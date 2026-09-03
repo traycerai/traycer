@@ -429,16 +429,27 @@ export function RateLimitPopover({
   profileSelection,
   scope,
   hasExplicitPick,
+  side,
+  align,
 }: {
   readonly onClose: () => void;
   readonly profileSelection: RateLimitProfileSelection;
   readonly scope: HostScope;
   readonly hasExplicitPick: boolean;
+  /**
+   * Which way the panel opens, and which of the trigger's edges it lines up
+   * with. Both are the caller's to state rather than this component's to guess:
+   * the header hangs a right-aligned panel below its glyph, and the status bar
+   * opens upward from a trigger at the left end of the strip, where an
+   * `end`-aligned panel would run off the window.
+   */
+  readonly side: "top" | "bottom";
+  readonly align: "start" | "end";
 }): ReactNode {
   return (
     <PopoverContent
-      side="bottom"
-      align="end"
+      side={side}
+      align={align}
       sideOffset={8}
       collisionPadding={RATE_LIMIT_POPOVER_COLLISION_PADDING_PX}
       role="dialog"

@@ -4517,6 +4517,24 @@ describe("ResourceMonitorPopover · host picker", () => {
     expect(returnToActive).toHaveBeenCalled();
   });
 
+  it("holds the global stream mount out of the tree while the pick has not resolved its own client", () => {
+    // Same scope as the test above - `hasExplicitPick: true`, no
+    // `streamBinding`, `status: "unreachable"` - which makes
+    // `streamBoundToScope` false. `GlobalResourcesStreamMount` renders
+    // nothing itself; its only observable effect is acquiring the registry's
+    // global entry, so that is what this proves absent. This is the safety
+    // claim the status bar's own dropped `scopedToOwnHost` gate now rests on:
+    // the popover staying mounted under an unresolved pick must not, by
+    // itself, open a stream against a machine nobody asked about.
+    hostScopeMock.scope = watchingSecondHostScope({ status: "unreachable" });
+    hostScopeMock.hasExplicitPick = true;
+    installStubFactory();
+
+    renderPopover();
+
+    expect(resourcesRegistry.getGlobal()).toBeNull();
+  });
+
   it("offers an upgrade, not a connectivity story, for a plan-restricted pick", () => {
     const returnToActive = vi.fn();
     hostScopeMock.scope = watchingSecondHostScope({

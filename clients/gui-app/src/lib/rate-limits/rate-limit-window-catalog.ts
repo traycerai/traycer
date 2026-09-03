@@ -53,6 +53,23 @@ export interface RateLimitWindowEntry {
    * provider reported no reset instant.
    */
   readonly label: string;
+  /**
+   * Whether the label says nothing but how long the window is (`5h`, `wk`,
+   * `mo`) — which is exactly the condition under which a live countdown may
+   * REPLACE it rather than being appended to it.
+   *
+   * `kind` cannot answer this and must not be used for it: a Codex extra
+   * window is `session`/`weekly` like the base windows and yet carries the
+   * limit's own name, while "Opus wk" is a duration with a model qualifier
+   * glued to the front. Deciding it here, where the label is built, is the
+   * only place the answer is knowable.
+   *
+   * The cost of getting it wrong is not cosmetic. Cursor's two buckets are
+   * required by the wire to share one reset instant, and Claude's weekly
+   * windows share theirs, so a surface that dropped their names would print
+   * two identical strings for two different pools.
+   */
+  readonly labelIsDuration: boolean;
   readonly kind: RateLimitWindowKind;
   readonly window: ProviderRateLimitWindow;
 }
@@ -104,13 +121,21 @@ export function formatCompactWindowDuration(minutes: number | null): string {
   return `${minutes}m`;
 }
 
-function entry(
-  windowKey: string,
-  label: string,
-  kind: RateLimitWindowKind,
-  window: ProviderRateLimitWindow | null,
-): RateLimitWindowEntry[] {
-  return window === null ? [] : [{ windowKey, label, kind, window }];
+/**
+ * One entry, or none when the provider reported no such window. Named
+ * arguments: the four descriptive fields are two strings and a boolean beside
+ * an enum, and a positional call site is where a label and a key, or a flag and
+ * a kind, get silently transposed.
+ */
+function entry(candidate: {
+  readonly windowKey: string;
+  readonly label: string;
+  readonly labelIsDuration: boolean;
+  readonly kind: RateLimitWindowKind;
+  readonly window: ProviderRateLimitWindow | null;
+}): RateLimitWindowEntry[] {
+  const window = candidate.window;
+  return window === null ? [] : [{ ...candidate, window }];
 }
 
 /**
@@ -199,101 +224,152 @@ function providerWindowCandidates(
   switch (rateLimits.provider) {
     case "claude-code":
       return [
-        ...entry("claude-code:fiveHour", "5h", "session", rateLimits.fiveHour),
-        ...entry("claude-code:sevenDay", "wk", "weekly", rateLimits.sevenDay),
-        ...entry(
-          "claude-code:sevenDayOpus",
-          "Opus wk",
-          "weekly",
-          rateLimits.sevenDayOpus,
-        ),
-        ...entry(
-          "claude-code:sevenDaySonnet",
-          "Sonnet wk",
-          "weekly",
-          rateLimits.sevenDaySonnet,
-        ),
+        ...entry({
+          windowKey: "claude-code:fiveHour",
+          label: "5h",
+          labelIsDuration: true,
+          kind: "session",
+          window: rateLimits.fiveHour,
+        }),
+        ...entry({
+          windowKey: "claude-code:sevenDay",
+          label: "wk",
+          labelIsDuration: true,
+          kind: "weekly",
+          window: rateLimits.sevenDay,
+        }),
+        // "Opus wk" is a duration with a model qualifier in front of it, and
+        // the qualifier is the whole point: all three weekly windows roll on
+        // one cycle, so a surface that swapped these labels for that shared
+        // reset would print the same string three times.
+        ...entry({
+          windowKey: "claude-code:sevenDayOpus",
+          label: "Opus wk",
+          labelIsDuration: false,
+          kind: "weekly",
+          window: rateLimits.sevenDayOpus,
+        }),
+        ...entry({
+          windowKey: "claude-code:sevenDaySonnet",
+          label: "Sonnet wk",
+          labelIsDuration: false,
+          kind: "weekly",
+          window: rateLimits.sevenDaySonnet,
+        }),
         // Model-scoped windows are discovered from the payload, never
         // hardcoded: the set of models a plan reports changes without a client
         // release, and the display name is the only identity they carry.
         ...rateLimits.modelScoped.map((window) => ({
           windowKey: `claude-code:model:${window.displayName}`,
           label: window.displayName,
+          labelIsDuration: false,
           kind: "model" as const,
           window,
         })),
       ];
     case "codex":
       return [
-        ...entry(
-          "codex:primary",
-          formatCompactWindowDuration(
+        ...entry({
+          windowKey: "codex:primary",
+          label: formatCompactWindowDuration(
             rateLimits.primary?.durationMinutes ?? null,
           ),
-          "session",
-          rateLimits.primary,
-        ),
-        ...entry(
-          "codex:secondary",
-          formatCompactWindowDuration(
+          labelIsDuration: true,
+          kind: "session",
+          window: rateLimits.primary,
+        }),
+        ...entry({
+          windowKey: "codex:secondary",
+          label: formatCompactWindowDuration(
             rateLimits.secondary?.durationMinutes ?? null,
           ),
-          "weekly",
-          rateLimits.secondary,
-        ),
+          labelIsDuration: true,
+          kind: "weekly",
+          window: rateLimits.secondary,
+        }),
+        // An extra window's label is duration-only exactly when the limit went
+        // unnamed - `codexExtraLabel` returns the bare duration there. A named
+        // one carries the only thing that tells it from the base window it
+        // shares a duration (and a reset) with.
         ...rateLimits.extraWindows.flatMap((extra) => [
-          ...entry(
-            `codex:extra:${extra.limitId}:primary`,
-            codexExtraLabel(
+          ...entry({
+            windowKey: `codex:extra:${extra.limitId}:primary`,
+            label: codexExtraLabel(
               extra.limitName,
               extra.primary?.durationMinutes ?? null,
             ),
-            "session",
-            extra.primary,
-          ),
-          ...entry(
-            `codex:extra:${extra.limitId}:secondary`,
-            codexExtraLabel(
+            labelIsDuration: extra.limitName === null,
+            kind: "session",
+            window: extra.primary,
+          }),
+          ...entry({
+            windowKey: `codex:extra:${extra.limitId}:secondary`,
+            label: codexExtraLabel(
               extra.limitName,
               extra.secondary?.durationMinutes ?? null,
             ),
-            "weekly",
-            extra.secondary,
-          ),
+            labelIsDuration: extra.limitName === null,
+            kind: "weekly",
+            window: extra.secondary,
+          }),
         ]),
       ];
     case "opencode":
       return [
-        ...entry("opencode:fiveHour", "5h", "session", rateLimits.fiveHour),
-        ...entry("opencode:weekly", "wk", "weekly", rateLimits.weekly),
-        ...entry("opencode:monthly", "mo", "monthly", rateLimits.monthly),
+        ...entry({
+          windowKey: "opencode:fiveHour",
+          label: "5h",
+          labelIsDuration: true,
+          kind: "session",
+          window: rateLimits.fiveHour,
+        }),
+        ...entry({
+          windowKey: "opencode:weekly",
+          label: "wk",
+          labelIsDuration: true,
+          kind: "weekly",
+          window: rateLimits.weekly,
+        }),
+        ...entry({
+          windowKey: "opencode:monthly",
+          label: "mo",
+          labelIsDuration: true,
+          kind: "monthly",
+          window: rateLimits.monthly,
+        }),
       ];
     case "grok":
       // One synthesized billing-period window. xAI names the period itself
       // ("monthly", "annual", ...), and there is no generic short form for a
-      // period whose length the payload never states.
-      return entry(
-        "grok:period",
-        rateLimits.periodType ?? "period",
-        "period",
-        rateLimits.period,
-      );
+      // period whose length the payload never states - so the name is not a
+      // duration and nothing may take its place.
+      return entry({
+        windowKey: "grok:period",
+        label: rateLimits.periodType ?? "period",
+        labelIsDuration: false,
+        kind: "period",
+        window: rateLimits.period,
+      });
     case "cursor":
       // Two synthesized buckets, named for the rows Cursor's own Spending page
-      // renders. Both reset on the billing cycle, so neither is a duration.
+      // renders. Both reset on the billing cycle - the wire REQUIRES the two
+      // reset instants to be equal - so neither name is a duration and neither
+      // may be dropped for one.
       return [
-        ...entry(
-          "cursor:cursorModels",
-          "Cursor models",
-          "bucket",
-          rateLimits.cursorModels,
-        ),
-        ...entry(
-          "cursor:otherModels",
-          "Other models",
-          "bucket",
-          rateLimits.otherModels,
-        ),
+        ...entry({
+          windowKey: "cursor:cursorModels",
+          label: "Cursor models",
+          labelIsDuration: false,
+          kind: "bucket",
+          window: rateLimits.cursorModels,
+        }),
+        ...entry({
+          windowKey: "cursor:otherModels",
+          label: "Other models",
+          labelIsDuration: false,
+          kind: "bucket",
+          window: rateLimits.otherModels,
+        }),
       ];
     case "openrouter":
     case "kilocode":

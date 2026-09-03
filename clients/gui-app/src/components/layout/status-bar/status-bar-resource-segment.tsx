@@ -58,7 +58,11 @@ export function StatusBarResourceSegment(props: StatusBarResourceSegmentProps) {
   // the watched host before reading a number out of it. The registry publishes
   // one projection for the window, which is not necessarily this chip's host.
   const projection = useGlobalResourceProjection();
-  const desktopApp = useDesktopAppResourceUsage();
+  // Only the desktop-app scope reads this, and subscribing is what starts a
+  // once-a-second IPC poll of the shell. The strip is on screen for the life of
+  // the window, so asking for it under the default host-tree scope would run
+  // that poll all session for a number nothing renders.
+  const desktopApp = useDesktopAppResourceUsage(scope === "desktop-app");
   // Asked unconditionally, and answered against this subtree's stream binding
   // — which the bar re-provided for the watched host. It is only ever CONSULTED
   // for the host-tree scope (see the reason resolver); the desktop-app scope
