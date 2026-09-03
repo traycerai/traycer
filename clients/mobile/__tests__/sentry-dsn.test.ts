@@ -38,6 +38,15 @@ describe("sentryDsnFromEnv", () => {
     ).toThrow(/public key/);
   });
 
+  it("rejects a legacy DSN carrying a secret key, which would ship inside the app", () => {
+    expect(() =>
+      sentryDsnFromEnv({
+        TRAYCER_MOBILE_SENTRY_DSN:
+          "https://abc123:s3cret@o123.ingest.sentry.io/456",
+      }),
+    ).toThrow(/secret key/);
+  });
+
   it("rejects a DSN with no project id, which Sentry would silently refuse to send to", () => {
     expect(() =>
       sentryDsnFromEnv({

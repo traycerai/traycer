@@ -34,6 +34,15 @@ export function sentryDsnFromEnv(env: NodeJS.ProcessEnv): string {
       "TRAYCER_MOBILE_SENTRY_DSN must be an https Sentry DSN (with public key)",
     );
   }
+  // A legacy DSN carries a SECRET key after the colon. The value baked here
+  // ships inside every installed app, so a secret in it is a leak by
+  // construction - refuse it rather than embed it. Modern DSNs have no
+  // password component at all.
+  if (parsed.password.length > 0) {
+    throw new Error(
+      "TRAYCER_MOBILE_SENTRY_DSN must not carry a secret key (public key only)",
+    );
+  }
   const projectId = parsed.pathname.split("/").pop() ?? "";
   if (!/^\d+$/.test(projectId)) {
     throw new Error(
