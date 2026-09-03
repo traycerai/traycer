@@ -84,6 +84,18 @@ describe("SessionImportProgress", () => {
     ).toBeTruthy();
   });
 
+  it("says the import did not start when the host closed the stream before its started frame", () => {
+    useSessionImportRunStore.getState().markStarting(new Map());
+    useSessionImportRunStore.getState().applyError();
+
+    render(<SessionImportProgress tone={sessionImportTone("dialog")} />);
+
+    expect(screen.getByText("The import did not start.")).toBeTruthy();
+    expect(
+      screen.queryByText("The import keeps running on your machine."),
+    ).toBeNull();
+  });
+
   it("points the tour at the end of onboarding and the dialog at the task list", () => {
     useSessionImportRunStore.getState().markStarting(new Map());
     useSessionImportRunStore

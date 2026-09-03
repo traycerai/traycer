@@ -35,6 +35,7 @@ export function SessionImportProgress(props: {
   const run = useSessionImportRunStore(
     useShallow((state) => ({
       status: state.status,
+      runId: state.runId,
       total: state.total,
       done: sessionImportDoneCount(state),
       lastTitle: state.lastTitle,
@@ -98,16 +99,23 @@ export function SessionImportProgress(props: {
   }
 
   if (run.status === "error") {
+    // No run id means the host closed the stream before its `started` frame:
+    // it refused the request, and nothing is running to keep running.
+    const neverStarted = run.runId === null;
     return (
       <div
         data-testid="session-import-progress-error"
         className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 px-4 py-10 text-center"
       >
         <p className={cn("text-ui-sm font-medium", tone.strong)}>
-          Traycer lost connection to the host importing the tasks.
+          {neverStarted
+            ? "The import did not start."
+            : "Traycer lost connection to the host importing the tasks."}
         </p>
         <p className={cn("max-w-md text-ui-xs", tone.muted)}>
-          The import keeps running on your machine.
+          {neverStarted
+            ? "The host turned the request down before reading any session. Pick the sessions again to retry."
+            : "The import keeps running on your machine."}
         </p>
       </div>
     );
