@@ -5262,6 +5262,67 @@ describe("WsStreamClient clock-skew park", () => {
     session.close();
   });
 
+  it("keeps today's behaviour at the pre-dial gate when the tracker says the clock is fine", async () => {
+    const { factory } = makeFactory();
+    const revalidator = makeRevalidator("rotated");
+    const clock = makeClockSignal("ok");
+    const client = makeClockClient({
+      factory,
+      auth: revalidator.auth,
+      clock: clock.signal,
+      bearer: () => expiredJwt(),
+    });
+    const session = client.subscribe("epic.subscribe", { epicId: "e1" });
+
+    await pollUntil(
+      "the pre-dial gate to revalidate",
+      () => revalidator.calls.count > 0,
+    );
+    expect(clock.recoverySubscribers()).toBe(0);
+
+    session.close();
+  });
+
+  it("still reaches the terminal bound for a HOST CONFIG MISMATCH, which looks identical on the wire", async () => {
+    // The whole reason parking keys on the tracker's verdict and not on the
+    // rejection shape: "authn validates it, the host rejects it" is also what a
+    // misconfigured host produces, and retrying that forever helps nobody.
+    const { factory, sockets } = makeFactory();
+    const revalidator = makeRevalidator("rotated");
+    const clock = makeClockSignal("ok");
+    const client = makeClockClient({
+      factory,
+      auth: revalidator.auth,
+      clock: clock.signal,
+      bearer: () => "plain-bearer",
+    });
+    const statuses: StreamConnectionStatus[] = [];
+    const closeReasons: Array<StreamCloseReason | null> = [];
+    const session = client.subscribe("epic.subscribe", { epicId: "e1" });
+    session.onStatusChange((status, reason) => {
+      statuses.push(status);
+      closeReasons.push(reason);
+    });
+
+    // Each cycle drives ITS OWN dial. Reaching for the most recent socket
+    // behind a fixed wait re-drives the previous one when the redial has not
+    // landed yet, which silently turns three cycles into fewer.
+    for (let cycle = 0; cycle < 3; cycle += 1) {
+      const socket = await nthSocket(sockets, cycle);
+      socket.fireOpen();
+      socket.fireText(UNAUTHORIZED_FATAL);
+    }
+    await pollUntil("the no-progress bound to close the session", () =>
+      statuses.includes("closed"),
+    );
+
+    expect(statuses).toContain("closed");
+    const fatalClose = closeReasons.find((r) => r?.kind === "fatalError");
+    expect(fatalClose?.kind).toBe("fatalError");
+
+    session.close();
+  });
+
   it("does NOT park on a clock running BEHIND, and still walks the no-progress bound to terminal", async () => {
     // The mirror of the incident, and the failure this feature would otherwise
     // have reintroduced in the opposite direction. A SLOW clock makes a bearer

@@ -2329,6 +2329,33 @@ describe("BrowserViewManager host window renderer reset (fix round 2)", () => {
     ).toBe(true);
     expect(view.visible).toBe(true);
   });
+
+  it("does not re-show a stale entry that was never reattached", async () => {
+    const harness = createHarness();
+    const { view } = await makeVisible(harness, BASE_KEY);
+
+    const hostWebContents = harness.windows.get("window-1")?.webContents;
+    if (hostWebContents === undefined) throw new Error("expected host window");
+    hostWebContents.emit(
+      "did-start-navigation",
+      {},
+      "http://localhost:31873/",
+      false,
+      true,
+      1,
+      1,
+    );
+    expect(view.visible).toBe(false);
+
+    // A recompute unrelated to this exact tile (e.g. another tile's bounds
+    // update triggering window reconciliation) must not accidentally
+    // re-show a stale-generation entry that the new renderer never claimed.
+    harness.manager.updateBounds("window-1", {
+      ...BASE_KEY,
+      bounds: { x: 5, y: 5, width: 300, height: 200 },
+    });
+    expect(view.visible).toBe(false);
+  });
 });
 
 describe("BrowserViewManager overlay occlusion broadcast routing (fix round 3)", () => {
