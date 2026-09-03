@@ -29,6 +29,34 @@ export interface ProcessMetricsSnapshot {
   readonly cpuUsage: { readonly user: number; readonly system: number };
 }
 
+/**
+ * One V8 isolate inside the renderer process: the page itself, or one of the
+ * dedicated workers it has spawned. `url` is the isolate's script URL - for a
+ * worker, the chunk it was started from, which is what tells an epic runtime
+ * worker apart from a diff highlighter worker.
+ */
+export interface RendererJsHeapIsolate {
+  readonly kind: "page" | "worker";
+  readonly url: string;
+  /** `Runtime.getHeapUsage` - live objects after the last GC. */
+  readonly usedBytes: number;
+  /** `Runtime.getHeapUsage` - pages V8 has committed for this isolate. */
+  readonly totalBytes: number;
+}
+
+/**
+ * The renderer's JS heaps, one row per isolate. A main-thread heap snapshot
+ * sees the page's isolate only; a renderer that runs a dozen dedicated workers
+ * can hold most of its memory where that snapshot cannot look. This is the
+ * readout that says where.
+ */
+export interface RendererJsHeapBreakdown {
+  readonly capturedAt: number;
+  /** The whole renderer process's working set, or `null` if it has no metric. */
+  readonly workingSetBytes: number | null;
+  readonly isolates: ReadonlyArray<RendererJsHeapIsolate>;
+}
+
 export type Vibrancy =
   | "titlebar"
   | "selection"

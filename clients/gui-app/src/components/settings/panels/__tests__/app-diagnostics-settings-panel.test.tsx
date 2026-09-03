@@ -16,6 +16,7 @@ import {
   installCustomLogLevelsBridge,
   installHeapSnapshotBridge,
   installHeldLogLevelsBridge,
+  installJsHeapBridge,
   installLogLevelsBridge,
   makeHost,
   makeSupportBridge,
@@ -28,6 +29,8 @@ import type {
   DesktopSupportLogTarget,
   DesktopSupportSnapshot,
 } from "@/lib/windows/types";
+import type { DesktopJsHeapBreakdown } from "@/lib/resources/desktop-app-resource-usage";
+import { formatMemoryBytes } from "@/lib/resources/format-resource-usage";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import { toast } from "sonner";
@@ -424,5 +427,101 @@ describe("<AppDiagnosticsSettingsPanel />", () => {
     });
     const path = await screen.findByTestId("diagnostics-heap-snapshot-path");
     expect(path.textContent).toBe("/tmp/heap-1.heapsnapshot");
+  });
+
+  it("does not render the Measure JS heaps button when the bridge is not installed", async () => {
+    installLogLevelsBridge(defaultSnapshot());
+    installHeapSnapshotBridge(() => Promise.resolve(null));
+    renderPanel(makeHost(makeSupportBridge({})));
+
+    await screen.findByRole("heading", { name: "Memory" });
+    expect(screen.queryByTestId("diagnostics-measure-js-heaps")).toBeNull();
+  });
+
+  it("measures JS heaps and renders a labeled breakdown table with a totals footer", async () => {
+    installLogLevelsBridge(defaultSnapshot());
+    installHeapSnapshotBridge(() => Promise.resolve(null));
+    const breakdown: DesktopJsHeapBreakdown = {
+      capturedAt: 1_700_000_000_000,
+      workingSetBytes: 300 * 1024 * 1024,
+      isolates: [
+        {
+          kind: "page",
+          url: "app://renderer/index.html",
+          usedBytes: 40 * 1024 * 1024,
+          totalBytes: 60 * 1024 * 1024,
+        },
+        {
+          kind: "worker",
+          url: "app://renderer/assets/epic-runtime-worker-entry-BKyjY2bC.js",
+          usedBytes: 10 * 1024 * 1024,
+          totalBytes: 15 * 1024 * 1024,
+        },
+        {
+          kind: "worker",
+          url: "app://renderer/assets/worker-DMI2JaPh.js",
+          usedBytes: 5 * 1024 * 1024,
+          totalBytes: 8 * 1024 * 1024,
+        },
+      ],
+    };
+    const measureJsHeaps = vi.fn(() =>
+      Promise.resolve<DesktopJsHeapBreakdown | null>(breakdown),
+    );
+    installJsHeapBridge(measureJsHeaps);
+    renderPanel(makeHost(makeSupportBridge({})));
+
+    const button = await screen.findByTestId("diagnostics-measure-js-heaps");
+    expect(screen.queryByTestId("diagnostics-js-heap-breakdown")).toBeNull();
+    fireEvent.click(button);
+
+    await waitFor(() => {
+      expect(measureJsHeaps).toHaveBeenCalled();
+    });
+
+    const table = await screen.findByTestId("diagnostics-js-heap-breakdown");
+    expect(within(table).getByText("This window")).toBeTruthy();
+    expect(within(table).getByText("Epic runtime worker")).toBeTruthy();
+    expect(within(table).getByText("Diff highlighter worker")).toBeTruthy();
+
+    const usedTotal = breakdown.isolates.reduce(
+      (sum, isolate) => sum + isolate.usedBytes,
+      0,
+    );
+    const committedTotal = breakdown.isolates.reduce(
+      (sum, isolate) => sum + isolate.totalBytes,
+      0,
+    );
+    expect(
+      within(table).getByText(
+        (_content, element) =>
+          element?.textContent ===
+          `3 isolates · process working set ${formatMemoryBytes(300 * 1024 * 1024)}`,
+      ),
+    ).toBeTruthy();
+    expect(within(table).getByText(formatMemoryBytes(usedTotal))).toBeTruthy();
+    expect(
+      within(table).getByText(formatMemoryBytes(committedTotal)),
+    ).toBeTruthy();
+  });
+
+  it("toasts when measuring JS heaps returns null", async () => {
+    installLogLevelsBridge(defaultSnapshot());
+    installHeapSnapshotBridge(() => Promise.resolve(null));
+    const measureJsHeaps = vi.fn(() =>
+      Promise.resolve<DesktopJsHeapBreakdown | null>(null),
+    );
+    installJsHeapBridge(measureJsHeaps);
+    renderPanel(makeHost(makeSupportBridge({})));
+
+    const button = await screen.findByTestId("diagnostics-measure-js-heaps");
+    fireEvent.click(button);
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith(
+        "Couldn't measure this window's JS heaps",
+      );
+    });
+    expect(screen.queryByTestId("diagnostics-js-heap-breakdown")).toBeNull();
   });
 });

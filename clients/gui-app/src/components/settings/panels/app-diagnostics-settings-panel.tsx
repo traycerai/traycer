@@ -17,7 +17,13 @@ import {
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { CopyTextButton } from "@/components/copy-text-button";
-import { getDesktopHeapSnapshotBridge } from "@/lib/resources/desktop-app-resource-usage";
+import {
+  describeDesktopJsHeapIsolate,
+  getDesktopHeapSnapshotBridge,
+  getDesktopJsHeapBridge,
+  type DesktopJsHeapBreakdown,
+} from "@/lib/resources/desktop-app-resource-usage";
+import { formatMemoryBytes } from "@/lib/resources/format-resource-usage";
 import { getLogLevelsBridge } from "@/lib/desktop-log-levels";
 import { runnerMutationKeys } from "@/lib/query-keys/runner-mutation-keys";
 import { toastFromRunnerError } from "@/lib/runner-error-toast";
@@ -227,6 +233,143 @@ function MemoryDiagnosticsGroup(): ReactNode {
           />
         </div>
       )}
+      <JsHeapReadout />
     </SettingsGroup>
+  );
+}
+
+/**
+ * The per-isolate companion to the heap snapshot. A snapshot walks the page's
+ * own V8 isolate and nothing else; the renderer also runs one isolate per
+ * dedicated worker (an epic runtime per live epic session, the diff
+ * highlighter pool), and a window whose snapshot explains a fraction of its
+ * footprint is usually carrying the rest there. This readout is cheap - a few
+ * protocol round trips, no freeze - and lists every isolate with what it holds,
+ * so the snapshot can be read against the number it was missing.
+ */
+function JsHeapReadout(): ReactNode {
+  const bridge = useMemo(() => getDesktopJsHeapBridge(), []);
+  const [breakdown, setBreakdown] = useState<DesktopJsHeapBreakdown | null>(
+    null,
+  );
+
+  const measureMutation = useMutation({
+    mutationKey: runnerMutationKeys.measureJsHeaps(),
+    mutationFn: (): Promise<DesktopJsHeapBreakdown | null> =>
+      bridge === null ? Promise.resolve(null) : bridge.measureJsHeaps(),
+    onSuccess: (result) => {
+      setBreakdown(result);
+      if (result === null) {
+        toast.error("Couldn't measure this window's JS heaps");
+      }
+    },
+    onError: (error) => {
+      setBreakdown(null);
+      toastFromRunnerError(error, "Couldn't measure this window's JS heaps");
+    },
+  });
+
+  if (bridge === null) return null;
+
+  const usedTotal =
+    breakdown === null
+      ? 0
+      : breakdown.isolates.reduce((sum, isolate) => sum + isolate.usedBytes, 0);
+  const committedTotal =
+    breakdown === null
+      ? 0
+      : breakdown.isolates.reduce(
+          (sum, isolate) => sum + isolate.totalBytes,
+          0,
+        );
+
+  return (
+    <>
+      <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border/60 px-4 py-2.5">
+        <span className="min-w-0 flex-1 text-ui-xs text-muted-foreground">
+          Lists every JS heap in this window: the page and each worker it runs.
+          A heap snapshot covers the page only, so this is what accounts for the
+          rest.
+        </span>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="shrink-0"
+          disabled={measureMutation.isPending}
+          onClick={() => measureMutation.mutate()}
+          data-testid="diagnostics-measure-js-heaps"
+        >
+          {measureMutation.isPending ? (
+            <AgentSpinningDots
+              className="text-current"
+              testId={undefined}
+              variant={undefined}
+            />
+          ) : null}
+          Measure JS heaps
+        </Button>
+      </div>
+      {breakdown === null ? null : (
+        <div className="px-4 pb-3" data-testid="diagnostics-js-heap-breakdown">
+          <table className="w-full border-collapse text-ui-xs">
+            <thead>
+              <tr className="text-left text-muted-foreground">
+                <th scope="col" className="py-1 pr-3 font-normal">
+                  Isolate
+                </th>
+                <th scope="col" className="py-1 pr-3 text-right font-normal">
+                  Live
+                </th>
+                <th scope="col" className="py-1 text-right font-normal">
+                  Committed
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {breakdown.isolates.map((isolate, index) => (
+                <tr
+                  key={`${isolate.url}:${String(index)}`}
+                  className="border-t border-border/40"
+                >
+                  <td className="py-1 pr-3">
+                    {describeDesktopJsHeapIsolate(isolate)}
+                    {isolate.kind === "worker" ? (
+                      <span className="ml-2 font-mono text-code-xs text-muted-foreground">
+                        {isolate.url.slice(isolate.url.lastIndexOf("/") + 1)}
+                      </span>
+                    ) : null}
+                  </td>
+                  <td className="py-1 pr-3 text-right font-mono tabular-nums">
+                    {formatMemoryBytes(isolate.usedBytes)}
+                  </td>
+                  <td className="py-1 text-right font-mono tabular-nums">
+                    {formatMemoryBytes(isolate.totalBytes)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr className="border-t border-border/60 text-muted-foreground">
+                <td className="py-1 pr-3">
+                  {breakdown.isolates.length === 1
+                    ? "1 isolate"
+                    : `${String(breakdown.isolates.length)} isolates`}
+                  {breakdown.workingSetBytes === null
+                    ? null
+                    : ` · process working set ${formatMemoryBytes(breakdown.workingSetBytes)}`}
+                </td>
+                <td className="py-1 pr-3 text-right font-mono tabular-nums">
+                  {formatMemoryBytes(usedTotal)}
+                </td>
+                <td className="py-1 text-right font-mono tabular-nums">
+                  {formatMemoryBytes(committedTotal)}
+                </td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      )}
+    </>
   );
 }
