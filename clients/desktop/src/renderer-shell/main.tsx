@@ -14,11 +14,11 @@ import {
 } from "./desktop-runner-host";
 import { composeDesktopSignInUrl, DESKTOP_REDIRECT_URI } from "./sign-in-url";
 import {
-  scrubDesktopBreadcrumbInPlace,
-  scrubDesktopSentryEventInPlace,
-  scrubDesktopSentrySpanInPlace,
-  scrubDesktopSentryTransactionInPlace,
-} from "../shared/sentry-scrub";
+  scrubSentryBreadcrumbInPlace,
+  scrubSentryEventInPlace,
+  scrubSentrySpanInPlace,
+  scrubSentryTransactionInPlace,
+} from "@traycer-clients/shared/platform/sentry-scrub";
 import { config } from "../config";
 
 declare global {
@@ -56,7 +56,7 @@ function bootstrap(): void {
       // an RPC error rendered into text. This is the same shaping the main
       // process applies, from the same detection leaf.
       beforeSend: (event) => {
-        scrubDesktopSentryEventInPlace(event);
+        scrubSentryEventInPlace(event);
         return event;
       },
       // The browser SDK records the full URL of every fetch/xhr/navigation.
@@ -64,18 +64,18 @@ function bootstrap(): void {
       // breadcrumbs keep origin + pathname and nothing else. Recorded-time,
       // not send-time: the scope outlives the event.
       beforeBreadcrumb: (breadcrumb) => {
-        scrubDesktopBreadcrumbInPlace(breadcrumb);
+        scrubSentryBreadcrumbInPlace(breadcrumb);
         return breadcrumb;
       },
       // Inert until a tracing integration is added - the browser SDK ships
       // none by default - and registered anyway so that adding one cannot
       // reopen `url.full`, which no `beforeSend` ever sees.
       beforeSendTransaction: (event) => {
-        scrubDesktopSentryTransactionInPlace(event);
+        scrubSentryTransactionInPlace(event);
         return event;
       },
       beforeSendSpan: (span) => {
-        scrubDesktopSentrySpanInPlace(span);
+        scrubSentrySpanInPlace(span);
         return span;
       },
     });

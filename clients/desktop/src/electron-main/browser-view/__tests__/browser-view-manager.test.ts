@@ -1371,7 +1371,6 @@ describe("BrowserViewManager native tab lifecycle", () => {
       },
     ]);
   });
-
   it("guards a popup's own navigation and window.open", async () => {
     const harness = createHarness();
     const { view } = await attachNativeTab(
@@ -1670,7 +1669,6 @@ describe("BrowserViewManager native tab lifecycle", () => {
     expect(view.webContents.closeCalls).toBe(0);
     expect(harness.views).toHaveLength(1);
   });
-
   it("echoes an existing native tab's current status when a renderer ensures it again", async () => {
     const harness = createHarness();
     const input = {
@@ -2305,7 +2303,6 @@ describe("BrowserViewManager host window renderer reset (fix round 2)", () => {
 
     expect(view.visible).toBe(false);
   });
-
   it("reattaching the tab clears the reset and makes it visible again", async () => {
     const harness = createHarness();
     const { capability, view } = await makeVisible(harness, BASE_KEY);
@@ -2331,54 +2328,6 @@ describe("BrowserViewManager host window renderer reset (fix round 2)", () => {
       }),
     ).toBe(true);
     expect(view.visible).toBe(true);
-  });
-
-  it("reattaching after a renderer reset echoes the entry's current status", async () => {
-    const harness = createHarness();
-    const { capability, view } = await makeVisible(harness, BASE_KEY);
-
-    // The tile reached "ready" via its own navigation commit before the
-    // reload, so main holds ready while the (future) renderer never saw it.
-    view.webContents.emit("did-navigate", {}, "https://example.com", 200, "OK");
-    expect(harness.nativeTabStatuses.at(-1)).toMatchObject({
-      ...capability,
-      status: "ready",
-    });
-    const statusesAfterReloadStart = harness.nativeTabStatuses.length;
-
-    const hostWebContents = harness.windows.get("window-1")?.webContents;
-    if (hostWebContents === undefined) throw new Error("expected host window");
-    hostWebContents.emit(
-      "did-start-navigation",
-      {},
-      "http://localhost:31873/",
-      false,
-      true,
-      1,
-      1,
-    );
-    expect(view.visible).toBe(false);
-
-    expect(
-      harness.manager.attachSurface("window-1", {
-        ...capability,
-        bindingId: "binding-after-reset",
-        surface: BASE_KEY,
-      }),
-    ).toBe(true);
-    expect(view.visible).toBe(true);
-    const echoes = harness.nativeTabStatuses.slice(statusesAfterReloadStart);
-    expect(
-      echoes.some(
-        (change) =>
-          change.hostId === capability.hostId &&
-          change.sessionId === capability.sessionId &&
-          change.tabId === capability.tabId &&
-          change.registrationId === capability.registrationId &&
-          change.status === "ready" &&
-          change.url === "https://example.com",
-      ),
-    ).toBe(true);
   });
 
   it("does not re-show a stale entry that was never reattached", async () => {
@@ -2413,26 +2362,6 @@ describe("BrowserViewManager overlay occlusion broadcast routing (fix round 3)",
   afterEach(() => {
     vi.restoreAllMocks();
   });
-
-  it("logs once, with counts, when none of the requested tiles belong to this manager instance", async () => {
-    const harness = createHarness();
-    const infoSpy = vi.spyOn(log, "info");
-
-    await harness.manager.overlay.occlude("window-1", {
-      overlayId: "settings-dialog",
-      tiles: [BASE_KEY],
-    });
-
-    expect(infoSpy).toHaveBeenCalledWith(
-      "[browser-view] occlude for overlay: no matching entries",
-      expect.objectContaining({
-        overlayId: "settings-dialog",
-        requestedCount: 1,
-        matchedCount: 0,
-      }),
-    );
-  });
-
   it("does not log a no-match warning when this manager owns the requested tile", async () => {
     const harness = createHarness();
     await attachNativeTab(

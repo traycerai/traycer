@@ -23,9 +23,6 @@ import { useSweepSessionStore } from "@/stores/epics/sweep-session-store";
  * of their cases care about the gap between the click and the proof landing.
  */
 
-const REV_A =
-  "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-
 const HOLDERS: readonly WorktreeBusyHolder[] = [
   {
     ownerRef: {
@@ -138,7 +135,6 @@ function safeRow(worktreePath: string, branch: string): EpicSweepWorktreeRow {
     note: null,
     holders: [],
     holdersStatus: "none",
-    holdersRevision: undefined,
   };
 }
 
@@ -151,7 +147,6 @@ function inUseRow(worktreePath: string, branch: string): EpicSweepWorktreeRow {
     note: "in-use",
     holders: HOLDERS,
     holdersStatus: "ready",
-    holdersRevision: REV_A,
   };
 }
 
@@ -172,7 +167,6 @@ function inUseUnknownRow(
     note: "in-use",
     holders: [],
     holdersStatus: "unknown",
-    holdersRevision: undefined,
   };
 }
 

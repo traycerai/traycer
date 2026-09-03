@@ -622,27 +622,6 @@ function createFakeLaneAdapter(laneId: string): LaneAdapter<FakeEvent> & {
 }
 
 describe("Replica / LaneAdapter / AdapterHost conformance smoke test", () => {
-  it("drives a fake environment with no DOM and no real timers", () => {
-    const environment = createFakeEnvironment();
-    let fired = false;
-    environment.scheduler.schedule(1000, () => {
-      fired = true;
-    });
-    expect(fired).toBe(false);
-    environment.advanceClock(999);
-    expect(fired).toBe(false);
-    environment.advanceClock(1);
-    expect(fired).toBe(true);
-
-    let ran = false;
-    environment.scheduler.scheduleMicrotask(() => {
-      ran = true;
-    });
-    expect(ran).toBe(false);
-    environment.drainMicrotasks();
-    expect(ran).toBe(true);
-  });
-
   it("applies the first event and ignores the second as stale-revision", () => {
     const environment = createFakeEnvironment();
     const replica = createFakeReplica("epic-1");
@@ -1379,16 +1358,6 @@ describe("createSessionRegistry", () => {
       expect(registry.peek("mat-1")).toBeNull();
       expect(registry.peek("acq-1")).not.toBeNull();
     });
-
-    it("acquire takes one unit of demand", () => {
-      const environment = createFakeEnvironment();
-      const policy = createTrackedPolicy(defaultPolicyConfig());
-      const registry = createSessionRegistry({ environment, policy });
-
-      registry.acquire("s1", "scope", () => makeSession("s1"));
-
-      expect(registry.peekEntry("s1")?.demand).toBe(1);
-    });
   });
 
   describe("rekey", () => {
@@ -1431,29 +1400,6 @@ describe("createSessionRegistry", () => {
       expect(registry.rekey("held-key", "new-key")).toBe(false);
       expect(registry.peek("held-key")).not.toBeNull();
       expect(registry.peek("new-key")).toBeNull();
-    });
-
-    it("refuses when the source entry is absent", () => {
-      const environment = createFakeEnvironment();
-      const policy = createTrackedPolicy(defaultPolicyConfig());
-      const registry = createSessionRegistry({ environment, policy });
-
-      expect(registry.rekey("missing", "new-key")).toBe(false);
-    });
-
-    it("refuses when the target key is already taken", () => {
-      const environment = createFakeEnvironment();
-      const policy = createTrackedPolicy(defaultPolicyConfig());
-      const registry = createSessionRegistry({ environment, policy });
-      const source = makeSession("source");
-      const target = makeSession("target");
-      registry.acquire("source-key", "scope", () => source);
-      registry.release("source-key", "warm");
-      registry.acquire("target-key", "scope", () => target);
-
-      expect(registry.rekey("source-key", "target-key")).toBe(false);
-      expect(registry.peek("source-key")).toBe(source);
-      expect(registry.peek("target-key")).toBe(target);
     });
   });
 

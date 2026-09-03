@@ -33,9 +33,9 @@
  */
 
 import {
-  type DesktopSentryEvent,
-  scrubDesktopSentryEventInPlace,
-} from "../../shared/sentry-scrub";
+  type ClientSentryEvent,
+  scrubSentryEventInPlace,
+} from "@traycer-clients/shared/platform/sentry-scrub";
 
 /** The slice of the event hint this module reads. The dump rides here. */
 export interface DesktopSentryEventHint {
@@ -56,7 +56,7 @@ const NON_RENDERER_PROCESSES = new Set(["browser", "gpu", "utility"]);
  * error event has none of the three and is never in scope here.
  */
 function carriesMinidump(
-  event: DesktopSentryEvent,
+  event: ClientSentryEvent,
   hint: DesktopSentryEventHint,
 ): boolean {
   if (event.platform === "native") return true;
@@ -74,7 +74,7 @@ function carriesMinidump(
  * the `renderer`/`unknown` of a dump found at startup - goes.
  */
 export function shouldDropNativeCrashEvent(
-  event: DesktopSentryEvent,
+  event: ClientSentryEvent,
   hint: DesktopSentryEventHint,
 ): boolean {
   if (!carriesMinidump(event, hint)) return false;
@@ -84,15 +84,16 @@ export function shouldDropNativeCrashEvent(
 
 /**
  * `beforeSend` for the desktop main process: the minidump drop, then the
- * shared Sentry scrub (`shared/sentry-scrub.ts`), which the app-shell
- * renderer runs too and which detects through the same
- * `@traycer/protocol/utils/text/redaction` leaf the services use.
+ * shared Sentry scrub (`@traycer-clients/shared/platform/sentry-scrub.ts`),
+ * which the app-shell renderer and the mobile shell run too and which detects
+ * through the same `@traycer/protocol/utils/text/redaction` leaf the services
+ * use.
  */
-export function desktopSentryBeforeSend<TEvent extends DesktopSentryEvent>(
+export function desktopSentryBeforeSend<TEvent extends ClientSentryEvent>(
   event: TEvent,
   hint: DesktopSentryEventHint,
 ): TEvent | null {
   if (shouldDropNativeCrashEvent(event, hint)) return null;
-  scrubDesktopSentryEventInPlace(event);
+  scrubSentryEventInPlace(event);
   return event;
 }
