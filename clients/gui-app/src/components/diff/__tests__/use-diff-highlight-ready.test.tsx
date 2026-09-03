@@ -294,6 +294,35 @@ describe("useDiffs highlight gates", () => {
     await act(async () => {});
     expect(screen.getByTestId("ready").textContent).toBe("pending");
   });
+
+  it("does not request the pool from a disabled gate", () => {
+    const manager = asWorkerPoolManager(fakeWorkerPoolManager());
+    registerDiffWorkerPoolCreator(() => manager);
+
+    render(
+      <FileReadyProbe
+        file={sampleFile()}
+        theme="pierre-dark"
+        enabled={false}
+      />,
+    );
+
+    expect(getDiffWorkerPool()).toBeUndefined();
+    expect(screen.getByTestId("ready").textContent).toBe("ready");
+  });
+
+  it("does not request the pool for an empty diff list", () => {
+    const manager = asWorkerPoolManager(fakeWorkerPoolManager());
+    registerDiffWorkerPoolCreator(() => manager);
+
+    render(<DiffReadyProbe fileDiffs={[]} theme="pierre-dark" enabled />);
+    render(<EditReadyProbe fileDiffs={[]} theme="pierre-dark" enabled />);
+
+    expect(getDiffWorkerPool()).toBeUndefined();
+    for (const probe of screen.getAllByTestId("ready")) {
+      expect(probe.textContent).toBe("ready");
+    }
+  });
 });
 
 function FileReadyProbe(props: {

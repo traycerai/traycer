@@ -435,7 +435,9 @@ describe("<AppDiagnosticsSettingsPanel />", () => {
     renderPanel(makeHost(makeSupportBridge({})));
 
     await screen.findByRole("heading", { name: "Memory" });
-    expect(screen.queryByTestId("diagnostics-measure-js-heaps")).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Measure JS heaps" }),
+    ).toBeNull();
   });
 
   it("measures JS heaps and renders a labeled breakdown table with a totals footer", async () => {
@@ -471,15 +473,17 @@ describe("<AppDiagnosticsSettingsPanel />", () => {
     installJsHeapBridge(measureJsHeaps);
     renderPanel(makeHost(makeSupportBridge({})));
 
-    const button = await screen.findByTestId("diagnostics-measure-js-heaps");
-    expect(screen.queryByTestId("diagnostics-js-heap-breakdown")).toBeNull();
+    const button = await screen.findByRole("button", {
+      name: "Measure JS heaps",
+    });
+    expect(screen.queryByRole("table")).toBeNull();
     fireEvent.click(button);
 
     await waitFor(() => {
       expect(measureJsHeaps).toHaveBeenCalled();
     });
 
-    const table = await screen.findByTestId("diagnostics-js-heap-breakdown");
+    const table = await screen.findByRole("table");
     expect(within(table).getByText("This window")).toBeTruthy();
     expect(within(table).getByText("Epic runtime worker")).toBeTruthy();
     expect(within(table).getByText("Diff highlighter worker")).toBeTruthy();
@@ -514,7 +518,9 @@ describe("<AppDiagnosticsSettingsPanel />", () => {
     installJsHeapBridge(measureJsHeaps);
     renderPanel(makeHost(makeSupportBridge({})));
 
-    const button = await screen.findByTestId("diagnostics-measure-js-heaps");
+    const button = await screen.findByRole("button", {
+      name: "Measure JS heaps",
+    });
     fireEvent.click(button);
 
     await waitFor(() => {
@@ -522,6 +528,6 @@ describe("<AppDiagnosticsSettingsPanel />", () => {
         "Couldn't measure this window's JS heaps",
       );
     });
-    expect(screen.queryByTestId("diagnostics-js-heap-breakdown")).toBeNull();
+    expect(screen.queryByRole("table")).toBeNull();
   });
 });

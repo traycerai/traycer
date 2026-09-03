@@ -28,10 +28,15 @@ import {
  * the pool arriving a render later does not re-route it. Only `"unavailable"`
  * (no provider mounted at all) releases a surface without one.
  */
-function useDiffWorkerPoolAvailability(): DiffWorkerPoolAvailability {
+function useDiffWorkerPoolAvailability(
+  wanted: boolean,
+): DiffWorkerPoolAvailability {
+  // Only a gate that is enabled and has something to highlight asks: a
+  // disabled gate or an empty diff list would otherwise build the pool for
+  // a surface that will never send it work.
   useEffect(() => {
-    requestDiffWorkerPool();
-  }, []);
+    if (wanted) requestDiffWorkerPool();
+  }, [wanted]);
   return useSyncExternalStore(
     subscribeDiffWorkerPool,
     getDiffWorkerPoolAvailability,
@@ -86,7 +91,7 @@ export function useDiffsFileHighlightReady(props: {
   readonly enabled: boolean;
 }): boolean {
   const pool = useWorkerPool();
-  const poolAvailability = useDiffWorkerPoolAvailability();
+  const poolAvailability = useDiffWorkerPoolAvailability(props.enabled);
   const { file, theme } = props;
   const prepareHighlight = useCallback(async (): Promise<void> => {
     // The provider owns render options; theme makes this callback a distinct
@@ -108,7 +113,9 @@ export function useDiffsDiffHighlightReady(props: {
   readonly enabled: boolean;
 }): boolean {
   const pool = useWorkerPool();
-  const poolAvailability = useDiffWorkerPoolAvailability();
+  const poolAvailability = useDiffWorkerPoolAvailability(
+    props.enabled && props.fileDiffs.length > 0,
+  );
   const { fileDiffs, theme } = props;
   const prepareHighlight = useCallback(async (): Promise<void> => {
     if (pool === undefined) return;
@@ -138,7 +145,9 @@ export function useDiffsDiffEditHighlightReady(props: {
   readonly enabled: boolean;
 }): boolean {
   const pool = useWorkerPool();
-  const poolAvailability = useDiffWorkerPoolAvailability();
+  const poolAvailability = useDiffWorkerPoolAvailability(
+    props.enabled && props.fileDiffs.length > 0,
+  );
   const { enabled, fileDiffs, theme } = props;
   const [preparedTarget, setPreparedTarget] =
     useState<ReadonlyArray<FileDiffMetadata> | null>(null);

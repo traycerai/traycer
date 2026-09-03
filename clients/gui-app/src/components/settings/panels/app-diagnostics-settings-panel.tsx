@@ -141,6 +141,7 @@ function DesktopAppLogEntry(props: {
  */
 /** Serialization scope for the heap capture - see the `scope` note below. */
 const HEAP_SNAPSHOT_MUTATION_SCOPE = "runner-heap-snapshot";
+const JS_HEAP_MEASURE_MUTATION_SCOPE = "runner-js-heap-measure";
 
 function MemoryDiagnosticsGroup(): ReactNode {
   const bridge = useMemo(() => getDesktopHeapSnapshotBridge(), []);
@@ -255,6 +256,11 @@ function JsHeapReadout(): ReactNode {
 
   const measureMutation = useMutation({
     mutationKey: runnerMutationKeys.measureJsHeaps(),
+    // Serialized for the same reason the heap capture is: the measurement
+    // attaches `webContents.debugger`, and a second call while the first holds
+    // the attachment is refused in main (`isAttached()`), which would read as
+    // a failure toast and clear a readout that was fine.
+    scope: { id: JS_HEAP_MEASURE_MUTATION_SCOPE },
     mutationFn: (): Promise<DesktopJsHeapBreakdown | null> =>
       bridge === null ? Promise.resolve(null) : bridge.measureJsHeaps(),
     onSuccess: (result) => {
