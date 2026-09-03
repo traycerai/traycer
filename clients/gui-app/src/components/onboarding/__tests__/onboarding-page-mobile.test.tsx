@@ -3,7 +3,8 @@ import {
   act,
   cleanup,
   fireEvent,
-  render,
+  render as renderUi,
+  type RenderResult,
   screen,
   waitFor,
 } from "@testing-library/react";
@@ -177,6 +178,16 @@ vi.mock("@/lib/safe-area-insets", async (importOriginal) => {
 
 // Import after mocks are registered.
 import { OnboardingPage } from "@/components/onboarding/onboarding-page";
+import type { ReactNode } from "react";
+import { WithTestQueryClient } from "@/__tests__/with-test-query-client";
+
+/**
+ * Every link surface below reaches the external-link bridge mutation, which
+ * needs a `QueryClientProvider` above it.
+ */
+function render(ui: ReactNode): RenderResult {
+  return renderUi(ui, { wrapper: WithTestQueryClient });
+}
 
 function renderPage() {
   return render(
@@ -188,7 +199,10 @@ function renderPage() {
 
 /** Which act is on screen, read from its rendered title. */
 function currentStage(): number {
-  return onboardingActsFor(false).findIndex(
+  return onboardingActsFor({
+    sessionImportAvailable: false,
+    loginImportAvailable: false,
+  }).findIndex(
     (act) =>
       screen.queryByText(act.title.replace(/\s+/g, " "), { exact: false }) !==
       null,
@@ -390,7 +404,11 @@ describe("OnboardingPage on the installed mobile app", () => {
   it("walks all six acts before offering the finish label", async () => {
     renderPage();
 
-    const lastActIndex = onboardingActsFor(false).length - 1;
+    const lastActIndex =
+      onboardingActsFor({
+        sessionImportAvailable: false,
+        loginImportAvailable: false,
+      }).length - 1;
     for (let index = 0; index < lastActIndex; index++) {
       expect(screen.getByTestId("onboarding-advance").textContent).toContain(
         "Continue",
@@ -626,7 +644,12 @@ describe("swiping between acts on the installed mobile app", () => {
   it("finishes the tour on a swipe left from the final act", async () => {
     const { container } = renderPage();
 
-    await advanceToStage(onboardingActsFor(false).length - 1);
+    await advanceToStage(
+      onboardingActsFor({
+        sessionImportAvailable: false,
+        loginImportAvailable: false,
+      }).length - 1,
+    );
     setGlobalGuideMock.mockClear();
 
     drag(

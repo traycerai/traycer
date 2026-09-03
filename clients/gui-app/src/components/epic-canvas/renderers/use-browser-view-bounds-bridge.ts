@@ -1,6 +1,7 @@
 import { useEffect, type RefObject } from "react";
 import {
   registerBrowserOverlayTile,
+  setBrowserOverlayTileMotion,
   updateBrowserOverlayTileRect,
   type BrowserOverlayRect,
 } from "@/lib/browser-view/tiles/browser-overlay-coordinator";
@@ -10,6 +11,14 @@ import type {
   BrowserViewBridge,
   BrowserViewTileKey,
 } from "@traycer-clients/shared/platform/browser-view";
+
+// Instant-enter/2-frame-exit hysteresis oscillated on ragged scrolls (wheel
+// ticks, flick tails): each re-entry into motion cost a capturePage + park +
+// restore race per tile, which reads as flicker. 6 frames (~100ms at 60fps)
+// of extra hold at rest costs at most one stale frame in exchange.
+// ponytail: still a guess, not a measurement - ticket 09's live probe should
+// confirm or retune this against the tail of a real pane animation.
+const MOTION_REST_FRAME_THRESHOLD = 6;
 
 interface UseBrowserViewBoundsBridgeArgs {
   readonly browserView: BrowserViewBridge | null;
@@ -75,6 +84,13 @@ export function useBrowserViewBoundsBridge(
 
     let frameId: number | null = null;
     let lastSentBounds: BrowserViewBounds | null = null;
+    // Invariant 8: motion is derived from this SAME per-frame comparison,
+    // not a second measurement or a new listener - see the header above for
+    // why scroll/resize/animation listeners each miss cases this rAF loop
+    // already covers. "Moving" is "the rect changed this frame"; "at rest"
+    // is "the rect has been identical for N consecutive frames" (below).
+    let inMotion = false;
+    let restFrameCount = 0;
 
     const measure = (): void => {
       frameId = window.requestAnimationFrame(measure);
@@ -97,8 +113,25 @@ export function useBrowserViewBoundsBridge(
       // Sub-pixel jitter is cheap to forward: main coalesces identical DIP
       // rects itself (`BrowserViewGeometry.applyBounds`), and an idle tile
       // reports byte-identical rects, so it still produces zero IPC.
-      if (lastSentBounds !== null && boundsAreEqual(lastSentBounds, bounds)) {
+      const unchangedSinceLastFrame =
+        lastSentBounds !== null && boundsAreEqual(lastSentBounds, bounds);
+      if (unchangedSinceLastFrame) {
+        if (inMotion) {
+          restFrameCount += 1;
+          if (restFrameCount >= MOTION_REST_FRAME_THRESHOLD) {
+            inMotion = false;
+            setBrowserOverlayTileMotion(tileKey, false);
+          }
+        }
         return;
+      }
+      restFrameCount = 0;
+      // The first frame after mount always changes `lastSentBounds` from
+      // null - that is the tile appearing, not moving, so it must not flag
+      // motion.
+      if (lastSentBounds !== null && !inMotion) {
+        inMotion = true;
+        setBrowserOverlayTileMotion(tileKey, true);
       }
       lastSentBounds = bounds;
       void browserView.updateBounds({ ...tileKey, bounds }).catch(ignoreError);
@@ -106,7 +139,24 @@ export function useBrowserViewBoundsBridge(
 
     measure();
 
+    // A pointer landing on the tile ends the freeze immediately instead of
+    // waiting out the rest hysteresis. While motion owns the tile its native
+    // view is parked off screen and the stand-in that replaces it is
+    // `pointer-events-none`, so a click arriving in the tail of a scroll
+    // reaches neither: releasing on `pointerdown` starts the restore
+    // handshake at the first sign of input rather than up to
+    // `MOTION_REST_FRAME_THRESHOLD` frames later. Capture phase, so a
+    // stand-in or status panel in front cannot swallow the signal.
+    const releaseMotionForInput = (): void => {
+      if (!inMotion) return;
+      inMotion = false;
+      restFrameCount = 0;
+      setBrowserOverlayTileMotion(tileKey, false);
+    };
+    surface.addEventListener("pointerdown", releaseMotionForInput, true);
+
     return () => {
+      surface.removeEventListener("pointerdown", releaseMotionForInput, true);
       if (frameId !== null) window.cancelAnimationFrame(frameId);
       unregisterOverlayTile();
     };

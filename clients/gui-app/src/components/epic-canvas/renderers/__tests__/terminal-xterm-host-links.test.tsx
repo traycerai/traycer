@@ -2,13 +2,13 @@ import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import { cleanup, render, waitFor } from "@testing-library/react";
 import { TerminalXtermHost } from "@/components/epic-canvas/renderers/terminal-tile-xterm";
 import { __disposeAllXtermHostsForTests } from "@/components/epic-canvas/renderers/xterm-host-registry";
-import { BrowserLinkRoutingProvider } from "@/lib/browser-view/link-routing/browser-link-routing";
+import { LinkTargetProvider } from "@/lib/links/link-target-provider";
 import {
   BrowserSessionsContext,
   type BrowserSessionsState,
 } from "@/components/epic-canvas/renderers/browser-sessions-context";
+import { BrowserSessionsSnapshotProvider } from "@/components/epic-canvas/renderers/browser-sessions-provider";
 import { createSingleTileCanvas } from "@/stores/epics/canvas/actions";
-import { collectPanes } from "@/stores/epics/canvas/tile-tree";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import {
   isBrowserSessionTileRef,
@@ -64,6 +64,16 @@ vi.mock("@/lib/keybindings/platform", async (importOriginal) => {
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHost: () => ({
     openExternalLink: xtermMocks.openExternalLink,
+  }),
+}));
+
+// The link seam reaches the desktop bridge through `RunnerHostContext`, which
+// this suite has no provider for; the terminal's own `useRunnerHost` mock
+// above covers its file-drop wiring only.
+vi.mock("@/lib/links/open-external-link", () => ({
+  useOpenExternalLink: () => ({
+    isPending: false,
+    mutateAsync: xtermMocks.openExternalLink,
   }),
 }));
 
@@ -198,8 +208,6 @@ function renderHost(): void {
 
 function renderHostWithBrowserRouting(): void {
   const canvas = createSingleTileCanvas(SOURCE_TILE);
-  const pane = collectPanes(canvas.root).at(0);
-  if (pane === undefined) throw new Error("expected source pane");
   useEpicCanvasStore.setState({
     tabsById: {
       [VIEW_TAB_ID]: {
@@ -212,45 +220,41 @@ function renderHostWithBrowserRouting(): void {
       [VIEW_TAB_ID]: canvas,
     },
   });
+  const sessions: BrowserSessionsState = {
+    hostId: SOURCE_TILE.hostId,
+    lifecycle: "live",
+    inventoryReady: true,
+    canMaterializeElectron: false,
+    items: [],
+    errorMessage: null,
+    retry: () => undefined,
+    openTab: xtermMocks.openTab,
+    closeTab: () => Promise.resolve(),
+  };
   render(
-    <BrowserSessionsContext.Provider
-      value={{
-        hostId: SOURCE_TILE.hostId,
-        lifecycle: "live",
-        inventoryReady: true,
-        canMaterializeElectron: false,
-        items: [],
-        errorMessage: null,
-        retry: () => undefined,
-        openTab: xtermMocks.openTab,
-        closeTab: () => Promise.resolve(),
-      }}
-    >
-      <BrowserLinkRoutingProvider
-        source={{
-          viewTabId: VIEW_TAB_ID,
-          paneId: pane.id,
-          hostId: SOURCE_TILE.hostId,
-        }}
-      >
-        <TerminalXtermHost
-          hostId={SOURCE_TILE.hostId}
-          sessionId="test-session"
-          tileKind="terminal"
-          instanceId="test-instance"
-          effectiveCols={80}
-          effectiveRows={24}
-          onUserInput={vi.fn()}
-          onContainerResize={vi.fn()}
-          onWriterReady={vi.fn()}
-          onTerminalReady={null}
-          shouldFocusOnActivePane={false}
-          registerImperativeFocus
-          findTargetId={null}
-          keepAlive={false}
-          chrome="padded"
-        />
-      </BrowserLinkRoutingProvider>
+    <BrowserSessionsContext.Provider value={sessions}>
+      {/* The click-time reader lives on the snapshot context (C8). */}
+      <BrowserSessionsSnapshotProvider value={sessions}>
+        <LinkTargetProvider epicId="epic-terminal" viewTabId={VIEW_TAB_ID}>
+          <TerminalXtermHost
+            hostId={SOURCE_TILE.hostId}
+            sessionId="test-session"
+            tileKind="terminal"
+            instanceId="test-instance"
+            effectiveCols={80}
+            effectiveRows={24}
+            onUserInput={vi.fn()}
+            onContainerResize={vi.fn()}
+            onWriterReady={vi.fn()}
+            onTerminalReady={null}
+            shouldFocusOnActivePane={false}
+            registerImperativeFocus
+            findTargetId={null}
+            keepAlive={false}
+            chrome="padded"
+          />
+        </LinkTargetProvider>
+      </BrowserSessionsSnapshotProvider>
     </BrowserSessionsContext.Provider>,
   );
 }
@@ -267,9 +271,13 @@ describe("<TerminalXtermHost /> link handling", () => {
     xtermMocks.openTab.mockClear();
     useEpicCanvasStore.setState({ canvasByTabId: {}, tabsById: {} });
     useSettingsStore.setState({
-      browserLinkDefaultMode: "in-app",
-      terminalBrowserLinkOpenMode: "in-app",
-      markdownBrowserLinkOpenMode: "in-app",
+      linkOpen: {
+        default: "in-app",
+        markdown: "in-app",
+        terminal: "in-app",
+        github: "in-app",
+        image: "in-app",
+      },
       browserDevOrigins: [],
     });
   });

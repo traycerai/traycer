@@ -2,6 +2,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "@capacitor/app";
 import { Capacitor } from "@capacitor/core";
+import { Keyboard } from "@capacitor/keyboard";
 import { PushNotifications } from "@capacitor/push-notifications";
 import {
   AndroidSettings,
@@ -175,9 +176,14 @@ function bootstrap(): void {
   // Native-only: the Keyboard plugin has no web implementation, and the dev
   // browser tab's overlay keyboard is already covered by gui-app's
   // visualViewport fallback. Started before render so the first keyboard
-  // event after mount is never missed.
+  // event after mount is never missed. Only iOS overlays the keyboard
+  // (`resize: none`), so only there does the bridge own `--keyboard-inset`;
+  // Android resizes its own webview and `100dvh` already tracks it.
   if (Capacitor.isNativePlatform()) {
-    startNativeKeyboardBridge();
+    startNativeKeyboardBridge({
+      plugin: Keyboard,
+      drivesInset: nativePlatform === "ios",
+    });
   }
   // APNs addressing follows code signing, not the backend set: staging and
   // production both ship distribution-signed (TestFlight / App Store rewrite

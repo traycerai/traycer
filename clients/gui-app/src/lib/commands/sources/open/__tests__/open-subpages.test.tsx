@@ -5,7 +5,7 @@ import type {
   WorktreeIntent,
 } from "@traycer/protocol/host/worktree-schemas";
 import type { BrowserSessionInfo } from "@traycer/protocol/host/browser/contracts";
-import type { BrowserSessionsLifecycle } from "@/components/epic-canvas/renderers/browser-sessions-context";
+import type { BrowserSessionsLifecycle } from "@traycer-clients/shared/platform/browser-view";
 import type { CommandContext, CommandItem } from "@/lib/commands/types";
 import type { KeybindingRouter } from "@/lib/keybindings/dispatch";
 import type { OpenTileIntoTargetGroupArgs } from "@/lib/commands/actions/open-into-target";
@@ -640,7 +640,7 @@ describe("Agents opener sub-page", () => {
     expect(useNewConversationModalOpenStore.getState().request).toEqual({
       epicId: "epic-1",
       tabId: "tab-1",
-      placement: { kind: "target-group", groupId: "group-1" },
+      placement: { kind: "tab", paneId: "group-1", index: null },
       parentId: null,
       hostId: null,
     });
@@ -697,7 +697,7 @@ describe("Agents opener sub-page", () => {
     expect(useNewConversationModalOpenStore.getState().request).toEqual({
       epicId: "epic-1",
       tabId: "tab-1",
-      placement: { kind: "target-group", groupId: "group-1" },
+      placement: { kind: "tab", paneId: "group-1", index: null },
       parentId: null,
       hostId: null,
     });

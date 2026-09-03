@@ -2,6 +2,7 @@ import "../../../../__tests__/test-browser-apis";
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { BrowserSettingsSection } from "@/components/settings/browser-settings-section";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 
 /**
  * Settings ▸ Browser rendered with NO `<HostRuntimeProvider>` above it, which
@@ -26,12 +27,16 @@ vi.mock("@/lib/browser-view/use-browser-save-logins", () => ({
 }));
 
 describe("<BrowserSettingsSection /> without a host runtime", () => {
-  afterEach(cleanup);
+  afterEach(() => {
+    cleanup();
+    useSettingsStore.setState({ browserDevOrigins: [] });
+  });
 
   it("renders the panel instead of throwing, and leaves the saved-logins group out", () => {
+    useSettingsStore.setState({ browserDevOrigins: ["http://localhost:5173"] });
     render(<BrowserSettingsSection />);
 
-    expect(screen.getByText("Web link default")).not.toBeNull();
+    expect(screen.getByText("Detected dev origins")).not.toBeNull();
     expect(screen.queryByText("Saved logins")).toBeNull();
     expect(screen.queryByRole("switch")).toBeNull();
   });

@@ -13,8 +13,7 @@ import type {
   BrowserViewDebugSnapshot,
   BrowserViewDebugSnapshotData,
   BrowserViewDetachSurface,
-  BrowserViewElectronTabCdpDispatch,
-  BrowserViewEnsureTab,
+  BrowserViewNativeTabStatusChange,
   BrowserViewStatus,
   BrowserViewElectronTabControl,
   BrowserViewNativeTabCapability,
@@ -25,6 +24,10 @@ import type {
 import type { PipCaptureIpcPayload } from "../../ipc-contracts/pip-capture-types";
 import { registrableDomainForUrl } from "@traycer/protocol/host/browser/registrable-domain";
 import { describeLogError, log } from "../app/logger";
+import {
+  isAllowedGuestNavigationUrl,
+  traceRefusedGuestNavigation,
+} from "./browser-guest-navigation";
 import type {
   BrowserSessionCertificateErrorChange,
   BrowserSessionDownloadChange,
@@ -32,6 +35,8 @@ import type {
   BrowserSessionProfileRequest,
 } from "./browser-session";
 import type {
+  BrowserViewElectronTabCdpDispatch,
+  BrowserViewEnsureTab,
   BrowserViewDevToolsWindow,
   BrowserViewNavigationHistory,
   BrowserViewPopupWebContents,
@@ -90,7 +95,6 @@ interface BrowserViewManagerOptions {
   ) => ManagedBrowserView;
   readonly getWindow: (windowId: string) => BrowserViewWindow | null;
   readonly createPopupWindowOptions: (
-    windowId: string,
     request: BrowserSessionProfileRequest,
   ) => BrowserWindowConstructorOptions;
   readonly createDevToolsWindow: (
@@ -115,10 +119,19 @@ interface BrowserViewManagerOptions {
   readonly onZoomChange: (listener: () => void) => () => void;
   readonly notifyHostWindowRendererReset: (windowId: string) => void;
   readonly send: BrowserViewSend;
+  /**
+   * Applies the host's storage seed for one guest. Takes the whole ensure-tab
+   * input rather than just the state, because the write is validated against
+   * the tab's OWN origin and attributed to the host that asked for it.
+   *
+   * Answers the part of the seed the JAR does not hold - the localStorage the
+   * caller may install as a document script - narrowed to what survived that
+   * validation, or `null` when nothing may be seeded at all.
+   */
   readonly seedStorageState: (
-    storageState: BrowserStorageState | null,
+    input: BrowserViewEnsureTab,
     webContents: ManagedBrowserView["webContents"],
-  ) => Promise<void>;
+  ) => Promise<BrowserStorageState | null>;
   readonly observePrimaryProfileOrigin: (
     url: string,
     webContents: ManagedBrowserView["webContents"],
@@ -159,6 +172,9 @@ export class BrowserViewManager {
   private readonly offDownloadChange: () => void;
   private readonly offCertificateError: () => void;
   private readonly entries = new BrowserViewEntryRegistry<BrowserViewEntry>();
+  private readonly nativeTabStatusListeners = new Set<
+    (change: BrowserViewNativeTabStatusChange) => void
+  >();
   private readonly geometry: BrowserViewGeometry;
   private readonly popups: BrowserViewPopups;
   private readonly debugSessions: BrowserViewDebugSessions;
@@ -214,6 +230,9 @@ export class BrowserViewManager {
       geometry: this.geometry,
       annotations: this.annotations,
       notifyHostWindowRendererReset: options.notifyHostWindowRendererReset,
+      emitStatus: (entry) => {
+        this.emitStatus(entry);
+      },
       closeEntry: (entry) => {
         void this.closeEntry(entry);
       },
@@ -544,6 +563,26 @@ export class BrowserViewManager {
         },
       };
     }
+    // The fourth navigation door, and the quietest: `cdpNavigate` reaches
+    // `Page.navigate` directly, so it bypasses both `navigate()` and
+    // `will-navigate`. The same predicate answers it - a curated command is
+    // still a navigation, and a guest's scheme policy does not depend on who
+    // asked.
+    if (
+      input.command.kind === "cdpNavigate" &&
+      !isAllowedGuestNavigationUrl(input.command.url)
+    ) {
+      traceRefusedGuestNavigation(input.command.url, "cdp-navigate");
+      return {
+        kind: input.command.kind,
+        ok: false,
+        error: {
+          kind: "cdp_error",
+          message: "Browser tabs can only open http, https or about:blank.",
+          code: null,
+        },
+      };
+    }
     const debugSession = this.debugSessions.ensure(entry);
     await debugSession.enableAfterCommit().catch(() => undefined);
     return debugSession.dispatch(input.target, input.command);
@@ -669,9 +708,27 @@ export class BrowserViewManager {
     entry.lastAppliedBounds = null;
     entry.rendererResetPending = false;
     this.windows.detachResetListenerIfUnused(surface.windowId);
+    // LAST, once every field the reading depends on has moved: `viewed` is
+    // read off the entry now (H10), so a detach that emitted nothing would
+    // leave the host believing a tile is still showing this guest. `attachSurface`
+    // emits for the same reason on the way in.
+    this.emitStatus(entry);
   }
 
+  /**
+   * The one funnel for every navigation this process asks a guest to perform -
+   * the renderer's `navigate` control action and the initial navigation the
+   * host's accepted tab starts with - so the scheme gate sits here rather than
+   * at either caller.
+   *
+   * It refuses BEFORE any entry state moves: a blocked target must not leave
+   * the tile reporting `loading` for a page that will never commit.
+   */
   private async navigate(entry: BrowserViewEntry, url: string): Promise<void> {
+    if (!isAllowedGuestNavigationUrl(url)) {
+      traceRefusedGuestNavigation(url, "navigate");
+      throw new Error("Browser tabs can only open http, https or about:blank.");
+    }
     this.annotations.end(entry, "navigation");
     entry.requestedUrl = url;
     entry.status = "loading";
@@ -888,21 +945,40 @@ export class BrowserViewManager {
     if (webContents === null) return;
     const readings = readNavigationReadings(webContents);
     if (readings === null) return;
+    const change: BrowserViewNativeTabStatusChange = {
+      ...entry.identity.key,
+      registrationId: entry.identity.registrationId,
+      url: entry.currentUrl,
+      title: entry.currentTitle === "" ? null : entry.currentTitle,
+      status: entry.status,
+      reason: entry.statusReason,
+      canGoBack: readings.canGoBack,
+      canGoForward: readings.canGoForward,
+      zoomPercent: readings.zoomPercent,
+      viewed: entry.surface !== null && entry.desiredVisible,
+    };
     this.send(
       entry.identity.lifecycleWindowId,
       RunnerHostEvent.browserViewNativeTabStatusChange,
-      {
-        ...entry.identity.key,
-        registrationId: entry.identity.registrationId,
-        url: entry.currentUrl,
-        title: entry.currentTitle === "" ? null : entry.currentTitle,
-        status: entry.status,
-        reason: entry.statusReason,
-        canGoBack: readings.canGoBack,
-        canGoForward: readings.canGoForward,
-        zoomPercent: readings.zoomPercent,
-      },
+      change,
     );
+    // The same reading, to the process that owns the host stream. It becomes
+    // `electronTabState` there (H10); the renderer's copy above is tile chrome.
+    for (const listener of this.nativeTabStatusListeners) listener(change);
+  }
+
+  /**
+   * Main-side subscription to the same status readings the renderer gets.
+   * Returns its own disposer, so a stream that closes stops hearing without
+   * touching another stream's subscription.
+   */
+  onNativeTabStatusChange(
+    listener: (change: BrowserViewNativeTabStatusChange) => void,
+  ): () => void {
+    this.nativeTabStatusListeners.add(listener);
+    return () => {
+      this.nativeTabStatusListeners.delete(listener);
+    };
   }
 
   private readLiveWebContents(

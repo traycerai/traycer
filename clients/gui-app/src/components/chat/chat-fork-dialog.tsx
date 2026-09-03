@@ -700,7 +700,6 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
           clearForkWorkspaces();
           const cancel = openCreatedChatWhenProjectedWithNavigation({
             intent: {
-              kind: "active-tile",
               epicId,
               tabId,
               chatId: result.chatId,
@@ -709,6 +708,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
               // that has never heard of this chat, and waiting out the whole
               // cross-host replication before anything appeared.
               hostId,
+              placement: null,
               source: "direct_ui",
             },
             navigateNestedFocus,

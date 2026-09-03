@@ -3,10 +3,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ProviderCustomModelProviderDialog } from "@/components/settings/panels/provider-custom-model-provider-dialog";
 import type { CustomProviderValues } from "@/components/settings/panels/model-provider-custom-draft";
 
-const mocks = vi.hoisted(() => ({ openExternalLink: vi.fn() }));
+const mocks = vi.hoisted(() => ({ openLink: vi.fn() }));
 
-vi.mock("@/hooks/runner/use-open-external-link-mutation", () => ({
-  useRunnerOpenExternalLink: () => ({ mutate: mocks.openExternalLink }),
+vi.mock("@/lib/links/open-link", () => ({
+  useOpenLink: () => mocks.openLink,
 }));
 
 function renderDialog(args: {
@@ -70,7 +70,7 @@ const STORED: CustomProviderValues = {
 };
 
 beforeEach(() => {
-  mocks.openExternalLink.mockReset();
+  mocks.openLink.mockReset();
 });
 
 afterEach(() => {
@@ -112,7 +112,7 @@ describe("custom model provider dialog", () => {
   });
 
   it("hands the docs link to the shell", () => {
-    // The renderer has no browser to navigate; the shell owns external links.
+    // The renderer has no browser to navigate; the app owns external links.
     renderDialog({
       initial: null,
       takenIds: [],
@@ -121,8 +121,10 @@ describe("custom model provider dialog", () => {
       submitError: null,
     });
     fireEvent.click(screen.getByText("provider config docs"));
-    expect(mocks.openExternalLink).toHaveBeenCalledWith(
+    expect(mocks.openLink).toHaveBeenCalledWith(
       "https://opencode.ai/docs/providers/#custom-provider",
+      "docs",
+      null,
     );
   });
 

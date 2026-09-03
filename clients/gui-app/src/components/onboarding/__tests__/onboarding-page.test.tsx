@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   cleanup,
   fireEvent,
-  render,
+  render as renderUi,
+  type RenderResult,
   screen,
   waitFor,
 } from "@testing-library/react";
@@ -10,6 +11,7 @@ import { LazyMotion, domAnimation } from "motion/react";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { traycerInfo } from "@traycer-clients/shared/platform/traycer-info";
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
+import { useFeatureAnnouncementsStore } from "@/stores/settings/feature-announcements-store";
 import {
   ONBOARDING_ACTS,
   onboardingActsFor,
@@ -64,6 +66,15 @@ vi.mock("@/hooks/session-import/use-session-import-available", () => ({
 const startSessionImportRunMock = vi.hoisted(() => vi.fn());
 vi.mock("@/components/session-import/session-import-run-handle", () => ({
   startSessionImportRun: startSessionImportRunMock,
+}));
+
+// Off by default: the login-import act needs a browser bridge and saved
+// logins on, which this harness has no desktop for. Suites that exercise
+// the act flip it and stub the stage.
+const loginImportAvailableMock = vi.hoisted(() => ({ value: false }));
+
+vi.mock("@/hooks/browser/use-login-import-available", () => ({
+  useLoginImportAvailable: () => loginImportAvailableMock.value,
 }));
 
 vi.mock("@/components/onboarding/onboarding-diorama", () => ({
@@ -151,6 +162,18 @@ vi.mock("@tanstack/react-router", async (importOriginal) => {
 
 // Import after mocks are registered.
 import { OnboardingPage } from "@/components/onboarding/onboarding-page";
+import type { ReactNode } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { WithTestQueryClient } from "@/__tests__/with-test-query-client";
+import { browserMutationKeys } from "@/lib/query-keys";
+
+/**
+ * Every link surface below reaches the external-link bridge mutation, which
+ * needs a `QueryClientProvider` above it.
+ */
+function render(ui: ReactNode): RenderResult {
+  return renderUi(ui, { wrapper: WithTestQueryClient });
+}
 
 function renderPage(args: { readonly replay: boolean }) {
   return render(
@@ -174,7 +197,10 @@ function createRunnerHost() {
 
 /** The tour the mocked host actually runs - not always the whole catalog. */
 function visibleActs(): ReadonlyArray<OnboardingAct> {
-  return onboardingActsFor(sessionImportAvailableMock.value);
+  return onboardingActsFor({
+    sessionImportAvailable: sessionImportAvailableMock.value,
+    loginImportAvailable: loginImportAvailableMock.value,
+  });
 }
 
 function currentActId(): string | null {
@@ -196,6 +222,8 @@ async function advanceToAct(actId: OnboardingActId): Promise<void> {
 describe("OnboardingPage", () => {
   beforeEach(() => {
     useOnboardingStore.setState({ completedAt: null, step: 0 });
+    useFeatureAnnouncementsStore.setState({ consumed: {} });
+    window.localStorage.clear();
     sessionImportAvailableMock.value = true;
     startSessionImportRunMock.mockClear();
     navigateMock.mockReset();
@@ -216,6 +244,8 @@ describe("OnboardingPage", () => {
   afterEach(() => {
     cleanup();
     useOnboardingStore.setState({ completedAt: null, step: 0 });
+    useFeatureAnnouncementsStore.setState({ consumed: {} });
+    window.localStorage.clear();
   });
 
   it("renders act 1 copy and the live miniature on initial mount", () => {
@@ -261,7 +291,7 @@ describe("OnboardingPage", () => {
     expect(screen.getByText("v0.0.0")).not.toBeNull();
   });
 
-  it("wires onboarding footer links to the website destinations", () => {
+  it("wires onboarding footer links to the website destinations", async () => {
     const host = createRunnerHost();
     render(
       <RunnerHostContext.Provider value={host}>
@@ -285,46 +315,12 @@ describe("OnboardingPage", () => {
       fireEvent.click(link);
     });
 
-    expect(host.openedExternalLinks).toEqual(
-      expectedLinks.map(([, url]) => url),
-    );
-  });
-
-  it("falls back to browser navigation when the runner host cannot open a footer link", async () => {
-    const host = createRunnerHost();
-    const openExternalLinkMock = vi
-      .spyOn(host, "openExternalLink")
-      .mockRejectedValue(new Error("host unavailable"));
-    const windowOpenMock = vi
-      .spyOn(window, "open")
-      .mockImplementation(() => null);
-
-    render(
-      <RunnerHostContext.Provider value={host}>
-        <LazyMotion features={domAnimation}>
-          <OnboardingPage replay={false} />
-        </LazyMotion>
-      </RunnerHostContext.Provider>,
-    );
-
-    fireEvent.click(
-      screen.getByRole<HTMLAnchorElement>("link", {
-        name: "Support",
-      }),
-    );
-
+    // The bridge is a mutation now, so each handoff lands a microtask later.
     await waitFor(() => {
-      expect(windowOpenMock).toHaveBeenCalledWith(
-        traycerInfo.mainWebsiteContactUs,
-        "_blank",
-        "noopener,noreferrer",
+      expect(host.openedExternalLinks).toEqual(
+        expectedLinks.map(([, url]) => url),
       );
     });
-    expect(openExternalLinkMock).toHaveBeenCalledWith(
-      traycerInfo.mainWebsiteContactUs,
-    );
-
-    windowOpenMock.mockRestore();
   });
 
   it("advances through every act while keeping the Figma continue label", async () => {
@@ -791,5 +787,200 @@ describe("OnboardingPage", () => {
       to: "/draft/new",
       replace: true,
     });
+  });
+
+  it("consumes the login-import announcement on Skip when the import is available", async () => {
+    loginImportAvailableMock.value = true;
+    renderPage({ replay: false });
+
+    fireEvent.click(screen.getByTestId("onboarding-skip"));
+
+    await waitFor(() => {
+      expect(useOnboardingStore.getState().completedAt).not.toBeNull();
+    });
+    expect(
+      useFeatureAnnouncementsStore.getState().consumed["login-import"],
+    ).toBeDefined();
+  });
+
+  it("consumes the login-import announcement on Skip even when the import is unavailable, so a pending availability read cannot resurrect the toast", async () => {
+    loginImportAvailableMock.value = false;
+    renderPage({ replay: false });
+
+    fireEvent.click(screen.getByRole("button", { name: /Skip intro/ }));
+
+    await waitFor(() => {
+      expect(useOnboardingStore.getState().completedAt).not.toBeNull();
+    });
+    expect(
+      useFeatureAnnouncementsStore.getState().consumed["login-import"],
+    ).toBeDefined();
+  });
+
+  it("consumes the login-import announcement on a completed tour (Continue through the last act)", async () => {
+    loginImportAvailableMock.value = true;
+    renderPage({ replay: false });
+
+    const acts = visibleActs();
+    await advanceToAct(acts[acts.length - 1].id);
+    fireEvent.click(screen.getByTestId("onboarding-advance"));
+
+    await waitFor(() => {
+      expect(useOnboardingStore.getState().completedAt).not.toBeNull();
+    });
+    expect(
+      useFeatureAnnouncementsStore.getState().consumed["login-import"],
+    ).toBeDefined();
+  });
+
+  it("disables Back while a login import is pending, and re-enables once it settles", async () => {
+    loginImportAvailableMock.value = true;
+    const client = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    renderUi(
+      <QueryClientProvider client={client}>
+        <LazyMotion features={domAnimation}>
+          <OnboardingPage replay={false} />
+        </LazyMotion>
+      </QueryClientProvider>,
+    );
+
+    await advanceToAct("login-import");
+    expect(currentActId()).toBe("login-import");
+
+    // Drives the SAME mutation cache `useIsMutating` reads, under the exact
+    // key the import mutation uses - no need to walk the whole import flow's
+    // UI to get a pending mutation registered.
+    // A holder rather than a `let`: the assignment happens inside the
+    // mutation's callback, which TypeScript's narrowing cannot see.
+    const releaseImport: { current: (() => void) | null } = { current: null };
+    const mutation = client.getMutationCache().build(client, {
+      mutationKey: browserMutationKeys.importLogins(),
+      mutationFn: () =>
+        new Promise<void>((resolve) => {
+          releaseImport.current = () => {
+            resolve();
+          };
+        }),
+    });
+    void mutation.execute(undefined);
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole<HTMLButtonElement>("button", { name: /Back/ })
+          .disabled,
+      ).toBe(true);
+    });
+
+    // The ArrowLeft path is the same guard as the button: the step must not
+    // move while the import is in flight.
+    const stepBeforeArrowLeft = useOnboardingStore.getState().step;
+    fireEvent.keyDown(window, { key: "ArrowLeft" });
+    expect(useOnboardingStore.getState().step).toBe(stepBeforeArrowLeft);
+    expect(currentActId()).toBe("login-import");
+
+    const release = releaseImport.current;
+    if (release === null) throw new Error("no import mutation to release");
+    release();
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole<HTMLButtonElement>("button", { name: /Back/ })
+          .disabled,
+      ).toBe(false);
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /Back/ }));
+    await waitFor(() => {
+      expect(currentActId()).not.toBe("login-import");
+    });
+  });
+
+  it("consumes the login-import announcement on Skip even after the act was dropped from the list mid-tour", async () => {
+    loginImportAvailableMock.value = true;
+    const view = renderPage({ replay: false });
+
+    // The tour-scoped marker is set by an effect that has to observe the act
+    // in the list at least once.
+    await waitFor(() => {
+      expect(visibleActs().map((act) => act.id)).toContain("login-import");
+    });
+
+    loginImportAvailableMock.value = false;
+    view.rerender(
+      <LazyMotion features={domAnimation}>
+        <OnboardingPage replay={false} />
+      </LazyMotion>,
+    );
+
+    await waitFor(() => {
+      expect(visibleActs().map((act) => act.id)).not.toContain("login-import");
+    });
+
+    fireEvent.click(screen.getByTestId("onboarding-skip"));
+
+    await waitFor(() => {
+      expect(useOnboardingStore.getState().completedAt).not.toBeNull();
+    });
+    // The marker, not the live availability: the act was offered at some
+    // point during this tour, even though the list held it for only part of
+    // it.
+    expect(
+      useFeatureAnnouncementsStore.getState().consumed["login-import"],
+    ).toBeDefined();
+  });
+
+  it("keeps the user on the SAME act by id when the act list changes under them", async () => {
+    // The shorter tour: login import starts unavailable, so agent-guide
+    // sits one index earlier than it does in the full catalog.
+    loginImportAvailableMock.value = false;
+    const view = renderPage({ replay: false });
+
+    await advanceToAct("agent-guide");
+    expect(currentActId()).toBe("agent-guide");
+
+    // Login import resolves available mid-tour and a new act is inserted
+    // ahead of agent-guide, which shifts its index by one.
+    loginImportAvailableMock.value = true;
+    view.rerender(
+      <LazyMotion features={domAnimation}>
+        <OnboardingPage replay={false} />
+      </LazyMotion>,
+    );
+
+    await waitFor(() => {
+      expect(currentActId()).toBe("agent-guide");
+    });
+    // The store's own position moved WITH the act, to wherever agent-guide
+    // now sits in the longer tour - never left pointing at the login-import
+    // act that took its old index.
+    const agentGuideIndex = visibleActs().findIndex(
+      (entry) => entry.id === "agent-guide",
+    );
+    expect(useOnboardingStore.getState().step).toBe(agentGuideIndex);
+  });
+
+  it("a normal Continue still advances to the next act after a re-seat", async () => {
+    loginImportAvailableMock.value = false;
+    const view = renderPage({ replay: false });
+    await advanceToAct("agent-guide");
+
+    loginImportAvailableMock.value = true;
+    view.rerender(
+      <LazyMotion features={domAnimation}>
+        <OnboardingPage replay={false} />
+      </LazyMotion>,
+    );
+    await waitFor(() => {
+      expect(currentActId()).toBe("agent-guide");
+    });
+
+    await advanceToAct("command-theme");
+
+    expect(currentActId()).toBe("command-theme");
   });
 });

@@ -1,11 +1,6 @@
 import "../../../../../__tests__/test-browser-apis";
-import {
-  act,
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-} from "@testing-library/react";
+import { act, cleanup, fireEvent, screen } from "@testing-library/react";
+import { renderPeekTile } from "@/components/epic-canvas/renderers/__tests__/browser-peek-tile-render";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   FakeStreamClient,
@@ -17,6 +12,8 @@ import {
   streamAuthRevalidatorModule,
   tabHostIdModule,
   tileBodyVisibleModule,
+  runnerOpenExternalLinkModule,
+  tileRoleRunnerHostModule,
   type FakeStreamSession,
 } from "@/components/epic-canvas/renderers/__tests__/browser-peek-tile-stream-fixture";
 import { BrowserPeekTile } from "@/components/epic-canvas/renderers/browser-peek-tile";
@@ -28,6 +25,12 @@ const hookState = vi.hoisted(() => ({
   streamClient: null as FakeStreamClient | null,
   visible: true,
 }));
+
+vi.mock("@/providers/use-runner-host", () => tileRoleRunnerHostModule());
+
+vi.mock("@/hooks/runner/use-open-external-link-mutation", () =>
+  runnerOpenExternalLinkModule(),
+);
 
 vi.mock("sonner", () => ({
   toast,
@@ -146,7 +149,7 @@ describe("BrowserPeekTile toolbar chrome", () => {
   });
 
   it("hides the controlling chip until armed and release disarms that epoch", async () => {
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
@@ -186,7 +189,7 @@ describe("BrowserPeekTile toolbar chrome", () => {
   });
 
   it("toasts once per unsupportedInteraction feature", () => {
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
@@ -207,7 +210,7 @@ describe("BrowserPeekTile toolbar chrome", () => {
   });
 
   it("keeps the focused address draft when the agent navigates", async () => {
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
@@ -240,7 +243,7 @@ describe("BrowserPeekTile toolbar chrome", () => {
   });
 
   it("auto-arms from a cold toolbar back click and sends goBack only after confirmation", async () => {
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
@@ -297,7 +300,7 @@ describe("BrowserPeekTile toolbar chrome", () => {
   });
 
   it("flushes every pending cold toolbar nav after arm confirmation", async () => {
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
@@ -356,7 +359,7 @@ describe("BrowserPeekTile toolbar chrome", () => {
   });
 
   it("drops a pending arm and cold nav when revoked before confirmation", async () => {
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
@@ -417,7 +420,7 @@ describe("BrowserPeekTile toolbar chrome", () => {
   });
 
   it("replaces a submitted address with the next live url", () => {
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
@@ -445,7 +448,7 @@ describe("BrowserPeekTile toolbar chrome", () => {
   });
 
   it("keeps control after leaving the tile from the address bar", async () => {
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"

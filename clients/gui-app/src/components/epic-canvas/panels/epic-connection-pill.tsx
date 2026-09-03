@@ -3,10 +3,12 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { LivePulse } from "@/components/ui/live-pulse";
 import {
   useEpicHasFreshCloudSyncStatus,
+  useEpicHostTransportStatus,
   useEpicSyncPillState,
   useEpicWriteCommandAlert,
 } from "@/lib/epic-selectors";
 import { useLinkDownTooLong } from "@/components/epic-canvas/panels/use-link-down-too-long";
+import { useCloudLinkGrace } from "@/components/epic-canvas/panels/use-cloud-link-grace";
 import type {
   EpicSyncPillState,
   EpicWriteCommandAlert,
@@ -59,6 +61,13 @@ import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
  * only the cloud link is down, in the per-Epic store while the host itself is
  * unreachable) and flush on reconnect; the pill is the only indicator - there
  * is no banner during reconnect.
+ *
+ * A cloud-only drop is additionally held back for `CLOUD_LINK_GRACE_MS`
+ * (`use-cloud-link-grace.ts`) before it may read amber: the host re-dials the
+ * collab socket within seconds, the edits are durable on the host throughout,
+ * and naming every such drop taught users the product's connection was
+ * broken while it was working. A host-link drop gets no such grace - there,
+ * an unsent edit exists only in this window and the copy is the warning.
  */
 export interface EpicConnectionPillProps {
   readonly epicId: string;
@@ -66,7 +75,13 @@ export interface EpicConnectionPillProps {
 
 export function EpicConnectionPill(props: EpicConnectionPillProps) {
   const derived = useEpicSyncPillState();
-  const state = useSyncPillDisplayState(derived);
+  const hostTransportStatus = useEpicHostTransportStatus();
+  // A cloud-only drop (host reachable, edits durable on the host) reads as
+  // neutral `syncing` until it has lasted `CLOUD_LINK_GRACE_MS`; a host-link
+  // drop is never held back. The escalation clock below still reads the RAW
+  // verdict, so the grace cannot delay or mask "Still reconnecting…".
+  const graced = useCloudLinkGrace(derived, hostTransportStatus);
+  const state = useSyncPillDisplayState(graced);
   const hasFreshCloudSyncStatus = useEpicHasFreshCloudSyncStatus();
   // The escalation clock reads the RAW verdict, not the settled display
   // state: the settle hold renames a genuine `synced` to `syncing` until the
@@ -106,8 +121,11 @@ export function EpicConnectionPill(props: EpicConnectionPillProps) {
     artifactIndicator: indicatorFor(state, linkDownTooLong),
     ...secondarySignals,
   });
+  // The graced verdict, not the settled one: a cloud drop inside its grace
+  // must read as quiet on hover too, or the tooltip names an outage the dot
+  // is deliberately not showing.
   const rawSelected = highestSeverityIndicator({
-    artifactIndicator: indicatorFor(derived, linkDownTooLong),
+    artifactIndicator: indicatorFor(graced, linkDownTooLong),
     ...secondarySignals,
   });
   const { indicator } = selected;
