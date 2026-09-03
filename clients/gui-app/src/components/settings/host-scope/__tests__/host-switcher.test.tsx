@@ -36,6 +36,7 @@ function renderEmpty(props: {
       onSelect={() => undefined}
       action={{
         kind: "add-host",
+        disabled: false,
         onSelect: props.onAddHost ?? (() => undefined),
       }}
       surface="rail"
@@ -107,7 +108,11 @@ describe("<HostSwitcher /> empty vs failed", () => {
         selected={null}
         activeHostId={null}
         onSelect={() => undefined}
-        action={{ kind: "add-host", onSelect: () => undefined }}
+        action={{
+          kind: "add-host",
+          disabled: false,
+          onSelect: () => undefined,
+        }}
         surface="rail"
         intent="view"
         disabled={false}
@@ -140,7 +145,11 @@ describe("<HostSwitcher /> empty vs failed", () => {
         selected={null}
         activeHostId={null}
         onSelect={() => undefined}
-        action={{ kind: "add-host", onSelect: () => undefined }}
+        action={{
+          kind: "add-host",
+          disabled: false,
+          onSelect: () => undefined,
+        }}
         surface="rail"
         intent="view"
         disabled={false}
@@ -198,7 +207,11 @@ describe("<HostSwitcher /> empty vs failed", () => {
         selected={null}
         activeHostId={null}
         onSelect={() => undefined}
-        action={{ kind: "add-host", onSelect: () => undefined }}
+        action={{
+          kind: "add-host",
+          disabled: false,
+          onSelect: () => undefined,
+        }}
         surface="rail"
         intent="view"
         disabled={false}
@@ -228,7 +241,11 @@ describe("<HostSwitcher /> trigger status", () => {
       inertExceptHostId: null,
       activeHostId: "host-a",
       onSelect: () => undefined,
-      action: { kind: "manage-hosts" as const, onSelect: () => undefined },
+      action: {
+        kind: "manage-hosts" as const,
+        disabled: false,
+        onSelect: () => undefined,
+      },
       surface: "inline" as const,
       intent: "pin" as const,
       disabled: false,
@@ -283,7 +300,7 @@ describe("<HostSwitcher /> trailing action", () => {
         selected={null}
         activeHostId={null}
         onSelect={() => undefined}
-        action={{ kind: "manage-hosts", onSelect }}
+        action={{ kind: "manage-hosts", disabled: false, onSelect }}
         surface="panel-header"
         intent="view"
         disabled={false}
@@ -319,7 +336,11 @@ describe("<HostSwitcher /> trailing action", () => {
         selected={null}
         activeHostId={null}
         onSelect={() => undefined}
-        action={{ kind: "manage-hosts", onSelect: () => undefined }}
+        action={{
+          kind: "manage-hosts",
+          disabled: false,
+          onSelect: () => undefined,
+        }}
         surface="panel-header"
         intent="view"
         disabled={false}
@@ -362,7 +383,11 @@ describe("<HostSwitcher /> setting-up status word (M5)", () => {
         selected={null}
         activeHostId={null}
         onSelect={() => undefined}
-        action={{ kind: "add-host", onSelect: () => undefined }}
+        action={{
+          kind: "add-host",
+          disabled: false,
+          onSelect: () => undefined,
+        }}
         surface="rail"
         intent="view"
         refusalByHostId={NO_HOST_OPTION_REFUSALS}

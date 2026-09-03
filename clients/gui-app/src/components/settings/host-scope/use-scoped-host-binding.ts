@@ -20,10 +20,13 @@ import type { HostScope } from "@/components/settings/host-scope/use-host-scope"
  *     `useTabHostClient()` and its host `useTabHostId()`. It has no `HostScope`
  *     to hand this hook, so it structurally cannot use it.
  *
- * EIGHT surfaces re-provide `HostRuntimeContext` in total: the six through
+ * TEN surfaces re-provide `HostRuntimeContext` in total: the eight through
  * this hook (`rate-limit-icon`, `shell`, `diagnostics`, `providers`, `host`,
- * and the onboarding TOUR) plus those two. Anything reading `useHostClient()`
- * / `useAddressableHostId()` beneath any of them gets that surface's host.
+ * `app-status-bar` — the bottom strip, which re-provides for the host its chip
+ * names — `layout`, whose per-provider status-bar toggles read the same watch
+ * pick the strip does, and the onboarding TOUR) plus those two. Anything
+ * reading `useHostClient()` / `useAddressableHostId()` beneath any of them
+ * gets that surface's host.
  *
  * The tour (`onboarding-page.tsx`) is the eighth, and the first outside
  * Settings-shaped surfaces: its two host-dependent acts read one machine -
@@ -44,7 +47,11 @@ import type { HostScope } from "@/components/settings/host-scope/use-host-scope"
  * audio, so pointing it at a pinned host ships a user's voice to a machine they
  * only picked to administer. Today it is safe only because no re-provider
  * happens to sit above a composer — a positional fact, not an invariant, which
- * is why it is written down here where the eighth re-provider gets added.
+ * is why it is written down here where the tenth re-provider gets added. The
+ * two most recent are the bottom strip and Layout's status-bar group, and both
+ * are safe for that same positional reason: a 24px strip holds a host chip and
+ * a readout, a Settings group holds toggles, and no composer will ever be a
+ * child of either.
  *
  * ⚠ AND THE RULE BINDS `StreamRuntimeContext` AT LEAST AS HARD, which this
  * note used to imply it did not by naming only the unary provider.
@@ -56,15 +63,17 @@ import type { HostScope } from "@/components/settings/host-scope/use-host-scope"
  * That population is no longer a single surface: `resource-monitor-popover`
  * was the only stream re-provider, and the epic sidebar's file tree, the git
  * diff panel, the HOST OVERVIEW (`host-settings-panel.tsx`, whose
- * `StreamRuntimeContext.Provider` carries `useScopedStreamBinding`) and the
- * onboarding TOUR are now four more, and the session-import DIALOG a fifth.
- * The Overview joined the list for its Data & migration group: both rows
- * move ONE machine's local data over a stream, so the stream has to be the
- * named host's. The tour joined it for the same reason one act down — the
- * session scan and the run it starts are that machine's — and the dialog
- * for exactly that scan and run. All are safe for the same positional reason
- * as the other three — they contain no composer, and so no path to the
- * microphone.
+ * `StreamRuntimeContext.Provider` carries `useScopedStreamBinding`), the
+ * onboarding TOUR and `app-status-bar` are now five more, and the
+ * session-import DIALOG a sixth. The Overview joined the list for its Data &
+ * migration group: both rows move ONE machine's local data over a stream, so
+ * the stream has to be the named host's. The tour joined it for the same
+ * reason one act down — the session scan and the run it starts are that
+ * machine's — and the dialog for exactly that scan and run. The strip joined
+ * it because its readout rides `resources.subscribe` for the host its chip
+ * names, while that chip's own reads are unary. All are safe for the same
+ * positional reason as the other three — they contain no composer, a 24px
+ * strip least of all, and so no path to the microphone.
  *
  * Three consumers of a re-provided stream now also CHECK it before acting,
  * because this hook's binding lands in an effect: `host-import-migration-

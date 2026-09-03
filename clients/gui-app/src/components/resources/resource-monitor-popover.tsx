@@ -124,6 +124,7 @@ import {
 } from "@/lib/resources/format-resource-usage";
 import {
   combineHeadlineResourceSummary,
+  hostMemorySharePercent,
   resolveResourceMonitorHostReading,
   type HeadlineResourceSummary,
 } from "@/lib/resources/headline-resource-summary";
@@ -215,9 +216,34 @@ const ROW_ACTION_SLOT = "flex w-10 shrink-0 items-center justify-center";
 const ROW_HOVER_REVEAL =
   "opacity-0 transition-opacity focus-visible:opacity-100 group-hover:opacity-100";
 
-interface ResourceMonitorPopoverProps {
-  readonly className: string | undefined;
-}
+/**
+ * How this popover is opened, as a discriminated union rather than an
+ * injectable node with a spare `className`.
+ *
+ * The two callers do not differ by decoration, they differ by ANATOMY. The
+ * header owns a fixed icon button and anchors its panel downward; the status
+ * bar's trigger is a live readout whose contents this component knows nothing
+ * about, and its panel has to open upward because there is nothing below the
+ * strip. A single optional-node shape would have let a caller supply a custom
+ * trigger and silently keep the header's downward panel — off the bottom of
+ * the window — which is precisely the pairing a union makes unrepresentable.
+ */
+export type ResourceMonitorPopoverTrigger =
+  | {
+      readonly trigger: "header-button";
+      readonly className: string | undefined;
+    }
+  | {
+      readonly trigger: "custom";
+      /**
+       * Rendered through `PopoverTrigger asChild`, so it must be a single
+       * element that forwards props and a ref to a real DOM node.
+       */
+      readonly triggerNode: ReactNode;
+      readonly contentSide: "top" | "bottom";
+    };
+
+type ResourceMonitorPopoverProps = ResourceMonitorPopoverTrigger;
 
 interface CanvasResourceSnapshot {
   readonly openTabOrder: readonly string[];
@@ -446,7 +472,7 @@ export function ResourceMonitorPopover(props: ResourceMonitorPopoverProps) {
       value={scopedStreamBinding ?? ambientStreamBinding}
     >
       <ScopedResourceMonitorPopover
-        className={props.className}
+        trigger={props}
         scope={scope}
         hasExplicitPick={hasExplicitPick}
         streamBoundToScope={
@@ -460,7 +486,7 @@ export function ResourceMonitorPopover(props: ResourceMonitorPopoverProps) {
 }
 
 function ScopedResourceMonitorPopover(props: {
-  readonly className: string | undefined;
+  readonly trigger: ResourceMonitorPopoverTrigger;
   readonly scope: HostScope;
   readonly hasExplicitPick: boolean;
   /** The provided stream client is the picked host's, not a fallback. */
@@ -498,31 +524,39 @@ function ScopedResourceMonitorPopover(props: {
         <GlobalResourcesStreamMount interactive={open} />
       ) : null}
       <Popover open={open} onOpenChange={setOpen}>
-        <TooltipWrapper
-          // The host belongs in the label only when it is NOT the obvious one.
-          // Naming the active host on every hover would train people to ignore
-          // the one case the words exist for.
-          label={tooltip}
-          side="top"
-          sideOffset={6}
-          align={undefined}
-        >
-          <PopoverTrigger asChild>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              aria-label="Resources"
-              data-testid="resource-monitor-header-button"
-              className={cn(
-                "text-muted-foreground hover:text-foreground",
-                props.className,
-              )}
-            >
-              <Cpu className="size-3.5" />
-            </Button>
-          </PopoverTrigger>
-        </TooltipWrapper>
+        {props.trigger.trigger === "header-button" ? (
+          <TooltipWrapper
+            // The host belongs in the label only when it is NOT the obvious one.
+            // Naming the active host on every hover would train people to ignore
+            // the one case the words exist for.
+            label={tooltip}
+            side="top"
+            sideOffset={6}
+            align={undefined}
+          >
+            <PopoverTrigger asChild>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                aria-label="Resources"
+                data-testid="resource-monitor-header-button"
+                className={cn(
+                  "text-muted-foreground hover:text-foreground",
+                  props.trigger.className,
+                )}
+              >
+                <Cpu className="size-3.5" />
+              </Button>
+            </PopoverTrigger>
+          </TooltipWrapper>
+        ) : (
+          // No tooltip wrapper: a custom trigger is a readout, not a glyph, so
+          // it already says what the icon button needed a hover to say - and
+          // the status bar's segment carries per-metric tooltips of its own
+          // that a wrapper here would compete with.
+          <PopoverTrigger asChild>{props.trigger.triggerNode}</PopoverTrigger>
+        )}
 
         {open ? (
           <ResourceMonitorContent
@@ -532,6 +566,11 @@ function ScopedResourceMonitorPopover(props: {
             scope={scope}
             hasExplicitPick={props.hasExplicitPick}
             streamBoundToScope={props.streamBoundToScope}
+            contentSide={
+              props.trigger.trigger === "header-button"
+                ? "bottom"
+                : props.trigger.contentSide
+            }
           />
         ) : null}
       </Popover>
@@ -717,6 +756,7 @@ function ResourceMonitorContent(props: {
   readonly hasExplicitPick: boolean;
   /** The provided stream client is the picked host's, not a fallback. */
   readonly streamBoundToScope: boolean;
+  readonly contentSide: "top" | "bottom";
 }) {
   const [sortMenuOpen, setSortMenuOpen] = useState(false);
   const scope = props.scope;
@@ -762,6 +802,7 @@ function ResourceMonitorContent(props: {
   return (
     <PopoverContent
       align="end"
+      side={props.contentSide}
       sideOffset={8}
       collisionPadding={12}
       role="dialog"
@@ -911,6 +952,7 @@ function ResourceMonitorHostPickerRow(props: {
         // lives, rather than a second copy of one verb from it.
         action={{
           kind: "manage-hosts",
+          disabled: false,
           onSelect: () => {
             props.onClose();
             carryViewedHostIntoSettingsScope(scope.hostId);
@@ -1868,20 +1910,14 @@ function hostTreeVisibleProjection(
   };
 }
 
-function hostMemorySharePercent(
-  app: AppResourceUsage | null,
-  summary: HeadlineResourceSummary | null,
-): number | null {
-  if (app === null || app.hostTotalMemoryBytes <= 0) return null;
-  if (summary === null || summary.memoryBytes === null) return null;
-  return (summary.memoryBytes / app.hostTotalMemoryBytes) * 100;
-}
-
 function HostRamShareMetric(props: {
   readonly app: AppResourceUsage | null;
   readonly summary: HeadlineResourceSummary | null;
 }) {
-  const percent = hostMemorySharePercent(props.app, props.summary);
+  const percent = hostMemorySharePercent(
+    props.summary?.memoryBytes ?? null,
+    props.app,
+  );
   return (
     <MetricBlock
       label="RAM share"
@@ -1895,7 +1931,10 @@ function HostRamShareBar(props: {
   readonly app: AppResourceUsage | null;
   readonly summary: HeadlineResourceSummary | null;
 }) {
-  const percent = hostMemorySharePercent(props.app, props.summary);
+  const percent = hostMemorySharePercent(
+    props.summary?.memoryBytes ?? null,
+    props.app,
+  );
   if (percent === null) return null;
   // Only the bar geometry and its ARIA value are bounded; the text above
   // reports the raw ratio, including a >100% one that exposes overlap.

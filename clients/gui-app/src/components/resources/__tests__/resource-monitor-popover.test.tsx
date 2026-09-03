@@ -832,7 +832,7 @@ function renderPopover(): void {
   render(
     <TooltipProvider>
       <ResourcesStreamMount epicId="epic-1" />
-      <ResourceMonitorPopover className={undefined} />
+      <ResourceMonitorPopover trigger="header-button" className={undefined} />
     </TooltipProvider>,
   );
 }
@@ -2353,7 +2353,7 @@ describe("ResourceMonitorPopover", () => {
     render(
       <TooltipProvider delayDuration={0}>
         <ResourcesStreamMount epicId="epic-1" />
-        <ResourceMonitorPopover className={undefined} />
+        <ResourceMonitorPopover trigger="header-button" className={undefined} />
       </TooltipProvider>,
     );
 
@@ -3562,7 +3562,7 @@ describe("ResourceMonitorPopover", () => {
     render(
       <TooltipProvider>
         <ResourcesStreamMount epicId="epic-1" />
-        <ResourceMonitorPopover className={undefined} />
+        <ResourceMonitorPopover trigger="header-button" className={undefined} />
       </TooltipProvider>,
     );
 
@@ -3589,7 +3589,7 @@ describe("ResourceMonitorPopover", () => {
     render(
       <TooltipProvider>
         <ResourcesStreamMount epicId="epic-1" />
-        <ResourceMonitorPopover className={undefined} />
+        <ResourceMonitorPopover trigger="header-button" className={undefined} />
       </TooltipProvider>,
     );
 
@@ -3645,7 +3645,7 @@ describe("ResourceMonitorPopover", () => {
     render(
       <TooltipProvider>
         <ResourcesStreamMount epicId="epic-1" />
-        <ResourceMonitorPopover className={undefined} />
+        <ResourceMonitorPopover trigger="header-button" className={undefined} />
       </TooltipProvider>,
     );
 
@@ -3670,7 +3670,7 @@ describe("ResourceMonitorPopover", () => {
     render(
       <TooltipProvider>
         <ResourcesStreamMount epicId="epic-1" />
-        <ResourceMonitorPopover className={undefined} />
+        <ResourceMonitorPopover trigger="header-button" className={undefined} />
       </TooltipProvider>,
     );
 
@@ -3741,7 +3741,7 @@ describe("ResourceMonitorPopover", () => {
     render(
       <TooltipProvider>
         <ResourcesStreamMount epicId="epic-1" />
-        <ResourceMonitorPopover className={undefined} />
+        <ResourceMonitorPopover trigger="header-button" className={undefined} />
       </TooltipProvider>,
     );
 
@@ -3783,7 +3783,7 @@ describe("ResourceMonitorPopover", () => {
     render(
       <TooltipProvider>
         <ResourcesStreamMount epicId="epic-1" />
-        <ResourceMonitorPopover className={undefined} />
+        <ResourceMonitorPopover trigger="header-button" className={undefined} />
       </TooltipProvider>,
     );
 
@@ -4575,7 +4575,7 @@ describe("ResourceMonitorPopover · host picker", () => {
     render(
       <TooltipProvider>
         <ResourcesStreamMount epicId="epic-1" />
-        <ResourceMonitorPopover className={undefined} />
+        <ResourceMonitorPopover trigger="header-button" className={undefined} />
       </TooltipProvider>,
     );
 
@@ -4987,5 +4987,59 @@ describe("ResourceMonitorPopover · host picker", () => {
       expect.objectContaining({ instanceId: "tile-term-shared-a" }),
       expect.anything(),
     );
+  });
+});
+
+/**
+ * The footer supplies its own trigger and needs the panel above it. The two
+ * halves are asserted together because the pairing is the point: a custom
+ * trigger that kept the header's downward panel would open off the bottom of
+ * the window, which is exactly what the discriminated prop exists to prevent.
+ */
+describe("ResourceMonitorPopover · custom trigger", () => {
+  function renderWithCustomTrigger(): void {
+    render(
+      <TooltipProvider>
+        <ResourcesStreamMount epicId="epic-1" />
+        <ResourceMonitorPopover
+          trigger="custom"
+          contentSide="top"
+          triggerNode={
+            <button type="button" data-testid="status-bar-trigger">
+              cpu 12%
+            </button>
+          }
+        />
+      </TooltipProvider>,
+    );
+  }
+
+  it("renders the caller's node instead of the header button", () => {
+    installStubFactory();
+    renderWithCustomTrigger();
+
+    expect(screen.queryByTestId("resource-monitor-header-button")).toBeNull();
+    expect(screen.getByTestId("status-bar-trigger")).not.toBeNull();
+  });
+
+  it("opens from that node, upward", () => {
+    installStubFactory();
+    renderWithCustomTrigger();
+
+    fireEvent.click(screen.getByTestId("status-bar-trigger"));
+
+    expect(
+      screen.getByRole("searchbox", { name: "Search resources" }),
+    ).not.toBeNull();
+    expect(screen.getByRole("dialog").getAttribute("data-side")).toBe("top");
+  });
+
+  it("leaves the header's own panel opening downward", () => {
+    installStubFactory();
+    renderPopover();
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+
+    expect(screen.getByRole("dialog").getAttribute("data-side")).toBe("bottom");
   });
 });
