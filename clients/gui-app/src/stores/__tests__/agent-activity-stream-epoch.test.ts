@@ -23,6 +23,7 @@ import type {
 import {
   __resetAgentActivityStoreForTests,
   agentActivityPlaneAnswers,
+  agentActivityPlaneCoversHost,
   openAgentActivityStream,
   useAgentActivityStore,
 } from "@/stores/agent-activity-store";
@@ -196,6 +197,7 @@ describe("agent activity stream epoch handoff", () => {
       reconnectEngine,
       firstClient,
       null,
+      "host-a",
     );
 
     driveToOpenAndConnected(firstSession);
@@ -214,7 +216,7 @@ describe("agent activity stream epoch handoff", () => {
     // The new epoch is opened, but its session is never driven - no frame,
     // no status change. Without the fix the store would still be reading
     // `open` / `connected` from the torn-down first session.
-    openAgentActivityStream(reconnectEngine, secondClient, null);
+    openAgentActivityStream(reconnectEngine, secondClient, null, "host-a");
 
     expect(useAgentActivityStore.getState().connectionStatus).toBe(
       "connecting",
@@ -227,7 +229,12 @@ describe("agent activity stream epoch handoff", () => {
     const client = new StubHostStreamClient(session, "host-stream-1");
     const reconnectEngine = createStubReconnectEngine();
 
-    const dispose = openAgentActivityStream(reconnectEngine, client, null);
+    const dispose = openAgentActivityStream(
+      reconnectEngine,
+      client,
+      null,
+      "host-a",
+    );
 
     driveToOpenAndConnected(session);
 
@@ -251,6 +258,7 @@ describe("agent activity stream epoch handoff", () => {
       reconnectEngine,
       firstClient,
       null,
+      "host-a",
     );
     driveToOpenAndConnected(firstSession);
     expect(agentActivityPlaneAnswers()).toBe(true);
@@ -262,7 +270,7 @@ describe("agent activity stream epoch handoff", () => {
       secondSession,
       "host-stream-2",
     );
-    openAgentActivityStream(reconnectEngine, secondClient, null);
+    openAgentActivityStream(reconnectEngine, secondClient, null, "host-a");
     // The window this pins: a raw transport open with no frame behind it. The
     // per-user union and its `servedBy` are still the FIRST epoch's, by
     // design, so a plane predicate that read `servedBy !== null` would vouch
@@ -290,7 +298,7 @@ describe("agent activity stream epoch handoff", () => {
     const client = new StubHostStreamClient(session, "host-stream-1");
     const reconnectEngine = createStubReconnectEngine();
 
-    openAgentActivityStream(reconnectEngine, client, null);
+    openAgentActivityStream(reconnectEngine, client, null, "host-a");
     driveToOpenAndConnected(session);
     expect(agentActivityPlaneAnswers()).toBe(true);
 
@@ -320,6 +328,56 @@ describe("agent activity stream epoch handoff", () => {
     expect(agentActivityPlaneAnswers()).toBe(true);
   });
 
+  it("records the caller's servingHostId, and a replacement's own", () => {
+    // A NARROW frame throughout (`cloudSyncStatus: null`, not the shared
+    // `driveToOpenAndConnected` helper's `"connected"`): a fleet-wide union
+    // would cover every host and this test would prove nothing about which
+    // one was actually recorded.
+    function driveOpenWithNarrowFrame(session: StubSession): void {
+      session.emitStatus("open", null);
+      session.emitFrame({
+        kind: "state",
+        servedBy: "local",
+        byEpic: { [EPIC_ID]: { working: [AGENT_ID], turn: [AGENT_ID] } },
+        cloudSyncStatus: null,
+        hasBinaryPayload: false,
+      });
+    }
+
+    const firstSession = new StubSession();
+    const firstClient = new StubHostStreamClient(firstSession, "host-stream-1");
+    const reconnectEngine = createStubReconnectEngine();
+
+    const disposeFirst = openAgentActivityStream(
+      reconnectEngine,
+      firstClient,
+      null,
+      "host-a",
+    );
+    // Set at open, ahead of any frame - `agentActivityPlaneCoversHost` is
+    // still false here because `agentActivityPlaneAnswers` gates it first,
+    // not because the host was not recorded.
+    expect(agentActivityPlaneAnswers()).toBe(false);
+    driveOpenWithNarrowFrame(firstSession);
+    expect(agentActivityPlaneCoversHost("host-a")).toBe(true);
+    expect(agentActivityPlaneCoversHost("host-b")).toBe(false);
+
+    disposeFirst();
+
+    const secondSession = new StubSession();
+    const secondClient = new StubHostStreamClient(
+      secondSession,
+      "host-stream-2",
+    );
+    // A different host now serves the union - the exact swap a host failover
+    // performs, with the registry potentially still holding a session bound
+    // to `host-a` from before it.
+    openAgentActivityStream(reconnectEngine, secondClient, null, "host-b");
+    driveOpenWithNarrowFrame(secondSession);
+    expect(agentActivityPlaneCoversHost("host-b")).toBe(true);
+    expect(agentActivityPlaneCoversHost("host-a")).toBe(false);
+  });
+
   it("the per-user cloud union survives a stream replacement", () => {
     const firstSession = new StubSession();
     const firstClient = new StubHostStreamClient(firstSession, "host-stream-1");
@@ -329,6 +387,7 @@ describe("agent activity stream epoch handoff", () => {
       reconnectEngine,
       firstClient,
       null,
+      "host-a",
     );
 
     driveToOpenAndConnected(firstSession);
@@ -344,7 +403,7 @@ describe("agent activity stream epoch handoff", () => {
       secondSession,
       "host-stream-2",
     );
-    openAgentActivityStream(reconnectEngine, secondClient, null);
+    openAgentActivityStream(reconnectEngine, secondClient, null, "host-a");
 
     // `byEpic` is per-user, not per-stream-epoch: a host switch does not
     // clear it, only the health of the stream that reported it.

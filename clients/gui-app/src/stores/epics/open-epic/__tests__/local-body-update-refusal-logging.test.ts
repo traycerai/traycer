@@ -193,6 +193,7 @@ describe("local body/update refusal settlement (open-epic store.ts)", () => {
     const handle = createOpenEpicStore({
       epicId: EPIC_ID,
       userId: null,
+      hostId: "test-host",
       // Unreached: this suite never calls `retryTransport`. Answered anyway
       // rather than defaulted, so it stays a decision the option forces.
       onRetryTransport: () => {},
@@ -313,6 +314,7 @@ describe("local body/update refusal settlement (open-epic store.ts)", () => {
       const handle = createOpenEpicStore({
         epicId: `${EPIC_ID}-lineage-${settlement}`,
         userId: null,
+        hostId: "test-host",
         onRetryTransport: () => {},
         runtime: binding,
         accounting: createProcessBackedAccountingPort({

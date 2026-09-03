@@ -354,6 +354,8 @@ function buildHeaderEpicHandle(
   return {
     epicId: tab.id,
     userId: null,
+    // The HANDLE's own host, distinct from the per-chat `hostId` above.
+    hostId: "test-host",
     // A production handle has no `doc` / `awareness`: the replica lives on the
     // worker thread and a `Y.Doc` cannot cross a structured clone.
     projection: {

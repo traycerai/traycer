@@ -139,6 +139,40 @@ function h(t: TestHandle): OpenedStoreForTest {
   return t.handle;
 }
 
+// Overrides a built handle's `hostId` for a cross-host scenario. Every OTHER
+// member - including `doc` / `awareness` / `store`, which `buildTestHandle`
+// already wraps as getters because a replica replacement can swap them
+// mid-life - stays LIVE-linked to `th`, the same way `buildTestHandle` stays
+// live-linked to its own `base`: a plain `{...th.handle, hostId}` spread
+// would freeze whichever values those getters returned at THIS call, not
+// track them, and a plain `{...th}` would do the same to `disposed`, which
+// `buildTestHandle` also declares as a getter/setter pair over a closure
+// variable.
+function withHostId(th: TestHandle, hostId: string): TestHandle {
+  return {
+    get disposed() {
+      return th.disposed;
+    },
+    set disposed(value: boolean) {
+      th.disposed = value;
+    },
+    notify: () => th.notify(),
+    handle: {
+      ...th.handle,
+      hostId,
+      get doc() {
+        return th.handle.doc;
+      },
+      get awareness() {
+        return th.handle.awareness;
+      },
+      get store() {
+        return th.handle.store;
+      },
+    },
+  };
+}
+
 // The cap's `epicIsBusy` guard fails CLOSED when the activity plane cannot
 // vouch for "no agent is working": every epic reads busy until the plane
 // answers. Puts the plane into the answering state before each test so the
@@ -286,57 +320,67 @@ describe("OpenEpicSessionRegistry", () => {
     expect(reconnecting.disposed).toBe(true);
   });
 
-  it("keeps a reconnecting session while the union covers only the host that built it", () => {
-    // The union is the serving host's answer. Without a cloud link it speaks
-    // for that host alone, and this registry can hold sessions bound to
-    // others with no per-session host to check them against - so a session
-    // whose own transport is down is one this union cannot speak about, and
-    // it stays. The same-tick control is the case above: with a fleet-wide
-    // union the identical session IS evicted.
+  it("keeps a session on another host while the union is narrow, even with an open transport", () => {
+    // The union is the SERVING host's answer, so a narrow one (no cloud link)
+    // can prove an epic idle only for a session bound to THAT host - this
+    // registry can hold sessions bound to others, with no OTHER way to check
+    // them against it. This is the fix for the gap `epicIsBusy`'s first cut
+    // left open and documented: an open transport used to make a session
+    // evictable regardless of which host it was bound to, because the
+    // plane's own map had no per-session host to compare against.
     useAgentActivityStore.setState({
       connectionStatus: "open",
       servedBy: "local",
       stateFrameSeenThisEpoch: true,
       cloudSyncStatus: null,
+      servingHostId: "host-serving",
     });
     const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
-    const reconnecting = buildTestHandle("e0", false);
-    reconnecting.handle.store.setState({
-      hostTransportStatus: "reconnecting",
-      snapshotLoaded: true,
-    });
-    registry.acquire("e0", () => h(reconnecting));
+    const elsewhere = withHostId(
+      buildTestHandle("e0", false),
+      "host-elsewhere",
+    );
+    registry.acquire("e0", () => h(elsewhere));
+    const onServingHost: TestHandle[] = [];
     for (let i = 1; i < 5; i += 1) {
-      registry.acquire(`e${i}`, () => h(buildTestHandle(`e${i}`, false)));
+      const th = withHostId(buildTestHandle(`e${i}`, false), "host-serving");
+      onServingHost.push(th);
+      registry.acquire(`e${i}`, () => h(th));
     }
-    registry.acquire("e5", () => h(buildTestHandle("e5", false)));
+    registry.acquire("e5", () =>
+      h(withHostId(buildTestHandle("e5", false), "host-serving")),
+    );
 
-    // The overflow entry the walk WOULD have taken is held, so the registry
-    // sits one over its cap rather than evicting blind.
-    expect(reconnecting.disposed).toBe(false);
-    expect(registry.size()).toBe(6);
+    // `e0` is the LRU entry, but the walk SKIPS it (its host is outside the
+    // union's reach) and evicts the next eligible LRU entry instead - the cap
+    // stays enforced, just not against the one session it cannot vouch for.
+    expect(elsewhere.disposed).toBe(false);
+    expect(registry.size()).toBe(5);
+    expect(onServingHost[0].disposed).toBe(true);
   });
 
-  it("still evicts an OPEN-transport session while the union is narrow", () => {
-    // The narrow-union arm is scoped to sessions whose transport is down. An
-    // open transport is the ordinary case on the host that built the union,
-    // and holding those too would make the cap inert for every install
-    // without a cloud link.
+  it("still evicts a session on the union's own serving host while the union stays narrow", () => {
+    // The narrow-union arm is scoped to sessions on a DIFFERENT host. A
+    // session on the host that built the union is exactly what the union
+    // describes, open transport or not - holding those too would make the
+    // cap inert for every install without a cloud link.
     useAgentActivityStore.setState({
       connectionStatus: "open",
       servedBy: "local",
       stateFrameSeenThisEpoch: true,
       cloudSyncStatus: null,
+      servingHostId: "host-serving",
     });
     const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
     const handles: TestHandle[] = [];
     for (let i = 0; i < 5; i += 1) {
-      const th = buildTestHandle(`e${i}`, false);
+      const th = withHostId(buildTestHandle(`e${i}`, false), "host-serving");
       handles.push(th);
       registry.acquire(`e${i}`, () => h(th));
-      th.handle.store.setState({ hostTransportStatus: "open" });
     }
-    registry.acquire("e5", () => h(buildTestHandle("e5", false)));
+    registry.acquire("e5", () =>
+      h(withHostId(buildTestHandle("e5", false), "host-serving")),
+    );
 
     expect(registry.size()).toBe(5);
     expect(handles[0].disposed).toBe(true);

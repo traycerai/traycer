@@ -12,7 +12,7 @@ import { appLogger } from "@/lib/logger";
 import { useSyncExternalStore } from "react";
 import {
   agentActivityPlaneAnswers,
-  agentActivityPlaneSpansFleet,
+  agentActivityPlaneCoversHost,
   getEpicAgentActivity,
   subscribeAgentActivity,
   subscribeAgentActivityPlaneHealth,
@@ -234,13 +234,16 @@ function eligibilityKeyFor(
   // bare epicId while an imperative `getUnsyncedEdits()` call already sees
   // the real title. Reading it here too keeps the two in lockstep.
   const liveTitle = readLiveTitle(handle);
-  // Every input of the two cap predicates is in the key, or a session that
-  // just became evictable would not trigger a prune until an unrelated field
-  // moved: `holdsNothingToLose` reads the three work fields, `epicIsBusy`
-  // reads the activity plane's health and reach, the epic's working set, and
-  // this session's transport (which no longer gates eviction on its own, but
-  // still decides whether a narrow union can speak for this session).
-  return `${holdsNothingToLose(state) ? 1 : 0}:${epicIsBusy(epicId, state) ? 1 : 0}:${state.isDirty ? 1 : 0}:${state.unsyncedQueueSize}:${state.writeCommands.length}:${state.hostTransportStatus}:${metaTitle}:${liveTitle}`;
+  // Every LIVE input of the two cap predicates is in the key, or a session
+  // that just became evictable would not trigger a prune until an unrelated
+  // field moved: `holdsNothingToLose` reads the three work fields below,
+  // `epicIsBusy` reads the activity plane's health and reach plus the epic's
+  // working set - all three keyed to the SUBSCRIPTION this session already
+  // holds (`unsubscribeActivity`), so no separate key term is needed for
+  // them. `handle.hostId` is fixed for the handle's whole life (see its own
+  // doc) and is not a live input, so it is not in the key either - it only
+  // needs to be read at the moment `epicIsBusy` runs, not watched.
+  return `${holdsNothingToLose(state) ? 1 : 0}:${epicIsBusy(epicId, handle.hostId) ? 1 : 0}:${state.isDirty ? 1 : 0}:${state.unsyncedQueueSize}:${state.writeCommands.length}:${metaTitle}:${liveTitle}`;
 }
 
 /**
@@ -291,29 +294,28 @@ function holdsNothingToLose(state: OpenEpicState): boolean {
  * whose agent is mid-turn.
  *
  * The third arm bounds WHICH epics an answering plane can speak for. The union
- * is built by the serving host, so it spans the fleet only when that host says
- * its cloud link is up (or when the cloud itself is serving it); a host with
- * no cloud claim reports the agents IT can see. This registry can hold
- * sessions bound to other hosts, and it has no per-session host to check them
- * against - so for a session whose own transport is not open, a plane that is
- * not known to span the fleet is not evidence about that session's host, and
- * the epic reads busy. It is exactly the sessions the transport clause used to
- * hold that this keeps holding, and only while the union is narrow: with a
- * cloud-connected plane the D1 case (an unmounted epic whose host went away)
- * is evictable as intended.
+ * is built by the serving host, so it can prove an epic idle only for a
+ * session bound to THAT host, or when the union is known to span the fleet
+ * (a cloud link, or the cloud itself serving it) - a host with no cloud claim
+ * reports the agents IT can see, and this registry can hold sessions bound to
+ * other hosts entirely. `agentActivityPlaneCoversHost` is the exact question:
+ * does the current union reach `hostId`. A session it does not reach reads
+ * busy, regardless of that session's own transport - the transport is a fact
+ * about THIS renderer's socket to that host, not about whether the ACTIVITY
+ * union (a separate stream, to whichever host is currently serving it) can
+ * see it, so it is not read here at all.
  *
- * The remaining gap is older than this gate: an OPEN-transport session on
- * another host is evicted on a narrow union's silence today too, because
- * `hasActiveAgentWork` has always read the same map. Closing it needs the
- * plane to carry its serving `hostId` and the registry to carry each
- * session's, which is a wider change than this one.
+ * This is the real fix for the gap an earlier revision of this gate left
+ * open and documented: an OPEN-transport session on another host used to be
+ * evicted on a narrow union's silence, because `hasActiveAgentWork` has
+ * always read the plane's map with no per-session host to check it against.
+ * `OpenEpicStoreHandle.hostId` closes that - every session's own host is now
+ * checked, open transport or not.
  */
-function epicIsBusy(epicId: string, state: OpenEpicState): boolean {
+function epicIsBusy(epicId: string, hostId: string): boolean {
   if (!agentActivityPlaneAnswers()) return true;
   if (hasActiveAgentWork(epicId)) return true;
-  return (
-    state.hostTransportStatus !== "open" && !agentActivityPlaneSpansFleet()
-  );
+  return !agentActivityPlaneCoversHost(hostId);
 }
 
 /**
@@ -573,10 +575,10 @@ export class OpenEpicSessionRegistry {
         // released.
         refreshOrderOnRelease: false,
         retainWhenIdle: () => true,
-        // Agent working, plane blind, or a union too narrow to speak for this
-        // session - see `epicIsBusy`.
+        // Agent working, plane blind, or a union that does not reach this
+        // session's host - see `epicIsBusy`.
         hasActiveWork: (session) =>
-          epicIsBusy(session.epicId, session.handle.store.getState()),
+          epicIsBusy(session.epicId, session.handle.hostId),
         // Never evict a session holding unsynced edits or unflushed writes.
         // The transport is NOT consulted - see `holdsNothingToLose`.
         isEvictable: (session) =>

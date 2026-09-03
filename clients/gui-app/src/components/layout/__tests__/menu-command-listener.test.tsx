@@ -226,6 +226,7 @@ function buildDirtyHandle(epicId: string): OpenEpicStoreHandle {
   return {
     epicId,
     userId: null,
+    hostId: "test-host",
     // A production handle has no `doc` / `awareness`: the replica lives on
     // the worker thread and a `Y.Doc` cannot cross a structured clone.
     projection: {

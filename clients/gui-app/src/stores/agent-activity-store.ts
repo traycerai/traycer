@@ -54,6 +54,15 @@ interface AgentActivityState {
    * attestation behind, which is the whole defect this field exists to close.
    */
   readonly stateFrameSeenThisEpoch: boolean;
+  /**
+   * The concrete host this epoch's stream is open against, or `null` while
+   * none is. Distinct from `servedBy`, which says whether the UNION reaches
+   * beyond that host (local vs. cloud) - this says WHICH host built it, so a
+   * caller holding a session bound to a different host can tell a narrow
+   * union apart from one that happens to cover it. Set once per epoch, at
+   * open, by the one caller that knows which host it dialed; never inferred.
+   */
+  readonly servingHostId: string | null;
   reset(): void;
 }
 
@@ -63,6 +72,7 @@ export const useAgentActivityStore = create<AgentActivityState>()((set) => ({
   cloudSyncStatus: null,
   byEpic: EMPTY_AGENT_ACTIVITY_BY_EPIC,
   stateFrameSeenThisEpoch: false,
+  servingHostId: null,
   reset: () => {
     set({
       servedBy: null,
@@ -70,6 +80,7 @@ export const useAgentActivityStore = create<AgentActivityState>()((set) => ({
       cloudSyncStatus: null,
       byEpic: EMPTY_AGENT_ACTIVITY_BY_EPIC,
       stateFrameSeenThisEpoch: false,
+      servingHostId: null,
     });
   },
 }));
@@ -116,6 +127,7 @@ export function noteAgentActivityConnectionStatus(
       cloudSyncStatus: null,
       byEpic: EMPTY_AGENT_ACTIVITY_BY_EPIC,
       stateFrameSeenThisEpoch: false,
+      servingHostId: null,
     });
     return;
   }
@@ -141,6 +153,14 @@ export function openAgentActivityStream(
   reconnectEngine: HostReconnectEngine,
   wsStreamClient: IHostStreamClient<HostStreamRpcRegistry>,
   onAuthError: (() => void) | null,
+  /**
+   * The host this stream is opening against - the caller's own
+   * `servingHostId`, known before the socket does anything. Recorded so a
+   * consumer holding a session bound to a DIFFERENT host can tell a narrow
+   * union apart from one that happens to cover it; see
+   * {@link agentActivityPlaneCoversHost}.
+   */
+  servingHostId: string,
 ): () => void {
   // A new stream epoch makes NO health claim until its own session speaks.
   //
@@ -159,6 +179,12 @@ export function openAgentActivityStream(
   // stays valid across a host switch (see `resetHostReplica`). Only the health
   // of the stream that reported it belongs to the epoch.
   retireEpochHealthClaim();
+  // Set unconditionally, after the retire above: this is the new epoch's own
+  // fact, known regardless of whether it ever attests, and the branch that
+  // reads it (`agentActivityPlaneCoversHost`) is already gated behind
+  // `agentActivityPlaneAnswers()` by every caller - so a `servingHostId` set
+  // ahead of the first frame is never consulted before it is current.
+  useAgentActivityStore.setState({ servingHostId });
   let disposed = false;
   let currentClient: AgentActivityStreamClient | null = null;
   const reopenScheduler = reconnectEngine.openReopenLane(() => {
@@ -305,6 +331,22 @@ export function agentActivityPlaneSpansFleet(): boolean {
 }
 
 /**
+ * Whether the current union is evidence about `hostId` specifically - either
+ * because it spans the fleet ({@link agentActivityPlaneSpansFleet}), or
+ * because `hostId` IS the host that built it.
+ *
+ * The registry can hold sessions bound to hosts other than the one serving
+ * the activity plane, and a narrow union says nothing about any of them - so
+ * this is the predicate a caller with a SPECIFIC session's host in hand
+ * should read, never `agentActivityPlaneSpansFleet` alone (which answers a
+ * host-agnostic "does this reach everywhere", not "does this reach HERE").
+ */
+export function agentActivityPlaneCoversHost(hostId: string): boolean {
+  if (agentActivityPlaneSpansFleet()) return true;
+  return useAgentActivityStore.getState().servingHostId === hostId;
+}
+
+/**
  * Fires when {@link agentActivityPlaneAnswers} or
  * {@link agentActivityPlaneSpansFleet} flips, in either direction. Separate
  * from {@link subscribeAgentActivity} because the two move on different
@@ -313,6 +355,11 @@ export function agentActivityPlaneSpansFleet(): boolean {
  * the health fields. Both predicates are here because the cap's busy gate
  * reads both, and a consumer woken for one and not the other would sit on a
  * stale verdict until an unrelated write.
+ *
+ * `servingHostId` is deliberately NOT tracked here as a third field: every
+ * write that changes it goes through `openAgentActivityStream`, which calls
+ * `retireEpochHealthClaim` first - so `answers` always flips false and back
+ * around any `servingHostId` change, and a listener already wakes on that.
  */
 export function subscribeAgentActivityPlaneHealth(
   listener: () => void,

@@ -642,6 +642,7 @@ export function NotificationsSessionProvider(
         reconnect,
         servingStreamClient,
         onAuthError,
+        streamHostId,
       );
     }
     if (notificationFeedMode === "cloud") {

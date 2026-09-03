@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   __resetAgentActivityStoreForTests,
   agentActivityPlaneAnswers,
+  agentActivityPlaneCoversHost,
   agentActivityPlaneSpansFleet,
   subscribeAgentActivityPlaneHealth,
   useAgentActivityStore,
@@ -188,5 +189,43 @@ describe("agentActivityPlaneSpansFleet", () => {
     });
 
     expect(agentActivityPlaneSpansFleet()).toBe(false);
+  });
+});
+
+describe("agentActivityPlaneCoversHost", () => {
+  it("covers any host once the union spans the fleet", () => {
+    useAgentActivityStore.setState({
+      servedBy: "cloud",
+      cloudSyncStatus: "connected",
+      servingHostId: "host-a",
+    });
+
+    expect(agentActivityPlaneCoversHost("host-a")).toBe(true);
+    // A fleet-wide union proves every host, not only the one that built it.
+    expect(agentActivityPlaneCoversHost("host-b")).toBe(true);
+  });
+
+  it("covers only the serving host while the union is narrow", () => {
+    useAgentActivityStore.setState({
+      servedBy: "local",
+      cloudSyncStatus: null,
+      servingHostId: "host-a",
+    });
+
+    expect(agentActivityPlaneCoversHost("host-a")).toBe(true);
+    expect(agentActivityPlaneCoversHost("host-b")).toBe(false);
+  });
+
+  it("covers no host once the serving connection has fully closed", () => {
+    // `noteAgentActivityConnectionStatus` clears `servingHostId` to `null` on
+    // `closed` - this is that state, so even `host-a`, the union's own
+    // former host, reads uncovered rather than stale.
+    useAgentActivityStore.setState({
+      servedBy: null,
+      cloudSyncStatus: null,
+      servingHostId: null,
+    });
+
+    expect(agentActivityPlaneCoversHost("host-a")).toBe(false);
   });
 });

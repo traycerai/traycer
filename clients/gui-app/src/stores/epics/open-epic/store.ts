@@ -148,6 +148,11 @@ export interface EpicRuntimeBinding {
 export interface OpenEpicStoreOptions {
   readonly epicId: string;
   /**
+   * The host this session is established against. Carried straight onto the
+   * returned handle - see {@link OpenEpicStoreHandle.hostId}.
+   */
+  readonly hostId: string;
+  /**
    * What to do when the host's plan-denial deadline says this session's
    * transport is worth probing again.
    *
@@ -941,6 +946,17 @@ export interface OpenEpicStoreHandle {
   readonly epicId: string;
   readonly userId: string | null;
   /**
+   * The host this session was established against - fixed for the handle's
+   * whole life. A host change is clone-not-migrate (this file's AGENTS.md):
+   * the provider tears the session down and acquires a new handle, it never
+   * repoints this one, so nothing here needs to observe it changing.
+   *
+   * Read by the registry's cap-eviction guard (`epicIsBusy`) to tell whether
+   * the activity plane's union - built by ONE serving host - can speak for
+   * THIS session at all.
+   */
+  readonly hostId: string;
+  /**
    * Transfer this session's root state into another, and take one in.
    *
    * The PORT the two merge sites use instead of reaching for `.doc`. It exists
@@ -1040,7 +1056,7 @@ export function isProjectionPatch(
 export function createOpenEpicStore(
   options: OpenEpicStoreOptions,
 ): OpenEpicStoreHandle {
-  const { epicId, userId } = options;
+  const { epicId, userId, hostId } = options;
   const mintedIngestFenceIdentity = nextIngestFenceIdentity;
   nextIngestFenceIdentity += 1;
 
@@ -2257,6 +2273,7 @@ export function createOpenEpicStore(
   return {
     epicId,
     userId,
+    hostId,
     body: {
       applyDocUpdate: (docKey, update) => {
         bodyDocs.applyRemote(docKey, update);
