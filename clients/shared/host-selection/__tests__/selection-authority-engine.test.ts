@@ -4517,6 +4517,62 @@ describe("SelectionAuthorityEngineImpl - a dead host reaches `dead` (B1/C6)", ()
 
     authority.dispose();
   });
+
+  /**
+   * The arm-time half of that guard, which the bystander case above does NOT
+   * prove: removing the effectiveness check at ARM time leaves this suite
+   * green, because the derive-time check still catches the bystander.
+   *
+   * What it does not catch is a STALE ceiling. Arm on every session loss and
+   * a host that lost its session long ago carries an already-expired deadline
+   * into the moment it is selected - so it would be declared dead on arrival,
+   * before anything had the chance to dial it even once. Both checks are
+   * load-bearing, for different cases, and the mutation that survives the
+   * other test reddens here.
+   */
+  it("does not kill a host on arrival because its session ended long before it was selected", async () => {
+    const clock = createFakeAuthorityClock(0);
+    const authority = createTestAuthority({
+      initialFleet: {
+        identityGeneration: 0,
+        localHostId: "L",
+        hosts: [fleetHost("L", "local"), fleetHost("P", "remote")],
+      },
+      initialIdentityKey: "acct-1",
+      clock,
+      localHostEnsure: readyLocalHostEnsurePort(),
+    });
+    const { engine } = authority;
+    const incarnation = attachReporter(engine, "A");
+
+    engine.ingestEvidence(
+      "A",
+      incarnation,
+      sessionEvidence("P", "s1", "established", 0),
+    );
+    expect(engine.snapshot().effectiveHostId).toBe("L");
+    engine.ingestEvidence(
+      "A",
+      incarnation,
+      sessionEvidence("P", "s1", "lost", 0),
+    );
+
+    // Long past the ceiling, with P still a bystander.
+    clock.advance(30 * 60_000);
+
+    // The user now picks P in Settings. It has not been dialed yet, so the
+    // only honest verdict is `connecting` - nothing has asked it anything.
+    expect(await engine.activate("A", incarnation, "P")).toEqual({ ok: true });
+    expect(engine.snapshot().effectiveHostId).toBe("P");
+
+    const onArrival = findLease(engine.snapshot().leases, "P");
+    if (onArrival === undefined) throw new Error("expected a lease for P");
+    expect(onArrival.status).toBe("connecting");
+    expect(isUsableForSelection(onArrival)).toBe(true);
+
+    authority.dispose();
+  });
+
   /**
    * The derive-time half, which neither arm above proves: with the arm-time
    * check in place, a ceiling can still be armed and then OUTLIVE the app's

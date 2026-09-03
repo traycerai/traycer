@@ -825,6 +825,19 @@ describe("DesktopSupportService - fingerprint sightings on freeze", () => {
     await buildService(null).freezeEvidence(KEY, null);
     expect(reportLedgerMock.recordFingerprintSighting).not.toHaveBeenCalled();
   });
+
+  it("records ONE sighting across StrictMode freeze → discard → freeze of the same key", async () => {
+    // Real renderer mounts under <StrictMode> (renderer-shell/main.tsx):
+    // setup freezes, cleanup discards, setup freezes again with the SAME
+    // draftId/key. The live freeze-map alone is not enough - discard clears
+    // it between the two setups. A short-TTL recentSightingKeys set must
+    // suppress the second claim so first open never reads as "2nd time".
+    const service = buildService(null);
+    await service.freezeEvidence(KEY, "fp:v1:sight");
+    service.discardFrozenEvidence(KEY);
+    await service.freezeEvidence(KEY, "fp:v1:sight");
+    expect(reportLedgerMock.recordFingerprintSighting).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("DesktopSupportService - evidence freeze semantics", () => {

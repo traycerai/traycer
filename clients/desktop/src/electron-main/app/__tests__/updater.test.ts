@@ -1296,6 +1296,41 @@ describe("RC release discovery and channel safety", () => {
     updater.startUpdateDownload();
     expect(autoUpdater.downloadUpdate).not.toHaveBeenCalled();
   });
+
+  it("ignores an update-available event whose check generation was superseded", async () => {
+    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
+    const discoveryControl: { resolve: ((response: Response) => void) | null } =
+      {
+        resolve: null,
+      };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        () =>
+          new Promise<Response>((resolve) => {
+            discoveryControl.resolve = resolve;
+          }),
+      ),
+    );
+    await updater.installAutoUpdater(true, makeDeps(true));
+    await updater.setAllowPrereleaseUpdates(true);
+    const rcCheck = updater.checkForUpdatesNow(false, "automatic");
+    await flushPromises();
+
+    // Bumps channelGeneration, superseding the in-flight RC check.
+    await updater.setAllowPrereleaseUpdates(false);
+    autoUpdater.emit("update-available", { version: "9.9.9-rc.1" });
+
+    expect(updater.getAppUpdateSnapshot().status).not.toBe("available");
+
+    const release = discoveryControl.resolve;
+    if (release === null) {
+      throw new Error("Expected the RC discovery fetch to be pending");
+    }
+    release(new Response(JSON.stringify([]), { status: 200 }));
+    await rcCheck;
+  });
+
   it("refuses a channel change while a download is in progress, leaving the RC channel and download intact", async () => {
     const { autoUpdater, preferences, updater } =
       await loadUpdater(NOT_LINUX_GUIDANCE);

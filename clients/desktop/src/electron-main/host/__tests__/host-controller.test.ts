@@ -5253,6 +5253,40 @@ describe("hostLifecycle wiring on success (fixup C2)", () => {
     expect(lifecycle.ensureWatcherInstalled).toHaveBeenCalled();
     expect(lifecycle.reloadSnapshotFromDisk).toHaveBeenCalled();
   });
+
+  it("the packaged-macOS locked activation cycle reinstalls the watcher and reloads the snapshot", async () => {
+    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+    const lifecycle = fakeHostLifecycle();
+    const controller = new HostController({
+      environment: "production",
+      hostLifecycle: lifecycle,
+      reachabilityProbe: async () => true,
+      desktopLockWaitMs: DESKTOP_LOCK_WAIT_MS,
+      desktopLockPollIntervalMs: DESKTOP_LOCK_POLL_INTERVAL_MS,
+    });
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writePidMetadata("production", { version: "1.7.0", pid: process.pid });
+    vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+      data: { version: "1.8.0", installGeneration: null },
+    });
+    vi.mocked(waitForHostReady).mockResolvedValue({
+      ready: true,
+      version: "1.7.0",
+      pid: process.pid,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      reason: "ready",
+    });
+
+    const outcome = await controller.installVersion("1.8.0", false);
+
+    expect(outcome.kind).toBe("ok");
+    expect(lifecycle.ensureWatcherInstalled).toHaveBeenCalled();
+    expect(lifecycle.reloadSnapshotFromDisk).toHaveBeenCalled();
+  });
+
   it("Class B: a null post-cycle reload prevents the packaged-mac activation cycle from reporting activated", async () => {
     vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
     const lifecycle = fakeHostLifecycle();

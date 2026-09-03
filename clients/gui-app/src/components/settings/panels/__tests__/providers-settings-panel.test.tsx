@@ -5836,6 +5836,60 @@ describe("<ProvidersSettingsPanel />", () => {
       createProfile: { label: "New profile", shareSkillsAndPlugins: false },
     });
   });
+
+  it("forwards Claude profile skills-and-plugins sharing by default", () => {
+    providerMocks.listResult.data = {
+      providers: [
+        {
+          ...providerState({
+            providerId: "claude-code",
+            selected: { kind: "bundled" },
+            candidates: [],
+            envOverrides: [],
+            profiles: [
+              profile({
+                profileId: "ambient",
+                kind: "ambient",
+                label: "Terminal account",
+                email: "ambient@example.test",
+                tier: null,
+                authStatus: "authenticated",
+                duplicateOfProfileId: null,
+                ambientDriftNotice: null,
+              }),
+            ],
+          }),
+          loginCapability: {
+            oauthArgs: ["auth", "login"],
+            token: null,
+            codePaste: null,
+            terminalLogin: null,
+          },
+        },
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    openProfilesTab();
+
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Create new profile" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
+
+    const [startVariables] = firstStartLoginCall();
+    expect(startVariables).toEqual({
+      providerId: "claude-code",
+      profileId: null,
+      createProfile: { label: "New profile", shareSkillsAndPlugins: true },
+    });
+  });
+
   it("does not create a second profile when the linked account already exists", async () => {
     providerMocks.listResult.data = {
       providers: [

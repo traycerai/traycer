@@ -203,6 +203,17 @@ describe("host-lifecycle read-only import boundary", () => {
     );
   });
 
+  it("reports an error for the bare, aliased child_process specifier", () => {
+    expectBoundaryError(
+      lintViolator("host-lifecycle/bare-import.ts", [
+        'import * as cp from "child_process";',
+        "export function boom(): void {",
+        "  void cp;",
+        "}",
+      ]),
+    );
+  });
+
   it("reports an error for a dynamic import() of child_process", () => {
     expectBoundaryError(
       lintViolator("host-lifecycle/dynamic-import.ts", [

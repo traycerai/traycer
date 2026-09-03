@@ -3736,6 +3736,49 @@ describe("RemoteSession forceReconnect", () => {
       session.close();
     }
   }, 10_000);
+
+  it("a force during a stalled PRE-SOCKET rejection (grant provider throws) is spent on that lander too", async () => {
+    const relay = new FakeRelayHost();
+    const lease = new MutableBearerLease("token", "user-1");
+    let releaseFirstMint = (): void => undefined;
+    const firstMint = new Promise<void>((resolve) => {
+      releaseFirstMint = resolve;
+    });
+    let mintIndex = 0;
+    const session = new RemoteSession({
+      ...buildSessionOptions(relay, lease, null),
+      grantProvider: async () => {
+        mintIndex += 1;
+        if (mintIndex === 1) {
+          await firstMint;
+          // The awaited pre-socket path REJECTS - the `beginConnectGuarded`
+          // catch lander, distinct from a structured `unavailable` result.
+          throw new Error("grant fetch transport failure");
+        }
+        return {
+          kind: "ok" as const,
+          grant: { grant: "grant-jws", expiresInSeconds: 300 },
+        };
+      },
+    });
+    try {
+      session.start();
+      await vi.waitFor(() => expect(mintIndex).toBe(1), WAIT);
+      session.forceReconnect("network-path-changed");
+      const releasedAt = Date.now();
+      releaseFirstMint();
+      await vi.waitFor(() => expect(mintIndex).toBe(2), {
+        timeout: 400,
+        interval: 10,
+      });
+      expect(Date.now() - releasedAt).toBeLessThan(400);
+      await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+      expect(relay.errors).toEqual([]);
+    } finally {
+      session.close();
+    }
+  }, 10_000);
+
   it("a spent force skips ONE wait without pardoning the ladder - the next failure waits its escalated rung", async () => {
     // Deterministic jitter: with `Math.random()` pinned at 0.5, the rungs
     // are exact - rung 0 waits 750ms, rung 1 waits 1500ms - so the pardoning

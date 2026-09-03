@@ -10186,7 +10186,10 @@ describe("createChatSessionStore", () => {
   // the two: a `blockDelta` carries no turn identity, and the re-emit is the
   // same event shape as the start. Only the session's memory of what it has
   // already opened can, so that is what decides it.
-  it.each([["subagent", "subagent.started", "subagent.progress"]])(
+  it.each([
+    ["subagent", "subagent.started", "subagent.progress"],
+    ["workflow", "workflow.started", "workflow.progress"],
+  ])(
     "drops a late %s start re-emit whose card was evicted",
     (_label, startedType, _progressType) => {
       const harness = createHarness();

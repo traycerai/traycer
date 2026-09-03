@@ -6981,7 +6981,10 @@ describe("one record across several spans", () => {
   }
 
   /** Both slices of one turn, held as disjoint spans with a gap between them. */
-  function splitTurn(window: TranscriptWindow): TranscriptWindow {
+  function splitTurn(
+    window: TranscriptWindow,
+    order: "earlier-first" | "later-first",
+  ): TranscriptWindow {
     const earlier = {
       fromOrdinal: 0,
       rowIds: ["row-0", "row-1"],
@@ -6992,35 +6995,43 @@ describe("one record across several spans", () => {
       rowIds: ["row-4", "row-5"],
       messages: [messageWithText(userMessage("shared", 1), "new")],
     };
-    return spanCarrying(spanCarrying(window, earlier), later);
+    return order === "earlier-first"
+      ? spanCarrying(spanCarrying(window, earlier), later)
+      : spanCarrying(spanCarrying(window, later), earlier);
   }
 
-  it("keeps both slices of a split turn when they arrive earlier-first", () => {
-    // Ordinals 2-3 are a gap, so these never touch - which is exactly the
-    // shape a turn straddling an evicted slice produces. Dropping the sharer
-    // is unbounded here rather than merely lossy: the drop is symmetric, so
-    // whichever slice is re-fetched evicts the other, and a reader looking at
-    // the whole turn drives that forever.
-    const window = splitTurn(windowWithSkeleton(10));
-    expect(window.spans.map((span) => span.fromOrdinal)).toEqual([0, 4]);
-    // Neither slice is a gap, so nothing re-requests either one.
-    expect(
-      transcriptHydrationGaps(window, { fromOrdinal: 0, toOrdinal: 2 }),
-    ).toEqual([]);
-    expect(
-      transcriptHydrationGaps(window, { fromOrdinal: 4, toOrdinal: 6 }),
-    ).toEqual([]);
-  });
+  it.each(["earlier-first", "later-first"] as const)(
+    "keeps both slices of a split turn when they arrive %s",
+    (order) => {
+      // Ordinals 2-3 are a gap, so these never touch - which is exactly the
+      // shape a turn straddling an evicted slice produces. Dropping the sharer
+      // is unbounded here rather than merely lossy: the drop is symmetric, so
+      // whichever slice is re-fetched evicts the other, and a reader looking at
+      // the whole turn drives that forever.
+      const window = splitTurn(windowWithSkeleton(10), order);
+      expect(window.spans.map((span) => span.fromOrdinal)).toEqual([0, 4]);
+      // Neither slice is a gap, so nothing re-requests either one.
+      expect(
+        transcriptHydrationGaps(window, { fromOrdinal: 0, toOrdinal: 2 }),
+      ).toEqual([]);
+      expect(
+        transcriptHydrationGaps(window, { fromOrdinal: 4, toOrdinal: 6 }),
+      ).toEqual([]);
+    },
+  );
 
-  it("renders the newest SERVE of a shared record, not the earliest span's, when they arrive earlier-first", () => {
-    // The question the dropped-sharer rule was really answering. Position
-    // decides where the record renders; freshness decides what it says, so
-    // the answer does not depend on which slice happens to sit lower.
-    const records = hydratedRecords(splitTurn(windowWithSkeleton(10)));
-    expect(records.messages).toHaveLength(1);
-    const rendered = JSON.stringify(records.messages[0]);
-    expect(rendered).toContain("new");
-  });
+  it.each(["earlier-first", "later-first"] as const)(
+    "renders the newest SERVE of a shared record, not the earliest span's, when they arrive %s",
+    (order) => {
+      // The question the dropped-sharer rule was really answering. Position
+      // decides where the record renders; freshness decides what it says, so
+      // the answer does not depend on which slice happens to sit lower.
+      const records = hydratedRecords(splitTurn(windowWithSkeleton(10), order));
+      expect(records.messages).toHaveLength(1);
+      const rendered = JSON.stringify(records.messages[0]);
+      expect(rendered).toContain(order === "earlier-first" ? "new" : "old");
+    },
+  );
 
   it("keeps an unmerged span that shares no record with the incoming one", () => {
     const held = spanCarrying(windowWithSkeleton(10), {
@@ -7042,7 +7053,7 @@ describe("one record across several spans", () => {
     // very record that changed - and once the containing span goes it is the
     // ONLY copy, rendered under rows the planner sees as covered. So the
     // invalidation follows the records rather than the ordinal.
-    const later = splitTurn(windowWithSkeleton(10));
+    const later = splitTurn(windowWithSkeleton(10), "earlier-first");
     expect(later.spans).toHaveLength(2);
     const rewritten = applyIndexChange(later, {
       activeTurnId: null,
