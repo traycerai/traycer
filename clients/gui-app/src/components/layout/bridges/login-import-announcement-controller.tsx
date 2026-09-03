@@ -112,8 +112,8 @@ export function LoginImportAnnouncementController(): null {
       <ActionToastContent
         toastId={LOGIN_IMPORT_ANNOUNCEMENT_TOAST_ID}
         eyebrow="New in this release"
-        title="Bring your logins with you"
-        description="Import the sites you're signed into in Chrome, Edge, Brave, Firefox, or Safari, so agents work on them as you."
+        title="Your browser logins, in Traycer"
+        description="Import the logins from the browser you already use, so agents work on those sites as you."
         actionLabel="Import logins…"
         onAction={() => {
           useBrowserFocusStore.getState().requestImportLogins();
