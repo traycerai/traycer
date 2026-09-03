@@ -1624,6 +1624,51 @@ describe("BrowserViewManager native tab lifecycle", () => {
     await flushCloseEntry();
     expect(view.webContents.closeCalls).toBe(1);
   });
+
+  it("transfers a provisioning tab's lifecycle lease before awaiting readiness", async () => {
+    const harness = createHarness();
+    const ensureInput = {
+      hostId: "host-1",
+      sessionId: "session-1",
+      tabId: "tab-1",
+      requestedUrl: "https://example.com/",
+      profile: "primary",
+      seedStorageState: null,
+      connectionId: null,
+    } as const;
+    const firstEnsure = harness.manager.ensureTab("window-1", ensureInput);
+    const view = harness.views[0];
+    if (view === undefined) throw new Error("expected native guest");
+    view.webContents.debugger.deferCommands = true;
+    await flushCloseEntry();
+
+    const reclaimedEnsure = harness.manager.ensureTab("window-2", ensureInput);
+    const previousOwner = harness.windows.get("window-1")?.webContents;
+    if (previousOwner === undefined) throw new Error("expected host window");
+    previousOwner.emit(
+      "did-start-navigation",
+      {},
+      "http://localhost:31873/",
+      false,
+      true,
+      1,
+      1,
+    );
+
+    for (const resolve of view.webContents.debugger.commandResolvers.splice(
+      0,
+    )) {
+      resolve(null);
+    }
+    const [firstReady, reclaimedReady] = await Promise.all([
+      firstEnsure,
+      reclaimedEnsure,
+    ]);
+
+    expect(reclaimedReady).toEqual(firstReady);
+    expect(view.webContents.closeCalls).toBe(0);
+    expect(harness.views).toHaveLength(1);
+  });
   it("echoes an existing native tab's current status when a renderer ensures it again", async () => {
     const harness = createHarness();
     const input = {

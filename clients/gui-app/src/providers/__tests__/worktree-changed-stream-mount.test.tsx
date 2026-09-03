@@ -491,4 +491,95 @@ describe("<WorktreeChangedStreamMount /> reopen lane", () => {
       vi.useRealTimers();
     }
   });
+
+  it("resets the reopen lane's backoff after a close that followed a healthy (>=30s open) session", () => {
+    // HEALTHY_SESSION_RESET_MS is module-local (30_000) - not exported, so
+    // pinned here by literal value.
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(0);
+      const queryClient = createAppQueryClient();
+      renderWorktreeChangedStreamMount(queryClient);
+      expect(worktreeMountStreamState.opened).toHaveLength(1);
+
+      // First close never reported "open" at all, so it is not healthy - the
+      // lane's backoff is untouched (still its initial 5s) for THIS
+      // schedule, then doubles to 10s for the next one.
+      emitWorktreeMountStatus(
+        "closed",
+        worktreeMountFatalClose("UNAUTHORIZED"),
+      );
+      act(() => {
+        vi.advanceTimersByTime(HOST_STREAM_REOPEN_INITIAL_BACKOFF_MS);
+      });
+      expect(worktreeMountStreamState.opened).toHaveLength(2);
+
+      // Second client: report "open", let it dwell >= 30s, then close.
+      emitWorktreeMountStatus("open", null);
+      act(() => {
+        vi.advanceTimersByTime(30_000);
+      });
+      emitWorktreeMountStatus(
+        "closed",
+        worktreeMountFatalClose("UNAUTHORIZED"),
+      );
+
+      // Without the healthy-dwell reset this close would inherit the doubled
+      // 10s backoff from the first close - advancing only the INITIAL 5s
+      // here is what proves the reset happened.
+      act(() => {
+        vi.advanceTimersByTime(HOST_STREAM_REOPEN_INITIAL_BACKOFF_MS);
+      });
+      expect(worktreeMountStreamState.opened).toHaveLength(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not reset the reopen lane's backoff after a quick (<30s) close", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(0);
+      const queryClient = createAppQueryClient();
+      renderWorktreeChangedStreamMount(queryClient);
+      expect(worktreeMountStreamState.opened).toHaveLength(1);
+
+      // First close (also not healthy): schedules at the initial 5s, then
+      // doubles to 10s for the next one.
+      emitWorktreeMountStatus(
+        "closed",
+        worktreeMountFatalClose("UNAUTHORIZED"),
+      );
+      act(() => {
+        vi.advanceTimersByTime(HOST_STREAM_REOPEN_INITIAL_BACKOFF_MS);
+      });
+      expect(worktreeMountStreamState.opened).toHaveLength(2);
+
+      // Second client: opens, but closes almost immediately - well under the
+      // 30s healthy dwell - so the backoff must NOT reset.
+      emitWorktreeMountStatus("open", null);
+      act(() => {
+        vi.advanceTimersByTime(1_000);
+      });
+      emitWorktreeMountStatus(
+        "closed",
+        worktreeMountFatalClose("UNAUTHORIZED"),
+      );
+
+      // The doubled 10s backoff is still in force: the initial 5s alone is
+      // not enough to reopen.
+      act(() => {
+        vi.advanceTimersByTime(HOST_STREAM_REOPEN_INITIAL_BACKOFF_MS);
+      });
+      expect(worktreeMountStreamState.opened).toHaveLength(2);
+
+      // The remaining 5s completes the 10s window.
+      act(() => {
+        vi.advanceTimersByTime(HOST_STREAM_REOPEN_INITIAL_BACKOFF_MS);
+      });
+      expect(worktreeMountStreamState.opened).toHaveLength(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

@@ -4823,6 +4823,34 @@ describe("WsStreamClient readiness", () => {
     session.close();
     client.close("test-teardown");
   });
+
+  it("is not ready once an owned session loses its socket", async () => {
+    const { client, sockets } = readinessClient();
+    const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
+
+    await flush();
+    const stub = sockets[0].socket;
+    stub.fireOpen();
+    stub.fireText(
+      streamOpenAck(
+        buildStreamManifest(
+          hostStreamRpcRegistry,
+          SERVES_EVERY_INSTALLED_MAJOR,
+        ),
+        undefined,
+      ),
+    );
+    expect(client.isReady()).toBe(true);
+
+    // The drop puts the session into its reconnect loop. The client still
+    // owns it, and it is not carrying traffic.
+    stub.fireClose(1006, "abnormal-closure", false);
+
+    expect(client.isReady()).toBe(false);
+
+    session.close();
+    client.close("test-teardown");
+  });
   it("is never ready once closed", () => {
     const { client } = readinessClient();
 

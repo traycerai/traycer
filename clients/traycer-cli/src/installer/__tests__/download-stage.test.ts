@@ -1328,6 +1328,135 @@ describe("downloadAndStageHost", () => {
       });
       expect((await readHostStagedRecord(ENV))?.version).toBe("1.5.0");
     }); // The absent-attempt direction of the same ablation (no `update-attempt.json`
+
+    it("an explicit `host download <version>` yields at promote when a parked attempt appears during transfer, preserving the parked attempt's staged bytes", async () => {
+      await writeInstall("1.0.0", {});
+      const versions = [
+        { version: "1.0.0", yanked: false },
+        { version: "1.2.0", yanked: false },
+        { version: "1.5.0", yanked: false },
+      ];
+      await downloadAndStageHost({
+        environment: ENV,
+        versionRequest: "1.2.0",
+        automatic: false,
+        onProgress: noopProgress,
+        registryClient: fakeRegistryClient({
+          latest: "1.5.0",
+          versions,
+          downloadGate: null,
+          onDownloadStart: null,
+        }),
+      });
+      const stagedBefore = await readHostStagedRecord(ENV);
+      const executablePath = join(stagedDirFor(ENV), executableBasename());
+      const executableBefore = readFileSync(executablePath);
+
+      const gate = makeGate();
+      const started = makeGate();
+      const client = fakeRegistryClient({
+        latest: "1.5.0",
+        versions,
+        downloadGate: gate.promise,
+        onDownloadStart: () => started.release(),
+      });
+      // Explicit version request - normally replaces ANY existing stage,
+      // even a newer one (see "an explicit version request replaces any
+      // existing stage" above). The promote-time guard must still yield in
+      // front of that otherwise-unconditional replace-any-stage policy.
+      const downloadPromise = downloadAndStageHost({
+        environment: ENV,
+        versionRequest: "1.5.0",
+        automatic: false,
+        onProgress: noopProgress,
+        registryClient: client,
+      });
+      await started.promise;
+      writeAttemptRecord({
+        attemptId: "parked-attempt-2",
+        targetVersion: "1.2.0",
+        phase: "waiting-to-activate",
+        execution: "parked",
+        continuation: "activate",
+      });
+      gate.release();
+
+      const result = await downloadPromise.then(
+        (outcome) => ({ kind: "outcome" as const, outcome }),
+        (error: unknown) => ({ kind: "error" as const, error }),
+      );
+
+      const stagedAfter = await readHostStagedRecord(ENV);
+      expect(stagedAfter).toEqual(stagedBefore);
+      expect(readFileSync(executablePath)).toEqual(executableBefore);
+      expect(result).toMatchObject({
+        kind: "error",
+        error: {
+          code: CLI_ERROR_CODES.HOST_UPDATE_ATTEMPT_ACTIVE,
+          details: expect.objectContaining({
+            disposition: "yield",
+            attemptId: "parked-attempt-2",
+            phase: "waiting-to-activate",
+            targetVersion: "1.2.0",
+            candidateVersion: "1.5.0",
+          }),
+        },
+      });
+    });
+
+    it("ablation: a TERMINAL attempt present at the same explicit-download promote-time race does not block the replace-any-stage promotion", async () => {
+      await writeInstall("1.0.0", {});
+      const versions = [
+        { version: "1.0.0", yanked: false },
+        { version: "1.2.0", yanked: false },
+        { version: "1.5.0", yanked: false },
+      ];
+      await downloadAndStageHost({
+        environment: ENV,
+        versionRequest: "1.2.0",
+        automatic: false,
+        onProgress: noopProgress,
+        registryClient: fakeRegistryClient({
+          latest: "1.5.0",
+          versions,
+          downloadGate: null,
+          onDownloadStart: null,
+        }),
+      });
+
+      const gate = makeGate();
+      const started = makeGate();
+      const client = fakeRegistryClient({
+        latest: "1.5.0",
+        versions,
+        downloadGate: gate.promise,
+        onDownloadStart: () => started.release(),
+      });
+      const downloadPromise = downloadAndStageHost({
+        environment: ENV,
+        versionRequest: "1.5.0",
+        automatic: false,
+        onProgress: noopProgress,
+        registryClient: client,
+      });
+      await started.promise;
+      writeAttemptRecord({
+        attemptId: "finished-attempt-2",
+        targetVersion: "1.2.0",
+        phase: "complete",
+        execution: "terminal",
+        continuation: null,
+        completedAt: "2026-01-01T00:05:00.000Z",
+      });
+      gate.release();
+
+      const outcome = await downloadPromise;
+      expect(outcome).toMatchObject({
+        outcome: "promoted",
+        stagedVersion: "1.5.0",
+      });
+      expect((await readHostStagedRecord(ENV))?.version).toBe("1.5.0");
+    });
     // at all at promote time) is already load-bearing coverage from the
     // pre-existing "downloads and promotes a fresh, strictly-newer version by
     // default (latest)" and "an explicit version request replaces any

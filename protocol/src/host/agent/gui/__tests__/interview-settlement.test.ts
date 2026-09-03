@@ -1531,6 +1531,29 @@ describe("delivery monotonicity", () => {
     );
   });
 
+  it("does not let a distinct losing settlement adopt a pending delivery onto a null slot", () => {
+    // mergeDelivery's first rule is "nothing recorded yet ⇒ take the incoming
+    // projection". Without correlating delivery to settlement authority, a
+    // GUI-answered block with `delivery: null` meeting an unrelated losing
+    // runtime settlement that carried a `pending` projection would ADOPT it -
+    // attaching an outbox identity that belongs to a different settlement,
+    // which then becomes the id every later update is ordered against.
+    const block = guiAuthoritativeBlock(null);
+    const foreign = makeDeliveryProjection(
+      "delivery-foreign",
+      "pending",
+      false,
+      0,
+    );
+    const result = applyInterviewSettlement(
+      block,
+      distinctLosingRuntimeSettlement(foreign),
+    );
+    expect(result.changed).toBe(false);
+    expect(result.patch.delivery).toBeNull();
+    expect(result.patch).toStrictEqual(ownedPatch(block));
+  });
+
   it("adopts a winning settlement's delivery wholesale, including a different deliveryId", () => {
     // A winner REPLACES the canonical settlement, so it brings a different
     // outbox item. Merging there is the bug this pins: stored {d1, delivered}

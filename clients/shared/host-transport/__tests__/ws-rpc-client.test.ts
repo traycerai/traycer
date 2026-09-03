@@ -2229,6 +2229,53 @@ describe("WsRpcClient", () => {
       await completeRetriedSocket(sockets, 1);
       await expect(pending).resolves.toEqual({ echoed: "HI" });
     });
+
+    it("suspend during delivery leg: overdue expiry on wake keeps the socket open for typed attestation recovery", async () => {
+      const { factory, sockets } = makeFactory();
+      const { client, authCalls, authority } = makeGraceRecoveryStack({
+        factory,
+        frameTimeoutMs: CLI_FRAME_TIMEOUT_MS,
+        hostAttestationWindowMs: HOST_ATTESTATION_WINDOW_MS,
+      });
+
+      const pending = client.request(
+        "host.echo",
+        { message: "hi" },
+        {
+          idempotencyKey: null,
+          authority: authority,
+          replayMustBeKeyed: false,
+        },
+      );
+      await driveUntilRequestSent(sockets);
+
+      // Response deadline → grace armed; window leg → delivery leg armed (t=45s).
+      await vi.advanceTimersByTimeAsync(CLI_FRAME_TIMEOUT_MS);
+      await vi.advanceTimersByTimeAsync(
+        HOST_ATTESTATION_WINDOW_MS -
+          CLI_FRAME_TIMEOUT_MS -
+          ATTESTATION_DELIVERY_SLACK_MS,
+      );
+      expect(sockets[0].socket.closed).toBeNull();
+
+      // Suspend while the delivery timer is pending, then let it fire overdue.
+      vi.setSystemTime(Date.now() + SUSPEND_JUMP_MS);
+      await vi.advanceTimersByTimeAsync(ATTESTATION_DELIVERY_SLACK_MS);
+      // Discriminator: late-fire forgiveness re-armed the delivery leg.
+      expect(sockets[0].socket.closed).toBeNull();
+
+      sockets[0].socket.fireMessage(typedPostOpenTimeoutFatal);
+      await flushFake();
+
+      for (let attempt = 0; attempt < 10 && sockets.length < 2; attempt += 1) {
+        await flushFake();
+      }
+      expect(sockets).toHaveLength(2);
+      expect(authCalls.count).toBe(0);
+
+      await completeRetriedSocket(sockets, 1);
+      await expect(pending).resolves.toEqual({ echoed: "HI" });
+    });
     it("close during grace keeps the original ambiguous response timeout without a second dial", async () => {
       const { factory, sockets } = makeFactory();
       const client = makeClient({

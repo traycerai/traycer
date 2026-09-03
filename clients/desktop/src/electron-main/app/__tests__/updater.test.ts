@@ -1750,6 +1750,15 @@ describe("Linux deb/rpm silent-install gating", () => {
 
     expect(autoUpdater.autoInstallOnAppQuit).toBe(true);
   });
+
+  it("keeps autoInstallOnAppQuit enabled for a Linux AppImage build (no package-type)", async () => {
+    setPlatform("linux");
+    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
+
+    await updater.installAutoUpdater(true, makeDeps(true));
+
+    expect(autoUpdater.autoInstallOnAppQuit).toBe(true);
+  });
   it("disables autoInstallOnAppQuit for a Linux deb build regardless of registration", async () => {
     setPlatform("linux");
     const { autoUpdater, updater } = await loadUpdater({
@@ -2099,6 +2108,47 @@ describe("compat recovery: RC probe", () => {
       route: "update-available",
     });
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("returns manual when the probe's network wait exceeds its deadline", async () => {
+    // A stalled request never rejects, so without a wall-clock ceiling the
+    // `manual` fallback is unreachable and the blocking dialog sits on a
+    // spinner forever - the one outcome every arm of this surface avoids.
+    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
+    await updater.installAutoUpdater(true, makeDeps(true));
+    autoUpdater.setFeedURL.mockClear();
+    let recoverySignal: AbortSignal | undefined;
+    // Never settles on its own. It rejects only when the recovery deadline
+    // aborts it, proving the fallback does not leave a live request behind.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        (_input: string | URL | Request, init: RequestInit | undefined) =>
+          new Promise((_resolve, reject) => {
+            recoverySignal = init?.signal ?? undefined;
+            recoverySignal?.addEventListener("abort", () => {
+              reject(new DOMException("aborted", "AbortError"));
+            });
+          }),
+      ),
+    );
+
+    vi.useFakeTimers();
+    try {
+      const pending = updater.resolveCompatRecovery({
+        minimumEpoch: 2,
+        hostAllowsRcRecovery: true,
+      });
+      await vi.advanceTimersByTimeAsync(20_000);
+      const plan = await pending;
+      expect(plan.route).toBe("manual");
+      expect(plan.rcCandidateVersion).toBeNull();
+      expect(recoverySignal?.aborted).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+    // Still read-only on the timeout path.
+    expect(autoUpdater.setFeedURL).not.toHaveBeenCalled();
   });
 
   it("does not offer the RC hop while a download is in flight", async () => {
