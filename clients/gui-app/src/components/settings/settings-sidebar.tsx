@@ -156,6 +156,7 @@ function SettingsSidebarHostPicker(props: {
         // the verb itself rather than in a link to this very page.
         action={{
           kind: "add-host",
+          disabled: false,
           onSelect: () => openAddHost(scope.hosts.map((host) => host.hostId)),
         }}
         surface="rail"

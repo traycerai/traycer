@@ -831,7 +831,7 @@ function renderPopover(): void {
   render(
     <TooltipProvider>
       <ResourcesStreamMount epicId="epic-1" />
-      <ResourceMonitorPopover className={undefined} />
+      <ResourceMonitorPopover trigger="header-button" className={undefined} />
     </TooltipProvider>,
   );
 }
@@ -2352,7 +2352,7 @@ describe("ResourceMonitorPopover", () => {
     render(
       <TooltipProvider delayDuration={0}>
         <ResourcesStreamMount epicId="epic-1" />
-        <ResourceMonitorPopover className={undefined} />
+        <ResourceMonitorPopover trigger="header-button" className={undefined} />
       </TooltipProvider>,
     );
 
@@ -3561,7 +3561,7 @@ describe("ResourceMonitorPopover", () => {
     render(
       <TooltipProvider>
         <ResourcesStreamMount epicId="epic-1" />
-        <ResourceMonitorPopover className={undefined} />
+        <ResourceMonitorPopover trigger="header-button" className={undefined} />
       </TooltipProvider>,
     );
 
@@ -3588,7 +3588,7 @@ describe("ResourceMonitorPopover", () => {
     render(
       <TooltipProvider>
         <ResourcesStreamMount epicId="epic-1" />
-        <ResourceMonitorPopover className={undefined} />
+        <ResourceMonitorPopover trigger="header-button" className={undefined} />
       </TooltipProvider>,
     );
 
@@ -3644,7 +3644,7 @@ describe("ResourceMonitorPopover", () => {
     render(
       <TooltipProvider>
         <ResourcesStreamMount epicId="epic-1" />
-        <ResourceMonitorPopover className={undefined} />
+        <ResourceMonitorPopover trigger="header-button" className={undefined} />
       </TooltipProvider>,
     );
 
@@ -3669,7 +3669,7 @@ describe("ResourceMonitorPopover", () => {
     render(
       <TooltipProvider>
         <ResourcesStreamMount epicId="epic-1" />
-        <ResourceMonitorPopover className={undefined} />
+        <ResourceMonitorPopover trigger="header-button" className={undefined} />
       </TooltipProvider>,
     );
 
@@ -3740,7 +3740,7 @@ describe("ResourceMonitorPopover", () => {
     render(
       <TooltipProvider>
         <ResourcesStreamMount epicId="epic-1" />
-        <ResourceMonitorPopover className={undefined} />
+        <ResourceMonitorPopover trigger="header-button" className={undefined} />
       </TooltipProvider>,
     );
 
@@ -3782,7 +3782,7 @@ describe("ResourceMonitorPopover", () => {
     render(
       <TooltipProvider>
         <ResourcesStreamMount epicId="epic-1" />
-        <ResourceMonitorPopover className={undefined} />
+        <ResourceMonitorPopover trigger="header-button" className={undefined} />
       </TooltipProvider>,
     );
 
@@ -4574,7 +4574,7 @@ describe("ResourceMonitorPopover · host picker", () => {
     render(
       <TooltipProvider>
         <ResourcesStreamMount epicId="epic-1" />
-        <ResourceMonitorPopover className={undefined} />
+        <ResourceMonitorPopover trigger="header-button" className={undefined} />
       </TooltipProvider>,
     );
 

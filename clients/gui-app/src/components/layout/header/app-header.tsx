@@ -14,6 +14,7 @@ import { NotificationsBell } from "@/components/notifications/notifications-bell
 import { cn } from "@/lib/utils";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { useLayoutStore } from "@/stores/settings/layout-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useTitleBarDraggingSuppressed } from "@/stores/layout/title-bar-drag-store";
 
@@ -76,9 +77,6 @@ function DesktopAppHeader(props: AppHeaderProps): ReactNode {
   const navDisabled = variant === "host-loading";
   const showBell = variant !== "host-loading";
   const framelessDesktop = isFramelessDesktop();
-  const showGlobalResourceMonitor = useSettingsStore(
-    (state) => state.showGlobalResourceMonitor,
-  );
   // A header-anchored overlay (e.g. the resource monitor) needs the title bar to
   // stop swallowing clicks so a click there dismisses it. Drop drag while any
   // such overlay is open; restore it once they all close.
@@ -148,15 +146,44 @@ function DesktopAppHeader(props: AppHeaderProps): ReactNode {
         style={framelessDesktop ? NO_DRAG_STYLE : undefined}
       >
         {!navDisabled ? <AppUpdateHeaderButton /> : null}
-        {!navDisabled ? <RateLimitIconButton /> : null}
-        {!navDisabled && showGlobalResourceMonitor ? (
-          <ResourceMonitorPopover className={undefined} />
-        ) : null}
+        {!navDisabled ? <HeaderUsageControls /> : null}
         {!navDisabled ? <HistoryButton /> : null}
         {showBell ? <HeaderNotificationsBell /> : null}
         <HeaderIdentity showAppSettings={!navDisabled} />
       </div>
     </header>
+  );
+}
+
+/**
+ * The header's half of "exactly one surface owns the usage gauge and the
+ * resource monitor". Under the `status-bar` placement both move to the strip
+ * and this renders nothing.
+ *
+ * The DESKTOP header's half only: `MobileAppHeader` keeps both controls
+ * unconditionally, because the footer is desktop-only and a mobile viewport
+ * that respected `status-bar` would end up with neither.
+ *
+ * `showGlobalResourceMonitor` still gates the resource button on top of this —
+ * the two settings answer different questions ("do I want a resource monitor
+ * at all" vs "where do the usage controls live"), so under the footer the
+ * segment is governed by the status bar's own `resources.enabled` instead.
+ */
+function HeaderUsageControls(): ReactNode {
+  const showGlobalResourceMonitor = useSettingsStore(
+    (state) => state.showGlobalResourceMonitor,
+  );
+  const inHeader = useLayoutStore(
+    (state) => state.statusBar.placement === "header",
+  );
+  if (!inHeader) return null;
+  return (
+    <>
+      <RateLimitIconButton />
+      {showGlobalResourceMonitor ? (
+        <ResourceMonitorPopover trigger="header-button" className={undefined} />
+      ) : null}
+    </>
   );
 }
 

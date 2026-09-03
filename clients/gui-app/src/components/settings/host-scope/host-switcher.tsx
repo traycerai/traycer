@@ -1,5 +1,11 @@
 import { useState, type ReactNode } from "react";
-import { ChevronDown, Plus, Settings, type LucideIcon } from "lucide-react";
+import {
+  ChevronDown,
+  Plus,
+  Power,
+  Settings,
+  type LucideIcon,
+} from "lucide-react";
 import {
   Command,
   CommandEmpty,
@@ -55,7 +61,10 @@ function hostSwitcherLabel(
     : `${subject}: ${selected.name}${status === null ? "" : `, ${status}`}`;
 }
 
-export type HostSwitcherActionKind = "add-host" | "manage-hosts";
+export type HostSwitcherActionKind =
+  | "add-host"
+  | "manage-hosts"
+  | "activate-host";
 
 /**
  * The picker's trailing action — a prop rather than a constant because only
@@ -66,10 +75,27 @@ export type HostSwitcherActionKind = "add-host" | "manage-hosts";
  * opener. A surface that merely WATCHES a host (the header's usage popover) has
  * no business growing a second copy of that flow, so it ends the list by
  * pointing at Settings instead. The rows above are identical either way, which
- * is the point: one picker, one row vocabulary, two endings.
+ * is the point: one picker, one row vocabulary, three endings.
+ *
+ * `activate-host` is the third, and it is the only one whose consequence is
+ * app-wide: it moves the app's effective host rather than opening a surface.
+ * The picker still owns none of that — the caller supplies the callback, and
+ * what it calls (`HostScope.makeActive`) is the selection authority's one
+ * writer.
  */
 export interface HostSwitcherAction {
   readonly kind: HostSwitcherActionKind;
+  /**
+   * The action cannot be taken right now — an Activate already in flight, and
+   * nothing else today.
+   *
+   * Required rather than optional so a caller with a pending write has to say
+   * which state it is in. `HostScope.isActivating` exists precisely because
+   * `makeActive` is not idempotent-by-accident: it validates, persists and
+   * re-derives, and a successful one fires the app's only `HostSelected`
+   * event, so a second click issues two of each.
+   */
+  readonly disabled: boolean;
   readonly onSelect: () => void;
 }
 
@@ -107,8 +133,19 @@ interface HostSwitcherActionPresentation {
  *   there rather than as this row's choices. So the trigger goes full-bleed and
  *   square, and the list drops flush from its bottom edge at exactly its width
  *   — one shared edge, one continuous surface.
+ * - `status-bar`: a chip in the app's 24px bottom strip, where the height is
+ *   the binding constraint and every other preset overflows it (`inline` is
+ *   `h-7`, and the padded presets are taller still). It is the only preset
+ *   whose list opens UPWARD, because there is nothing below the strip to open
+ *   into — hence its own `side`, and hence the collapsed single-line notice
+ *   branches below, which the stacked ones would burst the strip with.
  */
-export type HostSwitcherSurface = "rail" | "panel-header" | "field" | "inline";
+export type HostSwitcherSurface =
+  | "rail"
+  | "panel-header"
+  | "field"
+  | "inline"
+  | "status-bar";
 
 interface HostSwitcherSurfacePresentation {
   /**
@@ -126,6 +163,14 @@ interface HostSwitcherSurfacePresentation {
    * The hover fill still says it opens.
    */
   readonly trigger: string;
+  /**
+   * The selected host's NAME, which does not simply inherit the trigger: a
+   * surface can want a quieter name than its own text colour (`inline`,
+   * `status-bar`) or a smaller one than the default control size. An unset
+   * selection still overrides this to muted at the call site, so a preset only
+   * has to describe the resolved case.
+   */
+  readonly label: string;
   /** Squares off the two corners that would cut back in under the strip. */
   readonly list: string;
   /**
@@ -135,6 +180,20 @@ interface HostSwitcherSurfacePresentation {
    * card edge for it to double up against.
    */
   readonly sideOffsetPx: number;
+  /**
+   * Which way the list opens. `bottom` everywhere the picker has room beneath
+   * it; `top` only in the bottom strip, where it has none. Radix would flip it
+   * on collision anyway, but a collision flip is a fallback the list arrives at
+   * — this states the intent, so the strip's list is never rendered downward
+   * for the frame before measurement.
+   */
+  readonly side: "top" | "bottom";
+  /**
+   * How the zero-host and failed-list branches lay out. `stacked` is the
+   * padded two-line form every roomy surface uses; `chip` collapses the same
+   * words and the same retry into one line that fits the strip's row height.
+   */
+  readonly notice: "stacked" | "chip";
 }
 
 const HOST_SWITCHER_SURFACES: Record<
@@ -143,27 +202,51 @@ const HOST_SWITCHER_SURFACES: Record<
 > = {
   rail: {
     trigger: "rounded-md bg-foreground/5 hover:bg-foreground/7",
+    label: "text-ui-sm font-medium text-foreground",
     list: "",
     sideOffsetPx: 4,
+    side: "bottom",
+    notice: "stacked",
   },
   "panel-header": {
     trigger: "hover:bg-foreground/5",
+    label: "text-ui-sm font-medium text-foreground",
     list: "rounded-t-none",
     sideOffsetPx: 0,
+    side: "bottom",
+    notice: "stacked",
   },
   field: {
     // Deliberately the same tokens as the worktree picker's search input
     // (`InputGroup`, `border-input/40 bg-input/25`), one control above it.
     trigger:
       "rounded-lg border border-input/40 bg-input/25 hover:bg-input/40 dark:hover:bg-input/40",
+    label: "text-ui-sm font-medium text-foreground",
     list: "",
     sideOffsetPx: 4,
+    side: "bottom",
+    notice: "stacked",
   },
   inline: {
     trigger:
       "h-7 w-fit max-w-full gap-1.5 rounded-lg px-1.5 py-0 text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
+    label: "text-ui-sm font-medium text-muted-foreground",
     list: "",
     sideOffsetPx: 4,
+    side: "bottom",
+    notice: "stacked",
+  },
+  "status-bar": {
+    // `gap-1.5` rather than the default `gap-3`: at this height the label, the
+    // status word and the chevron are three items in 24px, and the roomier gap
+    // pushes a host name to an ellipsis it does not need.
+    trigger:
+      "h-6 w-fit max-w-full gap-1.5 rounded-none px-2 py-0 text-ui-xs text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
+    label: "text-ui-xs font-medium text-muted-foreground",
+    list: "",
+    sideOffsetPx: 4,
+    side: "top",
+    notice: "chip",
   },
 };
 
@@ -186,6 +269,14 @@ const HOST_SWITCHER_ACTIONS: Record<
     keywords: ["manage", "settings", "add", "install", "host", "hosts"],
     testId: "settings-host-switcher-manage",
     emptyTestId: "settings-host-switcher-empty-manage",
+  },
+  "activate-host": {
+    label: "Activate this host",
+    icon: Power,
+    commandValue: "action:activate-host",
+    keywords: ["activate", "active", "make", "default", "switch", "host"],
+    testId: "settings-host-switcher-activate",
+    emptyTestId: "settings-host-switcher-empty-activate",
   },
 };
 
@@ -268,6 +359,16 @@ export function HostSwitcher(props: {
   const action = HOST_SWITCHER_ACTIONS[props.action.kind];
   const ActionIcon = action.icon;
   const surface = HOST_SWITCHER_SURFACES[props.surface];
+  // Both no-picker branches below say the same two things — what is wrong and
+  // what to do — and only their LAYOUT can vary, because a surface that is 24px
+  // tall cannot stack them. Derived once so the two branches cannot drift into
+  // two different answers about which surface collapses.
+  const noticeContainer =
+    surface.notice === "chip"
+      ? "flex h-6 w-fit max-w-full items-center gap-2 px-2"
+      : "flex w-full flex-col gap-2 px-3 py-2";
+  const noticeActionAlign =
+    surface.notice === "chip" ? "self-center" : "self-start";
 
   // The empty state keys on the LIST, not on the selection.
   //
@@ -288,7 +389,7 @@ export function HostSwitcher(props: {
     if (props.listsFailed && !props.isLoading) {
       return (
         <div
-          className="flex w-full flex-col gap-2 px-3 py-2"
+          className={noticeContainer}
           data-testid="settings-host-switcher-lists-failed"
         >
           <span className="text-ui-xs text-muted-foreground">
@@ -297,7 +398,11 @@ export function HostSwitcher(props: {
           <button
             type="button"
             onClick={props.onRetryLists}
-            className="inline-flex items-center gap-1.5 self-start rounded-md px-1 py-0.5 text-ui-xs text-primary transition-colors hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+            className={cn(
+              "inline-flex items-center gap-1.5",
+              noticeActionAlign,
+              "rounded-md px-1 py-0.5 text-ui-xs text-primary transition-colors hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50",
+            )}
             data-testid="settings-host-switcher-retry-lists"
           >
             Try again
@@ -307,7 +412,7 @@ export function HostSwitcher(props: {
     }
     return (
       <div
-        className="flex w-full flex-col gap-2 px-3 py-2"
+        className={noticeContainer}
         data-testid="settings-host-switcher-empty"
       >
         <span className="text-ui-xs text-muted-foreground">
@@ -315,12 +420,23 @@ export function HostSwitcher(props: {
         </span>
         {/* Genuinely zero hosts is exactly when this action matters most, and
             it used to be unreachable here — the only opener lived in a popover
-            this branch returned before rendering. */}
+            this branch returned before rendering.
+
+            `action.disabled` is deliberately NOT wired here. It exists for
+            `activate-host`, and an Activate cannot reach this branch: with zero
+            hosts there is no host to activate, so every caller of that kind
+            resolves a host first and falls back to another ending when it has
+            none. Wiring a flag that is always false would only suggest a state
+            this branch can be in. */}
         {props.isLoading ? null : (
           <button
             type="button"
             onClick={props.action.onSelect}
-            className="inline-flex items-center gap-1.5 self-start rounded-md px-1 py-0.5 text-ui-xs text-primary transition-colors hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+            className={cn(
+              "inline-flex items-center gap-1.5",
+              noticeActionAlign,
+              "rounded-md px-1 py-0.5 text-ui-xs text-primary transition-colors hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50",
+            )}
             data-testid={action.emptyTestId}
           >
             <ActionIcon className="size-3.5 shrink-0" />
@@ -338,11 +454,11 @@ export function HostSwitcher(props: {
         selected={selected}
         disabled={props.disabled}
         keepFocusableWhenDisabled={props.keepFocusableWhenDisabled}
-        surfaceKind={props.surface}
         surface={surface}
       />
       <PopoverContent
         align="start"
+        side={surface.side}
         sideOffset={surface.sideOffsetPx}
         // Never narrower than the row it drops out of. A list floating at its
         // own width under a wider trigger reads as an unrelated panel that
@@ -397,6 +513,13 @@ export function HostSwitcher(props: {
               <CommandItem
                 value={action.commandValue}
                 keywords={[...action.keywords]}
+                // cmdk drops the click handler AND publishes `aria-disabled` /
+                // `data-disabled` from this one flag, so the row goes inert and
+                // says so in the same breath. The latch is here rather than
+                // only in `HostScope.makeActive` because that guard is silent:
+                // a live-looking row that does nothing is a different defect
+                // from a double write, and this surface can show both.
+                disabled={props.action.disabled}
                 onSelect={() => {
                   setOpen(false);
                   props.action.onSelect();
@@ -445,7 +568,6 @@ function HostSwitcherTrigger(props: {
   readonly selected: HostScopeOption | null;
   readonly disabled: boolean;
   readonly keepFocusableWhenDisabled?: boolean;
-  readonly surfaceKind: HostSwitcherSurface;
   readonly surface: HostSwitcherSurfacePresentation;
 }): ReactNode {
   const { selected } = props;
@@ -486,10 +608,9 @@ function HostSwitcherTrigger(props: {
           earns space in this compact trigger. */}
       <span
         className={cn(
-          "min-w-0 flex-1 truncate text-ui-sm font-medium",
-          selected === null || props.surfaceKind === "inline"
-            ? "text-muted-foreground"
-            : "text-foreground",
+          "min-w-0 flex-1 truncate",
+          props.surface.label,
+          selected === null && "text-muted-foreground",
           !props.disabled && "group-hover/host-switcher:text-foreground",
         )}
       >

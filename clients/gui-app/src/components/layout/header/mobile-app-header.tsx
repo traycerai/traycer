@@ -78,7 +78,10 @@ export function MobileAppHeader(): ReactNode {
       <div className="flex shrink-0 items-center gap-1">
         <RateLimitIconButton />
         {showGlobalResourceMonitor ? (
-          <ResourceMonitorPopover className={undefined} />
+          <ResourceMonitorPopover
+            trigger="header-button"
+            className={undefined}
+          />
         ) : null}
         {/* Last of the global controls, matching the desktop header's order
             (rate limit -> resource monitor -> bell). */}
