@@ -12,6 +12,7 @@ import { appLogger } from "@/lib/logger";
 import { useSyncExternalStore } from "react";
 import {
   agentActivityPlaneAnswers,
+  agentActivityPlaneSpansFleet,
   getEpicAgentActivity,
   subscribeAgentActivity,
   subscribeAgentActivityPlaneHealth,
@@ -236,8 +237,10 @@ function eligibilityKeyFor(
   // Every input of the two cap predicates is in the key, or a session that
   // just became evictable would not trigger a prune until an unrelated field
   // moved: `holdsNothingToLose` reads the three work fields, `epicIsBusy`
-  // reads the activity plane's health and the epic's working set.
-  return `${holdsNothingToLose(state) ? 1 : 0}:${epicIsBusy(epicId) ? 1 : 0}:${state.isDirty ? 1 : 0}:${state.unsyncedQueueSize}:${state.writeCommands.length}:${metaTitle}:${liveTitle}`;
+  // reads the activity plane's health and reach, the epic's working set, and
+  // this session's transport (which no longer gates eviction on its own, but
+  // still decides whether a narrow union can speak for this session).
+  return `${holdsNothingToLose(state) ? 1 : 0}:${epicIsBusy(epicId, state) ? 1 : 0}:${state.isDirty ? 1 : 0}:${state.unsyncedQueueSize}:${state.writeCommands.length}:${state.hostTransportStatus}:${metaTitle}:${liveTitle}`;
 }
 
 /**
@@ -286,9 +289,31 @@ function holdsNothingToLose(state: OpenEpicState): boolean {
  * but is never a candidate, so a blind window leaves the registry exactly
  * where it was - the pre-change behaviour - rather than evicting an epic
  * whose agent is mid-turn.
+ *
+ * The third arm bounds WHICH epics an answering plane can speak for. The union
+ * is built by the serving host, so it spans the fleet only when that host says
+ * its cloud link is up (or when the cloud itself is serving it); a host with
+ * no cloud claim reports the agents IT can see. This registry can hold
+ * sessions bound to other hosts, and it has no per-session host to check them
+ * against - so for a session whose own transport is not open, a plane that is
+ * not known to span the fleet is not evidence about that session's host, and
+ * the epic reads busy. It is exactly the sessions the transport clause used to
+ * hold that this keeps holding, and only while the union is narrow: with a
+ * cloud-connected plane the D1 case (an unmounted epic whose host went away)
+ * is evictable as intended.
+ *
+ * The remaining gap is older than this gate: an OPEN-transport session on
+ * another host is evicted on a narrow union's silence today too, because
+ * `hasActiveAgentWork` has always read the same map. Closing it needs the
+ * plane to carry its serving `hostId` and the registry to carry each
+ * session's, which is a wider change than this one.
  */
-function epicIsBusy(epicId: string): boolean {
-  return !agentActivityPlaneAnswers() || hasActiveAgentWork(epicId);
+function epicIsBusy(epicId: string, state: OpenEpicState): boolean {
+  if (!agentActivityPlaneAnswers()) return true;
+  if (hasActiveAgentWork(epicId)) return true;
+  return (
+    state.hostTransportStatus !== "open" && !agentActivityPlaneSpansFleet()
+  );
 }
 
 /**
@@ -548,8 +573,10 @@ export class OpenEpicSessionRegistry {
         // released.
         refreshOrderOnRelease: false,
         retainWhenIdle: () => true,
-        // Agent working, or activity plane blind - see `epicIsBusy`.
-        hasActiveWork: (session) => epicIsBusy(session.epicId),
+        // Agent working, plane blind, or a union too narrow to speak for this
+        // session - see `epicIsBusy`.
+        hasActiveWork: (session) =>
+          epicIsBusy(session.epicId, session.handle.store.getState()),
         // Never evict a session holding unsynced edits or unflushed writes.
         // The transport is NOT consulted - see `holdsNothingToLose`.
         isEvictable: (session) =>

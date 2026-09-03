@@ -286,6 +286,62 @@ describe("OpenEpicSessionRegistry", () => {
     expect(reconnecting.disposed).toBe(true);
   });
 
+  it("keeps a reconnecting session while the union covers only the host that built it", () => {
+    // The union is the serving host's answer. Without a cloud link it speaks
+    // for that host alone, and this registry can hold sessions bound to
+    // others with no per-session host to check them against - so a session
+    // whose own transport is down is one this union cannot speak about, and
+    // it stays. The same-tick control is the case above: with a fleet-wide
+    // union the identical session IS evicted.
+    useAgentActivityStore.setState({
+      connectionStatus: "open",
+      servedBy: "local",
+      stateFrameSeenThisEpoch: true,
+      cloudSyncStatus: null,
+    });
+    const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
+    const reconnecting = buildTestHandle("e0", false);
+    reconnecting.handle.store.setState({
+      hostTransportStatus: "reconnecting",
+      snapshotLoaded: true,
+    });
+    registry.acquire("e0", () => h(reconnecting));
+    for (let i = 1; i < 5; i += 1) {
+      registry.acquire(`e${i}`, () => h(buildTestHandle(`e${i}`, false)));
+    }
+    registry.acquire("e5", () => h(buildTestHandle("e5", false)));
+
+    // The overflow entry the walk WOULD have taken is held, so the registry
+    // sits one over its cap rather than evicting blind.
+    expect(reconnecting.disposed).toBe(false);
+    expect(registry.size()).toBe(6);
+  });
+
+  it("still evicts an OPEN-transport session while the union is narrow", () => {
+    // The narrow-union arm is scoped to sessions whose transport is down. An
+    // open transport is the ordinary case on the host that built the union,
+    // and holding those too would make the cap inert for every install
+    // without a cloud link.
+    useAgentActivityStore.setState({
+      connectionStatus: "open",
+      servedBy: "local",
+      stateFrameSeenThisEpoch: true,
+      cloudSyncStatus: null,
+    });
+    const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
+    const handles: TestHandle[] = [];
+    for (let i = 0; i < 5; i += 1) {
+      const th = buildTestHandle(`e${i}`, false);
+      handles.push(th);
+      registry.acquire(`e${i}`, () => h(th));
+      th.handle.store.setState({ hostTransportStatus: "open" });
+    }
+    registry.acquire("e5", () => h(buildTestHandle("e5", false)));
+
+    expect(registry.size()).toBe(5);
+    expect(handles[0].disposed).toBe(true);
+  });
+
   it("keeps overflow while every session stays dirty and no subscription fires a clean state", () => {
     const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
     const handles: TestHandle[] = [];

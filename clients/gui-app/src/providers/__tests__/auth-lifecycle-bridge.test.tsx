@@ -40,12 +40,15 @@ function fakeOpenEpicHandle(id: string): OpenEpicStoreHandle & {
     },
     body: { applyDocUpdate: () => {}, applyAwareness: () => {} },
     store: {
-      // `writeCommands` is read by the registry's eligibility key alongside
-      // `isDirty` and `unsyncedQueueSize`.
+      // The registry's eligibility key reads all three work fields plus the
+      // transport; `as never` hides an omission, and an absent `isDirty`
+      // would read as clean by accident rather than by the fixture saying so.
       getState: () =>
         ({
+          isDirty: false,
           unsyncedQueueSize: 0,
           writeCommands: [],
+          hostTransportStatus: "open",
           snapshotMeta: null,
         }) as never,
       subscribe: () => () => undefined,

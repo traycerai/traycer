@@ -337,8 +337,10 @@ function buildHeaderEpicHandle(
     snapshotMeta: null,
     isDirty: false,
     unsyncedQueueSize: 0,
-    // The registry's eligibility key reads all three work fields.
+    // The registry's eligibility key reads all three work fields and the
+    // transport.
     writeCommands: [],
+    hostTransportStatus: "open",
     bindingVersion: 0,
     installedArm: null,
     chatIngestSeq: 0,

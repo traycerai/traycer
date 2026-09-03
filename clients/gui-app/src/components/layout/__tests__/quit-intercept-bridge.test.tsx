@@ -51,6 +51,7 @@ interface FakeSessionState {
   // (the cap's data-loss gate is `isDirty` + these two), so a fake that omits
   // it fails inside the registry rather than in anything this suite asserts.
   writeCommands: readonly never[];
+  hostTransportStatus: "open";
   snapshotMeta: { epicLight: { title: string } | null } | null;
   discardUnsyncedEdits: () => void;
 }
@@ -68,6 +69,7 @@ function buildHandle(epicId: string, title: string): FakeHandle {
     isDirty: false,
     unsyncedQueueSize: 0,
     writeCommands: [],
+    hostTransportStatus: "open",
     snapshotMeta: { epicLight: { title } },
     discardUnsyncedEdits: () => {
       handle.discardCalls += 1;

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   __resetAgentActivityStoreForTests,
   agentActivityPlaneAnswers,
+  agentActivityPlaneSpansFleet,
   subscribeAgentActivityPlaneHealth,
   useAgentActivityStore,
 } from "@/stores/agent-activity-store";
@@ -116,13 +117,24 @@ describe("subscribeAgentActivityPlaneHealth", () => {
     });
     expect(callCount).toBe(1);
 
-    // Still true: a byEpic-shaped change with no effect on the answer.
-    useAgentActivityStore.setState({ cloudSyncStatus: "connected" });
+    // Still true, and still narrow: a working-set change moves neither
+    // predicate, and this subscription is not the one that reports it.
+    useAgentActivityStore.setState({
+      byEpic: new Map([
+        ["epic-1", { working: new Set(["agent-1"]), turn: new Set<string>() }],
+      ]),
+    });
     expect(callCount).toBe(1);
+
+    // Narrow -> fleet-wide, with the answer unchanged at true. The cap's busy
+    // gate reads both predicates, so a consumer not woken here would sit on
+    // "cannot speak for this session" until an unrelated write.
+    useAgentActivityStore.setState({ cloudSyncStatus: "connected" });
+    expect(callCount).toBe(2);
 
     // True -> false.
     useAgentActivityStore.setState({ connectionStatus: "closed" });
-    expect(callCount).toBe(2);
+    expect(callCount).toBe(3);
 
     unsubscribe();
     // Unsubscribed: a further flip must not be observed.
@@ -131,6 +143,46 @@ describe("subscribeAgentActivityPlaneHealth", () => {
       servedBy: "local",
       stateFrameSeenThisEpoch: true,
     });
-    expect(callCount).toBe(2);
+    expect(callCount).toBe(3);
+  });
+});
+
+describe("agentActivityPlaneSpansFleet", () => {
+  it("is true for a cloud-served union", () => {
+    useAgentActivityStore.setState({
+      servedBy: "cloud",
+      cloudSyncStatus: null,
+    });
+
+    expect(agentActivityPlaneSpansFleet()).toBe(true);
+  });
+
+  it("is true for a local plane whose host attests a connected cloud link", () => {
+    useAgentActivityStore.setState({
+      servedBy: "local",
+      cloudSyncStatus: "connected",
+    });
+
+    expect(agentActivityPlaneSpansFleet()).toBe(true);
+  });
+
+  it("is false for a local plane with no cloud claim", () => {
+    // NO CLAIM, not "connected": a host with no cloud link, or one too old to
+    // stamp the field, reports the agents it can see and no others.
+    useAgentActivityStore.setState({
+      servedBy: "local",
+      cloudSyncStatus: null,
+    });
+
+    expect(agentActivityPlaneSpansFleet()).toBe(false);
+  });
+
+  it("is false for a local plane whose cloud link is reconnecting", () => {
+    useAgentActivityStore.setState({
+      servedBy: "local",
+      cloudSyncStatus: "reconnecting",
+    });
+
+    expect(agentActivityPlaneSpansFleet()).toBe(false);
   });
 });

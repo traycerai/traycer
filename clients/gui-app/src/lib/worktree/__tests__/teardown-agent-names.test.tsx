@@ -33,8 +33,10 @@ function seedOpenEpicWithChatTitle(title: string): {
     snapshotMeta: null,
     isDirty: false,
     unsyncedQueueSize: 0,
-    // The registry's eligibility key reads all three work fields.
+    // The registry's eligibility key reads all three work fields and the
+    // transport.
     writeCommands: [],
+    hostTransportStatus: "open",
   });
   const storeCallable = (_selector: unknown): unknown => stateOf();
   const storeBase: unknown = Object.assign(storeCallable, {

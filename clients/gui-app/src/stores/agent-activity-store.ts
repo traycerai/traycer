@@ -242,20 +242,53 @@ export function agentActivityPlaneAnswers(): boolean {
 }
 
 /**
- * Fires when {@link agentActivityPlaneAnswers} flips, in either direction.
- * Separate from {@link subscribeAgentActivity} because the two move on
- * different fields: a stream close empties `byEpic` (which that subscription
- * sees) but a stream re-open with an empty union keeps the same empty map and
- * moves only the health fields.
+ * Whether the union the plane is vouching with covers the whole fleet, not
+ * just the serving host's own agents.
+ *
+ * The serving host builds the union, so it can only include another host's
+ * agents when it can reach the cloud: a `connected` stamp says it did, and a
+ * cloud-served plane is fleet-wide by construction. `null` is NO CLAIM - a
+ * host with no cloud link, or one too old to stamp the field - and a union
+ * built by one of those describes one machine. Callers that ask about an
+ * entity which may live on ANOTHER host must treat a narrow union's silence
+ * as "unknown", never as "idle".
+ *
+ * Deliberately separate from {@link agentActivityPlaneAnswers}: a narrow union
+ * is perfectly good evidence about the host that built it, and folding this
+ * into the health predicate would make every single-host install read as
+ * blind.
+ */
+export function agentActivityPlaneSpansFleet(): boolean {
+  const state = useAgentActivityStore.getState();
+  return state.servedBy === "cloud" || state.cloudSyncStatus === "connected";
+}
+
+/**
+ * Fires when {@link agentActivityPlaneAnswers} or
+ * {@link agentActivityPlaneSpansFleet} flips, in either direction. Separate
+ * from {@link subscribeAgentActivity} because the two move on different
+ * fields: a stream close empties `byEpic` (which that subscription sees) but
+ * a stream re-open with an empty union keeps the same empty map and moves only
+ * the health fields. Both predicates are here because the cap's busy gate
+ * reads both, and a consumer woken for one and not the other would sit on a
+ * stale verdict until an unrelated write.
  */
 export function subscribeAgentActivityPlaneHealth(
   listener: () => void,
 ): () => void {
-  let previous = agentActivityPlaneAnswers();
+  let previousAnswers = agentActivityPlaneAnswers();
+  let previousSpansFleet = agentActivityPlaneSpansFleet();
   return useAgentActivityStore.subscribe(() => {
-    const next = agentActivityPlaneAnswers();
-    if (next === previous) return;
-    previous = next;
+    const nextAnswers = agentActivityPlaneAnswers();
+    const nextSpansFleet = agentActivityPlaneSpansFleet();
+    if (
+      nextAnswers === previousAnswers &&
+      nextSpansFleet === previousSpansFleet
+    ) {
+      return;
+    }
+    previousAnswers = nextAnswers;
+    previousSpansFleet = nextSpansFleet;
     listener();
   });
 }
@@ -274,17 +307,19 @@ export function __setAgentActivityStateForTests(
 }
 
 /**
- * Puts the plane in the state a live app is in: stream open, this epoch's own
- * `state` frame received, no cloud-link complaint. Exists because the cap's
- * busy gate fails CLOSED on a plane that cannot vouch, so any suite that
- * exercises eviction has to say the plane is answering - and saying it by
- * hand means restating a four-field truth table that only this module owns.
+ * Puts the plane in the state a live cloud-connected app is in: stream open,
+ * this epoch's own `state` frame received, and a union that spans the fleet.
+ * Exists because the cap's busy gate fails CLOSED on a plane that cannot
+ * vouch, so any suite that exercises eviction has to say the plane is
+ * answering - and saying it by hand means restating a truth table that only
+ * this module owns. A suite about the NARROW-union arm sets the fields
+ * itself.
  */
 export function __setAgentActivityPlaneAnsweringForTests(): void {
   useAgentActivityStore.setState({
     connectionStatus: "open",
-    servedBy: "local",
-    cloudSyncStatus: null,
+    servedBy: "cloud",
+    cloudSyncStatus: "connected",
     stateFrameSeenThisEpoch: true,
   });
 }
