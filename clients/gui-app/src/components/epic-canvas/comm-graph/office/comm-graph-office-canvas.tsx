@@ -2236,7 +2236,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
       >
         <canvas
           ref={canvasRef}
-          className="absolute inset-0 h-full w-full"
+          className="absolute inset-0 h-full w-full touch-none"
           // The camera gestures live on the CANVAS, never on the wrapper. The
           // wrapper is also the parent of every overlay control, and a
           // pointerdown there took pointer capture - which retargets the

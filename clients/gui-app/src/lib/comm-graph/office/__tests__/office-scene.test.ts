@@ -534,6 +534,60 @@ describe("OfficeScene", () => {
     expect(hasBubbleAt(frame, "bubble-hello", seatedHead("beta"))).toBe(true);
   });
 
+  it("settles every envelope, bubble, and mid-walk arrival when motion is reduced mid-flight", () => {
+    const scene = new OfficeScene(layoutOffice);
+    scene.sync(sceneInput({ agents: AGENTS, visibleAgentIds: BOTH }));
+    const withPulse = sceneInput({
+      agents: AGENTS,
+      visibleAgentIds: BOTH,
+      pulse: REQUEST_PULSE,
+      pulseKey: "row-1",
+    });
+    scene.sync(withPulse);
+    scene.tick(50);
+    expect(envelopes(scene.frame())).toHaveLength(1);
+
+    // Same pulse key as before, so nothing replays - only the flag flips.
+    // What is already in flight has to be told, not just what starts from
+    // here on.
+    scene.sync(sceneInput({ ...withPulse, reducedMotion: true }));
+
+    const settled = scene.frame();
+    expect(envelopes(settled)).toHaveLength(0);
+    expect(hasBubbleAt(settled, "bubble-hello", seatedHead("beta"))).toBe(true);
+    expect(scene.isAnimating()).toBe(true);
+
+    // The delivered bubble is transient like any other; once it times out
+    // there is nothing left for the cut-short motion to keep the floor busy
+    // with.
+    scene.tick(800);
+    expect(scene.isAnimating()).toBe(false);
+
+    // The same flip mid-walk: a newcomer still crossing the floor jumps to
+    // the end of its path and sits, rather than being abandoned mid-stride.
+    const walkScene = new OfficeScene(layoutOffice);
+    walkScene.sync(sceneInput({ agents: AGENTS, visibleAgentIds: ALPHA_ONLY }));
+    const walkIn = sceneInput({
+      agents: AGENTS,
+      visibleAgentIds: BOTH,
+      pulse: CREATED_PULSE,
+      pulseKey: "created-beta",
+    });
+    walkScene.sync(walkIn);
+    // Still on foot, part-way across the floor - the walk-in this replaced
+    // takes sixty ticks like this one to finish on its own.
+    walkScene.tick(100);
+    expect(walkScene.isAnimating()).toBe(true);
+    expect(characterRect(walkScene.frame(), "beta")).not.toEqual(
+      seatedRect("beta"),
+    );
+
+    walkScene.sync(sceneInput({ ...walkIn, reducedMotion: true }));
+    expect(characterRect(walkScene.frame(), "beta")).toEqual(
+      seatedRect("beta"),
+    );
+  });
+
   it("bubbles a standing status when nothing transient is showing", () => {
     const scene = new OfficeScene(layoutOffice);
     scene.sync(
@@ -560,6 +614,33 @@ describe("OfficeScene", () => {
           drawable.x === seatedHead("beta").x,
       ),
     ).toBe(true);
+  });
+
+  it("draws an awaiting-only floor as a still frame", () => {
+    const scene = new OfficeScene(layoutOffice);
+    scene.sync(
+      sceneInput({
+        agents: AGENTS,
+        visibleAgentIds: BOTH,
+        // Reduced motion on the very first sync, so nobody walks in - the
+        // only thing left that could keep the floor animating is the
+        // awaiting bubble itself.
+        reducedMotion: true,
+        statusById: new Map<string, OfficeAgentStatus>([["alpha", "awaiting"]]),
+      }),
+    );
+    // Comfortably under the idle-errand threshold, so an idle beta does not
+    // wander off mid-assertion and become the reason the floor animates.
+    scene.tick(200);
+
+    const frame = scene.frame();
+    expect(hasBubbleAt(frame, "bubble-awaiting", seatedHead("alpha"))).toBe(
+      true,
+    );
+    // A request can sit open for hours; unlike the attention bubble, the
+    // awaiting one does not bob, so a seated agent wearing it is not a
+    // reason to keep redrawing.
+    expect(scene.isAnimating()).toBe(false);
   });
 
   it("finds a character first and its desk second under a point", () => {

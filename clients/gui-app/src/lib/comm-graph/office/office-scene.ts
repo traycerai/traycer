@@ -1008,7 +1008,12 @@ export class OfficeScene {
     this.statusById = input.statusById;
     this.openRequestsByReceiver = input.openRequestsByReceiver;
     this.playing = input.playing;
+    const motionJustReduced = input.reducedMotion && !this.reducedMotion;
     this.reducedMotion = input.reducedMotion;
+    // The flag governs what STARTS; what is already in flight has to be told.
+    // A person who just asked for less motion should not watch the envelope
+    // and the walk they asked to skip play out for another few seconds.
+    if (motionJustReduced && !firstSync) this.settleMotion();
     this.stepMs = input.stepMs;
     this.cursorMs = input.cursorMs;
     this.clockMs = input.clockMs;
@@ -1647,6 +1652,30 @@ export class OfficeScene {
     const character = this.characters.get(agentId);
     if (character === undefined) return;
     character.bubble = { sprite, remainingMs: durationMs };
+  }
+
+  /**
+   * Ends every motion in flight the way it would have ended: each envelope is
+   * delivered, each walk lands on its last tile and does what arriving there
+   * does (sit, stand at the spot, leave), and every thrown ball is gone. The
+   * floor is left in the state a full playthrough would have reached, so
+   * nothing downstream has to know the motion was cut short.
+   */
+  private settleMotion(): void {
+    for (const envelope of this.envelopes) {
+      this.deliver(envelope.toAgentId, envelope.pulseKind);
+    }
+    this.envelopes = [];
+    this.paperBalls = [];
+    for (const character of this.characters.values()) {
+      if (character.pathIndex >= character.path.length) continue;
+      const last = character.path[character.path.length - 1];
+      character.col = last.col;
+      character.row = last.row;
+      character.pathIndex = character.path.length;
+      // A zero-length step walks nowhere and runs the arrival branch alone.
+      this.advanceWalk(character, 0);
+    }
   }
 
   private advanceEnvelopes(dtMs: number): void {
@@ -2741,8 +2770,9 @@ export class OfficeScene {
       const status = this.statusOf(character.agentId);
       if (status === "working" || status === "background") return true;
       // The attention bubble bobs, so a flagged agent animates even seated.
+      // The awaiting bubble does not: a seated agent waiting on a reply is a
+      // still frame, and a request can stay open for hours.
       if (status === "attention" || status === "failure") return true;
-      if (this.statusById.get(character.agentId) === "awaiting") return true;
     }
     return false;
   }
