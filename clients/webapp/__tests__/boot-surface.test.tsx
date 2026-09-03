@@ -4,8 +4,11 @@ import { act, useLayoutEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  BOOT_FAILURE_MESSAGE,
+  BOOT_RETRY_LABEL,
   BOOT_SURFACE_ID,
   RetireBootSurface,
+  showBootFailure,
 } from "@traycer-clients/webapp/boot-surface";
 
 /**
@@ -46,6 +49,23 @@ describe("boot surface markup", () => {
 
   it("holds still for a visitor who asked for no motion", () => {
     expect(indexHtml).toContain("prefers-reduced-motion");
+  });
+
+  it("styles the failed state it can be switched into", () => {
+    // The failure copy is painted by the SAME inline block as the waiting
+    // copy, because a boot that never reached the app never reached the
+    // stylesheet either.
+    expect(indexHtml).toContain("boot-failed");
+    expect(indexHtml).toContain("boot-retry");
+  });
+
+  it("observes the boot's rejection instead of discarding the promise", () => {
+    // `bootstrap()` mounts the app from inside itself, so its rejection takes
+    // the mount with it. A bare `void bootstrap()` leaves the visitor on
+    // "Signing you in…" with no error, no app, and nothing to click - which
+    // is indistinguishable from a slow network for as long as the tab lives.
+    expect(mainTsx).toContain("showBootFailure()");
+    expect(mainTsx).not.toMatch(/void bootstrap\(\);/);
   });
 
   it("is retired from inside the rendered tree", () => {
@@ -174,6 +194,61 @@ describe("boot surface retirement", () => {
     // left looking at a legible surface rather than a blank document.
     expect(document.getElementById(BOOT_SURFACE_ID)).not.toBeNull();
     expect(container.innerHTML).toBe("");
+  });
+});
+
+describe("boot failure", () => {
+  beforeEach(() => {
+    document.body.innerHTML = `<div id="${BOOT_SURFACE_ID}"><div class="boot-wordmark">Traycer</div><div class="boot-status">Signing you in…</div></div><div id="root"></div>`;
+  });
+
+  afterEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  function surface(): HTMLElement {
+    const element = document.getElementById(BOOT_SURFACE_ID);
+    if (element === null) {
+      throw new Error("the fixture lost its boot surface");
+    }
+    return element;
+  }
+
+  it("replaces the waiting copy with a failure and a way out", () => {
+    showBootFailure();
+
+    expect(surface().textContent).toContain(BOOT_FAILURE_MESSAGE);
+    // The waiting copy is REPLACED, not appended to: leaving "Signing you in…"
+    // beside "could not start" is a screen that says both at once.
+    expect(surface().textContent).not.toContain("Signing you in");
+    const retry = surface().querySelector("button");
+    expect(retry?.textContent).toBe(BOOT_RETRY_LABEL);
+  });
+
+  it("stops the pulse that reads as progress", () => {
+    showBootFailure();
+
+    const status = surface().querySelector(".boot-status");
+    expect(status?.classList.contains("boot-failed")).toBe(true);
+  });
+
+  it("does not stack a second message on a second failure", () => {
+    showBootFailure();
+    showBootFailure();
+
+    expect(surface().querySelectorAll("button").length).toBe(1);
+    expect(surface().querySelectorAll(".boot-status").length).toBe(1);
+  });
+
+  it("is a no-op once the surface has been retired", () => {
+    // The app committed and took the screen; a late rejection must not paint
+    // a full-viewport failure card over a working app.
+    surface().remove();
+
+    expect(() => {
+      showBootFailure();
+    }).not.toThrow();
+    expect(document.getElementById(BOOT_SURFACE_ID)).toBeNull();
   });
 });
 

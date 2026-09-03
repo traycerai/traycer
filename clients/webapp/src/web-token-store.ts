@@ -344,6 +344,13 @@ export function parseStoredCredentials(
     typeof record.token !== "string" ||
     record.token.length === 0 ||
     typeof record.refreshToken !== "string" ||
+    // Empty is rejected for the same reason as an empty access token, and it
+    // is the refresh half that decides the OUTCOME: a record with no refresh
+    // token cannot rotate, so `rotate` would reach authn with an empty
+    // `refreshToken`, spend a round trip on it, come back `refresh-rejected`
+    // and sign the tab out. Refusing it here routes the visitor straight to
+    // sign-in instead, which is where that path ends anyway.
+    record.refreshToken.length === 0 ||
     typeof record.savedAt !== "string" ||
     typeof userRecord.id !== "string" ||
     typeof userRecord.email !== "string" ||
@@ -375,24 +382,66 @@ export function parseStoredCredentials(
  */
 export function createLocalStorageCredentialStorage(): WebCredentialStorage {
   return {
-    read: (key) => window.localStorage.getItem(key),
+    read: (key) => {
+      try {
+        return localStorageArea()?.getItem(key) ?? null;
+      } catch {
+        // A denied read is "signed out", which is the same answer absent
+        // bytes already produce - so nothing downstream has a second case.
+        return null;
+      }
+    },
     write: (key, value) => {
-      window.localStorage.setItem(key, value);
+      try {
+        localStorageArea()?.setItem(key, value);
+      } catch {
+        // A denied or full store is a session that does not PERSIST, not a
+        // boot that fails. This function is reached from `bootstrap()` before
+        // React mounts, so a throw here is the difference between a signed-out
+        // tab and a splash screen that never goes away.
+      }
     },
     remove: (key) => {
-      window.localStorage.removeItem(key);
+      try {
+        localStorageArea()?.removeItem(key);
+      } catch {
+        // Same bargain as `write`.
+      }
     },
     onExternalChange: (key, handler) => {
+      const area = localStorageArea();
+      // No store to write means no sibling can write it, so there is no
+      // adoption edge to arm - and `addEventListener` on a document whose
+      // storage is denied would install a listener nothing can ever fire.
+      if (area === null) return;
       window.addEventListener("storage", (event: StorageEvent) => {
         // `storage` fires only in the OTHER documents of the origin, so an
         // event here is always a sibling's write. A `null` key is the whole
         // store being cleared, which is also a change to this slot.
-        if (event.storageArea !== window.localStorage) return;
+        if (event.storageArea !== area) return;
         if (event.key !== null && event.key !== key) return;
         handler();
       });
     },
   };
+}
+
+/**
+ * `window.localStorage`, or `null` where the origin has no usable one.
+ *
+ * The PROPERTY ACCESS is the throwing part, not just the calls on it: a
+ * browser that denies storage for the origin (third-party context, "block all
+ * cookies", some private modes) raises `SecurityError` on the getter itself.
+ * Reading it inside the guard is what makes every call site below total, and a
+ * read that answers `null` is exactly the "signed out" this store's decoder
+ * already produces for absent bytes.
+ */
+function localStorageArea(): Storage | null {
+  try {
+    return window.localStorage;
+  } catch {
+    return null;
+  }
 }
 
 /**

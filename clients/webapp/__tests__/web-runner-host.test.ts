@@ -132,4 +132,35 @@ describe("WebRunnerHost external links", () => {
     );
     expect(window.location.href).toBe(href);
   });
+
+  it("opens the other two schemes the desktop shell allows", async () => {
+    const open = vi.spyOn(window, "open").mockReturnValue(null);
+    const host = runner();
+
+    await host.openExternalLink("http://example.test/docs");
+    await host.openExternalLink("mailto:support@example.test");
+
+    expect(open).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    // The argument reaches here from rendered markdown, so it is content. Each
+    // of these would run or resolve in a context this app names.
+    ["javascript:alert(1)"],
+    ["data:text/html,<script>alert(1)</script>"],
+    ["file:///etc/passwd"],
+    ["vbscript:msgbox(1)"],
+    // Unparseable is refused rather than passed through: `window.open` would
+    // resolve it against THIS document, turning a malformed external link
+    // into a navigation inside the app's own origin.
+    ["not a url at all"],
+    ["/epics/epic-a"],
+  ])("refuses to open %s", async (url) => {
+    const open = vi.spyOn(window, "open").mockReturnValue(null);
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    await runner().openExternalLink(url);
+
+    expect(open).not.toHaveBeenCalled();
+  });
 });

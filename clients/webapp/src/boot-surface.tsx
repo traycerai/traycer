@@ -36,3 +36,51 @@ export function RetireBootSurface(): null {
   }, []);
   return null;
 }
+
+/** What the surface says once the boot has failed rather than finished. */
+export const BOOT_FAILURE_MESSAGE = "Traycer could not start.";
+
+/** The label on the only action a failed boot offers. */
+export const BOOT_RETRY_LABEL = "Try again";
+
+/**
+ * Turns the boot surface from "waiting" into "failed, and here is the way
+ * out".
+ *
+ * The surface's whole reason to exist is that nothing else is on screen until
+ * the boot commits - which makes an unfinished boot indistinguishable from a
+ * slow one for as long as the document lives. Every path into `bootstrap()`
+ * that can reject therefore has to end here, or "Signing you in…" pulses
+ * forever with no error, no app and nothing to click.
+ *
+ * Plain DOM, like the markup it replaces: this runs on a boot that did not
+ * reach React, so it cannot be a component, and it must not depend on the
+ * bundle having initialized anything.
+ *
+ * Reload rather than a retry of `bootstrap()` in place: the boot mutates
+ * module state (the analytics surface, the runner host, the mint's
+ * scratchpad), so a fresh document is the only retry that starts from a state
+ * this function can name.
+ */
+export function showBootFailure(): void {
+  const surface = document.getElementById(BOOT_SURFACE_ID);
+  if (surface === null) return;
+  const wordmark = document.createElement("div");
+  wordmark.className = "boot-wordmark";
+  wordmark.textContent = "Traycer";
+  const status = document.createElement("div");
+  // `boot-failed` stops the pulse: an animation that reads as progress is
+  // worse than none once there is no progress left to make.
+  status.className = "boot-status boot-failed";
+  status.textContent = BOOT_FAILURE_MESSAGE;
+  const retry = document.createElement("button");
+  retry.type = "button";
+  retry.className = "boot-retry";
+  retry.textContent = BOOT_RETRY_LABEL;
+  retry.addEventListener("click", () => {
+    window.location.reload();
+  });
+  // Replaces rather than appends, so a second failure cannot stack a second
+  // message and a second button under the first.
+  surface.replaceChildren(wordmark, status, retry);
+}

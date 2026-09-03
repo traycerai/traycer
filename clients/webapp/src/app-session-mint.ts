@@ -403,17 +403,53 @@ export function createWindowMintLocation(): MintLocation {
   };
 }
 
-/** `sessionStorage`, as the seam above. */
+/**
+ * `sessionStorage`, as the seam above.
+ *
+ * Every operation is guarded, and the PROPERTY ACCESS is guarded with them: a
+ * browser that denies storage for the origin raises `SecurityError` on the
+ * getter itself, not only on the calls. This scratchpad is read on the
+ * pre-render boot path, so an unguarded throw here rejects `bootstrap()` and
+ * leaves the inline boot surface up with nothing behind it.
+ *
+ * A denied scratchpad degrades to "no handoff in flight", which is a state the
+ * mint already has an answer for - it is what a first, unbounced visit looks
+ * like - so the tab falls through to the device flow instead of failing.
+ */
 export function createSessionScratchpad(): MintScratchpad {
   return {
-    read: (key) => window.sessionStorage.getItem(key),
+    read: (key) => {
+      try {
+        return sessionStorageArea()?.getItem(key) ?? null;
+      } catch {
+        return null;
+      }
+    },
     write: (key, value) => {
-      window.sessionStorage.setItem(key, value);
+      try {
+        sessionStorageArea()?.setItem(key, value);
+      } catch {
+        // A scratchpad that cannot be written is one that reads back empty,
+        // which the callers above already treat as "nothing was spent".
+      }
     },
     remove: (key) => {
-      window.sessionStorage.removeItem(key);
+      try {
+        sessionStorageArea()?.removeItem(key);
+      } catch {
+        // Same bargain as `write`.
+      }
     },
   };
+}
+
+/** `window.sessionStorage`, or `null` where the origin has no usable one. */
+function sessionStorageArea(): Storage | null {
+  try {
+    return window.sessionStorage;
+  } catch {
+    return null;
+  }
 }
 
 /**

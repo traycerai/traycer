@@ -268,11 +268,38 @@ export class WebRunnerHost implements IRunnerHost {
     this.tokenStore.subscribe((change) => {
       this.syncSelectionIdentity(change.userId);
     });
-    void this.tokenStore.get().then((stored) => {
-      this.syncSelectionIdentity(stored?.user.id ?? null);
-      if (stored === null) {
-        void this.refreshHostFleet();
-      }
+    // Seeding, and every fleet read it reaches, is fire-and-forget by
+    // construction - a constructor cannot await. So each floating promise
+    // carries its own rejection handler: the seed's failure must not skip the
+    // identity sync silently, and neither may surface as an unhandled
+    // rejection, which on this shell is a page-level `error` event on a boot
+    // that is otherwise fine.
+    void this.tokenStore
+      .get()
+      .then((stored) => {
+        this.syncSelectionIdentity(stored?.user.id ?? null);
+        if (stored === null) {
+          this.refreshFleetInBackground();
+        }
+      })
+      .catch((error: unknown) => {
+        // Nothing to repair here: the identity port and the fleet both start
+        // at the signed-out answer, which is where a credential that cannot
+        // be read leaves this tab anyway. What is worth having is the log -
+        // the seed silently not running is otherwise invisible.
+        console.error("[web] stored credential read failed", error);
+      });
+  }
+
+  /**
+   * `refreshHostFleet()` where no caller is awaiting it. A fleet read reaches
+   * the token store and the network, and both can reject; an unobserved
+   * rejection here would be reported as a page error on a shell that is still
+   * perfectly usable with the fleet it already has.
+   */
+  private refreshFleetInBackground(): void {
+    void this.refreshHostFleet().catch((error: unknown) => {
+      console.error("[web] host fleet refresh failed", error);
     });
   }
 
@@ -286,7 +313,7 @@ export class WebRunnerHost implements IRunnerHost {
       return;
     }
     this.selectionIdentity.set(userId);
-    void this.refreshHostFleet();
+    this.refreshFleetInBackground();
   }
 
   /**
@@ -513,6 +540,15 @@ export class WebRunnerHost implements IRunnerHost {
   }
 
   async openExternalLink(url: string): Promise<void> {
+    // The same allow-list the desktop shell enforces in `safelyOpenExternal`,
+    // for the same reason: this method is reached from rendered markdown, so
+    // its argument is content, not a constant. `javascript:` and `data:` are
+    // the ones that matter - both would run in a context the opener names,
+    // and a tab has no privileged process between them and the app.
+    if (!isOpenableExternalUrl(url)) {
+      console.warn("[web] openExternalLink rejected", { url });
+      return;
+    }
     // A NEW browsing context, never `location.assign`: this is the app's own
     // tab, and navigating it away would tear down an in-flight device-flow
     // poll along with every open surface. Every markdown, settings and
@@ -868,6 +904,32 @@ class WebVisibilityEdgeSignal {
  * shipped with those slots) instead of a read, and possible delete, of
  * whatever else happens to answer to those names on the origin.
  */
+/**
+ * The schemes a link may be opened with, matching the desktop shell's
+ * `safelyOpenExternal` exactly. The two lists are the same policy stated
+ * twice because the mechanisms differ - `shell.openExternal` hands the URL to
+ * the OS, `window.open` hands it to this browser - and neither shell can
+ * enforce the other's.
+ */
+const OPENABLE_EXTERNAL_SCHEMES: ReadonlySet<string> = new Set([
+  "http:",
+  "https:",
+  "mailto:",
+]);
+
+function isOpenableExternalUrl(url: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    // Unparseable is refused rather than passed through: `window.open` would
+    // resolve it against THIS document's base, turning a malformed external
+    // link into a navigation somewhere inside the app's own origin.
+    return false;
+  }
+  return OPENABLE_EXTERNAL_SCHEMES.has(parsed.protocol);
+}
+
 const WEB_SECURE_STORAGE_PREFIX = "traycer.webapp.";
 
 function buildSecureStorage(storage: WebCredentialStorage): ISecureStorage {
@@ -980,5 +1042,9 @@ class WebPreferredHostStore implements PreferredHostStore {
 }
 
 function preferredHostKey(identityKey: string): string {
-  return `traycer.webapp.preferred-host.${identityKey}`;
+  // Composed from the shared prefix rather than repeating its literal: the
+  // namespace exists to keep this shell's slots off the dashboard's, and a
+  // second spelling of it is a slot that silently stops being namespaced the
+  // day the first one moves.
+  return `${WEB_SECURE_STORAGE_PREFIX}preferred-host.${identityKey}`;
 }

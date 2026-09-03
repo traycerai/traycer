@@ -19,7 +19,7 @@ import {
   runAppSessionMint,
   webCryptoPkce,
 } from "./app-session-mint";
-import { RetireBootSurface } from "./boot-surface";
+import { RetireBootSurface, showBootFailure } from "./boot-surface";
 import { NotFoundSurface } from "./not-found-surface";
 import { WebRunnerHost } from "./web-runner-host";
 import {
@@ -112,4 +112,13 @@ async function bootstrap(): Promise<void> {
   );
 }
 
-void bootstrap();
+// The boot's only observer. Nothing else is watching this promise: the app is
+// mounted from INSIDE it, so a rejection takes the mount with it and leaves
+// the inline boot surface as the entire document - "Signing you in…", forever,
+// with no error and nothing to click. The seams this boot reads are guarded
+// individually, but the handler is what makes the failure legible whatever
+// throws, including whatever is added to this path later.
+void bootstrap().catch((error: unknown) => {
+  console.error("[web] boot failed", error);
+  showBootFailure();
+});
