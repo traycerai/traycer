@@ -18,6 +18,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -84,6 +85,14 @@ import {
 } from "@/components/epic-canvas/sidebar/terminal-list-states";
 import { epicTerminalUiIdentityKey } from "@/lib/terminals/pending-create-identity";
 import { makeListedEpicTerminalRef } from "@/lib/terminals/listed-epic-terminal-ref";
+import {
+  SIDEBAR_REVEAL_HIGHLIGHT_CLASS,
+  revealSidebarNode,
+} from "@/components/epic-canvas/sidebar/epic-sidebar-tree-shared";
+import {
+  clearSidebarNodeRevealRequest,
+  useSidebarNodeRevealRequest,
+} from "@/stores/epics/sidebar-node-reveal-store";
 import type {
   ListedTerminalSidebarSession,
   TerminalSidebarSessionRow,
@@ -191,6 +200,21 @@ interface TerminalSidebarBodyProps {
 
 function TerminalSidebarBody(props: TerminalSidebarBodyProps) {
   const { panel } = props;
+  const listRef = useRef<HTMLUListElement>(null);
+  const revealRequest = useSidebarNodeRevealRequest(props.tabId);
+  useLayoutEffect(() => {
+    if (revealRequest === null || listRef.current === null) return;
+    if (
+      !revealSidebarNode(
+        listRef.current,
+        revealRequest.nodeId,
+        revealRequest.nonce,
+      )
+    ) {
+      return;
+    }
+    clearSidebarNodeRevealRequest(props.tabId, revealRequest.nonce);
+  }, [panel.rows, props.tabId, revealRequest]);
   if (panel.isLoading) {
     return <TerminalsLoadingState testIdPrefix={TERMINALS_TEST_ID_PREFIX} />;
   }
@@ -209,6 +233,7 @@ function TerminalSidebarBody(props: TerminalSidebarBodyProps) {
   }
   return (
     <ul
+      ref={listRef}
       aria-label="Epic terminals"
       className="space-y-0.5"
       data-testid="epic-terminal-sidebar-list"
@@ -416,9 +441,15 @@ function TerminalRow(props: TerminalRowProps) {
                   data-testid={`epic-terminal-sidebar-item-${session.sessionId}`}
                   data-terminal-host-id={hostId}
                   data-terminal-status={runtimeStatus}
+                  data-sidebar-node-id={epicTerminalUiIdentityKey(
+                    "session",
+                    hostId,
+                    session.sessionId,
+                  )}
                   className={cn(
                     "flex h-7 w-full items-center gap-1.5 rounded-md pl-2 pr-8 text-left text-ui-sm transition-colors",
                     "focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-2",
+                    SIDEBAR_REVEAL_HIGHLIGHT_CLASS,
                     isDragging && "cursor-grabbing opacity-60",
                     isActive
                       ? "bg-accent font-medium text-accent-foreground"

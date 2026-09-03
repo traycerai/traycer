@@ -16,6 +16,17 @@ const SIDEBAR_REVEAL_HIGHLIGHT_DURATION_MS = 3_000;
 export const SIDEBAR_REVEAL_HIGHLIGHT_CLASS =
   "data-[sidebar-reveal-highlighted=true]:bg-primary/15 data-[sidebar-reveal-highlighted=true]:ring-2 data-[sidebar-reveal-highlighted=true]:ring-inset data-[sidebar-reveal-highlighted=true]:ring-primary/80 motion-safe:data-[sidebar-reveal-highlighted=true]:animate-pulse";
 
+export function flashSidebarElement(element: HTMLElement, nonce: number): void {
+  const revealNonce = String(nonce);
+  element.dataset.sidebarRevealHighlighted = "true";
+  element.dataset.sidebarRevealNonce = revealNonce;
+  window.setTimeout(() => {
+    if (element.dataset.sidebarRevealNonce !== revealNonce) return;
+    delete element.dataset.sidebarRevealHighlighted;
+    delete element.dataset.sidebarRevealNonce;
+  }, SIDEBAR_REVEAL_HIGHLIGHT_DURATION_MS);
+}
+
 export function revealSidebarNode(
   region: HTMLElement,
   nodeId: string,
@@ -25,15 +36,8 @@ export function revealSidebarNode(
     region.querySelectorAll<HTMLElement>("[data-sidebar-node-id]"),
   ).find((element) => element.dataset.sidebarNodeId === nodeId);
   if (row === undefined) return false;
-  const revealNonce = String(nonce);
   row.scrollIntoView({ block: "nearest", inline: "nearest" });
-  row.dataset.sidebarRevealHighlighted = "true";
-  row.dataset.sidebarRevealNonce = revealNonce;
-  window.setTimeout(() => {
-    if (row.dataset.sidebarRevealNonce !== revealNonce) return;
-    delete row.dataset.sidebarRevealHighlighted;
-    delete row.dataset.sidebarRevealNonce;
-  }, SIDEBAR_REVEAL_HIGHLIGHT_DURATION_MS);
+  flashSidebarElement(row, nonce);
   return true;
 }
 

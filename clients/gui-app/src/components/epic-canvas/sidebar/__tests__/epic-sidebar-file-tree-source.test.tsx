@@ -200,6 +200,7 @@ const scrollToPathCalls: Array<{
   readonly path: string;
   readonly options: { readonly offset: string };
 }> = [];
+const fileTreeContainer = document.createElement("div");
 const modelListeners = new Set<() => void>();
 // Captured from the real `useFileTree(options)` call the panel makes - the
 // mocked hook below stashes `options.onSelectionChange` here so a test can
@@ -355,6 +356,7 @@ const mockModel = {
   scrollToPath: (path: string, options: { readonly offset: string }) => {
     scrollToPathCalls.push({ path, options });
   },
+  getFileTreeContainer: () => fileTreeContainer,
 };
 
 vi.mock("@pierre/trees/react", () => ({
@@ -608,6 +610,8 @@ describe("sidebar file tree source selection", () => {
     expandedAtLastReset.clear();
     selectedInModel.clear();
     scrollToPathCalls.length = 0;
+    delete fileTreeContainer.dataset.sidebarRevealHighlighted;
+    delete fileTreeContainer.dataset.sidebarRevealNonce;
     modelListeners.clear();
     capturedOnSelectionChange = null;
     installSearchHost({});
@@ -1246,6 +1250,7 @@ describe("reveal in sidebar", () => {
     expect(scrollToPathCalls).toEqual([
       { path: "src/lib/a.ts", options: { offset: "nearest" } },
     ]);
+    expect(fileTreeContainer.dataset.sidebarRevealHighlighted).toBe("true");
     expect(
       useFileTreeRevealStore.getState().requestsByViewTabId[REVEAL_TAB_ID],
     ).toBeUndefined();

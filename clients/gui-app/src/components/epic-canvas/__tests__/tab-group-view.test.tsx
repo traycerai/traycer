@@ -60,6 +60,18 @@ import {
 import { buildSyntheticTileSurfaceEnvironment } from "@/components/epic-canvas/surface-host/__tests__/synthetic-tile-surface-fixture";
 import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
 import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
+import { epicTerminalUiIdentityKey } from "@/lib/terminals/pending-create-identity";
+
+vi.mock("@/hooks/terminal/use-epic-terminal-authority", () => ({
+  useEpicTerminalAuthority: () => ({
+    capability: "legacy",
+    projection: undefined,
+    viewModel: null,
+    canMutate: false,
+    migrationPending: false,
+    rename: { mutate: vi.fn() },
+  }),
+}));
 
 const VIEW_TAB_ID = "view-tab-1";
 
@@ -411,6 +423,16 @@ const CHAT: EpicCanvasTileRef = {
   type: "chat",
   name: "Chat",
   hostId: "host-A",
+};
+
+const TERMINAL: EpicCanvasTileRef = {
+  id: "terminal-1",
+  instanceId: "inst-terminal-1",
+  type: "terminal",
+  name: "Terminal",
+  hostId: "host-A",
+  titleSource: "default",
+  cwd: "/repo",
 };
 
 function specTab(n: number): EpicCanvasTileRef {
@@ -2225,6 +2247,33 @@ describe("<TabGroupView /> Reveal in Sidebar", () => {
     ).toEqual({ nodeId: CHAT.id, nonce: 1 });
     expect(useEpicLeftPanelStore.getState().getActivePanelId(VIEW_TAB_ID)).toBe(
       "chats",
+    );
+  });
+
+  it("targets a host-bound terminal row", () => {
+    const tabs = [SPEC, TERMINAL];
+    seedCanvas(tabs, SPEC.instanceId);
+    render(groupView(tabs, SPEC.instanceId, true));
+
+    fireEvent.contextMenu(
+      screen.getByTestId(`tab-item-${TERMINAL.instanceId}`),
+    );
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Reveal in Sidebar" }),
+    );
+
+    expect(
+      useSidebarNodeRevealStore.getState().requestsByViewTabId[VIEW_TAB_ID],
+    ).toEqual({
+      nodeId: epicTerminalUiIdentityKey(
+        "session",
+        TERMINAL.hostId,
+        TERMINAL.id,
+      ),
+      nonce: 1,
+    });
+    expect(useEpicLeftPanelStore.getState().getActivePanelId(VIEW_TAB_ID)).toBe(
+      "terminals",
     );
   });
 });

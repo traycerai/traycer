@@ -33,7 +33,10 @@ import {
   usePaneActivationOwnership,
 } from "@/components/epic-canvas/pane-activation";
 import { cn } from "@/lib/utils";
-import { hasTerminalPendingCreate } from "@/lib/terminals/pending-create-identity";
+import {
+  epicTerminalUiIdentityKey,
+  hasTerminalPendingCreate,
+} from "@/lib/terminals/pending-create-identity";
 import {
   useEpicCanvasStore,
   useIsActivePane,
@@ -102,6 +105,7 @@ import {
 } from "@/stores/epics/left-panel-store";
 import { isEditableRole } from "@/lib/epic-permissions";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
+import { prDetailTileId } from "@/lib/pr/pr-detail-tile";
 
 interface TabGroupViewProps {
   readonly epicId: string;
@@ -137,6 +141,33 @@ function panelIdForTabType(
   if (tabType === TILE_KIND_PR_DIFF) return "pull-requests";
   if (tabType === TILE_KIND_BROWSER_SESSION) return "browsers";
   return "artifacts";
+}
+
+function sidebarRevealNodeIdForTab(tab: EpicCanvasTileRef): string | null {
+  if (isTileRefRecordBacked(tab)) return tab.id;
+  switch (tab.type) {
+    case TILE_KIND_BROWSER_SESSION:
+      return tab.id;
+    case "terminal":
+      return epicTerminalUiIdentityKey("session", tab.hostId, tab.id);
+    case TILE_KIND_PUBLISHED_CHAT:
+      return tab.chatId;
+    case TILE_KIND_SNAPSHOT_DIFF:
+      return tab.diff.chatId;
+    case TILE_KIND_PR_DETAIL:
+    case TILE_KIND_PR_DIFF:
+      return prDetailTileId({
+        hostId: tab.hostId,
+        githubHost: tab.githubHost,
+        owner: tab.owner,
+        repo: tab.repo,
+        prNumber: tab.prNumber,
+      });
+    case TILE_KIND_GIT_DIFF:
+      return tab.diff.kind === "file" ? tab.id : null;
+    default:
+      return null;
+  }
 }
 
 /**
@@ -349,11 +380,10 @@ export const TabGroupView = memo(function TabGroupView(
           filePath: tab.filePath,
         });
       }
-      if (
-        tab !== undefined &&
-        (isTileRefRecordBacked(tab) || tab.type === TILE_KIND_BROWSER_SESSION)
-      ) {
-        requestSidebarNodeReveal(tabId, tab.id);
+      const sidebarNodeId =
+        tab === undefined ? null : sidebarRevealNodeIdForTab(tab);
+      if (sidebarNodeId !== null) {
+        requestSidebarNodeReveal(tabId, sidebarNodeId);
       }
       if (tab?.type === TILE_KIND_BROWSER_SESSION) {
         useSurfaceHostSelectionStore

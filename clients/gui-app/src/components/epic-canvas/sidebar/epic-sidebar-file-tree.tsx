@@ -58,8 +58,10 @@ import { usePierreCanvasDragBridge } from "@/components/epic-canvas/dnd/use-pier
 import { extractPierreItemPathFromEvent } from "@/components/epic-canvas/pierre-tree-adapter";
 import {
   PIERRE_FILE_TREE_THEME_STYLE,
+  PIERRE_FILE_TREE_REVEAL_HIGHLIGHT_CSS,
   PIERRE_FILE_TREE_TRUNCATION_TOLERANCE_CSS,
 } from "@/components/epic-canvas/pierre-tree-theme";
+import { flashSidebarElement } from "@/components/epic-canvas/sidebar/epic-sidebar-tree-shared";
 import { workspaceFileRefFromTreePath } from "@/components/epic-canvas/workspace-file/workspace-file-ref";
 import { getBasename } from "@/lib/path/cross-platform-path";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -614,7 +616,7 @@ function FileTreeBodyForResolvedHost(
     // `hide-non-matches`: the filter input below drops every row whose
     // name does not match, keeping only matches and their parents.
     fileTreeSearchMode: "hide-non-matches",
-    unsafeCSS: PIERRE_FILE_TREE_TRUNCATION_TOLERANCE_CSS,
+    unsafeCSS: `${PIERRE_FILE_TREE_TRUNCATION_TOLERANCE_CSS}\n${PIERRE_FILE_TREE_REVEAL_HIGHLIGHT_CSS}`,
     onSelectionChange: (selectedPaths) => {
       const selectedPath = selectedPaths.at(-1);
       if (selectedPath === undefined) return;
@@ -1056,6 +1058,10 @@ function useWorkspaceFileTreeReveal(args: {
       suppressSelectionOpenRef.current = false;
     }
     model.scrollToPath(filePath, { offset: "nearest" });
+    const container = model.getFileTreeContainer();
+    if (container !== undefined) {
+      flashSidebarElement(container, request.nonce);
+    }
     clearFileTreeRevealRequest(viewTabId, request.nonce);
   }, [
     browsing,

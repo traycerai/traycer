@@ -35,6 +35,11 @@ import { GitFileSectionStack } from "./git-file-section-stack";
 import type { GitFileSectionBodyRenderProps } from "./git-file-section-stack";
 import { useGitPierreFileTreeModel } from "./use-git-pierre-file-tree-model";
 import { onMiddleClick } from "@/lib/dom/on-middle-click";
+import {
+  clearSidebarNodeRevealRequest,
+  useSidebarNodeRevealRequest,
+} from "@/stores/epics/sidebar-node-reveal-store";
+import { flashSidebarElement } from "@/components/epic-canvas/sidebar/epic-sidebar-tree-shared";
 
 export interface FileTreeProps {
   readonly epicId: string;
@@ -211,6 +216,16 @@ function GitTreeSectionBody(props: GitTreeSectionBodyProps): ReactNode {
     },
     [fileByPath, props.hostId, props.repositoryContext, props.runningDir],
   );
+  const revealRequest = useSidebarNodeRevealRequest(props.viewTabId);
+  useEffect(() => {
+    if (activeFilePath === null || revealRequest === null) return;
+    const tile = tileForTreePath(activeFilePath);
+    if (tile?.id !== revealRequest.nodeId) return;
+    const container = model.getFileTreeContainer();
+    if (container === undefined) return;
+    flashSidebarElement(container, revealRequest.nonce);
+    clearSidebarNodeRevealRequest(props.viewTabId, revealRequest.nonce);
+  }, [activeFilePath, model, props.viewTabId, revealRequest, tileForTreePath]);
 
   const openFileFromTreeRow = useCallback(
     (event: MouseEvent<HTMLElement>, gesture: TileOpenGesture) => {
