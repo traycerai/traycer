@@ -791,6 +791,63 @@ describe("OfficeScene", () => {
     expect(roomLabel.text.endsWith("…")).toBe(true);
   });
 
+  it("re-letters a cabin sign in place when its root is renamed, without moving anyone", () => {
+    const root = agent({ id: "root", name: "Ann", createdAt: 1 });
+    const child = agent({ id: "child", parentId: "root", createdAt: 2 });
+    const family = [root, child];
+    const ids = new Set(family.map((person) => person.id));
+
+    const scene = new OfficeScene(layoutOffice);
+    scene.sync(
+      sceneInput({ agents: family, visibleAgentIds: ids, reducedMotion: true }),
+    );
+
+    const before = scene.frame();
+    expect(labels(before.props).some((label) => label.text === "Ann")).toBe(
+      true,
+    );
+    const versionBefore = before.staticVersion;
+    const regionsBefore = before.hitRegions;
+
+    // Same ids, parentIds, createdAt and hostId - the agent SET is unchanged,
+    // so this is a rename, not a re-layout.
+    const renamedRoot = agent({ id: "root", name: "Bea", createdAt: 1 });
+    const renamedFamily = [renamedRoot, child];
+    scene.sync(
+      sceneInput({
+        agents: renamedFamily,
+        visibleAgentIds: ids,
+        reducedMotion: true,
+      }),
+    );
+
+    const after = scene.frame();
+    expect(labels(after.props).some((label) => label.text === "Bea")).toBe(
+      true,
+    );
+    // The stale lettering must be gone, not merely joined by the new sign.
+    expect(labels(after.props).some((label) => label.text === "Ann")).toBe(
+      false,
+    );
+    // A rename bumps the renderer's cache key, since the sign it re-letters
+    // lives on the layout the cache keys off.
+    expect(after.staticVersion).toBe(versionBefore + 1);
+    // Nobody's chair moved: the layout signature excludes names on purpose, so
+    // this must not have sent anyone back across the floor.
+    expect(after.hitRegions).toEqual(regionsBefore);
+
+    // The identical (already-renamed) input again must not re-letter or bump
+    // the version a second time - only an actual name CHANGE does that.
+    scene.sync(
+      sceneInput({
+        agents: renamedFamily,
+        visibleAgentIds: ids,
+        reducedMotion: true,
+      }),
+    );
+    expect(scene.frame().staticVersion).toBe(versionBefore + 1);
+  });
+
   it("signs every amenity the way it signs a cabin", () => {
     const scene = new OfficeScene(layoutOffice);
     scene.sync(sceneInput({ agents: AGENTS, visibleAgentIds: BOTH }));

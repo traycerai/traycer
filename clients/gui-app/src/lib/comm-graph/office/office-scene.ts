@@ -789,6 +789,36 @@ function agentSetSignature(agents: ReadonlyArray<OfficeAgentInput>): string {
     .join("\u0001");
 }
 
+/** The names alone, so a rename is detectable without being a re-layout. */
+function agentNameSignature(agents: ReadonlyArray<OfficeAgentInput>): string {
+  return agents
+    .map((agent) => `${agent.id}\u0000${agent.name}`)
+    .sort()
+    .join("\u0001");
+}
+
+/**
+ * The same floor plan with every cabin sign and pod plate re-lettered from
+ * the current agent names. Geometry is untouched, so nothing that was placed
+ * moves.
+ */
+function withRefreshedNames(
+  layout: OfficeLayout,
+  agentById: ReadonlyMap<string, OfficeAgentInput>,
+): OfficeLayout {
+  return {
+    ...layout,
+    rooms: layout.rooms.map((room) => ({
+      ...room,
+      name: agentById.get(room.rootAgentId)?.name ?? room.name,
+      pods: room.pods.map((pod) => ({
+        ...pod,
+        name: agentById.get(pod.leadAgentId)?.name ?? pod.name,
+      })),
+    })),
+  };
+}
+
 /**
  * Where a prop's sprite is drawn, given that props are TOP-LEFT anchored.
  *
@@ -943,6 +973,7 @@ export class OfficeScene {
     number
   >();
   private agentSignature: string | null = null;
+  private nameSignature = "";
   private pulse: CommGraphPulse | null = null;
   private lastPulseKey: string | null = null;
   private playing = false;
@@ -1030,6 +1061,20 @@ export class OfficeScene {
       // re-pathed to the destination it was just given.
       this.rehomeCharacters();
     }
+    // A rename is the one agent change that does NOT restack the floor - a
+    // re-layout sends every errand-goer back to its chair - but the cabin
+    // signs and pod plates carry names copied at layout time, so they are
+    // rewritten in place and the floor's version moves, which is what makes
+    // the cached floor and the static layer pick the new lettering up.
+    const names = agentNameSignature(input.agents);
+    if (!layoutChanged && names !== this.nameSignature) {
+      this.currentLayout = withRefreshedNames(
+        this.currentLayout,
+        this.agentById,
+      );
+      this.layoutVersion += 1;
+    }
+    this.nameSignature = names;
     this.applyArchivalTransitions(input, firstSync);
     this.reconcileCharacters(input, firstSync);
     this.returningIds.clear();
