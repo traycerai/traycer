@@ -1045,59 +1045,26 @@ export class OfficeScene {
     this.statusById = input.statusById;
     this.openRequestsByReceiver = input.openRequestsByReceiver;
     this.playing = input.playing;
+    // Both transitions are read BEFORE the new values are stored, and neither
+    // fires on the first sync, where there is nothing in flight to end.
     const motionJustReduced = input.reducedMotion && !this.reducedMotion;
+    const rewound = this.cursorRewoundBy(input);
     this.reducedMotion = input.reducedMotion;
-    // The flag governs what STARTS; what is already in flight has to be told.
-    // A person who just asked for less motion should not watch the envelope
-    // and the walk they asked to skip play out for another few seconds.
-    if (motionJustReduced && !firstSync) this.settleMotion();
     this.stepMs = input.stepMs;
-    // A cursor that moved BACK - a seek, a step, or leaving live for history -
-    // lands on a prefix in which whatever was mid-flight has not happened yet.
-    // An envelope from a later row must not keep flying over the earlier
-    // floor, let alone land there.
-    //
-    // Two rows can share a millisecond, and a step between them moves the
-    // cursor without moving `cursorMs`. The pulse key names the row, so a key
-    // change at an equal time is a move too - taken as a rewind either way,
-    // because dropping a flight the next row would restart costs nothing and
-    // keeping one from a later row costs the truth of the earlier prefix.
-    const rewound =
-      input.cursorMs !== null &&
-      (this.cursorMs === null ||
-        input.cursorMs < this.cursorMs ||
-        (input.cursorMs === this.cursorMs &&
-          input.pulseKey !== this.lastPulseKey));
-    if (rewound && !firstSync) this.dropTransientMotion();
     this.cursorMs = input.cursorMs;
     this.clockMs = input.clockMs;
     this.pulse = input.pulse;
     this.agentById = new Map(input.agents.map((agent) => [agent.id, agent]));
+    if (!firstSync) {
+      // The flag governs what STARTS; what is already in flight has to be
+      // told. A person who just asked for less motion should not watch the
+      // envelope and the walk they asked to skip play out for another few
+      // seconds.
+      if (motionJustReduced) this.settleMotion();
+      if (rewound) this.dropTransientMotion();
+    }
 
-    const signature = agentSetSignature(input.agents);
-    const layoutChanged = signature !== this.agentSignature;
-    if (layoutChanged) {
-      this.agentSignature = signature;
-      this.currentLayout = this.layoutOf(input.agents);
-      this.layoutVersion += 1;
-      // Before reconciling, so a newly spawned walker is not immediately
-      // re-pathed to the destination it was just given.
-      this.rehomeCharacters();
-    }
-    // A rename is the one agent change that does NOT restack the floor - a
-    // re-layout sends every errand-goer back to its chair - but the cabin
-    // signs and pod plates carry names copied at layout time, so they are
-    // rewritten in place and the floor's version moves, which is what makes
-    // the cached floor and the static layer pick the new lettering up.
-    const names = agentNameSignature(input.agents);
-    if (!layoutChanged && names !== this.nameSignature) {
-      this.currentLayout = withRefreshedNames(
-        this.currentLayout,
-        this.agentById,
-      );
-      this.layoutVersion += 1;
-    }
-    this.nameSignature = names;
+    this.adoptLayout(input.agents);
     this.applyArchivalTransitions(input, firstSync);
     this.reconcileCharacters(input, firstSync);
     this.returningIds.clear();
@@ -1721,6 +1688,58 @@ export class OfficeScene {
     const character = this.characters.get(agentId);
     if (character === undefined) return;
     character.bubble = { sprite, remainingMs: durationMs };
+  }
+
+  /**
+   * Whether this input's cursor sits BEFORE the one last synced - a seek, a
+   * step back, or leaving live for history. That lands on a prefix in which
+   * whatever was mid-flight has not happened yet: an envelope from a later row
+   * must not keep flying over the earlier floor, let alone land there.
+   *
+   * Two rows can share a millisecond, and a step between them moves the cursor
+   * without moving `cursorMs`. The pulse key names the row, so a key change at
+   * an equal time is a move too - taken as a rewind either way, because
+   * dropping a flight the next row would restart costs nothing and keeping one
+   * from a later row costs the truth of the earlier prefix.
+   */
+  private cursorRewoundBy(input: OfficeSceneInput): boolean {
+    if (input.cursorMs === null) return false;
+    if (this.cursorMs === null) return true;
+    if (input.cursorMs < this.cursorMs) return true;
+    return (
+      input.cursorMs === this.cursorMs && input.pulseKey !== this.lastPulseKey
+    );
+  }
+
+  /**
+   * Re-plans the floor when the agent SET changed, and only re-letters it
+   * when only names did.
+   *
+   * A rename is the one agent change that does NOT restack the floor - a
+   * re-layout sends every errand-goer back to its chair - but the cabin signs
+   * and pod plates carry names copied at layout time, so they are rewritten
+   * in place and the floor's version moves, which is what makes the cached
+   * floor and the static layer pick the new lettering up.
+   */
+  private adoptLayout(agents: ReadonlyArray<OfficeAgentInput>): void {
+    const signature = agentSetSignature(agents);
+    const layoutChanged = signature !== this.agentSignature;
+    const names = agentNameSignature(agents);
+    if (layoutChanged) {
+      this.agentSignature = signature;
+      this.currentLayout = this.layoutOf(agents);
+      this.layoutVersion += 1;
+      // Before reconciling, so a newly spawned walker is not immediately
+      // re-pathed to the destination it was just given.
+      this.rehomeCharacters();
+    } else if (names !== this.nameSignature) {
+      this.currentLayout = withRefreshedNames(
+        this.currentLayout,
+        this.agentById,
+      );
+      this.layoutVersion += 1;
+    }
+    this.nameSignature = names;
   }
 
   /**
