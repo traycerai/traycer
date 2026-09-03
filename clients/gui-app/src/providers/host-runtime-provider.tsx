@@ -325,7 +325,12 @@ export function createHostRuntime<Registry extends VersionedRpcRegistry>(
                 if (runtime === null) {
                   return;
                 }
-                runtime.hostClient.invalidateHostScopeUnannounced(hostId);
+                // A ready boundary un-strands; it is not evidence the data
+                // changed, so healthy entries keep their staleTime.
+                runtime.hostClient.invalidateHostScopeUnannounced(
+                  hostId,
+                  "stranded-only",
+                );
               },
             })).messenger;
       // Closes the unary-RPC auth-recovery loop: a mid-call 401 from
@@ -434,7 +439,12 @@ export function createHostRuntime<Registry extends VersionedRpcRegistry>(
           if (runtime === null) {
             return;
           }
-          runtime.hostClient.invalidateHostScopeUnannounced(hostId);
+          // The host was rebuilt under its own id: everything cached for it
+          // describes a machine that is gone, healthy entries included.
+          runtime.hostClient.invalidateHostScopeUnannounced(
+            hostId,
+            "everything",
+          );
         },
       });
       const rotationSweepSubscription = directory.onChange(

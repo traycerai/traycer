@@ -50,6 +50,10 @@ const controlKey = queryKeys.hostMethod<HostRpcRegistry, "git.getCapabilities">(
  * points; an un-carved `invalidateQueries({queryKey})` would beat that and
  * re-spawn provider CLIs on every recovery sweep. Same-host transport rebind
  * also passes `refetchActive: true` — the carve-out is global for that edge.
+ *
+ * The carve-out check runs BEFORE the stranded-only filter
+ * (`createHostQueryInvalidator`), so it holds under either sweep shape; the
+ * stranded-vs-everything split below governs only the NON-catalog entries.
  */
 describe("createHostQueryInvalidator / invalidateHostScope", () => {
   const stops: Array<() => void> = [];
@@ -60,49 +64,333 @@ describe("createHostQueryInvalidator / invalidateHostScope", () => {
     }
   });
 
-  it("with refetchActive: true, refetches non-catalog host queries and leaves catalog methods entirely untouched", async () => {
-    const queryClient = createAppQueryClient();
-    const invalidator = createHostQueryInvalidator(queryClient);
+  describe("stranded-only sweep (availability recovery: refetchActive: true, strandedOnly: true)", () => {
+    it("refetches an errored non-catalog query while catalog carve-outs stay untouched even when errored", async () => {
+      const queryClient = createAppQueryClient();
+      const invalidator = createHostQueryInvalidator(queryClient);
 
-    const models = mountCountedQuery(queryClient, listModelsKey, {
-      staleTime: Infinity,
-      impl: () => Promise.resolve({ models: ["a"] }),
+      const models = mountCountedQuery(queryClient, listModelsKey, {
+        staleTime: Infinity,
+        impl: () => Promise.reject(new Error("catalog probe failed")),
+      });
+      const control = mountCountedQuery(queryClient, controlKey, {
+        staleTime: 0,
+        impl: () => Promise.reject(new Error("control probe failed")),
+      });
+      stops.push(models.stop, control.stop);
+
+      await waitUntil(
+        () => queryClient.getQueryState(listModelsKey)?.status === "error",
+      );
+      await waitUntil(
+        () => queryClient.getQueryState(controlKey)?.status === "error",
+      );
+      expect(models.fetches.count).toBe(1);
+      expect(control.fetches.count).toBe(1);
+
+      control.setImpl(() => Promise.resolve({ capabilities: [] }));
+
+      invalidator.invalidateHostScope(HOST_ID, {
+        refetchActive: true,
+        strandedOnly: true,
+      });
+
+      // Stranded (errored) non-catalog query recovers.
+      await waitUntil(() => control.fetches.count === 2);
+      expect(control.fetches.count).toBe(2);
+      await waitUntil(
+        () => queryClient.getQueryState(controlKey)?.status === "success",
+      );
+
+      // Carve-out holds even though the catalog is itself errored.
+      await settle(20);
+      expect(models.fetches.count).toBe(1);
+      expect(queryClient.getQueryState(listModelsKey)?.status).toBe("error");
     });
-    const commands = mountCountedQuery(queryClient, listCommandsKey, {
-      staleTime: Infinity,
-      impl: () => Promise.resolve({ commands: ["c"] }),
+
+    it("cancels and refetches a non-catalog query still fetching (a pending fetch)", async () => {
+      const queryClient = createAppQueryClient();
+      const invalidator = createHostQueryInvalidator(queryClient);
+
+      // Never resolves on its own - the fetch is deliberately left hanging so
+      // the entry is still `fetchStatus: "fetching"` when the sweep runs.
+      const pending = mountCountedQuery(queryClient, controlKey, {
+        staleTime: 0,
+        impl: () => new Promise(() => undefined),
+      });
+      stops.push(pending.stop);
+
+      await waitUntil(() => pending.fetches.count === 1);
+      expect(queryClient.getQueryState(controlKey)?.fetchStatus).toBe(
+        "fetching",
+      );
+
+      pending.setImpl(() => Promise.resolve({ capabilities: [] }));
+
+      invalidator.invalidateHostScope(HOST_ID, {
+        refetchActive: true,
+        strandedOnly: true,
+      });
+
+      // The hanging fetch is cancelled and a fresh one is started, not left
+      // to sit in its retry/backoff state forever.
+      await waitUntil(() => pending.fetches.count === 2);
+      expect(pending.fetches.count).toBe(2);
+      await waitUntil(
+        () => queryClient.getQueryState(controlKey)?.status === "success",
+      );
+      expect(queryClient.getQueryState(controlKey)?.fetchStatus).toBe("idle");
     });
-    const control = mountCountedQuery(queryClient, controlKey, {
-      staleTime: 0,
-      impl: () => Promise.resolve({ capabilities: [] }),
+
+    it("leaves a successful, idle non-catalog query untouched (not cancelled, not refetched)", async () => {
+      const queryClient = createAppQueryClient();
+      const invalidator = createHostQueryInvalidator(queryClient);
+
+      const control = mountCountedQuery(queryClient, controlKey, {
+        staleTime: 0,
+        impl: () => Promise.resolve({ capabilities: [] }),
+      });
+      stops.push(control.stop);
+
+      await waitUntil(() => control.fetches.count === 1);
+      await waitUntil(
+        () => queryClient.getQueryState(controlKey)?.status === "success",
+      );
+
+      invalidator.invalidateHostScope(HOST_ID, {
+        refetchActive: true,
+        strandedOnly: true,
+      });
+
+      // An outage could not have stranded a query that already holds a
+      // successful, idle result - a stall says nothing about this data.
+      await settle(20);
+      expect(control.fetches.count).toBe(1);
+      expect(queryClient.getQueryState(controlKey)?.isInvalidated).toBe(false);
     });
-    stops.push(models.stop, commands.stop, control.stop);
 
-    await waitUntil(() => models.fetches.count === 1);
-    await waitUntil(() => commands.fetches.count === 1);
-    await waitUntil(() => control.fetches.count === 1);
+    it("does not auto-refetch an errored catalog; intent edge recovers it", async () => {
+      // Accepted trade-off for the same-host transport-rebind edge (also
+      // refetchActive: true): an error-state catalog is marked stale without a
+      // recovery fetch, so a rebind/flap cannot re-open the #912 CLI storm.
+      // Recovery is intentional — harnessCatalogEntryNeedsRefresh treats isError
+      // as always-due, and an intent-edge refetch (picker open / selection)
+      // clears the stranded entry.
+      const queryClient = createAppQueryClient();
+      const invalidator = createHostQueryInvalidator(queryClient);
 
-    invalidator.invalidateHostScope(HOST_ID, { refetchActive: true });
+      const models = mountCountedQuery(queryClient, listModelsKey, {
+        staleTime: Infinity,
+        impl: () => Promise.reject(new Error("catalog probe failed")),
+      });
+      const control = mountCountedQuery(queryClient, controlKey, {
+        staleTime: 0,
+        impl: () => Promise.reject(new Error("control probe failed")),
+      });
+      stops.push(models.stop, control.stop);
 
-    // Non-catalog active observer must refetch (mutation probe: a plain
-    // invalidateQueries({queryKey}) would also bump catalog counts, so this
-    // assertion alone is not enough — the unchanged catalog counts below are
-    // the carve-out probe).
-    await waitUntil(() => control.fetches.count === 2);
-    expect(control.fetches.count).toBe(2);
+      await waitUntil(() => models.fetches.count === 1);
+      await waitUntil(
+        () => queryClient.getQueryState(listModelsKey)?.status === "error",
+      );
+      await waitUntil(
+        () => queryClient.getQueryState(controlKey)?.status === "error",
+      );
+      expect(queryClient.getQueryState(listModelsKey)?.error).toBeTruthy();
 
-    // Give a short window for a buggy active-refetch of catalogs to show up.
-    await settle(20);
-    expect(models.fetches.count).toBe(1);
-    expect(commands.fetches.count).toBe(1);
+      control.setImpl(() => Promise.resolve({ capabilities: [] }));
 
-    // NOT invalidated - see the next test for why the flag itself matters.
-    expect(queryClient.getQueryState(listModelsKey)?.isInvalidated).toBe(false);
-    expect(queryClient.getQueryState(listCommandsKey)?.isInvalidated).toBe(
-      false,
-    );
-    // Control refetched successfully, so the invalidation flag clears.
-    expect(queryClient.getQueryState(controlKey)?.isInvalidated).toBe(false);
+      invalidator.invalidateHostScope(HOST_ID, {
+        refetchActive: true,
+        strandedOnly: true,
+      });
+
+      // The stranded non-catalog control still recovers.
+      await waitUntil(() => control.fetches.count === 2);
+      expect(control.fetches.count).toBe(2);
+
+      await settle(20);
+      // Carve-out holds even when the catalog entry is already in error: no
+      // automatic recovery fetch on the active host-scope sweep. The unchanged
+      // fetch count is the whole probe here - note that `isInvalidated` below
+      // is NOT evidence of anything the invalidator did: a query comes out of a
+      // REJECTED fetch already flagged invalidated by TanStack itself, before
+      // any `invalidateQueries` call (verified directly). It is asserted only
+      // to pin that pre-existing shape, and it is exactly why the successful
+      // catalogs in the tests above - where the flag does mean something - are
+      // the ones that discriminate the carve-out.
+      expect(models.fetches.count).toBe(1);
+      expect(queryClient.getQueryState(listModelsKey)?.isInvalidated).toBe(
+        true,
+      );
+      expect(queryClient.getQueryState(listModelsKey)?.status).toBe("error");
+
+      // Intent edge: flip the probe to succeed and refetch (picker open /
+      // harnessCatalogEntryNeedsRefresh path). Entry recovers.
+      models.setImpl(() =>
+        Promise.resolve({
+          harnessId: "claude",
+          models: [{ id: "m1", label: "Model 1" }],
+        }),
+      );
+      await models.observer.refetch();
+
+      await waitUntil(
+        () => queryClient.getQueryState(listModelsKey)?.status === "success",
+      );
+      expect(models.fetches.count).toBe(2);
+      expect(queryClient.getQueryState(listModelsKey)?.error).toBeNull();
+      expect(queryClient.getQueryState(listModelsKey)?.data).toEqual({
+        harnessId: "claude",
+        models: [{ id: "m1", label: "Model 1" }],
+      });
+    });
+
+    it("does not refetch a cloud epic-tasks key while still refetching a stranded ordinary host key", async () => {
+      // The bind-path force-refetch is the broadest host-scope sweep; force-
+      // refetching the cloud epic-tasks history drops optimistically-inserted
+      // local-first epics (cloud-query-keys.ts). This pin is the availability-
+      // recovery enforcement of that documented invariant.
+      const queryClient = createAppQueryClient();
+      const invalidator = createHostQueryInvalidator(queryClient);
+
+      const epicTasksKey = queryKeys.cloudEpicTasks(HOST_ID, "fingerprint-1", {
+        limit: 20,
+        filters: null,
+        sort: "recent",
+        extensionPhaseVersion: "1.0.0",
+        extensionEpicVersion: "1.0.0",
+      });
+      const epicTasks = mountCountedQuery(queryClient, epicTasksKey, {
+        staleTime: Infinity,
+        impl: () =>
+          Promise.resolve({
+            tasks: [],
+            nextCursor: undefined,
+            hasMore: false,
+          }),
+      });
+      const control = mountCountedQuery(queryClient, controlKey, {
+        staleTime: 0,
+        impl: () => Promise.reject(new Error("control probe failed")),
+      });
+      stops.push(epicTasks.stop, control.stop);
+
+      await waitUntil(() => epicTasks.fetches.count === 1);
+      await waitUntil(
+        () => queryClient.getQueryState(controlKey)?.status === "error",
+      );
+
+      control.setImpl(() => Promise.resolve({ capabilities: [] }));
+
+      invalidator.invalidateHostScope(HOST_ID, {
+        refetchActive: true,
+        strandedOnly: true,
+      });
+
+      await waitUntil(() => control.fetches.count === 2);
+      expect(control.fetches.count).toBe(2);
+
+      await settle(20);
+      expect(epicTasks.fetches.count).toBe(1);
+      expect(queryClient.getQueryState(epicTasksKey)?.isInvalidated).toBe(
+        false,
+      );
+    });
+  });
+
+  describe("everything sweep (key rotation: refetchActive: true, strandedOnly: false)", () => {
+    it("refetches a successful, idle non-catalog query while catalog carve-outs stay untouched", async () => {
+      const queryClient = createAppQueryClient();
+      const invalidator = createHostQueryInvalidator(queryClient);
+
+      const models = mountCountedQuery(queryClient, listModelsKey, {
+        staleTime: Infinity,
+        impl: () => Promise.resolve({ models: ["a"] }),
+      });
+      const commands = mountCountedQuery(queryClient, listCommandsKey, {
+        staleTime: Infinity,
+        impl: () => Promise.resolve({ commands: ["c"] }),
+      });
+      const control = mountCountedQuery(queryClient, controlKey, {
+        staleTime: 0,
+        impl: () => Promise.resolve({ capabilities: [] }),
+      });
+      stops.push(models.stop, commands.stop, control.stop);
+
+      await waitUntil(() => models.fetches.count === 1);
+      await waitUntil(() => commands.fetches.count === 1);
+      await waitUntil(() => control.fetches.count === 1);
+
+      invalidator.invalidateHostScope(HOST_ID, {
+        refetchActive: true,
+        strandedOnly: false,
+      });
+
+      // A whole-machine sweep refetches even a healthy, idle non-catalog
+      // query - unlike the stranded-only case above.
+      await waitUntil(() => control.fetches.count === 2);
+      expect(control.fetches.count).toBe(2);
+
+      // Give a short window for a buggy active-refetch of catalogs to show up.
+      await settle(20);
+      expect(models.fetches.count).toBe(1);
+      expect(commands.fetches.count).toBe(1);
+
+      // NOT invalidated - catalogs are carved out of every active sweep.
+      expect(queryClient.getQueryState(listModelsKey)?.isInvalidated).toBe(
+        false,
+      );
+      expect(queryClient.getQueryState(listCommandsKey)?.isInvalidated).toBe(
+        false,
+      );
+      // Control refetched successfully, so the invalidation flag clears.
+      expect(queryClient.getQueryState(controlKey)?.isInvalidated).toBe(false);
+    });
+
+    it("does not refetch a cloud epic-tasks key while still refetching an ordinary host key", async () => {
+      const queryClient = createAppQueryClient();
+      const invalidator = createHostQueryInvalidator(queryClient);
+
+      const epicTasksKey = queryKeys.cloudEpicTasks(HOST_ID, "fingerprint-1", {
+        limit: 20,
+        filters: null,
+        sort: "recent",
+        extensionPhaseVersion: "1.0.0",
+        extensionEpicVersion: "1.0.0",
+      });
+      const epicTasks = mountCountedQuery(queryClient, epicTasksKey, {
+        staleTime: Infinity,
+        impl: () =>
+          Promise.resolve({
+            tasks: [],
+            nextCursor: undefined,
+            hasMore: false,
+          }),
+      });
+      const control = mountCountedQuery(queryClient, controlKey, {
+        staleTime: 0,
+        impl: () => Promise.resolve({ capabilities: [] }),
+      });
+      stops.push(epicTasks.stop, control.stop);
+
+      await waitUntil(() => epicTasks.fetches.count === 1);
+      await waitUntil(() => control.fetches.count === 1);
+
+      invalidator.invalidateHostScope(HOST_ID, {
+        refetchActive: true,
+        strandedOnly: false,
+      });
+
+      await waitUntil(() => control.fetches.count === 2);
+      expect(control.fetches.count).toBe(2);
+
+      await settle(20);
+      expect(epicTasks.fetches.count).toBe(1);
+      expect(queryClient.getQueryState(epicTasksKey)?.isInvalidated).toBe(
+        false,
+      );
+    });
   });
 
   // Codex review, PR #977 thread PRRT_kwDOL6Tbrc6WdeIO: "Do not invalidate
@@ -179,7 +467,10 @@ describe("createHostQueryInvalidator / invalidateHostScope", () => {
     await waitUntil(() => commands.fetches.count === 1);
     await waitUntil(() => control.fetches.count === 1);
 
-    invalidator.invalidateHostScope(HOST_ID, { refetchActive: false });
+    invalidator.invalidateHostScope(HOST_ID, {
+      refetchActive: false,
+      strandedOnly: false,
+    });
 
     await settle(20);
     expect(models.fetches.count).toBe(1);
@@ -191,116 +482,6 @@ describe("createHostQueryInvalidator / invalidateHostScope", () => {
       true,
     );
     expect(queryClient.getQueryState(controlKey)?.isInvalidated).toBe(true);
-  });
-
-  it("with refetchActive: true, does not refetch a cloud epic-tasks key while still refetching an ordinary host key", async () => {
-    // The bind-path force-refetch is the broadest host-scope sweep; force-
-    // refetching the cloud epic-tasks history drops optimistically-inserted
-    // local-first epics (cloud-query-keys.ts). This pin is the bind-path
-    // enforcement of that documented invariant.
-    const queryClient = createAppQueryClient();
-    const invalidator = createHostQueryInvalidator(queryClient);
-
-    const epicTasksKey = queryKeys.cloudEpicTasks(HOST_ID, "fingerprint-1", {
-      limit: 20,
-      filters: null,
-      sort: "recent",
-      extensionPhaseVersion: "1.0.0",
-      extensionEpicVersion: "1.0.0",
-    });
-    const epicTasks = mountCountedQuery(queryClient, epicTasksKey, {
-      staleTime: Infinity,
-      impl: () =>
-        Promise.resolve({
-          tasks: [],
-          nextCursor: undefined,
-          hasMore: false,
-        }),
-    });
-    const control = mountCountedQuery(queryClient, controlKey, {
-      staleTime: 0,
-      impl: () => Promise.resolve({ capabilities: [] }),
-    });
-    stops.push(epicTasks.stop, control.stop);
-
-    await waitUntil(() => epicTasks.fetches.count === 1);
-    await waitUntil(() => control.fetches.count === 1);
-
-    invalidator.invalidateHostScope(HOST_ID, { refetchActive: true });
-
-    await waitUntil(() => control.fetches.count === 2);
-    expect(control.fetches.count).toBe(2);
-
-    await settle(20);
-    expect(epicTasks.fetches.count).toBe(1);
-    expect(queryClient.getQueryState(epicTasksKey)?.isInvalidated).toBe(false);
-  });
-
-  it("does not auto-refetch an errored catalog on refetchActive: true; intent edge recovers it", async () => {
-    // Accepted trade-off for the same-host transport-rebind edge (also
-    // refetchActive: true): an error-state catalog is marked stale without a
-    // recovery fetch, so a rebind/flap cannot re-open the #912 CLI storm.
-    // Recovery is intentional — harnessCatalogEntryNeedsRefresh treats isError
-    // as always-due, and an intent-edge refetch (picker open / selection)
-    // clears the stranded entry.
-    const queryClient = createAppQueryClient();
-    const invalidator = createHostQueryInvalidator(queryClient);
-
-    const models = mountCountedQuery(queryClient, listModelsKey, {
-      staleTime: Infinity,
-      impl: () => Promise.reject(new Error("catalog probe failed")),
-    });
-    const control = mountCountedQuery(queryClient, controlKey, {
-      staleTime: 0,
-      impl: () => Promise.resolve({ capabilities: [] }),
-    });
-    stops.push(models.stop, control.stop);
-
-    await waitUntil(() => models.fetches.count === 1);
-    await waitUntil(
-      () => queryClient.getQueryState(listModelsKey)?.status === "error",
-    );
-    await waitUntil(() => control.fetches.count === 1);
-    expect(queryClient.getQueryState(listModelsKey)?.error).toBeTruthy();
-
-    invalidator.invalidateHostScope(HOST_ID, { refetchActive: true });
-
-    await waitUntil(() => control.fetches.count === 2);
-    expect(control.fetches.count).toBe(2);
-
-    await settle(20);
-    // Carve-out holds even when the catalog entry is already in error: no
-    // automatic recovery fetch on the active host-scope sweep. The unchanged
-    // fetch count is the whole probe here - note that `isInvalidated` below
-    // is NOT evidence of anything the invalidator did: a query comes out of a
-    // REJECTED fetch already flagged invalidated by TanStack itself, before
-    // any `invalidateQueries` call (verified directly). It is asserted only
-    // to pin that pre-existing shape, and it is exactly why the successful
-    // catalogs in the tests above - where the flag does mean something - are
-    // the ones that discriminate the carve-out.
-    expect(models.fetches.count).toBe(1);
-    expect(queryClient.getQueryState(listModelsKey)?.isInvalidated).toBe(true);
-    expect(queryClient.getQueryState(listModelsKey)?.status).toBe("error");
-
-    // Intent edge: flip the probe to succeed and refetch (picker open /
-    // harnessCatalogEntryNeedsRefresh path). Entry recovers.
-    models.setImpl(() =>
-      Promise.resolve({
-        harnessId: "claude",
-        models: [{ id: "m1", label: "Model 1" }],
-      }),
-    );
-    await models.observer.refetch();
-
-    await waitUntil(
-      () => queryClient.getQueryState(listModelsKey)?.status === "success",
-    );
-    expect(models.fetches.count).toBe(2);
-    expect(queryClient.getQueryState(listModelsKey)?.error).toBeNull();
-    expect(queryClient.getQueryState(listModelsKey)?.data).toEqual({
-      harnessId: "claude",
-      models: [{ id: "m1", label: "Model 1" }],
-    });
   });
 });
 

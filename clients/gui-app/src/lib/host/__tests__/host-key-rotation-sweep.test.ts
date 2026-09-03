@@ -231,7 +231,8 @@ describe("buildHostKeyRotationSweep wired to a real HostClient", () => {
   it("invalidates the rotated host's scope WITHOUT announcing a change event", async () => {
     const { client, invalidator, events } = buildRealHostClient();
     const sweep = buildHostKeyRotationSweep({
-      sweepHostScope: (hostId) => client.invalidateHostScopeUnannounced(hostId),
+      sweepHostScope: (hostId) =>
+        client.invalidateHostScopeUnannounced(hostId, "everything"),
     });
 
     sweep([remoteEntry({ publicKey: "pk-1" })]);
@@ -244,7 +245,9 @@ describe("buildHostKeyRotationSweep wired to a real HostClient", () => {
     await flushAvailabilityCoalescing();
 
     expect(invalidator.calls).toEqual([mockRemoteHostEntry.hostId]);
-    expect(invalidator.options).toEqual([{ refetchActive: true }]);
+    expect(invalidator.options).toEqual([
+      { refetchActive: true, strandedOnly: false },
+    ]);
     // THE CLAIM: a rotation swept ALONE in its microtask tick must produce
     // zero change events. A reason-scoped consumer (an `availability-recovered`
     // subscriber) would otherwise be woken for an event that never happened -
