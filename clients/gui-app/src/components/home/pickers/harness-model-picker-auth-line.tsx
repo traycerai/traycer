@@ -12,9 +12,12 @@ import {
 } from "@/lib/providers/provider-ambient-auth";
 import {
   type ProviderSetupGuidance,
-  providerSetupGuidance,
+  providerSetupSteps,
+  resolveProviderTerminalSetup,
 } from "@/lib/providers/provider-setup-guidance";
 import { isProviderSignedOutCatalogError } from "@/lib/providers/provider-signed-out-catalog-error";
+import type { ProviderTerminalLoginSurface } from "@/lib/providers/provider-terminal-login-surface";
+import { ProviderSetupTerminalAction } from "@/components/home/pickers/provider-setup-terminal-action";
 
 /**
  * The ambient account line for the browsed provider - rendered in the slot the
@@ -58,6 +61,12 @@ export function PickerProviderAuthLine(props: {
   readonly state: ProviderCliState | null;
   /** The catalog entry for the same provider, when the picker has one. */
   readonly harness: GuiHarnessCatalogEntry | null;
+  /** Where a provider's setup terminal lands - see the type's doc. */
+  readonly terminalLoginSurface: ProviderTerminalLoginSurface | null;
+  /** The picker's run-target host, which that terminal is minted on. */
+  readonly runTargetHostId: string | null;
+  /** Closes the picker without opening anything else. */
+  readonly onClosePicker: () => void;
 }): ReactNode {
   const verdict = pickerAuthLineVerdict(props.state, props.harness);
   switch (verdict.kind) {
@@ -66,7 +75,15 @@ export function PickerProviderAuthLine(props: {
     case "signed-out":
       return <AuthLineRow badgeText={null} label="Not authenticated" />;
     case "setup":
-      return <SetupGuidanceRow guidance={verdict.guidance} />;
+      return (
+        <SetupGuidanceRow
+          providerId={verdict.providerId}
+          guidance={verdict.guidance}
+          terminalLoginSurface={props.terminalLoginSurface}
+          runTargetHostId={props.runTargetHostId}
+          onClosePicker={props.onClosePicker}
+        />
+      );
     case "account":
       return (
         <AuthLineRow badgeText={verdict.badgeText} label={verdict.label} />
@@ -77,7 +94,11 @@ export function PickerProviderAuthLine(props: {
 type PickerAuthLineVerdict =
   | { readonly kind: "hidden" }
   | { readonly kind: "signed-out" }
-  | { readonly kind: "setup"; readonly guidance: ProviderSetupGuidance }
+  | {
+      readonly kind: "setup";
+      readonly providerId: ProviderId;
+      readonly guidance: ProviderSetupGuidance;
+    }
   | {
       readonly kind: "account";
       readonly badgeText: string | null;
@@ -100,11 +121,16 @@ function pickerAuthLineVerdict(
     harness !== null &&
     isProviderSignedOutCatalogError(providerId, harness.modelsError);
   if (catalogSignedOut || isSignedOut(state, harness)) {
-    const guidance = providerSetupGuidance(providerId);
+    // Whether a terminal sign-in applies is the host's call, read from the
+    // `providers.list` row; a row that has not resolved reads as "not yet".
+    const guidance = resolveProviderTerminalSetup(
+      providerId,
+      state?.loginCapability,
+    );
     // Compact when the model list is showing the setup CTA for the same
     // verdict, so the popover never says it twice.
     if (guidance === null || catalogSignedOut) return { kind: "signed-out" };
-    return { kind: "setup", guidance };
+    return { kind: "setup", providerId, guidance };
   }
   if (state === null) return { kind: "hidden" };
   const auth = state.auth;
@@ -167,9 +193,13 @@ function AuthLineRow(props: {
 }
 
 function SetupGuidanceRow(props: {
+  readonly providerId: ProviderId;
   readonly guidance: ProviderSetupGuidance;
+  readonly terminalLoginSurface: ProviderTerminalLoginSurface | null;
+  readonly runTargetHostId: string | null;
+  readonly onClosePicker: () => void;
 }): ReactNode {
-  const { guidance } = props;
+  const { guidance, terminalLoginSurface } = props;
   return (
     <div
       role="note"
@@ -178,12 +208,23 @@ function SetupGuidanceRow(props: {
     >
       <span className="text-foreground/90">Not authenticated</span>
       <span>{guidance.summary}</span>
+      <ProviderSetupTerminalAction
+        providerId={props.providerId}
+        guidance={guidance}
+        surface={terminalLoginSurface}
+        runTargetHostId={props.runTargetHostId}
+        onBeforeStart={props.onClosePicker}
+      />
       <ol className="list-decimal space-y-0.5 pl-4">
-        {guidance.steps.map((step) => (
-          <li key={step}>{step}</li>
-        ))}
+        {providerSetupSteps(guidance, terminalLoginSurface !== null).map(
+          (step) => (
+            <li key={step}>{step}</li>
+          ),
+        )}
       </ol>
-      <ProviderSetupManualCommand command={guidance.manualCommand} />
+      {guidance.manualCommand === null ? null : (
+        <ProviderSetupManualCommand command={guidance.manualCommand} />
+      )}
     </div>
   );
 }

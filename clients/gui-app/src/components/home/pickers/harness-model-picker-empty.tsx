@@ -6,11 +6,18 @@ import type { GuiHarnessCatalogEntry } from "@/hooks/harnesses/use-gui-harness-c
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
 import { guiHarnessIdToProviderId } from "@/lib/provider-ordering";
 import { ProviderSetupManualCommand } from "@/components/home/pickers/harness-model-picker-auth-line";
+import { ProviderSetupTerminalAction } from "@/components/home/pickers/provider-setup-terminal-action";
 import {
   type ProviderSetupGuidance,
-  providerSetupGuidance,
+  providerSetupSteps,
+  resolveProviderTerminalSetup,
 } from "@/lib/providers/provider-setup-guidance";
 import { isProviderSignedOutCatalogError } from "@/lib/providers/provider-signed-out-catalog-error";
+import type { ProviderTerminalLoginSurface } from "@/lib/providers/provider-terminal-login-surface";
+import type {
+  ProviderCliState,
+  ProviderId,
+} from "@traycer/protocol/host/provider-schemas";
 import { KeyRound, SquareTerminal } from "lucide-react";
 import type { ReactNode } from "react";
 
@@ -49,8 +56,17 @@ interface ModelRowsStateProps {
   readonly hostUnavailableLabel: string | null;
   readonly hasQuery: boolean;
   readonly activeProvider: GuiHarnessCatalogEntry | null;
+  /** The same provider's `providers.list` row - its `loginCapability` is what
+   *  decides whether a terminal sign-in applies. `null` until resolved. */
+  readonly activeProviderState: ProviderCliState | null;
   readonly rowsCount: number;
   readonly onOpenProviderSettings: () => void;
+  /** Where a provider's setup terminal lands - see the type's doc. */
+  readonly terminalLoginSurface: ProviderTerminalLoginSurface | null;
+  /** The picker's run-target host, which that terminal is minted on. */
+  readonly runTargetHostId: string | null;
+  /** Closes the picker without opening anything else. */
+  readonly onClosePicker: () => void;
 }
 
 export function ModelRowsState(props: ModelRowsStateProps): ReactNode | null {
@@ -60,8 +76,12 @@ export function ModelRowsState(props: ModelRowsStateProps): ReactNode | null {
     hostUnavailableLabel,
     hasQuery,
     activeProvider,
+    activeProviderState,
     rowsCount,
     onOpenProviderSettings,
+    terminalLoginSurface,
+    runTargetHostId,
+    onClosePicker,
   } = props;
 
   if (hostUnavailableLabel !== null && rowsCount === 0) {
@@ -123,13 +143,23 @@ export function ModelRowsState(props: ModelRowsStateProps): ReactNode | null {
   }
 
   if (activeProvider !== null && activeProvider.modelsError !== null) {
-    // A signed-out verdict for a provider with its own setup flow gets the
-    // steps that fix it, in the space the model rows would occupy - the host's
-    // "signed out, reconnect" sentence is true but names no action, and the
-    // report-issue icon beside it invites a bug report for a missing key.
-    const setup = providerSetupCta(activeProvider);
+    // A signed-out verdict for a provider whose sign-in runs in a terminal
+    // gets the action that fixes it, in the space the model rows would occupy
+    // - the host's "signed out, reconnect" sentence is true but names no
+    // action, and the report-issue icon beside it invites a bug report for a
+    // missing key.
+    const setup = providerSetupCta(activeProvider, activeProviderState);
     if (setup !== null) {
-      return <ProviderSetupCta label={activeProvider.label} guidance={setup} />;
+      return (
+        <ProviderSetupCta
+          providerId={setup.providerId}
+          label={activeProvider.label}
+          guidance={setup.guidance}
+          terminalLoginSurface={terminalLoginSurface}
+          runTargetHostId={runTargetHostId}
+          onClosePicker={onClosePicker}
+        />
+      );
     }
     // Surface the host's specific reason for API-key providers and packaged SDK
     // failures instead of a generic catch-all. Fall back when the message is
@@ -206,32 +236,47 @@ function unavailableProviderState(
 }
 
 // The setup guidance to show in place of the model list, when the list failed
-// with the host's signed-out verdict AND the provider has a setup flow of its
-// own (Reasonix: a terminal wizard writing the provider's private `.env`).
-// Any other failure keeps the host's own reason below.
+// with the host's signed-out verdict AND the host says this provider signs in
+// from a terminal (Copilot's device code; Reasonix's credential wizard). Any
+// other failure keeps the host's own reason below. The `providers.list` row
+// may lag the catalog error by a fetch; until it lands this is `null` and the
+// generic reason row shows, then re-resolves.
 function providerSetupCta(
   provider: GuiHarnessCatalogEntry,
-): ProviderSetupGuidance | null {
+  state: ProviderCliState | null,
+): {
+  readonly providerId: ProviderId;
+  readonly guidance: ProviderSetupGuidance;
+} | null {
   const providerId = guiHarnessIdToProviderId(provider.id);
   if (providerId === null) return null;
-  const guidance = providerSetupGuidance(providerId);
+  const guidance = resolveProviderTerminalSetup(
+    providerId,
+    state?.loginCapability,
+  );
   if (guidance === null) return null;
   return isProviderSignedOutCatalogError(providerId, provider.modelsError)
-    ? guidance
+    ? { providerId, guidance }
     : null;
 }
 
-// Shown in place of the model list when a provider with its own credential
-// store is signed out. Same shape as the API-key CTA below, but the steps are
-// the provider's terminal flow: Traycer cannot take the key itself. No
-// Settings button, deliberately - Settings has no terminal sign-in for such a
-// provider (its own hint sends the user back to the composer), so the button
-// would be a dead end; the steps name the composer banner instead.
+// Shown in place of the model list when a provider that signs in from a
+// terminal is signed out. Same shape as the API-key CTA below, but the action
+// is the provider's terminal flow: Traycer cannot complete it itself. The
+// button asks the host to open that flow in a terminal on the surface this
+// picker is drawn on (an epic's canvas, or the landing terminal panel); on a
+// surface with neither (a fork dialog) the steps say where the button lives.
+// No Settings button, deliberately - Settings has no terminal sign-in for
+// such a provider, so it would be a dead end.
 function ProviderSetupCta(props: {
+  readonly providerId: ProviderId;
   readonly label: string;
   readonly guidance: ProviderSetupGuidance;
+  readonly terminalLoginSurface: ProviderTerminalLoginSurface | null;
+  readonly runTargetHostId: string | null;
+  readonly onClosePicker: () => void;
 }): ReactNode {
-  const { guidance } = props;
+  const { guidance, terminalLoginSurface } = props;
   return (
     <div className="flex flex-col items-center gap-2 px-4 py-6 text-center">
       <span className="flex size-9 items-center justify-center rounded-full bg-primary/10 text-primary">
@@ -243,14 +288,27 @@ function ProviderSetupCta(props: {
       <p className="max-w-[min(90vw,18rem)] text-balance text-ui-xs text-muted-foreground">
         {guidance.summary}
       </p>
+      <div className="max-w-[min(90vw,18rem)]">
+        <ProviderSetupTerminalAction
+          providerId={props.providerId}
+          guidance={guidance}
+          surface={terminalLoginSurface}
+          runTargetHostId={props.runTargetHostId}
+          onBeforeStart={props.onClosePicker}
+        />
+      </div>
       <ol className="max-w-[min(90vw,18rem)] list-decimal space-y-0.5 pl-4 text-left text-ui-xs text-muted-foreground">
-        {guidance.steps.map((step) => (
-          <li key={step}>{step}</li>
-        ))}
+        {providerSetupSteps(guidance, terminalLoginSurface !== null).map(
+          (step) => (
+            <li key={step}>{step}</li>
+          ),
+        )}
       </ol>
-      <p className="max-w-[min(90vw,18rem)] text-left text-ui-xs text-muted-foreground">
-        <ProviderSetupManualCommand command={guidance.manualCommand} />
-      </p>
+      {guidance.manualCommand === null ? null : (
+        <p className="max-w-[min(90vw,18rem)] text-left text-ui-xs text-muted-foreground">
+          <ProviderSetupManualCommand command={guidance.manualCommand} />
+        </p>
+      )}
     </div>
   );
 }

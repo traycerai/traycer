@@ -6,6 +6,8 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import type { ProviderTerminalLoginSurface } from "@/lib/providers/provider-terminal-login-surface";
+import { UNBOUND_LANDING_PAGE_ID } from "@/stores/home/landing-terminal-store";
 import { createStore } from "zustand/vanilla";
 import { useStore } from "zustand";
 import type { JsonContent } from "@traycer/protocol/common/registry";
@@ -199,6 +201,16 @@ export function LandingComposer(props: LandingComposerProps) {
     () => runtimeState.selection,
   );
   const draftId = props.draftId;
+  // The start page whose terminal panel a picker-started setup terminal
+  // opens in, keyed exactly as the panel keys its layouts. Memoized because
+  // the toolbar and picker are memo'd.
+  const terminalLoginSurface = useMemo<ProviderTerminalLoginSurface>(
+    () => ({
+      kind: "landing",
+      landingPageId: draftId ?? UNBOUND_LANDING_PAGE_ID,
+    }),
+    [draftId],
+  );
   const globalComposerMode = useSettingsStore((state) => state.composerMode);
   const setGlobalComposerMode = useSettingsStore(
     (state) => state.setComposerMode,
@@ -905,6 +917,7 @@ export function LandingComposer(props: LandingComposerProps) {
       // only in the ∅ case - nothing usable to create on - which submit
       // re-validation refuses before any create runs.
       hostId={resolvedHostId}
+      terminalLoginSurface={terminalLoginSurface}
       onSubmit={handleSubmit}
       onStartTerminal={handleStartTerminal}
       onDocumentChange={handleDocumentChange}

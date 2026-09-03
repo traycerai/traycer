@@ -61,6 +61,24 @@ function disabledProviderState(providerId: ProviderId): ProviderCliState {
   return { ...baseProviderState(providerId), enabled: false };
 }
 
+// Overrides `loginCapability` with a terminal-login-capable shape - this is
+// what `resolveProviderTerminalSetup` now gates the "setup" verdict on, so a
+// test asserting the full guidance row must supply it explicitly rather than
+// relying on the guidance table alone.
+function withTerminalLoginCapability(
+  state: ProviderCliState,
+): ProviderCliState {
+  return {
+    ...state,
+    loginCapability: {
+      oauthArgs: ["setup"],
+      token: null,
+      codePaste: null,
+      terminalLogin: {},
+    },
+  };
+}
+
 function harnessOption(
   id: GuiHarnessId,
   enabled: boolean,
@@ -108,7 +126,13 @@ describe("<PickerProviderAuthLine />", () => {
 
   it("renders nothing when both state and harness are null (no provider identity to resolve)", () => {
     const { container } = render(
-      <PickerProviderAuthLine state={null} harness={null} />,
+      <PickerProviderAuthLine
+        state={null}
+        harness={null}
+        terminalLoginSurface={null}
+        runTargetHostId={null}
+        onClosePicker={() => undefined}
+      />,
     );
     expect(container.firstChild).toBeNull();
   });
@@ -118,6 +142,9 @@ describe("<PickerProviderAuthLine />", () => {
       <PickerProviderAuthLine
         state={disabledProviderState("reasonix")}
         harness={null}
+        terminalLoginSurface={null}
+        runTargetHostId={null}
+        onClosePicker={() => undefined}
       />,
     );
     expect(container.firstChild).toBeNull();
@@ -128,28 +155,40 @@ describe("<PickerProviderAuthLine />", () => {
       <PickerProviderAuthLine
         state={null}
         harness={harnessOption("reasonix", false, "unauthenticated", null)}
+        terminalLoginSurface={null}
+        runTargetHostId={null}
+        onClosePicker={() => undefined}
       />,
     );
     expect(container.firstChild).toBeNull();
   });
 
-  it("renders the signed-out guidance line when state is null but an enabled harness row reports unauthenticated (provider identity and enabled both resolved from the harness)", () => {
+  it("renders the compact signed-out line when state is null (no loginCapability to resolve guidance from), even though identity/enabled resolve from the harness", () => {
     render(
       <PickerProviderAuthLine
         state={null}
         harness={harnessOption("reasonix", true, "unauthenticated", null)}
+        terminalLoginSurface={null}
+        runTargetHostId={null}
+        onClosePicker={() => undefined}
       />,
     );
 
-    expect(screen.getByRole("note", { name: "Setup required" })).toBeDefined();
+    // No `providers.list` row means no `loginCapability` to resolve the
+    // terminal-login guidance from, so this stays the compact line rather
+    // than the full "Setup required" note.
+    expect(screen.queryByRole("note", { name: "Setup required" })).toBeNull();
     expect(screen.getByText("Not authenticated")).toBeDefined();
   });
 
   it("renders the setup-guidance row (steps + manual-command sentence, no button) for a signed-out provider with guidance (reasonix)", () => {
     render(
       <PickerProviderAuthLine
-        state={baseProviderState("reasonix")}
+        state={withTerminalLoginCapability(baseProviderState("reasonix"))}
         harness={null}
+        terminalLoginSurface={null}
+        runTargetHostId={null}
+        onClosePicker={() => undefined}
       />,
     );
 
@@ -166,7 +205,7 @@ describe("<PickerProviderAuthLine />", () => {
     expect(list).not.toBeNull();
     const items = Array.from(list?.querySelectorAll("li") ?? []);
     expect(items.map((item) => item.textContent)).toEqual([
-      "From a chat, choose “Set up in terminal” in the banner above the composer. It opens Reasonix's setup wizard on the host this composer runs on.",
+      "Choose “Set up in terminal” from a chat's model picker or the start page's. It opens Reasonix's setup wizard on the host that composer runs on.",
       "Paste your provider API key when asked (DeepSeek by default).",
       "Refresh this list.",
     ]);
@@ -186,6 +225,9 @@ describe("<PickerProviderAuthLine />", () => {
       <PickerProviderAuthLine
         state={baseProviderState("claude-code")}
         harness={null}
+        terminalLoginSurface={null}
+        runTargetHostId={null}
+        onClosePicker={() => undefined}
       />,
     );
 
@@ -196,13 +238,18 @@ describe("<PickerProviderAuthLine />", () => {
   it("treats a signed-out harness row (authStatus: unauthenticated) as signed out even when the provider state is authenticated", () => {
     render(
       <PickerProviderAuthLine
-        state={providerStateWithAuth(
-          "reasonix",
-          "authenticated",
-          null,
-          "Authenticated",
+        state={withTerminalLoginCapability(
+          providerStateWithAuth(
+            "reasonix",
+            "authenticated",
+            null,
+            "Authenticated",
+          ),
         )}
         harness={harnessOption("reasonix", true, "unauthenticated", null)}
+        terminalLoginSurface={null}
+        runTargetHostId={null}
+        onClosePicker={() => undefined}
       />,
     );
 
@@ -228,6 +275,9 @@ describe("<PickerProviderAuthLine />", () => {
             providerSignedOutMessage("reasonix"),
           ),
         )}
+        terminalLoginSurface={null}
+        runTargetHostId={null}
+        onClosePicker={() => undefined}
       />,
     );
 
@@ -245,13 +295,16 @@ describe("<PickerProviderAuthLine />", () => {
   it("still renders the full guidance when the model list's error is NOT the signed-out message", () => {
     render(
       <PickerProviderAuthLine
-        state={baseProviderState("reasonix")}
+        state={withTerminalLoginCapability(baseProviderState("reasonix"))}
         harness={harnessOption(
           "reasonix",
           true,
           undefined,
           catalogErrorFor("agent.gui.listModels", "spawn failed: ENOENT"),
         )}
+        terminalLoginSurface={null}
+        runTargetHostId={null}
+        onClosePicker={() => undefined}
       />,
     );
 
@@ -273,6 +326,9 @@ describe("<PickerProviderAuthLine />", () => {
           "Authenticated as octocat",
         )}
         harness={null}
+        terminalLoginSurface={null}
+        runTargetHostId={null}
+        onClosePicker={() => undefined}
       />,
     );
 
@@ -291,6 +347,9 @@ describe("<PickerProviderAuthLine />", () => {
           "API key configured",
         )}
         harness={null}
+        terminalLoginSurface={null}
+        runTargetHostId={null}
+        onClosePicker={() => undefined}
       />,
     );
 
@@ -307,6 +366,9 @@ describe("<PickerProviderAuthLine />", () => {
           null,
         )}
         harness={null}
+        terminalLoginSurface={null}
+        runTargetHostId={null}
+        onClosePicker={() => undefined}
       />,
     );
     expect(container.firstChild).toBeNull();
@@ -322,6 +384,9 @@ describe("<PickerProviderAuthLine />", () => {
           "some label",
         )}
         harness={null}
+        terminalLoginSurface={null}
+        runTargetHostId={null}
+        onClosePicker={() => undefined}
       />,
     );
     expect(container.firstChild).toBeNull();

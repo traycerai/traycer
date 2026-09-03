@@ -27,6 +27,7 @@ import { requestLandingTerminalClose } from "@/lib/terminals/landing-terminal-cl
 import {
   LANDING_TERMINAL_SOURCE_STORE_VERSION,
   absentListingProvesDeath,
+  isProviderLoginLandingTab,
   terminalSessionKey,
   useLandingTerminalStore,
   type LandingTerminalPendingKill,
@@ -555,13 +556,18 @@ export async function reconcileCapableLandingTerminals(args: {
     return "snapshot-not-fresh";
   }
 
+  // A host-created sign-in session is manager-owned and import-exempt: it is
+  // not legacy evidence, and `importLegacy` under its id would hand the plain
+  // registry a session it never spawned. Its tab stays unacknowledged for
+  // life and attaches through the legacy reattach path instead.
   const legacyTabs = useLandingTerminalStore
     .getState()
     .tabs.filter(
       (tab) =>
         tab.hostId === activeHostId &&
         tab.hostAuthorityAcknowledged !== true &&
-        tab.pendingCreate !== true,
+        tab.pendingCreate !== true &&
+        !isProviderLoginLandingTab(tab),
     );
   await Promise.all(
     legacyTabs.map(async (legacyTab) => {

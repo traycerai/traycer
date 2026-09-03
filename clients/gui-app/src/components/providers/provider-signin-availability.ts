@@ -10,10 +10,11 @@ import { providerDisplayName } from "@/lib/provider-ordering";
  * Whether this provider can actually be signed in from a real terminal, rather
  * than through a headless browser-OAuth child.
  *
- * ONE helper, four consumers (this module's two exports, the composer re-auth
- * banner's `deriveLoginOptions`, and the picker's `resolveCreateProfileGate`)
- * so a surface cannot drift into offering the headless button for a provider
- * the host will refuse.
+ * ONE helper, five consumers (this module's two exports, the composer re-auth
+ * banner's `deriveLoginOptions`, the picker's `resolveCreateProfileGate`, and
+ * the picker's setup CTA via `resolveProviderTerminalSetup`) so a surface
+ * cannot drift into offering the headless button for a provider the host will
+ * refuse, or the terminal one for a provider it cannot open.
  *
  * It answers CAN, not merely `terminalLogin !== null`, because the command the
  * terminal runs is `oauthArgs` - a provider advertising `terminalLogin` with no

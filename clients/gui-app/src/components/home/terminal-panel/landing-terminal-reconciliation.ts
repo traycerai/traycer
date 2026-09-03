@@ -7,6 +7,7 @@ import { terminalSessionTitle } from "@/lib/terminals/terminal-title";
 import { selectPlainTerminalViewModel } from "@/lib/terminals/plain-terminal-authority";
 import {
   hostAcknowledgedTab,
+  isProviderLoginLandingTab,
   terminalSessionKey,
   type LandingTerminalTabRef,
 } from "@/stores/home/landing-terminal-store";
@@ -102,7 +103,10 @@ export function reconcileLandingTerminalTabs(
       return [tab];
     }
     matchedSessionIds.add(session.sessionId);
-    if (session.status === "exited") {
+    // A sign-in tab outlives its session's exit: its tile shows the ended
+    // state with a restart, the way the epic sign-in tile does. Dropping it
+    // here would retract the only surface that can restart the sign-in.
+    if (session.status === "exited" && !isProviderLoginLandingTab(tab)) {
       exitedInstanceIds.push(tab.instanceId);
       return [];
     }
@@ -239,7 +243,9 @@ function landingTerminalTabsEqual(
     left.titleSource === right.titleSource &&
     left.hostAuthorityAcknowledged === right.hostAuthorityAcknowledged &&
     left.pendingCreate === right.pendingCreate &&
-    left.sourceStoreVersion === right.sourceStoreVersion
+    left.sourceStoreVersion === right.sourceStoreVersion &&
+    left.origin === right.origin &&
+    left.originProviderId === right.originProviderId
   );
 }
 

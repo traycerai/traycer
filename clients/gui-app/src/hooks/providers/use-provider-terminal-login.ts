@@ -26,9 +26,16 @@ export interface ProviderTerminalLoginStarter {
 }
 
 /**
- * Runs the whole terminal sign-in gesture: ask the host for a fresh sign-in
- * terminal, retire the one it replaced, and put the new one in front of the
- * user in THIS view.
+ * Runs the whole terminal sign-in gesture for an EPIC surface: ask the host
+ * for a fresh sign-in terminal in this epic's scope, retire the one it
+ * replaced, and put the new one in front of the user in THIS view. The
+ * landing page's counterpart is `useLandingProviderTerminalLogin`, which
+ * lands the terminal in the landing panel instead of a canvas tile.
+ *
+ * Tab-bound by construction (`useTabHostClient` / `useTabHostId`): the tile
+ * this opens is bound to the tab's host, so the PTY has to be minted there.
+ * A surface whose composer resolves its host separately from the tab (the
+ * in-epic new-conversation modal) must not call this.
  *
  * Ordering is deliberate. Closing the retired tiles first and opening second is
  * one synchronous store sequence, so a close cannot land after the open; and
@@ -146,7 +153,7 @@ export function useProviderTerminalLogin(args: {
     if (epicId === null || viewTabId === null) return;
     startTerminalLogin.mutate({
       providerId,
-      epicId,
+      scope: { kind: "epic", epicId },
       // The host resizes to these while the shell's output is still buffered,
       // so its first redraw is correctly sized. A concrete size beats guessing:
       // the tile resizes itself on mount anyway.

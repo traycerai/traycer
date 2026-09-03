@@ -1,6 +1,10 @@
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import type { PlainTerminalProjection } from "@traycer/protocol/host/terminal/plain-schemas";
+import {
+  providerIdSchema,
+  type ProviderId,
+} from "@traycer/protocol/host/provider-schemas";
 import { basePersistOptions, landingTerminalsKey } from "@/lib/persist";
 import { selectPlainTerminalViewModel } from "@/lib/terminals/plain-terminal-authority";
 
@@ -9,6 +13,14 @@ export const MIN_LANDING_TERMINAL_PANEL_WIDTH_FRACTION = 0.22;
 export const MAX_LANDING_TERMINAL_PANEL_WIDTH_FRACTION = 0.72;
 
 export type LandingTerminalTitleSource = "default" | "manual";
+
+/**
+ * The layout key for a start page whose draft has no id yet. Every writer of
+ * a per-page layout (the panel, the gesture provider, the draft surface, a
+ * picker-started sign-in) must key the same way or the panel a gesture opened
+ * is not the panel the user sees.
+ */
+export const UNBOUND_LANDING_PAGE_ID = "unbound-landing-page";
 
 export const LANDING_TERMINAL_SOURCE_STORE_VERSION = 1;
 
@@ -29,6 +41,25 @@ export interface LandingTerminalTabRef {
   readonly pendingCreate?: boolean;
   /** Schema version attached to legacy import evidence. */
   readonly sourceStoreVersion?: number;
+  /**
+   * `"provider-login"` means the HOST created this session, for a provider
+   * sign-in (`providers.startTerminalLogin` with an independent scope). Such a
+   * tab never creates: the session carries the provider's spawn env, and a
+   * `terminal.plain.create` or legacy `terminal.create` under its id would
+   * spawn a bare shell that looks like the sign-in terminal and cannot sign
+   * anyone in. It is also import-exempt - a manager-owned session is not
+   * legacy evidence for `terminal.plain.importLegacy` - and it survives its
+   * session's exit so the user can restart the sign-in from where it ended.
+   * Absent for every terminal this panel created itself.
+   */
+  readonly origin?: "provider-login";
+  /** The provider the sign-in was for; only meaningful with `origin`. */
+  readonly originProviderId?: ProviderId;
+}
+
+/** Whether this tab shows a host-created provider sign-in session. */
+export function isProviderLoginLandingTab(tab: LandingTerminalTabRef): boolean {
+  return tab.origin === "provider-login";
 }
 
 /**
@@ -224,7 +255,23 @@ export function parseLandingTerminalTabRef(
     ...(isNonNegativeInteger(value.sourceStoreVersion)
       ? { sourceStoreVersion: value.sourceStoreVersion }
       : {}),
+    ...parseProviderLoginOrigin(value),
   };
+}
+
+// The origin marker is what keeps a sign-in tab from creating a bare shell
+// under the host's session id, so a persisted one is read back strictly: a
+// marker without a recognizable provider still marks the tab (the tile then
+// shows the ended state without a restart button, exactly as the epic tile
+// does for a ref written before the provider was recorded).
+function parseProviderLoginOrigin(
+  value: Record<string, unknown>,
+): Pick<LandingTerminalTabRef, "origin" | "originProviderId"> {
+  if (value.origin !== "provider-login") return {};
+  const providerId = providerIdSchema.safeParse(value.originProviderId);
+  return providerId.success
+    ? { origin: "provider-login", originProviderId: providerId.data }
+    : { origin: "provider-login" };
 }
 
 export function parsePersistedLandingTerminalState(

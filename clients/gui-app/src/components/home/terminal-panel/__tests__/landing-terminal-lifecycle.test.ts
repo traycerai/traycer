@@ -544,6 +544,34 @@ describe("landing terminal lifecycle", () => {
     expect(result.collapseWhenEmpty).toBe(true);
   });
 
+  it("keeps a provider-login tab whose session exited, instead of dropping it like a plain tab", () => {
+    const signInTab: LandingTerminalTabRef = {
+      ...tab({
+        instanceId: "sign-in",
+        sessionId: "ended-signin",
+        hostId: HOST_A,
+      }),
+      // Real sign-in tabs are always titleSource "manual" (see
+      // `openLandingSignInTerminal`), which also isolates this test from the
+      // default-title rename path exercised elsewhere in this file.
+      titleSource: "manual",
+      origin: "provider-login",
+      originProviderId: "reasonix",
+    };
+    const result = reconcileLandingTerminalTabs({
+      tabs: [signInTab],
+      activeInstanceId: "sign-in",
+      activeHostId: HOST_A,
+      sessions: [session({ sessionId: "ended-signin", status: "exited" })],
+      excludedSessionKeys: new Set(),
+      mintInstanceId: () => "unused",
+    });
+
+    expect(result.tabs).toEqual([signInTab]);
+    expect(result.exitedInstanceIds).toEqual([]);
+    expect(result.collapseWhenEmpty).toBe(false);
+  });
+
   it("re-keys a terminal-id collision without changing its bound host or cwd", () => {
     useLandingTerminalStore
       .getState()

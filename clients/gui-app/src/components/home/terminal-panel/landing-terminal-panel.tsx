@@ -67,6 +67,7 @@ import {
   landingTerminalLayoutFor,
   useLandingTerminalStore,
   type LandingTerminalTabRef,
+  UNBOUND_LANDING_PAGE_ID,
 } from "@/stores/home/landing-terminal-store";
 import { LandingTerminalTabStrip } from "./landing-terminal-tab-strip";
 import { LandingTerminalDirectoryPicker } from "./landing-terminal-directory-picker";
@@ -360,8 +361,8 @@ export function LandingTerminalPanel(): ReactNode {
   // Layout belongs to the focused start page. This is deliberately independent
   // of `target`: a pending gesture may retain an earlier page's host/folder
   // routing while focus has already moved to another page.
-  const landingPageId = focusedLandingPageId ?? "unbound-landing-page";
-  const targetLandingPageId = target.draftId ?? "unbound-landing-page";
+  const landingPageId = focusedLandingPageId ?? UNBOUND_LANDING_PAGE_ID;
+  const targetLandingPageId = target.draftId ?? UNBOUND_LANDING_PAGE_ID;
   const tabs = useLandingTerminalStore((state) => state.tabs);
   const [authorityEntries, setAuthorityEntries] =
     useState<LandingTerminalAuthorityEntries>({});

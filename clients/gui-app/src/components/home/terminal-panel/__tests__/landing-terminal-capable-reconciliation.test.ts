@@ -610,6 +610,62 @@ describe("capable landing-terminal reconciliation", () => {
     ).not.toBe(true);
   });
 
+  it("never imports a provider-login tab as legacy evidence, while an ordinary unacknowledged tab still is", async () => {
+    const ordinary = tab({
+      instanceId: "ordinary-instance",
+      terminalId: "terminal-ordinary",
+      name: "Ordinary title",
+    });
+    const signIn: LandingTerminalTabRef = {
+      ...tab({
+        instanceId: "sign-in-instance",
+        terminalId: "terminal-signin",
+        name: "Reasonix sign-in",
+      }),
+      origin: "provider-login",
+      originProviderId: "reasonix",
+    };
+    useLandingTerminalStore.getState().addTab(ordinary);
+    useLandingTerminalStore.getState().addTab(signIn);
+    queryClient.setQueryData(
+      hostQueryKeys.plainTerminals(HOST_ID, SCOPE),
+      freshCollection([]),
+    );
+    const importLegacy = vi.fn((request: ImportLegacyPlainTerminalRequest) => {
+      expect(request.terminalId).toBe("terminal-ordinary");
+      return Promise.resolve({
+        status: "existing" as const,
+        terminal: terminal({
+          terminalId: "terminal-ordinary",
+          manualTitle: "Ordinary title",
+          revision: 1,
+          runtime: "running",
+        }),
+      });
+    });
+
+    await reconcileCapableLandingTerminals({
+      activeHostId: HOST_ID,
+      landingPageId: LANDING_PAGE_ID,
+      capability: CAPABILITY,
+      canMutate: true,
+      closeTerminal: () => Promise.resolve(),
+      importLegacyTerminal: importLegacy,
+      queryClient,
+    });
+
+    // The provider-login sign-in tab is manager-owned - it must never reach
+    // `importLegacyTerminal`, however many ordinary legacy tabs get imported.
+    expect(importLegacy).toHaveBeenCalledTimes(1);
+    expect(importLegacy).toHaveBeenCalledWith(
+      expect.objectContaining({ terminalId: "terminal-ordinary" }),
+    );
+    const signInAfter = useLandingTerminalStore
+      .getState()
+      .tabs.find((candidate) => candidate.instanceId === signIn.instanceId);
+    expect(signInAfter).toEqual(signIn);
+  });
+
   it("returns reconciled after a successful pass", async () => {
     queryClient.setQueryData(
       hostQueryKeys.plainTerminals(HOST_ID, SCOPE),
