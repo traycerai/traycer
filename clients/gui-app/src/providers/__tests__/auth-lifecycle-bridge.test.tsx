@@ -7,6 +7,7 @@ import { __getChatSessionRegistryForTests } from "@/lib/registries/chat-session-
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
+import { useWatchHostStore } from "@/stores/host-scope/watch-host-store";
 import { useAddHostDialogStore } from "@/stores/settings/add-host-dialog-store";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
 import {
@@ -260,6 +261,41 @@ describe("<EpicSessionLifecycleBridge />", () => {
     });
 
     expect(useSettingsHostScopeStore.getState().scopedHostId).toBeNull();
+  });
+
+  it("drops the shared watch-host pick on user-switch", () => {
+    // Same account-owned rule as the Settings scope, and this one PERSISTS -
+    // left standing it survives the restart into the next sign-in and opens
+    // both watching surfaces on a host the new account has never seen.
+    useWatchHostStore.getState().setScopedHostId("host-owned-by-alice");
+
+    render(
+      <EpicSessionLifecycleBridge>
+        <div />
+      </EpicSessionLifecycleBridge>,
+    );
+
+    act(() => {
+      resetAuth("signed-in", "bob@example.com", "user-bob");
+    });
+
+    expect(useWatchHostStore.getState().scopedHostId).toBeNull();
+  });
+
+  it("drops the shared watch-host pick on sign-out", () => {
+    useWatchHostStore.getState().setScopedHostId("host-owned-by-alice");
+
+    render(
+      <EpicSessionLifecycleBridge>
+        <div />
+      </EpicSessionLifecycleBridge>,
+    );
+
+    act(() => {
+      resetAuth("signed-out", null, null);
+    });
+
+    expect(useWatchHostStore.getState().scopedHostId).toBeNull();
   });
 
   it("closes the Add-host dialog and drops its fleet snapshot on user-switch", () => {

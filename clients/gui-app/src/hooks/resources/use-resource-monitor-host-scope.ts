@@ -2,11 +2,11 @@ import {
   useHostScopeFor,
   type HostScope,
 } from "@/components/settings/host-scope/use-host-scope";
-import { useResourceMonitorStore } from "@/stores/resources/resource-monitor-store";
+import { useWatchHostStore } from "@/stores/host-scope/watch-host-store";
 
 /**
  * Which host the header's resource monitor is READING — the same host model
- * Settings administers through, over this surface's own persisted pick.
+ * Settings administers through, over the shared persisted watch pick.
  *
  * Resolved at the header rather than inside `PopoverContent` because the
  * `resources.subscribe` stream this surface owns is mounted next to the
@@ -32,10 +32,8 @@ export interface ResourceMonitorHostScope {
 }
 
 export function useResourceMonitorHostScope(): ResourceMonitorHostScope {
-  const scopedHostId = useResourceMonitorStore((state) => state.scopedHostId);
-  const setScopedHostId = useResourceMonitorStore(
-    (state) => state.setScopedHostId,
-  );
+  const scopedHostId = useWatchHostStore((state) => state.scopedHostId);
+  const setScopedHostId = useWatchHostStore((state) => state.setScopedHostId);
   const scope = useHostScopeFor({ scopedHostId, setScopedHostId });
   return { scope, hasExplicitPick: scopedHostId !== null };
 }

@@ -2,11 +2,11 @@ import {
   useHostScopeFor,
   type HostScope,
 } from "@/components/settings/host-scope/use-host-scope";
-import { useRateLimitPopoverStore } from "@/stores/rate-limits/rate-limit-popover-store";
+import { useWatchHostStore } from "@/stores/host-scope/watch-host-store";
 
 /**
  * Which host the header's usage glyph and popover are READING — the same host
- * model Settings administers through, over this surface's own persisted pick.
+ * model Settings administers through, over the shared persisted watch pick.
  *
  * Mounted at the header (not inside `PopoverContent`) because the glyph is the
  * popover's trigger: two bars summarizing host A above a panel reporting host
@@ -38,10 +38,8 @@ export interface RateLimitHostScope {
 }
 
 export function useRateLimitResolveHostScope(): RateLimitHostScope {
-  const scopedHostId = useRateLimitPopoverStore((state) => state.scopedHostId);
-  const setScopedHostId = useRateLimitPopoverStore(
-    (state) => state.setScopedHostId,
-  );
+  const scopedHostId = useWatchHostStore((state) => state.scopedHostId);
+  const setScopedHostId = useWatchHostStore((state) => state.setScopedHostId);
   const scope = useHostScopeFor({ scopedHostId, setScopedHostId });
   return { scope, hasExplicitPick: scopedHostId !== null };
 }
