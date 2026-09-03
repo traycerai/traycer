@@ -240,8 +240,14 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
     visible,
   });
   const snapshot = useBrowserViewSnapshot(tileKey);
+  // Null browser view on BOTH inert paths, not just the start page: an
+  // annotation is captured into a chat in an epic, so a placement with no epic
+  // has nowhere to put one. Without the `epicId === null` half, a Start Page
+  // tab sitting on a real page would render an enabled Annotate button whose
+  // capture routes through an empty epic id and resolves no targets at all -
+  // an overlay that works and then attaches to nothing.
   const annotation = useBrowserAnnotationSession({
-    browserView: showStartPage ? null : browserView,
+    browserView: showStartPage || epicId === null ? null : browserView,
     tileKey,
     status: effectiveStatus,
     epicId: epicId ?? "",

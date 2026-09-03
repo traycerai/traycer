@@ -8,6 +8,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ReactElement } from "react";
 import type { BrowserSessionInfo } from "@traycer/protocol/host/browser/contracts";
 import {
   sessionInfo,
@@ -16,6 +17,10 @@ import {
 import { BrowserSessionTile } from "@/components/epic-canvas/renderers/browser-session-tile";
 import type { BrowserPeekCompleteMeaning } from "@/components/browser-tile/browser-peek-tile";
 import type { ElectronTabBinding } from "@/lib/browser-view/sessions/electron-tab-directory";
+import type {
+  BrowserTileNode,
+  BrowserTilePlacement,
+} from "@/components/browser-tile/browser-tile-placement";
 import type { BrowserSessionTileRef } from "@/stores/epics/canvas/types";
 import type { TileOpenIntent } from "@/lib/canvas/tile-open/intent";
 
@@ -50,6 +55,10 @@ const harness = vi.hoisted(() => ({
 const canvasState = vi.hoisted(() => ({
   tabsById: {} as Record<string, unknown>,
   openTile: vi.fn<(intent: TileOpenIntent) => void>(),
+  updateBrowserTileViewportPresetInTab:
+    vi.fn<
+      (viewTabId: string, tileInstanceId: string, preset: string) => void
+    >(),
 }));
 
 /** Props `ElectronTabSurface` was actually handed on its latest render. */
@@ -61,7 +70,8 @@ const surfaceCapture = vi.hoisted(() => ({
   onConvertToPip: null as (() => void) | null,
   persistViewportPreset: null as ((preset: string) => void) | null,
   visible: null as boolean | null,
-  placement: null as unknown,
+  placement: null as BrowserTilePlacement | null,
+  node: null as BrowserTileNode | null,
   pageSessionId: null as string | null,
 }));
 
@@ -154,7 +164,8 @@ vi.mock("@/components/browser-tile/agent-browser-tile", () => ({
     readonly binding: ElectronTabBinding;
     readonly pageSessionId: string;
     readonly visible: boolean;
-    readonly placement: unknown;
+    readonly placement: BrowserTilePlacement;
+    readonly node: BrowserTileNode;
     readonly onRequestClose: () => void;
     readonly onConvertToPip: (() => void) | null;
     readonly persistViewportPreset: ((preset: string) => void) | null;
@@ -168,6 +179,7 @@ vi.mock("@/components/browser-tile/agent-browser-tile", () => ({
     surfaceCapture.persistViewportPreset = props.persistViewportPreset;
     surfaceCapture.visible = props.visible;
     surfaceCapture.placement = props.placement;
+    surfaceCapture.node = props.node;
     surfaceCapture.pageSessionId = props.pageSessionId;
     return (
       <div
@@ -258,15 +270,19 @@ function binding(): ElectronTabBinding {
   };
 }
 
-function renderTile(): void {
-  render(
+function tileElement(paneId: string): ReactElement {
+  return (
     <BrowserSessionTile
       node={NODE}
       viewTabId="view-1"
-      paneId="pane-1"
+      paneId={paneId}
       epicId="epic-1"
-    />,
+    />
   );
+}
+
+function renderTile(): void {
+  render(tileElement("pane-1"));
 }
 
 describe("BrowserSessionTile lifecycle projection", () => {
@@ -292,6 +308,7 @@ describe("BrowserSessionTile lifecycle projection", () => {
     surfaceCapture.persistViewportPreset = null;
     surfaceCapture.visible = null;
     surfaceCapture.placement = null;
+    surfaceCapture.node = null;
     surfaceCapture.pageSessionId = null;
   });
 
@@ -947,7 +964,7 @@ describe("BrowserSessionTile open-link routing", () => {
     });
   });
 
-  it("opens a new tab in the same session on Cmd+T", async () => {
+  it("opens a new tab in the same session for a foreground default-URL request", async () => {
     renderTile();
 
     act(() => {
@@ -963,5 +980,106 @@ describe("BrowserSessionTile open-link routing", () => {
     // to the original while the rest of this file's assertions still are.
     expect(harness.openTab.mock.calls.at(0)?.at(0)).toBe("sess-1");
     expect(harness.closeTab).not.toHaveBeenCalled();
+  });
+});
+
+describe("BrowserSessionTile adapter props", () => {
+  beforeEach(() => {
+    harness.binding = binding();
+    harness.items = [session("ready", "electron")];
+    harness.lifecycle = "live";
+    harness.inventoryReady = true;
+    harness.canMaterializeElectron = true;
+    reachabilityHarness.status = "reachable";
+    surfaceCapture.placement = null;
+    surfaceCapture.node = null;
+    surfaceCapture.visible = null;
+    surfaceCapture.onConvertToPip = null;
+    surfaceCapture.persistViewportPreset = null;
+    surfaceCapture.onRequestClose = null;
+    canvasState.updateBrowserTileViewportPresetInTab.mockClear();
+    harness.closeCanvasTile.mockClear();
+  });
+
+  it("derives every prop the body needs from canvas context", () => {
+    renderTile();
+
+    expect(surfaceCapture.placement).toEqual({
+      kind: "canvas",
+      epicId: "epic-1",
+      viewTabId: "view-1",
+      paneId: "pane-1",
+    });
+    // The surface's node carries the LIVE tab url, not the canvas ref's fields:
+    // the body re-wraps the scope-free node with whatever the inventory says
+    // the tab is showing right now.
+    expect(surfaceCapture.node).toEqual({
+      instanceId: NODE.instanceId,
+      hostId: NODE.hostId,
+      sessionId: NODE.sessionId,
+      url: "https://example.com/page",
+      viewportPreset: NODE.viewportPreset,
+    });
+    expect(surfaceCapture.pageSessionId).toBe(NODE.id);
+    // The canvas can do all three, so none of the capability callbacks is null
+    // - a null here is what the Start Page placement will mean, not this one.
+    expect(surfaceCapture.onConvertToPip).not.toBeNull();
+    expect(surfaceCapture.persistViewportPreset).not.toBeNull();
+    expect(surfaceCapture.onRequestClose).not.toBeNull();
+    expect(surfaceCapture.visible).toBe(true);
+  });
+
+  it("routes the close and viewport-preset callbacks to the canvas", () => {
+    renderTile();
+
+    surfaceCapture.onRequestClose?.();
+    expect(harness.closeCanvasTile).toHaveBeenCalledOnce();
+
+    surfaceCapture.persistViewportPreset?.("mobile");
+    expect(
+      canvasState.updateBrowserTileViewportPresetInTab,
+    ).toHaveBeenCalledWith("view-1", NODE.instanceId, "mobile");
+  });
+
+  /**
+   * The one failure mode in this refactor with no natural alarm. The native
+   * surface memoizes its tile key and binding id on `placement`,
+   * `node.instanceId` and `pageSessionId`, and keys its surface-attach effect
+   * on the resulting tile key - so if any of those three stops being stable
+   * across a render, the native view detaches and re-attaches every render and
+   * settles at `bounds === null`, with every other test in this file green.
+   * Inline the adapter's `placement` object literal and this is what reddens.
+   *
+   * The surface's `node` OBJECT is deliberately fresh per render and is not
+   * pinned here: the body rebuilds it to carry the live `tab.url`, and nothing
+   * memoizes on its identity. Only its `instanceId` reaches the tile key.
+   */
+  it("hands the body a referentially stable placement across a rerender", () => {
+    const view = render(tileElement("pane-1"));
+    const firstPlacement = surfaceCapture.placement;
+    const firstInstanceId = surfaceCapture.node?.instanceId;
+    const firstPageSessionId = surfaceCapture.pageSessionId;
+    expect(firstPlacement).not.toBeNull();
+
+    view.rerender(tileElement("pane-1"));
+
+    expect(surfaceCapture.placement).toBe(firstPlacement);
+    expect(surfaceCapture.node?.instanceId).toBe(firstInstanceId);
+    expect(surfaceCapture.pageSessionId).toBe(firstPageSessionId);
+  });
+
+  it("mints a new placement when the pane changes", () => {
+    const view = render(tileElement("pane-1"));
+    const firstPlacement = surfaceCapture.placement;
+
+    view.rerender(tileElement("pane-2"));
+
+    // Stability must not be latching: a real change has to travel, or the
+    // native surface would keep addressing the pane it was first mounted in.
+    expect(surfaceCapture.placement).not.toBe(firstPlacement);
+    const placement = surfaceCapture.placement;
+    expect(placement?.kind === "canvas" ? placement.paneId : null).toBe(
+      "pane-2",
+    );
   });
 });

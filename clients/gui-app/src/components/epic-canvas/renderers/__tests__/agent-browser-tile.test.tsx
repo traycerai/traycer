@@ -32,6 +32,8 @@ const state = vi.hoisted(() => ({
   ),
   closeCanvasTile: vi.fn(),
   focusAddress: vi.fn(),
+  /** Every `useBrowserAnnotationSession` call, newest last. */
+  annotationInputs: [] as Array<{ readonly browserView: unknown }>,
   persistViewportPreset: vi.fn<(preset: BrowserViewViewportPresetId) => void>(),
 }));
 
@@ -60,7 +62,10 @@ vi.mock("@/components/epic-canvas/renderers/use-browser-view-snapshot", () => ({
   useBrowserViewSnapshot: () => null,
 }));
 vi.mock("@/hooks/browser/use-browser-annotation-session", () => ({
-  useBrowserAnnotationSession: () => null,
+  useBrowserAnnotationSession: (input: { readonly browserView: unknown }) => {
+    state.annotationInputs.push(input);
+    return null;
+  },
 }));
 vi.mock("@/lib/browser-view/tiles/visible-tile-registry", async (load) => {
   const actual =
@@ -253,6 +258,7 @@ const SURFACE_RECT = { left: 8, top: 12, width: 400, height: 300 };
  */
 beforeEach(() => {
   state.events = [];
+  state.annotationInputs = [];
   window.requestAnimationFrame = () => 1;
   window.cancelAnimationFrame = () => undefined;
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
@@ -342,7 +348,7 @@ describe("ElectronTabSurface", () => {
     expect(state.chromeInputs.at(0)?.surfaceServices).toBeNull();
     await waitFor(() => {
       expect(bindSurface).toHaveBeenCalledExactlyOnceWith({
-        bindingId: "canvasview-1pane-1tile-1",
+        bindingId: "canvas\u001fview-1\u001fpane-1\u001ftile-1",
         surface: {
           viewTabId: "view-1",
           paneId: "pane-1",
@@ -365,6 +371,46 @@ describe("ElectronTabSurface", () => {
 
     expect(screen.getByText("Local servers")).toBeTruthy();
     expect(bindSurface).not.toHaveBeenCalled();
+  });
+
+  /**
+   * An annotation is captured into a chat in an epic, so a placement that names
+   * no epic has nowhere to put one. Pinned rather than left to the epic id
+   * being empty: with a live browser view the toolbar's Annotate button is
+   * enabled (`canStart` reads `browserView !== null && status === "ready"`), so
+   * the reader would get a working overlay whose capture resolves no targets.
+   * This is the rule the Start Page tile inherits.
+   */
+  it("keeps the annotation session inert under a placement with no epic", () => {
+    state.bridge = new TestBridge();
+    render(
+      <ElectronTabSurface
+        node={NODE}
+        binding={createRecordingBinding()}
+        placement={{ kind: "landing", landingPageId: "landing-1" }}
+        visible
+        pageSessionId={PAGE_SESSION_ID}
+        onRequestClose={state.closeCanvasTile}
+        persistViewportPreset={null}
+        onOpenLinkInNewTile={state.onOpenLinkInNewTile}
+        onConvertToPip={null}
+      />,
+    );
+
+    expect(state.annotationInputs.length).toBeGreaterThan(0);
+    for (const input of state.annotationInputs) {
+      expect(input.browserView).toBeNull();
+    }
+  });
+
+  it("gives the annotation session a live browser view on a canvas placement", () => {
+    // The other arm, so the assertion above cannot pass by the surface simply
+    // never handing a browser view to anything - which is what it would do if
+    // the bridge were absent rather than the epic.
+    state.bridge = new TestBridge();
+    render(surfaceElement(NODE, createRecordingBinding()));
+
+    expect(state.annotationInputs.at(-1)?.browserView).not.toBeNull();
   });
 
   it("detaches the native surface when the tile becomes hidden", async () => {
