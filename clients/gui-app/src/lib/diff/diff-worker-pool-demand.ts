@@ -84,11 +84,24 @@ export function registerDiffWorkerPoolCreator(creator: PoolCreator): void {
   notify();
 }
 
-/** Provider unmount. The manager is the provider's to terminate, not ours. */
+/**
+ * Provider unmount. The manager is the provider's to terminate, not ours.
+ *
+ * The demand goes with it. Every surface that can ask for a pool renders BELOW
+ * this provider, so they have all unmounted too and none of their asks is being
+ * discarded - whereas a `requested` left standing would outlive them and make
+ * the next `registerDiffWorkerPoolCreator` build a pool during its own mount.
+ * The shell can be torn down and rebuilt within one session (a host outage or
+ * sign-out unmounts it under `HostReadyGate`), and the second shell has to be
+ * as lazy as the first: eager spawning that only starts on the second lifetime
+ * is exactly the cost this module exists to remove, minus the symptom that
+ * would make anyone look.
+ */
 export function unregisterDiffWorkerPoolCreator(creator: PoolCreator): void {
   if (store.creator !== creator) return;
   store.creator = null;
   store.manager = undefined;
+  store.requested = false;
   notify();
 }
 

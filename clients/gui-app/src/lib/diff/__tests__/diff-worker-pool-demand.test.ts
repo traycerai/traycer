@@ -163,7 +163,7 @@ describe("diff-worker-pool-demand", () => {
     expect(getDiffWorkerPoolAvailability()).toBe("ready");
   });
 
-  it("clears the manager and creator when the registered creator unregisters", () => {
+  it("clears the manager, creator, AND the request when the registered creator unregisters", () => {
     const creator = fakeCreator("i");
     registerDiffWorkerPoolCreator(creator);
     requestDiffWorkerPool();
@@ -172,9 +172,41 @@ describe("diff-worker-pool-demand", () => {
     unregisterDiffWorkerPoolCreator(creator);
 
     expect(getDiffWorkerPool()).toBeUndefined();
-    // The request itself is untouched - only the creator/manager are cleared -
-    // so a still-requested surface now reads "unavailable", not "pending".
-    expect(getDiffWorkerPoolAvailability()).toBe("unavailable");
+    // The request is cleared too, not just the creator/manager: every surface
+    // that could have asked for a pool renders below the provider, so it has
+    // unmounted along with it, and a `requested` left standing would make the
+    // NEXT registration build a pool eagerly during its own mount.
+    expect(getDiffWorkerPoolAvailability()).toBe("pending");
+  });
+
+  it("does not eagerly rebuild a pool for a second app-shell lifetime's registration after unregister", () => {
+    // The regression this pins: a host outage or sign-out unmounts the
+    // provider and remounts it under `HostReadyGate` within one session. The
+    // second lifetime must be exactly as lazy as the first - nothing has
+    // asked for a pool YET in this lifetime, so registering its creator alone
+    // must not build one.
+    const creator1 = vi.fn(fakeCreator("k1"));
+    registerDiffWorkerPoolCreator(creator1);
+    requestDiffWorkerPool();
+    expect(creator1).toHaveBeenCalledTimes(1);
+    expect(getDiffWorkerPool()).toBeDefined();
+
+    unregisterDiffWorkerPoolCreator(creator1);
+
+    // Second lifetime: the provider re-registers with a fresh creator.
+    const creator2 = vi.fn(fakeCreator("k2"));
+    registerDiffWorkerPoolCreator(creator2);
+
+    expect(creator2).not.toHaveBeenCalled();
+    expect(getDiffWorkerPool()).toBeUndefined();
+    expect(getDiffWorkerPoolAvailability()).toBe("pending");
+
+    // Only a fresh request, made in THIS lifetime, re-creates the pool.
+    requestDiffWorkerPool();
+
+    expect(creator2).toHaveBeenCalledTimes(1);
+    expect(getDiffWorkerPool()).toBe(creator2.mock.results[0]?.value);
+    expect(getDiffWorkerPoolAvailability()).toBe("ready");
   });
 
   it("getDiffWorkerPool() reflects exactly the manager the creator produced", () => {

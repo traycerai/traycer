@@ -626,4 +626,54 @@ describe("<AppDiagnosticsSettingsPanel />", () => {
     });
     expect(screen.queryByRole("table")).toBeNull();
   });
+
+  it("serializes the heap snapshot and the JS heap measurement through their shared mutation scope", async () => {
+    installLogLevelsBridge(defaultSnapshot());
+    // Seeded with a callable rather than `null`: the executor runs
+    // synchronously, but TypeScript cannot see that and narrows a
+    // `null`-initialised binding to `null` for the rest of the test.
+    let resolveCapture: (path: string | null) => void = () => undefined;
+    const capturePromise = new Promise<string | null>((resolve) => {
+      resolveCapture = resolve;
+    });
+    const takeHeapSnapshot = vi.fn(() => capturePromise);
+    installHeapSnapshotBridge(takeHeapSnapshot);
+    const measureJsHeaps = vi.fn(() =>
+      Promise.resolve<DesktopJsHeapBreakdown | null>(null),
+    );
+    installJsHeapBridge(measureJsHeaps);
+    renderPanel(makeHost(makeSupportBridge({})));
+
+    const captureButton = await screen.findByTestId(
+      "diagnostics-capture-heap-snapshot",
+    );
+    const measureButton = await screen.findByRole("button", {
+      name: "Measure JS heaps",
+    });
+
+    fireEvent.click(captureButton);
+    await waitFor(() => {
+      expect(takeHeapSnapshot).toHaveBeenCalledTimes(1);
+    });
+
+    // The measure button is its own mutation observer - it is not disabled by
+    // capture being pending, so this click genuinely fires
+    // `measureMutation.mutate()` rather than being a no-op the panel refuses.
+    expect(measureButton.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(measureButton);
+
+    // Let the click's mutate() call and TanStack Query's shared-scope check
+    // settle before asserting the negative: the bridge fn itself must not
+    // have run yet, because it is queued behind the still-pending capture.
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    expect(measureJsHeaps).not.toHaveBeenCalled();
+
+    resolveCapture("/tmp/heap-1.heapsnapshot");
+
+    await waitFor(() => {
+      expect(measureJsHeaps).toHaveBeenCalledTimes(1);
+    });
+  });
 });

@@ -130,6 +130,12 @@ function buildFakeDebugger(options: {
   readonly workers: ReadonlyArray<FakeWorkerFixture>;
   readonly isAttachedInitially: boolean;
   readonly attachThrows: boolean;
+  /**
+   * Rejects the cleanup `Target.setAutoAttach` call (`autoAttach: false`)
+   * only - the arming call (`autoAttach: true`) always succeeds, matching a
+   * session that goes away only after the reads it enabled already landed.
+   */
+  readonly autoAttachFalseRejects: boolean;
 }): FakeDebugger {
   let attached = options.isAttachedInitially;
   let messageListener: MessageListener | null = null;
@@ -202,6 +208,9 @@ function buildFakeDebugger(options: {
       }
       if (method === "Target.setAutoAttach") {
         const autoAttach = commandParams?.["autoAttach"];
+        if (autoAttach === false && options.autoAttachFalseRejects) {
+          return Promise.reject(new Error("auto-attach cleanup failed"));
+        }
         if (autoAttach === true && messageListener !== null) {
           const listener = messageListener;
           for (const worker of options.workers) {
@@ -323,6 +332,7 @@ describe("handleMeasureJsHeaps", () => {
       workers,
       isAttachedInitially: false,
       attachThrows: false,
+      autoAttachFalseRejects: false,
     });
     const { event, sender } = buildFakeEvent({
       isDestroyed: false,
@@ -416,6 +426,7 @@ describe("handleMeasureJsHeaps", () => {
       workers,
       isAttachedInitially: false,
       attachThrows: false,
+      autoAttachFalseRejects: false,
     });
     const { event } = buildFakeEvent({
       isDestroyed: false,
@@ -458,6 +469,7 @@ describe("handleMeasureJsHeaps", () => {
       workers: [],
       isAttachedInitially: true,
       attachThrows: false,
+      autoAttachFalseRejects: false,
     });
     const { event } = buildFakeEvent({
       isDestroyed: false,
@@ -484,6 +496,7 @@ describe("handleMeasureJsHeaps", () => {
       workers: [],
       isAttachedInitially: false,
       attachThrows: true,
+      autoAttachFalseRejects: false,
     });
     const { event } = buildFakeEvent({
       isDestroyed: false,
@@ -506,6 +519,7 @@ describe("handleMeasureJsHeaps", () => {
       workers: [],
       isAttachedInitially: false,
       attachThrows: false,
+      autoAttachFalseRejects: false,
     });
     const { event } = buildFakeEvent({
       isDestroyed: false,
@@ -533,6 +547,7 @@ describe("handleMeasureJsHeaps", () => {
       workers: [],
       isAttachedInitially: false,
       attachThrows: false,
+      autoAttachFalseRejects: false,
     });
     const { event } = buildFakeEvent({
       isDestroyed: true,
@@ -570,6 +585,7 @@ describe("handleMeasureJsHeaps", () => {
       workers,
       isAttachedInitially: false,
       attachThrows: false,
+      autoAttachFalseRejects: false,
     });
     const { event } = buildFakeEvent({
       isDestroyed: false,
@@ -639,6 +655,7 @@ describe("handleMeasureJsHeaps", () => {
       workers: freshWorkers,
       isAttachedInitially: false,
       attachThrows: false,
+      autoAttachFalseRejects: false,
     });
     const { event: freshEvent } = buildFakeEvent({
       isDestroyed: false,
@@ -674,5 +691,65 @@ describe("handleMeasureJsHeaps", () => {
           method === "Target.setAutoAttach" && params?.["autoAttach"] === false,
       );
     expect(freshAutoAttachFalseCalls).toHaveLength(1);
+  });
+
+  it("still returns the full breakdown, and still detaches, when the cleanup autoAttach:false command rejects", async () => {
+    // CodeRabbit Minor: a `finally` block that throws replaces whatever the
+    // `try` returned. This command can reject for reasons that say nothing
+    // about the rows already read (the page navigated, the session went
+    // away), so the read isolates must survive it rather than turning a
+    // complete breakdown into a failure toast.
+    const workers: ReadonlyArray<FakeWorkerFixture> = [
+      {
+        sessionId: "session-worker",
+        type: "worker",
+        url: "app://renderer/assets/worker-DMI2JaPh.js",
+        heapUsage: { usedSize: 2_000_000, totalSize: 3_000_000 },
+      },
+    ];
+    const debuggerApi = buildFakeDebugger({
+      pageHeapUsage: { usedSize: 10_000_000, totalSize: 20_000_000 },
+      workers,
+      isAttachedInitially: false,
+      attachThrows: false,
+      autoAttachFalseRejects: true,
+    });
+    const { event } = buildFakeEvent({
+      isDestroyed: false,
+      pageUrl: "app://renderer/index.html",
+      pid: 1,
+      debuggerApi,
+    });
+
+    const result = await handleMeasureJsHeaps(event);
+
+    expect(result).not.toBeNull();
+    expect(result?.isolates).toEqual([
+      {
+        kind: "page",
+        url: "app://renderer/index.html",
+        usedBytes: 10_000_000,
+        totalBytes: 20_000_000,
+        embedderBytes: null,
+        backingStorageBytes: null,
+      },
+      {
+        kind: "worker",
+        url: "app://renderer/assets/worker-DMI2JaPh.js",
+        usedBytes: 2_000_000,
+        totalBytes: 3_000_000,
+        embedderBytes: null,
+        backingStorageBytes: null,
+      },
+    ]);
+    expect(debuggerApi.detach).toHaveBeenCalledTimes(1);
+    // The arming call (autoAttach:true) still had to succeed for the worker
+    // row to exist at all - only the cleanup call (autoAttach:false) rejects.
+    const autoAttachCalls = debuggerApi.sendCommand.mock.calls.filter(
+      ([method]) => method === "Target.setAutoAttach",
+    );
+    expect(autoAttachCalls).toHaveLength(2);
+    expect(autoAttachCalls[0]?.[1]).toMatchObject({ autoAttach: true });
+    expect(autoAttachCalls[1]?.[1]).toMatchObject({ autoAttach: false });
   });
 });

@@ -133,6 +133,20 @@ function DesktopAppLogEntry(props: {
 }
 
 /**
+ * One serialization scope for BOTH memory diagnostics - see the `scope` note
+ * below for why `scope` and not `mutationKey`.
+ *
+ * They share it because they contend for the same renderer isolate, not merely
+ * for the same button. A heap capture freezes that isolate for as long as the
+ * walk takes (tens of seconds on the long-lived sessions worth capturing),
+ * which is longer than `JS_HEAP_MEASURE_TIMEOUT_MS`; a measurement started
+ * underneath one would have its protocol reads stall behind the freeze and
+ * report a measurement failure for a window that is perfectly measurable a
+ * moment later. Queuing the second action is the honest answer.
+ */
+const MEMORY_DIAGNOSTICS_MUTATION_SCOPE = "runner-memory-diagnostics";
+
+/**
  * On-demand heap capture for memory reports. The renderer freezes while V8
  * walks the heap and the file runs to gigabytes on exactly the long-lived
  * sessions worth capturing, so this is a deliberate button rather than
@@ -140,10 +154,6 @@ function DesktopAppLogEntry(props: {
  * The resulting path is shown for copying rather than revealed in the file
  * manager: no reveal capability is exposed for arbitrary paths.
  */
-/** Serialization scope for the heap capture - see the `scope` note below. */
-const HEAP_SNAPSHOT_MUTATION_SCOPE = "runner-heap-snapshot";
-const JS_HEAP_MEASURE_MUTATION_SCOPE = "runner-js-heap-measure";
-
 function MemoryDiagnosticsGroup(): ReactNode {
   const bridge = useMemo(() => getDesktopHeapSnapshotBridge(), []);
   // The two capabilities are gated independently, like every other pair of
@@ -158,7 +168,7 @@ function MemoryDiagnosticsGroup(): ReactNode {
     // `mutationKey` alone does not. Without it the only thing standing
     // between a double-click and two concurrent multi-gigabyte heap walks
     // is the `disabled` prop, which cannot help a second mounted panel.
-    scope: { id: HEAP_SNAPSHOT_MUTATION_SCOPE },
+    scope: { id: MEMORY_DIAGNOSTICS_MUTATION_SCOPE },
     mutationFn: (): Promise<string | null> =>
       bridge === null ? Promise.resolve(null) : bridge.takeHeapSnapshot(),
     onSuccess: (path) => {
@@ -306,7 +316,7 @@ function JsHeapReadout(): ReactNode {
     // attaches `webContents.debugger`, and a second call while the first holds
     // the attachment is refused in main (`isAttached()`), which would read as
     // a failure toast and clear a readout that was fine.
-    scope: { id: JS_HEAP_MEASURE_MUTATION_SCOPE },
+    scope: { id: MEMORY_DIAGNOSTICS_MUTATION_SCOPE },
     mutationFn: (): Promise<DesktopJsHeapBreakdown | null> =>
       bridge === null ? Promise.resolve(null) : bridge.measureJsHeaps(),
     onSuccess: (result) => {

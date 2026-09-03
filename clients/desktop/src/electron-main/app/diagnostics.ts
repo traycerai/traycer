@@ -326,11 +326,23 @@ async function measureIsolates(
     // attachment, so there is nothing left to turn off - only someone else's
     // attachment to damage.
     if (!cancellation.cancelled) {
-      await debuggerApi.sendCommand("Target.setAutoAttach", {
-        autoAttach: false,
-        waitForDebuggerOnStart: false,
-        flatten: true,
-      });
+      try {
+        await debuggerApi.sendCommand("Target.setAutoAttach", {
+          autoAttach: false,
+          waitForDebuggerOnStart: false,
+          flatten: true,
+        });
+      } catch (err) {
+        // A `finally` that throws replaces what the `try` returned, so an
+        // unguarded cleanup would trade a complete breakdown for a failure
+        // toast - and this command rejects for reasons that say nothing about
+        // the rows already read (the page navigated, the session went away).
+        // The outer `finally` detaches either way, which is what actually
+        // undoes the auto-attach.
+        log.debug("[diagnostics] auto-attach cleanup failed", {
+          error: describeLogError(err),
+        });
+      }
     }
   }
   return isolates;
