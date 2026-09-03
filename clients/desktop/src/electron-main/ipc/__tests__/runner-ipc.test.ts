@@ -703,6 +703,7 @@ describe("RunnerIpcBridge", () => {
           RunnerHostInvoke.windowSetContentProtection,
           RunnerHostInvoke.diagnosticsGetMetrics,
           RunnerHostInvoke.diagnosticsTakeHeapSnapshot,
+          RunnerHostInvoke.diagnosticsMeasureJsHeaps,
           RunnerHostInvoke.diagnosticsTraceStart,
           RunnerHostInvoke.diagnosticsTraceStop,
           RunnerHostInvoke.systemPreferencesAccentColor,

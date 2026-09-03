@@ -103,6 +103,74 @@ describe("discoverLoginImportSources: chromium", () => {
     }
   });
 
+  it("finds Aside and Helium under their macOS Application Support roots", async () => {
+    const support = join(root, "Library", "Application Support");
+    await writeFileAt(join(support, "Aside", "Default", "Cookies"), "a", T1);
+    await writeFileAt(
+      join(support, "net.imput.helium", "Default", "Cookies"),
+      "h",
+      T2,
+    );
+
+    const sources = await discoverLoginImportSources(environment({}));
+    const aside = sources.find((source) => source.browser === "aside");
+    const helium = sources.find((source) => source.browser === "helium");
+
+    expect(aside?.location).toEqual({
+      kind: "chromium",
+      browser: "aside",
+      cookiesPath: join(support, "Aside", "Default", "Cookies"),
+      localStatePath: join(support, "Aside", "Local State"),
+    });
+    expect(helium?.location).toEqual({
+      kind: "chromium",
+      browser: "helium",
+      cookiesPath: join(support, "net.imput.helium", "Default", "Cookies"),
+      localStatePath: join(support, "net.imput.helium", "Local State"),
+    });
+  });
+
+  it("does not look for Aside or Helium on Windows or Linux", async () => {
+    // Each platform gets a Chrome jar at its real root, so a run that finds
+    // Chrome and not the candidates below proves discovery walked the tree
+    // and skipped them, rather than finding nothing at all. The candidate
+    // roots are where a Chromium fork conventionally lands on each OS.
+    const local = join(root, "AppData", "Local");
+    const config = join(root, ".config");
+    const candidates: Record<"win32" | "linux", readonly string[]> = {
+      win32: [
+        join(local, "Google", "Chrome", "User Data"),
+        join(local, "Aside", "User Data"),
+        join(local, "Aside"),
+        join(local, "net.imput.helium", "User Data"),
+        join(local, "imput", "Helium", "User Data"),
+      ],
+      linux: [
+        join(config, "google-chrome"),
+        join(config, "Aside"),
+        join(config, "aside"),
+        join(config, "net.imput.helium"),
+        join(config, "helium"),
+      ],
+    };
+    for (const platform of ["win32", "linux"] as const) {
+      for (const userDataDir of candidates[platform]) {
+        await writeFileAt(join(userDataDir, "Default", "Cookies"), "c", T1);
+      }
+
+      const sources = await discoverLoginImportSources(
+        environment({ platform }),
+      );
+
+      expect(sources.some((source) => source.browser === "chrome")).toBe(true);
+      expect(
+        sources.filter(
+          (source) => source.browser === "aside" || source.browser === "helium",
+        ),
+      ).toEqual([]);
+    }
+  });
+
   it("finds Opera's profileless root-level cookie database as 'Default'", async () => {
     const operaRoot = join(
       root,

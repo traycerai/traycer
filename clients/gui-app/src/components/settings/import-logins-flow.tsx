@@ -219,30 +219,41 @@ function PickStep(props: {
             cookie file instead.
           </p>
         ) : null}
-        {listed.map((source) => (
-          <button
-            key={source.id}
-            type="button"
-            className="flex w-full min-w-0 items-center justify-between gap-3 rounded-md px-3 py-2 text-left hover:bg-foreground/8 focus-visible:bg-foreground/8 focus-visible:outline-none"
-            onClick={() => {
-              props.onPick(source);
-            }}
+        {groupSourcesByBrowser(listed).map((group) => (
+          <section
+            key={group.browser}
+            aria-labelledby={`login-import-browser-${group.browser}`}
+            className="flex flex-col gap-0.5 not-first:mt-2"
           >
-            <span className="min-w-0 flex-1 truncate">
-              <span className="font-medium text-foreground">
-                {BROWSER_LABELS[source.browser]}
-              </span>
-              <span className="text-muted-foreground"> · </span>
-              <span className="text-muted-foreground">
-                {source.profileLabel}
-              </span>
-            </span>
-            {source.lastUsedAt !== null ? (
-              <span className="shrink-0 text-ui-xs text-muted-foreground">
-                {formatRelativeTimestamp(source.lastUsedAt, now)}
-              </span>
-            ) : null}
-          </button>
+            <h3
+              id={`login-import-browser-${group.browser}`}
+              className="mb-0.5 px-3 font-semibold text-ui-xs tracking-wide text-muted-foreground/70 uppercase"
+            >
+              {BROWSER_LABELS[group.browser]}
+            </h3>
+            {group.sources.map((source) => (
+              <button
+                key={source.id}
+                type="button"
+                // The heading carries the browser visually; the row's own
+                // name keeps it so a screen reader does not hear "Default".
+                aria-label={`${BROWSER_LABELS[group.browser]} · ${source.profileLabel}`}
+                className="flex w-full min-w-0 items-center justify-between gap-3 rounded-md px-3 py-2 text-left hover:bg-foreground/8 focus-visible:bg-foreground/8 focus-visible:outline-none"
+                onClick={() => {
+                  props.onPick(source);
+                }}
+              >
+                <span className="min-w-0 flex-1 truncate text-foreground">
+                  {source.profileLabel}
+                </span>
+                {source.lastUsedAt !== null ? (
+                  <span className="shrink-0 text-ui-xs text-muted-foreground">
+                    {formatRelativeTimestamp(source.lastUsedAt, now)}
+                  </span>
+                ) : null}
+              </button>
+            ))}
+          </section>
         ))}
       </div>
       <Frame.Footer>
@@ -273,6 +284,31 @@ function PickStep(props: {
       </Frame.Footer>
     </>
   );
+}
+
+interface LoginImportSourceGroup {
+  readonly browser: LoginImportBrowser;
+  readonly sources: readonly LoginImportSource[];
+}
+
+/**
+ * One section per browser, in the order the browsers first appear in the
+ * (most-recently-used-first) list: the browser whose profile was used last
+ * heads the list, and its profiles keep their own recency order under it.
+ */
+function groupSourcesByBrowser(
+  sources: readonly LoginImportSource[],
+): readonly LoginImportSourceGroup[] {
+  const groups = new Map<LoginImportBrowser, LoginImportSource[]>();
+  for (const source of sources) {
+    const group = groups.get(source.browser);
+    if (group === undefined) groups.set(source.browser, [source]);
+    else group.push(source);
+  }
+  return [...groups].map(([browser, grouped]) => ({
+    browser,
+    sources: grouped,
+  }));
 }
 
 function ChooseStep(props: {

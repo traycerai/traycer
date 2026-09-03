@@ -11,7 +11,7 @@
  * only has to pass a prefix (`events.filter(e => e.timestamp <= t)`) to get the
  * graph as of `t`; nothing here reads "now".
  */
-import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
+import type { GuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
 import type { CommGraphEvent } from "@/lib/comm-graph/comm-graph-events";
 
 export type CommGraphAgentKind = "chat" | "terminal-agent";
@@ -40,10 +40,31 @@ export interface CommGraphAgentNode {
    * happened.
    */
   readonly parentId: string | null;
-  /** TUI harness brand, for the node icon. `null` for GUI chats. */
-  readonly harnessId: TuiHarnessId | null;
+  /**
+   * The harness running this agent - a terminal agent's own brand, or a GUI
+   * chat's persisted run setting. `null` when the record carries none, which
+   * for a chat means it has never been given run settings.
+   *
+   * Widened past the terminal-only set deliberately: this is a fact about the
+   * agent, not about the surface it happens to run on, and the office draws it
+   * for both kinds. The node graph's icon does NOT read this - it resolves
+   * through `EpicNodeTabIcon` by node id - so populating it for chats changes
+   * nothing there.
+   */
+  readonly harnessId: GuiHarnessId | null;
+  /** The model slug the record carries, when it has one. Shown on hover only. */
+  readonly model: string | null;
   /** Archived agents are ALWAYS shown, styled muted - the graph is historical. */
   readonly archived: boolean;
+  /**
+   * WHEN the record was archived, or `null` while live.
+   *
+   * Carried alongside the boolean rather than replacing it: the graph asks
+   * "is this archived?" and the office asks "was it archived AS OF the
+   * cursor?", and a timeline that can be scrubbed back before the archival
+   * cannot answer the second from the first.
+   */
+  readonly archivedAt: number | null;
   readonly createdAt: number;
 }
 
@@ -162,6 +183,22 @@ function isOpenRequest(
   const reply = latestReply.get(threadKey(event.hostId, event.responseId));
   if (reply === undefined) return true;
   return compareThreadCausalOrder(reply, event) < 0;
+}
+
+/**
+ * The `expectReply` sends that still have no reply on their thread.
+ *
+ * Exactly the openness rule `hasOpenThread` reports below, exposed as ROWS
+ * rather than as a flag on a pair. A consumer that needs the WAITING SENDER
+ * cannot recover direction from an undirected edge, and a second hand-rolled
+ * pass over thread causality would drift from this one the first time the
+ * ordering rules move - so there is one implementation and two views of it.
+ */
+export function openCommGraphRequests(
+  events: ReadonlyArray<CommGraphEvent>,
+): ReadonlyArray<CommGraphEvent> {
+  const latestReply = latestReplyByThread(events);
+  return events.filter((event) => isOpenRequest(event, latestReply));
 }
 
 interface MutablePairEntry {

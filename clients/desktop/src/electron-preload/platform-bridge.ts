@@ -16,6 +16,7 @@ import type {
   LogLevelsSnapshot,
   PendingCertificateError,
   ProcessMetricsSnapshot,
+  RendererJsHeapBreakdown,
   TrustedCertificateEntry,
   Vibrancy,
 } from "../ipc-contracts/platform-types";
@@ -30,6 +31,7 @@ export type {
   InstalledFont,
   PendingCertificateError,
   ProcessMetricsSnapshot,
+  RendererJsHeapBreakdown,
   TrustedCertificateEntry,
   Vibrancy,
 } from "../ipc-contracts/platform-types";
@@ -60,6 +62,7 @@ export interface PlatformBridgeSurface {
   diagnostics: {
     getMetrics(): Promise<ProcessMetricsSnapshot>;
     takeHeapSnapshot(): Promise<string | null>;
+    measureJsHeaps(): Promise<RendererJsHeapBreakdown | null>;
     traceStart(): Promise<boolean>;
     traceStop(): Promise<string | null>;
   };
@@ -191,6 +194,10 @@ export function buildPlatformBridge(): PlatformBridgeSurface {
         ipcRenderer.invoke(
           RunnerHostInvoke.diagnosticsTakeHeapSnapshot,
         ) as Promise<string | null>,
+      measureJsHeaps: () =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.diagnosticsMeasureJsHeaps,
+        ) as Promise<RendererJsHeapBreakdown | null>,
       traceStart: () =>
         ipcRenderer.invoke(
           RunnerHostInvoke.diagnosticsTraceStart,

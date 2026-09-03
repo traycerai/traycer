@@ -1753,7 +1753,8 @@ export function updateCommGraphTileView(
       if (
         ref.view.x === view.x &&
         ref.view.y === view.y &&
-        ref.view.zoom === view.zoom
+        ref.view.zoom === view.zoom &&
+        ref.view.mode === view.mode
       ) {
         return ref;
       }
