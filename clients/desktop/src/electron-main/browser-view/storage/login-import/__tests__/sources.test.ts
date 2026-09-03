@@ -103,6 +103,46 @@ describe("discoverLoginImportSources: chromium", () => {
     }
   });
 
+  it("finds Aside and Helium under their macOS Application Support roots", async () => {
+    const support = join(root, "Library", "Application Support");
+    await writeFileAt(join(support, "Aside", "Default", "Cookies"), "a", T1);
+    await writeFileAt(
+      join(support, "net.imput.helium", "Default", "Cookies"),
+      "h",
+      T2,
+    );
+
+    const sources = await discoverLoginImportSources(environment({}));
+    const aside = sources.find((source) => source.browser === "aside");
+    const helium = sources.find((source) => source.browser === "helium");
+
+    expect(aside?.location).toEqual({
+      kind: "chromium",
+      browser: "aside",
+      cookiesPath: join(support, "Aside", "Default", "Cookies"),
+      localStatePath: join(support, "Aside", "Local State"),
+    });
+    expect(helium?.location).toEqual({
+      kind: "chromium",
+      browser: "helium",
+      cookiesPath: join(support, "net.imput.helium", "Default", "Cookies"),
+      localStatePath: join(support, "net.imput.helium", "Local State"),
+    });
+  });
+
+  it("does not look for Aside or Helium on Windows or Linux", async () => {
+    for (const platform of ["win32", "linux"] as const) {
+      const sources = await discoverLoginImportSources(
+        environment({ platform }),
+      );
+      expect(
+        sources.some(
+          (source) => source.browser === "aside" || source.browser === "helium",
+        ),
+      ).toBe(false);
+    }
+  });
+
   it("finds Opera's profileless root-level cookie database as 'Default'", async () => {
     const operaRoot = join(
       root,

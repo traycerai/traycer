@@ -6,6 +6,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ImportLoginsDialog } from "@/components/settings/import-logins-dialog";
@@ -175,6 +176,45 @@ describe("<ImportLoginsDialog /> pick step", () => {
     expect(
       screen.getByRole("button", { name: /Import from a file…/ }),
     ).not.toBeNull();
+  });
+
+  it("groups profiles under one heading per browser, most recently used browser first", async () => {
+    const bridge = new TestBridge();
+    const hour = 60 * 60 * 1000;
+    bridge.sources = [
+      source({
+        id: "safari",
+        browser: "safari",
+        profileLabel: "Safari",
+        lastUsedAt: Date.now() - hour,
+      }),
+      source({
+        id: "chrome-work",
+        browser: "chrome",
+        profileLabel: "Work",
+        lastUsedAt: Date.now() - 2 * hour,
+      }),
+      source({
+        id: "chrome-default",
+        browser: "chrome",
+        profileLabel: "Default",
+        lastUsedAt: Date.now() - 3 * hour,
+      }),
+    ];
+    renderDialog(bridge);
+
+    const headings = await screen.findAllByRole("heading", { level: 3 });
+    expect(headings.map((heading) => heading.textContent)).toEqual([
+      "Safari",
+      "Google Chrome",
+    ]);
+    const chrome = screen.getByRole("region", { name: "Google Chrome" });
+    expect(
+      within(chrome)
+        .getAllByRole("button")
+        .map((button) => button.textContent),
+    ).toEqual(["Work2h ago", "Default3h ago"]);
+    expect(screen.getAllByText("Google Chrome")).toHaveLength(1);
   });
 
   it("picking the same file twice lists it once", async () => {
