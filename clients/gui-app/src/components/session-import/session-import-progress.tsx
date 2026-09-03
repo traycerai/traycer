@@ -186,11 +186,12 @@ function NotImported(props: {
         </button>
       </div>
       {expanded ? (
-        // Capped at roughly a third of the panel: a long list scrolls here
-        // rather than growing past the headline it explains.
+        // Capped at roughly a third of the viewport: a long list scrolls here
+        // rather than growing past the headline it explains, and the cap
+        // follows the window instead of a fixed rem.
         <div
           data-testid="session-import-failure-details"
-          className="flex max-h-[14rem] w-full flex-col gap-3 overflow-y-auto overscroll-contain text-left"
+          className="flex max-h-[30vh] w-full flex-col gap-3 overflow-y-auto overscroll-contain text-left"
         >
           {groups.map((group) => (
             <section

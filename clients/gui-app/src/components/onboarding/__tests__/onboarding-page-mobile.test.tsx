@@ -42,9 +42,30 @@ vi.mock("@/components/onboarding/onboarding-session-import-stage", () => ({
   ),
 }));
 
+// Advertised as AVAILABLE on purpose: the phone tour omits the act regardless,
+// and the eager scan must follow the tour, not the capability.
 vi.mock("@/hooks/session-import/use-session-import-available", () => ({
-  useSessionImportAvailable: () => false,
+  useSessionImportAvailable: () => true,
 }));
+
+const sessionImportScanMock = vi.hoisted(() => ({
+  activeCalls: [] as boolean[],
+}));
+
+vi.mock("@/components/session-import/use-session-import-scan", async () => {
+  const model = await import(
+    "@/components/session-import/session-import-model"
+  );
+  return {
+    useSessionImportScan: (active: boolean) => {
+      sessionImportScanMock.activeCalls.push(active);
+      return {
+        state: model.SESSION_IMPORT_INITIAL_STATE,
+        dispatch: () => undefined,
+      };
+    },
+  };
+});
 
 vi.mock("@/components/onboarding/onboarding-phone-diorama", () => ({
   OnboardingPhoneDiorama: (props: {
@@ -274,6 +295,18 @@ describe("OnboardingPage on the installed mobile app", () => {
     cleanup();
     setMobileApp(false);
     useOnboardingStore.setState({ completedAt: null, step: 0 });
+  });
+
+  it("never starts the session scan, even when the host advertises import", () => {
+    sessionImportScanMock.activeCalls.length = 0;
+    renderPage();
+
+    // The phone tour has no session-import act, so nothing would ever show
+    // what the scan read; the gate follows the tour, not the capability.
+    expect(sessionImportScanMock.activeCalls.length).toBeGreaterThan(0);
+    expect(sessionImportScanMock.activeCalls.every((active) => !active)).toBe(
+      true,
+    );
   });
 
   it("opens on the drawer act with the phone miniature, never the desktop one", () => {

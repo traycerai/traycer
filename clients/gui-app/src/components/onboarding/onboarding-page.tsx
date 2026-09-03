@@ -855,13 +855,19 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
   );
   // The session scan starts with the tour, not with its last act: reading
   // every session on the machine takes a while, and the acts before the import
-  // one are exactly that while. It pauses while a run owns the wizard, and the
-  // wizard retiring a finished run on mount is what brings it back.
-  const sessionImportRunIdle = useSessionImportRunStore(
-    (state) => state.status === "idle",
+  // one are exactly that while. Only a tour that will actually show the act
+  // pays for it - the phone tour never lists it, capability or not - and it
+  // pauses while a run is in flight. A finished run does not hold it back: a
+  // replayed tour after an earlier import would otherwise wait for the whole
+  // scan at the last act.
+  const tourShowsSessionImport = acts.some(
+    (act) => act.id === "session-import",
+  );
+  const sessionImportRunInFlight = useSessionImportRunStore(
+    (state) => state.status === "starting" || state.status === "running",
   );
   const sessionImportScan = useSessionImportScan(
-    sessionImportAvailable && sessionImportRunIdle,
+    tourShowsSessionImport && !sessionImportRunInFlight,
   );
   // Read the raw step and clamp here: negotiation can retire an act while the
   // user is already past its new end, and the clamp is what keeps the page on
