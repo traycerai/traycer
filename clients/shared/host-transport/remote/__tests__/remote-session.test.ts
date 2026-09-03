@@ -7171,6 +7171,11 @@ describe("RemoteSession clock-skew park", () => {
       try {
         session.start();
         await vi.waitFor(() => expect(session.isClosed()).toBe(true), WAIT);
+        // The bound is what this case is about, so pin that it was actually
+        // walked. Without this, an implementation that closed on the first
+        // rejection - never retrying at all - would satisfy `isClosed()` and
+        // read as "reached the terminal bound".
+        expect(relay.openBearers).toHaveLength(3);
         expect(clock.recoverySubscribers()).toBe(0);
       } finally {
         session.close();
