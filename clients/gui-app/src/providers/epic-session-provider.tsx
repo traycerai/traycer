@@ -891,6 +891,10 @@ export function EpicSessionProvider(
         const created = createOpenEpicStore({
           epicId,
           userId: sessionUserId,
+          // The same value the runtime binding above was built with - see its
+          // own comment. Carried onto the handle so the registry's cap-guard
+          // can tell whether the activity plane speaks for this session.
+          hostId: handleHostId,
           accounting,
           // The rebuild half of the plan-denial reprobe. The store decides
           // WHETHER (it owns the dirtiness that makes a rebuild lossy here);

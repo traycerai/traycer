@@ -11,6 +11,11 @@ import {
   PLAIN_TERMINAL_RELEASE_LINGER_MS,
   TerminalSessionRegistry,
 } from "@/stores/terminals/terminal-session-registry";
+import {
+  DESKTOP_RETENTION_PROFILE,
+  MOBILE_RETENTION_PROFILE,
+  setRetentionProfile,
+} from "@/stores/replica-memory/retention-profile";
 
 const HOST_ID = "host-1";
 
@@ -59,6 +64,10 @@ describe("TerminalSessionRegistry", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  afterEach(() => {
+    setRetentionProfile(DESKTOP_RETENTION_PROFILE);
   });
 
   it("lingers a released running plain terminal, then disposes at window expiry", () => {
@@ -665,5 +674,34 @@ describe("TerminalSessionRegistry", () => {
     expect(registry.membershipIdsForHost("host-a")).toEqual(["inst-a"]);
     expect(registry.membershipIdsForHost("host-b")).toEqual(["inst-b"]);
     expect(registry.membershipIdsForHost("host-none")).toEqual([]);
+  });
+
+  it("follows the active retention profile's linger cap, not the desktop constant", () => {
+    // `TerminalSessionRegistry` has no constructor option for this cap - it
+    // reads `getRetentionProfile().maxLingeringPlainTerminals` fresh on every
+    // warm-pool walk (see `terminal-session-registry.ts`'s `maxWarm` getter).
+    // Mirrors the desktop-cap fixture above ("caps the linger pool..."), but
+    // proves the SMALLER mobile number is what actually governs once that
+    // profile is active, not `MAX_LINGERING_PLAIN_TERMINALS`.
+    setRetentionProfile(MOBILE_RETENTION_PROFILE);
+    const registry = new TerminalSessionRegistry();
+    const owned = Array.from(
+      { length: MOBILE_RETENTION_PROFILE.maxLingeringPlainTerminals + 1 },
+      () => createHandle("terminal"),
+    );
+
+    owned.forEach((entry, index) => {
+      registry.acquire(`terminal-${index}`, () => entry.handle, HOST_ID);
+    });
+    owned.forEach((entry, index) => {
+      registry.release(`terminal-${index}`, entry.handle, true);
+    });
+
+    expect(owned[0].closeCount()).toBe(2);
+    expect(registry.get("terminal-0")).toBeNull();
+    owned.slice(1).forEach((entry, index) => {
+      expect(entry.closeCount()).toBe(1);
+      expect(registry.get(`terminal-${index + 1}`)).toBe(entry.handle);
+    });
   });
 });

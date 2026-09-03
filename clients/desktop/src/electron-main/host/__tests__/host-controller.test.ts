@@ -5026,6 +5026,50 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
     );
   });
 
+  it("awaitMutationLaneIdle waits for a standalone (non-FIFO) revision-refresh cycle", async () => {
+    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writePidMetadata("production", { version: "1.7.0", pid: process.pid });
+    vi.mocked(hasUnappliedPendingLoginItemRevision).mockResolvedValue(true);
+    const registerGate = deferred<"enabled">();
+    let registerCalled = false;
+    vi.mocked(registerHostLoginItem).mockImplementation(async () => {
+      registerCalled = true;
+      return registerGate.promise;
+    });
+    vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+      data: {
+        action: "noop",
+        running: true,
+        version: "1.7.0",
+        runtimeVersion: "1.7.0",
+      },
+    });
+
+    const refreshPromise =
+      controller.applyPendingLoginItemRevisionIfIdle("outside-lane");
+    // Real fs reads precede the disruptive step (readRunningRuntimeVersion,
+    // probeHostBusyVerdict, the lock acquisition, readRunningHostIdentity,
+    // readDesktopHostInstallRecord) - poll rather than a fixed microtask
+    // flush so this doesn't race those.
+    await vi.waitFor(() => {
+      if (!registerCalled) throw new Error("register not reached yet");
+    });
+
+    // Mid-cycle, never having gone through `enqueueMutation` - the drain
+    // must still see it as busy rather than idle.
+    expect(await controller.awaitMutationLaneIdle(20)).toBe(false);
+
+    registerGate.resolve("enabled");
+    await refreshPromise;
+
+    expect(await controller.awaitMutationLaneIdle(20)).toBe(true);
+  });
+
   it("P4: quit drain sees the pending-revision intent during its reachability precheck", async () => {
     vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
     const reachabilityGate = deferred<boolean>();
@@ -5674,6 +5718,55 @@ describe("Class B no-op liveness", () => {
     vi.mocked(runBundledTraycerCliJson).mockResolvedValue(
       availableSnapshotFixture("1.7.0", ["1.7.0"]),
     );
+
+    await expect(
+      controller.applyStaged("manual", false),
+    ).resolves.toMatchObject({
+      kind: "installed-not-converged",
+    });
+  });
+
+  it("does not trust a CLI no-op apply to imply activation without a live endpoint", async () => {
+    const controller = newControllerWithReachability(
+      "production",
+      async () => false,
+    );
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writeStagedRecord("production", "1.8.0", "1.8.0");
+    vi.mocked(runBundledTraycerCliJson).mockResolvedValue(
+      availableSnapshotFixture("1.8.0", ["1.8.0"]),
+    );
+    vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+      data: { outcome: "no-op", installedVersion: "1.7.0" },
+    });
+
+    await expect(
+      controller.applyStaged("manual", false),
+    ).resolves.toMatchObject({
+      kind: "installed-not-converged",
+    });
+  });
+
+  it("does not trust a packaged-mac no-op apply to imply activation without a live endpoint", async () => {
+    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+    const controller = newControllerWithReachability(
+      "production",
+      async () => false,
+    );
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writeStagedRecord("production", "1.8.0", "1.8.0");
+    vi.mocked(runBundledTraycerCliJson).mockResolvedValue(
+      availableSnapshotFixture("1.8.0", ["1.8.0"]),
+    );
+    vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+      data: { outcome: "no-op", installedVersion: "1.7.0" },
+    });
 
     await expect(
       controller.applyStaged("manual", false),

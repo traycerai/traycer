@@ -1491,6 +1491,40 @@ describe("RC release discovery and channel safety", () => {
       url: "https://github.com/traycerai/traycer/releases/download/desktop-v1.6.0-rc.1/",
     });
   });
+
+  it("falls back to an older release when the newest release's manifest version disagrees with its tag (finding 4)", async () => {
+    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
+    vi.stubGlobal(
+      "fetch",
+      fetchRouter(
+        [
+          macReleaseFixture("desktop-v1.8.0-rc.1", true),
+          macReleaseFixture("desktop-v1.7.0-rc.1", true),
+        ],
+        {
+          // Publishing error: the manifest names a different version than
+          // the release tag it was fetched from.
+          "desktop-v1.8.0-rc.1": manifestYamlForTag(
+            "desktop-v1.8.0-rc.2",
+            macZipAssetName("desktop-v1.8.0-rc.1"),
+          ),
+          "desktop-v1.7.0-rc.1": manifestYamlForTag(
+            "desktop-v1.7.0-rc.1",
+            macZipAssetName("desktop-v1.7.0-rc.1"),
+          ),
+        },
+      ),
+    );
+    await updater.installAutoUpdater(true, makeDeps(true));
+
+    await updater.setAllowPrereleaseUpdates(true);
+    await updater.checkForUpdatesNow(false, "manual");
+
+    expect(autoUpdater.setFeedURL).toHaveBeenLastCalledWith({
+      provider: "generic",
+      url: "https://github.com/traycerai/traycer/releases/download/desktop-v1.7.0-rc.1/",
+    });
+  });
   it("never selects a tag with a leading-zero identifier, falling back to a strict-SemVer release", async () => {
     const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
     vi.stubGlobal(

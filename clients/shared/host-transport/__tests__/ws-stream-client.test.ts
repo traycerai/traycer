@@ -1912,6 +1912,83 @@ describe("WsStreamClient", () => {
     vi.useRealTimers();
   });
 
+  it("does not emit availability recovery when the stall-length gap is the client's own late ping", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+
+    const { factory, sockets } = makeFactory();
+    const client = makeClient({
+      factory,
+      authToken: "t",
+      pingIntervalMs: 25_000,
+      pongTimeoutMs: 50_000,
+      initialBackoffMs: 10,
+      maxBackoffMs: 1_000,
+    });
+    const recovered = vi.fn();
+    client.subscribeAvailabilityRecovered(recovered);
+
+    const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
+    const socket = sockets[0].socket;
+    completeHandshake(socket);
+
+    // Healthy cadence: the t=25s ping is answered the moment it lands.
+    vi.advanceTimersByTime(25_000);
+    socket.fireText({ kind: "pong", hasBinaryPayload: false });
+    expect(recovered).not.toHaveBeenCalled();
+
+    // The client's OWN heartbeat timer fires late - a backgrounded or busy
+    // renderer, not a host stall: the wall clock jumps 10s before the next
+    // ping is actually written, so the gap since the last pong (35s) clears
+    // the stall-length threshold even though the host answers instantly.
+    vi.setSystemTime(Date.now() + 10_000);
+    vi.advanceTimersByTime(25_000);
+    socket.fireText({ kind: "pong", hasBinaryPayload: false });
+
+    expect(recovered).not.toHaveBeenCalled();
+    expect(socket.closed).toBeNull();
+
+    session.close();
+    vi.useRealTimers();
+  });
+
+  it("emits availability recovery when the host answers the ping late even though the client sent it on time", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+
+    const { factory, sockets } = makeFactory();
+    const client = makeClient({
+      factory,
+      authToken: "t",
+      pingIntervalMs: 25_000,
+      pongTimeoutMs: 50_000,
+      initialBackoffMs: 10,
+      maxBackoffMs: 1_000,
+    });
+    const recovered = vi.fn();
+    client.subscribeAvailabilityRecovered(recovered);
+
+    const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
+    const socket = sockets[0].socket;
+    completeHandshake(socket);
+
+    // t=25s ping, answered promptly - healthy cadence, no emission.
+    vi.advanceTimersByTime(25_000);
+    socket.fireText({ kind: "pong", hasBinaryPayload: false });
+    expect(recovered).not.toHaveBeenCalled();
+
+    // t=50s ping, sent exactly on schedule, but the HOST takes 7s to answer
+    // it (t=57s): the client's own ping was on time, so the gap is genuine
+    // host-side recovery evidence.
+    vi.advanceTimersByTime(25_000);
+    vi.advanceTimersByTime(7_000);
+    socket.fireText({ kind: "pong", hasBinaryPayload: false });
+
+    expect(recovered).toHaveBeenCalledTimes(1);
+    expect(socket.closed).toBeNull();
+
+    session.close();
+    vi.useRealTimers();
+  });
+
   it("requestReconnect drops the live socket and redials through existing backoff without disposing the session", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: false });
 
@@ -5258,6 +5335,67 @@ describe("WsStreamClient clock-skew park", () => {
     expect(sockets.length).toBe(dialsAtPark + 1);
     // The park released its handle on the way back out.
     expect(clock.recoverySubscribers()).toBe(0);
+
+    session.close();
+  });
+
+  it("keeps today's behaviour at the pre-dial gate when the tracker says the clock is fine", async () => {
+    const { factory } = makeFactory();
+    const revalidator = makeRevalidator("rotated");
+    const clock = makeClockSignal("ok");
+    const client = makeClockClient({
+      factory,
+      auth: revalidator.auth,
+      clock: clock.signal,
+      bearer: () => expiredJwt(),
+    });
+    const session = client.subscribe("epic.subscribe", { epicId: "e1" });
+
+    await pollUntil(
+      "the pre-dial gate to revalidate",
+      () => revalidator.calls.count > 0,
+    );
+    expect(clock.recoverySubscribers()).toBe(0);
+
+    session.close();
+  });
+
+  it("still reaches the terminal bound for a HOST CONFIG MISMATCH, which looks identical on the wire", async () => {
+    // The whole reason parking keys on the tracker's verdict and not on the
+    // rejection shape: "authn validates it, the host rejects it" is also what a
+    // misconfigured host produces, and retrying that forever helps nobody.
+    const { factory, sockets } = makeFactory();
+    const revalidator = makeRevalidator("rotated");
+    const clock = makeClockSignal("ok");
+    const client = makeClockClient({
+      factory,
+      auth: revalidator.auth,
+      clock: clock.signal,
+      bearer: () => "plain-bearer",
+    });
+    const statuses: StreamConnectionStatus[] = [];
+    const closeReasons: Array<StreamCloseReason | null> = [];
+    const session = client.subscribe("epic.subscribe", { epicId: "e1" });
+    session.onStatusChange((status, reason) => {
+      statuses.push(status);
+      closeReasons.push(reason);
+    });
+
+    // Each cycle drives ITS OWN dial. Reaching for the most recent socket
+    // behind a fixed wait re-drives the previous one when the redial has not
+    // landed yet, which silently turns three cycles into fewer.
+    for (let cycle = 0; cycle < 3; cycle += 1) {
+      const socket = await nthSocket(sockets, cycle);
+      socket.fireOpen();
+      socket.fireText(UNAUTHORIZED_FATAL);
+    }
+    await pollUntil("the no-progress bound to close the session", () =>
+      statuses.includes("closed"),
+    );
+
+    expect(statuses).toContain("closed");
+    const fatalClose = closeReasons.find((r) => r?.kind === "fatalError");
+    expect(fatalClose?.kind).toBe("fatalError");
 
     session.close();
   });

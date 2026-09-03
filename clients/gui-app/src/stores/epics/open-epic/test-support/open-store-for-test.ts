@@ -297,6 +297,12 @@ function openStoreOver(
   const handle = createOpenEpicStore({
     epicId: options.epicId,
     userId: options.userId,
+    // Not on `OpenStoreForTestOptions`: every other caller of this harness
+    // would need to start passing it for no reason, since the one suite that
+    // cares about a specific `hostId` (the registry's cross-host eviction
+    // test) overrides the field on the returned handle directly instead of
+    // threading a new option through this whole harness.
+    hostId: "test-host",
     accounting,
     onRetryTransport: () => {
       retryTransportRequests += 1;
