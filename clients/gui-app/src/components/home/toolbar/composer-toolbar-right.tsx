@@ -85,6 +85,8 @@ function ComposerToolbarRightImpl(props: ComposerToolbarRightProps) {
         stopDisabled={stopDisabled}
         onStopTurn={onStopTurn}
         disabledHint={composerDisabledHint}
+        // Enter still queues here, so Send needs no button of its own mid-turn.
+        stopPlacement="replace"
       />
     </div>
   );

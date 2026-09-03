@@ -2,6 +2,7 @@ import "../../../../../__tests__/test-browser-apis";
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ChatActiveTurn } from "@traycer/protocol/host/agent/gui/subscribe";
 import { ComposerMobileToolbar } from "@/components/home/mobile/composer-mobile-toolbar";
 import { createComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
 
@@ -30,7 +31,11 @@ function makeStore(modelSlug: string) {
   });
 }
 
-function renderToolbar(modelSlug: string, onSubmit: () => void) {
+function renderToolbar(
+  modelSlug: string,
+  onSubmit: () => void,
+  activeTurnStatus: ChatActiveTurn["status"] | null,
+) {
   return render(
     <ComposerMobileToolbar
       store={makeStore(modelSlug)}
@@ -38,9 +43,9 @@ function renderToolbar(modelSlug: string, onSubmit: () => void) {
       canSubmit
       attachmentPending={false}
       onSubmit={onSubmit}
-      activeTurnStatus={null}
-      stopDisabled
-      onStopTurn={null}
+      activeTurnStatus={activeTurnStatus}
+      stopDisabled={false}
+      onStopTurn={activeTurnStatus === null ? null : vi.fn()}
       composerDisabledHint={null}
       dictation={null}
       dictationPreparing={null}
@@ -53,7 +58,7 @@ function renderToolbar(modelSlug: string, onSubmit: () => void) {
 
 describe("ComposerMobileToolbar", () => {
   it("keeps the desktop arrangement: attach, permission, model, send", () => {
-    renderToolbar("claude-opus-5", vi.fn());
+    renderToolbar("claude-opus-5", vi.fn(), null);
     expect(screen.getByRole("button", { name: "Attach image" })).not.toBeNull();
     expect(screen.getByTestId("mock-model-picker")).not.toBeNull();
     expect(screen.getByRole("button", { name: "Send" })).not.toBeNull();
@@ -62,7 +67,7 @@ describe("ComposerMobileToolbar", () => {
   });
 
   it("renders the permission as an icon, naming it only for assistive tech", () => {
-    renderToolbar("claude-opus-5", vi.fn());
+    renderToolbar("claude-opus-5", vi.fn(), null);
     expect(
       screen.getByRole("button", { name: "Permissions: Supervised" }),
     ).not.toBeNull();
@@ -72,7 +77,7 @@ describe("ComposerMobileToolbar", () => {
   });
 
   it("opens the options sheet from the permission pill", async () => {
-    renderToolbar("claude-opus-5", vi.fn());
+    renderToolbar("claude-opus-5", vi.fn(), null);
     expect(screen.queryByTestId("composer-options-sheet")).toBeNull();
     await userEvent.click(
       screen.getByRole("button", { name: "Permissions: Supervised" }),
@@ -82,7 +87,7 @@ describe("ComposerMobileToolbar", () => {
 
   it("blocks send while the model slug is still empty", () => {
     const onSubmit = vi.fn();
-    renderToolbar("", onSubmit);
+    renderToolbar("", onSubmit, null);
     expect(
       screen.getByRole("button", { name: "Send" }).hasAttribute("disabled"),
     ).toBe(true);
@@ -90,8 +95,18 @@ describe("ComposerMobileToolbar", () => {
 
   it("allows send once the model slug resolves", async () => {
     const onSubmit = vi.fn();
-    renderToolbar("claude-opus-5", onSubmit);
+    renderToolbar("claude-opus-5", onSubmit, null);
     await userEvent.click(screen.getByRole("button", { name: "Send" }));
+    expect(onSubmit).toHaveBeenCalled();
+  });
+
+  it("keeps a Queue button beside Stop while a turn runs", async () => {
+    // Return is a newline on a phone, so without this button there would be
+    // no way to queue a message mid-turn.
+    const onSubmit = vi.fn();
+    renderToolbar("claude-opus-5", onSubmit, "running");
+    expect(screen.getByRole("button", { name: "Stop" })).not.toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "Queue" }));
     expect(onSubmit).toHaveBeenCalled();
   });
 });
