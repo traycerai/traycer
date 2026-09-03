@@ -1320,20 +1320,20 @@ function toBrowserViewWindow(
 }
 
 const FORGET_ALL_LOGINS_CONFIRMATION: MainConfirmation = {
-  title: "Forget browser logins?",
-  message: "Forget all saved browser logins?",
+  title: "Remove all website sessions?",
+  message: "Remove every saved website session?",
   detail:
-    "Every site you are signed in to in Traycer's browser is signed out, here and on every connected machine. This cannot be undone.",
-  confirmLabel: "Forget all",
+    "Open Traycer browser tabs reload signed out, and agent sessions using them may be interrupted. This cannot be undone.",
+  confirmLabel: "Remove all",
 };
 
 function clearSiteConfirmation(domain: string): MainConfirmation {
   return {
-    title: "Clear this saved login?",
-    message: `Sign out of ${domain} everywhere?`,
+    title: "Remove this website session?",
+    message: `Remove the saved session for ${domain}?`,
     detail:
-      "You will be signed out of this site on every machine this account is signed in to. Other sites are untouched.",
-    confirmLabel: "Clear",
+      "Traycer removes its session data from the shared collection. You may be signed out on connected Traycer hosts. Other sites are untouched.",
+    confirmLabel: "Remove",
   };
 }
 
