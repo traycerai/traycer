@@ -46,6 +46,7 @@ export const ACTION_IDS = [
   "group.focus-editor",
   "tile.find.replace",
   "app.sidebar.toggle",
+  "app.status-bar.toggle",
   "nav.back",
   "nav.forward",
   "app.resources.open",
@@ -461,6 +462,21 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
     category: "app",
     kind: "chord",
     defaultChord: "mod+b",
+    secondaryChord: undefined,
+    terminalPolicy: "shell",
+    secondaryTerminalPolicy: undefined,
+  },
+  "app.status-bar.toggle": {
+    id: "app.status-bar.toggle",
+    label: "Toggle status bar",
+    description:
+      "Move usage limits and the resource monitor between the header and the status bar.",
+    category: "app",
+    kind: "chord",
+    // Unbound by default: the surfaces it moves between are both always
+    // reachable, so it earns a palette row rather than one of the few chords
+    // left that a terminal does not want.
+    defaultChord: null,
     secondaryChord: undefined,
     terminalPolicy: "shell",
     secondaryTerminalPolicy: undefined,

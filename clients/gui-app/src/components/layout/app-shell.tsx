@@ -11,6 +11,7 @@ import { MobileNavDrawer } from "@/components/layout/shell/mobile-nav-drawer";
 import { SWIPE_NAV_SCREEN_ATTRIBUTE } from "@/components/layout/shell/screen-snapshot";
 import { useDragToDismissKeyboard } from "@/components/layout/shell/use-drag-to-dismiss-keyboard";
 import { SessionConnectivityStrip } from "@/components/layout/session-connectivity-strip";
+import { StatusBarKeybindingBridge } from "@/components/layout/status-bar/status-bar-keybinding-bridge";
 import { ClockSkewBanner } from "@/components/layout/clock-skew-banner";
 import { useMobileHistorySwipes } from "@/components/layout/shell/use-mobile-history-swipes";
 import { TopLevelTabHost } from "@/components/layout/top-level-tab-host";
@@ -132,6 +133,7 @@ export function AppShell(props: AppShellProps) {
               <OpenFolderDialog />
               <RemoteFolderPickerDialog />
               <QuitInterceptBridge />
+              <StatusBarKeybindingBridge />
               <MigrationRunController />
               <MigrationBlockingModalHost />
               {isMobile ? <MobileNavDrawer /> : null}

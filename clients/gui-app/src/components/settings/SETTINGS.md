@@ -24,6 +24,7 @@ SettingsLayout
     └── settings panel route
         ├── GeneralSettingsPanel
         ├── AppearanceSettingsPanel
+        ├── LayoutSettingsPanel
         ├── OpeningBehaviorPanel
         ├── ProvidersSettingsPanel
         ├── NotificationsSettingsPanel

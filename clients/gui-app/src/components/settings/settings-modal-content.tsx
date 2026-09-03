@@ -7,6 +7,7 @@ import {
 } from "@/lib/settings-sections";
 import { GeneralSettingsPanel } from "@/components/settings/panels/general-settings-panel";
 import { AppearanceSettingsPanel } from "@/components/settings/panels/appearance-settings-panel";
+import { LayoutSettingsPanel } from "@/components/settings/panels/layout-settings-panel";
 import { OpeningBehaviorPanel } from "@/components/settings/panels/opening-behavior-panel";
 import { KeybindingsSettingsPanel } from "@/components/settings/panels/keybindings-settings-panel";
 import { ShellSettingsPanel } from "@/components/settings/panels/shell-settings-panel";
@@ -72,6 +73,7 @@ export function SettingsModalContent(
 const SETTINGS_PANELS = {
   general: GeneralSettingsPanel,
   appearance: AppearanceSettingsPanel,
+  layout: LayoutSettingsPanel,
   "opening-behavior": OpeningBehaviorPanel,
   "app-notifications": AppNotificationsSettingsPanel,
   providers: ProvidersSettingsPanel,

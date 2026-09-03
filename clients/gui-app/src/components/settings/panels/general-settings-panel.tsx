@@ -77,24 +77,6 @@ export function GeneralSettingsPanel() {
   const migrationProgressLabel = formatMigrationProgress(migrationState);
   const migrationIsRunning =
     migrationState.status === "running" || migrationState.remoteRunning;
-  const showGlobalResourceMonitor = useSettingsStore(
-    (s) => s.showGlobalResourceMonitor,
-  );
-  const setShowGlobalResourceMonitor = useSettingsStore(
-    (s) => s.setShowGlobalResourceMonitor,
-  );
-  const showNavigatorResourceStats = useSettingsStore(
-    (s) => s.showNavigatorResourceStats,
-  );
-  const setShowNavigatorResourceStats = useSettingsStore(
-    (s) => s.setShowNavigatorResourceStats,
-  );
-  const pinContextUsageBreakdown = useSettingsStore(
-    (s) => s.pinContextUsageBreakdown,
-  );
-  const setPinContextUsageBreakdown = useSettingsStore(
-    (s) => s.setPinContextUsageBreakdown,
-  );
   const quoteReplyEnabled = useSettingsStore((s) => s.quoteReplyEnabled);
   const setQuoteReplyEnabled = useSettingsStore((s) => s.setQuoteReplyEnabled);
   const steerOnModEnterEnabled = useSettingsStore(
@@ -150,20 +132,6 @@ export function GeneralSettingsPanel() {
               />
             }
           />
-          <SettingsRow
-            label="Pin context usage breakdown"
-            description="Keep the context window breakdown visible near the chat composer when usage data is available."
-            control={
-              <Switch
-                checked={pinContextUsageBreakdown}
-                onCheckedChange={(value) => {
-                  trackGeneralSetting("pinContextUsageBreakdown");
-                  setPinContextUsageBreakdown(value);
-                }}
-                aria-label="Pin context usage breakdown"
-              />
-            }
-          />
         </SettingsGroup>
 
         <BrowserSettingsSection />
@@ -175,34 +143,6 @@ export function GeneralSettingsPanel() {
           fill={false}
         >
           <PreventSleepSettingsSection />
-          <SettingsRow
-            label="Show global resources button"
-            description="Show the app-wide resource monitor in the header."
-            control={
-              <Switch
-                checked={showGlobalResourceMonitor}
-                onCheckedChange={(value) => {
-                  trackGeneralSetting("showGlobalResourceMonitor");
-                  setShowGlobalResourceMonitor(value);
-                }}
-                aria-label="Show global resources button"
-              />
-            }
-          />
-          <SettingsRow
-            label="Show navigator resource stats"
-            description="Show compact live CPU and memory chips in task navigator rows."
-            control={
-              <Switch
-                checked={showNavigatorResourceStats}
-                onCheckedChange={(value) => {
-                  trackGeneralSetting("showNavigatorResourceStats");
-                  setShowNavigatorResourceStats(value);
-                }}
-                aria-label="Show navigator resource stats"
-              />
-            }
-          />
         </SettingsGroup>
 
         <SettingsGroup
