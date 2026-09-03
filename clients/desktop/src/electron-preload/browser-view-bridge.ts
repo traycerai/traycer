@@ -19,6 +19,8 @@ import type {
   BrowserViewTileKey,
   BrowserViewNativeTabCapability,
   BrowserViewNativeTabStatusChange,
+  BrowserViewGuestMountRequested,
+  BrowserViewGuestReleaseRequested,
   LoginImportResult,
   LoginImportScan,
   LoginImportSource,
@@ -250,6 +252,16 @@ export function buildBrowserViewBridge(): { browserView: BrowserViewBridge } {
       onNativeTabStatusChange: (handler) =>
         subscribe<BrowserViewNativeTabStatusChange>(
           RunnerHostEvent.browserViewNativeTabStatusChange,
+          handler,
+        ),
+      onGuestMountRequested: (handler) =>
+        subscribe<BrowserViewGuestMountRequested>(
+          RunnerHostEvent.browserViewGuestMountRequested,
+          handler,
+        ),
+      onGuestReleaseRequested: (handler) =>
+        subscribe<BrowserViewGuestReleaseRequested>(
+          RunnerHostEvent.browserViewGuestReleaseRequested,
           handler,
         ),
     },

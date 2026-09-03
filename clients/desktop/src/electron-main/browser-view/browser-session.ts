@@ -65,6 +65,16 @@ type BrowserDisplayMediaRequestHandler = (
   callback: (streams: object) => void,
 ) => void;
 
+interface BrowserViewBeforeRequestDetails {
+  readonly url: string;
+  readonly webContentsId?: number;
+}
+
+type BrowserViewBeforeRequestListener = (
+  details: BrowserViewBeforeRequestDetails,
+  callback: (response: { readonly cancel?: boolean }) => void,
+) => void;
+
 interface BrowserViewPolicySession {
   setPermissionRequestHandler(
     handler: BrowserPermissionRequestHandler | null,
@@ -90,6 +100,9 @@ interface BrowserViewPolicySession {
     handler: BrowserDisplayMediaRequestHandler | null,
   ): void;
   on(event: "will-download", listener: BrowserDownloadListener): void;
+  readonly webRequest: {
+    onBeforeRequest(listener: BrowserViewBeforeRequestListener): void;
+  };
 }
 
 interface BrowserViewTrackedWebContents {
@@ -161,6 +174,13 @@ const BROWSER_ALLOWED_PERMISSIONS: ReadonlySet<string> = new Set([
 
 const installedPolicySessions = new WeakSet<BrowserViewPolicySession>();
 const browserWebContentsIds = new Set<number>();
+/**
+ * Exact webview guests whose non-`about:blank` requests stay cancelled until
+ * main finishes policy/seed/CDP. One process set; each session policy installs
+ * the same `onBeforeRequest` listener once.
+ */
+const gatedGuestWebContentsIds = new Set<number>();
+const BLANK_GUEST_REQUEST_URL = "about:blank";
 const browserDownloadListeners = new Set<
   (change: BrowserSessionDownloadChange) => void
 >();
@@ -386,9 +406,34 @@ function installBrowserViewSessionPolicy(
   target.setDisplayMediaRequestHandler((_request, callback) => {
     callback({});
   });
+  target.webRequest.onBeforeRequest((details, callback) => {
+    const webContentsId = details.webContentsId;
+    if (
+      webContentsId !== undefined &&
+      gatedGuestWebContentsIds.has(webContentsId) &&
+      details.url !== BLANK_GUEST_REQUEST_URL
+    ) {
+      callback({ cancel: true });
+      return;
+    }
+    callback({});
+  });
   target.on("will-download", (_event, item, webContents) => {
     handleBrowserViewDownload(item, webContents);
   });
+}
+
+/**
+ * Cancel this guest's non-`about:blank` requests until the disposer runs.
+ * Called once for each guest birth; the returned disposer is idempotent.
+ */
+export function gateBrowserViewGuestRequests(
+  webContentsId: number,
+): () => void {
+  gatedGuestWebContentsIds.add(webContentsId);
+  return () => {
+    gatedGuestWebContentsIds.delete(webContentsId);
+  };
 }
 
 function isBrowserPermissionAllowed(permission: string): boolean {

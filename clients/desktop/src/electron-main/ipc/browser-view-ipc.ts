@@ -6,6 +6,7 @@ import {
   type BrowserWindowConstructorOptions,
   type IpcMainInvokeEvent,
   type Session,
+  type WebContents,
 } from "electron";
 import {
   RunnerHostEvent,
@@ -108,10 +109,17 @@ import {
   openBrowserSessionsTransport,
 } from "../browser-sessions/browser-sessions-transport";
 import type {
+  BrowserViewGuestMountRequested,
+  BrowserViewNativeTabKey,
   LoginImportResult,
   LoginImportScan,
   LoginImportSource,
 } from "@traycer-clients/shared/platform/browser-view";
+import {
+  clearAllAttachmentGrants,
+  mintAttachmentGrant,
+  releaseAttachmentGrant,
+} from "../browser-view/webview-guest-birth";
 
 /**
  * The whole-jar capture reads the one shared `primary` identity, so its
@@ -1235,8 +1243,52 @@ export function registerBrowserViewIpc(
   bridge.disposeFns.push(() => {
     sessions.dispose();
     manager.dispose();
+    clearAllAttachmentGrants();
   });
   return { manager, sessions };
+}
+
+export function requestRendererGuestMount(
+  bridge: RunnerIpcBridge,
+  windowId: string,
+  input: {
+    readonly partition: string;
+    readonly identity: BrowserViewNativeTabKey;
+    readonly onAttached: (guest: WebContents) => Promise<void>;
+  },
+): BrowserViewGuestMountRequested {
+  const mount = mintAttachmentGrant({
+    windowId,
+    partition: input.partition,
+    identity: input.identity,
+    onAttached: input.onAttached,
+    onExpired: (release) => {
+      bridge.safeSendToWindow(
+        windowId,
+        RunnerHostEvent.browserViewGuestReleaseRequested,
+        release,
+      );
+    },
+  });
+  bridge.safeSendToWindow(
+    windowId,
+    RunnerHostEvent.browserViewGuestMountRequested,
+    mount,
+  );
+  return mount;
+}
+
+export function requestRendererGuestRelease(
+  bridge: RunnerIpcBridge,
+  registrationId: string,
+): void {
+  const release = releaseAttachmentGrant(registrationId);
+  if (release === null) return;
+  bridge.safeSendToWindow(
+    release.windowId,
+    RunnerHostEvent.browserViewGuestReleaseRequested,
+    { registrationId: release.registrationId },
+  );
 }
 
 function createElectronBrowserView(

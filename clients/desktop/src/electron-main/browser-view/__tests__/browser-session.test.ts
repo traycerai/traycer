@@ -107,6 +107,22 @@ class FakePolicySession {
     | null = null;
   displayMediaRequestHandler: BrowserDisplayMediaRequestHandler | null = null;
   readonly downloadListeners: BrowserDownloadListener[] = [];
+  beforeRequestListener:
+    | ((
+        details: { readonly url: string; readonly webContentsId?: number },
+        callback: (response: { readonly cancel?: boolean }) => void,
+      ) => void)
+    | null = null;
+  readonly webRequest = {
+    onBeforeRequest: (
+      listener: (
+        details: { readonly url: string; readonly webContentsId?: number },
+        callback: (response: { readonly cancel?: boolean }) => void,
+      ) => void,
+    ): void => {
+      this.beforeRequestListener = listener;
+    },
+  };
 
   /**
    * The `Session["cookies"]` slice the primary-profile delta observer
@@ -693,5 +709,35 @@ describe("browser view session policy", () => {
       mod.readBrowserViewPendingCertificateError(certificateErrorId),
     ).toBeNull();
     stop();
+  });
+
+  it("cancels gated guest https until a disposer runs", async () => {
+    const mod = await import("../browser-session");
+    const session = electronState.browserSession;
+    if (session === null) throw new Error("browser session fake missing");
+    mod.ensureBrowserViewSession(PRIMARY);
+    const listener = session.beforeRequestListener;
+    if (listener === null) throw new Error("beforeRequest listener missing");
+
+    const replies: Array<{ readonly cancel?: boolean }> = [];
+    const ask = (details: {
+      readonly url: string;
+      readonly webContentsId: number;
+    }): void => {
+      listener(details, (response) => {
+        replies.push(response);
+      });
+    };
+
+    const dispose = mod.gateBrowserViewGuestRequests(77);
+    ask({ url: "https://example/", webContentsId: 77 });
+    ask({ url: "about:blank", webContentsId: 77 });
+    ask({ url: "https://example/", webContentsId: 78 });
+    expect(replies).toEqual([{ cancel: true }, {}, {}]);
+
+    replies.length = 0;
+    dispose();
+    ask({ url: "https://example/", webContentsId: 77 });
+    expect(replies).toEqual([{}]);
   });
 });

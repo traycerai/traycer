@@ -376,4 +376,12 @@ export class FakeBrowserViewBridge implements BrowserViewBridge {
   onNativeTabStatusChange() {
     return { dispose: () => undefined };
   }
+
+  onGuestMountRequested() {
+    return { dispose: () => undefined };
+  }
+
+  onGuestReleaseRequested() {
+    return { dispose: () => undefined };
+  }
 }

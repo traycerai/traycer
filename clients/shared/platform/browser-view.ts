@@ -31,6 +31,19 @@ export interface BrowserViewNativeTabCapability extends BrowserViewNativeTabKey 
   readonly registrationId: string;
 }
 
+/**
+ * Main asks the trusted renderer to create a blank `<webview>` for this grant.
+ * Identity and partition only - never seed or cookie material.
+ */
+export interface BrowserViewGuestMountRequested extends BrowserViewNativeTabCapability {
+  readonly partition: string;
+}
+
+/** Main tells the renderer to drop the DOM guest for this grant or registration. */
+export interface BrowserViewGuestReleaseRequested {
+  readonly registrationId: string;
+}
+
 export interface BrowserViewAttachSurface extends BrowserViewNativeTabCapability {
   readonly bindingId: string;
   readonly surface: BrowserViewTileKey;
@@ -818,5 +831,11 @@ export interface BrowserViewBridge {
   ): { dispose: () => void };
   onNativeTabStatusChange(
     handler: (change: BrowserViewNativeTabStatusChange) => void,
+  ): { dispose: () => void };
+  onGuestMountRequested(
+    handler: (request: BrowserViewGuestMountRequested) => void,
+  ): { dispose: () => void };
+  onGuestReleaseRequested(
+    handler: (request: BrowserViewGuestReleaseRequested) => void,
   ): { dispose: () => void };
 }

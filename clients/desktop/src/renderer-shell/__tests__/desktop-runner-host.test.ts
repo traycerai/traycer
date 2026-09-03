@@ -614,6 +614,8 @@ function buildFakeBridge(
       stopPipCapture: async () => undefined,
       onPipCaptureFrame: (_handler) => ({ dispose: () => undefined }),
       onNativeTabStatusChange: (_handler) => ({ dispose: () => undefined }),
+      onGuestMountRequested: (_handler) => ({ dispose: () => undefined }),
+      onGuestReleaseRequested: (_handler) => ({ dispose: () => undefined }),
       reportAnnotationAttachResult: async () => undefined,
     },
     hostManagement: {
