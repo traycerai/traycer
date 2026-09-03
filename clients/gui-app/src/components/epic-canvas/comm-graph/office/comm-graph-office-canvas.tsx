@@ -1571,6 +1571,9 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
   }, [hostDirectory.data]);
   useEffect(() => {
     runtime.setHostNames(hostNameById);
+    // The signs are painted from this map and nothing on the floor moves when
+    // a label arrives, so the frame that shows it has to be asked for.
+    runtime.invalidateFrame();
   }, [hostNameById, runtime]);
 
   useEffect(() => {
@@ -1834,6 +1837,14 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
       advanceLiveClock();
       const scene = readScene();
       scene.tick(elapsed);
+      // A DPR change does not resize anything in CSS pixels, so no resize
+      // event is guaranteed to arrive - a browser zoom on a secondary display
+      // moves it silently. Checked BEFORE the idle skip: resizing the bitmap
+      // is what invalidates the gate, and a still floor would otherwise never
+      // reach the check. The compare is two property reads a frame.
+      if ((window.devicePixelRatio || 1) !== appliedDprRef.current) {
+        applyCanvasSize();
+      }
 
       const clockMs = runtime.getSceneInput()?.clockMs ?? 0;
       const draw = gate.shouldDraw({
@@ -1851,12 +1862,6 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
       const frame = scene.frame();
       runtime.setHitRegions(frame.hitRegions);
       runtime.setEnvelopeRegions(frame.envelopeHitRegions);
-      // A DPR change does not resize anything in CSS pixels, so no resize
-      // event is guaranteed to arrive - a browser zoom on a secondary display
-      // moves it silently. The compare is two property reads a frame.
-      if ((window.devicePixelRatio || 1) !== appliedDprRef.current) {
-        applyCanvasSize();
-      }
       const camera = runtime.getCamera();
       const viewport = runtime.getViewport();
       applyAutoFit(frame.size, viewport);
