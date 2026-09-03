@@ -4,7 +4,14 @@ import { ReportIssueAction } from "@/components/report-issue/report-issue-action
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import type { GuiHarnessCatalogEntry } from "@/hooks/harnesses/use-gui-harness-catalog";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
-import { KeyRound } from "lucide-react";
+import { guiHarnessIdToProviderId } from "@/lib/provider-ordering";
+import { ProviderSetupManualCommand } from "@/components/home/pickers/harness-model-picker-auth-line";
+import {
+  type ProviderSetupGuidance,
+  providerSetupGuidance,
+} from "@/lib/providers/provider-setup-guidance";
+import { isProviderSignedOutCatalogError } from "@/lib/providers/provider-signed-out-catalog-error";
+import { KeyRound, SquareTerminal } from "lucide-react";
 import type { ReactNode } from "react";
 
 interface PickerStateRowProps {
@@ -116,6 +123,14 @@ export function ModelRowsState(props: ModelRowsStateProps): ReactNode | null {
   }
 
   if (activeProvider !== null && activeProvider.modelsError !== null) {
+    // A signed-out verdict for a provider with its own setup flow gets the
+    // steps that fix it, in the space the model rows would occupy - the host's
+    // "signed out, reconnect" sentence is true but names no action, and the
+    // report-issue icon beside it invites a bug report for a missing key.
+    const setup = providerSetupCta(activeProvider);
+    if (setup !== null) {
+      return <ProviderSetupCta label={activeProvider.label} guidance={setup} />;
+    }
     // Surface the host's specific reason for API-key providers and packaged SDK
     // failures instead of a generic catch-all. Fall back when the message is
     // empty.
@@ -187,6 +202,56 @@ function unavailableProviderState(
       icon={undefined}
       action={undefined}
     />
+  );
+}
+
+// The setup guidance to show in place of the model list, when the list failed
+// with the host's signed-out verdict AND the provider has a setup flow of its
+// own (Reasonix: a terminal wizard writing the provider's private `.env`).
+// Any other failure keeps the host's own reason below.
+function providerSetupCta(
+  provider: GuiHarnessCatalogEntry,
+): ProviderSetupGuidance | null {
+  const providerId = guiHarnessIdToProviderId(provider.id);
+  if (providerId === null) return null;
+  const guidance = providerSetupGuidance(providerId);
+  if (guidance === null) return null;
+  return isProviderSignedOutCatalogError(providerId, provider.modelsError)
+    ? guidance
+    : null;
+}
+
+// Shown in place of the model list when a provider with its own credential
+// store is signed out. Same shape as the API-key CTA below, but the steps are
+// the provider's terminal flow: Traycer cannot take the key itself. No
+// Settings button, deliberately - Settings has no terminal sign-in for such a
+// provider (its own hint sends the user back to the composer), so the button
+// would be a dead end; the steps name the composer banner instead.
+function ProviderSetupCta(props: {
+  readonly label: string;
+  readonly guidance: ProviderSetupGuidance;
+}): ReactNode {
+  const { guidance } = props;
+  return (
+    <div className="flex flex-col items-center gap-2 px-4 py-6 text-center">
+      <span className="flex size-9 items-center justify-center rounded-full bg-primary/10 text-primary">
+        <SquareTerminal className="size-4" />
+      </span>
+      <span className="text-ui-sm font-medium text-foreground">
+        Set up {props.label}
+      </span>
+      <p className="max-w-[min(90vw,18rem)] text-balance text-ui-xs text-muted-foreground">
+        {guidance.summary}
+      </p>
+      <ol className="max-w-[min(90vw,18rem)] list-decimal space-y-0.5 pl-4 text-left text-ui-xs text-muted-foreground">
+        {guidance.steps.map((step) => (
+          <li key={step}>{step}</li>
+        ))}
+      </ol>
+      <p className="max-w-[min(90vw,18rem)] text-left text-ui-xs text-muted-foreground">
+        <ProviderSetupManualCommand command={guidance.manualCommand} />
+      </p>
+    </div>
   );
 }
 
