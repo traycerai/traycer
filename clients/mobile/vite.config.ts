@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import babel from "@rolldown/plugin-babel";
+import { sentryVitePlugin } from "@sentry/vite-plugin";
 import tailwindcss from "@tailwindcss/vite";
 import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import react, { reactCompilerPreset } from "@vitejs/plugin-react";
@@ -71,6 +72,60 @@ const SHIPPED_RETURN_SCHEMES = {
 
 type MobileEnvironment = "dev" | keyof typeof SHIPPED_ENVIRONMENTS;
 
+/**
+ * Sentry DSN to bake, or `""` for crash reporting OFF. One env var for every
+ * environment: absent by default (every local build reports nothing), exported
+ * by the release lanes. Read at BUILD time and baked as a literal - the same
+ * posture as the backend URLs above, and as the desktop's deploy script
+ * stamping `sentryRendererDsn` - so an installed app cannot be repointed by a
+ * runtime environment variable. A garbage value fails the build here rather
+ * than shipping a client that silently reports nowhere.
+ */
+function sentryDsnFromEnv(env: NodeJS.ProcessEnv): string {
+  const raw = env.TRAYCER_MOBILE_SENTRY_DSN;
+  if (raw === undefined || raw.trim().length === 0) {
+    return "";
+  }
+  const trimmed = raw.trim();
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    throw new Error("TRAYCER_MOBILE_SENTRY_DSN is not a URL");
+  }
+  if (parsed.protocol !== "https:" || parsed.username.length === 0) {
+    throw new Error(
+      "TRAYCER_MOBILE_SENTRY_DSN must be an https Sentry DSN (with public key)",
+    );
+  }
+  return trimmed;
+}
+
+interface SentrySourcemapUpload {
+  readonly org: string;
+  readonly project: string;
+  readonly authToken: string;
+}
+
+/**
+ * Sourcemap upload credentials, or `null` when the build should not upload -
+ * every local build, and any CI lane that has not exported all three. Mirrors
+ * the desktop renderer's gate (`vite.renderer.config.ts`), split out because
+ * here the answer ALSO decides whether sourcemaps are emitted at all: see the
+ * `build.sourcemap` note below.
+ */
+function sentrySourcemapUploadFromEnv(
+  env: NodeJS.ProcessEnv,
+): SentrySourcemapUpload | null {
+  const org = env.SENTRY_ORG?.trim() ?? "";
+  const project = env.SENTRY_PROJECT?.trim() ?? "";
+  const authToken = env.SENTRY_AUTH_TOKEN?.trim() ?? "";
+  if (org.length === 0 || project.length === 0 || authToken.length === 0) {
+    return null;
+  }
+  return { org, project, authToken };
+}
+
 function resolveMobileEnvironment(): MobileEnvironment {
   const raw = process.env.TRAYCER_MOBILE_ENV;
   if (raw === undefined || raw.trim().length === 0 || raw === "dev") {
@@ -96,6 +151,7 @@ function shippedConfig(
     // Authn shows this on the device-flow approval page as who is asking.
     hostLabel: "Traycer Mobile",
     returnScheme: SHIPPED_RETURN_SCHEMES[environment],
+    sentryDsn: sentryDsnFromEnv(process.env),
     // No loopback host to dial: the shipped client discovers hosts through
     // the registry (`remoteFetcher={null}` → gui-app's default fetcher).
     devHost: null,
@@ -292,6 +348,10 @@ async function guiAppDevConfig(): Promise<TraycerMobileBakedConfig> {
     // The checked-in scheme both native projects register; dev builds are
     // never re-stamped.
     returnScheme: "traycer",
+    // Off unless a developer exports the DSN deliberately - the one way to
+    // verify reporting end to end from the dev loop. Events then land tagged
+    // `environment: "dev"`.
+    sentryDsn: sentryDsnFromEnv(process.env),
     devHost: {
       devHostPath: DEV_HOST_PATH,
       host: {
@@ -322,6 +382,12 @@ export default defineConfig(async (): Promise<UserConfig> => {
     environment === "dev"
       ? await guiAppDevConfig()
       : shippedConfig(environment);
+  // Never under the bundled dev loop: it emits full sourcemaps for local
+  // debugging, and an upload pass would delete them from under the developer.
+  const sentryUpload = bundledDevelopment
+    ? null
+    : sentrySourcemapUploadFromEnv(process.env);
+  const webOutDir = resolve(mobileRoot, "dist", "web");
 
   // The dev server (and its pid.json endpoint) exist only for the loopback
   // scaffolding; a shipped build neither serves nor needs a port. The
@@ -388,6 +454,22 @@ export default defineConfig(async (): Promise<UserConfig> => {
         ...plugin,
         enforce: "post" as const,
       })),
+      // Uploads the hidden sourcemaps (and injects the debug ids + release
+      // that let Sentry match an event to them), then DELETES the `.map`
+      // files: `webDir` is copied wholesale into both native projects by
+      // `cap sync`, so anything left in `dist/web` ships inside the IPA/APK.
+      ...(sentryUpload === null
+        ? []
+        : [
+            sentryVitePlugin({
+              org: sentryUpload.org,
+              project: sentryUpload.project,
+              authToken: sentryUpload.authToken,
+              sourcemaps: {
+                filesToDeleteAfterUpload: [join(webOutDir, "**", "*.map")],
+              },
+            }),
+          ]),
     ],
     resolve: {
       alias: {
@@ -401,12 +483,20 @@ export default defineConfig(async (): Promise<UserConfig> => {
     build: {
       target: "es2022",
       emptyOutDir: true,
-      outDir: resolve(mobileRoot, "dist", "web"),
+      outDir: webOutDir,
       // The tunnel-friendly development bundle favors rebuild speed and
-      // debuggability. Ordinary release builds retain Vite's minification and
-      // the existing no-sourcemap output.
+      // debuggability (full sourcemaps, no minification). Ordinary builds keep
+      // Vite's minification, and emit sourcemaps ONLY when an upload is
+      // configured: `"hidden"` (no `sourceMappingURL` comment) so the WebView
+      // never fetches them, and the upload plugin above removes the files
+      // once Sentry has them. With no upload there is nothing to emit them
+      // FOR - and every `.map` left in `dist/web` would ship in the app.
       minify: bundledDevelopment ? false : undefined,
-      sourcemap: bundledDevelopment,
+      sourcemap: bundledDevelopment
+        ? true
+        : sentryUpload === null
+          ? false
+          : "hidden",
     },
     server,
     preview,
