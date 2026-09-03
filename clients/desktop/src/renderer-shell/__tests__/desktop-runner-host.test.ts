@@ -608,6 +608,7 @@ function buildFakeBridge(
       onOpenTileRequest: (_handler) => ({ dispose: () => undefined }),
       onOverlayTileRestored: (_handler) => ({ dispose: () => undefined }),
       onTileCommand: (_handler) => ({ dispose: () => undefined }),
+      onTileFocused: (_handler) => ({ dispose: () => undefined }),
       onSnapshotInvalidated: (_handler) => ({ dispose: () => undefined }),
       onAnnotationEvent: (_handler) => ({ dispose: () => undefined }),
       onAnnotationAttached: (_handler) => ({ dispose: () => undefined }),
