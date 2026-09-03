@@ -105,8 +105,18 @@ export function AppShell(props: AppShellProps) {
               <SessionConnectivityStrip />
               <main className="relative flex min-h-0 flex-1 flex-col">
                 {/* The app's edge-to-edge content viewport. Individual surfaces
-                  own their internal overflow, including the landing terminal. */}
-                <div className="relative flex min-h-0 flex-1 overflow-hidden">
+                  own their internal overflow, including the landing terminal.
+
+                  `overflow-clip`, NOT `overflow-hidden`: a hidden-overflow box
+                  is still a scroll container, so a `focus()` without
+                  `preventScroll` or a `scrollIntoView` on any descendant can
+                  scroll it programmatically - and nothing ever scrolls it
+                  back. Seen live when the window moved onto an external
+                  display: the transient relayout left this viewport scrolled
+                  by one toolbar row, so the epic status row and sidebar rail
+                  sat under the app header until a tab switch remounted the
+                  surface. A clipped box has no scroll offset to drift. */}
+                <div className="relative flex min-h-0 flex-1 overflow-clip">
                   <TopLevelSurfaceActivationProvider>
                     <TopLevelTabHost />
                   </TopLevelSurfaceActivationProvider>
