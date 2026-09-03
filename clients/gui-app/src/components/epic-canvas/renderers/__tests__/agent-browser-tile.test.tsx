@@ -14,7 +14,9 @@ import type {
   BrowserViewBoundsUpdate,
   BrowserViewTileCommand,
   BrowserViewTileCommandEvent,
+  BrowserViewTileKey,
 } from "@traycer-clients/shared/platform/browser-view";
+import { registerHostedPaneActivationClaim } from "@/components/epic-canvas/pane-activation";
 
 const state = vi.hoisted(() => ({
   visible: true,
@@ -178,6 +180,25 @@ interface NativeStatusChange {
 }
 
 class TestBridge {
+  private tileFocusedHandler: ((tile: BrowserViewTileKey) => void) | null =
+    null;
+
+  onTileFocused(handler: (tile: BrowserViewTileKey) => void): {
+    dispose: () => void;
+  } {
+    this.tileFocusedHandler = handler;
+    return { dispose: () => (this.tileFocusedHandler = null) };
+  }
+
+  emitTileFocused(): void {
+    this.tileFocusedHandler?.({
+      viewTabId: "view-1",
+      paneId: "pane-1",
+      tileInstanceId: "tile-1",
+      pageSessionId: "browser-session:session-1:tab-1",
+    });
+  }
+
   private statusHandler: ((change: NativeStatusChange) => void) | null = null;
 
   onNativeTabStatusChange(handler: (change: NativeStatusChange) => void): {
@@ -387,6 +408,27 @@ describe("ElectronTabSurface", () => {
 
     expect(screen.getByText("Local servers")).toBeTruthy();
     expect(bindSurface).not.toHaveBeenCalled();
+  });
+
+  it("activates its pane when the native browser guest receives focus", () => {
+    const claim = vi.fn();
+    const unregister = registerHostedPaneActivationClaim(
+      "view-1",
+      "pane-1",
+      claim,
+    );
+    renderTile(createRecordingBinding());
+
+    act(() => {
+      state.bridge?.emitTileFocused();
+    });
+
+    expect(claim).toHaveBeenCalledExactlyOnceWith({
+      defaultPrevented: false,
+      scope: null,
+      target: null,
+    });
+    unregister();
   });
 
   it("detaches the native surface when the tile becomes hidden", async () => {

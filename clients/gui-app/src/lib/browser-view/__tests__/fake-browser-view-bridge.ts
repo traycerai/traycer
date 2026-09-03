@@ -310,6 +310,12 @@ export class FakeBrowserViewBridge implements BrowserViewBridge {
     };
   }
 
+  onTileFocused(_handler: (tile: BrowserViewTileKey) => void): {
+    dispose: () => void;
+  } {
+    return { dispose: () => undefined };
+  }
+
   onSnapshotInvalidated(
     handler: (change: BrowserViewSnapshotInvalidatedChange) => void,
   ): {
