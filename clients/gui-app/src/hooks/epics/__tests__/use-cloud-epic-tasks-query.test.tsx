@@ -131,6 +131,16 @@ function hasLocalFirstPhase(value: unknown, phase: string): boolean {
   );
 }
 
+/**
+ * The `epic.listTasks` dispatches alone. An unverified initial leg also sends
+ * a `host.status` probe before it, so a raw call count over-reads by one.
+ */
+function listTasksCalls(): Array<[string, unknown]> {
+  return mockHostClient.request.mock.calls
+    .filter(([method]) => method === "epic.listTasks")
+    .map(([method, params]) => [String(method), params]);
+}
+
 describe("useCloudEpicTasksQuery", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -221,8 +231,11 @@ describe("useCloudEpicTasksQuery", () => {
         "unverified-local",
       ]);
     });
-    expect(mockHostClient.request).toHaveBeenCalledTimes(1);
-    expect(mockHostClient.request.mock.calls[0]?.[1]).toMatchObject({
+    // An unverified initial leg is preceded by the live-host probe
+    // (`host.status`), whose handshake is what the admission trusts; the
+    // list call itself is still exactly one.
+    expect(listTasksCalls()).toHaveLength(1);
+    expect(listTasksCalls()[0]?.[1]).toMatchObject({
       localFirstPhase: "initial",
     });
 
@@ -1610,7 +1623,10 @@ describe("useCloudEpicTasksQuery", () => {
       await waitFor(() => {
         expect(taskLightIds(result.current.tasks)).toEqual(["unverified-1-6"]);
       });
-      expect(mockHostClient.request.mock.calls[0]?.[1]).toMatchObject({
+      // Probe first, then the list: the admission is decided on the live
+      // host's handshake, not on the registry read alone.
+      expect(mockHostClient.request.mock.calls[0]?.[0]).toBe("host.status");
+      expect(listTasksCalls()[0]?.[1]).toMatchObject({
         localFirstPhase: "initial",
       });
       expect(result.current.initialLegRefused).toBe(false);

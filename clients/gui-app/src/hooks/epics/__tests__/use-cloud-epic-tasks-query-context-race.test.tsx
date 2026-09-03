@@ -409,7 +409,18 @@ describe("useCloudEpicTasksQuery request-context race", () => {
       await Promise.resolve();
       await Promise.resolve();
     });
-    expect(fixture.request).toHaveBeenCalledTimes(1);
+    // Still the ONE list call from the signed-in run above. The unverified
+    // resume does dispatch a `host.status` probe - the live-host re-check of
+    // the local-first line - and that probe is what refuses here (nothing
+    // negotiated 1.6), so no second list request follows it.
+    expect(
+      fixture.request.mock.calls.filter(
+        ([method]) => method === "epic.listTasks",
+      ),
+    ).toHaveLength(1);
+    expect(
+      fixture.request.mock.calls.filter(([method]) => method === "host.status"),
+    ).toHaveLength(1);
     // The refusal is TERMINAL for the production client (no retry that would
     // re-ask and be refused again), so the query settles on it rather than
     // sitting in a retry delay with no error yet.
@@ -420,7 +431,14 @@ describe("useCloudEpicTasksQuery request-context race", () => {
         )?.error,
       ).toBeInstanceOf(CloudEpicTasksVerdictWithdrawnError);
     });
-    expect(fixture.request).toHaveBeenCalledTimes(1);
+    // Settling on the refusal dispatched nothing further: still the one list
+    // call and the one probe.
+    expect(
+      fixture.request.mock.calls.filter(
+        ([method]) => method === "epic.listTasks",
+      ),
+    ).toHaveLength(1);
+    expect(fixture.request).toHaveBeenCalledTimes(2);
   });
 
   it("bounds an initial request-context wait at the discovery deadline", async () => {

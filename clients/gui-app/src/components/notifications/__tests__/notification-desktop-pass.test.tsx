@@ -40,6 +40,7 @@ import {
   openNotificationsStream,
 } from "@/stores/notifications/notifications-store";
 import { useNotificationsPopoverStore } from "@/stores/notifications/notifications-popover-store";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import type { NotificationsStreamCallbacks } from "@traycer-clients/shared/host-transport/notifications-stream-client";
 import {
   type NotificationEntry,
@@ -531,6 +532,16 @@ function resetStores(): void {
 describe("notification desktop-pass design corrections", () => {
   beforeEach(() => {
     resetStores();
+    // The collaboration rows below are cloud-held, and marking one read is a
+    // Notifications-room write - gated on the session's cloud verdict, so
+    // this suite runs signed in. The host rows need no verdict.
+    useAuthStore
+      .getState()
+      .setSignedIn(
+        { userId: "user-desktop-pass", userName: "U", email: "u@example.com" },
+        { userId: "user-desktop-pass", username: "U" },
+        [],
+      );
   });
 
   afterEach(() => {
@@ -538,6 +549,7 @@ describe("notification desktop-pass design corrections", () => {
     hostBindingState.current = null;
     __resetHostNotificationsStoreForTests();
     useNotificationsPopoverStore.getState().setOpen(false);
+    useAuthStore.getState().setSignedOut();
   });
 
   describe("unread rail", () => {
