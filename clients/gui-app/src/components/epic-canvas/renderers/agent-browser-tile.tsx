@@ -51,6 +51,7 @@ import {
   DEFAULT_BROWSER_TILE_URL,
   makeBrowserSessionTileRef,
 } from "@/stores/epics/canvas/tile-schema/browser-tile";
+import { claimHostedPaneActivation } from "@/components/epic-canvas/pane-activation";
 
 interface ElectronTabSurfaceNode {
   readonly id: string;
@@ -276,6 +277,21 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
       props.viewTabId,
     ],
   );
+
+  useEffect(() => {
+    if (browserView === null) return;
+    const subscription = browserView.onTileFocused((focusedTile) => {
+      if (!isSameBrowserViewTile(focusedTile, tileKey)) return;
+      claimHostedPaneActivation(props.viewTabId, props.paneId, {
+        defaultPrevented: false,
+        scope: null,
+        target: null,
+      });
+    });
+    return () => {
+      subscription.dispose();
+    };
+  }, [browserView, props.paneId, props.viewTabId, tileKey]);
 
   useEffect(() => {
     if (browserView === null) return;
