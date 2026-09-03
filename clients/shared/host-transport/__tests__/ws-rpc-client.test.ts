@@ -2276,6 +2276,43 @@ describe("WsRpcClient", () => {
       await completeRetriedSocket(sockets, 1);
       await expect(pending).resolves.toEqual({ echoed: "HI" });
     });
+
+    it("long-poll delivery-floor grace is finite: expires as original non-retryable timeout without a second dial", async () => {
+      const { factory, sockets } = makeFactory();
+      const { client, authority } = makeGraceRecoveryStack({
+        factory,
+        frameTimeoutMs: 1_000,
+        hostAttestationWindowMs: HOST_ATTESTATION_WINDOW_MS,
+      });
+
+      const pending = client.requestWithResponseTimeout(
+        "host.echo",
+        { message: "slow" },
+        LONG_POLL_RESPONSE_TIMEOUT_MS,
+        {
+          idempotencyKey: null,
+          authority: authority,
+          replayMustBeKeyed: false,
+        },
+      );
+      const rejection = expect(pending).rejects.toSatisfy(
+        (error: unknown) =>
+          error instanceof HostTransportFailureError &&
+          !(error instanceof RetryableTransportError) &&
+          error.message.includes(
+            `frame timed out after ${LONG_POLL_RESPONSE_TIMEOUT_MS}ms`,
+          ),
+      );
+      await driveUntilRequestSent(sockets);
+
+      await vi.advanceTimersByTimeAsync(LONG_POLL_RESPONSE_TIMEOUT_MS);
+      expect(sockets[0].socket.closed).toBeNull();
+
+      // Delivery floor only; nothing arrives → original ambiguous timeout.
+      await vi.advanceTimersByTimeAsync(ATTESTATION_DELIVERY_SLACK_MS);
+      await rejection;
+      expect(sockets).toHaveLength(1);
+    });
     it("close during grace keeps the original ambiguous response timeout without a second dial", async () => {
       const { factory, sockets } = makeFactory();
       const client = makeClient({
