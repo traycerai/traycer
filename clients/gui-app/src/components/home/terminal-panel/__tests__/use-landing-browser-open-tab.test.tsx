@@ -101,6 +101,79 @@ afterEach(() => {
 });
 
 describe("landingBrowserTabCount", () => {
+  // The pending latch is keyed by DEVICE, so an ask on one and a later ask on
+  // another are both in flight at once. A panel-level slot holding "the row
+  // this answer is for" would be read by whichever device replied first,
+  // whatever the other had recorded - so the association travels with its own
+  // request instead.
+  it("hands each answer back the request it was made with", async () => {
+    const settles: Array<(identity: BrowserTabIdentity) => void> = [];
+    const openTab = vi.fn(
+      () =>
+        new Promise<BrowserTabIdentity>((resolve) => {
+          settles.push(resolve);
+        }),
+    );
+    const answered: Array<{
+      readonly tabId: string;
+      readonly placeholderInstanceId: string | null;
+    }> = [];
+    const hostRef: { current: string } = { current: "host-a" };
+    const { result, rerender } = renderHook(
+      () =>
+        useLandingBrowserOpenTab({
+          canDriveTabs: true,
+          hostId: hostRef.current,
+          sessions: sessionsState({ openTab }),
+          onOpened: (tab, request) => {
+            answered.push({
+              tabId: tab.tabId,
+              placeholderInstanceId: request.placeholderInstanceId,
+            });
+          },
+        }),
+      { wrapper: QueryWrapper },
+    );
+
+    act(() => {
+      result.current.open({ placeholderInstanceId: "placeholder-a" });
+    });
+    await waitFor(() => {
+      expect(openTab).toHaveBeenCalledTimes(1);
+    });
+
+    // A different device, so the latch releases and a SECOND ask goes out
+    // while the first is still unanswered.
+    hostRef.current = "host-b";
+    rerender();
+    act(() => {
+      result.current.open({ placeholderInstanceId: "placeholder-b" });
+    });
+    await waitFor(() => {
+      expect(openTab).toHaveBeenCalledTimes(2);
+    });
+
+    // The FIRST device answers second, after the later ask recorded its own
+    // row - the ordering a shared slot cannot survive.
+    act(() => {
+      settles[1]?.({ sessionId: "session-b", tabId: "tab-b" });
+    });
+    await waitFor(() => {
+      expect(answered).toHaveLength(1);
+    });
+    act(() => {
+      settles[0]?.({ sessionId: "session-a", tabId: "tab-a" });
+    });
+    await waitFor(() => {
+      expect(answered).toHaveLength(2);
+    });
+
+    expect(answered).toEqual([
+      { tabId: "tab-b", placeholderInstanceId: "placeholder-b" },
+      { tabId: "tab-a", placeholderInstanceId: "placeholder-a" },
+    ]);
+  });
+
   // A shell with no native browser capability can only WATCH a tab: the tile
   // renders as a "View only" screencast, and an independent session has no
   // agent driving it either. The chord opens without ever rendering the
@@ -122,7 +195,7 @@ describe("landingBrowserTabCount", () => {
     );
 
     act(() => {
-      result.current.open();
+      result.current.open({ placeholderInstanceId: null });
     });
 
     await waitFor(() => {
@@ -197,7 +270,7 @@ describe("useLandingBrowserOpenTab", () => {
     });
 
     act(() => {
-      result.current.open();
+      result.current.open({ placeholderInstanceId: null });
     });
     await waitFor(() => {
       expect(onOpened).toHaveBeenCalledTimes(1);
@@ -232,13 +305,13 @@ describe("useLandingBrowserOpenTab", () => {
     });
 
     act(() => {
-      result.current.open();
+      result.current.open({ placeholderInstanceId: null });
     });
     await waitFor(() => {
       expect(result.current.isOpening).toBe(true);
     });
     act(() => {
-      result.current.open();
+      result.current.open({ placeholderInstanceId: null });
     });
     expect(openTab).toHaveBeenCalledTimes(1);
 
@@ -269,7 +342,7 @@ describe("useLandingBrowserOpenTab", () => {
 
     expect(result.current.tabCount).toBe(LANDING_BROWSER_TAB_CAP);
     act(() => {
-      result.current.open();
+      result.current.open({ placeholderInstanceId: null });
     });
 
     await waitFor(() => {
@@ -293,7 +366,7 @@ describe("useLandingBrowserOpenTab", () => {
 
     expect(result.current.tabCount).toBe(null);
     act(() => {
-      result.current.open();
+      result.current.open({ placeholderInstanceId: null });
     });
 
     await waitFor(() => {
@@ -330,8 +403,8 @@ describe("useLandingBrowserOpenTab", () => {
     // and a click can share - and the await only lets the winner's mutation
     // reach the device.
     await act(async () => {
-      result.current.open();
-      result.current.open();
+      result.current.open({ placeholderInstanceId: null });
+      result.current.open({ placeholderInstanceId: null });
       await Promise.resolve();
     });
 
@@ -357,13 +430,13 @@ describe("useLandingBrowserOpenTab", () => {
     });
 
     act(() => {
-      result.current.open();
+      result.current.open({ placeholderInstanceId: null });
     });
     await waitFor(() => {
       expect(onOpened).toHaveBeenCalledTimes(1);
     });
     act(() => {
-      result.current.open();
+      result.current.open({ placeholderInstanceId: null });
     });
     await waitFor(() => {
       expect(openTab).toHaveBeenCalledTimes(2);
@@ -380,7 +453,7 @@ describe("useLandingBrowserOpenTab", () => {
     });
 
     act(() => {
-      result.current.open();
+      result.current.open({ placeholderInstanceId: null });
     });
 
     await waitFor(() => {

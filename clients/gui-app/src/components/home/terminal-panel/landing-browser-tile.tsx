@@ -64,9 +64,23 @@ function LandingBrowserTileSessions(props: {
   readonly onRequestNewTab: () => void;
 }): ReactNode {
   const hostClient = useHostClientForHostId(props.tab.hostId);
+  // Read here rather than in the body below, because it decides whether this
+  // tile puts its device on a stream AT ALL - and the provider is what would
+  // acquire it.
+  const paneVisible = usePaneVisible();
   return (
     <BrowserSessionsHostProvider
-      hostId={props.tab.hostId}
+      // `null` holds no stream. A tile in a collapsed panel or a backgrounded
+      // Start Page renders nothing, and the desktop caps a window's browser
+      // streams and refuses the one asked for last - so a tile nobody can see
+      // must not be the reason a visible one is refused. The panel's own arm
+      // follows the same rule, and both share the refcounted coordinator, so
+      // this only releases when that one has too.
+      //
+      // Deliberately NOT narrowed to `props.active`: the strip renders a row
+      // for every tab, and those rows read their title and dormancy from this
+      // inventory.
+      hostId={props.panelOpen && paneVisible ? props.tab.hostId : null}
       hostClient={hostClient}
       scope={INDEPENDENT_BROWSER_SCOPE}
     >

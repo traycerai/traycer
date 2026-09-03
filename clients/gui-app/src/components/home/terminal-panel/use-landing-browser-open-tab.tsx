@@ -57,6 +57,20 @@ export function landingBrowserTabCount(
     .reduce((total, item) => total + item.tabs.length, 0);
 }
 
+/**
+ * What one ask was answering, carried WITH that ask.
+ *
+ * The opener's pending state is keyed by device, so a request on one device and
+ * a later one on another can both be in flight - and a panel-level slot holding
+ * "the row this is for" would be read by whichever answered first, whatever it
+ * had recorded. Mutation variables travel with their own request by
+ * construction, which is what makes each answer act on its own row.
+ */
+export interface LandingBrowserOpenRequest {
+  /** The chooser row the ask was made from, or `null` for a chord. */
+  readonly placeholderInstanceId: string | null;
+}
+
 export interface LandingBrowserOpenTab {
   /** A tab has been asked for and the device has not answered yet. */
   readonly isOpening: boolean;
@@ -65,7 +79,7 @@ export interface LandingBrowserOpenTab {
    * chooser renders the cap from this; the opener re-checks it.
    */
   readonly tabCount: number | null;
-  readonly open: () => void;
+  readonly open: (request: LandingBrowserOpenRequest) => void;
 }
 
 /**
@@ -91,8 +105,14 @@ export function useLandingBrowserOpenTab(args: {
    * rendering the chooser's card, so the refusal has to live here too.
    */
   readonly canDriveTabs: boolean;
-  /** Runs once the device has answered, with the ref that was added. */
-  readonly onOpened: (tab: LandingBrowserTabRef) => void;
+  /**
+   * Runs once the device has answered, with the ref that was added and the
+   * request it answers - never a slot some other request may have overwritten.
+   */
+  readonly onOpened: (
+    tab: LandingBrowserTabRef,
+    request: LandingBrowserOpenRequest,
+  ) => void;
 }): LandingBrowserOpenTab {
   const { canDriveTabs, hostId, sessions, onOpened } = args;
   /** Set for the whole in-flight window, so `open()` is idempotent per tick. */
@@ -105,7 +125,9 @@ export function useLandingBrowserOpenTab(args: {
     // flight at once and the cap re-check below reads a count that includes
     // whatever the other one just opened. See `openTabScope`.
     scope: { id: browserMutationKeys.openTabScope(hostId) },
-    mutationFn: async (): Promise<LandingBrowserTabRef> => {
+    mutationFn: async (
+      _request: LandingBrowserOpenRequest,
+    ): Promise<LandingBrowserTabRef> => {
       // `inventoryReady` belongs in THIS guard rather than being left to the
       // cap check below: a live stream that has not published an inventory has
       // no count, so the cap check passes vacuously and the open goes to a
@@ -146,8 +168,8 @@ export function useLandingBrowserOpenTab(args: {
         titleSource: "default",
       };
     },
-    onSuccess: (tab) => {
-      onOpened(tab);
+    onSuccess: (tab, request) => {
+      onOpened(tab, request);
     },
     onError: (cause: Error) => {
       toast.error(cause.message);
@@ -158,20 +180,26 @@ export function useLandingBrowserOpenTab(args: {
   });
   const isOpening = useIsMutating({ mutationKey: openTabKey }) > 0;
   const mutate = openMutation.mutate;
-  const open = useCallback(() => {
-    // `isOpening` is RENDERED state: `useIsMutating` publishes through the
-    // query cache's subscription, so two `open()` calls in one tick both read
-    // the value from the render they were dispatched in - `false` - and both
-    // reach the mutation. Only a ref moves within the tick. It records the
-    // device rather than a bare boolean so a host switch mid-flight releases
-    // it: that is a different device, and its tab is not the one in flight.
-    if (isOpening) return;
-    if (inFlightRef.current !== null && inFlightRef.current.hostId === hostId) {
-      return;
-    }
-    inFlightRef.current = { hostId };
-    mutate();
-  }, [hostId, isOpening, mutate]);
+  const open = useCallback(
+    (request: LandingBrowserOpenRequest) => {
+      // `isOpening` is RENDERED state: `useIsMutating` publishes through the
+      // query cache's subscription, so two `open()` calls in one tick both read
+      // the value from the render they were dispatched in - `false` - and both
+      // reach the mutation. Only a ref moves within the tick. It records the
+      // device rather than a bare boolean so a host switch mid-flight releases
+      // it: that is a different device, and its tab is not the one in flight.
+      if (isOpening) return;
+      if (
+        inFlightRef.current !== null &&
+        inFlightRef.current.hostId === hostId
+      ) {
+        return;
+      }
+      inFlightRef.current = { hostId };
+      mutate(request);
+    },
+    [hostId, isOpening, mutate],
+  );
   return { isOpening, tabCount, open };
 }
 

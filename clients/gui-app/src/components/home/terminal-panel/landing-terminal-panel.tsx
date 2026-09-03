@@ -89,6 +89,7 @@ import {
   selectLandingBrowserViewModel,
   type LandingBrowserViewModel,
 } from "./landing-browser-presentation";
+import { usePaneVisible } from "@/components/epic-tabs/pane-visibility-context";
 import { screencastRoleForShell } from "@/lib/browser-view/sessions/use-screencast-session";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import {
@@ -435,20 +436,6 @@ export function LandingTerminalPanel(): ReactNode {
       ].filter((hostId): hostId is string => hostId !== null),
     [terminalTabs, target.hostId],
   );
-  // The target host is in the browser list even with no browser tab on it:
-  // creating one goes through that device's coordinator, so the arm has to be
-  // mounted before the first tab exists. The stream is held unconditionally
-  // for exactly that reason - the `app.browser.new` chord and the chooser's
-  // tab-cap count both need a coordinator to ask before there is anything to
-  // reconcile - and it costs one stream per window with an open Start Page,
-  // which is what the refcounted coordinator key already assumes.
-  const browserHostIds = useMemo(
-    () =>
-      [
-        ...new Set([...browserTabs.map((tab) => tab.hostId), target.hostId]),
-      ].filter((hostId): hostId is string => hostId !== null),
-    [browserTabs, target.hostId],
-  );
   const handleAuthorityEntry = useCallback(
     (hostId: string, entry: LandingTerminalAuthorityEntry | null): void => {
       setAuthorityEntries((current) => {
@@ -491,6 +478,41 @@ export function LandingTerminalPanel(): ReactNode {
     landingPanelLayoutFor(state, landingPageId),
   );
   const panelOpen = layout.panelOpen;
+  // Whether this Start Page is the surface on screen. The panel outlives its
+  // activation - it stays mounted behind a backgrounded header tab so the
+  // terminals beside it keep their PTYs - so "mounted" says nothing about
+  // whether anything of it is being looked at.
+  const paneVisible = usePaneVisible();
+  // A browser stream is a socket, a relay attach, a desktop identity
+  // attestation and a whole contributed-set replay, and the desktop caps a
+  // window at `MAX_STREAMS_PER_WINDOW` of them, refusing whichever is asked
+  // for LAST. So a panel holding streams for hosts it is showing nothing of
+  // can cost the reader the tab they are actually looking at.
+  //
+  // The target host is unconditional, and only it: creating a browser tab goes
+  // through that device's coordinator, so `app.browser.new` and the chooser's
+  // tab-cap count both need one mounted before the first tab exists - and both
+  // work while the panel is collapsed.
+  //
+  // The tab hosts follow the PANEL, not the individual tab. A collapsed panel
+  // and a backgrounded Start Page render nothing, so nothing needs a tab
+  // host's inventory; an OPEN one renders a strip row per tab, and that row
+  // reads its title, address and dormancy from its host's inventory. Gating
+  // per tab instead - only the active one's host - would leave every other
+  // browser row reading "status unavailable" against a device that is fine and
+  // freeze its title, which is a worse lie than the cost it saves.
+  const browserHostIds = useMemo(
+    () =>
+      [
+        ...new Set([
+          target.hostId,
+          ...(panelOpen && paneVisible
+            ? browserTabs.map((tab) => tab.hostId)
+            : []),
+        ]),
+      ].filter((hostId): hostId is string => hostId !== null),
+    [browserTabs, panelOpen, paneVisible, target.hostId],
+  );
   const targetPanelOpen = useLandingPanelStore(
     (state) => landingPanelLayoutFor(state, targetLandingPageId).panelOpen,
   );
@@ -1197,11 +1219,6 @@ export function LandingTerminalPanel(): ReactNode {
   const canDriveBrowserTabs =
     screencastRoleForShell(useRunnerHostOrNull()) === "tile";
 
-  // The chooser row a browser ask was made from, so its answer can tell "my
-  // row is still there" from "something else took it while the device was
-  // replying". `null` for the chord, which asks from no row at all. One slot is
-  // enough: the opener admits one ask per device at a time.
-  const browserOpenForPlaceholderRef = useRef<string | null>(null);
   const browserOpenTab = useLandingBrowserOpenTab({
     canDriveTabs: canDriveBrowserTabs,
     hostId: target.hostId,
@@ -1209,10 +1226,11 @@ export function LandingTerminalPanel(): ReactNode {
       target.hostId === null ? null : (browserSessions[target.hostId] ?? null),
     // Same rule as the terminal arm: replace the placeholder it was picked from
     // in that row's own strip position, and append when that row is gone.
-    onOpened: (tab) => {
-      const forPlaceholderInstanceId = browserOpenForPlaceholderRef.current;
-      browserOpenForPlaceholderRef.current = null;
-      fulfillPlaceholder(tab, forPlaceholderInstanceId);
+    // The row is read off the REQUEST, so an answer can only ever act on the
+    // row its own ask was made from - two devices can be answering at once,
+    // and the first back must not consume the other's association.
+    onOpened: (tab, request) => {
+      fulfillPlaceholder(tab, request.placeholderInstanceId);
     },
   });
   const openBrowserTab = browserOpenTab.open;
@@ -1221,8 +1239,8 @@ export function LandingTerminalPanel(): ReactNode {
   // question the chooser asks.
   const revealAndOpenBrowserTab = useCallback(() => {
     if (!panelOpen) setPanelOpen(true);
-    browserOpenForPlaceholderRef.current = null;
-    openBrowserTab();
+    // No row: the chord answers the chooser's question without being asked it.
+    openBrowserTab({ placeholderInstanceId: null });
   }, [openBrowserTab, panelOpen, setPanelOpen]);
 
   // A link the page asked to open in a new tab, on the raising tab's device
@@ -1263,12 +1281,13 @@ export function LandingTerminalPanel(): ReactNode {
   const pickNewTabKind = useCallback(
     (kind: LandingNewTabKind): void => {
       if (kind === "browser") {
-        // The row the pick was made from. A later pick - the other card, or a
-        // chord - can take this row while the device is answering, and that
-        // later choice is the one the reader is looking at.
-        browserOpenForPlaceholderRef.current =
-          useLandingPanelStore.getState().placeholder?.instanceId ?? null;
-        openBrowserTab();
+        // The row the pick was made from, carried with the ask. A later pick -
+        // the other card, or a chord - can take this row while the device is
+        // answering, and that later choice is the one the reader is looking at.
+        openBrowserTab({
+          placeholderInstanceId:
+            useLandingPanelStore.getState().placeholder?.instanceId ?? null,
+        });
         return;
       }
       // The existing terminal create flow, directory picker and all. It

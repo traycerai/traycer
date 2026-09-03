@@ -111,6 +111,7 @@ const mocks = vi.hoisted(() => {
     plainImportAsync: vi.fn(),
     browserSessionsByHost,
     browserCloseTab: vi.fn(() => Promise.resolve()),
+    browserStreamHostIds: [] as readonly string[],
     // Whether the SHELL has native browser capability. True is a desktop, the
     // shell every browser scenario here is about; false is the web / mobile
     // shell that can only watch a tab.
@@ -309,6 +310,9 @@ vi.mock(
         useEffect(() => {
           const browserHostIds =
             browserHostKey.length === 0 ? [] : browserHostKey.split("\u0000");
+          // The devices the panel is asking to be put on a stream. Recorded
+          // because each one costs a capped per-window browser stream.
+          mocks.browserStreamHostIds = browserHostIds;
           browserHostIds.forEach((hostId) => {
             onBrowserSessions(
               hostId,
@@ -754,6 +758,7 @@ describe("<LandingTerminalPanel />", () => {
       Promise.reject(new Error("unexpected legacy import")),
     );
     mocks.browserSessionsByHost = {};
+    mocks.browserStreamHostIds = [];
     mocks.runnerHostHasBrowserView = true;
     mocks.browserCloseTab.mockClear();
     // `mockClear` keeps an implementation a test installed, so restore the
@@ -2069,6 +2074,100 @@ describe("<LandingTerminalPanel />", () => {
     await waitFor(() => {
       expect(useLandingPanelStore.getState().tabs).toHaveLength(1);
     });
+  });
+
+  // A browser stream costs a socket, a relay attach, an identity attestation
+  // and a contributed-set replay, and the desktop caps a window at twelve of
+  // them and refuses whichever is asked for LAST. So a panel holding streams
+  // for devices it is showing nothing of can cost the reader the very tab they
+  // just opened.
+  it("drops every tab host's stream when the panel is collapsed", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    useLandingPanelStore.getState().addTab({
+      kind: "browser",
+      instanceId: "browser-a",
+      hostId: "host-a",
+      sessionId: "session-a",
+      tabId: "tab-a",
+      name: "a.example",
+      titleSource: "default",
+    });
+    useLandingPanelStore.getState().addTab({
+      kind: "browser",
+      instanceId: "browser-b",
+      hostId: "host-b",
+      sessionId: "session-b",
+      tabId: "tab-b",
+      name: "b.example",
+      titleSource: "default",
+    });
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+
+    // Open: every tab host, because the strip is rendering a row for each and
+    // those rows read their title and dormancy from that device's inventory.
+    await waitFor(() => {
+      expect([...mocks.browserStreamHostIds].sort()).toEqual([
+        "host-a",
+        "host-b",
+      ]);
+    });
+
+    act(() => {
+      useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, false);
+    });
+
+    // Collapsed: nothing of those devices is on screen, so nothing holds their
+    // streams. The TARGET host stays - `app.browser.new` reveals the panel and
+    // opens through that device's coordinator, and the chooser's cap count
+    // reads the same one.
+    await waitFor(() => {
+      expect(mocks.browserStreamHostIds).toEqual(["host-a"]);
+    });
+  });
+
+  // The other half of the ruling this restores: the target device is on a
+  // stream before any browser tab exists, which is what the chord and the
+  // chooser's count both need.
+  it("keeps the target host's stream with no browser tab open", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    mocks.browserSessionsByHost = {
+      "host-a": browserSessionsState({
+        items: [
+          sessionInfo({
+            sessionId: "independent-session",
+            hostId: "host-a",
+            scope: independentScope(),
+            tabs: [tabInfo({ tabId: "existing", url: "https://example.com/" })],
+          }),
+        ],
+      }),
+    };
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+
+    await waitFor(() => {
+      expect(mocks.browserStreamHostIds).toEqual(["host-a"]);
+    });
+    // And the count that stream carries reaches the card, which is the whole
+    // reason the ruling held it unconditionally.
+    const browserCard = await screen.findByTestId(
+      "landing-new-tab-card-browser",
+    );
+    await waitFor(() => {
+      expect(browserCard.getAttribute("aria-disabled")).toBeNull();
+    });
+    expect(
+      screen.queryByTestId("landing-new-tab-card-browser-reason"),
+    ).toBeNull();
   });
 
   // A shell with no native browser capability can only WATCH a browser tab -
