@@ -82,8 +82,7 @@ import {
   browserForgetLedgerPendingClears,
   isBrowserForgetLedgerPendingAck,
   isHeadlessOriginCookieKey,
-  browserForgetLedgerRevision,
-  browserForgetLedgerUnclearedForgets,
+  bracketUnclearedForgets,
   markBrowserForgetLedgerCleared,
   onBrowserForgetLedgerChanged,
   recordForgetAllBrowserLogins,
@@ -92,7 +91,6 @@ import {
   recordHeadlessOriginCookieKeys,
   releaseBrowserForgetLedgerConnection,
   releaseHeadlessOriginCookieKeys,
-  unionUnclearedForgets,
   withoutUnclearedForgets,
 } from "../browser-view/storage/browser-forget-ledger";
 import { trustBrowserCertificate } from "../app/cert-trust";
@@ -548,19 +546,16 @@ export function registerBrowserViewIpc(
       // clear that records, clears and marks itself while the cookies are
       // being read would be in neither a mask taken before (not recorded
       // yet) nor one taken after (already cleared), while the read still
-      // holds the cookie it removed. Before the read: the ledger's revision
-      // and what is uncleared then. After: what is uncleared now, widened
-      // to everything recorded since the mark. The union is the mask.
-      const mark = browserForgetLedgerRevision();
-      const before = browserForgetLedgerUnclearedForgets(null);
-      const captured = await primaryProfileSnapshots.capture();
-      return withoutUnclearedForgets(
-        captured,
-        unionUnclearedForgets(
-          before,
-          browserForgetLedgerUnclearedForgets(mark),
-        ),
-      );
+      // holds the cookie it removed. The bracket accumulates every forget
+      // recorded while it is open, apart from the ledger's trimmed rows.
+      const bracket = bracketUnclearedForgets();
+      try {
+        const captured = await primaryProfileSnapshots.capture();
+        return withoutUnclearedForgets(captured, bracket.close());
+      } finally {
+        // A read that threw still ends its bracket (`close` is idempotent).
+        bracket.close();
+      }
     };
 
   /**

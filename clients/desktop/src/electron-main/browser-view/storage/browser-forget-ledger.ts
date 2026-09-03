@@ -240,6 +240,7 @@ export async function initBrowserForgetLedger(filePath: string): Promise<void> {
     (value) => recordSchema.safeParse(value).data ?? EMPTY_RECORD,
   );
   completedClears.clear();
+  openBrackets.clear();
   deferredNotificationDepth = 0;
   notificationPending = false;
   const loaded = await store.load();
@@ -325,6 +326,7 @@ export async function recordForgetAllBrowserLogins(): Promise<number> {
     // machine wakes up with holds nothing a host contributed.
     headlessOriginKeys: [],
   });
+  noteRecordedForgets([], true);
   await persist();
   return revision;
 }
@@ -394,6 +396,7 @@ export async function recordForgottenBrowserSites(
       (key) => !scopes.has(registrableDomain(key.domain) ?? ""),
     ),
   });
+  noteRecordedForgets(scopes, false);
   await persist();
   return revision;
 }
@@ -531,38 +534,21 @@ export interface BrowserForgetLedgerUnclearedForgets {
   readonly domains: ReadonlySet<string>;
 }
 
-/** The ledger's current top revision - a mark for {@link browserForgetLedgerUnclearedForgets}. */
-export function browserForgetLedgerRevision(): number {
-  return ledger.revision;
-}
-
-/**
- * `recordedAfter` widens the answer to every forget recorded above that
- * revision, cleared or not. A caller that reads the jar asynchronously takes
- * the ledger's revision BEFORE the read and asks with it after: a forget
- * recorded during the read may have been cleared and marked before the
- * caller looks, and "uncleared right now" alone would miss it while the
- * read still holds the cookie it removed. `null` asks for the plain
- * uncleared set.
- */
-export function browserForgetLedgerUnclearedForgets(
-  recordedAfter: number | null,
-): BrowserForgetLedgerUnclearedForgets {
-  const counts = (revision: number): boolean =>
-    (revision > ledger.clearedThrough && !completedClears.has(revision)) ||
-    (recordedAfter !== null && revision > recordedAfter);
+export function browserForgetLedgerUnclearedForgets(): BrowserForgetLedgerUnclearedForgets {
+  const uncleared = (revision: number): boolean =>
+    revision > ledger.clearedThrough && !completedClears.has(revision);
   const forgetAll = ledger.forgetAll;
   return {
-    forgetAll: forgetAll !== null && counts(forgetAll.revision),
+    forgetAll: forgetAll !== null && uncleared(forgetAll.revision),
     domains: new Set(
       ledger.domains
-        .filter((entry) => counts(entry.revision))
+        .filter((entry) => uncleared(entry.revision))
         .map((entry) => entry.domain),
     ),
   };
 }
 
-/** The forgets in either answer; a whole-jar read's mask is the union of before and after. */
+/** The forgets in either answer. */
 export function unionUnclearedForgets(
   a: BrowserForgetLedgerUnclearedForgets,
   b: BrowserForgetLedgerUnclearedForgets,
@@ -570,6 +556,69 @@ export function unionUnclearedForgets(
   return {
     forgetAll: a.forgetAll || b.forgetAll,
     domains: new Set([...a.domains, ...b.domains]),
+  };
+}
+
+/**
+ * Every forget recorded while a bracket is open, kept APART from the
+ * ledger's rows: `trimDomains` bounds those for the wire and a forget-all
+ * drops them, so a mask read off the rows alone could lose a record made
+ * during the read to either. Bounded by what is recorded while a read is
+ * in flight, and gone when the bracket closes.
+ */
+interface OpenUnclearedForgetsBracket {
+  forgetAll: boolean;
+  readonly domains: Set<string>;
+}
+const openBrackets = new Set<OpenUnclearedForgetsBracket>();
+
+function noteRecordedForgets(
+  scopes: Iterable<string>,
+  forgetAll: boolean,
+): void {
+  for (const bracket of openBrackets) {
+    if (forgetAll) bracket.forgetAll = true;
+    for (const scope of scopes) bracket.domains.add(scope);
+  }
+}
+
+export interface UnclearedForgetsBracket {
+  /**
+   * The mask for a jar read that ran between `bracketUnclearedForgets()` and
+   * this call. Idempotent; the first call ends the bracket.
+   */
+  readonly close: () => BrowserForgetLedgerUnclearedForgets;
+}
+
+/**
+ * The mask for an ASYNCHRONOUS jar read, which does not queue on the
+ * serializer. A site clear can record, clear and mark itself between the
+ * cookie read and the mask, and a mask taken only afterwards would let the
+ * cookie the read still holds through. So the mask brackets the read: what
+ * is uncleared when it opens, what is uncleared when it closes, and every
+ * forget recorded in between - the last from its own accumulator rather
+ * than the ledger's rows, which are trimmed for the wire and dropped by a
+ * forget-all, so no burst of clears during the read can push a record out
+ * of the mask.
+ */
+export function bracketUnclearedForgets(): UnclearedForgetsBracket {
+  const before = browserForgetLedgerUnclearedForgets();
+  const recorded: OpenUnclearedForgetsBracket = {
+    forgetAll: false,
+    domains: new Set(),
+  };
+  openBrackets.add(recorded);
+  let closed: BrowserForgetLedgerUnclearedForgets | null = null;
+  return {
+    close: () => {
+      if (closed !== null) return closed;
+      openBrackets.delete(recorded);
+      closed = unionUnclearedForgets(
+        unionUnclearedForgets(before, browserForgetLedgerUnclearedForgets()),
+        recorded,
+      );
+      return closed;
+    },
   };
 }
 
@@ -597,11 +646,9 @@ export function unionUnclearedForgets(
  * The mask has to bracket the READ, which is asynchronous and does not
  * queue on the serializer: a site clear can record, clear and mark itself
  * between the cookie read and the mask, and a mask taken only afterwards
- * would then let the cookie the read still holds through. So the caller
- * takes the uncleared set and the ledger's revision before the read, and
- * masks with the union of that set and the after-read answer widened to
- * everything recorded since ({@link unionUnclearedForgets},
- * {@link browserForgetLedgerUnclearedForgets} with `recordedAfter`).
+ * would then let the cookie the read still holds through. The caller
+ * opens {@link bracketUnclearedForgets} before the read and masks with
+ * what `close()` answers after it.
  *
  * An `unavailable` capture passes through untouched; a capture that has
  * nothing left stays `captured` and empty, since under a pending forget an
