@@ -1,11 +1,6 @@
 import "../../../../../__tests__/test-browser-apis";
-import {
-  act,
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-} from "@testing-library/react";
+import { act, cleanup, fireEvent, screen } from "@testing-library/react";
+import { renderPeekTile } from "@/components/epic-canvas/renderers/__tests__/browser-peek-tile-render";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   FakeStreamClient,
@@ -96,7 +91,7 @@ function liveStream(): FakeStreamSession {
 const PAST_ANY_LINGER_MS = 30_000;
 
 function renderTile(): void {
-  render(
+  renderPeekTile(
     <BrowserPeekTile
       viewTabId="view-tab-1"
       paneId="pane-1"
@@ -335,7 +330,7 @@ describe("AgentCursorOverlay", () => {
     // `cursor === null` reset of `pressedId` - the retained 1 then matches the
     // NEXT selection's first cursor, and a plain move draws a phantom ripple
     // for a press that never happened.
-    const { rerender } = render(
+    const { rerender } = renderPeekTile(
       <AgentCursorOverlay
         cursor={cursorAt({ type: "down", id: 1 })}
         frameSize={FRAME_SIZE}

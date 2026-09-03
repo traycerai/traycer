@@ -1,10 +1,11 @@
 import { Bot } from "lucide-react";
-import { useCallback } from "react";
+import { useCallback, type MouseEvent } from "react";
 import type { RoleClaim } from "@traycer/protocol/persistence/epic/role-claims";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import { useEpicAgentOpenRef } from "@/hooks/epic/use-epic-agent-open-ref";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
+import { modifiersFromMouseEvent } from "@/lib/canvas/tile-open/intent";
 import {
   useEpicAgentRoleClaimsByAgentId,
   useEpicArtifactRecords,
@@ -14,6 +15,7 @@ import {
   type EpicTreeRecord,
 } from "@/lib/epic-selectors";
 import { cn } from "@/lib/utils";
+import { onMiddleClick } from "@/lib/dom/on-middle-click";
 
 type AgentTreeRecord = EpicTreeRecord & {
   readonly type: "chat" | "terminal-agent";
@@ -135,7 +137,7 @@ function AgentReferenceButton(props: {
   readonly label: string;
   readonly roleClaimId: string | null;
 }) {
-  const tileNavigation = useEpicTileNavigation();
+  const { openTile } = useEpicTileNavigation();
   const chatHarnessId = useEpicChatHarnessId(props.agent.id);
   const tuiHarnessId = useMaybeEpicTuiAgentHarnessId(props.agent.id);
   const harnessId = chatHarnessId ?? tuiHarnessId;
@@ -145,14 +147,27 @@ function AgentReferenceButton(props: {
     name: props.agent.name,
     type: props.agent.type,
   });
-  const openAgent = useCallback(() => {
-    tileNavigation.openTileInEpic(props.epicId, buildOpenRef());
-  }, [props.epicId, buildOpenRef, tileNavigation]);
+  const openAgent = useCallback(
+    (event: MouseEvent<HTMLButtonElement>) => {
+      openTile({
+        node: buildOpenRef(),
+        target: { epicId: props.epicId },
+        // A chip is a button, like every other agent-opening control here.
+        gesture: "explicit",
+        modifiers: modifiersFromMouseEvent(event),
+        placement: null,
+        dedupe: true,
+        source: "direct_ui",
+      });
+    },
+    [props.epicId, buildOpenRef, openTile],
+  );
 
   return (
     <button
       type="button"
       onClick={openAgent}
+      onAuxClick={onMiddleClick(openAgent)}
       className={cn(
         "mx-[1px] inline-flex max-w-[min(26rem,80vw)] items-center gap-1 rounded-md border border-primary/25 bg-primary/10 px-1.5 py-0.5 align-baseline",
         "text-ui-sm font-medium text-primary transition-colors hover:bg-primary/15 hover:text-primary focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none",

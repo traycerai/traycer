@@ -121,14 +121,6 @@
         ]
       },
       {
-        "from": "resources/cli",
-        "to": "cli",
-        "filter": [
-          "**/*",
-          "!README.md"
-        ]
-      },
-      {
         "from": "resources/tray",
         "to": "tray",
         "filter": [
@@ -160,6 +152,15 @@
       "extendInfo": {
         "NSMicrophoneUsageDescription": "Traycer uses the microphone for voice dictation in the composer."
       },
+      "extraResources": [
+        {
+          "from": "resources/cli/darwin-${arch}",
+          "to": "cli/darwin-${arch}",
+          "filter": [
+            "**/*"
+          ]
+        }
+      ],
       "target": [
         {
           "target": "dmg",
@@ -187,6 +188,15 @@
           "sha256"
         ]
       },
+      "extraResources": [
+        {
+          "from": "resources/cli/win32-${arch}",
+          "to": "cli/win32-${arch}",
+          "filter": [
+            "**/*"
+          ]
+        }
+      ],
       "target": [
         {
           "target": "nsis",
@@ -208,6 +218,15 @@
       "icon": "icons",
       "syncDesktopName": true,
       "maintainer": "Traycer AI <support@traycer.ai>",
+      "extraResources": [
+        {
+          "from": "resources/cli/linux-${arch}",
+          "to": "cli/linux-${arch}",
+          "filter": [
+            "**/*"
+          ]
+        }
+      ],
       "target": [
         {
           "target": "AppImage",

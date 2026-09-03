@@ -212,6 +212,7 @@ export interface DesktopPreloadBridge {
   ): Promise<readonly string[]>;
   requestMicrophoneAccess(): Promise<"granted" | "denied">;
   openMicrophoneSettings(): Promise<void>;
+  openFullDiskAccessSettings(): Promise<void>;
   beginAuthAttempt(): void;
   onAuthCallback(handler: () => void): {
     dispose: () => void;
@@ -924,6 +925,10 @@ export class DesktopRunnerHost implements IRunnerHost {
 
   openMicrophoneSettings(): Promise<void> {
     return this.bridge.openMicrophoneSettings();
+  }
+
+  openFullDiskAccessSettings(): Promise<void> {
+    return this.bridge.openFullDiskAccessSettings();
   }
 
   openExternalLink(url: string): Promise<void> {

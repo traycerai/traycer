@@ -107,6 +107,23 @@ export function registerSupportIpc(bridge: RunnerIpcBridge): void {
     await shell.openExternal(url);
   });
 
+  // Opens the macOS Privacy → Full Disk Access pane, where the login import
+  // sends a user whose Safari jar the OS refused. Hardcoded in main for the
+  // same reason as the microphone link: `x-apple.systempreferences:` is not
+  // an http(s) scheme, so `openExternalLink` would refuse it and report
+  // nothing (`safelyOpenExternal` answers `false`, which that handler drops).
+  bridge.handleInvoke(RunnerHostInvoke.openFullDiskAccessSettings, async () => {
+    if (process.platform !== "darwin") {
+      log.warn(
+        "[support] openFullDiskAccessSettings unsupported on this platform",
+      );
+      return;
+    }
+    await shell.openExternal(
+      "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles",
+    );
+  });
+
   // Opens the native notification-preferences page. The URL is selected in
   // main rather than supplied by the renderer, so this intentionally bypasses
   // the http-only external-link gate just like the microphone settings link.

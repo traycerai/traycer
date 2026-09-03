@@ -149,6 +149,11 @@ import {
   type EpicPostResolvePreparation,
   type EpicRouteFocus,
 } from "@/lib/tab-navigation";
+import {
+  commitWithoutNavigation,
+  MANUAL_TILE_OPEN,
+  openTileWithNavigation,
+} from "@/lib/canvas/tile-open/open-tile";
 import { cn } from "@/lib/utils";
 import { useCloudEpicTasksQuery } from "@/hooks/epics/use-cloud-epic-tasks-query";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -162,6 +167,7 @@ import type {
   EpicViewTab,
 } from "@/stores/epics/canvas/types";
 import { NO_HOST_OPTION_REFUSALS } from "@/components/settings/host-scope/host-option-model";
+import { tileIntent } from "@/lib/canvas/tile-open/intent";
 import {
   formatMemoryBytesOrUnavailable,
   resourceMemoryBytes,
@@ -173,8 +179,12 @@ import {
   type ResourceMemoryMetric,
   type ResourceMemoryUsage,
 } from "@/lib/resources/memory-metric";
+import {
+  isResourceSortOption,
+  useResourceMonitorStore,
+  type ResourceSortOption,
+} from "@/stores/resources/resource-monitor-store";
 
-type ResourceSortOption = "memory" | "cpu" | "name" | "tab";
 type NavigateFn = UseNavigateResult<string>;
 
 const SORT_LABELS: Record<ResourceSortOption, string> = {
@@ -1228,7 +1238,10 @@ function ResourceMonitorPanel(props: {
   readonly sortMenuOpen: boolean;
   readonly onSortMenuOpenChange: (open: boolean) => void;
 }) {
-  const [sortOption, setSortOption] = useState<ResourceSortOption>("tab");
+  // This panel unmounts on every close, so the ordering is held by the store -
+  // see `resource-monitor-store.ts`.
+  const sortOption = useResourceMonitorStore((state) => state.sortOption);
+  const setSortOption = useResourceMonitorStore((state) => state.setSortOption);
   const searchQuery = props.searchQuery;
   const scope = props.scope;
   const sortMenuOpen = props.sortMenuOpen;
@@ -4612,7 +4625,11 @@ function openResourceOwner(args: {
       focus: focusForOwner(snapshot),
       // A preserved tile the human already chose to keep once: reopening it is
       // a return to their own tab, not a glance at a new one.
-      preparation: { kind: "open-tile", node: closedTile.node, preview: false },
+      preparation: {
+        kind: "open-tile",
+        node: closedTile.node,
+        gesture: "explicit",
+      },
       navigate: args.navigate,
       navigateNested: args.navigateNested,
       activeEpicId: args.activeEpicId,
@@ -4639,8 +4656,9 @@ function openResourceOwner(args: {
         }),
         // Same glance every other shell door is (see
         // `useOpenManagedCommandOutput`): jumping from a resource row to the
-        // log is a look, and the strip should not keep it unasked.
-        preview: true,
+        // log is a look, and the strip should not keep it unasked. `single` is
+        // the gesture that lands a preview tab.
+        gesture: "single",
       },
       navigate: args.navigate,
       navigateNested: args.navigateNested,
@@ -4682,7 +4700,7 @@ function openResourceOwner(args: {
         name: displayTitle(record.name, "agent"),
         hostId: record.hostId,
       },
-      preview: false,
+      gesture: "explicit",
     },
     navigate: args.navigate,
     navigateNested: args.navigateNested,
@@ -4749,9 +4767,13 @@ function prepareResourceTarget(
 ): NestedFocusTarget | null {
   const canvas = useEpicCanvasStore.getState();
   if (preparation.kind === "open-tile") {
-    return preparation.preview
-      ? canvas.prepareOpenTilePreviewInTabFocusTarget(tabId, preparation.node)
-      : canvas.prepareOpenTileInTabFocusTarget(tabId, preparation.node);
+    // `commitWithoutNavigation`: the caller already wrapped this in its own
+    // `navigateNested`, so the open must not issue a second route write.
+    return openTileWithNavigation(
+      tileIntent(preparation.node, { tabId }, preparation.gesture, "direct_ui"),
+      commitWithoutNavigation,
+      MANUAL_TILE_OPEN,
+    );
   }
   return canvas.prepareSetActiveTileTabFocusTarget(
     tabId,
@@ -4837,12 +4859,6 @@ function isOwnerNodeRef(ref: EpicCanvasTileRef): ref is EpicNodeRef {
     ref.type === "terminal" ||
     ref.type === "chat" ||
     ref.type === "terminal-agent"
-  );
-}
-
-function isResourceSortOption(value: string): value is ResourceSortOption {
-  return (
-    value === "memory" || value === "cpu" || value === "name" || value === "tab"
   );
 }
 

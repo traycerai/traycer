@@ -53,6 +53,7 @@ import {
   resourcesRegistry,
   type GlobalResourceProjection,
 } from "@/stores/resources/resources-registry";
+import { useResourceMonitorStore } from "@/stores/resources/resource-monitor-store";
 import { useTitleBarDragStore } from "@/stores/layout/title-bar-drag-store";
 import { queryClient } from "@/lib/query-client";
 import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
@@ -116,7 +117,7 @@ vi.mock("@/lib/host/stream-runtime-context", async (importOriginal) => {
 // `importOriginal` rather than a fixed factory, deliberately: a fixed one goes
 // stale the moment either module gains an export some other component in this
 // tree already calls, and fails at the call site rather than here.
-const openExternalLinkMock = vi.hoisted(() => ({ mutate: vi.fn() }));
+const openLinkMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/providers/use-runner-host", async (importOriginal) => {
   const actual =
@@ -127,22 +128,9 @@ vi.mock("@/providers/use-runner-host", async (importOriginal) => {
   };
 });
 
-vi.mock(
-  "@/hooks/runner/use-open-external-link-mutation",
-  async (importOriginal) => {
-    const actual =
-      await importOriginal<
-        typeof import("@/hooks/runner/use-open-external-link-mutation")
-      >();
-    return {
-      ...actual,
-      useRunnerOpenExternalLink: () => ({
-        isPending: false,
-        mutate: openExternalLinkMock.mutate,
-      }),
-    };
-  },
-);
+vi.mock("@/lib/links/open-link", () => ({
+  useOpenLink: () => openLinkMock,
+}));
 
 // The scope's own six hooks (both host lists, the runner host, the plan gate)
 // are not this suite's subject - it mocks at the scope boundary, exactly as the
@@ -384,7 +372,12 @@ vi.mock("@/hooks/epics/use-cloud-epic-tasks-query", () => ({
 
 const canvasMock = vi.hoisted(() => {
   const prepareOpenTileInTabFocusTarget = vi.fn();
+  const prepareOpenTileInTabFocusTargetFromSource = vi.fn();
+  const prepareOpenTilePreviewInTabFocusTargetFromSource = vi.fn();
+  const prepareOpenTileInBackgroundTabFocusTargetFromSource = vi.fn();
+  const prepareOpenTileInPaneFocusTargetFromSource = vi.fn();
   const prepareSetActiveTileTabFocusTarget = vi.fn();
+  const trackOpenedCanvasTile = vi.fn();
   const resolveTargetTabForEpic = vi.fn(() => "tab-2");
   const closedTilePayloadsByTabId: Record<
     string,
@@ -489,13 +482,22 @@ const canvasMock = vi.hoisted(() => {
       ],
     },
     prepareOpenTileInTabFocusTarget,
+    prepareOpenTileInTabFocusTargetFromSource,
+    prepareOpenTilePreviewInTabFocusTargetFromSource,
+    prepareOpenTileInBackgroundTabFocusTargetFromSource,
+    prepareOpenTileInPaneFocusTargetFromSource,
     prepareSetActiveTileTabFocusTarget,
     resolveTargetTabForEpic,
   };
   return {
     state,
     prepareOpenTileInTabFocusTarget,
+    prepareOpenTileInTabFocusTargetFromSource,
+    prepareOpenTilePreviewInTabFocusTargetFromSource,
+    prepareOpenTileInBackgroundTabFocusTargetFromSource,
+    prepareOpenTileInPaneFocusTargetFromSource,
     prepareSetActiveTileTabFocusTarget,
+    trackOpenedCanvasTile,
     resolveTargetTabForEpic,
   };
 });
@@ -508,7 +510,10 @@ vi.mock("@/stores/epics/canvas/store", () => {
       getState: () => canvasMock.state,
     },
   );
-  return { useEpicCanvasStore };
+  return {
+    useEpicCanvasStore,
+    trackOpenedCanvasTile: canvasMock.trackOpenedCanvasTile,
+  };
 });
 
 function resourceProcess(
@@ -835,7 +840,7 @@ afterEach(() => {
   cleanup();
   resourcesKillMock.mutate.mockClear();
   managedCommandStopMock.mutate.mockClear();
-  openExternalLinkMock.mutate.mockClear();
+  openLinkMock.mockClear();
   Reflect.deleteProperty(globalThis, "runnerHost");
   routerMock.navigate.mockReset();
   routerMock.pathname = "/epics/epic-1/tab-1";
@@ -868,7 +873,12 @@ afterEach(() => {
   tabNavigationMock.resourceEpicTabIntent.mockClear();
   tabNavigationMock.activateTabIntent.mockClear();
   canvasMock.prepareOpenTileInTabFocusTarget.mockReset();
+  canvasMock.prepareOpenTileInTabFocusTargetFromSource.mockReset();
+  canvasMock.prepareOpenTilePreviewInTabFocusTargetFromSource.mockReset();
+  canvasMock.prepareOpenTileInBackgroundTabFocusTargetFromSource.mockReset();
+  canvasMock.prepareOpenTileInPaneFocusTargetFromSource.mockReset();
   canvasMock.prepareSetActiveTileTabFocusTarget.mockReset();
+  canvasMock.trackOpenedCanvasTile.mockReset();
   canvasMock.resolveTargetTabForEpic.mockReset();
   canvasMock.resolveTargetTabForEpic.mockReturnValue("tab-2");
   __setResourcesStreamClientFactoryForTests(null);
@@ -881,6 +891,9 @@ afterEach(() => {
   globalResourcesUnsupportedMock.unsupported = null;
   resourcesRegistry.disposeAll();
   useTitleBarDragStore.setState({ suppressors: new Set() });
+  // The sort pick is persisted, so it outlives a test that changed it - reset
+  // it the way every other shared store here is reset.
+  useResourceMonitorStore.getState().setSortOption("tab");
   queryClient.clear();
 });
 
@@ -948,6 +961,33 @@ describe("ResourceMonitorPopover", () => {
         .getByRole("menuitemradio", { name: "Tab order" })
         .getAttribute("aria-checked"),
     ).toBe("true");
+  });
+
+  it("keeps the chosen sort option after the popover is closed and reopened", () => {
+    const stub = installStubFactory();
+    renderPopover();
+
+    act(() => {
+      stub.emit().onSnapshot(projection({ owners: [owner({})] }));
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    fireEvent.pointerDown(
+      screen.getByRole("button", { name: "Sort resource rows" }),
+      { button: 0, ctrlKey: false, pointerType: "mouse" },
+    );
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Memory" }));
+
+    // Closing unmounts the panel - the pick has to survive that, not the panel.
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(
+      screen.queryByRole("searchbox", { name: "Search resources" }),
+    ).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    expect(
+      screen.getByRole("button", { name: "Sort resource rows" }).textContent,
+    ).toContain("Memory");
   });
 
   it("filters tasks and owners with case-insensitive free text", () => {
@@ -2579,7 +2619,7 @@ describe("ResourceMonitorPopover", () => {
             cwd: "/work/background",
           },
           // A tile the human kept once already: reopening it is a return.
-          preview: false,
+          gesture: "explicit",
         },
       }),
     );
@@ -2697,7 +2737,11 @@ describe("ResourceMonitorPopover", () => {
     expect(navigateNestedMock).not.toHaveBeenCalled();
     expect(tabNavigationMock.resourceEpicTabIntent).not.toHaveBeenCalled();
     expect(tabNavigationMock.activateTabIntent).not.toHaveBeenCalled();
-    expect(canvasMock.prepareOpenTileInTabFocusTarget).not.toHaveBeenCalled();
+    // Disabled row: the click handler never runs, so no open-tile plan is
+    // ever resolved and none of the `prepare*FromSource` actions fire.
+    expect(
+      canvasMock.prepareOpenTileInTabFocusTargetFromSource,
+    ).not.toHaveBeenCalled();
   });
 
   it("reopens a closed terminal tile of the CURRENT tab through the same-route boundary", async () => {
@@ -2716,7 +2760,11 @@ describe("ResourceMonitorPopover", () => {
         pendingCreate: false,
       },
     };
-    canvasMock.prepareOpenTileInTabFocusTarget.mockReturnValue({
+    // Non-empty canvas (tab-1 already hosts pane-1): `resolveTileOpen`'s
+    // default-tab-placement path lands on that pane via `anchorPaneId`, so
+    // the executor dispatches `prepareOpenTileInPaneFocusTargetFromSource`
+    // rather than the (now empty-canvas-only) tab-level opener.
+    canvasMock.prepareOpenTileInPaneFocusTargetFromSource.mockReturnValue({
       paneId: "pane-1",
       tileInstanceId: "tile-term-gone",
     });
@@ -2754,8 +2802,11 @@ describe("ResourceMonitorPopover", () => {
       "tab-1",
       expect.any(Function),
     );
-    expect(canvasMock.prepareOpenTileInTabFocusTarget).toHaveBeenCalledWith(
+    expect(
+      canvasMock.prepareOpenTileInPaneFocusTargetFromSource,
+    ).toHaveBeenCalledWith(
       "tab-1",
+      "pane-1",
       {
         id: "term-gone",
         instanceId: "tile-term-gone",
@@ -2765,6 +2816,7 @@ describe("ResourceMonitorPopover", () => {
         hostId: "host-1",
         cwd: "/work",
       },
+      { mode: "permanent", index: null, source: "direct_ui" },
     );
     expect(tabNavigationMock.resourceEpicTabIntent).not.toHaveBeenCalled();
     expect(tabNavigationMock.activateTabIntent).not.toHaveBeenCalled();
@@ -2814,13 +2866,17 @@ describe("ResourceMonitorPopover", () => {
       "pane-1",
       "tile-term-1",
     );
-    expect(canvasMock.prepareOpenTileInTabFocusTarget).not.toHaveBeenCalled();
+    // `activate-tile` preparation, not `open-tile`: this never reaches
+    // `openTileWithNavigation`, so no `prepare*FromSource` action fires.
+    expect(
+      canvasMock.prepareOpenTileInTabFocusTargetFromSource,
+    ).not.toHaveBeenCalled();
   });
 
-  it("commits a not-yet-open owner through prepareOpenTileInTabFocusTarget + cross-route navigation", async () => {
+  it("commits a not-yet-open owner through prepareOpenTileInTabFocusTargetFromSource + cross-route navigation", async () => {
     routerMock.pathname = "/epics/epic-1/tab-1";
     canvasMock.resolveTargetTabForEpic.mockReturnValue("tab-2");
-    canvasMock.prepareOpenTileInTabFocusTarget.mockReturnValue({
+    canvasMock.prepareOpenTileInTabFocusTargetFromSource.mockReturnValue({
       paneId: "pane-2",
       tileInstanceId: "instance-new",
     });
@@ -2850,7 +2906,12 @@ describe("ResourceMonitorPopover", () => {
     fireEvent.click(await screen.findByText("Agent Chat"));
 
     expect(canvasMock.resolveTargetTabForEpic).not.toHaveBeenCalled();
-    expect(canvasMock.prepareOpenTileInTabFocusTarget).not.toHaveBeenCalled();
+    // Cross-route: the real `tab-navigation.ts` (which would eventually call
+    // `openTileWithNavigation`) is mocked out entirely here, so no local
+    // store action ever runs.
+    expect(
+      canvasMock.prepareOpenTileInTabFocusTargetFromSource,
+    ).not.toHaveBeenCalled();
     expect(navigateNestedMock).not.toHaveBeenCalled();
     expect(tabNavigationMock.resourceEpicTabIntent).toHaveBeenCalledTimes(1);
     const input = tabNavigationMock.resourceEpicTabIntent.mock.calls[0]?.[0];
@@ -4489,7 +4550,11 @@ describe("ResourceMonitorPopover · host picker", () => {
     // surfaces cannot drift on what a person is supposed to do next — and it
     // has to ACT, or it is decoration with the right test id.
     fireEvent.click(screen.getByTestId("host-scope-plan-upgrade"));
-    expect(openExternalLinkMock.mutate).toHaveBeenCalled();
+    expect(openLinkMock).toHaveBeenCalledWith(
+      expect.any(String),
+      "account",
+      null,
+    );
 
     // Still a way back, for someone who would rather keep watching than pay.
     fireEvent.click(
@@ -4858,7 +4923,9 @@ describe("ResourceMonitorPopover · host picker", () => {
         pendingCreate: false,
       },
     };
-    canvasMock.prepareOpenTileInTabFocusTarget.mockReturnValue({
+    // tab-1's canvas is non-empty (afterEach resets it to pane-1 with
+    // tile-term-1), so `resolveTileOpen` anchors this open on that pane.
+    canvasMock.prepareOpenTileInPaneFocusTargetFromSource.mockReturnValue({
       paneId: "pane-1",
       tileInstanceId: "tile-term-shared-b",
     });
@@ -4899,17 +4966,25 @@ describe("ResourceMonitorPopover · host picker", () => {
     expect(row.disabled).toBe(false);
     fireEvent.click(row);
 
-    expect(canvasMock.prepareOpenTileInTabFocusTarget).toHaveBeenCalledWith(
+    expect(
+      canvasMock.prepareOpenTileInPaneFocusTargetFromSource,
+    ).toHaveBeenCalledWith(
       "tab-1",
+      "pane-1",
       expect.objectContaining({
         id: "term-shared",
         instanceId: "tile-term-shared-b",
         hostId: "host-b",
       }),
+      { mode: "permanent", index: null, source: "direct_ui" },
     );
-    expect(canvasMock.prepareOpenTileInTabFocusTarget).not.toHaveBeenCalledWith(
+    expect(
+      canvasMock.prepareOpenTileInPaneFocusTargetFromSource,
+    ).not.toHaveBeenCalledWith(
       "tab-1",
+      expect.anything(),
       expect.objectContaining({ instanceId: "tile-term-shared-a" }),
+      expect.anything(),
     );
   });
 });

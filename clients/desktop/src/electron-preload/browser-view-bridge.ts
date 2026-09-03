@@ -19,6 +19,9 @@ import type {
   BrowserViewTileKey,
   BrowserViewNativeTabCapability,
   BrowserViewNativeTabStatusChange,
+  LoginImportResult,
+  LoginImportScan,
+  LoginImportSource,
 } from "@traycer-clients/shared/platform/browser-view";
 import type {
   BrowserAnnotationAttachedIpcEvent,
@@ -168,6 +171,23 @@ export function buildBrowserViewBridge(): { browserView: BrowserViewBridge } {
           RunnerHostInvoke.browserViewClearSite,
           input,
         ) as Promise<void>,
+      listLoginImportSources: () =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.browserViewLoginImportListSources,
+        ) as Promise<readonly LoginImportSource[]>,
+      pickLoginImportFile: () =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.browserViewLoginImportPickFile,
+        ) as Promise<LoginImportSource | null>,
+      scanLoginImportSource: (sourceId) =>
+        ipcRenderer.invoke(RunnerHostInvoke.browserViewLoginImportScan, {
+          sourceId,
+        }) as Promise<LoginImportScan>,
+      importLogins: (input) =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.browserViewLoginImportRun,
+          input,
+        ) as Promise<LoginImportResult>,
       onFindChange: (handler) =>
         subscribe<BrowserViewFindChange>(
           RunnerHostEvent.browserViewFindChange,

@@ -501,6 +501,12 @@ export const browserTabPreviewSchema = z
   .strict();
 export type BrowserTabPreview = z.infer<typeof browserTabPreviewSchema>;
 
+/** Who opened the tab: the agent driving the session, or the page itself. */
+const browserTabOpenedSourceSchema = z.enum(["agent", "page"]);
+export type BrowserTabOpenedSource = z.infer<
+  typeof browserTabOpenedSourceSchema
+>;
+
 export const browserSessionsServerFrameSchema = z.discriminatedUnion("kind", [
   z
     .object({
@@ -533,10 +539,11 @@ export const browserSessionsServerFrameSchema = z.discriminatedUnion("kind", [
     .strict(),
   z
     .object({
-      kind: z.literal("agentTabOpened"),
+      kind: z.literal("tabOpened"),
       ...textFrameFields,
       ...browserSessionReferenceFields,
       tabId: z.string(),
+      source: browserTabOpenedSourceSchema,
     })
     .strict(),
   z

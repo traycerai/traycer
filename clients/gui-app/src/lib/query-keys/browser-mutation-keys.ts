@@ -14,6 +14,14 @@ export const browserMutationKeys = {
    * other machine-local prefs take.
    */
   setSaveLogins: () => ["browser.setSaveLogins"] as const,
+  /**
+   * "Import logins from another browser". Machine-local like the toggle: the
+   * jars it reads and the jar it writes are this desktop's, so a static key
+   * is the whole scope.
+   */
+  importLogins: () => ["browser.importLogins"] as const,
+  /** The native file picker for a cookie export; same scope, same reason. */
+  pickLoginImportFile: () => ["browser.pickLoginImportFile"] as const,
 };
 
 export const browserQueryKeys = {
@@ -33,4 +41,16 @@ export const browserQueryKeys = {
    */
   saveLogins: (browserView: object | null) =>
     ["browser.saveLogins", browserView] as const,
+  /**
+   * The browsers and profiles the desktop can import logins from. Same bridge
+   * argument, same reasoning as {@link browserQueryKeys.saveLogins}.
+   */
+  loginImportSources: (browserView: object | null) =>
+    ["browser.loginImportSources", browserView] as const,
+  /**
+   * One source's scan. The source id is minted by the desktop per listing, so
+   * a scan can never outlive the listing it came from.
+   */
+  loginImportScan: (browserView: object | null, sourceId: string | null) =>
+    ["browser.loginImportScan", browserView, sourceId] as const,
 };

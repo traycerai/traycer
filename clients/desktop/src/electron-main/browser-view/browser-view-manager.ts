@@ -95,7 +95,6 @@ interface BrowserViewManagerOptions {
   ) => ManagedBrowserView;
   readonly getWindow: (windowId: string) => BrowserViewWindow | null;
   readonly createPopupWindowOptions: (
-    windowId: string,
     request: BrowserSessionProfileRequest,
   ) => BrowserWindowConstructorOptions;
   readonly createDevToolsWindow: (

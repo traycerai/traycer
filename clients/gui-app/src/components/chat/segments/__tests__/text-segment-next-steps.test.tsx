@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TextSegment } from "@/components/chat/segments/text-segment";
 import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
 import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
+import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 import {
   openStoreForTest,
   type OpenedStoreForTest,
@@ -18,7 +19,7 @@ const KNOWN_AGENT_ID = "be923cf0-e487-4572-b76b-8c70cf6136dd";
 const KNOWN_ROLE_CLAIM_ID = "e901561e-f565-461f-8f45-b9bd1c3dd07d";
 const FIRST_NEXT_STEP = "Use /implementation-validation to validate the work";
 const tileNavigationMocks = vi.hoisted(() => ({
-  openTileInEpic: vi.fn(),
+  openTile: vi.fn(),
 }));
 const agentReferenceHostState = vi.hoisted(() => ({
   ownerHostId: "host-1" as string | null,
@@ -92,7 +93,7 @@ vi.mock("@/components/ui/tooltip-wrapper", () => ({
 
 vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
   useEpicTileNavigation: () => ({
-    openTileInEpic: tileNavigationMocks.openTileInEpic,
+    openTile: tileNavigationMocks.openTile,
   }),
 }));
 
@@ -167,7 +168,7 @@ describe("TextSegment next steps rendering", () => {
         },
       },
     });
-    tileNavigationMocks.openTileInEpic.mockClear();
+    tileNavigationMocks.openTile.mockClear();
     agentReferenceHostState.ownerHostId = "host-1";
     agentReferenceHostState.ownerUserId = "user-1";
     agentReferenceHostState.sessionHostId = "host-session";
@@ -438,13 +439,17 @@ describe("TextSegment next steps rendering", () => {
       );
     }
     fireEvent.click(roleReferences[0]);
-    expect(tileNavigationMocks.openTileInEpic).toHaveBeenCalledWith(
-      "epic-1",
+    expect(tileNavigationMocks.openTile).toHaveBeenCalledWith(
       expect.objectContaining({
-        id: KNOWN_AGENT_ID,
-        name: "Planning Agent",
-        type: "chat",
-        hostId: "host-1",
+        node: expect.objectContaining({
+          id: KNOWN_AGENT_ID,
+          name: "Planning Agent",
+          type: "chat",
+          hostId: "host-1",
+        }) as EpicCanvasTileRef,
+        target: { epicId: "epic-1" },
+        // The chip is a button, so it pins the tile (R6).
+        gesture: "explicit",
       }),
     );
     expect(screen.queryByText(KNOWN_ROLE_CLAIM_ID)).toBeNull();
@@ -466,15 +471,19 @@ describe("TextSegment next steps rendering", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Planning Agent" }));
-    expect(tileNavigationMocks.openTileInEpic).toHaveBeenCalledWith(
-      "epic-1",
+    expect(tileNavigationMocks.openTile).toHaveBeenCalledWith(
       expect.objectContaining({
-        type: "published-chat",
-        hostId: "host-session",
-        taskId: "epic-1",
-        chatId: KNOWN_AGENT_ID,
-        ownerHostId: "host-owner",
-        ownerUserId: "user-owner",
+        node: expect.objectContaining({
+          type: "published-chat",
+          hostId: "host-session",
+          taskId: "epic-1",
+          chatId: KNOWN_AGENT_ID,
+          ownerHostId: "host-owner",
+          ownerUserId: "user-owner",
+        }) as EpicCanvasTileRef,
+        target: { epicId: "epic-1" },
+        // The chip is a button, so it pins the tile (R6).
+        gesture: "explicit",
       }),
     );
   });

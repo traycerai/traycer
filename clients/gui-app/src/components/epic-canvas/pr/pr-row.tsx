@@ -29,7 +29,7 @@ import {
   PR_STATE_PILL_CLASS,
   PR_STATE_TINT_CLASS,
 } from "@/components/worktree/worktree-pr-state-palette";
-import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link-mutation";
+import { useOpenLinkWithPending } from "@/lib/links/open-link";
 import {
   formatPrBaseFromHead,
   formatPrRowTitle,
@@ -44,7 +44,7 @@ import {
 import { useRelativeTimestamp } from "@/lib/relative-time";
 import { useIsActiveTile } from "@/stores/epics/canvas/store";
 import { cn } from "@/lib/utils";
-import { RunnerHostContext } from "@/providers/runner-host-context";
+import { onMiddleClick } from "@/lib/dom/on-middle-click";
 
 /**
  * Every badge on row 1 speaks the hover card's dialect: borderless tint,
@@ -487,37 +487,31 @@ function PrNumberAnchor(props: {
   readonly state: PrState;
   readonly children: ReactNode;
 }): ReactNode {
-  const runnerHost = use(RunnerHostContext);
-  const openExternalLink = useRunnerOpenExternalLink();
-  const isPending = openExternalLink.isPending;
+  // In-flight guarded: a double click on the badge would otherwise fire two
+  // bridge requests and open two OS tabs (R10).
+  const { isPending, openLink } = useOpenLinkWithPending();
   const handleClick = useCallback(
     (event: MouseEvent<HTMLAnchorElement>): void => {
       // The row opens the detail tile; this badge means GitHub.
       event.stopPropagation();
-      // No RunnerHost bound (e.g. web): let the browser handle the anchor
-      // natively, preserving modifier-click/middle-click tab semantics.
-      if (runnerHost === null) return;
       event.preventDefault();
-      // Guard against a second RunnerHost request firing while the first
-      // `openExternalLink` mutation for this PR is still in flight - `mutate`
-      // fires one per call, so a double click opens the browser twice. Same
-      // guard as `PrDetailGitHubLink` and `PrExternalGitHubLink`.
       if (isPending) return;
-      openExternalLink.mutate(props.prUrl);
+      void openLink(props.prUrl, "github", event);
     },
-    [isPending, openExternalLink, props.prUrl, runnerHost],
+    [isPending, openLink, props.prUrl],
   );
   return (
     <a
       href={props.prUrl}
-      target="_blank"
-      rel="noreferrer"
       aria-label={props.ariaLabel}
-      className={props.className}
+      // The guard drops activation while a handoff is in flight, so the
+      // anchor must not keep announcing itself as actionable.
       aria-disabled={isPending}
+      className={props.className}
       data-testid="pr-row-number"
       data-pr-state={props.state}
       onClick={handleClick}
+      onAuxClick={onMiddleClick(handleClick)}
     >
       {props.children}
     </a>

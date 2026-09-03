@@ -1,4 +1,5 @@
 import "../../../../__tests__/test-browser-apis";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   cleanup,
   fireEvent,
@@ -8,6 +9,9 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BrowserSettingsSection } from "@/components/settings/browser-settings-section";
+import { FakeBrowserViewBridge } from "@/lib/browser-view/__tests__/fake-browser-view-bridge";
+import { useBrowserFocusStore } from "@/stores/settings/browser-focus-store";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 import type { BrowserSaveLoginsController } from "@/lib/browser-view/use-browser-save-logins";
 import type {
   BrowserSavedLoginSite,
@@ -81,6 +85,15 @@ const browserView = vi.hoisted(() => ({
   forgetLogins: vi.fn(() => Promise.resolve(true)),
   clearSavedLoginSite: vi.fn((_domain: string) => Promise.resolve(true)),
 }));
+/**
+ * What `useRunnerHostOrNull` hands the section: the stub above for most of the
+ * suite, and a real `FakeBrowserViewBridge` for the import-row tests that open
+ * `<ImportLoginsDialog />`, whose four login-import calls the stub does not
+ * answer.
+ */
+const browserViewState = vi.hoisted((): { current: object } => ({
+  current: {},
+}));
 
 function boundHostRuntime(): object {
   return {
@@ -92,7 +105,7 @@ function boundHostRuntime(): object {
 }
 
 vi.mock("@/providers/use-runner-host", () => ({
-  useRunnerHostOrNull: () => ({ browserView }),
+  useRunnerHostOrNull: () => ({ browserView: browserViewState.current }),
 }));
 
 vi.mock("@/lib/host", () => ({
@@ -120,7 +133,15 @@ vi.mock("@/lib/browser-view/use-browser-save-logins", () => ({
 }));
 
 vi.mock("@/hooks/browser/use-browser-saved-login-sites-query", () => ({
+  BROWSER_SAVED_LOGIN_SITES_METHOD: "browser.savedLoginSites",
   useBrowserSavedLoginSitesQuery: () => ({ data: sites.current, refetch }),
+}));
+
+// The import dialog's run mutation resolves the surface host to invalidate
+// the saved-sites list on success; the binding stub above has no client to
+// resolve through, and this suite asserts only that the dialog opens.
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => "host-1",
 }));
 
 function controller(
@@ -145,7 +166,14 @@ function renderSection(
 ): void {
   saveLogins.current = current;
   sites.current = data;
-  render(<BrowserSettingsSection />);
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  render(
+    <QueryClientProvider client={client}>
+      <BrowserSettingsSection />
+    </QueryClientProvider>,
+  );
 }
 
 function toggle(): HTMLElement {
@@ -154,6 +182,7 @@ function toggle(): HTMLElement {
 
 describe("<BrowserSettingsSection /> saved logins", () => {
   beforeEach(() => {
+    browserViewState.current = browserView;
     hostBinding.current = boundHostRuntime();
     hostDirectory.localHostId = null;
     hostDirectory.labels = {};
@@ -164,6 +193,8 @@ describe("<BrowserSettingsSection /> saved logins", () => {
     browserView.forgetLogins.mockClear();
     browserView.clearSavedLoginSite.mockClear();
     refetch.mockClear();
+    hostBinding.current = {};
+    useSettingsStore.setState({ browserDevOrigins: [] });
   });
 
   it("reflects the machine's decision", () => {
@@ -228,6 +259,10 @@ describe("<BrowserSettingsSection /> saved logins", () => {
 
   it("renders nothing at all without a host runtime", () => {
     hostBinding.current = null;
+    // Seeded so the dev-origins group has a row: it is all that is left of the
+    // Browser group now that link and agent-tab controls live in Settings >
+    // Opening behavior.
+    useSettingsStore.setState({ browserDevOrigins: ["http://localhost:5173"] });
     renderSection(controller({ enabled: true }), {
       kind: "sites",
       sites: [savedSite("example.com")],
@@ -241,7 +276,7 @@ describe("<BrowserSettingsSection /> saved logins", () => {
       screen.queryByRole("button", { name: "Forget all browser logins…" }),
     ).toBeNull();
     // The rest of the Browser section is unaffected.
-    expect(screen.getByText("Web link default")).not.toBeNull();
+    expect(screen.getByText("Detected dev origins")).not.toBeNull();
   });
 
   it("lists site names and last-seen times, and never a value", () => {
@@ -483,6 +518,95 @@ describe("<BrowserSettingsSection /> saved logins", () => {
       expect(
         screen.getByText("Includes a sign-in from host-there"),
       ).not.toBeNull();
+    });
+  });
+
+  it("disables the import row with the correct inline hint when saved logins is off", () => {
+    renderSection(controller({ enabled: false }), null);
+
+    const importButton = screen.getByRole("button", {
+      name: "Import logins…",
+    });
+    expect(importButton.hasAttribute("disabled")).toBe(true);
+    expect(
+      screen.getByText("Turn on Save website logins first."),
+    ).not.toBeNull();
+  });
+
+  it("does not show the off hint, and leaves the import row enabled, when saved logins is on", () => {
+    renderSection(controller({ enabled: true }), null);
+
+    const importButton = screen.getByRole("button", {
+      name: "Import logins…",
+    });
+    expect(importButton.hasAttribute("disabled")).toBe(false);
+    expect(screen.queryByText("Turn on Save website logins first.")).toBeNull();
+  });
+
+  it("opens the import dialog when saved logins is on and a browserView bridge exists", async () => {
+    browserViewState.current = new FakeBrowserViewBridge();
+    renderSection(controller({ enabled: true }), null);
+
+    fireEvent.click(screen.getByRole("button", { name: "Import logins…" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("import-logins-dialog")).not.toBeNull();
+    });
+    expect(
+      screen.getByRole("heading", {
+        name: "Import logins from another browser",
+      }),
+    ).not.toBeNull();
+  });
+
+  describe("the import intent (browser-focus-store)", () => {
+    afterEach(() => {
+      useBrowserFocusStore.setState({ openImportLogins: false });
+    });
+
+    it("an armed intent opens the dialog on mount without a click", async () => {
+      browserViewState.current = new FakeBrowserViewBridge();
+      useBrowserFocusStore.getState().requestImportLogins();
+
+      renderSection(controller({ enabled: true }), null);
+
+      await waitFor(() => {
+        expect(screen.getByTestId("import-logins-dialog")).not.toBeNull();
+      });
+    });
+
+    it("closing consumes the intent, so it stays closed on a remount", async () => {
+      browserViewState.current = new FakeBrowserViewBridge();
+      useBrowserFocusStore.getState().requestImportLogins();
+
+      renderSection(controller({ enabled: true }), null);
+      await waitFor(() => {
+        expect(screen.getByTestId("import-logins-dialog")).not.toBeNull();
+      });
+
+      fireEvent.keyDown(document, { key: "Escape" });
+      await waitFor(() => {
+        expect(screen.queryByTestId("import-logins-dialog")).toBeNull();
+      });
+      expect(useBrowserFocusStore.getState().openImportLogins).toBe(false);
+
+      cleanup();
+      renderSection(controller({ enabled: true }), null);
+      expect(screen.queryByTestId("import-logins-dialog")).toBeNull();
+    });
+
+    it("an intent armed with saving off opens nothing and still consumes it", async () => {
+      browserViewState.current = new FakeBrowserViewBridge({
+        saveLogins: false,
+      });
+      useBrowserFocusStore.getState().requestImportLogins();
+
+      renderSection(controller({ enabled: false }), null);
+
+      await waitFor(() => {
+        expect(useBrowserFocusStore.getState().openImportLogins).toBe(false);
+      });
+      expect(screen.queryByTestId("import-logins-dialog")).toBeNull();
     });
   });
 });

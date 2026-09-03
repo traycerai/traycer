@@ -1,14 +1,28 @@
 import "../../../../../__tests__/test-browser-apis";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render as renderUi,
+  type RenderResult,
+  screen,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import type { BrowserSessionsState } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
 import { renderTile } from "@/components/epic-canvas/renderers/tile-render";
-import { useBrowserLinkRouter } from "@/lib/browser-view/link-routing/browser-link-router";
-import type { BrowserLinkOpenResult } from "@/lib/browser-view/link-routing/browser-link-routing-core";
+import { useOpenLink } from "@/lib/links/open-link";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
+import { WithTestQueryClient } from "@/__tests__/with-test-query-client";
+
+/**
+ * Every link surface below reaches the external-link bridge mutation, which
+ * needs a `QueryClientProvider` above it.
+ */
+function render(ui: ReactNode): RenderResult {
+  return renderUi(ui, { wrapper: WithTestQueryClient });
+}
 
 const CANVAS_HOST_ID = "host-canvas";
 const TILE_HOST_ID = "host-remote";
@@ -22,10 +36,6 @@ const EPIC_ID = "epic-1";
 const sessionsHarness = vi.hoisted(() => ({
   acquiredHostIds: [] as string[],
   openTabCalls: [] as Array<{ readonly hostId: string; readonly url: string }>,
-}));
-
-const routerHarness = vi.hoisted(() => ({
-  results: [] as string[],
 }));
 
 vi.mock(
@@ -137,18 +147,13 @@ function liveSessionsState(hostId: string): BrowserSessionsState {
  * links): it only reads the shared router, with no host knowledge of its own.
  */
 function LinkClickProbe() {
-  const route = useBrowserLinkRouter();
+  const openLink = useOpenLink();
   return (
     <button
       type="button"
       data-testid="tile-link"
       onClick={() => {
-        const result: BrowserLinkOpenResult = route(
-          "markdown",
-          "https://example.test/docs",
-          null,
-        );
-        routerHarness.results.push(result);
+        void openLink("https://example.test/docs", "markdown", null);
       }}
     >
       link
@@ -170,12 +175,15 @@ describe("renderTile browser sessions host boundary", () => {
   beforeEach(() => {
     sessionsHarness.acquiredHostIds = [];
     sessionsHarness.openTabCalls = [];
-    routerHarness.results = [];
     useEpicCanvasStore.setState({ canvasByTabId: {}, tabsById: {} });
     useSettingsStore.setState({
-      browserLinkDefaultMode: "in-app",
-      markdownBrowserLinkOpenMode: "in-app",
-      terminalBrowserLinkOpenMode: "in-app",
+      linkOpen: {
+        default: "in-app",
+        markdown: "in-app",
+        terminal: "in-app",
+        github: "in-app",
+        image: "in-app",
+      },
       browserDevOrigins: [],
     });
   });
@@ -196,7 +204,6 @@ describe("renderTile browser sessions host boundary", () => {
     fireEvent.click(screen.getByTestId("tile-link"));
 
     expect(sessionsHarness.acquiredHostIds).toEqual([TILE_HOST_ID]);
-    expect(routerHarness.results).toEqual(["in-app"]);
     expect(sessionsHarness.openTabCalls).toEqual([
       { hostId: TILE_HOST_ID, url: "https://example.test/docs" },
     ]);

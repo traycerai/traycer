@@ -490,6 +490,51 @@ describe("BrowserPrimaryProfileSnapshotCoordinator", () => {
     expect(coordinator.rememberedOrigins()).toEqual([]);
   });
 
+  it("clearableOrigins names an origin whose read is still in flight", async () => {
+    let resolveInFlight: (
+      snapshot: BrowserPrimaryProfileOriginSnapshot,
+    ) => void = () => undefined;
+    const { coordinator } = createTestCoordinator(
+      () =>
+        new Promise((resolve) => {
+          resolveInFlight = resolve;
+        }),
+    );
+    const webContents = {
+      getURL: () => "https://unused.example/",
+      executeJavaScript: () => Promise.resolve([]),
+    };
+
+    coordinator.observe("https://pending.example/inbox", webContents);
+
+    // The read has not settled yet: rememberedOrigins (what a CAPTURE draws
+    // on) knows nothing about it, but clearableOrigins (what a site clear can
+    // NAME) does - otherwise a clear that only invalidated the read would
+    // leave the tile's live localStorage in place to meet the imported
+    // cookies on the next reload.
+    expect(coordinator.clearableOrigins()).toEqual(["https://pending.example"]);
+    expect(coordinator.rememberedOrigins()).toEqual([]);
+
+    resolveInFlight({
+      origin: "https://pending.example",
+      localStorage: [{ name: "token", value: "kept" }],
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Once the read settles it moves into the remembered tier, and
+    // clearableOrigins still names it (now via rememberedOrigins) rather than
+    // double-counting it as still pending.
+    expect(coordinator.rememberedOrigins()).toEqual([
+      {
+        origin: "https://pending.example",
+        localStorage: [{ name: "token", value: "kept" }],
+      },
+    ]);
+    expect(coordinator.clearableOrigins()).toEqual(["https://pending.example"]);
+  });
+
   it("keeps a demoted origin's fresh value when a LATER tab re-seeds the same jar", async () => {
     // `retainSeededOrigins` runs once per PROVISIONED TAB, not once per run.
     // A wholesale replace on the second tab's seed drops what LRU eviction

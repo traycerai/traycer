@@ -2,7 +2,6 @@ import {
   type MouseEvent,
   type ReactNode,
   type RefObject,
-  use,
   useCallback,
   useEffect,
   useEffectEvent,
@@ -11,6 +10,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { useIsMutating } from "@tanstack/react-query";
 import { useNavigate, useRouter } from "@tanstack/react-router";
 import { AnimatePresence, m } from "motion/react";
 import { traycerInfo } from "@traycer-clients/shared/platform/traycer-info";
@@ -35,14 +35,21 @@ import {
   OnboardingPhoneDiorama,
   type OnboardingPhoneSceneId,
 } from "@/components/onboarding/onboarding-phone-diorama";
+import { OnboardingLoginImportStage } from "@/components/onboarding/onboarding-login-import-stage";
 import { OnboardingSessionImportStage } from "@/components/onboarding/onboarding-session-import-stage";
 import { OnboardingThemePicker } from "@/components/onboarding/onboarding-theme-picker";
+import {
+  useSessionImportScan,
+  type SessionImportScanHandle,
+} from "@/components/session-import/use-session-import-scan";
 import { useAgentSelectionGuideGlobalOnboardingDraftQuery } from "@/hooks/agent/use-agent-selection-guide-global-onboarding-draft-query";
 import { useAgentSelectionGuideSetGlobalMutation } from "@/hooks/agent/use-agent-selection-guide-set-global-mutation";
+import { useLoginImportAvailable } from "@/hooks/browser/use-login-import-available";
 import { useSessionImportAvailable } from "@/hooks/session-import/use-session-import-available";
-import { RunnerHostContext } from "@/providers/runner-host-context";
+import { browserMutationKeys } from "@/lib/query-keys";
 import { getClientAppVersionLabel } from "@/lib/app-version";
 import { shortcutHintsVisible } from "@/lib/keybindings/shortcut-hints";
+import { useOpenLink } from "@/lib/links/open-link";
 import { isMobileApp } from "@/lib/mobile-app";
 import { readSafeAreaInsets } from "@/lib/safe-area-insets";
 import {
@@ -51,8 +58,11 @@ import {
   useOnboardingStore,
 } from "@/stores/onboarding/onboarding-store";
 import { useOnboardingTourOpenStore } from "@/stores/onboarding/onboarding-tour-open-store";
+import { useSessionImportRunStore } from "@/stores/session-import/session-import-run-store";
+import { useFeatureAnnouncementsStore } from "@/stores/settings/feature-announcements-store";
 import { cn } from "@/lib/utils";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
+import { onMiddleClick } from "@/lib/dom/on-middle-click";
 
 const ACT_EASE = [0.32, 0.72, 0, 1] as const;
 const ONBOARDING_FOOTER_LINKS = [
@@ -582,6 +592,7 @@ type OnboardingMiniature =
   | { readonly kind: "desktop"; readonly actId: DesktopOnboardingActId }
   | { readonly kind: "phone"; readonly scene: OnboardingPhoneSceneId }
   | { readonly kind: "session-import" }
+  | { readonly kind: "login-import" }
   | { readonly kind: "none" };
 
 /**
@@ -593,8 +604,9 @@ type OnboardingMiniature =
  * The two acts that do real setup work drop the miniature on a phone: providers
  * already stacked to its list-only layout below `lg`, and the agent guide moves
  * its editor into the copy rail, where a phone keyboard can reach it. Session
- * import is desktop-only (the mobile tour never lists it), and shows no
- * miniature at all - its stage is the live wizard.
+ * import and login import are desktop-only (the mobile tour never lists
+ * them), and show no miniature at all - their stages are the live wizard and
+ * the live import flow.
  */
 function miniatureForAct(actId: OnboardingActId): OnboardingMiniature {
   const mobile = isMobileApp();
@@ -612,6 +624,8 @@ function miniatureForAct(actId: OnboardingActId): OnboardingMiniature {
       return mobile ? { kind: "none" } : { kind: "desktop", actId };
     case "session-import":
       return { kind: "session-import" };
+    case "login-import":
+      return { kind: "login-import" };
     case "mobile-tasks":
       return { kind: "phone", scene: "drawer" };
     case "mobile-switcher":
@@ -631,21 +645,18 @@ function OnboardingMiniatureColumn(props: {
   readonly addon: OnboardingAct["addon"];
   readonly miniature: OnboardingMiniature;
   readonly agentGuide: OnboardingAgentGuideState;
-  readonly registerSessionImportSubmit: (submit: () => void) => void;
+  readonly sessionImportScan: SessionImportScanHandle;
 }) {
-  const { actId, addon, miniature, agentGuide, registerSessionImportSubmit } =
-    props;
+  const { actId, addon, miniature, agentGuide, sessionImportScan } = props;
   if (miniature.kind === "none") return null;
   const phone = miniature.kind === "phone";
   let content: ReactNode;
   if (miniature.kind === "phone") {
     content = <OnboardingPhoneDiorama scene={miniature.scene} />;
   } else if (miniature.kind === "session-import") {
-    content = (
-      <OnboardingSessionImportStage
-        registerSubmit={registerSessionImportSubmit}
-      />
-    );
+    content = <OnboardingSessionImportStage scan={sessionImportScan} />;
+  } else if (miniature.kind === "login-import") {
+    content = <OnboardingLoginImportStage />;
   } else {
     content = (
       <OnboardingDiorama actId={miniature.actId} agentGuide={agentGuide} />
@@ -819,6 +830,28 @@ function OnboardingWordmark() {
   );
 }
 
+/**
+ * The session scan starts with the tour, not with its last act: reading every
+ * session on the machine takes a while, and the acts before the import one are
+ * exactly that while. Only a tour that will actually show the act pays for it -
+ * the phone tour never lists it, capability or not - and it pauses while a run
+ * is in flight. A finished run does not hold it back: a replayed tour after an
+ * earlier import would otherwise wait for the whole scan at the last act.
+ */
+function useOnboardingSessionImportScan(
+  acts: ReadonlyArray<OnboardingAct>,
+): SessionImportScanHandle {
+  const tourShowsSessionImport = acts.some(
+    (act) => act.id === "session-import",
+  );
+  const sessionImportRunInFlight = useSessionImportRunStore(
+    (state) => state.status === "starting" || state.status === "running",
+  );
+  return useSessionImportScan(
+    tourShowsSessionImport && !sessionImportRunInFlight,
+  );
+}
+
 export function OnboardingPage(props: { readonly replay: boolean }) {
   // Draft + provider-derived default live in one state object so the
   // query-sync effect mirrors them through a single trailing setState call
@@ -834,13 +867,6 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
   const agentGuideInitializedRef = useRef(false);
   const agentGuideAutoDefaultRef = useRef(false);
   const agentGuideLastDefaultRef = useRef("");
-  // The live wizard's submit, handed over while the session-import act is on
-  // screen. A ref rather than state: it changes on every render of a streaming
-  // scan, and nothing renders off it - Continue only reads it when pressed.
-  const sessionImportSubmitRef = useRef<(() => void) | null>(null);
-  const registerSessionImportSubmit = useCallback((submit: () => void) => {
-    sessionImportSubmitRef.current = submit;
-  }, []);
   const stageRef = useRef<HTMLDivElement | null>(null);
   // The page's other platform read (`miniatureForAct` has the first): the
   // interaction polish the installed app gets and a desktop window must not -
@@ -851,15 +877,25 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
   const router = useRouter();
   const { replay } = props;
   // The tour this shell can run, not the full catalog: the installed app plays
-  // the phone tour, and a host that cannot scan sessions never reaches the
-  // session-import act, whose stage is the live wizard. Everything below
+  // the phone tour, a host that cannot scan sessions never reaches the
+  // session-import act, whose stage is the live wizard, and a machine that
+  // cannot import logins (no browser bridge, or saving off) never reaches the
+  // login-import act, whose stage is the live import flow. Everything below
   // counts acts off this list, so an omitted act is unreachable rather than
   // merely blank.
   const sessionImportAvailable = useSessionImportAvailable();
+  const loginImportAvailable = useLoginImportAvailable();
   const acts = useMemo(
-    () => onboardingActsFor(sessionImportAvailable),
-    [sessionImportAvailable],
+    () => onboardingActsFor({ sessionImportAvailable, loginImportAvailable }),
+    [loginImportAvailable, sessionImportAvailable],
   );
+  const sessionImportScan = useOnboardingSessionImportScan(acts);
+  // An import the login-import act started is a desktop write that may be
+  // sitting on a keystore prompt; Continue holds until it settles so the
+  // stage is there to show the outcome. Skip does not: the write finishes
+  // either way, and the user can always leave.
+  const loginImportPending =
+    useIsMutating({ mutationKey: browserMutationKeys.importLogins() }) > 0;
   // Read the raw step and clamp here: negotiation can retire an act while the
   // user is already past its new end, and the clamp is what keeps the page on
   // a real act until the next move re-seats the store.
@@ -869,7 +905,11 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
   const advanceStep = useOnboardingStore((state) => state.advance);
   const retreat = useOnboardingStore((state) => state.retreat);
   const complete = useOnboardingStore((state) => state.complete);
+  const consumeAnnouncement = useFeatureAnnouncementsStore(
+    (state) => state.consume,
+  );
   const restart = useOnboardingStore((state) => state.restart);
+  const reseat = useOnboardingStore((state) => state.reseat);
   const agentGuideQuery = useAgentSelectionGuideGlobalOnboardingDraftQuery();
   const agentGuideSetMutation = useAgentSelectionGuideSetGlobalMutation();
   const {
@@ -880,6 +920,30 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
   } = agentGuideSetMutation;
 
   const act = acts[step];
+  // The act list can change under the user: session import resolving
+  // `unsupported` drops its act, and login import resolving available
+  // inserts one right after it (`useLoginImportAvailable` is false until the
+  // save-logins read answers). The store's position is an INDEX, so either
+  // would move a user past that point onto whichever act now sits at their
+  // index - a user on the agent guide would find themselves on the login
+  // import. Re-seated by act id instead: the ref carries the act of the
+  // previous commit, and the layout effect below runs before this commit
+  // paints, so the user stays on the act they can see. An act that vanished
+  // under the user leaves the clamped index in place, as before.
+  const seatedActIdRef = useRef<OnboardingAct["id"]>(act.id);
+  useLayoutEffect(() => {
+    const seated = seatedActIdRef.current;
+    const index = acts.findIndex((entry) => entry.id === seated);
+    if (index < 0) return;
+    const current = clampOnboardingStep(
+      useOnboardingStore.getState().step,
+      acts.length,
+    );
+    if (acts[current]?.id !== seated) reseat(index);
+  }, [acts, reseat]);
+  useLayoutEffect(() => {
+    seatedActIdRef.current = act.id;
+  });
   const miniature = miniatureForAct(act.id);
   const isAgentGuideAct = act.id === "agent-guide";
   const agentGuideQueryData = agentGuideQuery.data;
@@ -1013,7 +1077,8 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
     onValueChange: updateAgentGuideDraft,
     onRevertToDefault: revertAgentGuideDraft,
   };
-  const advanceDisabled = (isAgentGuideAct || isLastAct) && agentGuideSaving;
+  const advanceDisabled =
+    ((isAgentGuideAct || isLastAct) && agentGuideSaving) || loginImportPending;
 
   // Finishing the tour must never leave the app on the tabless landing.
   // Replay-from-settings sets `?replay=true` (and pushed /onboarding onto the
@@ -1032,6 +1097,18 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
             : AnalyticsEvent.OnboardingSkipped,
           { last_step: act.id },
         );
+        // The tour is this release's announcement surface, so finishing it -
+        // completed or skipped, act reached or not - consumes the
+        // announcement: the release toast is for a user who finished
+        // onboarding BEFORE the feature existed, and whoever leaves this
+        // tour is not that user. Unconditional on purpose, since every
+        // narrower rule had a hole: the act's availability is `false` while
+        // the saved-logins read is still pending, so an immediate Skip saw
+        // no act; an act the list held can be dropped again before it is
+        // reached; and on a shell with no bridge the toast never shows, so
+        // consuming costs nothing. Before `complete()`, which is what makes
+        // the toast eligible.
+        consumeAnnouncement("login-import");
         complete();
         if (replay) {
           router.history.back();
@@ -1040,25 +1117,34 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
         void navigate({ to: "/draft/new", replace: true });
       });
     },
-    [act.id, complete, navigate, replay, router, saveAgentGuideDraft],
+    [
+      act.id,
+      complete,
+      consumeAnnouncement,
+      navigate,
+      replay,
+      router,
+      saveAgentGuideDraft,
+    ],
   );
 
   const retreatWithAnalytics = useCallback((): void => {
+    // Back holds for the same reason Continue does: leaving the act unmounts
+    // the flow while the desktop's write goes on, so its Done step could
+    // never show what the import did, and coming back would offer a fresh
+    // flow over logins already replaced. Skip stays open - the write
+    // finishes either way, and the user can always leave the tour.
+    if (loginImportPending) return;
     const destination = acts[Math.max(0, step - 1)] ?? act;
     retreat(acts.length);
     Analytics.getInstance().track(AnalyticsEvent.OnboardingNavigated, {
       direction: "back",
       step: destination.id,
     });
-  }, [act, acts, retreat, step]);
+  }, [act, acts, loginImportPending, retreat, step]);
 
   const advance = useCallback((): void => {
     if (advanceDisabled) return;
-    // The session-import act has one forward control, and it does both jobs:
-    // start the import for whatever is ticked (nothing ticked is a no-op), then
-    // move on. The run is owned by the app-wide controller, so it outlives this
-    // act and keeps going while the user finishes the tour.
-    if (act.addon === "session-import") sessionImportSubmitRef.current?.();
     const advancePastCurrent = (): void => {
       if (isLastAct) {
         finish("completed");
@@ -1207,13 +1293,14 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
                 addon={act.addon}
                 miniature={miniature}
                 agentGuide={agentGuideState}
-                registerSessionImportSubmit={registerSessionImportSubmit}
+                sessionImportScan={sessionImportScan}
               />
             </div>
             <OnboardingStageEdgeFade
               visible={
                 miniature.kind === "desktop" ||
-                miniature.kind === "session-import"
+                miniature.kind === "session-import" ||
+                miniature.kind === "login-import"
               }
             />
             <div className="onboarding-actions absolute z-10 flex items-center justify-end gap-3">
@@ -1226,9 +1313,11 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
               {step > 0 ? (
                 <button
                   type="button"
+                  data-testid="onboarding-back"
                   onClick={retreatWithAnalytics}
+                  disabled={loginImportPending}
                   className={cn(
-                    "flex h-9 items-center justify-center gap-2 rounded px-3 font-heading text-[0.875rem] leading-[1.125rem] font-medium text-white transition-colors hover:bg-white/10 [@media(min-height:920px)]:h-10 [@media(min-height:920px)]:px-4 [@media(min-height:920px)]:text-[0.9375rem]",
+                    "flex h-9 items-center justify-center gap-2 rounded px-3 font-heading text-[0.875rem] leading-[1.125rem] font-medium text-white transition-colors hover:bg-white/10 disabled:pointer-events-none disabled:opacity-55 [@media(min-height:920px)]:h-10 [@media(min-height:920px)]:px-4 [@media(min-height:920px)]:text-[0.9375rem]",
                     actionHeight,
                   )}
                 >
@@ -1263,24 +1352,14 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
 }
 
 function OnboardingFooterLinks() {
-  const runnerHost = use(RunnerHostContext);
-
-  const openInBrowser = useCallback((url: string) => {
-    window.open(url, "_blank", "noopener,noreferrer");
-  }, []);
+  const openLink = useOpenLink();
 
   const openFooterLink = useCallback(
     (event: MouseEvent<HTMLAnchorElement>, url: string) => {
       event.preventDefault();
-      if (runnerHost !== null) {
-        void runnerHost.openExternalLink(url).catch(() => {
-          openInBrowser(url);
-        });
-        return;
-      }
-      openInBrowser(url);
+      void openLink(url, "docs", event);
     },
-    [openInBrowser, runnerHost],
+    [openLink],
   );
 
   return (
@@ -1290,9 +1369,10 @@ function OnboardingFooterLinks() {
           <li key={link.label}>
             <a
               href={link.url}
-              target="_blank"
-              rel="noreferrer"
               onClick={(event) => openFooterLink(event, link.url)}
+              onAuxClick={onMiddleClick((event) =>
+                openFooterLink(event, link.url),
+              )}
               className="transition-colors hover:text-white/80"
             >
               {link.label}

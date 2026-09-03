@@ -1,15 +1,17 @@
-import type { ReactNode } from "react";
+import { useLayoutEffect, useRef, type ReactNode } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useReactiveLocalHostId } from "@/hooks/host/use-reactive-local-host-id";
+import type { BrowserSessionsState } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useBrowserSessions } from "./use-browser-sessions";
 import {
   BrowserSessionsContext,
   BrowserSessionsCoordinatorKeyContext,
+  BrowserSessionsSnapshotContext,
 } from "./browser-sessions-context";
 
 export function BrowserSessionsProvider(props: {
@@ -48,7 +50,9 @@ export function BrowserSessionsHostProvider(props: {
   return (
     <BrowserSessionsCoordinatorKeyContext.Provider value={coordinatorKey}>
       <BrowserSessionsContext.Provider value={sessions}>
-        {props.children}
+        <BrowserSessionsSnapshotProvider value={sessions}>
+          {props.children}
+        </BrowserSessionsSnapshotProvider>
       </BrowserSessionsContext.Provider>
     </BrowserSessionsCoordinatorKeyContext.Provider>
   );
@@ -82,5 +86,27 @@ export function BrowserSessionsHostBoundary(props: {
     >
       {props.children}
     </BrowserSessionsHostProvider>
+  );
+}
+/**
+ * Publishes the sessions state through a ref whose identity never changes, so
+ * an event-time reader (`useOpenBrowserUrl`) sees the current value without
+ * re-rendering on every stream frame. Exported for tests that mount
+ * `BrowserSessionsContext.Provider` by hand.
+ */
+export function BrowserSessionsSnapshotProvider(props: {
+  readonly value: BrowserSessionsState | null;
+  readonly children: ReactNode;
+}) {
+  const ref = useRef<BrowserSessionsState | null>(props.value);
+  // Layout, not passive: the ref has to hold the committed value before the
+  // frame the user can click in, and a passive effect may flush after paint.
+  useLayoutEffect(() => {
+    ref.current = props.value;
+  });
+  return (
+    <BrowserSessionsSnapshotContext.Provider value={ref}>
+      {props.children}
+    </BrowserSessionsSnapshotContext.Provider>
   );
 }

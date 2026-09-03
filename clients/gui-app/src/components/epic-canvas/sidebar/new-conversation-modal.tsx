@@ -41,10 +41,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
-import {
-  useCreateTuiAgentForClient,
-  type TuiAgentPlacement,
-} from "@/hooks/agent/use-create-tui-agent";
+import { useCreateTuiAgentForClient } from "@/hooks/agent/use-create-tui-agent";
 import { useComposerDictation } from "@/hooks/composer/use-composer-dictation";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { useLeaderScopeAbsorber } from "@/hooks/keybindings/use-leader-scope-absorber";
@@ -124,10 +121,7 @@ import {
   type NewConversationModalSeed,
 } from "@/stores/epics/new-conversation-modal-store";
 import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
-import {
-  ACTIVE_TILE_PLACEMENT,
-  type ConversationTilePlacement,
-} from "@/lib/canvas/conversation-tile-placement";
+import type { ExplicitTilePlacement } from "@/lib/canvas/tile-open/intent";
 import type { LandingDraftWorkspaceSnapshot } from "@/stores/home/landing-draft-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import {
@@ -213,7 +207,7 @@ export function NewConversationModalAction(
     openModal({
       epicId,
       tabId,
-      placement: ACTIVE_TILE_PLACEMENT,
+      placement: null,
       parentId,
       // Names no host: the modal resolves its own per-EPIC placement (this
       // Epic's last created chat's host, else the host the Epic is served
@@ -303,7 +297,7 @@ export function NewConversationModalHost(props: {
     <NewConversationModalDialog
       epicId={props.epicId}
       tabId={props.tabId}
-      placement={isOpen ? request.placement : ACTIVE_TILE_PLACEMENT}
+      placement={isOpen ? request.placement : null}
       parentId={isOpen ? request.parentId : null}
       hostId={isOpen ? request.hostId : null}
       open={isOpen}
@@ -317,7 +311,7 @@ export function NewConversationModalHost(props: {
 function NewConversationModalDialog(props: {
   readonly epicId: string;
   readonly tabId: string;
-  readonly placement: ConversationTilePlacement;
+  readonly placement: ExplicitTilePlacement | null;
   readonly parentId: string | null;
   readonly hostId: string | null;
   readonly open: boolean;
@@ -458,7 +452,7 @@ export function NewConversationModalHeader(props: {
 export function NewConversationModalBody(props: {
   readonly epicId: string;
   readonly tabId: string;
-  readonly placement: ConversationTilePlacement;
+  readonly placement: ExplicitTilePlacement | null;
   readonly parentId: string | null;
   /** Caller-named host to create on; `null` lets this Epic own placement. */
   readonly hostId: string | null;
@@ -1047,7 +1041,7 @@ export function NewConversationModalBody(props: {
           tabId,
           parentId,
           title: "",
-          placement: toTuiPlacement(placement),
+          placement,
           harnessId: launch.harnessId,
           model: launch.model,
           reasoningEffort: launch.reasoningEffort,
@@ -1348,19 +1342,4 @@ function promptStashDisabled(args: {
   return (
     args.isSubmitting || args.attachmentPending || !args.chatComposerActive
   );
-}
-
-function toTuiPlacement(
-  placement: ConversationTilePlacement,
-): TuiAgentPlacement {
-  if (placement.kind === "target-group") {
-    return { kind: "target-group", groupId: placement.groupId };
-  }
-  if (placement.kind === "split") {
-    // Terminal agents can't occupy a split. Open into the group the split was
-    // anchored on (a valid TUI placement) rather than discarding the location
-    // and falling all the way back to the active tile.
-    return { kind: "target-group", groupId: placement.groupId };
-  }
-  return { kind: "active-tile" };
 }

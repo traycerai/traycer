@@ -8,34 +8,26 @@
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { GitFileStatus } from "@traycer/protocol/host";
+import type { TileOpenIntent } from "@/lib/canvas/tile-open/intent";
+import type { NestedFocusTarget } from "@/lib/epic-nested-focus-route";
 
-const state = vi.hoisted(
-  (): {
-    prepareOpenTileInTabFocusTarget: Mock;
-    navigateNested: Mock;
-  } => ({
-    prepareOpenTileInTabFocusTarget: vi.fn(),
-    navigateNested: vi.fn(
-      (_epicId: string, _viewTabId: string, fn: () => unknown) => fn(),
-    ),
-  }),
-);
+// Typed to the real signature, so the recorded intent below is a
+// `TileOpenIntent` rather than an `any` the assertions would have to cast.
+type OpenTileMock = Mock<(intent: TileOpenIntent) => NestedFocusTarget | null>;
+
+const state = vi.hoisted((): { openTile: OpenTileMock } => ({
+  openTile: vi.fn(),
+}));
 
 vi.mock("@/lib/epic-selectors", () => ({
   useOpenEpicId: () => "epic-1",
 }));
 
-vi.mock("@/hooks/epic/use-epic-nested-focus-navigation", () => ({
-  useEpicNestedFocusNavigation: () => state.navigateNested,
-}));
-
-vi.mock("@/stores/epics/canvas/store", () => ({
-  useEpicCanvasStore: <T,>(
-    selector: (store: { readonly prepareOpenTileInTabFocusTarget: Mock }) => T,
-  ): T =>
-    selector({
-      prepareOpenTileInTabFocusTarget: state.prepareOpenTileInTabFocusTarget,
-    }),
+// The block opens through the one tile resolver, so that is what the test
+// stands in for - placement, grouping, dedupe and the route write are its
+// job, not this component's.
+vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
+  useEpicTileNavigation: () => ({ openTile: state.openTile }),
 }));
 
 import { PdfDiffView } from "../pdf-diff-view";
@@ -69,6 +61,13 @@ function renderView(overrides: {
   );
 }
 
+/** The intent the block handed the resolver, or a failure if it opened none. */
+function lastIntent(): TileOpenIntent {
+  const call = state.openTile.mock.calls.at(-1);
+  if (call === undefined) throw new Error("expected an openTile call");
+  return call[0];
+}
+
 describe("PdfDiffView", () => {
   afterEach(() => {
     cleanup();
@@ -88,15 +87,36 @@ describe("PdfDiffView", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Open report.pdf" }));
 
-    expect(state.prepareOpenTileInTabFocusTarget).toHaveBeenCalledWith(
-      "view-1",
-      expect.objectContaining({
-        type: "workspace-file",
-        hostId: "host-A",
-        workspacePath: "/work/repo",
-        filePath: "docs/report.pdf",
-      }),
-    );
+    const intent = lastIntent();
+    expect(intent.node).toMatchObject({
+      type: "workspace-file",
+      hostId: "host-A",
+      workspacePath: "/work/repo",
+      filePath: "docs/report.pdf",
+    });
+    expect(intent.target).toEqual({ tabId: "view-1" });
+    expect(intent.gesture).toBe("single");
+    // The click's modifiers reach the resolver, so shift-click splits here
+    // the way it does on every other tile-opening surface.
+    expect(intent.modifiers).toEqual({
+      shift: false,
+      alt: false,
+      middle: false,
+    });
+  });
+
+  it("carries a shift-click through to the resolver as a split", () => {
+    renderView({});
+
+    fireEvent.click(screen.getByRole("button", { name: "Open report.pdf" }), {
+      shiftKey: true,
+    });
+
+    expect(lastIntent().modifiers).toEqual({
+      shift: true,
+      alt: false,
+      middle: false,
+    });
   });
 
   it("labels an added PDF and still offers Open", () => {

@@ -18,6 +18,7 @@ import {
   assistantRowTurnKey,
   chatTranscriptEventRowId,
   forkedChatLinkRowId,
+  importedChatMarkerRowId,
   isTurnDecoratingEvent,
   projectTranscriptRows,
   queueSteerRowId,
@@ -1073,8 +1074,9 @@ export function spanChargeBytes(
 /**
  * Fold one record set's BACKABLE identities into `into` - the derived id
  * shapes every tier produces the same way: a message backs the row carrying
- * its id, an event backs both its transcript row and its forked-chat-link
- * row, and a stopped turn's event backs that turn's assistant row.
+ * its id, an event backs its transcript row, its forked-chat-link row and its
+ * imported-chat-marker row, and a stopped turn's event backs that turn's
+ * assistant row.
  *
  * Lives HERE (not in `transcript-list-rows.ts`, which imports it) because the
  * draws relation above and both tiers' backing channels consume the same fold
@@ -1090,6 +1092,7 @@ export function addRecordBackedRowIds(
   for (const event of events) {
     into.add(chatTranscriptEventRowId(event.eventId));
     into.add(forkedChatLinkRowId(event.eventId));
+    into.add(importedChatMarkerRowId(event.eventId));
     if (event.type === "turn.stopped" && event.turnId !== null) {
       into.add(assistantRowId(event.turnId));
     }

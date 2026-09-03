@@ -3,10 +3,10 @@ import {
   act,
   cleanup,
   fireEvent,
-  render,
   screen,
   waitFor,
 } from "@testing-library/react";
+import { renderPeekTile } from "@/components/epic-canvas/renderers/__tests__/browser-peek-tile-render";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   FakeStreamClient,
@@ -167,7 +167,7 @@ describe("BrowserPeekTile on a coarse pointer", () => {
   });
 
   it("nav bar reflects navState", () => {
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
@@ -216,7 +216,7 @@ describe("BrowserPeekTile on a coarse pointer", () => {
   });
 
   it("a dialog renders as a sheet and answers dialogResponse", async () => {
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"

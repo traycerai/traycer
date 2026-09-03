@@ -1,115 +1,31 @@
 import { useCallback, useMemo } from "react";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
-import type { NavigateNestedFocus } from "@/lib/epic-nested-focus-navigation";
-import type { NestedFocusTarget } from "@/lib/epic-nested-focus-route";
+import type { TileOpenIntent } from "@/lib/canvas/tile-open/intent";
 import {
-  useEpicCanvasStore,
-  type EpicCanvasStore,
-} from "@/stores/epics/canvas/store";
-import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
+  MANUAL_TILE_OPEN,
+  openTileWithNavigation,
+} from "@/lib/canvas/tile-open/open-tile";
+import type { NestedFocusTarget } from "@/lib/epic-nested-focus-route";
 
 export interface EpicTileNavigation {
-  readonly openTileInTab: (
-    tabId: string,
-    node: EpicCanvasTileRef,
-  ) => NestedFocusTarget | null;
-  readonly openTilePreviewInTab: (
-    tabId: string,
-    node: EpicCanvasTileRef,
-  ) => NestedFocusTarget | null;
-  readonly openTileInEpic: (
-    epicId: string,
-    node: EpicCanvasTileRef,
-  ) => NestedFocusTarget | null;
-  readonly openTilePreviewInEpic: (
-    epicId: string,
-    node: EpicCanvasTileRef,
-  ) => NestedFocusTarget | null;
+  /**
+   * The one way a tile enters or is focused on a canvas (decision C1): the
+   * intent plus the placement settings, the live canvas and the viewport go
+   * through the pure resolver, and the resulting plan through the
+   * nested-focus boundary. Returns the committed focus target, or `null` when
+   * nothing was focused (a background open, a PiP, a no-op).
+   */
+  readonly openTile: (intent: TileOpenIntent) => NestedFocusTarget | null;
 }
 
 export function useEpicTileNavigation(): EpicTileNavigation {
   const navigateNested = useEpicNestedFocusNavigation();
 
-  const openTileInTab = useCallback(
-    (tabId: string, node: EpicCanvasTileRef): NestedFocusTarget | null => {
-      const store = useEpicCanvasStore.getState();
-      return openPreparedTileInTab({
-        store,
-        navigateNested,
-        tabId,
-        node,
-        preview: false,
-      });
-    },
+  const openTile = useCallback(
+    (intent: TileOpenIntent): NestedFocusTarget | null =>
+      openTileWithNavigation(intent, navigateNested, MANUAL_TILE_OPEN),
     [navigateNested],
   );
 
-  const openTilePreviewInTab = useCallback(
-    (tabId: string, node: EpicCanvasTileRef): NestedFocusTarget | null => {
-      const store = useEpicCanvasStore.getState();
-      return openPreparedTileInTab({
-        store,
-        navigateNested,
-        tabId,
-        node,
-        preview: true,
-      });
-    },
-    [navigateNested],
-  );
-
-  const openTileInEpic = useCallback(
-    (epicId: string, node: EpicCanvasTileRef): NestedFocusTarget | null => {
-      const tabId = useEpicCanvasStore
-        .getState()
-        .resolveTargetTabForEpic(epicId, undefined);
-      return openTileInTab(tabId, node);
-    },
-    [openTileInTab],
-  );
-
-  const openTilePreviewInEpic = useCallback(
-    (epicId: string, node: EpicCanvasTileRef): NestedFocusTarget | null => {
-      const tabId = useEpicCanvasStore
-        .getState()
-        .resolveTargetTabForEpic(epicId, undefined);
-      return openTilePreviewInTab(tabId, node);
-    },
-    [openTilePreviewInTab],
-  );
-
-  return useMemo(
-    () => ({
-      openTileInTab,
-      openTilePreviewInTab,
-      openTileInEpic,
-      openTilePreviewInEpic,
-    }),
-    [
-      openTileInEpic,
-      openTileInTab,
-      openTilePreviewInEpic,
-      openTilePreviewInTab,
-    ],
-  );
-}
-
-function openPreparedTileInTab(args: {
-  readonly store: EpicCanvasStore;
-  readonly navigateNested: NavigateNestedFocus;
-  readonly tabId: string;
-  readonly node: EpicCanvasTileRef;
-  readonly preview: boolean;
-}): NestedFocusTarget | null {
-  const epicId = args.store.tabsById[args.tabId]?.epicId ?? null;
-  const prepare = () =>
-    args.preview
-      ? useEpicCanvasStore
-          .getState()
-          .prepareOpenTilePreviewInTabFocusTarget(args.tabId, args.node)
-      : useEpicCanvasStore
-          .getState()
-          .prepareOpenTileInTabFocusTarget(args.tabId, args.node);
-  if (epicId === null) return prepare();
-  return args.navigateNested(epicId, args.tabId, prepare);
+  return useMemo(() => ({ openTile }), [openTile]);
 }

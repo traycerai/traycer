@@ -246,6 +246,7 @@ function SearchRun({
       tabId: ctx.activeTabId,
       groupId: ctx.targetGroupId,
       ref,
+      dedupe: false,
       navigateNestedFocus: ctx.router.navigateNestedFocus,
     });
   };
@@ -273,6 +274,7 @@ function SearchRun({
             : `Untitled ${resolved.kind}`,
         hostId: defaultHostId,
       },
+      dedupe: false,
       navigateNestedFocus: ctx.router.navigateNestedFocus,
     });
   };
