@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { createReadStream, createWriteStream } from "node:fs";
-import { mkdir, rm, stat, unlink } from "node:fs/promises";
+import { constants, createWriteStream, type ReadStream } from "node:fs";
+import { mkdir, open, rm, stat, unlink } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -163,17 +163,48 @@ export type SqliteFileCopy = (
  * up; a read stream with `end` set asks the kernel for at most `maxBytes + 1`
  * bytes however far the file has grown, so the snapshot on disk can never be
  * larger than the budget plus one byte, and that one byte is the signal.
+ *
+ * Opened the way `readBoundedFile` opens a picked export: non-blocking, so a
+ * FIFO at the path - which an ordinary read-only open waits on until a
+ * writer appears, and the import service serialises every scan and import
+ * behind this promise - opens at once, and then refused by KIND on the open
+ * handle, never on the path beforehand, since a path checked and then opened
+ * is two files if anything moves in between. A non-regular file is
+ * {@link SqliteNotRegularFileError}, which the copy classifies as
+ * `unreadable`; the flag changes nothing about a regular file.
  */
 export async function copySqliteFileBounded(
   from: string,
   to: string,
   maxBytes: number,
 ): Promise<number> {
-  // `end` is inclusive: the stream reads bytes 0..maxBytes, one past the
-  // budget, and stops there whatever the file's length.
-  const source = createReadStream(from, { end: maxBytes });
+  const handle = await open(from, constants.O_RDONLY | constants.O_NONBLOCK);
+  let source: ReadStream;
+  try {
+    if (!(await handle.stat()).isFile()) {
+      throw new SqliteNotRegularFileError();
+    }
+    // `end` is inclusive: the stream reads bytes 0..maxBytes, one past the
+    // budget, and stops there whatever the file's length. The stream owns
+    // the handle from here and closes it when it ends.
+    source = handle.createReadStream({ end: maxBytes, autoClose: true });
+  } catch (error) {
+    await handle.close().catch(() => undefined);
+    throw error;
+  }
   await pipeline(source, createWriteStream(to, { mode: 0o600 }));
   return source.bytesRead;
+}
+
+/**
+ * The source at a path is not a regular file: a FIFO, a device, a directory.
+ * Carries no path: an error's message travels to wherever it is later logged.
+ */
+export class SqliteNotRegularFileError extends Error {
+  constructor() {
+    super("sqlite snapshot source is not a regular file");
+    this.name = "SqliteNotRegularFileError";
+  }
 }
 
 /** What one attempt may still copy; shared by the main file and its siblings. */
@@ -316,6 +347,10 @@ export function classifyCopyFailure(
   error: unknown,
   platform: NodeJS.Platform,
 ): SqliteSnapshotFailure {
+  // A FIFO, a device or a directory where a database file should be: not a
+  // database this reader can read, and said with the closed reason the
+  // caller already has for that.
+  if (error instanceof SqliteNotRegularFileError) return "unreadable";
   const code = errnoCode(error);
   if (code === "ENOENT" || code === "ENOTDIR") return "missing";
   // Windows reports a file another process holds with a denying share mode

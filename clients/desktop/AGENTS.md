@@ -275,7 +275,10 @@ failures.
   over `MAX_SQLITE_SNAPSHOT_BYTES`) AND capped during the copy (a streamed
   `copySqliteFileBounded` under one per-attempt budget across the three
   files, one byte past it being the signal, so a source that grows between
-  the size check and its copy cannot be followed past the bound) and by
+  the size check and its copy cannot be followed past the bound; the
+  source is opened non-blocking and refused by kind on the HANDLE, as
+  `readBoundedFile` does, so a FIFO at a sibling path cannot hold the open
+  and wedge the import service's queue) and by
   row count before a row is
   selected (`assertRowBudget`, many times any browser's cookie ceiling) -
   both `profile-too-large`, with an explainer that names the browser's

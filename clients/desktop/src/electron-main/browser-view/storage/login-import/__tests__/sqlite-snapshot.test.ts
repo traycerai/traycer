@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
   appendFile,
@@ -22,6 +23,7 @@ import {
   copySqliteFiles,
   MAX_SQLITE_SNAPSHOT_BYTES,
   SQLITE_SNAPSHOT_COPY_ATTEMPTS,
+  SqliteNotRegularFileError,
   sweepSqliteSnapshots,
   withSqliteSnapshot,
   type SqliteFileCopy,
@@ -225,6 +227,15 @@ describe("classifyCopyFailure - codes not portably reproducible end to end", () 
       "unreadable",
     );
     expect(classifyCopyFailure("not even an error", "darwin")).toBe(
+      "unreadable",
+    );
+  });
+
+  it("classifies SqliteNotRegularFileError as 'unreadable' regardless of platform", () => {
+    expect(classifyCopyFailure(new SqliteNotRegularFileError(), "darwin")).toBe(
+      "unreadable",
+    );
+    expect(classifyCopyFailure(new SqliteNotRegularFileError(), "win32")).toBe(
       "unreadable",
     );
   });
@@ -523,5 +534,60 @@ describe("copySqliteFileBounded", () => {
         100,
       ),
     ).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("rejects with SqliteNotRegularFileError when `from` is a directory", async () => {
+    if (process.platform === "win32") {
+      // A directory open throws EISDIR on Windows instead of succeeding and
+      // failing the later isFile() check - a different code path entirely.
+      return;
+    }
+    const sourceDir = await mkdtemp(join(tmpdir(), "sqlite-snapshot-source-"));
+    dirsToClean.push(sourceDir);
+    const dirAsFrom = join(sourceDir, "not-a-file");
+    await mkdir(dirAsFrom);
+    const destDir = await mkdtemp(join(tmpdir(), "sqlite-snapshot-dest-"));
+    dirsToClean.push(destDir);
+
+    await expect(
+      copySqliteFileBounded(dirAsFrom, join(destDir, "out.bin"), 100),
+    ).rejects.toBeInstanceOf(SqliteNotRegularFileError);
+  });
+});
+
+describe("copySqliteFiles - a FIFO sibling is classified 'unreadable' promptly, never hangs", () => {
+  it("answers 'unreadable' when the -wal sibling is a FIFO", async () => {
+    if (process.platform === "win32") {
+      // No FIFOs on Windows; mkfifo is not available there either.
+      return;
+    }
+    const sourceDir = await mkdtemp(join(tmpdir(), "sqlite-snapshot-source-"));
+    dirsToClean.push(sourceDir);
+    const sourcePath = await makeRealSqliteFile(sourceDir, "cookies.sqlite");
+    const walPath = `${sourcePath}-wal`;
+    execFileSync("mkfifo", [walPath]);
+    const snapshotDir = await mkdtemp(join(tmpdir(), "sqlite-snapshot-dest-"));
+    dirsToClean.push(snapshotDir);
+    const snapshotPath = join(snapshotDir, "cookies.sqlite");
+
+    const copy: SqliteFileCopy = (from, to, maxBytes) =>
+      copySqliteFileBounded(from, to, maxBytes);
+
+    const timerHolder: { current: NodeJS.Timeout | null } = { current: null };
+    try {
+      const result = await Promise.race([
+        copySqliteFiles(sourcePath, snapshotPath, process.platform, copy),
+        new Promise<never>((_resolve, reject) => {
+          timerHolder.current = setTimeout(() => {
+            reject(new Error("copy blocked on the FIFO"));
+          }, 5_000);
+          timerHolder.current.unref();
+        }),
+      ]);
+
+      expect(result).toBe("unreadable");
+    } finally {
+      if (timerHolder.current !== null) clearTimeout(timerHolder.current);
+    }
   });
 });
