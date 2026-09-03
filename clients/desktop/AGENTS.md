@@ -291,8 +291,10 @@ failures.
   capture at a window's close or at quit reads the same way, for at most
   its flush budget (`FINAL_PRIMARY_PROFILE_FLUSH_TIMEOUT_MS`, ONE deadline
   over the barrier wait, the read and the ack - the ack gets what the
-  barrier left, never a fresh budget): a barrier still held past it skips
-  the capture rather
+  barrier and the read left, never a fresh budget, and a read still running
+  at the deadline is raced: the capture answers `not-sent` and the read,
+  which holds the lease until it settles, sends nothing when it does): a
+  barrier still held past it skips the capture rather
   than shipping a hybrid the close would make permanent, the import's own
   push inside its barrier being the capture of record - and it takes the
   direct path, not `capturePrimaryProfileNow`'s lane, since the import's

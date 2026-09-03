@@ -52,6 +52,35 @@ import type {
 export const FINAL_PRIMARY_PROFILE_FLUSH_TIMEOUT_MS = 5_000;
 
 /**
+ * `promise`'s own value if it settles within `waitMs`, else `fallback` - the
+ * promise itself is left to settle on its own, its result unread. A settle
+ * in the same turn as the timer cannot be mistaken: the value's continuation
+ * is a microtask, the timer a macrotask after it.
+ */
+function settledWithin<T, F>(
+  promise: Promise<T>,
+  waitMs: number,
+  fallback: F,
+): Promise<T | F> {
+  return new Promise<T | F>((resolve) => {
+    const timer = setTimeout(() => {
+      resolve(fallback);
+    }, waitMs);
+    timer.unref();
+    void promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      () => {
+        clearTimeout(timer);
+        resolve(fallback);
+      },
+    );
+  });
+}
+
+/**
  * What became of one capture on one stream. `unacked` is a frame that LEFT
  * and drew no ack in time; it is kept apart from `not-sent` because to the
  * once-per-host rule a frame that left is the host's capture, ack or no ack.
@@ -821,16 +850,24 @@ class BrowserSessionsStream {
   private async capturePrimaryProfileOnce(
     ordering: CaptureOrdering,
   ): Promise<BrowserPrimaryProfileCaptureOutcome> {
-    // A bounded barrier wait is the shutdown budget, and it is ONE budget
-    // for the whole capture: whatever the barrier wait and the jar read
-    // leave of it is what the ack may take. Window close and quit await this
-    // method directly, and a barrier that releases at the end of the wait
-    // must not buy the ack a fresh budget on top.
-    const startedAt = Date.now();
-    const ackTimeoutMs = (): number =>
+    // A bounded barrier wait is the shutdown budget, and it is ONE deadline
+    // for the whole capture: the barrier wait, the jar read AND the ack.
+    // Window close and quit await this method directly, so a barrier that
+    // releases at the end of the wait must not buy the read a fresh run or
+    // the ack a fresh budget on top. The read cannot be cancelled - it holds
+    // the serializer's lease until it settles - so past the deadline it is
+    // raced: this method answers `not-sent`, and `stillWanted` below, read
+    // once the jar HAS been read, refuses to send a frame the deadline
+    // already gave up on.
+    const deadline =
       ordering === "now" || ordering.behindBarrierFor === null
+        ? null
+        : Date.now() + ordering.behindBarrierFor;
+    const remainingMs = (): number =>
+      deadline === null
         ? FINAL_PRIMARY_PROFILE_FLUSH_TIMEOUT_MS
-        : Math.max(0, ordering.behindBarrierFor - (Date.now() - startedAt));
+        : Math.max(0, deadline - Date.now());
+    const expired = (): boolean => deadline !== null && Date.now() >= deadline;
     if (this.connectionStatus !== "open") return "not-sent";
     const requestId = this.standingCaptureRequestId;
     // No standing id means this host either never authorized the jar plane for
@@ -843,11 +880,15 @@ class BrowserSessionsStream {
     // be sent, or that would quote an id the host no longer holds, never
     // LEFT: the registry must be free to try this host's healthy sibling
     // stream, which `unacked` would forbid.
-    const sent = await this.answerCaptureRequest(
+    const answer = this.answerCaptureRequest(
       requestId,
-      () => this.standingCaptureRequestId === requestId,
+      () => this.standingCaptureRequestId === requestId && !expired(),
       ordering,
     );
+    const sent =
+      deadline === null
+        ? await answer
+        : await settledWithin(answer, remainingMs(), "not-sent");
     if (sent === "not-sent") return "not-sent";
     // The ack waiter - and its timeout - start once the frame has LEFT, not
     // before the jar read. No ack can be missed: the send was synchronous,
@@ -856,7 +897,7 @@ class BrowserSessionsStream {
     // receives, in order, and this frame's slot must absorb its own ack
     // rather than leave it for the next capture's - but that ack counts for
     // nothing: whatever the host took, it was not the jar.
-    const acked = await this.awaitCaptureAck(requestId, ackTimeoutMs());
+    const acked = await this.awaitCaptureAck(requestId, remainingMs());
     if (sent === "sent-no-jar") return "sent-no-jar";
     return acked ? "acked" : "unacked";
   }

@@ -220,6 +220,128 @@ describe("forget ledger durability", () => {
   });
 });
 
+describe("forget ledger loaded-domain normalization", () => {
+  it("normalizes a loaded row to its registrable domain", async () => {
+    const file = pathIn("normalize-single.json");
+    await writeFile(
+      file,
+      JSON.stringify({
+        revision: 1,
+        clearedThrough: 0,
+        forgetAll: null,
+        domains: [{ domain: "login.example.com", forgottenAt: 5, revision: 1 }],
+        ackedByHost: [],
+        headlessOriginKeys: [],
+      }),
+      "utf8",
+    );
+
+    await initBrowserForgetLedger(file);
+
+    expect(
+      browserForgetLedgerDigestForHost(HOST).domains.map(
+        (entry) => entry.domain,
+      ),
+    ).toEqual(["example.com"]);
+  });
+
+  it("keeps the higher-revision row when two loaded rows collapse to the same scope", async () => {
+    const file = pathIn("normalize-collapse.json");
+    await writeFile(
+      file,
+      JSON.stringify({
+        revision: 3,
+        clearedThrough: 0,
+        forgetAll: null,
+        domains: [
+          { domain: "login.example.com", forgottenAt: 5, revision: 1 },
+          { domain: "app.example.com", forgottenAt: 9, revision: 3 },
+        ],
+        ackedByHost: [],
+        headlessOriginKeys: [],
+      }),
+      "utf8",
+    );
+
+    await initBrowserForgetLedger(file);
+
+    // One row survives under the shared scope, carrying the newer row's
+    // data - the same collapse a re-forget performs on the write path.
+    expect(browserForgetLedgerDigestForHost(HOST).domains).toEqual([
+      { domain: "example.com", forgottenAt: 9 },
+    ]);
+  });
+
+  it("drops a loaded row whose domain collapses to nothing", async () => {
+    const file = pathIn("normalize-drop.json");
+    await writeFile(
+      file,
+      JSON.stringify({
+        revision: 1,
+        clearedThrough: 0,
+        forgetAll: null,
+        domains: [{ domain: "not a domain", forgottenAt: 5, revision: 1 }],
+        ackedByHost: [],
+        headlessOriginKeys: [],
+      }),
+      "utf8",
+    );
+
+    await initBrowserForgetLedger(file);
+
+    // A row nothing can match would be a forget that never fires - the same
+    // rule the write path applies, applied here to a row a build that
+    // predates it could still have written.
+    expect(browserForgetLedgerDigestForHost(HOST).domains).toEqual([]);
+  });
+
+  it("makes a normalized loaded domain match a capture's uncleared-forget filter", async () => {
+    const file = pathIn("normalize-uncleared.json");
+    await writeFile(
+      file,
+      JSON.stringify({
+        revision: 1,
+        clearedThrough: 0,
+        forgetAll: null,
+        domains: [{ domain: "login.example.com", forgottenAt: 5, revision: 1 }],
+        ackedByHost: [],
+        headlessOriginKeys: [],
+      }),
+      "utf8",
+    );
+
+    await initBrowserForgetLedger(file);
+
+    const uncleared = browserForgetLedgerUnclearedForgets();
+    expect(uncleared.domains.has("example.com")).toBe(true);
+
+    const cookie: BrowserStorageCookie = {
+      name: "sid",
+      value: "v",
+      domain: "login.example.com",
+      path: "/",
+      expires: -1,
+      httpOnly: false,
+      secure: true,
+      sameSite: "Lax",
+      partitionKey: null,
+    };
+    const result: BrowserPrimaryProfileCaptureResult = {
+      status: "captured",
+      storageState: { cookies: [cookie], origins: [] },
+      reason: null,
+    };
+
+    const filtered = withoutUnclearedForgets(result, uncleared);
+    if (filtered.status !== "captured") {
+      throw new Error("expected a captured result");
+    }
+    // The normalized scope is what the filter matches against, so the
+    // login's own cookie - still spelled under the subdomain - is caught.
+    expect(filtered.storageState.cookies).toEqual([]);
+  });
+});
+
 describe("forget ledger mutations", () => {
   beforeEach(loadEmptyLedger);
 

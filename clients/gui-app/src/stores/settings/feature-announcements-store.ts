@@ -101,6 +101,16 @@ export const useFeatureAnnouncementsStore = create<FeatureAnnouncementsState>()(
         // window wrote, if it wrote. The `storage` listener at the bottom
         // keeps a window that did NOT claim in step afterwards; it is not
         // what makes this exclusive, since that event is asynchronous.
+        //
+        // Not atomic across processes, and knowingly so: Chromium applies a
+        // `setItem` to the writing renderer's cache at once and replicates
+        // it to the others through the browser process, so two windows that
+        // reach this line within that replication (milliseconds) both claim.
+        // The cost is a second dismissible toast, once per install; the
+        // remedy would be a main-process claim behind a new desktop IPC for
+        // a notice the app shows once, which is not worth its surface. The
+        // once-per-window duplicate that DID happen - every restored window
+        // toasting - is what this closes.
         void useFeatureAnnouncementsStore.persist.rehydrate();
         if (Object.hasOwn(get().consumed, id)) return false;
         set({ consumed: consumeInto(get().consumed, id) });

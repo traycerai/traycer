@@ -252,7 +252,7 @@ export async function initBrowserForgetLedger(filePath: string): Promise<void> {
   // than of the last mutation to touch it.
   ledger = {
     ...loaded,
-    domains: trimDomains(loaded.domains),
+    domains: trimDomains(normalizedLoadedDomains(loaded.domains)),
     ackedByHost: loaded.ackedByHost.slice(-MAX_ACKED_HOSTS),
     headlessOriginKeys: loaded.headlessOriginKeys.slice(
       -MAX_HEADLESS_ORIGIN_KEYS,
@@ -264,6 +264,32 @@ export async function initBrowserForgetLedger(filePath: string): Promise<void> {
     domains: ledger.domains.length,
     forgetAll: ledger.forgetAll !== null,
   });
+}
+
+/**
+ * The write path records a site under its REGISTRABLE domain, and every read
+ * that matches a site against the ledger - a capture's uncleared-forget
+ * filter, an observation's refusal window - derives the same scope from what
+ * it holds. The schema does not enforce that on the file, so a row written
+ * by hand or by a build that predates the rule (`login.example.com`) would
+ * sit in the ledger matching nothing, and a login the user forgot would ride
+ * a capture back to every host. Loaded rows are put under the rule here: a
+ * row that collapses to a scope another row already holds keeps the newer
+ * revision (the same collapse a re-forget performs on the write path), and
+ * one that collapses to nothing is dropped, as the write path drops it.
+ */
+function normalizedLoadedDomains(
+  rows: readonly ForgetLedgerRecord["domains"][number][],
+): ForgetLedgerRecord["domains"][number][] {
+  const byScope = new Map<string, ForgetLedgerRecord["domains"][number]>();
+  for (const row of rows) {
+    const scope = registrableDomain(row.domain);
+    if (scope === null) continue;
+    const held = byScope.get(scope);
+    if (held !== undefined && held.revision >= row.revision) continue;
+    byScope.set(scope, { ...row, domain: scope });
+  }
+  return [...byScope.values()];
 }
 
 /**

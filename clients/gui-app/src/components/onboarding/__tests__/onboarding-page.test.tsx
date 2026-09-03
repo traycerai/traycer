@@ -155,7 +155,9 @@ vi.mock("@tanstack/react-router", async (importOriginal) => {
 // Import after mocks are registered.
 import { OnboardingPage } from "@/components/onboarding/onboarding-page";
 import type { ReactNode } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { WithTestQueryClient } from "@/__tests__/with-test-query-client";
+import { browserMutationKeys } from "@/lib/query-keys";
 
 /**
  * Every link surface below reaches the external-link bridge mutation, which
@@ -771,6 +773,105 @@ describe("OnboardingPage", () => {
     expect(
       useFeatureAnnouncementsStore.getState().consumed["login-import"],
     ).toBeUndefined();
+  });
+
+  it("disables Back while a login import is pending, and re-enables once it settles", async () => {
+    loginImportAvailableMock.value = true;
+    const client = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    renderUi(
+      <QueryClientProvider client={client}>
+        <LazyMotion features={domAnimation}>
+          <OnboardingPage replay={false} />
+        </LazyMotion>
+      </QueryClientProvider>,
+    );
+
+    await advanceToAct("login-import");
+    expect(currentActId()).toBe("login-import");
+
+    // Drives the SAME mutation cache `useIsMutating` reads, under the exact
+    // key the import mutation uses - no need to walk the whole import flow's
+    // UI to get a pending mutation registered.
+    // A holder rather than a `let`: the assignment happens inside the
+    // mutation's callback, which TypeScript's narrowing cannot see.
+    const releaseImport: { current: (() => void) | null } = { current: null };
+    const mutation = client.getMutationCache().build(client, {
+      mutationKey: browserMutationKeys.importLogins(),
+      mutationFn: () =>
+        new Promise<void>((resolve) => {
+          releaseImport.current = () => {
+            resolve();
+          };
+        }),
+    });
+    void mutation.execute(undefined);
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId<HTMLButtonElement>("onboarding-back").disabled,
+      ).toBe(true);
+    });
+
+    // The ArrowLeft path is the same guard as the button: the step must not
+    // move while the import is in flight.
+    const stepBeforeArrowLeft = useOnboardingStore.getState().step;
+    fireEvent.keyDown(window, { key: "ArrowLeft" });
+    expect(useOnboardingStore.getState().step).toBe(stepBeforeArrowLeft);
+    expect(currentActId()).toBe("login-import");
+
+    const release = releaseImport.current;
+    if (release === null) throw new Error("no import mutation to release");
+    release();
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId<HTMLButtonElement>("onboarding-back").disabled,
+      ).toBe(false);
+    });
+
+    fireEvent.click(screen.getByTestId("onboarding-back"));
+    await waitFor(() => {
+      expect(currentActId()).not.toBe("login-import");
+    });
+  });
+
+  it("consumes the login-import announcement on Skip even after the act was dropped from the list mid-tour", async () => {
+    loginImportAvailableMock.value = true;
+    const view = renderPage({ replay: false });
+
+    // The tour-scoped marker is set by an effect that has to observe the act
+    // in the list at least once.
+    await waitFor(() => {
+      expect(visibleActs().map((act) => act.id)).toContain("login-import");
+    });
+
+    loginImportAvailableMock.value = false;
+    view.rerender(
+      <LazyMotion features={domAnimation}>
+        <OnboardingPage replay={false} />
+      </LazyMotion>,
+    );
+
+    await waitFor(() => {
+      expect(visibleActs().map((act) => act.id)).not.toContain("login-import");
+    });
+
+    fireEvent.click(screen.getByTestId("onboarding-skip"));
+
+    await waitFor(() => {
+      expect(useOnboardingStore.getState().completedAt).not.toBeNull();
+    });
+    // The marker, not the live availability: the act was offered at some
+    // point during this tour, even though the list held it for only part of
+    // it.
+    expect(
+      useFeatureAnnouncementsStore.getState().consumed["login-import"],
+    ).toBeDefined();
   });
 
   it("keeps the user on the SAME act by id when the act list changes under them", async () => {

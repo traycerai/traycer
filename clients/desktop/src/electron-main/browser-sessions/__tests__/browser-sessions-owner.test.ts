@@ -470,6 +470,100 @@ describe("the browser.sessions jar plane lives in main", () => {
     }
   });
 
+  it("the final capture's deadline expires while the jar read is still pending, sending no frame even once the read resolves late", async () => {
+    vi.useFakeTimers();
+    try {
+      const session = await openLiveStream(harness, registry, "window-1");
+      session.emit(
+        {
+          kind: "capturePrimaryProfile",
+          hasBinaryPayload: false,
+          requestId: "standing-1",
+          standing: true,
+        },
+        null,
+      );
+
+      // No barrier held - the jar read itself is what stays outstanding past
+      // the deadline.
+      harness.jar.deferCaptures = true;
+      const flushed = registry.captureFinalPrimaryProfiles("window-1");
+      await vi.advanceTimersByTimeAsync(FINAL_PRIMARY_PROFILE_FLUSH_TIMEOUT_MS);
+      await flushed;
+
+      // The deadline passed with the read still in flight: the flush settled
+      // on `not-sent` without waiting for it.
+      expect(session.framesOfKind("primaryProfileCaptured")).toHaveLength(0);
+
+      harness.jar.resolvePendingCapture();
+      for (let tick = 0; tick < 8; tick += 1) {
+        await Promise.resolve();
+      }
+
+      // The read finished AFTER the deadline: `stillWanted` now also requires
+      // `!expired()`, so no frame was sent and no ack waiter was ever
+      // registered to satisfy.
+      expect(session.framesOfKind("primaryProfileCaptured")).toHaveLength(0);
+      session.emit(
+        {
+          kind: "primaryProfileCaptureAck",
+          hasBinaryPayload: false,
+          requestId: "standing-1",
+        },
+        null,
+      );
+      // An ack emitted afterwards changes nothing - there was never a waiter
+      // for it to satisfy.
+      expect(session.framesOfKind("primaryProfileCaptured")).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("the final capture's one deadline covers the barrier wait too: a jar read still pending when it expires sends no frame", async () => {
+    vi.useFakeTimers();
+    try {
+      const session = await openLiveStream(harness, registry, "window-1");
+      session.emit(
+        {
+          kind: "capturePrimaryProfile",
+          hasBinaryPayload: false,
+          requestId: "standing-1",
+          standing: true,
+        },
+        null,
+      );
+
+      harness.jar.deferBarrier = true;
+      const flushed = registry.captureFinalPrimaryProfiles("window-1");
+
+      // 3 of the 5-second shutdown budget spent waiting on the barrier.
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(harness.jar.captures).toBe(0);
+
+      // The barrier releases with 2 seconds of the deadline left, but the
+      // read it starts stays pending.
+      harness.jar.deferCaptures = true;
+      harness.jar.releaseBarrier();
+      await vi.advanceTimersByTimeAsync(2_000);
+      await flushed;
+
+      expect(harness.jar.captures).toBe(1);
+      // No fresh budget was granted once the barrier released - the read was
+      // still in flight when the ONE shared deadline ran out.
+      expect(session.framesOfKind("primaryProfileCaptured")).toHaveLength(0);
+
+      harness.jar.resolvePendingCapture();
+      for (let tick = 0; tick < 8; tick += 1) {
+        await Promise.resolve();
+      }
+      expect(session.framesOfKind("primaryProfileCaptured")).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+      harness.jar.releaseBarrier();
+    }
+  });
+
   it("the import's own push still reads and sends immediately while the barrier is deferred, unblocked by a final capture waiting on the same gate", async () => {
     const session = await openLiveStream(harness, registry, "window-1");
     session.emit(

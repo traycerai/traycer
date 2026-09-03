@@ -928,6 +928,16 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
   useLayoutEffect(() => {
     seatedActIdRef.current = act.id;
   });
+  // Whether THIS tour ever offered the login-import act. Tour-scoped rather
+  // than the live availability, which can drop the act again before the
+  // user reaches it (saving turned off in Settings meanwhile); the finish
+  // consumes the announcement off this marker.
+  const tourOfferedLoginImportRef = useRef(false);
+  useEffect(() => {
+    if (acts.some((entry) => entry.id === "login-import")) {
+      tourOfferedLoginImportRef.current = true;
+    }
+  }, [acts]);
   const miniature = miniatureForAct(act.id);
   const isAgentGuideAct = act.id === "agent-guide";
   const agentGuideQueryData = agentGuideQuery.data;
@@ -1081,12 +1091,16 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
             : AnalyticsEvent.OnboardingSkipped,
           { last_step: act.id },
         );
-        // The login-import act was in this tour, so the tour was the
-        // surface that announced the feature - reached or skipped past.
-        // Consumed before `complete()`, which is what makes the release
-        // toast eligible: a user who skipped the intro must not meet the
-        // feature they skipped as an announcement the moment they leave.
-        if (loginImportAvailable) consumeAnnouncement("login-import");
+        // The login-import act was in this tour at some point, so the tour
+        // was the surface that announced the feature - reached or skipped
+        // past. Consumed before `complete()`, which is what makes the
+        // release toast eligible: a user who skipped the intro must not meet
+        // the feature they skipped as an announcement the moment they leave.
+        // The marker, not the live availability: an act the list held and
+        // then dropped (saving turned off mid-tour) was still offered.
+        if (tourOfferedLoginImportRef.current) {
+          consumeAnnouncement("login-import");
+        }
         complete();
         if (replay) {
           router.history.back();
@@ -1099,7 +1113,6 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
       act.id,
       complete,
       consumeAnnouncement,
-      loginImportAvailable,
       navigate,
       replay,
       router,
@@ -1108,13 +1121,19 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
   );
 
   const retreatWithAnalytics = useCallback((): void => {
+    // Back holds for the same reason Continue does: leaving the act unmounts
+    // the flow while the desktop's write goes on, so its Done step could
+    // never show what the import did, and coming back would offer a fresh
+    // flow over logins already replaced. Skip stays open - the write
+    // finishes either way, and the user can always leave the tour.
+    if (loginImportPending) return;
     const destination = acts[Math.max(0, step - 1)] ?? act;
     retreat(acts.length);
     Analytics.getInstance().track(AnalyticsEvent.OnboardingNavigated, {
       direction: "back",
       step: destination.id,
     });
-  }, [act, acts, retreat, step]);
+  }, [act, acts, loginImportPending, retreat, step]);
 
   const advance = useCallback((): void => {
     if (advanceDisabled) return;
@@ -1291,9 +1310,11 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
               {step > 0 ? (
                 <button
                   type="button"
+                  data-testid="onboarding-back"
                   onClick={retreatWithAnalytics}
+                  disabled={loginImportPending}
                   className={cn(
-                    "flex h-9 items-center justify-center gap-2 rounded px-3 font-heading text-[0.875rem] leading-[1.125rem] font-medium text-white transition-colors hover:bg-white/10 [@media(min-height:920px)]:h-10 [@media(min-height:920px)]:px-4 [@media(min-height:920px)]:text-[0.9375rem]",
+                    "flex h-9 items-center justify-center gap-2 rounded px-3 font-heading text-[0.875rem] leading-[1.125rem] font-medium text-white transition-colors hover:bg-white/10 disabled:pointer-events-none disabled:opacity-55 [@media(min-height:920px)]:h-10 [@media(min-height:920px)]:px-4 [@media(min-height:920px)]:text-[0.9375rem]",
                     actionHeight,
                   )}
                 >
