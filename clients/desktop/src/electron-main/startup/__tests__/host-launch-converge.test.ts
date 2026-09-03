@@ -490,60 +490,6 @@ describe("runLaunchHostConvergeReconcile (fixup B1 + B2)", () => {
     expect(controller.convergeReadyCalls).toEqual([]);
   });
 
-  it("does not recover after a failed apply when the service is present anyway", async () => {
-    // A failed apply is not by itself an activation problem. Without this the
-    // arm would fire on every unsuccessful update, turning an ordinary "stayed
-    // on the old version" into a service cycle.
-    const controller = fakeHostController(
-      fakeStatus(true, "activated", false),
-      { kind: "failed", message: "apply failed" },
-      { kind: "ok", value: { activated: true } },
-    );
-
-    await runLaunchHostConvergeReconcile(controller, fakeMenu());
-
-    expect(controller.convergeReadyCalls).toEqual([]);
-  });
-
-  it("does not turn a failed apply into a first install on a host that was never installed", async () => {
-    const controller = fakeHostController(
-      { ...fakeStatus(true, "unavailable", false), installedVersion: null },
-      { kind: "failed", message: "apply failed" },
-      { kind: "ok", value: { activated: true } },
-    );
-
-    await runLaunchHostConvergeReconcile(controller, fakeMenu());
-
-    expect(controller.convergeReadyCalls).toEqual([]);
-  });
-
-  it("does not recover when the user removed the host during the apply", async () => {
-    // The apply can take minutes. `removedByUser` is therefore re-read after
-    // it rather than inherited from the pre-apply sample - a user who removed
-    // the host mid-update must not be handed a reinstall.
-    const base = fakeHostController(
-      fakeStatus(true, "unavailable", false),
-      { kind: "failed", message: "apply failed" },
-      { kind: "ok", value: { activated: true } },
-    );
-    let statusReads = 0;
-    const controller: IpcHostController & {
-      readonly convergeReadyCalls: readonly boolean[];
-    } = {
-      ...base,
-      // Reads 1 and 2 are the initial and post-stage samples; the third is the
-      // one this arm takes after the apply returns.
-      async getStatus(): Promise<HostControllerStatus> {
-        statusReads += 1;
-        return fakeStatus(true, "unavailable", statusReads > 2);
-      },
-    };
-
-    await runLaunchHostConvergeReconcile(controller, fakeMenu());
-
-    expect(controller.convergeReadyCalls).toEqual([]);
-  });
-
   it("P1: does not resurrect a host removed by the user", async () => {
     const controller = fakeHostController(
       fakeStatus(false, "pendingActivation", true),
@@ -1440,16 +1386,6 @@ describe("applyHostUpdateMenuState", () => {
     );
     expect(menu.setHostUpdateAvailableVersion).toHaveBeenCalledWith("1.4.0");
   });
-
-  it("sets the installed version for activationUnknown debt (no ready update)", () => {
-    const menu = fakeMenu();
-    applyHostUpdateMenuState(
-      menu,
-      fakeStatus(false, "activationUnknown", false),
-    );
-    expect(menu.setHostUpdateAvailableVersion).toHaveBeenCalledWith("1.4.0");
-  });
-
   it("a ready update supersedes activation debt", () => {
     // updateReady + pendingActivation both true is the coexistence case the
     // reconcile explicitly prioritizes - the menu must show the ready

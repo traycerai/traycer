@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrowserSessionInfo } from "@traycer/protocol/host/browser/contracts";
 import { BrowserSessionTile } from "@/components/epic-canvas/renderers/browser-session-tile";
 import type { BrowserPeekCompleteMeaning } from "@/components/epic-canvas/renderers/browser-peek-tile";
-import type { ElectronTabBinding } from "@/lib/browser-view/sessions/electron-tabs";
+import type { ElectronTabBinding } from "@/lib/browser-view/sessions/electron-tab-directory";
 import type { BrowserSessionTileRef } from "@/stores/epics/canvas/types";
 
 const harness = vi.hoisted(() => ({
@@ -68,7 +68,7 @@ vi.mock("@/components/epic-canvas/renderers/browser-sessions-context", () => ({
     closeTab: vi.fn(),
   }),
 }));
-vi.mock("@/lib/browser-view/sessions/electron-tabs", () => ({
+vi.mock("@/lib/browser-view/sessions/electron-tab-directory", () => ({
   useElectronTabBindingOnHost: (
     sessionId: string,
     tabId: string,

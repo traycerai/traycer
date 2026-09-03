@@ -107,15 +107,15 @@ const openExternalLinkMutate = vi.hoisted(() => vi.fn());
 // The badge opens the upgrade link through this hook rather than the bridge
 // directly (see the component's own comment), so this mock is what T2's new
 // assertion below spies on instead of asserting on copy alone.
-vi.mock("@/hooks/runner/use-open-external-link-mutation", () => ({
-  useRunnerOpenExternalLink: () => ({
-    mutate: openExternalLinkMutate,
+vi.mock("@/lib/links/open-link", () => ({
+  useOpenLinkWithPending: () => ({
+    openLink: openExternalLinkMutate,
     isPending: false,
   }),
 }));
 
 /**
- * The badge opens the upgrade link through `useRunnerOpenExternalLink` rather
+ * The badge opens the upgrade link through `useOpenLinkWithPending` rather
  * than calling the bridge directly, so it needs a query client like every
  * other backend-touching surface in this app.
  */
@@ -216,6 +216,8 @@ describe("<EpicDurabilityBadge />", () => {
 
     expect(openExternalLinkMutate).toHaveBeenCalledWith(
       new URL(CONFIGURED_SIGN_IN_URL).origin,
+      "auth",
+      null,
     );
   });
 

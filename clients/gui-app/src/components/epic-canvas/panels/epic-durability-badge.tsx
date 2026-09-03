@@ -1,7 +1,7 @@
 import { Button } from "@/components/ui/button";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { useEpicExportArtifacts } from "@/hooks/epic/use-epic-export-artifacts-mutation";
-import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link-mutation";
+import { useOpenLinkWithPending } from "@/lib/links/open-link";
 import {
   useEpicArtifactRecords,
   useEpicCloudFreshnessView,
@@ -220,19 +220,19 @@ function BadgeActionSpinner() {
  * so a rejected `openExternalLink` is reported instead of silently dropped.
  */
 function UpgradeAction(props: { readonly signInUrl: string }) {
-  const openExternalLink = useRunnerOpenExternalLink();
+  const { isPending, openLink } = useOpenLinkWithPending();
   return (
     <button
       type="button"
       className="underline underline-offset-2"
       data-testid="epic-durability-upgrade"
-      disabled={openExternalLink.isPending}
+      disabled={isPending}
       onClick={() => {
-        openExternalLink.mutate(resolvePlatformBaseUrl(props.signInUrl));
+        void openLink(resolvePlatformBaseUrl(props.signInUrl), "auth", null);
       }}
     >
       Upgrade
-      {openExternalLink.isPending ? <BadgeActionSpinner /> : null}
+      {isPending ? <BadgeActionSpinner /> : null}
     </button>
   );
 }

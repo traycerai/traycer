@@ -155,6 +155,11 @@ export interface EpicRuntimeBinding {
 export interface OpenEpicStoreOptions {
   readonly epicId: string;
   /**
+   * The host this session is established against. Carried straight onto the
+   * returned handle - see {@link OpenEpicStoreHandle.hostId}.
+   */
+  readonly hostId: string;
+  /**
    * What to do when the host's plan-denial deadline says this session's
    * transport is worth probing again.
    *
@@ -993,6 +998,17 @@ export interface OpenEpicStoreHandle {
   readonly epicId: string;
   readonly userId: string | null;
   /**
+   * The host this session was established against - fixed for the handle's
+   * whole life. A host change is clone-not-migrate (this file's AGENTS.md):
+   * the provider tears the session down and acquires a new handle, it never
+   * repoints this one, so nothing here needs to observe it changing.
+   *
+   * Read by the registry's cap-eviction guard (`epicIsBusy`) to tell whether
+   * the activity plane's union - built by ONE serving host - can speak for
+   * THIS session at all.
+   */
+  readonly hostId: string;
+  /**
    * Transfer this session's root state into another, and take one in.
    *
    * The PORT the two merge sites use instead of reaching for `.doc`. It exists
@@ -1092,7 +1108,7 @@ export function isProjectionPatch(
 export function createOpenEpicStore(
   options: OpenEpicStoreOptions,
 ): OpenEpicStoreHandle {
-  const { epicId, userId } = options;
+  const { epicId, userId, hostId } = options;
   const mintedIngestFenceIdentity = nextIngestFenceIdentity;
   nextIngestFenceIdentity += 1;
 
@@ -1138,10 +1154,84 @@ export function createOpenEpicStore(
     storeApi?.setState({ isDirty: true });
   }
 
+  /**
+   * Count of `body/update` calls posted but not yet settled, per DISPATCH
+   * GENERATION (`bodyDocGenerationForDispatch`'s own token) rather than per
+   * `docKey` string.
+   *
+   * This is the window `refusedBodyUpdateDocKeys` does not cover: that set
+   * starts only once the ANSWER is known (`dropped`, or a rejection), but the
+   * edit is already live in main's doc - and the worker has not yet had a
+   * chance to prove otherwise - from the instant the call is POSTED. A
+   * synchronous cap-eviction check racing the round trip must see this window
+   * too, or it reads a session mid-edit as `isDirty: false` and disposes it,
+   * discarding an edit that was never durably held anywhere else (the
+   * previous `isClean()` transport clause covered this by accident, by
+   * refusing to evict ANY session with a non-`open` transport; the data-loss
+   * gate that replaced it does not, so this has to cover it directly).
+   *
+   * Keyed by the GENERATION, not the `docKey` string, because a `docKey` is
+   * reused across a replacement: a string-keyed count would let a stale
+   * settle from a RETIRED lineage's call decrement - or, worse, silently
+   * delete - a bucket that by then belongs to a fresh dispatch under the same
+   * key. A generation token is unique for the lineage's whole life and never
+   * reused, so a stale settle can only ever touch its OWN bucket, and needs no
+   * generation check of its own to stay correct. `retireBodyDoc` deletes the
+   * retired generation's bucket outright - not merely lets it drain to zero -
+   * so an in-flight call for a lineage that no longer exists stops counting
+   * toward "something is pending" the moment it stops being true, rather than
+   * forcing the REPLACEMENT body's next clean projection to read dirty.
+   */
+  const pendingBodyUpdateCallCountByGeneration = new Map<symbol, number>();
+
+  function notePendingBodyUpdate(generation: symbol): void {
+    pendingBodyUpdateCallCountByGeneration.set(
+      generation,
+      (pendingBodyUpdateCallCountByGeneration.get(generation) ?? 0) + 1,
+    );
+  }
+
+  function clearPendingBodyUpdate(generation: symbol): void {
+    const count = pendingBodyUpdateCallCountByGeneration.get(generation);
+    if (count === undefined) return;
+    if (count > 1) {
+      // Another call for this SAME generation is still outstanding - the
+      // latch stays forced, and there is nothing new to publish.
+      pendingBodyUpdateCallCountByGeneration.set(generation, count - 1);
+      return;
+    }
+    pendingBodyUpdateCallCountByGeneration.delete(generation);
+    // The write `notePendingBodyUpdate`'s caller made is the only thing that
+    // forced `isDirty` true for this reason, and nothing else re-asserts it
+    // once the last count clears - unlike `retireBodyDoc`, this settle is the
+    // ORDINARY case (a success, not a lineage ending), so it has to publish
+    // the recomputed verdict itself rather than leaving the store holding
+    // whatever the LAST write happened to be.
+    if (
+      refusedBodyUpdateDocKeys.size > 0 ||
+      pendingBodyUpdateCallCountByGeneration.size > 0
+    ) {
+      return;
+    }
+    storeApi?.setState({ isDirty: workerReplicaIsDirty });
+  }
+
   function retireBodyDoc(docKey: string): void {
+    const retiredGeneration = bodyDocGenerationByDocKey.get(docKey);
     bodyDocGenerationByDocKey.delete(docKey);
-    if (!refusedBodyUpdateDocKeys.delete(docKey)) return;
-    if (refusedBodyUpdateDocKeys.size > 0) return;
+    const hadRefusal = refusedBodyUpdateDocKeys.delete(docKey);
+    // Deletes the bucket outright, not a decrement - see the field's own doc
+    // on why a stale settle must find nothing left to touch.
+    const hadPending =
+      retiredGeneration !== undefined &&
+      pendingBodyUpdateCallCountByGeneration.delete(retiredGeneration);
+    if (!hadRefusal && !hadPending) return;
+    if (
+      refusedBodyUpdateDocKeys.size > 0 ||
+      pendingBodyUpdateCallCountByGeneration.size > 0
+    ) {
+      return;
+    }
     storeApi?.setState({ isDirty: workerReplicaIsDirty });
   }
   /**
@@ -1468,7 +1558,10 @@ export function createOpenEpicStore(
     let projected = workerProjected;
     if (projected.isDirty !== undefined) {
       workerReplicaIsDirty = projected.isDirty;
-      if (refusedBodyUpdateDocKeys.size > 0) {
+      if (
+        refusedBodyUpdateDocKeys.size > 0 ||
+        pendingBodyUpdateCallCountByGeneration.size > 0
+      ) {
         projected = { ...projected, isDirty: true };
       }
     }
@@ -1666,6 +1759,13 @@ export function createOpenEpicStore(
       // make the recovery obligation observable without turning typing into a
       // rejected user action.
       const dispatchedGeneration = bodyDocGenerationForDispatch(docKey);
+      // Latched BEFORE the call, synchronously - see
+      // `pendingBodyUpdateCallCountByGeneration`'s own doc for the window
+      // this closes. Cleared in `finally` regardless of outcome: by settle
+      // time ownership has resolved one way or the other, through the paths
+      // below.
+      notePendingBodyUpdate(dispatchedGeneration);
+      storeApi?.setState({ isDirty: true });
       void runtime.port
         .call("body/update", { docKey, update }, NO_TRANSFER)
         .then((answer) => {
@@ -1697,6 +1797,9 @@ export function createOpenEpicStore(
             { docKey },
             cause,
           );
+        })
+        .finally(() => {
+          clearPendingBodyUpdate(dispatchedGeneration);
         });
     },
     onLocalAwareness: (docKey, frame, localClientId) => {
@@ -1794,14 +1897,15 @@ export function createOpenEpicStore(
             // F10 data loss.
             //
             // Gated on `isDirty` + pending writes rather than on `isClean()`,
-            // deliberately, and for the reason the registry gives at its own
-            // re-point gate: `isClean()` ALSO requires an open transport,
+            // deliberately: `isClean()` ALSO requires an open transport,
             // which a plan-denied one has by definition lost - so it reads
             // false for every session this can ever be called about and the
             // rebuild would never once fire. `snapshotLoaded` is excluded for
             // the same shape of reason: a session that never loaded has
             // nothing to lose, and requiring it would block exactly the
-            // sessions this exists to recover.
+            // sessions this exists to recover. The registry's cap predicate
+            // (`holdsNothingToLose`) and its re-point gate read the same
+            // three work fields for the same reason.
             if (state.isDirty || state.writeCommands.length > 0) return;
             options.onRetryTransport();
           },
@@ -2308,6 +2412,7 @@ export function createOpenEpicStore(
   return {
     epicId,
     userId,
+    hostId,
     body: {
       applyDocUpdate: (docKey, update) => {
         bodyDocs.applyRemote(docKey, update);

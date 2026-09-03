@@ -238,11 +238,11 @@ describe("new chat command actions", () => {
 
     expect(opened.intents).toEqual([
       {
-        kind: "active-tile",
         epicId: EPIC_ID,
         tabId: TAB_ID,
         chatId: "host-chat",
         hostId: "test-host",
+        placement: null,
         source: "direct_ui",
       },
     ]);
@@ -296,11 +296,11 @@ describe("new chat command actions", () => {
     seedActiveGroup();
 
     openCreatedChatWhenProjected({
-      kind: "active-tile",
       epicId: EPIC_ID,
       tabId: TAB_ID,
       chatId: "host-chat",
       hostId: "test-host",
+      placement: null,
       source: "direct_ui",
     });
 
@@ -334,11 +334,11 @@ describe("new chat command actions", () => {
 
     openCreatedChatWhenProjectedWithNavigation({
       intent: {
-        kind: "active-tile",
         epicId: EPIC_ID,
         tabId: TAB_ID,
         chatId: "host-chat",
         hostId: "test-host",
+        placement: null,
         source: "direct_ui",
       },
       navigateNestedFocus: navigation.navigateNestedFocus,
@@ -383,11 +383,11 @@ describe("new chat command actions", () => {
       seedActiveGroup();
 
       const cancel = openCreatedChatWhenProjected({
-        kind: "active-tile",
         epicId: EPIC_ID,
         tabId: TAB_ID,
         chatId: "host-chat",
         hostId: "test-host",
+        placement: null,
         source: "direct_ui",
       });
 
@@ -411,11 +411,11 @@ describe("new chat command actions", () => {
       seedActiveGroup();
 
       openCreatedChatWhenProjected({
-        kind: "active-tile",
         epicId: EPIC_ID,
         tabId: TAB_ID,
         chatId: "host-chat",
         hostId: "test-host",
+        placement: null,
         source: "direct_ui",
       });
 
@@ -432,11 +432,11 @@ describe("new chat command actions", () => {
       seedActiveGroup();
 
       openCreatedChatWhenProjected({
-        kind: "active-tile",
         epicId: EPIC_ID,
         tabId: TAB_ID,
         chatId: "host-chat",
         hostId: "test-host",
+        placement: null,
         source: "direct_ui",
       });
 
@@ -458,11 +458,11 @@ describe("new chat command actions", () => {
       seedActiveGroup();
 
       openCreatedChatWhenProjected({
-        kind: "active-tile",
         epicId: EPIC_ID,
         tabId: TAB_ID,
         chatId: "host-chat",
         hostId: "test-host",
+        placement: null,
         source: "direct_ui",
       });
 
@@ -479,11 +479,11 @@ describe("new chat command actions", () => {
       seedActiveGroup();
 
       const cancel = openCreatedChatWhenProjected({
-        kind: "active-tile",
         epicId: EPIC_ID,
         tabId: TAB_ID,
         chatId: "host-chat",
         hostId: "test-host",
+        placement: null,
         source: "direct_ui",
       });
 
@@ -551,12 +551,11 @@ describe("new chat command actions", () => {
     if (targetGroupId === null) throw new Error("expected a new empty group");
 
     openCreatedChatWhenProjected({
-      kind: "target-group",
       epicId: EPIC_ID,
       tabId: TAB_ID,
       chatId: "host-chat",
-      groupId: targetGroupId,
       hostId: "test-host",
+      placement: { kind: "tab", paneId: targetGroupId, index: null },
       source: "command_palette",
     });
     registryMock.projectChat({ id: "host-chat", title: "Host chat" });
@@ -581,12 +580,11 @@ describe("new chat command actions", () => {
       .splitPaneEmptyRightInTab(TAB_ID, sourceGroupId);
     if (targetGroupId === null) throw new Error("expected a target group");
     openCreatedChatWhenProjected({
-      kind: "target-group",
       epicId: EPIC_ID,
       tabId: TAB_ID,
       chatId: "host-chat",
-      groupId: targetGroupId,
       hostId: "test-host",
+      placement: { kind: "tab", paneId: targetGroupId, index: null },
       source: "command_palette",
     });
 
@@ -612,13 +610,11 @@ describe("new chat command actions", () => {
     const activeGroupId = seedActiveGroup();
 
     openCreatedChatWhenProjected({
-      kind: "split",
       epicId: EPIC_ID,
       tabId: TAB_ID,
       chatId: "host-chat",
-      targetGroupId: activeGroupId,
-      position: "bottom",
       hostId: "test-host",
+      placement: { kind: "split", paneId: activeGroupId, edge: "bottom" },
       source: "direct_ui",
     });
     registryMock.projectChat({ id: "host-chat", title: "" });

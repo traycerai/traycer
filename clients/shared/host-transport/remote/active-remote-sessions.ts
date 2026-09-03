@@ -626,6 +626,8 @@ export function acquireRemoteSession<
         replayMustBeKeyed,
       ),
     subscribe: (method, params) => session.subscribe(method, params),
+    subscribeAtVersion: (method, schemaVersion, params) =>
+      session.subscribeAtVersion(method, schemaVersion, params),
     subscribeWithParamsProvider: (method, paramsProvider) =>
       session.subscribeWithParamsProvider(method, paramsProvider),
     notifyBearerRotated: () => session.notifyBearerRotated(),

@@ -5,6 +5,8 @@ import { cn } from "@/lib/utils";
 import { usePaneAwareContentGuard } from "@/components/epic-tabs/pane-visibility-context";
 import { usePortalConcealed } from "@/components/ui/portal-concealment-context";
 import { useSafeAreaCollisionPadding } from "@/components/ui/safe-area-collision-padding";
+import { useComposedRefs } from "radix-ui/internal";
+import { useRegisterBrowserOverlay } from "@/lib/browser-view/tiles/use-register-browser-overlay";
 
 function ContextMenu({
   ...props
@@ -21,6 +23,7 @@ function ContextMenuTrigger({
 }
 
 function ContextMenuContent({
+  ref,
   className,
   collisionPadding,
   onCloseAutoFocus,
@@ -41,12 +44,14 @@ function ContextMenuContent({
   // cap; both are displaceable by a caller (see
   // `safe-area-collision-padding.ts` and `dropdown-menu.tsx`).
   const safeAreaInsets = useSafeAreaCollisionPadding();
+  const registerOverlayRef = useRegisterBrowserOverlay<HTMLDivElement>();
+  const composedRef = useComposedRefs(ref, registerOverlayRef);
   if (!paneFocused || concealed) return null;
   return (
     <ContextMenuPrimitive.Portal>
       <ContextMenuPrimitive.Content
+        ref={composedRef}
         data-slot="context-menu-content"
-        data-browser-overlay="context-menu"
         collisionPadding={collisionPadding ?? safeAreaInsets}
         className={cn(
           "z-50 max-w-safe-dvw min-w-40 overflow-hidden rounded-lg bg-popover p-1 text-popover-foreground shadow-md ring-1 ring-foreground/10 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
@@ -159,6 +164,7 @@ function ContextMenuSubTrigger({
 }
 
 function ContextMenuSubContent({
+  ref,
   className,
   collisionPadding,
   ...props
@@ -166,10 +172,12 @@ function ContextMenuSubContent({
   // A submenu opens sideways from a row that is itself already near an edge, so
   // it is the surface most likely to need the clamp its parent content has.
   const safeAreaInsets = useSafeAreaCollisionPadding();
+  const registerOverlayRef = useRegisterBrowserOverlay<HTMLDivElement>();
+  const composedRef = useComposedRefs(ref, registerOverlayRef);
   return (
     <ContextMenuPrimitive.SubContent
+      ref={composedRef}
       data-slot="context-menu-sub-content"
-      data-browser-overlay="context-menu"
       collisionPadding={collisionPadding ?? safeAreaInsets}
       className={cn(
         "z-50 max-w-safe-dvw min-w-24 overflow-hidden rounded-lg bg-popover p-1 text-popover-foreground shadow-lg ring-1 ring-foreground/10 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",

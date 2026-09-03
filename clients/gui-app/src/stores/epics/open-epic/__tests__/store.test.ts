@@ -2348,6 +2348,15 @@ describe("createOpenEpicStore", () => {
       localUpdate,
       stateVectorBase64(hostArtifactRoomDoc),
     );
+    // The local edit's OWN `body/update` call is still outstanding at this
+    // point - posting it is what synchronously set `isDirty`, and only its
+    // OWN settlement (not this host ack, a separate round trip) releases
+    // that latch. See `pendingBodyUpdateCallCountByGeneration`'s own doc.
+    // `drainUntil`, not a fixed await count: this in-process worker's own
+    // round trip is exactly what `leasedFragment` above already needed it
+    // for, and a fixed tick count that happens to cover THAT round trip is
+    // not a promise it covers this one too.
+    await drainUntil(() => (opened.store.getState().isDirty ? null : true));
     expect(opened.store.getState().isDirty).toBe(false);
     expect(opened.isClean()).toBe(true);
 
@@ -2405,6 +2414,10 @@ describe("createOpenEpicStore", () => {
 
     opened.store.getState().discardUnsyncedEdits();
 
+    // Same reason as the sibling test above: the local edit's own
+    // `body/update` call is still outstanding, and `discardUnsyncedEdits`
+    // does not touch that latch - only the call's own settlement does.
+    await drainUntil(() => (opened.store.getState().isDirty ? null : true));
     expect(opened.store.getState().isDirty).toBe(false);
     expect(opened.isClean()).toBe(true);
 
@@ -2487,6 +2500,10 @@ describe("createOpenEpicStore", () => {
       sentBytes,
       ackVector,
     );
+    // Same reason as the sibling tests above: the local edit's own
+    // `body/update` call is still outstanding, and only ITS OWN settlement
+    // releases the pending latch that posting it set.
+    await drainUntil(() => (opened.store.getState().isDirty ? null : true));
     expect(opened.store.getState().isDirty).toBe(false);
     expect(opened.isClean()).toBe(true);
 

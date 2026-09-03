@@ -11,7 +11,6 @@ const NOW_MS = Date.UTC(2026, 6, 30, 12, 0, 0);
 const testState: {
   items: ReadonlyArray<HistoryItem>;
   signOut: () => Promise<void>;
-  openExternalLink: (url: string) => Promise<void>;
   openSettings: () => void;
   isPending: boolean;
   cloudPagePending: boolean;
@@ -19,12 +18,16 @@ const testState: {
 } = {
   items: [],
   signOut: () => Promise.resolve(),
-  openExternalLink: () => Promise.resolve(),
   openSettings: () => undefined,
   isPending: false,
   cloudPagePending: false,
   hostRequiresCloudToList: false,
 };
+
+const openLink = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/links/open-link", () => ({ useOpenLink: () => openLink }));
+
+const trackMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/hooks/home/use-history-query", () => ({
   useHistoryQuery: () => ({
@@ -50,7 +53,7 @@ vi.mock("@/lib/analytics", () => ({
     SubscriptionManagementOpened: "SubscriptionManagementOpened",
     SignOutRequested: "SignOutRequested",
   },
-  Analytics: { getInstance: () => ({ track: () => undefined }) },
+  Analytics: { getInstance: () => ({ track: trackMock }) },
 }));
 
 vi.mock("@/lib/host", () => ({
@@ -63,7 +66,6 @@ vi.mock("@/providers/use-runner-host", () => ({
     // The platform origin comes from `signInUrl`, which every shell already
     // composes from its configured cloud-UI base.
     signInUrl: "https://platform.test/sign-in",
-    openExternalLink: (url: string) => testState.openExternalLink(url),
   }),
 }));
 
@@ -151,11 +153,12 @@ describe("MobileNavDrawer", () => {
     vi.setSystemTime(NOW_MS);
     testState.items = [];
     testState.signOut = () => Promise.resolve();
-    testState.openExternalLink = () => Promise.resolve();
     testState.openSettings = () => undefined;
     testState.isPending = false;
     testState.cloudPagePending = false;
     testState.hostRequiresCloudToList = false;
+    openLink.mockClear();
+    trackMock.mockClear();
     useMobileNavStore.setState({ open: true });
     useAuthStore.setState({
       profile: {
@@ -650,22 +653,26 @@ describe("MobileNavDrawer", () => {
       ).toBe("Sign out");
     });
 
-    it("opens the subscription page through the runner host", async () => {
-      const opened: string[] = [];
-      testState.openExternalLink = (url) => {
-        opened.push(url);
-        return Promise.resolve();
-      };
+    it("opens the subscription page through openLink and tracks it synchronously", async () => {
       renderDrawer();
       fireEvent.click(
         await screen.findByTestId("mobile-nav-manage-subscription"),
       );
 
-      expect(opened.length).toBe(1);
       // `resolvePlatformBaseUrl` takes the origin of the shell's own
       // `signInUrl`, so this tracks whatever deployment is configured rather
       // than rewriting a hostname label.
-      expect(opened[0]).toBe("https://platform.test");
+      expect(openLink).toHaveBeenCalledExactlyOnceWith(
+        "https://platform.test",
+        "account",
+        null,
+      );
+      // Analytics fires unconditionally alongside the open, not gated on any
+      // promise settling.
+      expect(trackMock).toHaveBeenCalledExactlyOnceWith(
+        "SubscriptionManagementOpened",
+        { source: "direct_ui" },
+      );
       expect(useMobileNavStore.getState().open).toBe(false);
     });
 

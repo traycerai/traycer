@@ -339,6 +339,10 @@ function buildHeaderEpicHandle(
     snapshotMeta: null,
     isDirty: false,
     unsyncedQueueSize: 0,
+    // The registry's eligibility key reads all three work fields and the
+    // transport.
+    writeCommands: [],
+    hostTransportStatus: "open",
     bindingVersion: 0,
     installedArm: null,
     chatIngestSeq: 0,
@@ -352,6 +356,8 @@ function buildHeaderEpicHandle(
   return {
     epicId: tab.id,
     userId: null,
+    // The HANDLE's own host, distinct from the per-chat `hostId` above.
+    hostId: "test-host",
     // A production handle has no `doc` / `awareness`: the replica lives on the
     // worker thread and a `Y.Doc` cannot cross a structured clone.
     projection: {

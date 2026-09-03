@@ -3,10 +3,10 @@ import {
   act,
   cleanup,
   fireEvent,
-  render,
   screen,
   waitFor,
 } from "@testing-library/react";
+import { renderPeekTile } from "@/components/epic-canvas/renderers/__tests__/browser-peek-tile-render";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   FakeStreamClient,
@@ -18,6 +18,8 @@ import {
   streamAuthRevalidatorModule,
   tabHostIdModule,
   tileBodyVisibleModule,
+  runnerOpenExternalLinkModule,
+  tileRoleRunnerHostModule,
   type FakeStreamSession,
 } from "@/components/epic-canvas/renderers/__tests__/browser-peek-tile-stream-fixture";
 import { BrowserPeekTile } from "@/components/epic-canvas/renderers/browser-peek-tile";
@@ -26,6 +28,12 @@ const hookState = vi.hoisted(() => ({
   streamClient: null as FakeStreamClient | null,
   visible: true,
 }));
+
+vi.mock("@/providers/use-runner-host", () => tileRoleRunnerHostModule());
+
+vi.mock("@/hooks/runner/use-open-external-link-mutation", () =>
+  runnerOpenExternalLinkModule(),
+);
 
 vi.mock("sonner", () => ({
   toast: { error: vi.fn(), success: vi.fn() },
@@ -159,7 +167,7 @@ describe("BrowserPeekTile on a coarse pointer", () => {
   });
 
   it("nav bar reflects navState", () => {
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
@@ -208,7 +216,7 @@ describe("BrowserPeekTile on a coarse pointer", () => {
   });
 
   it("a dialog renders as a sheet and answers dialogResponse", async () => {
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"

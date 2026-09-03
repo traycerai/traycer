@@ -960,9 +960,12 @@ export function createEpicControlReplica(
     migrationStatus: () => sink.read().migration.status,
 
     noteTransportDetached(): void {
-      // The PUBLISHED leg only. `isClean()` reads it and the handle is
-      // unreachable from the transport now, so leaving the last live reading in
-      // place would lie.
+      // The PUBLISHED leg only. `isClean()` and the sync pill read it, and the
+      // handle is unreachable from the transport now, so leaving the last live
+      // reading in place would lie. (The registry's cap predicate no longer
+      // reads the transport; a retained buffer is protected from the cap
+      // structurally - it lives outside the registry's walk - and by being
+      // dirty by construction.)
       //
       // The internal `transportStatus` is deliberately NOT moved, and that is
       // not an oversight. A retained handle's projected state freezes at its

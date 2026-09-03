@@ -72,6 +72,7 @@ import type {
   DisplayTopology,
   FileSaveInput,
   FileSaveResult,
+  HostKeyPinMismatch,
   InstalledFont,
   PendingCertificateError,
   ProcessMetricsSnapshot,
@@ -90,6 +91,7 @@ export type {
   CertificateTrustScope,
   DisplaySnapshot,
   DisplayTopology,
+  HostKeyPinMismatch,
   PendingCertificateError,
   ProcessMetricsSnapshot,
   TrustedCertificateEntry,
@@ -135,6 +137,7 @@ import type {
   GlobalShortcutStatus,
 } from "../ipc-contracts/global-shortcuts-types";
 import type {
+  DesktopAuthSessionSetResult,
   DesktopAuthSessionSnapshot,
   DesktopRuntimePlatform,
   DesktopTopLevelMenuId,
@@ -209,6 +212,7 @@ export interface DesktopPreloadBridge {
   ): Promise<readonly string[]>;
   requestMicrophoneAccess(): Promise<"granted" | "denied">;
   openMicrophoneSettings(): Promise<void>;
+  openFullDiskAccessSettings(): Promise<void>;
   beginAuthAttempt(): void;
   onAuthCallback(handler: () => void): {
     dispose: () => void;
@@ -460,6 +464,11 @@ export interface DesktopPlatformBridge {
       dispose: () => void;
     };
   };
+  hostKeyPin: {
+    onMismatch(handler: (entry: HostKeyPinMismatch) => void): {
+      dispose: () => void;
+    };
+  };
   display: {
     list(): Promise<DisplayTopology>;
     onTopologyChange(
@@ -622,7 +631,9 @@ export interface DesktopWindowsBridge {
   };
   authSession: {
     get(): Promise<DesktopAuthSessionSnapshot>;
-    set(snapshot: DesktopAuthSessionSnapshot): Promise<void>;
+    set(
+      snapshot: DesktopAuthSessionSnapshot,
+    ): Promise<DesktopAuthSessionSetResult>;
     onChange(handler: (snapshot: DesktopAuthSessionSnapshot) => void): {
       dispose: () => void;
     };
@@ -914,6 +925,10 @@ export class DesktopRunnerHost implements IRunnerHost {
 
   openMicrophoneSettings(): Promise<void> {
     return this.bridge.openMicrophoneSettings();
+  }
+
+  openFullDiskAccessSettings(): Promise<void> {
+    return this.bridge.openFullDiskAccessSettings();
   }
 
   openExternalLink(url: string): Promise<void> {

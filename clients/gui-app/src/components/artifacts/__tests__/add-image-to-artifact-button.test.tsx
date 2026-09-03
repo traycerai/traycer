@@ -84,6 +84,16 @@ vi.mock("@/providers/use-open-epic-handle", () => ({
 
 vi.mock("@/lib/artifacts/node-display", () => ({
   isEpicArtifactKind: () => true,
+  // Read at module load by the settings store, which the link seam pulls in.
+  DEFAULT_EPIC_NODE_ICON_COLORS: {
+    chat: "#38bdf8",
+    "terminal-agent": "#22d3ee",
+    spec: "#fbbf24",
+    ticket: "#a78bfa",
+    story: "#34d399",
+    review: "#fb7185",
+    terminal: "#94a3b8",
+  },
 }));
 
 let fragmentDoc: Y.Doc;

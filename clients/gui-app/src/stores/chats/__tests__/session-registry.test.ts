@@ -575,6 +575,57 @@ describe("ChatSessionRegistry", () => {
     expect(registry.membershipIdsForHost("host-none")).toEqual([]);
     registry.disposeAll();
   });
+
+  it("re-reads maxWarmSessions on every warm-pool walk when given as a function", () => {
+    let cap = 2;
+    const registry = new ChatSessionRegistry({
+      idleTtlMs: TTL_MS,
+      maxWarmSessions: () => cap,
+    });
+    const a = createHandle("epic-1", "chat-a");
+    const b = createHandle("epic-1", "chat-b");
+    const c = createHandle("epic-1", "chat-c");
+    registry.acquire(
+      { epicId: "epic-1", chatId: "chat-a", hostId: HOST, scopeKey: SCOPE },
+      () => a.handle,
+    );
+    registry.acquire(
+      { epicId: "epic-1", chatId: "chat-b", hostId: HOST, scopeKey: SCOPE },
+      () => b.handle,
+    );
+    registry.acquire(
+      { epicId: "epic-1", chatId: "chat-c", hostId: HOST, scopeKey: SCOPE },
+      () => c.handle,
+    );
+
+    registry.release("epic-1", "chat-a", HOST);
+    vi.advanceTimersByTime(1_000);
+    registry.release("epic-1", "chat-b", HOST);
+    vi.advanceTimersByTime(1_000);
+    // Two warm sessions: exactly at the cap of 2, nothing evicted yet.
+    expect(a.closeCount()).toBe(0);
+    expect(b.closeCount()).toBe(0);
+
+    // A third release overflows the cap of 2; the oldest-released (a) goes.
+    registry.release("epic-1", "chat-c", HOST);
+    expect(a.closeCount()).toBe(1);
+    expect(b.closeCount()).toBe(0);
+    expect(c.closeCount()).toBe(0);
+
+    // Lower the cap and force a fresh walk: the NEW limit is read, not the
+    // one captured when the registry was constructed.
+    cap = 1;
+    const d = createHandle("epic-1", "chat-d");
+    registry.acquire(
+      { epicId: "epic-1", chatId: "chat-d", hostId: HOST, scopeKey: SCOPE },
+      () => d.handle,
+    );
+    registry.release("epic-1", "chat-d", HOST);
+
+    expect(b.closeCount()).toBe(1);
+    expect(c.closeCount()).toBe(1);
+    expect(d.closeCount()).toBe(0);
+  });
 });
 
 function markRunning(handle: ChatSessionStoreHandle): void {

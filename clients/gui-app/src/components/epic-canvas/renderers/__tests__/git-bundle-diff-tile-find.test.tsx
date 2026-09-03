@@ -118,6 +118,7 @@ vi.mock("@/hooks/host/use-tab-host-client", () => ({
 }));
 
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
+  useHostMethodSchemaVersion: () => null,
   useHostSupportsMethod: () => false,
 }));
 

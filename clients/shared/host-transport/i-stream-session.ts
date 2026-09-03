@@ -82,6 +82,28 @@ export function isMethodIncompatibleClose(
 }
 
 /**
+ * Whether an incompatibility close is explicitly attributed to `method`.
+ *
+ * A connection-wide protocol skew may carry the same `INCOMPATIBLE` code with
+ * no per-method details. Consumers must not treat that as proof that one
+ * optional method is absent, because doing so can incorrectly enter a legacy
+ * fallback instead of surfacing the connection incompatibility.
+ */
+export function isIncompatibleCloseForMethod(
+  reason: StreamCloseReason | null,
+  method: string,
+): boolean {
+  if (!isMethodIncompatibleClose(reason) || reason?.kind !== "fatalError") {
+    return false;
+  }
+  return (
+    reason.details.incompatibleMethods?.some(
+      (details) => details.method === method,
+    ) === true
+  );
+}
+
+/**
  * Frame envelope shape exposed to session consumers. The `kind` discriminant
  * plus `hasBinaryPayload` is the minimum the transport needs to route each
  * frame; every other field is contract-specific and is preserved verbatim

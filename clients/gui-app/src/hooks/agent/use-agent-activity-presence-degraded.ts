@@ -6,15 +6,31 @@ import { useNotificationsServingHostId } from "@/hooks/host/use-notifications-se
 import { useReactiveLocalHostId } from "@/hooks/host/use-reactive-local-host-id";
 
 /**
- * How long a degraded reading may hold before the pill is allowed to say so.
+ * How long a degraded reading may hold before the pill is allowed to say so,
+ * per reason.
  *
- * The stream opens a beat after the Epic's own host link on a cold start and
- * is re-dialled by its own lane after a close; the host's room lifecycle treats
- * `reconnecting` as a blip it rides out before rebuilding. Neither is worth an
- * amber flash. Past this the user is looking at spinners that may no longer be
- * true.
+ * `stream-down`: the stream opens a beat after the Epic's own host link on a
+ * cold start and is re-dialled by its own lane after a close. Neither is worth
+ * an amber flash. Past this the user is looking at spinners that may no longer
+ * be true.
+ *
+ * `cloud-down`: the host's collab socket is re-dialled 1 s after a close and a
+ * fresh backend instance answers auth and sync a few seconds later, so a
+ * routine drop is over well inside this window - and the two seconds the
+ * stream grace allows were shorter than one such reconnect, which is how a
+ * backend incident painted "Remote agent status unavailable" several times a
+ * minute over agents that never stopped. Aligned with the artifact leg's
+ * `CLOUD_LINK_GRACE_MS` so the two planes stop naming the same drop at
+ * different moments. What the grace hides is only the FRESHNESS of a remote
+ * spinner; agents on this device stay live throughout.
  */
-const PRESENCE_DEGRADED_GRACE_MS = 2_000;
+const PRESENCE_DEGRADED_GRACE_MS: Record<
+  AgentActivityPresenceDegradedReason,
+  number
+> = {
+  "stream-down": 2_000,
+  "cloud-down": 15_000,
+};
 
 /**
  * Why agent status on this Epic may be stale or unknown, or `null` when the
@@ -101,7 +117,7 @@ export function useAgentActivityPresenceDegraded(): AgentActivityPresenceDegrade
     if (reason === null) return undefined;
     const timer = window.setTimeout(() => {
       setSustained(reason);
-    }, PRESENCE_DEGRADED_GRACE_MS);
+    }, PRESENCE_DEGRADED_GRACE_MS[reason]);
     return () => {
       window.clearTimeout(timer);
     };

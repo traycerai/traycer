@@ -588,6 +588,17 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // A toggle: two quick presses are on-then-off, and the second must not
+  // coalesce into the first or the human ends up with the opposite of what
+  // the switch shows. `fifo` keeps two IDENTICAL presses distinct; it cannot
+  // order an on against an off, because the value is part of the params and
+  // so of the queue key - those are two queues. The per-command ordering
+  // lives one layer up, in `useManagedCommandConfigure`'s mutation scope.
+  "managedCommand.configure": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Deliver takes `fifo` for a reason the other three do not have, and NOT the
   // one about distinct params. The coordinator keys queues by
   // [hostId, userId, method, params], so two Delivers naming different subsets

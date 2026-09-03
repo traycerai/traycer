@@ -12,6 +12,7 @@ import type {
   CertificateTrustScope,
   LogLevel,
   LogLevelScope,
+  HostKeyPinMismatch,
   LogLevelsSnapshot,
   PendingCertificateError,
   ProcessMetricsSnapshot,
@@ -25,6 +26,7 @@ export type {
   BackgroundMaterial,
   DisplaySnapshot,
   DisplayTopology,
+  HostKeyPinMismatch,
   InstalledFont,
   PendingCertificateError,
   ProcessMetricsSnapshot,
@@ -101,6 +103,10 @@ export interface PlatformBridgeSurface {
     dismissPending(id: string): Promise<void>;
     showSystemDialog(certificate: unknown, message: string): Promise<boolean>;
     onPending(handler: Listener<PendingCertificateError>): Disposable;
+  };
+  hostKeyPin: {
+    /** Fires when main refused a host whose static key changed (H11). */
+    onMismatch(handler: Listener<HostKeyPinMismatch>): Disposable;
   };
   display: {
     list(): Promise<DisplayTopology>;
@@ -291,6 +297,10 @@ export function buildPlatformBridge(): PlatformBridgeSurface {
         ) as Promise<boolean>,
       onPending: (handler) =>
         subscribe(RunnerHostEvent.certificateErrorPending, handler),
+    },
+    hostKeyPin: {
+      onMismatch: (handler) =>
+        subscribe(RunnerHostEvent.hostKeyPinMismatch, handler),
     },
     display: {
       list: () =>

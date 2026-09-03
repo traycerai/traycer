@@ -1,8 +1,13 @@
 import { useEffect, type ReactNode } from "react";
+import { appLogger } from "@/lib/logger";
 import { useAuthService } from "@/lib/host";
 import { useWindowsBridge } from "@/providers/windows-bridge-context";
+import { authSessionRefusedToast } from "@/lib/toast/channels";
 import type { AuthSessionSnapshot } from "@/lib/auth/auth-service";
-import type { DesktopAuthSessionSnapshot } from "@/lib/windows/types";
+import type {
+  DesktopAuthSessionRefusalReason,
+  DesktopAuthSessionSnapshot,
+} from "@/lib/windows/types";
 
 /**
  * Cross-window auth-projection bridge for the desktop windows bridge.
@@ -67,7 +72,33 @@ export function WindowsBridgeAuthSessionBridge(
         return;
       }
       lastWrittenSerialized = serialized;
-      void bridge.authSession.set(desktopSnapshot);
+      void bridge.authSession.set(desktopSnapshot).then(
+        (result) => {
+          if (result.outcome !== "refused") return;
+          // The latch is an echo suppressor, not a record of what the bridge
+          // holds: a refused write left nothing there, so keeping it latched
+          // makes the very next projection of the SAME snapshot a no-op and
+          // the window never re-attempts. Cleared only while the latch is
+          // still this write's - a newer projection has already superseded it.
+          if (lastWrittenSerialized === serialized)
+            lastWrittenSerialized = null;
+          authSessionRefusedToast.warning(
+            describeAuthSessionRefusalReason(result.reason),
+          );
+        },
+        (cause: unknown) => {
+          // An IPC invoke that REJECTS - the main handler threw, the channel is
+          // absent, the window is being destroyed - leaves exactly the stuck
+          // latch the refusal branch above exists to prevent, plus an unhandled
+          // rejection. Same clearing rule, so the next projection of the same
+          // snapshot is attempted again.
+          if (lastWrittenSerialized === serialized)
+            lastWrittenSerialized = null;
+          appLogger.warn("[auth] could not write the desktop auth session", {
+            cause: cause instanceof Error ? cause.message : String(cause),
+          });
+        },
+      );
     };
 
     const ingestInbound = (snapshot: DesktopAuthSessionSnapshot): void => {
@@ -161,6 +192,28 @@ function fromDesktopSnapshot(
     profile: null,
     contextMetadata: null,
   };
+}
+
+const AUTH_SESSION_REFUSAL_COPY: Record<
+  DesktopAuthSessionRefusalReason,
+  string
+> = {
+  "malformed-token": "the sign-in token was malformed",
+  "unsupported-algorithm": "the sign-in token used an unsupported algorithm",
+  "unknown-signing-key": "the sign-in token's signing key was not recognized",
+  "key-source-unavailable": "the signing-key source was unavailable",
+  "bad-signature": "the sign-in token's signature did not verify",
+  expired: "the sign-in token had expired",
+  "issuer-mismatch": "the sign-in token's issuer did not match",
+  "audience-mismatch": "the sign-in token's audience did not match",
+  "subject-mismatch": "the sign-in token's subject did not match",
+};
+
+/** Names the refusal category in plain words. Never renders the token. */
+function describeAuthSessionRefusalReason(
+  reason: DesktopAuthSessionRefusalReason,
+): string {
+  return `Traycer could not verify this sign-in with the auth service (${AUTH_SESSION_REFUSAL_COPY[reason]}). Sign out and back in.`;
 }
 
 function serializeDesktopSnapshot(

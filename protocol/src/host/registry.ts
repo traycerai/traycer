@@ -303,11 +303,17 @@ import {
   diagnosticsLogsTailV10,
 } from "@traycer/protocol/host/diagnostics/contracts";
 import {
+  managedCommandConfigureV10,
   managedCommandDeleteV10,
   managedCommandDeliverHeldV10,
+  managedCommandStartUpgradeV10ToV11,
   managedCommandStartV10,
+  managedCommandStartV11,
+  managedCommandStopUpgradeV10ToV11,
   managedCommandStopV10,
+  managedCommandStopV11,
   managedCommandSubscribeOutputV10,
+  managedCommandSubscribeOutputV11,
 } from "@traycer/protocol/host/managed-command/contracts";
 import { hostGetRuntimeCapabilitiesV10 } from "@traycer/protocol/host/runtime-capabilities/contracts";
 import { hostRebindLocalStoreV10 } from "@traycer/protocol/host/local-store/contracts";
@@ -472,8 +478,14 @@ import {
   workspaceSearchTextV10,
 } from "@traycer/protocol/host/workspace/contracts";
 import { workspaceSubscribeFileListV10 } from "@traycer/protocol/host/workspace/subscribe";
-import { workspaceStreamAssetV10 } from "@traycer/protocol/host/workspace/asset-stream";
-import { gitStreamFileAssetV10 } from "@traycer/protocol/host/git-asset-stream";
+import {
+  workspaceStreamAssetV10,
+  workspaceStreamAssetV11,
+} from "@traycer/protocol/host/workspace/asset-stream";
+import {
+  gitStreamFileAssetV10,
+  gitStreamFileAssetV11,
+} from "@traycer/protocol/host/git-asset-stream";
 import {
   terminalCreateDowngradeV21ToV10,
   terminalCreateV10,
@@ -582,6 +594,7 @@ import {
   resourcesSubscribeV12,
   resourcesSubscribeV13,
   resourcesSubscribeV14,
+  resourcesSubscribeV15,
   resourcesKillV10,
   resourcesListLocalServersV10,
 } from "@traycer/protocol/host/resources/subscribe";
@@ -597,7 +610,10 @@ import {
 import { sessionImportScanV10 } from "@traycer/protocol/host/session-import/scan";
 import { sessionImportRunV10 } from "@traycer/protocol/host/session-import/run";
 import { sessionImportStatusV10 } from "@traycer/protocol/host/session-import/contracts";
-import { worktreeDeleteBatchByPathStreamV10 } from "@traycer/protocol/host/worktree-delete-batch-stream";
+import {
+  worktreeDeleteBatchByPathStreamV10,
+  worktreeDeleteBatchByPathStreamV11,
+} from "@traycer/protocol/host/worktree-delete-batch-stream";
 import {
   worktreeDeleteByPathStreamV10,
   worktreeDeleteByPathStreamV11,
@@ -614,7 +630,11 @@ import {
   hostChatRecordsSubscribeV11,
   hostChatRecordsSubscribeV12,
 } from "@traycer/protocol/host/epic/chat-records";
-import { editorOpenPathsV10 } from "@traycer/protocol/host/editor/contracts";
+import {
+  editorOpenPathsUpgradeV10ToV11,
+  editorOpenPathsV10,
+  editorOpenPathsV11,
+} from "@traycer/protocol/host/editor/contracts";
 import {
   gitListChangedFilesV10,
   gitListChangedFilesV11,
@@ -6871,11 +6891,15 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   },
   "editor.openPaths": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: editorOpenPathsV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: editorOpenPathsV11,
+          upgradeFromPreviousVersion: editorOpenPathsUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -7006,14 +7030,21 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   // The human lifecycle controls for monitors and shells. Brand-new v1.0
   // methods on the same `degrade: unsupported` channel as `resources.kill`
   // above: a host without the managed-command subsystem simply lacks them.
+  // `1.1` on start/stop returns the command with `relaunchOnHostRestart`;
+  // the shipped `1.0` stays pinned to the pre-relaunch command shape (see
+  // `managedCommandSchemaPreRelaunch`).
   "managedCommand.start": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: managedCommandStartV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: managedCommandStartV11,
+          upgradeFromPreviousVersion: managedCommandStartUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -7022,11 +7053,15 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   "managedCommand.stop": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: managedCommandStopV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: managedCommandStopV11,
+          upgradeFromPreviousVersion: managedCommandStopUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -7039,6 +7074,25 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       versions: {
         0: {
           contract: managedCommandDeleteV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  // The one human-editable setting: relaunch after a host restart. Same
+  // channel as the lifecycle three; a host too old to have the flag lacks the
+  // method, so the GUI hides the switch (`useHostSupportsMethod`), and its
+  // commands read `relaunchOnHostRestart: true` by default - which is what
+  // such a host does (it respawns every survivor; it never offered the
+  // choice).
+  "managedCommand.configure": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: managedCommandConfigureV10,
           upgradeFromPreviousVersion: null,
         },
       },
@@ -9120,10 +9174,15 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   // `host/managed-command/subscribe.ts` for what a global panel would re-add).
   "managedCommand.subscribeOutput": {
     1: {
-      latestMinor: 0,
+      // `1.1` adds `relaunchOnHostRestart` to the snapshot/status headers;
+      // `1.0` is pinned to the shipped pre-relaunch command shape.
+      latestMinor: 1,
       versions: {
         0: {
           contract: managedCommandSubscribeOutputV10,
+        },
+        1: {
+          contract: managedCommandSubscribeOutputV11,
         },
       },
     },
@@ -9197,31 +9256,37 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
       },
     },
   },
-  // Image preview stream for the workspace file tile - no-degrade rationale in `asset-stream.ts`'s file-level doc.
+  // Asset preview stream for the workspace file tile - no-degrade rationale in `asset-stream.ts`'s file-level doc. 1.1 adds PDF.
   "workspace.streamAsset": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: workspaceStreamAssetV10,
         },
+        1: {
+          contract: workspaceStreamAssetV11,
+        },
       },
     },
   },
-  // Sibling of `workspace.streamAsset` for the git diff tile's old/new image sides - same no-degrade rationale.
+  // Sibling of `workspace.streamAsset` for the git diff tile's old/new sides - same no-degrade rationale. 1.1 adds PDF.
   "git.streamFileAsset": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: gitStreamFileAssetV10,
+        },
+        1: {
+          contract: gitStreamFileAssetV11,
         },
       },
     },
   },
   "resources.subscribe": {
     1: {
-      latestMinor: 4,
+      latestMinor: 5,
       versions: {
         0: {
           contract: resourcesSubscribeV10,
@@ -9241,6 +9306,11 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
         // for every minor before this one.
         4: {
           contract: resourcesSubscribeV14,
+        },
+        // @1.5 lets a mounted stream remain on the background cadence while
+        // only a visible resource monitor asks for interactive refresh.
+        5: {
+          contract: resourcesSubscribeV15,
         },
       },
     },
@@ -9422,10 +9492,13 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   // which is what makes fallback safe for a destructive operation.
   "worktree.deleteBatchByPath": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: worktreeDeleteBatchByPathStreamV10,
+        },
+        1: {
+          contract: worktreeDeleteBatchByPathStreamV11,
         },
       },
     },

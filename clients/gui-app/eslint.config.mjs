@@ -18,6 +18,13 @@ import {
   tabNavigationStoreActionRestrictions,
 } from "../../eslint/traycer-nested-focus-boundary-rules.mjs";
 import {
+  LINK_EGRESS_BRIDGE_RESTRICTIONS,
+  LINK_EGRESS_DOM_RESTRICTIONS,
+  LINK_EGRESS_HOOK_RESTRICTIONS,
+  LINK_EGRESS_RESTRICTIONS,
+  TILE_OPEN_RESTRICTIONS,
+} from "../../eslint/traycer-tile-open-boundary-rules.mjs";
+import {
   hostSelectionReadAllowlist,
   hostSelectionReadImportRestrictions,
   selectByIdRestrictions,
@@ -74,6 +81,81 @@ const importRestrictionDimensions = {
   ],
   readPath: hostSelectionReadImportRestrictions.patterns,
   kernel: selectionKernelImportRestrictions.patterns,
+  // Overlay portal enforcement (browser-overlay-coexistence epic, ticket 02).
+  // The app's shadcn wrappers in src/components/ui/** are the registration
+  // seam - mounting them registers a live rect with the browser-tile
+  // occlusion coordinator (`useRegisterBrowserOverlay`, ticket 01). Reaching
+  // past a wrapper to the raw primitive skips that registration, so a tile
+  // can be occluded by an overlay the coordinator never learns about.
+  //
+  // Scoped by `importNames`, not a whole-package ban: each package also
+  // exports plain utilities with no portal/overlay behavior of their own
+  // (`Slot`, `useComposedRefs`, `toast`, cmdk's item/group sub-components)
+  // that are legitimately imported outside `src/components/ui/**` today,
+  // including by the registration seam's own hand-rolled-popover callers.
+  overlayPortal: [
+    {
+      group: ["radix-ui"],
+      importNames: [
+        "AlertDialog",
+        "ContextMenu",
+        "Dialog",
+        "DropdownMenu",
+        "HoverCard",
+        "Menubar",
+        "NavigationMenu",
+        "Popover",
+        "Portal",
+        "Select",
+        "Toast",
+        "Tooltip",
+      ],
+      message:
+        "Overlay portal primitives are built only by the shadcn wrappers in src/components/ui/** (they register with the browser-tile occlusion coordinator via useRegisterBrowserOverlay). Use the wrapper - Dialog/Popover/Select/DropdownMenu/Tooltip/ContextMenu/HoverCard from @/components/ui/* - instead of importing the Radix primitive directly.",
+    },
+    {
+      group: ["radix-ui/internal"],
+      importNames: [
+        "DismissableLayer",
+        "FocusGuards",
+        "FocusScope",
+        "Menu",
+        "Popper",
+        "Presence",
+        "Primitive",
+        "RovingFocus",
+      ],
+      message:
+        "These radix-ui/internal exports hand-build overlay behavior (positioning, dismiss, focus) outside the registered wrappers. Use the shadcn wrapper in src/components/ui/** instead. `useComposedRefs` and the other ref/state utilities are unrestricted.",
+    },
+    {
+      group: ["vaul"],
+      message:
+        "vaul is wrapped by @/components/ui/sheet and @/components/ui/drawer, which register with the browser-tile occlusion coordinator. Use the wrapper instead of importing vaul directly.",
+    },
+    {
+      group: ["@radix-ui/*"],
+      message:
+        "Radix primitive packages (@radix-ui/react-dialog, @radix-ui/react-dismissable-layer, ...) are wrapped by the shadcn components in src/components/ui/**, which register with the browser-tile occlusion coordinator via useRegisterBrowserOverlay. Use the wrapper instead of importing a @radix-ui/* package directly.",
+    },
+    {
+      // `regex`, not `group`: `group` matching is gitignore-style (the
+      // `ignore` package) - a slash-less pattern like "sonner" matches any
+      // path whose LAST SEGMENT is "sonner", which caught our own
+      // `@/components/ui/sonner` wrapper alias along with the bare "sonner"
+      // package specifier. Anchored regex matches only the literal package.
+      regex: "^sonner$",
+      importNames: ["Toaster"],
+      message:
+        'The sonner <Toaster/> portal is mounted once by @/components/ui/sonner, which registers with the browser-tile occlusion coordinator. Import `toast` from "sonner" to trigger a toast; do not mount another <Toaster/>.',
+    },
+    {
+      group: ["cmdk"],
+      importNames: ["Command", "CommandDialog", "CommandRoot"],
+      message:
+        "The cmdk Command root is wrapped by @/components/ui/command, which registers with the browser-tile occlusion coordinator. Use the wrapper's exports instead of importing cmdk's Command directly.",
+    },
+  ],
 };
 
 /** The `boundary` dimension plus whichever others this file set carries. */
@@ -291,6 +373,8 @@ const generalCustomSyntaxRestrictions = [
   ...selectByIdRestrictions,
   ...selectionAuthorityRestrictions,
   ...cloudBearerFenceRestrictions,
+  ...LINK_EGRESS_RESTRICTIONS,
+  ...TILE_OPEN_RESTRICTIONS,
 ];
 
 // ── `no-restricted-syntax` IS COMPOSED FROM DIMENSIONS TOO. ──
@@ -329,6 +413,12 @@ const syntaxExemptions = {
   selectById: selectByIdRestrictions,
   selectionAuthority: selectionAuthorityRestrictions,
   cloudBearerFence: cloudBearerFenceRestrictions,
+  // Two groups, not one: tests lift the bridge half (they stub
+  // `{ openExternalLink: vi.fn() }` and assert on it) and keep the DOM half.
+  linkEgressBridge: LINK_EGRESS_BRIDGE_RESTRICTIONS,
+  linkEgressHook: LINK_EGRESS_HOOK_RESTRICTIONS,
+  linkEgressDom: LINK_EGRESS_DOM_RESTRICTIONS,
+  tileOpen: TILE_OPEN_RESTRICTIONS,
 };
 
 /**
@@ -454,11 +544,16 @@ export default tseslint.config(
       "react/jsx-no-useless-fragment": ["warn", { allowExpressions: true }],
 
       // ── Import boundaries + full-store Zustand selectors ────────────────────
-      // Dimensions: boundary + kernel. `kernel` rides the BASE block so the
-      // ban has no hole outside `src` and none at files the `src` blocks
-      // exempt for unrelated reasons (the analytics adapter); the two blocks
-      // that lift it - tests and the owner - are narrow and explicit.
-      "@typescript-eslint/no-restricted-imports": importRestrictions("kernel"),
+      // Dimensions: boundary + kernel + overlayPortal. Both ride the BASE
+      // block so neither ban has a hole outside `src` or at files the `src`
+      // blocks exempt for unrelated reasons (the analytics adapter); the
+      // blocks that lift one or the other - tests, the kernel owner, the
+      // wrapper layer itself, and the reasoned pre-registration-seam raw
+      // consumers - are narrow and explicit.
+      "@typescript-eslint/no-restricted-imports": importRestrictions(
+        "kernel",
+        "overlayPortal",
+      ),
 
       "no-restricted-syntax": syntaxRestrictions({
         exempt: [],
@@ -491,14 +586,15 @@ export default tseslint.config(
       "@typescript-eslint/no-restricted-imports": importRestrictions(
         "posthog",
         "kernel",
+        "overlayPortal",
       ),
     },
   },
   {
     // D12 read path: ban active-host / default-client hook imports outside the
     // allowlisted layer. The allowlisted files are NOT a subset of this set -
-    // they carry boundary + posthog + kernel from the block above, and this
-    // block simply never matches them.
+    // they carry boundary + posthog + kernel + overlayPortal from the block
+    // above, and this block simply never matches them.
     files: ["src/**/*.{ts,tsx}"],
     ignores: [...analyticsAdapterFiles, ...hostSelectionReadAllowlist],
     rules: {
@@ -506,6 +602,7 @@ export default tseslint.config(
         "posthog",
         "readPath",
         "kernel",
+        "overlayPortal",
       ),
     },
   },
@@ -523,6 +620,7 @@ export default tseslint.config(
         "posthog",
         "readPath",
         "kernel",
+        "overlayPortal",
       ),
     },
   },
@@ -536,17 +634,46 @@ export default tseslint.config(
         "posthog",
         "readPath",
         "kernel",
+        "overlayPortal",
       ),
     },
   },
   {
     // The reasoned app-wide reads, per FILE: their partition (boundary +
-    // posthog + kernel) minus `readPath`.
+    // posthog + kernel + overlayPortal) minus `readPath`.
     files: [
       ...epicCanvasAppWideReadExemptions,
       ...followingSurfaceAppWideReadExemptions,
       ...appChromeAppWideReadExemptions,
       ...hookWrapperAppWideReadExemptions,
+    ],
+    rules: {
+      "@typescript-eslint/no-restricted-imports": importRestrictions(
+        "posthog",
+        "kernel",
+        "overlayPortal",
+      ),
+    },
+  },
+  {
+    // The registration seam's own reasoned raw-primitive consumers, per FILE.
+    // These predate/parallel the shadcn wrapper layer and register manually
+    // with `useRegisterBrowserOverlay` (ticket 01): the promotable-modal
+    // family builds custom dialog chrome the shadcn Dialog wrapper does not
+    // support, so it constructs `DialogPrimitive` directly and registers it
+    // itself. `system-tab-modal-host.tsx` imports `Dialog.Root` only - its
+    // painted surface registers via `PromotableModalFrame`, not itself; it
+    // is exempted here so that composition (Root wrapping a frame that
+    // already registers) is not mistaken for a raw, unregistered portal.
+    // Their partition (boundary + posthog + kernel) minus `overlayPortal` -
+    // `readPath` never applied to this directory (it is inside
+    // `hostSelectionReadAllowlist`'s `src/components/layout/**`), so it is
+    // not restated here.
+    files: [
+      "src/components/layout/dialogs/promotable-modal-frame.tsx",
+      "src/components/layout/dialogs/window-host-modal.tsx",
+      "src/components/layout/dialogs/migration-blocking-modal-host.tsx",
+      "src/components/layout/dialogs/system-tab-modal-host.tsx",
     ],
     rules: {
       "@typescript-eslint/no-restricted-imports": importRestrictions(
@@ -578,7 +705,10 @@ export default tseslint.config(
     // broad block by accident, which a directory glob here could.
     files: selectionKernelOwner,
     rules: {
-      "@typescript-eslint/no-restricted-imports": importRestrictions("posthog"),
+      "@typescript-eslint/no-restricted-imports": importRestrictions(
+        "posthog",
+        "overlayPortal",
+      ),
     },
   },
   {
@@ -610,14 +740,49 @@ export default tseslint.config(
   },
   {
     // shadcn/ui generated primitives follow library conventions that
-    // intentionally diverge from app-code rules.
+    // intentionally diverge from app-code rules. `src/components/ui/**` is
+    // ALSO the `overlayPortal` allowance named in the ticket: it is the one
+    // place allowed to import the raw portal primitives, since it is the
+    // wrapper layer that registers them. Its natural partition (boundary +
+    // posthog + readPath + kernel - it is not in `hostSelectionReadAllowlist`)
+    // is restated here minus `overlayPortal`.
     files: ["src/components/ui/**/*.tsx"],
     rules: {
+      "@typescript-eslint/no-restricted-imports": importRestrictions(
+        "posthog",
+        "readPath",
+        "kernel",
+      ),
       "react-refresh/only-export-components": "off",
       "react-hooks/purity": "off",
       "@tanstack/query/no-rest-destructuring": "off",
       "jsx-a11y/click-events-have-key-events": "off",
       "jsx-a11y/no-noninteractive-element-interactions": "off",
+    },
+  },
+  {
+    // Two more reasoned raw-primitive consumers, same natural partition as
+    // `src/components/ui/**` above (neither directory is in
+    // `hostSelectionReadAllowlist`, so both carry readPath): restated here
+    // minus `overlayPortal` rather than folded into the block above, so
+    // neither file inherits the shadcn-only rule turn-offs by accident.
+    // `epic-migration-modal.tsx`'s raw `DialogPrimitive` follows the
+    // promotable-modal family's pattern - it registers itself via
+    // `useRegisterBrowserOverlay` (contrast the `layout/dialogs` block
+    // above, whose directory IS in the allowlist and so carries no
+    // `readPath` to begin with). `palette-item-row.tsx` renders cmdk's
+    // `Command` row internals for the command palette's own list, predating
+    // this ticket.
+    files: [
+      "src/components/epic-canvas/dialogs/epic-migration-modal.tsx",
+      "src/components/command-palette/palette-item-row.tsx",
+    ],
+    rules: {
+      "@typescript-eslint/no-restricted-imports": importRestrictions(
+        "posthog",
+        "readPath",
+        "kernel",
+      ),
     },
   },
   {
@@ -750,6 +915,18 @@ export default tseslint.config(
       // to mean "inside a `vi.mock` callback" is not expressible, and one that
       // tried would be the fails-by-passing shape this file keeps out.
       //
+      // `tileOpen` / `linkEgressBridge`: DELIBERATE, and the same shape as
+      // `selectById` above. A canvas test stubs the store it drives
+      // (`{ prepareOpenTileInTabFocusTarget: vi.fn(), ... }`) and a
+      // runner-host test stubs the bridge (`{ openExternalLink: vi.fn() }`);
+      // in both, the property name IS the observation the assertion reads, so
+      // applying the ban would edit away the mechanism of the test.
+      // `linkEgressHook` too: the bridge hook's OWN test has to import it to
+      // exercise the null-host and rejection paths.
+      // `linkEgressDom` is NOT lifted: `window.open` and `target="_blank"`
+      // are shipped-surface bans with no test-double reading, and a test that
+      // opens one is asserting the app has a door it is not allowed to have.
+      //
       // Residual, precisely: a component DEFINED in a test file and then
       // imported by product code would escape both bans. That is pathological,
       // would not survive review, and no rule in this file is the right place to
@@ -761,6 +938,9 @@ export default tseslint.config(
           "forwardRef",
           "selectById",
           "selectionAuthority",
+          "tileOpen",
+          "linkEgressBridge",
+          "linkEgressHook",
         ],
         nestedFocus: null,
         tabNavigation: [
@@ -916,6 +1096,79 @@ export default tseslint.config(
       }),
     },
   },
+  // ── Link-egress boundary allowlist (A6) ─────────────────────────────────────
+  // See eslint/traycer-tile-open-boundary-rules.mjs. Two files, both of which
+  // are BELOW the `useOpenLink` seam rather than bypassing it.
+  {
+    // The desktop bridge itself - the one door out of the app, and the thing
+    // `useOpenLink` calls once it has decided the link goes external.
+    files: ["src/lib/links/open-external-link.ts"],
+    rules: {
+      "no-restricted-syntax": syntaxRestrictions({
+        exempt: ["linkEgressBridge"],
+        nestedFocus: [],
+        tabNavigation: null,
+      }),
+    },
+  },
+  {
+    // The only two files allowed to hold the bridge HOOK: `open-link.ts`
+    // decides in-app vs external, and `open-browser-url.ts` owns the A5
+    // failure toast's explicit "Open in browser" action.
+    files: ["src/lib/links/open-link.ts", "src/lib/links/open-browser-url.ts"],
+    rules: {
+      "no-restricted-syntax": syntaxRestrictions({
+        exempt: ["linkEgressHook"],
+        nestedFocus: [],
+        tabNavigation: null,
+      }),
+    },
+  },
+  {
+    // Device-grant and provider-reauth verification URLs. Hard-external by A2
+    // (an OAuth grant has no in-app meaning), and this module runs outside
+    // React, so the hook form is not available to it.
+    files: ["src/lib/auth/auth-service.ts"],
+    rules: {
+      "no-restricted-syntax": syntaxRestrictions({
+        exempt: ["linkEgressBridge"],
+        nestedFocus: [],
+        tabNavigation: null,
+      }),
+    },
+  },
+
+  // ── Tile-open boundary allowlist (C1) ───────────────────────────────────────
+  // The seam's own implementation, plus the store that defines the actions and
+  // the two reasoned callers that sit below it. Test files lift this dimension
+  // in the block above; these globs are single-level on purpose so they do not
+  // shadow it for `tile-open/__tests__/`.
+  {
+    files: [
+      "src/lib/canvas/tile-open/*.{ts,tsx}",
+      "src/hooks/epic/use-epic-tile-navigation.ts",
+    ],
+    rules: {
+      "no-restricted-syntax": syntaxRestrictions({
+        exempt: ["tileOpen"],
+        nestedFocus: [],
+        tabNavigation: null,
+      }),
+    },
+  },
+  {
+    // Defines every `prepare*FocusTarget` and calls its own actions through
+    // `get()`; the store is what the seam is a boundary AROUND.
+    files: ["src/stores/epics/canvas/store.ts"],
+    rules: {
+      "no-restricted-syntax": syntaxRestrictions({
+        exempt: ["tileOpen"],
+        nestedFocus: [],
+        tabNavigation: null,
+      }),
+    },
+  },
+
   // Oxlint runs first and owns every compatible rule represented in its
   // generated config, including the type-aware rules. Keep this last so ESLint
   // retains the repository-specific boundaries and selector-based invariants

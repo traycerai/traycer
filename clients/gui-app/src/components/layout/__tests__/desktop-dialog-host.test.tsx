@@ -340,6 +340,7 @@ function createBaseRunnerHost(): IRunnerHost {
     getRegisteredUrlSchemes: () => Promise.resolve([]),
     requestMicrophoneAccess: () => Promise.resolve("granted" as const),
     openMicrophoneSettings: () => Promise.resolve(),
+    openFullDiskAccessSettings: () => Promise.resolve(),
     beginAuthAttempt: () => undefined,
     onAuthCallback: () => ({ dispose: () => undefined }),
     deviceFlow: { start: () => Promise.resolve(null) },
@@ -441,7 +442,7 @@ function createDesktopWindowsBridgeForTests(calls: {
           token: null,
           profile: null,
         }),
-      set: () => Promise.resolve(),
+      set: () => Promise.resolve({ outcome: "accepted" as const }),
       onChange: () => ({ dispose: () => undefined }),
     },
   };
@@ -576,6 +577,7 @@ function createDirtyEpicHandle(
   return {
     epicId,
     userId: null,
+    hostId: "test-host",
     // No `doc` / `awareness`: a production handle has neither, because the
     // replica lives on the worker thread and a `Y.Doc` cannot cross a
     // structured clone.

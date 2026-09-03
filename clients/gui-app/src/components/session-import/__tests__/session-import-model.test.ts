@@ -15,10 +15,14 @@ import {
   groupSessionImportFailures,
   harnessDisplayName,
   sessionImportFailureLabel,
+  sessionImportFailureDetailVaries,
+  sessionImportNotImportedLine,
   sessionImportGroupKey,
+  sessionImportScanWindowLabel,
   sessionImportSelectionKey,
   sessionImportWizardReducer,
   SESSION_IMPORT_INITIAL_STATE,
+  SESSION_IMPORT_SCAN_WINDOW_OPTIONS,
   type SessionImportOutcomeEntry,
   type SessionImportWizardAction,
   type SessionImportWizardState,
@@ -992,9 +996,7 @@ describe("groupSessionImportFailures", () => {
 
     expect(groups).toHaveLength(1);
     expect(groups[0]?.reason).toBe("source_unreadable");
-    expect(groups[0]?.label).toBe(
-      sessionImportFailureLabel("source_unreadable"),
-    );
+    expect(groups[0]?.label).toBe("Could not be read");
     expect(groups[0]?.entries).toEqual([
       { selectionKey: knownKey, title: "Fix login bug", detail: "disk error" },
       {
@@ -1020,9 +1022,9 @@ describe("groupSessionImportFailures", () => {
 
     expect(groups.map((entry) => entry.reason)).toEqual([
       "source_unreadable",
-      "source_empty",
       "workspace_bind_failed",
       "internal_error",
+      "source_empty",
     ]);
   });
 });
@@ -1038,3 +1040,65 @@ function failureEntry(
     outcome: { kind: "failed", reason, detail },
   };
 }
+
+describe("sessionImportNotImportedLine", () => {
+  it("names the cause when every failure shares one", () => {
+    const groups = groupSessionImportFailures(
+      [
+        failureEntry("s1", "source_empty", ""),
+        failureEntry("s2", "source_empty", ""),
+      ],
+      new Map(),
+    );
+    expect(sessionImportNotImportedLine(groups)).toBe(
+      "Not imported: 2 sessions with no messages",
+    );
+  });
+
+  it("keeps the line plain when the causes are mixed, and singular for one session", () => {
+    const mixed = groupSessionImportFailures(
+      [
+        failureEntry("s1", "source_empty", ""),
+        failureEntry("s2", "source_unreadable", "disk error"),
+      ],
+      new Map(),
+    );
+    expect(sessionImportNotImportedLine(mixed)).toBe(
+      "Not imported: 2 sessions",
+    );
+    const one = groupSessionImportFailures(
+      [failureEntry("s1", "source_unreadable", "disk error")],
+      new Map(),
+    );
+    expect(sessionImportNotImportedLine(one)).toBe(
+      "Not imported: 1 session that could not be read",
+    );
+  });
+});
+
+describe("sessionImportFailureDetailVaries", () => {
+  it("keeps the per-session detail only where it carries more than the heading", () => {
+    expect(sessionImportFailureDetailVaries("source_unreadable")).toBe(true);
+    expect(sessionImportFailureDetailVaries("internal_error")).toBe(true);
+    expect(sessionImportFailureDetailVaries("source_empty")).toBe(false);
+    expect(sessionImportFailureDetailVaries("workspace_bind_failed")).toBe(
+      false,
+    );
+  });
+});
+
+describe("SESSION_IMPORT_SCAN_WINDOW_OPTIONS", () => {
+  it("leads with a 24-hour option ahead of the default 7-day window", () => {
+    expect(SESSION_IMPORT_SCAN_WINDOW_OPTIONS[0]).toEqual({
+      window: 1,
+      label: "Last 24 hours",
+    });
+    expect(
+      SESSION_IMPORT_SCAN_WINDOW_OPTIONS.map((option) => option.window),
+    ).toEqual([1, 7, 14, 30, null]);
+  });
+
+  it("labels the 24-hour window", () => {
+    expect(sessionImportScanWindowLabel(1)).toBe("Last 24 hours");
+  });
+});

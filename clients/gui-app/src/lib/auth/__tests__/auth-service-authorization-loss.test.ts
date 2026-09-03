@@ -273,6 +273,9 @@ function fakeSession(): FakeSession {
     sendUnary: vi.fn(() => {
       throw new Error("not exercised by these tests");
     }),
+    subscribeAtVersion: vi.fn(() => {
+      throw new Error("not exercised by these tests");
+    }),
     forceReconnect: vi.fn(),
     subscribe: vi.fn(() => {
       throw new Error("not exercised by these tests");

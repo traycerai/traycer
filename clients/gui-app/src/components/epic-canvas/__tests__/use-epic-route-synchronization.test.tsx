@@ -47,7 +47,6 @@ import {
 type CanvasStoreSlice = Pick<
   EpicCanvasStore,
   | "renameTab"
-  | "openTileInTab"
   | "applyNestedRouteFocus"
   | "closeCanvasTab"
   | "pendingCreateArtifactIds"
@@ -63,6 +62,8 @@ interface TestState {
   } | null;
   nestedFocusEnabled: boolean;
   useRealCanvasStore: boolean;
+  /** What `useRouter().state.location.pathname` answers. */
+  routerPathname: string;
   navigate: Mock;
   canvasActivePaneId: string | null;
   canvasRoot: TileLayoutNode | null;
@@ -98,6 +99,7 @@ const testState = vi.hoisted<TestState>(() => ({
   autoOpenTarget: null,
   nestedFocusEnabled: false,
   useRealCanvasStore: false,
+  routerPathname: "/epics/route-sync-epic/route-sync-tab",
   // `useNavigate()` returns a function returning a PROMISE; callers attach
   // rejection handlers to it. A bare `vi.fn()` answers `undefined` and makes
   // those call sites throw here for a reason the real API never would.
@@ -112,7 +114,6 @@ const testState = vi.hoisted<TestState>(() => ({
   cloudAuthorized: true,
   canvasStore: {
     renameTab: vi.fn(),
-    openTileInTab: vi.fn(),
     applyNestedRouteFocus: vi.fn(),
     closeCanvasTab: vi.fn(),
     pendingCreateArtifactIds: new Set<string>(),
@@ -123,9 +124,43 @@ const testState = vi.hoisted<TestState>(() => ({
   },
 }));
 
+const tileNavigationMocks = vi.hoisted(() => ({
+  openTile: vi.fn(),
+  /** The navigation seam each open was committed through (C6). */
+  navigationSeams: [] as Array<
+    (
+      epicId: string,
+      tabId: string,
+      prepare: () => { paneId: string; tileInstanceId: string } | null,
+    ) => unknown
+  >,
+}));
+
+// The executor is stubbed, but the SEAM the hook hands it is kept: the legacy
+// deep-link landing must commit with a route REPLACE, not a push.
+vi.mock("@/lib/canvas/tile-open/open-tile", () => ({
+  MANUAL_TILE_OPEN: { createTab: true, pipOrigin: "manual" },
+  commitWithoutNavigation: (
+    _epicId: string,
+    _tabId: string,
+    prepare: () => unknown,
+  ) => prepare(),
+  openTileWithNavigation: (
+    intent: unknown,
+    navigateNested: (typeof tileNavigationMocks.navigationSeams)[number],
+  ) => {
+    tileNavigationMocks.navigationSeams.push(navigateNested);
+    tileNavigationMocks.openTile(intent);
+    return null;
+  },
+}));
+
 vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => testState.navigate,
-  useRouter: () => ({ history: {} }),
+  useRouter: () => ({
+    history: {},
+    state: { location: { pathname: testState.routerPathname } },
+  }),
 }));
 
 vi.mock("@/lib/persistent-history", () => ({
@@ -347,7 +382,9 @@ function resetStores(): void {
   testState.chatRecordListAuthoritative = true;
   testState.cloudAuthorized = true;
   vi.mocked(testState.canvasStore.renameTab).mockClear();
-  vi.mocked(testState.canvasStore.openTileInTab).mockClear();
+  tileNavigationMocks.openTile.mockClear();
+  tileNavigationMocks.navigationSeams.length = 0;
+  testState.routerPathname = `/epics/${EPIC_ID}/${TAB_ID}`;
   vi.mocked(testState.canvasStore.applyNestedRouteFocus).mockClear();
   vi.mocked(testState.canvasStore.closeCanvasTab).mockClear();
   testState.openEpicState.setLastFocusedArtifactId.mockClear();
@@ -516,12 +553,18 @@ describe("useEpicRouteSynchronization", () => {
     );
 
     await waitFor(() => {
-      expect(testState.canvasStore.openTileInTab).toHaveBeenCalledWith(
-        TAB_ID,
+      expect(tileNavigationMocks.openTile).toHaveBeenCalledWith(
         expect.objectContaining({
-          id: "artifact-1",
-          type: "spec",
-          name: "Focused artifact",
+          target: { tabId: TAB_ID },
+          gesture: "single",
+          placement: null,
+          dedupe: true,
+          source: "deep_link",
+          node: expect.objectContaining({
+            id: "artifact-1",
+            type: "spec",
+            name: "Focused artifact",
+          }) as EpicCanvasTileRef,
         }),
       );
     });
@@ -570,12 +613,18 @@ describe("useEpicRouteSynchronization", () => {
     );
 
     await waitFor(() => {
-      expect(testState.canvasStore.openTileInTab).toHaveBeenCalledWith(
-        TAB_ID,
+      expect(tileNavigationMocks.openTile).toHaveBeenCalledWith(
         expect.objectContaining({
-          id: "chat-notified",
-          type: "chat",
-          name: "Notified chat",
+          target: { tabId: TAB_ID },
+          gesture: "single",
+          placement: null,
+          dedupe: true,
+          source: "deep_link",
+          node: expect.objectContaining({
+            id: "chat-notified",
+            type: "chat",
+            name: "Notified chat",
+          }) as EpicCanvasTileRef,
         }),
       );
     });
@@ -617,7 +666,7 @@ describe("useEpicRouteSynchronization", () => {
       );
     });
     expect(testState.navigate).not.toHaveBeenCalled();
-    expect(testState.canvasStore.openTileInTab).not.toHaveBeenCalled();
+    expect(tileNavigationMocks.openTile).not.toHaveBeenCalled();
   });
 
   it("does not let a stale route target undo an in-flight local pane navigation", () => {
@@ -799,7 +848,7 @@ describe("useEpicRouteSynchronization", () => {
 
     await waitFor(() => {
       expect(testState.navigate).not.toHaveBeenCalled();
-      expect(testState.canvasStore.openTileInTab).not.toHaveBeenCalled();
+      expect(tileNavigationMocks.openTile).not.toHaveBeenCalled();
       expect(
         testState.openEpicState.setLastFocusedArtifactId,
       ).not.toHaveBeenCalledWith("artifact-1");
@@ -895,12 +944,18 @@ describe("useEpicRouteSynchronization", () => {
     );
 
     await waitFor(() => {
-      expect(testState.canvasStore.openTileInTab).toHaveBeenCalledWith(
-        TAB_ID,
+      expect(tileNavigationMocks.openTile).toHaveBeenCalledWith(
         expect.objectContaining({
-          id: "artifact-1",
-          type: "spec",
-          name: "Focused artifact",
+          target: { tabId: TAB_ID },
+          gesture: "single",
+          placement: null,
+          dedupe: true,
+          source: "deep_link",
+          node: expect.objectContaining({
+            id: "artifact-1",
+            type: "spec",
+            name: "Focused artifact",
+          }) as EpicCanvasTileRef,
         }),
       );
     });
@@ -961,6 +1016,72 @@ describe("useEpicRouteSynchronization", () => {
     });
   });
 
+  it("commits a legacy focus deep-link landing with a route replace, not a push", async () => {
+    testState.nestedFocusEnabled = true;
+    renderHook(
+      (intent: EpicRouteFocusIntent) => useEpicRouteSynchronization(intent),
+      {
+        initialProps: {
+          ...THREAD_FOCUS_INTENT,
+          focusThreadId: undefined,
+        },
+      },
+    );
+
+    await waitFor(() => {
+      expect(tileNavigationMocks.navigationSeams).toHaveLength(1);
+    });
+    testState.navigate.mockClear();
+
+    // Run the seam the executor was handed, exactly as `executeTileOpen` does.
+    tileNavigationMocks.navigationSeams[0](EPIC_ID, TAB_ID, () => ({
+      paneId: "pane-1",
+      tileInstanceId: "tile-1",
+    }));
+
+    // Landing on the deep link IS the history entry; pushing a second one
+    // would make Back a two-press affair for a single navigation.
+    expect(testState.navigate.mock.calls.at(-1)?.[0]).toMatchObject({
+      to: "/epics/$epicId/$tabId",
+      params: { epicId: EPIC_ID, tabId: TAB_ID },
+      replace: true,
+    });
+  });
+
+  it("does not yank the router when the surface is a background epic", async () => {
+    testState.nestedFocusEnabled = true;
+    // The user is looking at ANOTHER epic tab; a focus write here would pull
+    // the router away from it.
+    testState.routerPathname = "/epics/other-epic/other-tab";
+    renderHook(
+      (intent: EpicRouteFocusIntent) => useEpicRouteSynchronization(intent),
+      {
+        initialProps: {
+          ...THREAD_FOCUS_INTENT,
+          focusThreadId: undefined,
+        },
+      },
+    );
+
+    await waitFor(() => {
+      expect(tileNavigationMocks.navigationSeams).toHaveLength(1);
+    });
+    testState.navigate.mockClear();
+
+    const focusTarget = tileNavigationMocks.navigationSeams[0](
+      EPIC_ID,
+      TAB_ID,
+      () => ({ paneId: "pane-1", tileInstanceId: "tile-1" }),
+    );
+
+    // The focus still commits into the canvas - only the URL write is gated.
+    expect(focusTarget).toEqual({
+      paneId: "pane-1",
+      tileInstanceId: "tile-1",
+    });
+    expect(testState.navigate).not.toHaveBeenCalled();
+  });
+
   it("does not reuse auto-open dedupe keys across epics", async () => {
     const hook = renderHook(
       (intent: EpicRouteFocusIntent) => useEpicRouteSynchronization(intent),
@@ -973,17 +1094,23 @@ describe("useEpicRouteSynchronization", () => {
     );
 
     await waitFor(() => {
-      expect(testState.canvasStore.openTileInTab).toHaveBeenCalledWith(
-        TAB_ID,
+      expect(tileNavigationMocks.openTile).toHaveBeenCalledWith(
         expect.objectContaining({
-          id: "artifact-1",
-          type: "spec",
-          name: "Focused artifact",
+          target: { tabId: TAB_ID },
+          gesture: "single",
+          placement: null,
+          dedupe: true,
+          source: "deep_link",
+          node: expect.objectContaining({
+            id: "artifact-1",
+            type: "spec",
+            name: "Focused artifact",
+          }) as EpicCanvasTileRef,
         }),
       );
     });
 
-    vi.mocked(testState.canvasStore.openTileInTab).mockClear();
+    tileNavigationMocks.openTile.mockClear();
     hook.rerender({
       ...THREAD_FOCUS_INTENT,
       epicId: "route-sync-epic-b",
@@ -992,12 +1119,18 @@ describe("useEpicRouteSynchronization", () => {
     });
 
     await waitFor(() => {
-      expect(testState.canvasStore.openTileInTab).toHaveBeenCalledWith(
-        "route-sync-tab-b",
+      expect(tileNavigationMocks.openTile).toHaveBeenCalledWith(
         expect.objectContaining({
-          id: "artifact-1",
-          type: "spec",
-          name: "Focused artifact",
+          target: { tabId: "route-sync-tab-b" },
+          gesture: "single",
+          placement: null,
+          dedupe: true,
+          source: "deep_link",
+          node: expect.objectContaining({
+            id: "artifact-1",
+            type: "spec",
+            name: "Focused artifact",
+          }) as EpicCanvasTileRef,
         }),
       );
     });

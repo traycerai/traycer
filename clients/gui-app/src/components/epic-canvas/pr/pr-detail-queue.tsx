@@ -1,4 +1,4 @@
-import { useCallback, type ReactNode } from "react";
+import { useCallback, type MouseEvent, type ReactNode } from "react";
 import {
   AlertTriangle,
   Check,
@@ -24,6 +24,7 @@ import {
 } from "@/components/epic-canvas/pr/pr-detail-tone";
 import { PrActorAvatar } from "@/components/epic-canvas/pr/pr-detail-avatar";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import type { LinkClickEvent } from "@/lib/links/open-link";
 import { cn } from "@/lib/utils";
 
 const KIND_GLYPH = {
@@ -50,7 +51,7 @@ export function PrDetailQueue(props: {
   readonly queue: PrAttentionQueue;
   readonly target: PrQuoteTarget | null;
   readonly onSendItem: (item: PrAttentionItem) => void;
-  readonly onOpenDetails: (url: string) => void;
+  readonly onOpenDetails: (url: string, event: LinkClickEvent) => void;
 }): ReactNode {
   const isCalm = props.queue.items.length === 0;
   const subline = formatPrAttentionSubline(props.queue);
@@ -183,15 +184,18 @@ function PrQueueRow(props: {
   readonly item: PrAttentionItem;
   readonly target: PrQuoteTarget | null;
   readonly onSendItem: (item: PrAttentionItem) => void;
-  readonly onOpenDetails: (url: string) => void;
+  readonly onOpenDetails: (url: string, event: LinkClickEvent) => void;
 }): ReactNode {
   const { item, onOpenDetails } = props;
   const Glyph = KIND_GLYPH[item.kind];
   const tone = item.kind === "review-required" ? "pending" : "fail";
   const text = prAttentionRowText(item);
-  const openDetails = useCallback((): void => {
-    if (item.detailsUrl !== null) onOpenDetails(item.detailsUrl);
-  }, [item.detailsUrl, onOpenDetails]);
+  const openDetails = useCallback(
+    (event: MouseEvent<HTMLButtonElement>): void => {
+      if (item.detailsUrl !== null) onOpenDetails(item.detailsUrl, event);
+    },
+    [item.detailsUrl, onOpenDetails],
+  );
   return (
     <div
       className="flex min-w-0 items-center gap-3 px-3 py-2.5 transition-colors not-first:border-t not-first:border-border/30 hover:bg-foreground/[0.02]"

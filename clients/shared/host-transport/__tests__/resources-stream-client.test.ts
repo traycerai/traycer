@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import {
   createRequestContext,
@@ -185,6 +185,11 @@ function parseText(raw: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+// Fixtures carry the `@1.5` shape. A test that simulates an older host says so
+// by negotiating that minor - whose schema strips these keys on parse, which is
+// exactly the backfill path `toPayload` exists for.
+const NULL_DETAIL = { pssBytes: null, privateBytes: null } as const;
+
 const OWNER = {
   owner: {
     kind: "terminal" as const,
@@ -199,6 +204,8 @@ const OWNER = {
   processCount: 2,
   cpuPercent: 10,
   rssBytes: 1_000,
+  ...NULL_DETAIL,
+  managedCommand: null,
   processes: [
     {
       pid: 1,
@@ -208,6 +215,8 @@ const OWNER = {
       command: "/bin/bash",
       cpuPercent: 10,
       rssBytes: 1_000,
+      ...NULL_DETAIL,
+      descriptor: null,
     },
   ],
 };
@@ -220,6 +229,7 @@ const EPIC = {
   processCount: 2,
   cpuPercent: 10,
   rssBytes: 1_000,
+  ...NULL_DETAIL,
 };
 
 const APP = {
@@ -233,10 +243,13 @@ const APP = {
     command: "traycer-host",
     cpuPercent: 1,
     rssBytes: 2_000,
+    ...NULL_DETAIL,
+    descriptor: null,
   },
   processCount: 1,
   cpuPercent: 1,
   rssBytes: 2_000,
+  ...NULL_DETAIL,
 };
 
 const HOST_TREE = {
@@ -244,6 +257,7 @@ const HOST_TREE = {
   processCount: 3,
   cpuPercent: 15,
   rssBytes: 3_000,
+  ...NULL_DETAIL,
 };
 
 const OTHER = {
@@ -252,6 +266,7 @@ const OTHER = {
   processCount: 1,
   cpuPercent: 4,
   rssBytes: 500,
+  ...NULL_DETAIL,
   processes: [
     {
       pid: 20,
@@ -261,6 +276,8 @@ const OTHER = {
       command: "worker",
       cpuPercent: 4,
       rssBytes: 500,
+      ...NULL_DETAIL,
+      descriptor: null,
     },
   ],
 };
@@ -287,12 +304,15 @@ describe("ResourcesStreamClient", () => {
     expect(parseText(sockets[0].textSent[1])).toEqual({
       kind: "subscribe",
       method: "resources.subscribe",
-      schemaVersion: { major: 1, minor: 4, supportedMajors: [1] },
+      schemaVersion: { major: 1, minor: 5, supportedMajors: [1] },
       params: {
         epicId: "epic-1",
         scope: { kind: "epic", epicId: "epic-1" },
       },
     });
+    // No `setDemand` frame: the host already starts a subscription at
+    // background cadence, so restating it would spend a frame on nothing.
+    expect(sockets[0].textSent).toHaveLength(2);
 
     sockets[0].fireText({
       kind: "snapshot",
@@ -304,6 +324,7 @@ describe("ResourcesStreamClient", () => {
       epic: EPIC,
       hostTree: HOST_TREE,
       other: OTHER,
+      restricted: null,
     });
     sockets[0].fireText({
       kind: "update",
@@ -315,12 +336,15 @@ describe("ResourcesStreamClient", () => {
       epic: { ...EPIC, cpuPercent: 55, sampledAt: 2_000 },
       hostTree: { ...HOST_TREE, sampledAt: 2_000, cpuPercent: 60 },
       other: { ...OTHER, sampledAt: 2_000, cpuPercent: 5 },
+      restricted: null,
     });
 
     expect(snapshots).toHaveLength(1);
     expect(snapshots[0].app?.process?.name).toBe("traycer-host");
     expect(snapshots[0].owners[0].owner.ownerId).toBe("s1");
     expect(snapshots[0].owners[0].harnessId).toBeNull();
+    expect(snapshots[0].owners[0].pssBytes).toBeNull();
+    expect(snapshots[0].owners[0].processes[0].privateBytes).toBeNull();
     expect(snapshots[0].owners[0].processes[0].command).toBe("/bin/bash");
     expect(snapshots[0].epic?.epicId).toBe("epic-1");
     expect(snapshots[0].epics).toEqual([]);
@@ -332,6 +356,104 @@ describe("ResourcesStreamClient", () => {
     expect(updates[0].hostTree?.cpuPercent).toBe(60);
 
     client.close();
+  });
+
+  it("preserves nullable @1.5 RSS and aggregate-only restricted usage", () => {
+    const { factory, sockets } = makeFactory();
+    const snapshots: ResourcesProjectionPayload[] = [];
+    const client = new ResourcesStreamClient({
+      wsStreamClient: makeWsStreamClient(factory),
+      scope: { kind: "epic", epicId: "epic-1" },
+      callbacks: {
+        onSnapshot: (payload) => snapshots.push(payload),
+        onUpdate: () => undefined,
+        onConnectionStatus: () => undefined,
+        onScopeSupport: () => undefined,
+      },
+    });
+    completeHandshakeAt(sockets[0], { major: 1, minor: 5 });
+    const process = {
+      ...OWNER.processes[0],
+      rssBytes: null,
+      pssBytes: 600,
+      privateBytes: 400,
+    };
+    sockets[0].fireText({
+      kind: "snapshot",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      sampledAt: 1_000,
+      app: null,
+      owners: [
+        {
+          ...OWNER,
+          rssBytes: null,
+          pssBytes: 600,
+          privateBytes: 400,
+          processes: [process],
+          managedCommand: null,
+        },
+      ],
+      epic: null,
+      hostTree: null,
+      other: null,
+      restricted: {
+        sampledAt: 1_000,
+        processCount: 2,
+        cpuPercent: 3.25,
+        rssBytes: null,
+        pssBytes: 900,
+        privateBytes: 700,
+      },
+    });
+
+    expect(snapshots[0].owners[0]).toMatchObject({
+      pssBytes: 600,
+      privateBytes: 400,
+      rssBytes: null,
+    });
+    expect(snapshots[0].owners[0].processes[0]).toMatchObject({
+      pssBytes: 600,
+      privateBytes: 400,
+      rssBytes: null,
+    });
+    expect(snapshots[0].restricted).toEqual({
+      sampledAt: 1_000,
+      processCount: 2,
+      cpuPercent: 3.25,
+      rssBytes: null,
+      pssBytes: 900,
+      privateBytes: 700,
+    });
+    client.close();
+  });
+
+  it("publishes visibility demand only to an @1.5 host", () => {
+    const latest = makeFactory();
+    const latestClient = new ResourcesStreamClient({
+      wsStreamClient: makeWsStreamClient(latest.factory),
+      scope: { kind: "global" },
+      callbacks: trackScopeSupport().callbacks,
+    });
+    completeHandshakeAt(latest.sockets[0], { major: 1, minor: 5 });
+    latestClient.setDemand("interactive");
+    expect(parseText(latest.sockets[0].textSent[2])).toEqual({
+      kind: "setDemand",
+      demand: "interactive",
+      hasBinaryPayload: false,
+    });
+    latestClient.close();
+
+    const old = makeFactory();
+    const oldClient = new ResourcesStreamClient({
+      wsStreamClient: makeWsStreamClient(old.factory),
+      scope: { kind: "global" },
+      callbacks: trackScopeSupport().callbacks,
+    });
+    completeHandshakeAt(old.sockets[0], { major: 1, minor: 4 });
+    oldClient.setDemand("interactive");
+    expect(old.sockets[0].textSent).toHaveLength(2);
+    oldClient.close();
   });
 
   it("backfills harnessId to null for a pre-1.3 (harnessId-less) frame", () => {
@@ -347,11 +469,11 @@ describe("ResourcesStreamClient", () => {
         onScopeSupport: () => {},
       },
     });
-    completeHandshake(sockets[0]);
+    completeHandshakeAt(sockets[0], { major: 1, minor: 2 });
 
-    // An older host emits a `@1.2` frame whose owner carries NO harnessId. It
-    // fails the `@1.3` parse, falls back to `@1.2`, and `toPayload` normalizes
-    // the missing field to `null` so downstream always reads a defined value.
+    // A host that negotiated `@1.2` emits an owner with NO harnessId. The
+    // `@1.2` schema strips the later minors' keys and `toPayload` normalizes
+    // the missing field to `null`, so downstream always reads a defined value.
     const { harnessId: _omit, ...ownerWithoutHarness } = OWNER;
     sockets[0].fireText({
       kind: "snapshot",
@@ -383,7 +505,7 @@ describe("ResourcesStreamClient", () => {
         onScopeSupport: () => {},
       },
     });
-    completeHandshake(sockets[0]);
+    completeHandshakeAt(sockets[0], { major: 1, minor: 4 });
 
     sockets[0].fireText({
       kind: "snapshot",
@@ -432,7 +554,7 @@ describe("ResourcesStreamClient", () => {
         onScopeSupport: () => {},
       },
     });
-    completeHandshake(sockets[0]);
+    completeHandshakeAt(sockets[0], { major: 1, minor: 3 });
 
     // A `@1.3` host emits owners without `managedCommand` - and folds any
     // running command's tree into `other` rather than naming it as an owner.
@@ -469,6 +591,7 @@ describe("ResourcesStreamClient", () => {
       },
     });
     completeHandshake(sockets[0]);
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
 
     sockets[0].fireText({ kind: "pong", hasBinaryPayload: false });
     // Missing the required `owners`/`epic` fields -> fails the frame schema.
@@ -480,6 +603,59 @@ describe("ResourcesStreamClient", () => {
 
     expect(snapshots).toHaveLength(0);
     expect(updates).toHaveLength(0);
+    // A frame that fails the version this session NEGOTIATED is a protocol
+    // fault, not evidence that the host is speaking an older minor.
+    expect(errors).toHaveBeenCalledTimes(1);
+    errors.mockRestore();
+
+    client.close();
+  });
+
+  it("keeps a nullable-RSS @1.5 frame at @1.5 rather than degrading it", () => {
+    const { factory, sockets } = makeFactory();
+    const snapshots: ResourcesProjectionPayload[] = [];
+    const client = new ResourcesStreamClient({
+      wsStreamClient: makeWsStreamClient(factory),
+      scope: { kind: "epic", epicId: "epic-1" },
+      callbacks: {
+        onSnapshot: (p) => snapshots.push(p),
+        onUpdate: () => {},
+        onConnectionStatus: () => {},
+        onScopeSupport: () => {},
+      },
+    });
+    completeHandshakeAt(sockets[0], { major: 1, minor: 5 });
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    // `rssBytes: null` is unparseable at every older minor, and a jittery
+    // negative CPU delta is exactly the field a tighter `@1.5` would have
+    // rejected. Both must ride through on the negotiated version.
+    sockets[0].fireText({
+      kind: "snapshot",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      sampledAt: 1_000,
+      app: null,
+      owners: [
+        {
+          ...OWNER,
+          rssBytes: null,
+          pssBytes: 600,
+          processes: [{ ...OWNER.processes[0], rssBytes: null, pssBytes: 600 }],
+        },
+      ],
+      epic: null,
+      hostTree: { ...HOST_TREE, rssBytes: null, cpuPercent: -0.5 },
+      other: null,
+      restricted: null,
+    });
+
+    expect(snapshots).toHaveLength(1);
+    expect(snapshots[0].owners[0].rssBytes).toBeNull();
+    expect(snapshots[0].owners[0].pssBytes).toBe(600);
+    expect(snapshots[0].hostTree?.cpuPercent).toBe(-0.5);
+    expect(errors).not.toHaveBeenCalled();
+    errors.mockRestore();
 
     client.close();
   });

@@ -63,6 +63,7 @@ import {
 } from "./tile-tree";
 import { createEmptyCanvas } from "./canvas-state";
 import { makeBlankTileRef } from "./tile-schema/blank-tile";
+import type { PaneTileOpenOptions } from "@/lib/canvas/tile-open/intent";
 
 // ---------------------------------------------------------------------------
 // Pane / tile helpers
@@ -331,6 +332,7 @@ function insertTabInstance(
   };
 }
 
+/** Insert `instanceId` at `index` (clamped); `null` appends. */
 function selectSyntheticFallback(
   pane: TilePane,
   removedIndex: number,
@@ -676,28 +678,6 @@ export function openTileInBackgroundTab(
 }
 
 /**
- * Opener path for a SINGLETON tile - one whose content `id` is derived rather
- * than per-instance (the comm graph is one per epic).
- *
- * {@link openTileInPane} deliberately bypasses dedup so two views of the same
- * content can sit side by side. That is wrong for a singleton: a second tab
- * would share the content id, so any per-tile state keyed on it (the comm
- * graph's persisted viewport) would be written by both copies. Focus the
- * existing tab wherever it lives, and only open into `paneId` when there is
- * none.
- */
-export function openSingletonTileInPane(
-  state: EpicCanvasState,
-  paneId: string,
-  ref: EpicCanvasTileRef,
-): EpicCanvasState {
-  if (state.root !== null && findPaneTabForRef(state, ref) !== null) {
-    return openTile(state, ref, false, null);
-  }
-  return openTileInPane(state, paneId, ref);
-}
-
-/**
  * Open `ref` into an explicit `paneId` as a fresh tab instance, bypassing
  * global dedup. Unlike {@link openTile}, this is the opener's path: it
  * never focuses an already-open tab and never falls back to the active pane.
@@ -707,8 +687,19 @@ export function openSingletonTileInPane(
  * - inserts into the explicit pane (no active-pane resolution),
  * - makes the target pane and the new tab active.
  *
+ * `mode` mirrors the three whole-canvas openers so one pane-scoped call
+ * covers all of them: `permanent` is a pinned tab, `preview` also claims the
+ * pane's preview slot (evicting and GC-ing the previous preview, like
+ * `openTile(..., preview: true)`), and `background` only adds membership -
+ * `activeTabId` / `activePaneId` are untouched, like
+ * {@link openTileInBackgroundTab}.
+ *
+ * `index` is the strip position; `null` appends.
+ *
  * Fill-in-place: when the pane's active tab is a blank "New tab", the picked
- * content replaces it at the same index (browser new-tab semantics).
+ * content replaces it at the same index (browser new-tab semantics). Only for
+ * `permanent` + `index: null` - a positioned or preview open never eats a
+ * blank.
  *
  * No-op when the canvas is empty or `paneId` does not resolve to a pane.
  */
@@ -716,20 +707,49 @@ export function openTileInPane(
   state: EpicCanvasState,
   paneId: string,
   ref: EpicCanvasTileRef,
+  options: PaneTileOpenOptions,
 ): EpicCanvasState {
+  const { mode, index } = options;
   if (state.root === null) return state;
   const target = findPaneById(state.root, paneId);
   if (target === null) return state;
   const node: EpicCanvasTileRef = { ...ref, instanceId: uuidv4() };
-  const active = resolveActiveTabInstance(target);
+
+  // Background: membership only. Same contract as `openTileInBackgroundTab`
+  // (no active tab/pane change), just into an explicit pane.
+  if (mode === "background") {
+    const root = replacePane(state.root, paneId, (pane) => ({
+      ...pane,
+      // `toSpliced` clamps past the end on its own; the `max` keeps a
+      // negative index off the "count from the end" path.
+      tabInstanceIds: pane.tabInstanceIds.toSpliced(
+        index === null ? pane.tabInstanceIds.length : Math.max(0, index),
+        0,
+        node.instanceId,
+      ),
+    }));
+    return {
+      ...state,
+      root,
+      tilesByInstanceId: withTile(state.tilesByInstanceId, node),
+    };
+  }
+
+  // Fill-in-place only for an unpositioned permanent open: an explicit index
+  // is a position, and a preview must not consume a blank (same rule as
+  // `openTile`).
+  const active =
+    mode === "permanent" && index === null
+      ? resolveActiveTabInstance(target)
+      : null;
   const activeRef =
     active === null
       ? null
       : (state.tilesByInstanceId[active.instanceId] ?? null);
 
   if (active !== null && activeRef !== null && isBlankTileRef(activeRef)) {
-    const tabInstanceIds = target.tabInstanceIds.map((id, index) =>
-      index === active.index ? node.instanceId : id,
+    const tabInstanceIds = target.tabInstanceIds.map((id, at) =>
+      at === active.index ? node.instanceId : id,
     );
     // Replace the blank in place; clear preview if it pointed at the blank.
     const root = replacePane(state.root, paneId, (pane) => {
@@ -759,17 +779,21 @@ export function openTileInPane(
   const inserted = insertTabInstance(
     target,
     node.instanceId,
-    target.tabInstanceIds.length,
-    false,
+    index ?? target.tabInstanceIds.length,
+    mode === "preview",
   );
   const root = replacePane(state.root, paneId, () =>
     recordPaneActivation(inserted.pane, node.instanceId),
   );
+  const tilesWithNode = withTile(state.tilesByInstanceId, node);
   return {
     ...state,
     root,
     activePaneId: paneId,
-    tilesByInstanceId: withTile(state.tilesByInstanceId, node),
+    tilesByInstanceId:
+      inserted.removedPreviewInstanceId === null
+        ? tilesWithNode
+        : withoutTiles(tilesWithNode, [inserted.removedPreviewInstanceId]),
   };
 }
 

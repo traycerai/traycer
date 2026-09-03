@@ -396,6 +396,11 @@ export interface IRemoteSession<
     method: Method,
     params: ParamsOf<StreamRegistry, Method>,
   ): IStreamSession;
+  subscribeAtVersion<Method extends keyof StreamRegistry & string>(
+    method: Method,
+    schemaVersion: SchemaVersion,
+    params: ParamsOf<StreamRegistry, Method>,
+  ): IStreamSession;
   subscribeWithParamsProvider<Method extends keyof StreamRegistry & string>(
     method: Method,
     paramsProvider: () => ParamsOf<StreamRegistry, Method>,
@@ -1411,7 +1416,19 @@ export class RemoteSession<
     method: Method,
     params: ParamsOf<StreamRegistry, Method>,
   ): IStreamSession {
-    return this.subscribeWithParamsProvider(method, () => params);
+    return this.subscribeWithParamsProviderInternal(method, () => params, null);
+  }
+
+  subscribeAtVersion<Method extends keyof StreamRegistry & string>(
+    method: Method,
+    schemaVersion: SchemaVersion,
+    params: ParamsOf<StreamRegistry, Method>,
+  ): IStreamSession {
+    return this.subscribeWithParamsProviderInternal(
+      method,
+      () => params,
+      schemaVersion,
+    );
   }
 
   /**
@@ -1424,6 +1441,20 @@ export class RemoteSession<
     method: Method,
     paramsProvider: () => ParamsOf<StreamRegistry, Method>,
   ): IStreamSession {
+    return this.subscribeWithParamsProviderInternal(
+      method,
+      paramsProvider,
+      null,
+    );
+  }
+
+  private subscribeWithParamsProviderInternal<
+    Method extends keyof StreamRegistry & string,
+  >(
+    method: Method,
+    paramsProvider: () => ParamsOf<StreamRegistry, Method>,
+    requiredSchemaVersion: SchemaVersion | null,
+  ): IStreamSession {
     this.start();
     const streamId = this.allocateStreamId();
     const stream = new LogicalStream({
@@ -1433,6 +1464,7 @@ export class RemoteSession<
       // Recomputed against the host manifest at (re)subscribe; a provisional
       // client-canonical version is fine until then.
       schemaVersion: this.clientStreamCanonical(method),
+      requiredSchemaVersion,
       qos: qosForStreamMethod(method),
       port: this,
     });
@@ -2689,22 +2721,41 @@ export class RemoteSession<
       this.clientManifests.stream,
       hostManifest.stream,
     );
+    const requiredVersion = stream.requiredSchemaVersion;
     const clientCanonical = selectedClientManifest[stream.method];
     const hostCanonical = hostManifest.stream[stream.method];
-    const compat = checkStreamMethodCompatibility(
-      this.options.streamRegistry,
-      selectedClientManifest,
-      hostManifest.stream,
-      "client",
-      stream.method,
-    );
+    const pinnedVersionSupported =
+      requiredVersion === null ||
+      (hostCanonical !== undefined &&
+        hostCanonical.major === requiredVersion.major &&
+        hostCanonical.minor >= requiredVersion.minor);
+    const compat = pinnedVersionSupported
+      ? checkStreamMethodCompatibility(
+          this.options.streamRegistry,
+          selectedClientManifest,
+          hostManifest.stream,
+          "client",
+          stream.method,
+        )
+      : {
+          ok: false as const,
+          details: incompatibleStreamDetails(
+            stream.method,
+            clientCanonical,
+            hostCanonical,
+          ),
+        };
     if (
       !compat.ok ||
       clientCanonical === undefined ||
       hostCanonical === undefined
     ) {
       const details: FatalErrorDetails = compat.ok
-        ? incompatibleStreamDetails(stream.method)
+        ? incompatibleStreamDetails(
+            stream.method,
+            clientCanonical,
+            hostCanonical,
+          )
         : compat.details;
       stream.goFatal(details);
       this.subscriptions.delete(stream.streamId);
@@ -4707,11 +4758,27 @@ function planRestrictedFatalDetails(): FatalErrorDetails {
   };
 }
 
-function incompatibleStreamDetails(method: string): FatalErrorDetails {
+function incompatibleStreamDetails(
+  method: string,
+  clientCanonical: SchemaVersion | undefined,
+  hostCanonical: SchemaVersion | undefined,
+): FatalErrorDetails {
   return {
     code: "INCOMPATIBLE",
     reason: `Stream method '${method}' is not compatible with the host`,
-    incompatibleMethods: null,
+    incompatibleMethods: [
+      {
+        method,
+        clientCanonical: clientCanonical ?? null,
+        hostCanonical: hostCanonical ?? null,
+        blocking:
+          clientCanonical === undefined
+            ? "client-missing-method"
+            : hostCanonical === undefined
+              ? "host-missing-method"
+              : "no-bridge",
+      },
+    ],
     upgradeGuidance: null,
   };
 }

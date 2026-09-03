@@ -10,6 +10,12 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type { BrowserViewBridge } from "@traycer-clients/shared/platform/browser-view";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
+import {
+  usePaneFocused,
+  usePaneVisible,
+} from "@/components/epic-tabs/pane-visibility-context";
+import { useEpicViewTabId } from "@/components/epic-canvas/view-tab-context";
+import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useReactiveLocalHostId } from "@/hooks/host/use-reactive-local-host-id";
@@ -30,7 +36,6 @@ import {
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { useDurableStreamTransportFactory } from "@/lib/host/use-durable-stream-transport";
 import { useRunnerHost } from "@/providers/use-runner-host";
-import { useWindowsBridge } from "@/providers/windows-bridge-context";
 
 function browserSessionsOwnerIdentityKey(
   hostClient: HostClient<HostRpcRegistry> | null,
@@ -52,14 +57,12 @@ export function useBrowserSessionsForHost(args: {
   const runnerHost = useRunnerHost();
   const hostClient = useHostClientForHostId(args.hostId);
   const localHostId = useReactiveLocalHostId();
-  const desktopWindowId = useWindowsBridge()?.windowId ?? null;
   return useBrowserSessions({
     hostId: args.hostId,
     hostClient,
     epicId: args.epicId,
     browserView: runnerHost.browserView,
     localHostId,
-    desktopWindowId,
   }).state;
 }
 
@@ -70,12 +73,6 @@ interface UseBrowserSessionsArgs {
   readonly browserView: BrowserViewBridge | null;
   /** This machine's host id, declared as the Electron locality signal. */
   readonly localHostId: string | null;
-  /**
-   * This renderer's desktop window id, or null off Electron. Declared on
-   * `electronTabLifecycleReady` so the host hands the Electron lifecycle over
-   * only to the incumbent owner's own window.
-   */
-  readonly desktopWindowId: string | null;
 }
 
 interface BrowserSessionsHookResult {
@@ -86,7 +83,22 @@ interface BrowserSessionsHookResult {
 export function useBrowserSessions(
   args: UseBrowserSessionsArgs,
 ): BrowserSessionsHookResult {
-  const { hostId, epicId, browserView, localHostId, desktopWindowId } = args;
+  const { hostId, epicId, browserView, localHostId } = args;
+  const navigateNested = useEpicNestedFocusNavigation();
+  const viewTabId = useEpicViewTabId();
+  const surfaceVisible = usePaneVisible();
+  const surfaceFocused = usePaneFocused();
+  const presentation = useMemo(
+    () =>
+      viewTabId === null
+        ? null
+        : {
+            viewTabId,
+            visible: surfaceVisible,
+            focused: surfaceFocused,
+          },
+    [surfaceFocused, surfaceVisible, viewTabId],
+  );
   const hostEntry = useHostDirectoryEntry(hostId ?? UNKNOWN_HOST_PLACEHOLDER);
   const transportReady =
     args.hostClient !== null &&
@@ -95,6 +107,9 @@ export function useBrowserSessions(
     args.hostClient,
     hostEntry,
   );
+  // Not sent to main, which reads the signed-in user from the desktop auth
+  // session it owns; it only decides whether asking is worth an IPC.
+  const userId = args.hostClient?.getRequestContextUserId() ?? null;
   const openTransport = useDurableStreamTransportFactory();
   const owner = useMemo<BrowserSessionsOwner | null>(
     () =>
@@ -118,7 +133,14 @@ export function useBrowserSessions(
         consumerId,
         epicId,
         owner: selectedOwner,
-        runtime: { browserView, localHostId, desktopWindowId, openTransport },
+        runtime: {
+          browserView,
+          userId,
+          localHostId,
+          presentation,
+          navigateNested,
+          openTransport,
+        },
         createIfMissing: transportReady,
       }),
   );
@@ -132,17 +154,21 @@ export function useBrowserSessions(
     if (coordinatorKey === null) return;
     upsertBrowserSessionsCoordinatorConsumer(coordinatorKey, consumerId, {
       browserView,
+      userId,
       localHostId,
-      desktopWindowId,
+      presentation,
+      navigateNested,
       openTransport,
     });
   }, [
     browserView,
     consumerId,
     coordinatorKey,
-    desktopWindowId,
     localHostId,
+    navigateNested,
     openTransport,
+    userId,
+    presentation,
   ]);
 
   const subscribe = useCallback(

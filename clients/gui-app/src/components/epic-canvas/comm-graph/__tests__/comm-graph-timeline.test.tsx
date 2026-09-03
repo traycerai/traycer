@@ -88,10 +88,7 @@ vi.mock("@/hooks/pr/use-owner-pr-references", () => ({
 }));
 
 const tileNavigationMocks = vi.hoisted(() => ({
-  openTileInEpic: vi.fn(),
-  openTileInTab: vi.fn(),
-  openTilePreviewInEpic: vi.fn(),
-  openTilePreviewInTab: vi.fn(),
+  openTile: vi.fn(),
 }));
 vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
   useEpicTileNavigation: () => tileNavigationMocks,
@@ -129,6 +126,7 @@ import {
 import { makeCommGraphTileRef } from "@/stores/epics/canvas/tile-schema/comm-graph-tile";
 import { TestEpicSessionWrapper } from "@/components/epic-canvas/__tests__/test-epic-session";
 import { createEpicSessionTestHarness } from "@/components/epic-canvas/__tests__/test-epic-session-harness";
+import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 
 const EPIC_ID = "epic-comm-timeline";
 const CHAT_ID = "chat-1";
@@ -363,7 +361,7 @@ beforeEach(() => {
   __resetCommGraphRegistryForTests();
   useCommGraphTimelineStore.setState({ stateByEpicId: {} });
   useCommGraphRowOpenStore.setState({ openRowKeysByEpicId: {} });
-  tileNavigationMocks.openTileInEpic.mockClear();
+  tileNavigationMocks.openTile.mockClear();
   useChatTranscriptJumpStore.setState({ requestsByChatId: {} });
   queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -652,9 +650,19 @@ describe("CommGraphTile projection", () => {
 
     await openAgentDetailJump(1);
 
-    expect(tileNavigationMocks.openTileInEpic).toHaveBeenCalledWith(
-      EPIC_ID,
-      expect.objectContaining({ id: CHAT_ID, type: "chat", hostId: HOST_A }),
+    expect(tileNavigationMocks.openTile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        target: { epicId: EPIC_ID },
+        gesture: "explicit",
+        modifiers: null,
+        placement: null,
+        dedupe: true,
+        node: expect.objectContaining({
+          id: CHAT_ID,
+          type: "chat",
+          hostId: HOST_A,
+        }) as EpicCanvasTileRef,
+      }),
     );
     expect(
       useChatTranscriptJumpStore.getState().requestsByChatId[
@@ -705,9 +713,19 @@ describe("CommGraphTile projection", () => {
       await screen.findByTestId(`comm-graph-detail-${HOST_A}-1-sender`),
     );
 
-    expect(tileNavigationMocks.openTileInEpic).toHaveBeenCalledWith(
-      EPIC_ID,
-      expect.objectContaining({ id: CHAT_ID, type: "chat", hostId: HOST_A }),
+    expect(tileNavigationMocks.openTile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        target: { epicId: EPIC_ID },
+        gesture: "explicit",
+        modifiers: null,
+        placement: null,
+        dedupe: true,
+        node: expect.objectContaining({
+          id: CHAT_ID,
+          type: "chat",
+          hostId: HOST_A,
+        }) as EpicCanvasTileRef,
+      }),
     );
     expect(
       useChatTranscriptJumpStore.getState().requestsByChatId[
@@ -744,9 +762,19 @@ describe("CommGraphTile projection", () => {
       await screen.findByTestId(`comm-graph-detail-${HOST_A}-1-receiver`),
     );
 
-    expect(tileNavigationMocks.openTileInEpic).toHaveBeenCalledWith(
-      EPIC_ID,
-      expect.objectContaining({ id: CHAT_ID, type: "chat", hostId: HOST_A }),
+    expect(tileNavigationMocks.openTile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        target: { epicId: EPIC_ID },
+        gesture: "explicit",
+        modifiers: null,
+        placement: null,
+        dedupe: true,
+        node: expect.objectContaining({
+          id: CHAT_ID,
+          type: "chat",
+          hostId: HOST_A,
+        }) as EpicCanvasTileRef,
+      }),
     );
     expect(
       useChatTranscriptJumpStore.getState().requestsByChatId[
@@ -781,9 +809,19 @@ describe("CommGraphTile projection", () => {
 
     // The tile opens - and that is ALL. The idle agent never wrote this
     // notice, so there is no anchor in its transcript to park a jump on.
-    expect(tileNavigationMocks.openTileInEpic).toHaveBeenCalledWith(
-      EPIC_ID,
-      expect.objectContaining({ id: CHAT_ID, type: "chat", hostId: HOST_A }),
+    expect(tileNavigationMocks.openTile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        target: { epicId: EPIC_ID },
+        gesture: "explicit",
+        modifiers: null,
+        placement: null,
+        dedupe: true,
+        node: expect.objectContaining({
+          id: CHAT_ID,
+          type: "chat",
+          hostId: HOST_A,
+        }) as EpicCanvasTileRef,
+      }),
     );
     expect(
       useChatTranscriptJumpStore.getState().requestsByChatId[
@@ -812,9 +850,19 @@ describe("CommGraphTile projection", () => {
     // notice is the DB sender's chat.
     await openAgentDetailJump(1);
 
-    expect(tileNavigationMocks.openTileInEpic).toHaveBeenCalledWith(
-      EPIC_ID,
-      expect.objectContaining({ id: CHAT_ID, type: "chat", hostId: HOST_A }),
+    expect(tileNavigationMocks.openTile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        target: { epicId: EPIC_ID },
+        gesture: "explicit",
+        modifiers: null,
+        placement: null,
+        dedupe: true,
+        node: expect.objectContaining({
+          id: CHAT_ID,
+          type: "chat",
+          hostId: HOST_A,
+        }) as EpicCanvasTileRef,
+      }),
     );
     expect(
       useChatTranscriptJumpStore.getState().requestsByChatId[
@@ -837,9 +885,18 @@ describe("CommGraphTile projection", () => {
 
     await openAgentDetailJump(1);
 
-    expect(tileNavigationMocks.openTileInEpic).toHaveBeenCalledWith(
-      EPIC_ID,
-      expect.objectContaining({ id: TUI_ID, type: "terminal-agent" }),
+    expect(tileNavigationMocks.openTile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        target: { epicId: EPIC_ID },
+        gesture: "explicit",
+        modifiers: null,
+        placement: null,
+        dedupe: true,
+        node: expect.objectContaining({
+          id: TUI_ID,
+          type: "terminal-agent",
+        }) as EpicCanvasTileRef,
+      }),
     );
     expect(useChatTranscriptJumpStore.getState().requestsByChatId).toEqual({});
   });
@@ -859,9 +916,18 @@ describe("CommGraphTile projection", () => {
 
     // No anchor to scroll to, so the jump degrades to the row's owning agent -
     // the RECEIVER, which is where the origin ref would have pointed.
-    expect(tileNavigationMocks.openTileInEpic).toHaveBeenCalledWith(
-      EPIC_ID,
-      expect.objectContaining({ id: TUI_ID, type: "terminal-agent" }),
+    expect(tileNavigationMocks.openTile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        target: { epicId: EPIC_ID },
+        gesture: "explicit",
+        modifiers: null,
+        placement: null,
+        dedupe: true,
+        node: expect.objectContaining({
+          id: TUI_ID,
+          type: "terminal-agent",
+        }) as EpicCanvasTileRef,
+      }),
     );
     expect(useChatTranscriptJumpStore.getState().requestsByChatId).toEqual({});
   });
@@ -1004,9 +1070,18 @@ describe("comm-graph agent detail", () => {
 
     fireEvent.click(await screen.findByTestId("comm-graph-agent-panel-open"));
 
-    expect(tileNavigationMocks.openTileInEpic).toHaveBeenCalledWith(
-      EPIC_ID,
-      expect.objectContaining({ id: TUI_ID, type: "terminal-agent" }),
+    expect(tileNavigationMocks.openTile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        target: { epicId: EPIC_ID },
+        gesture: "explicit",
+        modifiers: null,
+        placement: null,
+        dedupe: true,
+        node: expect.objectContaining({
+          id: TUI_ID,
+          type: "terminal-agent",
+        }) as EpicCanvasTileRef,
+      }),
     );
   });
 

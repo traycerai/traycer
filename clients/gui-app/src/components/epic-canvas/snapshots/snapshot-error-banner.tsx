@@ -7,7 +7,7 @@ import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
 import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
-import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link-mutation";
+import { useOpenLinkWithPending } from "@/lib/links/open-link";
 import { useEpicRequestFreshSnapshot } from "@/lib/epic-selectors";
 import { resolvePlatformBaseUrl } from "@/lib/auth/platform-base-url";
 import { getClientAppVersion } from "@/lib/app-version";
@@ -208,19 +208,19 @@ function LocalStoreRepair(props: { readonly error: SnapshotFetchError }) {
 
 function UpgradeButton() {
   const runnerHost = useRunnerHost();
-  const openExternalLink = useRunnerOpenExternalLink();
+  const { isPending, openLink } = useOpenLinkWithPending();
   return (
     <Button
       type="button"
       size="sm"
       data-testid="snapshot-error-upgrade"
-      disabled={openExternalLink.isPending}
+      disabled={isPending}
       onClick={() => {
-        openExternalLink.mutate(resolvePlatformBaseUrl(runnerHost.signInUrl));
+        void openLink(resolvePlatformBaseUrl(runnerHost.signInUrl), "auth", null);
       }}
     >
       Upgrade
-      {openExternalLink.isPending ? (
+      {isPending ? (
         <AgentSpinningDots
           className="size-3"
           testId={undefined}

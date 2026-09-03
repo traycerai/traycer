@@ -62,6 +62,7 @@ import {
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 import type { NestedFocusTarget } from "@/lib/epic-nested-focus-route";
+import type { AnalyticsSource } from "@/lib/analytics";
 
 const HOST_ID = "host-1";
 const EPIC_ID = "epic-1";
@@ -1113,7 +1114,11 @@ describe("reveal in sidebar", () => {
   }
 
   let openPreviewSpy: Mock<
-    (tabId: string, node: EpicCanvasTileRef) => NestedFocusTarget | null
+    (
+      tabId: string,
+      node: EpicCanvasTileRef,
+      source: AnalyticsSource,
+    ) => NestedFocusTarget | null
   >;
 
   beforeEach(() => {
@@ -1141,13 +1146,15 @@ describe("reveal in sidebar", () => {
     __resetWorkspaceFileListSubscriptionsForTesting();
     useFileTreeStore.setState({ expandedPathsByScope: {} });
     useFileTreeRevealStore.setState({ requestsByViewTabId: {} }, true);
-    // The panel reads this action to open a row's preview on a genuine
-    // selection; mocked so the "still opens on a real click" case is
-    // observable without a real canvas/tab-strip mounted, and so the reveal
-    // tests can assert it was NOT called for a programmatic selection.
+    // The panel reads this action (via `openTile`, on the empty test canvas
+    // where the open-tile executor's plan has no pane to open into) to open a
+    // row's preview on a genuine selection; mocked so the "still opens on a
+    // real click" case is observable without a real canvas/tab-strip mounted,
+    // and so the reveal tests can assert it was NOT called for a
+    // programmatic selection.
     openPreviewSpy = vi.fn(() => null);
     useEpicCanvasStore.setState({
-      prepareOpenTilePreviewInTabFocusTarget: openPreviewSpy,
+      prepareOpenTilePreviewInTabFocusTargetFromSource: openPreviewSpy,
     });
   });
 
@@ -1359,6 +1366,7 @@ describe("reveal in sidebar", () => {
     expect(openPreviewSpy).toHaveBeenCalledWith(
       REVEAL_TAB_ID,
       expect.objectContaining({ filePath: "readme.md" }),
+      "direct_ui",
     );
   });
 
@@ -1499,10 +1507,18 @@ describe("file tree on a touch viewport", () => {
   }
 
   let openPermanentSpy: Mock<
-    (tabId: string, node: EpicCanvasTileRef) => NestedFocusTarget | null
+    (
+      tabId: string,
+      node: EpicCanvasTileRef,
+      source: AnalyticsSource,
+    ) => NestedFocusTarget | null
   >;
   let openPreviewSpy: Mock<
-    (tabId: string, node: EpicCanvasTileRef) => NestedFocusTarget | null
+    (
+      tabId: string,
+      node: EpicCanvasTileRef,
+      source: AnalyticsSource,
+    ) => NestedFocusTarget | null
   >;
 
   beforeEach(() => {
@@ -1536,8 +1552,8 @@ describe("file tree on a touch viewport", () => {
     openPermanentSpy = vi.fn(() => null);
     openPreviewSpy = vi.fn(() => null);
     useEpicCanvasStore.setState({
-      prepareOpenTileInTabFocusTarget: openPermanentSpy,
-      prepareOpenTilePreviewInTabFocusTarget: openPreviewSpy,
+      prepareOpenTileInTabFocusTargetFromSource: openPermanentSpy,
+      prepareOpenTilePreviewInTabFocusTargetFromSource: openPreviewSpy,
     });
     breakpointListeners.clear();
     installLiveMatchMedia();
@@ -1610,6 +1626,7 @@ describe("file tree on a touch viewport", () => {
     expect(openPreviewSpy).toHaveBeenCalledWith(
       TAB_ID,
       expect.objectContaining({ filePath: "readme.md" }),
+      "direct_ui",
     );
   });
 

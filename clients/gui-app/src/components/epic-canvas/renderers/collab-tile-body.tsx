@@ -752,7 +752,6 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
             editable={editable}
             scrollContainer={scrollContainer}
             openLink={artifactLinkOpener.openLink}
-            openLinkPending={artifactLinkOpener.isExternalPending}
             onOpenChange={setLinkPopoverOpen}
           />
         ) : null}
