@@ -1,6 +1,8 @@
 import { useLayoutEffect, useRef } from "react";
+import { subscribeStatusAnimation } from "@/lib/animation/status-animation-clock";
 import { cn } from "@/lib/utils";
 import type { AgentSpinnerVariant } from "@/components/ui/agent-spinner-variant";
+import { WorkingDots } from "@/components/ui/working-dots";
 
 interface AgentSpinnerPreset {
   readonly frames: readonly string[];
@@ -613,39 +615,42 @@ export function AgentSpinningDots(props: AgentSpinningDotsProps) {
   // `useState(frameIndex)` re-rendered this component every `intervalMs` (up to
   // 12.5Hz per spinner); on a busy loading surface like the providers settings
   // panel - which mounts several spinners at once - that flickered the whole
-  // subtree on every frame. Writing `textContent` straight to the node is a
-  // pure DOM mutation: zero React re-render, zero reconciliation, byte-for-byte
-  // the same glyphs/cadence/width as before. The span renders NO JSX children,
-  // so a parent re-render never resets the glyph; the layout effect (runs
-  // pre-paint, so the first frame shows immediately like the old version) is the
-  // sole owner of `textContent`.
+  // subtree on every frame. The span renders NO JSX children, so a parent
+  // re-render never resets the glyph; the layout effect (runs pre-paint, so
+  // the first frame shows immediately) is the sole owner of the text.
+  //
+  // Two details are load-bearing for the renderer's memory, not just its CPU:
+  //
+  // - The glyph is written to ONE text node's `data`, never via `textContent`.
+  //   `textContent =` removes the old text node and inserts a new one, and a
+  //   child-list mutation inside a `:has()` subject (the tab strip's
+  //   `.group/tab:has(:focus-visible)`) invalidates the whole tab's style,
+  //   destroys and recreates the spinner's layout object, and wakes every
+  //   `childList` MutationObserver on `document.body`. A character-data
+  //   mutation does none of that: one text run relayouts.
+  // - Every spinner advances from the shared status animation clock, so N
+  //   spinners on screen are one timer task and one style/layout/paint pass
+  //   per tick, not N. Presets slower than the clock keep their cadence; the
+  //   60-70 ms presets run at the clock's 80 ms.
   useLayoutEffect(() => {
     if (presetFrames === null || presetIntervalMs === null) return;
     const node = frameRef.current;
     if (node === null) return;
-    let frameIndex = 0;
-    node.textContent = presetFrames[0];
+    const text = document.createTextNode(presetFrames[0] ?? "");
+    node.replaceChildren(text);
     if (presetFrames.length === 1) return;
-    const intervalId = window.setInterval(() => {
-      frameIndex = (frameIndex + 1) % presetFrames.length;
-      node.textContent = presetFrames[frameIndex];
-    }, presetIntervalMs);
-
-    return () => window.clearInterval(intervalId);
+    let shownIndex = 0;
+    return subscribeStatusAnimation((elapsedMs) => {
+      const frameIndex =
+        Math.floor(elapsedMs / presetIntervalMs) % presetFrames.length;
+      if (frameIndex === shownIndex) return;
+      shownIndex = frameIndex;
+      text.data = presetFrames[frameIndex] ?? "";
+    });
   }, [presetFrames, presetIntervalMs]);
 
   if (preset === null) {
-    return (
-      <span
-        data-testid={props.testId}
-        aria-hidden="true"
-        className={cn("working-dots text-current", props.className)}
-      >
-        <span />
-        <span />
-        <span />
-      </span>
-    );
+    return <WorkingDots className={props.className} testId={props.testId} />;
   }
 
   return (

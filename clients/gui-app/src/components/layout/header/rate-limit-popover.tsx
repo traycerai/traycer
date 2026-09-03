@@ -16,6 +16,8 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
+import { WorkingDots } from "@/components/ui/working-dots";
+import { WorkingShimmerText } from "@/components/ui/working-shimmer-text";
 import { PopoverContent } from "@/components/ui/popover";
 import { Skeleton } from "@/components/ui/skeleton";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
@@ -2244,22 +2246,8 @@ function UsageLimitUpdatedLabel({
 function RefreshingText(): ReactNode {
   return (
     <span className="inline-flex items-baseline gap-1 text-ui-xs text-muted-foreground">
-      <span className="working-text-shimmer text-ui-xs">Refreshing</span>
-      <RefreshingWorkingDots />
-    </span>
-  );
-}
-
-function RefreshingWorkingDots(): ReactNode {
-  return (
-    <span
-      aria-hidden="true"
-      className="working-dots text-current"
-      data-testid="usage-limit-refreshing-dots"
-    >
-      <span />
-      <span />
-      <span />
+      <WorkingShimmerText className="text-ui-xs">Refreshing</WorkingShimmerText>
+      <WorkingDots className={undefined} testId="usage-limit-refreshing-dots" />
     </span>
   );
 }

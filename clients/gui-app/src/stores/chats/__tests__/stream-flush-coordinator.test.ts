@@ -3,6 +3,7 @@ import {
   createStreamFlushCoordinator,
   FRAME_TIMEOUT_FALLBACK_MS,
   HIDDEN_FLUSH_INTERVAL_MS,
+  VISIBLE_FLUSH_MIN_INTERVAL_MS,
   type StreamFlushCoordinator,
   type StreamFlushTimers,
 } from "@/stores/chats/stream-flush-coordinator";
@@ -211,5 +212,67 @@ describe("stream flush coordinator", () => {
 
     expect(fake.frameCount()).toBe(0);
     expect(fake.timerCount()).toBe(0);
+  });
+
+  it("arms a timer at the visible floor when a delta arrives before it elapses, not a frame", () => {
+    const fake = createFakeTimers();
+    const coordinator = createStreamFlushCoordinator(fake.timers);
+    const store = registerFakeStore(coordinator);
+
+    store.bufferDelta();
+    fake.fireFrame();
+    expect(store.flushCount()).toBe(1); // lastFlushAt = 0
+
+    const deltaAt = 10;
+    fake.advance(deltaAt);
+    store.bufferDelta();
+    // Still inside the 32ms floor since the last flush: a timer, not a frame.
+    expect(fake.frameCount()).toBe(0);
+    expect(fake.timerCount()).toBe(1);
+
+    fake.advance(VISIBLE_FLUSH_MIN_INTERVAL_MS - deltaAt - 1);
+    expect(store.flushCount()).toBe(1);
+    fake.advance(1);
+    expect(store.flushCount()).toBe(2);
+  });
+
+  it("arms a frame once the visible floor has elapsed since the last flush", () => {
+    const fake = createFakeTimers();
+    const coordinator = createStreamFlushCoordinator(fake.timers);
+    const store = registerFakeStore(coordinator);
+
+    store.bufferDelta();
+    fake.fireFrame();
+    expect(store.flushCount()).toBe(1); // lastFlushAt = 0
+
+    fake.advance(VISIBLE_FLUSH_MIN_INTERVAL_MS + 8);
+    store.bufferDelta();
+    expect(fake.frameCount()).toBe(1);
+    // A frame arm also arms the fallback timeout - the same pairing as the
+    // very first flush.
+    expect(fake.timerCount()).toBe(1);
+  });
+
+  it("arms a timer, not a frame, when setVisible(true) fires inside the visible floor", () => {
+    const fake = createFakeTimers();
+    const coordinator = createStreamFlushCoordinator(fake.timers);
+    const store = registerFakeStore(coordinator);
+
+    store.bufferDelta();
+    fake.fireFrame();
+    expect(store.flushCount()).toBe(1); // lastFlushAt = 0
+
+    store.setVisible(false);
+    fake.advance(10); // still inside the 32ms floor since the last visible flush
+    store.bufferDelta(); // buffered while hidden
+
+    store.setVisible(true);
+    expect(fake.frameCount()).toBe(0);
+    expect(fake.timerCount()).toBe(1);
+
+    fake.advance(VISIBLE_FLUSH_MIN_INTERVAL_MS - 10 - 1);
+    expect(store.flushCount()).toBe(1);
+    fake.advance(1);
+    expect(store.flushCount()).toBe(2);
   });
 });

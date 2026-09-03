@@ -10,19 +10,26 @@
  * Tick sources - two timers race, whichever fires first runs the tick and
  * cancels the other:
  *
- * - `requestAnimationFrame`: the steady-state cadence while the window is
- *   visible. Visible stores flush every tick (display refresh rate).
+ * - `requestAnimationFrame`: the cadence while the window is visible and a
+ *   visible store is due. The flush lands on a frame boundary.
  * - a `setTimeout` fallback (`FRAME_TIMEOUT_FALLBACK_MS`): rAF does not fire
  *   while the window is hidden/minimized, which previously let buffered
  *   deltas accumulate for the whole duration of a long uninterrupted stream.
  *   The timeout keeps draining buffers at a slow cadence with no
  *   `visibilitychange` listeners.
+ * - a `setTimeout` at the next due time, when every pending store is inside
+ *   its interval (a hidden store's slow tier, or a visible store's floor).
  *
  * Visibility tiers - each registration carries a visibility flag reported
  * from the React layer (chat is visible when ANY surface rendering it is
  * visible; default visible so an unreported store never starves):
  *
- * - visible: flushes on every tick.
+ * - visible: flushes on the next frame, then no more often than
+ *   `VISIBLE_FLUSH_MIN_INTERVAL_MS`. Every flush is a React commit of the
+ *   streaming row plus a style/layout/paint pass, and each of those allocates
+ *   Blink-heap garbage; on a 120 Hz display an uncapped rAF cadence cost
+ *   ~1 MB/s of that per streaming chat. ~30 flushes/s is well past what a
+ *   reader can perceive at token cadence and a quarter of the work.
  * - hidden (`display:none` keep-alive tab, backgrounded pane): flushes only
  *   when `HIDDEN_FLUSH_INTERVAL_MS` has elapsed since its last flush. Passive
  *   consumers (epic-sidebar progress, notification triggers) stay live at the
@@ -35,6 +42,9 @@ export const FRAME_TIMEOUT_FALLBACK_MS = 500;
 
 /** Minimum interval between flushes for stores with no visible surface. */
 export const HIDDEN_FLUSH_INTERVAL_MS = 500;
+
+/** Minimum interval between two flushes of a visible store (~30 Hz). */
+export const VISIBLE_FLUSH_MIN_INTERVAL_MS = 32;
 
 /**
  * Timer seam. Production uses rAF + window timeouts (see
@@ -89,7 +99,8 @@ interface RegistrationState {
   readonly flush: () => void;
   readonly hasPending: () => boolean;
   visible: boolean;
-  lastFlushAt: number;
+  /** `null` until the first flush: a visible store's first flush is never held back. */
+  lastFlushAt: number | null;
   active: boolean;
 }
 
@@ -114,10 +125,21 @@ export function createStreamFlushCoordinator(
     }
   }
 
+  /** Earliest time this entry may flush again; `-Infinity` for a visible store that never has. */
+  function dueAt(entry: RegistrationState): number {
+    if (entry.visible) {
+      return entry.lastFlushAt === null
+        ? Number.NEGATIVE_INFINITY
+        : entry.lastFlushAt + VISIBLE_FLUSH_MIN_INTERVAL_MS;
+    }
+    // A hidden store that never flushed waits out a full interval from
+    // registration, so a hidden stream never fans out on its first delta.
+    return (entry.lastFlushAt ?? 0) + HIDDEN_FLUSH_INTERVAL_MS;
+  }
+
   function isEntryDue(entry: RegistrationState, now: number): boolean {
     if (!entry.hasPending()) return false;
-    if (entry.visible) return true;
-    return now - entry.lastFlushAt >= HIDDEN_FLUSH_INTERVAL_MS;
+    return now >= dueAt(entry);
   }
 
   function armFrame(): void {
@@ -131,36 +153,45 @@ export function createStreamFlushCoordinator(
     }
   }
 
-  function armTimerAt(dueAt: number): void {
-    // Frame mode already ticks sooner than any hidden-store deadline.
+  function armTimerAt(dueTime: number): void {
+    // Frame mode already ticks sooner than any timed deadline.
     if (frameHandle !== null) return;
     if (timerHandle !== null) {
-      if (timerDueAt !== null && timerDueAt <= dueAt) return;
+      if (timerDueAt !== null && timerDueAt <= dueTime) return;
       timers.clearTimer(timerHandle);
       timerHandle = null;
     }
-    const delay = Math.max(0, dueAt - timers.now());
+    const delay = Math.max(0, dueTime - timers.now());
     timerDueAt = timers.now() + delay;
     timerHandle = timers.setTimer(tick, delay);
   }
 
+  /** Arms for one entry: a frame if it is due now, else a timer at its due time. */
+  function armFor(entry: RegistrationState, now: number): void {
+    const due = dueAt(entry);
+    if (due <= now) {
+      if (entry.visible) armFrame();
+      else armTimerAt(now);
+      return;
+    }
+    armTimerAt(due);
+  }
+
   function rearm(): void {
     const now = timers.now();
-    let earliestHiddenDueAt: number | null = null;
+    let earliestDueAt: number | null = null;
     for (const entry of entries) {
       if (!entry.hasPending()) continue;
-      if (entry.visible) {
+      const due = dueAt(entry);
+      if (entry.visible && due <= now) {
         armFrame();
         return;
       }
-      const dueAt = entry.lastFlushAt + HIDDEN_FLUSH_INTERVAL_MS;
-      earliestHiddenDueAt =
-        earliestHiddenDueAt === null
-          ? dueAt
-          : Math.min(earliestHiddenDueAt, dueAt);
+      earliestDueAt =
+        earliestDueAt === null ? due : Math.min(earliestDueAt, due);
     }
-    if (earliestHiddenDueAt !== null) {
-      armTimerAt(Math.max(earliestHiddenDueAt, now));
+    if (earliestDueAt !== null) {
+      armTimerAt(Math.max(earliestDueAt, now));
     }
   }
 
@@ -181,25 +212,22 @@ export function createStreamFlushCoordinator(
         flush: input.flush,
         hasPending: input.hasPending,
         visible: true,
-        lastFlushAt: 0,
+        lastFlushAt: null,
         active: true,
       };
       entries.add(entry);
       return {
         requestFlush: () => {
           if (!entry.active || !entry.hasPending()) return;
-          if (entry.visible) {
-            armFrame();
-            return;
-          }
-          armTimerAt(entry.lastFlushAt + HIDDEN_FLUSH_INTERVAL_MS);
+          armFor(entry, timers.now());
         },
         setVisible: (visible) => {
           if (!entry.active || entry.visible === visible) return;
           entry.visible = visible;
           // A newly-visible store with a buffered tail should paint on the
-          // next frame, not wait out the hidden-tier interval.
-          if (visible && entry.hasPending()) armFrame();
+          // next frame (or as soon as its floor allows), not wait out the
+          // hidden-tier interval.
+          if (visible && entry.hasPending()) armFor(entry, timers.now());
         },
         unregister: () => {
           if (!entry.active) return;
