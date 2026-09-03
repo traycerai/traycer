@@ -1995,6 +1995,31 @@ it("packaged, no manifest, slot reports an OLDER version: still re-stages", asyn
   expect(result?.staged).toBe("staged");
   expect(readFileSync(wellKnownPath, "utf8")).toBe(runningBytes);
 });
+
+it("packaged, no manifest, slot version probe fails: stages (seniority unprovable)", async () => {
+  seaState.current = true;
+  const { refreshWellKnownSlotIfStale, wellKnownCliBinaryPath } =
+    await import("../well-known-cli");
+  const wellKnownPath = wellKnownCliBinaryPath(ENVIRONMENT);
+  mkdirSync(dirname(wellKnownPath), { recursive: true });
+  writeFileSync(wellKnownPath, "a slot binary that cannot answer --version");
+  const running = join(workHome, "running-binary");
+  const runningBytes = "the running binary's bytes";
+  writeFileSync(running, runningBytes);
+  const base = Date.now();
+  utimesSync(wellKnownPath, new Date(base), new Date(base));
+  utimesSync(running, new Date(base - 120_000), new Date(base - 120_000));
+  // No `slotProbeControl.versionForPath` entry for `wellKnownPath` - the
+  // mock's default rejects, exactly like spawning this suite's plain-text
+  // fixture would in production.
+
+  const result = await withExecPath(running, () =>
+    refreshWellKnownSlotIfStale(ENVIRONMENT),
+  );
+
+  expect(result?.staged).toBe("staged");
+  expect(readFileSync(wellKnownPath, "utf8")).toBe(runningBytes);
+});
 // Answering `--version` proves a program RUNS, not that it may hold the
 // slot. `isInterpreterDistribution` already refuses to nominate an npm
 // install for exactly one reason - the slot is spawned by the host daemon

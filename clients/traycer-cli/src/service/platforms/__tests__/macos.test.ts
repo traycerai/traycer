@@ -334,6 +334,60 @@ printf '%s\\n' "$@" > ${JSON.stringify(args)}
       await rm(work, { recursive: true, force: true });
     }
   });
+
+  // Runs the emitted launcher through its own `#!/bin/sh` shebang rather than
+  // naming an interpreter, which Windows does not honour.
+  it.skipIf(process.platform === "win32")(
+    "launcher file: starts both an N-1 CLI without --service-label and a current CLI with it, preserving leading invocation args",
+    async () => {
+      const work = mkdtempSync(join(tmpdir(), "traycer-host-start-launcher-"));
+      const launcher = join(work, "traycer-host-start");
+      const oldCli = join(work, "old-cli.sh");
+      const newCli = join(work, "new-cli.sh");
+      const oldArgs = join(work, "old-args.txt");
+      const newArgs = join(work, "new-args.txt");
+      try {
+        await writeFile(
+          launcher,
+          buildHostStartLauncherScript("ai.traycer.host.compat"),
+          "utf8",
+        );
+        await chmod(launcher, 0o755);
+        await writeFile(
+          oldCli,
+          `#!/bin/sh
+if [ "$1" = "host" ] && [ "$2" = "capabilities" ]; then
+  echo "error: unknown command 'capabilities'" >&2
+  exit 1
+fi
+printf '%s\\n' "$@" > ${JSON.stringify(oldArgs)}
+`,
+          "utf8",
+        );
+        await writeFile(
+          newCli,
+          `#!/bin/sh
+if [ "$1" = "--entry=cli-entry.js" ] && [ "$2" = "host" ] && [ "$3" = "adoption-nonce" ]; then printf '%s\\n' '11111111-1111-4111-8111-111111111111'; exit 0; fi
+if [ "$1" = "--entry=cli-entry.js" ] && [ "$2" = "host" ] && [ "$3" = "capabilities" ] && [ "$4" = "--has" ] && { [ "$5" = "service-label" ] || [ "$5" = "host-start-adoption-v2" ]; }; then exit 0; fi
+printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
+`,
+          "utf8",
+        );
+        await chmod(oldCli, 0o700);
+        await chmod(newCli, 0o700);
+
+        await execFileAsync(launcher, [oldCli]);
+        await execFileAsync(launcher, [newCli, "--entry=cli-entry.js"]);
+
+        expect(await readFile(oldArgs, "utf8")).toBe("host\nstart\n");
+        expect(await readFile(newArgs, "utf8")).toBe(
+          "--entry=cli-entry.js\nhost\nstart\n--service-label\nai.traycer.host.compat\n--adoption-nonce\n11111111-1111-4111-8111-111111111111\n",
+        );
+      } finally {
+        await rm(work, { recursive: true, force: true });
+      }
+    },
+  );
   // Field observation 2026-07-28 (sfltool dumpbtm): with `/bin/sh` as
   // ProgramArguments[0], BTM recorded `Name: sh, Parent Identifier:
   // Unknown Developer` for every CLI-registered install, and
