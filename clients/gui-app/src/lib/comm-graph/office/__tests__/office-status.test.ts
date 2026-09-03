@@ -135,6 +135,25 @@ describe("officeAgentStatuses", () => {
     expect(statuses.get("alpha")).toBe("failure");
   });
 
+  it("leaves this moment's failure, attention and turn out of the past", () => {
+    // Nothing records what these three sources said at an earlier moment, so
+    // on a historical cursor they are not applied at all: a crash that
+    // happened this morning is not painted on every frame of last week. What
+    // the event prefix can answer (awaiting) still is.
+    const statuses = officeAgentStatuses({
+      agents: [ALPHA, BETA],
+      cursorMs: 20,
+      events: [event({ id: 1, timestamp: 10, expectReply: true })],
+      visibleAgentIds: BOTH_VISIBLE,
+      activityTiers: new Map<string, AgentActivityTier>([["beta", "turn"]]),
+      attentionAgentIds: new Set(["beta"]),
+      failureAgentIds: new Set(["beta"]),
+    });
+
+    expect(statuses.get("alpha")).toBe("awaiting");
+    expect(statuses.get("beta")).toBe("idle");
+  });
+
   it("has nothing to say about a failure on an agent off the floor", () => {
     const statuses = officeAgentStatuses({
       agents: [ALPHA, BETA],

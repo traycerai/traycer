@@ -1632,6 +1632,9 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
       camera.x = screenX - (screenX - camera.x) * ratio;
       camera.y = screenY - (screenY - camera.y) * ratio;
       camera.zoom = nextZoom;
+      // The camera is not part of what the idle skip watches - a still floor
+      // would keep the old framing painted under the new hit geometry.
+      runtime.invalidateFrame();
       persistView();
     },
     [persistView, runtime],
@@ -1650,6 +1653,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     runtime.getCamera().y = fitted.y;
     runtime.getCamera().zoom = fitted.zoom;
     fittedRef.current = { floor: size, viewport };
+    runtime.invalidateFrame();
     persistView();
   }, [persistView, readScene, runtime]);
 
@@ -2014,6 +2018,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
         }
         runtime.getCamera().x = drag.cameraX + dx;
         runtime.getCamera().y = drag.cameraY + dy;
+        runtime.invalidateFrame();
         return;
       }
       const point = toSpritePoint(event.clientX, event.clientY);

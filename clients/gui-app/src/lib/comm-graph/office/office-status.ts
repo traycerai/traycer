@@ -129,15 +129,28 @@ function statusFor(
   return "idle";
 }
 
-/** Statuses for the agents that exist as of the cursor; nobody else has one. */
+const NO_TIERS: ReadonlyMap<string, AgentActivityTier> = new Map();
+const NO_AGENT_IDS: ReadonlySet<string> = new Set();
+
+/**
+ * Statuses for the agents that exist as of the cursor; nobody else has one.
+ *
+ * The activity tiers, the attention set and the failure set are LIVE-ONLY
+ * sources: they describe this moment, and nothing records what they said at
+ * any earlier one. On a historical cursor they are left out entirely rather
+ * than applied to the past, or a crash that happened this morning would be
+ * painted on every frame of last week's replay. What survives a historical
+ * cursor is what the event prefix and the archive moment can answer.
+ */
 export function officeAgentStatuses(
   args: OfficeAgentStatusInput,
 ): ReadonlyMap<string, OfficeAgentStatus> {
+  const live = args.cursorMs === null;
   const sources: OfficeStatusSources = {
     awaiting: awaitingSenderIds(args.events, args.visibleAgentIds),
-    activityTiers: args.activityTiers,
-    attentionAgentIds: args.attentionAgentIds,
-    failureAgentIds: args.failureAgentIds,
+    activityTiers: live ? args.activityTiers : NO_TIERS,
+    attentionAgentIds: live ? args.attentionAgentIds : NO_AGENT_IDS,
+    failureAgentIds: live ? args.failureAgentIds : NO_AGENT_IDS,
   };
   const statuses = new Map<string, OfficeAgentStatus>();
   for (const agent of args.agents) {
