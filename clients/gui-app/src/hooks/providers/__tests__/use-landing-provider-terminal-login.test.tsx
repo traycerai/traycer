@@ -26,6 +26,7 @@ import {
   providerLoginTerminalProviderId,
   useProviderLoginTerminalsStore,
 } from "@/stores/providers/provider-login-terminals";
+import { useLandingPaneAnchorStore } from "@/components/home/terminal-panel/landing-pane-anchor-store";
 
 const LANDING_PAGE_ID = "draft-1";
 
@@ -72,6 +73,10 @@ describe("useLandingProviderStartTerminalLogin", () => {
     useLandingTerminalStore.getState().resetForTests();
     useProviderLoginTerminalsStore.setState(
       useProviderLoginTerminalsStore.getInitialState(),
+      true,
+    );
+    useLandingPaneAnchorStore.setState(
+      useLandingPaneAnchorStore.getInitialState(),
       true,
     );
     mocks.startTerminalLoginRequest.mockReset();
@@ -243,5 +248,75 @@ describe("useLandingProviderStartTerminalLogin", () => {
     expect(
       state.tabs.filter((tab) => tab.sessionId === "term-new"),
     ).toHaveLength(1);
+  });
+
+  it("opens the panel layout for the initiating landingPageId plus every start page with a mounted panel anchor", async () => {
+    const anchorA = document.createElement("div");
+    const anchorB = document.createElement("div");
+    useLandingPaneAnchorStore.getState().setAnchor("draft-a", anchorA);
+    useLandingPaneAnchorStore.getState().setAnchor("draft-b", anchorB);
+    mocks.startTerminalLoginRequest.mockResolvedValue({
+      sessionId: "term-new",
+      replacedSessionId: null,
+    });
+    const { wrapper } = makeWrapper();
+    const { result } = renderStarter(wrapper, null);
+
+    act(() => {
+      result.current.start("draft-a");
+    });
+    await waitFor(() => expect(result.current.isPending).toBe(false));
+
+    const state = useLandingTerminalStore.getState();
+    // Both anchored pages open - the initiating one directly, and the other
+    // because the retained hosted-page id (unreadable from outside) might be
+    // either one.
+    expect(landingTerminalLayoutFor(state, "draft-a").panelOpen).toBe(true);
+    expect(landingTerminalLayoutFor(state, "draft-b").panelOpen).toBe(true);
+  });
+
+  it("opens only the initiating page's layout when no panel anchors are registered", async () => {
+    mocks.startTerminalLoginRequest.mockResolvedValue({
+      sessionId: "term-new",
+      replacedSessionId: null,
+    });
+    const { wrapper } = makeWrapper();
+    const { result } = renderStarter(wrapper, null);
+
+    act(() => {
+      result.current.start(LANDING_PAGE_ID);
+    });
+    await waitFor(() => expect(result.current.isPending).toBe(false));
+
+    const state = useLandingTerminalStore.getState();
+    expect(landingTerminalLayoutFor(state, LANDING_PAGE_ID).panelOpen).toBe(
+      true,
+    );
+    // No crash, and no layout key opened beyond the initiating page - an
+    // empty anchor set contributes nothing to the union.
+    expect(Object.keys(state.layoutsByLandingPageId)).toEqual([
+      LANDING_PAGE_ID,
+    ]);
+  });
+
+  it("opens the initiating page's layout even when it has no panel anchor of its own", async () => {
+    const anchorB = document.createElement("div");
+    useLandingPaneAnchorStore.getState().setAnchor("draft-b", anchorB);
+    mocks.startTerminalLoginRequest.mockResolvedValue({
+      sessionId: "term-new",
+      replacedSessionId: null,
+    });
+    const { wrapper } = makeWrapper();
+    const { result } = renderStarter(wrapper, null);
+
+    act(() => {
+      // "draft-a" has no anchor registered - only "draft-b" does.
+      result.current.start("draft-a");
+    });
+    await waitFor(() => expect(result.current.isPending).toBe(false));
+
+    const state = useLandingTerminalStore.getState();
+    expect(landingTerminalLayoutFor(state, "draft-a").panelOpen).toBe(true);
+    expect(landingTerminalLayoutFor(state, "draft-b").panelOpen).toBe(true);
   });
 });

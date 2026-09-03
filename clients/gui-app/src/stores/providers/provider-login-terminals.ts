@@ -1,6 +1,9 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
+import {
+  providerIdSchema,
+  type ProviderId,
+} from "@traycer/protocol/host/provider-schemas";
 import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
 
 /**
@@ -50,6 +53,58 @@ function sessionKey(hostId: string, sessionId: string): string {
   return `${hostId}:${sessionId}`;
 }
 
+interface SharedProviderLoginRecords {
+  readonly providerBySessionKey: Readonly<
+    Record<string, ProviderId | undefined>
+  >;
+  readonly recentKeys: ReadonlyArray<string>;
+}
+
+const NO_SHARED_RECORDS: SharedProviderLoginRecords = {
+  providerBySessionKey: {},
+  recentKeys: [],
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * What the OTHER windows have written, read straight from storage.
+ *
+ * Everything is validated rather than trusted: this parses a value another
+ * process wrote, and a single bad entry must degrade to "no shared records"
+ * instead of throwing inside a `set`. Session ids are uuids, so a stale entry
+ * can never be re-matched - dropping an unparseable one costs nothing.
+ */
+function readSharedRecords(): SharedProviderLoginRecords {
+  if (typeof window === "undefined") return NO_SHARED_RECORDS;
+  let parsed: unknown;
+  try {
+    const raw = window.localStorage.getItem(
+      PROVIDER_LOGIN_TERMINALS_PERSIST_KEY,
+    );
+    if (raw === null) return NO_SHARED_RECORDS;
+    parsed = JSON.parse(raw);
+  } catch {
+    return NO_SHARED_RECORDS;
+  }
+  if (!isRecord(parsed) || !isRecord(parsed.state)) return NO_SHARED_RECORDS;
+  const rawProviders = parsed.state.providerBySessionKey;
+  const rawRecent = parsed.state.recentKeys;
+  const providerBySessionKey: Record<string, ProviderId> = {};
+  if (isRecord(rawProviders)) {
+    for (const [entry, value] of Object.entries(rawProviders)) {
+      const providerId = providerIdSchema.safeParse(value);
+      if (providerId.success) providerBySessionKey[entry] = providerId.data;
+    }
+  }
+  const recentKeys = Array.isArray(rawRecent)
+    ? rawRecent.filter((entry): entry is string => typeof entry === "string")
+    : [];
+  return { providerBySessionKey, recentKeys };
+}
+
 export const useProviderLoginTerminalsStore =
   create<ProviderLoginTerminalsState>()(
     persist(
@@ -58,19 +113,37 @@ export const useProviderLoginTerminalsStore =
         recentKeys: [],
         record: ({ hostId, sessionId, providerId }) =>
           set((state) => {
+            // Merged against what is ON DISK, not just this window's memory.
+            // Persist writes the whole map, so two windows completing sign-ins
+            // before either sees the other's `storage` event would have the
+            // second write drop the first session - and the listener below
+            // then rehydrates from that already-overwritten value, so the lost
+            // origin never comes back. The consequence is not cosmetic: an
+            // unclassified live session is one a tile recreates as a bare
+            // shell.
+            const shared = readSharedRecords();
             const key = sessionKey(hostId, sessionId);
+            // This window's own order first (it is the one that just acted),
+            // then the other window's, so the bound evicts the globally
+            // least-recently-seen rather than everything the peer knew.
             const recentKeys = [
               key,
               ...state.recentKeys.filter((entry) => entry !== key),
+              ...shared.recentKeys.filter(
+                (entry) => entry !== key && !state.recentKeys.includes(entry),
+              ),
             ].slice(0, MAX_TRACKED_SESSIONS);
             const kept = new Set(recentKeys);
             const providerBySessionKey: Record<string, ProviderId> = {
               [key]: providerId,
             };
-            for (const [entry, value] of Object.entries(
-              state.providerBySessionKey,
-            )) {
-              if (value !== undefined && kept.has(entry)) {
+            // Shared first so this window's own view wins a genuine conflict;
+            // the same session key can only ever carry one provider anyway.
+            for (const [entry, value] of [
+              ...Object.entries(shared.providerBySessionKey),
+              ...Object.entries(state.providerBySessionKey),
+            ]) {
+              if (value !== undefined && kept.has(entry) && entry !== key) {
                 providerBySessionKey[entry] = value;
               }
             }
