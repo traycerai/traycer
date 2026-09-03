@@ -192,6 +192,23 @@ export interface ManagedBrowserView {
   setVisible(visible: boolean): void;
 }
 
+/**
+ * Main-owned mint of a renderer `<webview>` guest.
+ * `onAttached` runs seed/CDP while the request gate is still up.
+ * The mint's `ready` Promise settles after that gate is disposed, or
+ * rejects on timeout/terminal drop. It is not a renderer payload.
+ */
+export interface BrowserViewGuestAttachRequest {
+  readonly partition: string;
+  readonly identity: BrowserViewNativeTabKey;
+  readonly onAttached: (guest: BrowserViewWebContents) => Promise<void>;
+}
+
+export interface BrowserViewGuestAttachResult {
+  readonly registrationId: string;
+  readonly ready: Promise<void>;
+}
+
 interface ManagedContentView {
   addChildView(view: ManagedBrowserView): void;
   removeChildView(view: ManagedBrowserView): void;

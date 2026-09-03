@@ -2,10 +2,15 @@ import { randomUUID } from "node:crypto";
 import type { BrowserViewNativeTabCapability } from "@traycer-clients/shared/platform/browser-view";
 import type { BrowserStorageState } from "@traycer/protocol/host/browser/contracts";
 import { describeLogError, log } from "../../app/logger";
-import type { BrowserSessionProfile } from "../browser-session";
+import {
+  partitionForProfile,
+  type BrowserSessionProfile,
+} from "../browser-session";
 import type {
   BrowserViewEnsureTab,
-  ManagedBrowserView,
+  BrowserViewGuestAttachRequest,
+  BrowserViewGuestAttachResult,
+  BrowserViewWebContents,
 } from "../browser-view-port";
 import { browserLocalStorageSeedScript } from "../storage/browser-storage-state";
 import type {
@@ -29,9 +34,21 @@ interface BrowserViewProvisioningOptions {
     identity: BrowserViewNativeIdentity,
     profile: BrowserSessionProfile,
   ) => BrowserViewEntry;
+  readonly createEntryFromWebContents: (
+    requestedUrl: string,
+    identity: BrowserViewNativeIdentity,
+    profile: BrowserSessionProfile,
+    webContents: BrowserViewWebContents,
+  ) => BrowserViewEntry;
+  readonly attachRendererGuest:
+    | ((
+        windowId: string,
+        request: BrowserViewGuestAttachRequest,
+      ) => BrowserViewGuestAttachResult)
+    | null;
   readonly seedStorageState: (
     input: BrowserViewEnsureTab,
-    webContents: ManagedBrowserView["webContents"],
+    webContents: BrowserViewWebContents,
   ) => Promise<BrowserStorageState | null>;
   readonly closeEntry: (entry: BrowserViewEntry) => Promise<void>;
   readonly navigate: (entry: BrowserViewEntry, url: string) => Promise<void>;
@@ -53,9 +70,21 @@ export class BrowserViewProvisioning {
     identity: BrowserViewNativeIdentity,
     profile: BrowserSessionProfile,
   ) => BrowserViewEntry;
+  private readonly createEntryFromWebContents: (
+    requestedUrl: string,
+    identity: BrowserViewNativeIdentity,
+    profile: BrowserSessionProfile,
+    webContents: BrowserViewWebContents,
+  ) => BrowserViewEntry;
+  private readonly attachRendererGuest:
+    | ((
+        windowId: string,
+        request: BrowserViewGuestAttachRequest,
+      ) => BrowserViewGuestAttachResult)
+    | null;
   private readonly seedStorageState: (
     input: BrowserViewEnsureTab,
-    webContents: ManagedBrowserView["webContents"],
+    webContents: BrowserViewWebContents,
   ) => Promise<BrowserStorageState | null>;
   private readonly closeEntry: (entry: BrowserViewEntry) => Promise<void>;
   private readonly navigate: (
@@ -69,6 +98,8 @@ export class BrowserViewProvisioning {
     this.windows = options.windows;
     this.debugSessions = options.debugSessions;
     this.createEntry = options.createEntry;
+    this.createEntryFromWebContents = options.createEntryFromWebContents;
+    this.attachRendererGuest = options.attachRendererGuest;
     this.seedStorageState = options.seedStorageState;
     this.closeEntry = options.closeEntry;
     this.navigate = options.navigate;
@@ -93,6 +124,10 @@ export class BrowserViewProvisioning {
 
     logEnsureStage(input, startedAt, "manager_started", "started", null);
     const lifecycle = new NativeBrowserViewLifecycle();
+    this.windows.ensureResetListener(windowId);
+    if (this.attachRendererGuest !== null) {
+      return this.ensureAttachedGuestTab(windowId, input, lifecycle, startedAt);
+    }
     const identity: BrowserViewNativeIdentity = {
       key: {
         hostId: input.hostId,
@@ -103,10 +138,101 @@ export class BrowserViewProvisioning {
       lifecycleWindowId: windowId,
       lifecycle,
     };
-    this.windows.ensureResetListener(windowId);
     const entry = this.createEntry(input.requestedUrl, identity, input.profile);
     logEnsureStage(input, startedAt, "entry_created", "ok", null);
     void this.settleNativeTabInitialization(entry, input, startedAt);
+    return lifecycle.provisioned;
+  }
+
+  private ensureAttachedGuestTab(
+    windowId: string,
+    input: BrowserViewEnsureTab,
+    lifecycle: NativeBrowserViewLifecycle,
+    startedAt: number,
+  ): Promise<BrowserViewNativeTabCapability> {
+    const attachRendererGuest = this.attachRendererGuest;
+    if (attachRendererGuest === null) {
+      throw new Error("Renderer guest attach seam is missing.");
+    }
+    const key = {
+      hostId: input.hostId,
+      sessionId: input.sessionId,
+      tabId: input.tabId,
+    };
+    let createdEntry: BrowserViewEntry | null = null;
+    let prepared: {
+      readonly provisioned: BrowserViewNativeTabCapability;
+      readonly seedScriptId: string | null;
+    } | null = null;
+    const mount = attachRendererGuest(windowId, {
+      partition: partitionForProfile(input.profile, input.sessionId),
+      identity: key,
+      onAttached: async (guest) => {
+        const identity: BrowserViewNativeIdentity = {
+          key,
+          registrationId: mount.registrationId,
+          lifecycleWindowId: windowId,
+          lifecycle,
+        };
+        const entry = this.createEntryFromWebContents(
+          input.requestedUrl,
+          identity,
+          input.profile,
+          guest,
+        );
+        createdEntry = entry;
+        logEnsureStage(input, startedAt, "entry_created", "ok", null);
+        try {
+          prepared = await this.initializeNativeTab(entry, input, startedAt);
+        } catch (error) {
+          logEnsureStage(
+            input,
+            startedAt,
+            "manager_settled",
+            "failed",
+            error instanceof Error ? error.name : typeof error,
+          );
+          try {
+            await this.closeEntry(entry);
+          } catch (cleanupError) {
+            log.warn("[browser-view] native tab cleanup failed", {
+              error: describeLogError(cleanupError),
+              guestKey: entry.guestKey,
+            });
+          }
+          throw error;
+        }
+      },
+    });
+    void mount.ready.then(
+      () => {
+        if (prepared === null) {
+          lifecycle.failProvisioning(
+            new Error("webview guest attached without a provisioned entry"),
+          );
+          return;
+        }
+        lifecycle.completeProvisioning(
+          prepared.provisioned,
+          prepared.seedScriptId,
+        );
+      },
+      (error: unknown) => {
+        const pending = createdEntry;
+        const cleanup =
+          pending === null
+            ? Promise.resolve()
+            : this.closeEntry(pending).catch((cleanupError: unknown) => {
+                log.warn("[browser-view] native tab cleanup failed", {
+                  error: describeLogError(cleanupError),
+                  guestKey: pending.guestKey,
+                });
+              });
+        return cleanup.then(() => {
+          lifecycle.failProvisioning(error);
+        });
+      },
+    );
     return lifecycle.provisioned;
   }
 
@@ -179,7 +305,15 @@ export class BrowserViewProvisioning {
     startedAt: number,
   ): Promise<void> {
     try {
-      await this.initializeNativeTab(entry, input, startedAt);
+      const initialized = await this.initializeNativeTab(
+        entry,
+        input,
+        startedAt,
+      );
+      entry.identity.lifecycle.completeProvisioning(
+        initialized.provisioned,
+        initialized.seedScriptId,
+      );
     } catch (error) {
       logEnsureStage(
         input,
@@ -206,11 +340,14 @@ export class BrowserViewProvisioning {
     entry: BrowserViewEntry,
     input: BrowserViewEnsureTab,
     startedAt: number,
-  ): Promise<BrowserViewNativeTabCapability> {
+  ): Promise<{
+    readonly provisioned: BrowserViewNativeTabCapability;
+    readonly seedScriptId: string | null;
+  }> {
     // The script is built from what the seed path RETURNED, never from the
     // host's raw frame: the localStorage half is narrowed to the tab's own
     // site there, and refused outright when the cookie half was refused.
-    const seeded = await this.seedStorageState(input, entry.view.webContents);
+    const seeded = await this.seedStorageState(input, entry.webContents);
     const seedScript = browserLocalStorageSeedScript(seeded);
     await this.activateNativeTabTarget(entry, input, startedAt);
     const debugSession = this.debugSessions.ensure(entry);
@@ -221,8 +358,7 @@ export class BrowserViewProvisioning {
     await debugSession.enableAfterCommit();
     const provisioned = this.resolveNativeTabProvisioned(entry);
     logEnsureStage(input, startedAt, "manager_settled", "ok", null);
-    entry.identity.lifecycle.completeProvisioning(provisioned, seedScriptId);
-    return provisioned;
+    return { provisioned, seedScriptId };
   }
 
   private async activateNativeTabTarget(
@@ -236,9 +372,9 @@ export class BrowserViewProvisioning {
     // is deliberately suppressed from browser-session state and history.
     entry.internalNavigation = true;
     try {
-      await entry.view.webContents.loadURL("about:blank");
+      await entry.webContents.loadURL("about:blank");
     } finally {
-      entry.view.webContents.navigationHistory?.clear();
+      entry.webContents.navigationHistory?.clear();
       entry.internalNavigation = false;
     }
     logEnsureStage(input, startedAt, "target_activated", "ok", null);
@@ -268,7 +404,7 @@ export function isNativeTabAvailable(
   return (
     entries.isCurrent(entry) &&
     entry.status !== "dead" &&
-    !entry.view.webContents.isDestroyed()
+    !entry.webContents.isDestroyed()
   );
 }
 

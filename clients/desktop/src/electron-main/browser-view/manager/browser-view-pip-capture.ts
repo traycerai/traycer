@@ -148,7 +148,7 @@ export class BrowserViewPipCapture {
       };
       this.geometry.applyBounds(entry);
     }
-    entry.view.webContents.setBackgroundThrottling(false);
+    entry.webContents.setBackgroundThrottling(false);
     this.geometry.applyVisibility(entry);
     const captureOffscreen = entry.visible !== true;
     if (captureOffscreen) this.geometry.parkOffscreen(entry);

@@ -77,6 +77,10 @@ export class BrowserViewWindowAttachment {
     if (entry.parentWindowId === surface.windowId && targetWindow !== null) {
       return;
     }
+    if (entry.view === null) {
+      entry.parentWindowId = targetWindow === null ? null : surface.windowId;
+      return;
+    }
     if (currentWindow !== null) {
       currentWindow.contentView.removeChildView(entry.view);
     }
@@ -93,7 +97,9 @@ export class BrowserViewWindowAttachment {
   attachUnbound(entry: BrowserViewEntry, windowId: string): boolean {
     const window = this.getWindow(windowId);
     if (window === null || window.isDestroyed()) return false;
-    window.contentView.addChildView(entry.view);
+    if (entry.view !== null) {
+      window.contentView.addChildView(entry.view);
+    }
     entry.parentWindowId = windowId;
     return true;
   }
@@ -103,7 +109,7 @@ export class BrowserViewWindowAttachment {
       entry.parentWindowId === null
         ? null
         : this.getWindow(entry.parentWindowId);
-    if (window !== null && !window.isDestroyed()) {
+    if (window !== null && !window.isDestroyed() && entry.view !== null) {
       window.contentView.removeChildView(entry.view);
     }
     entry.parentWindowId = null;

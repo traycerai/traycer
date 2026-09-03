@@ -12,6 +12,7 @@ import type { BrowserDebugSession } from "../debug/browser-debug-session";
 import type { BrowserViewEntryKey } from "./browser-view-entry-registry";
 import type {
   BrowserViewDevToolsWindow,
+  BrowserViewWebContents,
   ManagedBrowserView,
 } from "../browser-view-port";
 import type { NativeBrowserViewLifecycle } from "./native-browser-view-lifecycle";
@@ -47,7 +48,16 @@ export interface BrowserViewEntry {
    * by then the host frame that named the profile is long gone.
    */
   readonly profile: BrowserSessionProfile;
-  readonly view: ManagedBrowserView;
+  /**
+   * The guest itself. Capability code talks only to this; native presentation
+   * (`view`) is optional until cutover deletes `WebContentsView`.
+   */
+  readonly webContents: BrowserViewWebContents;
+  /**
+   * Native `WebContentsView` presentation, or `null` for a renderer `<webview>`
+   * guest. Bounds, visibility, and window parenting stay on this object.
+   */
+  readonly view: ManagedBrowserView | null;
   readonly listeners: BrowserViewListenerMap;
   parentWindowId: string | null;
   desiredVisible: boolean;

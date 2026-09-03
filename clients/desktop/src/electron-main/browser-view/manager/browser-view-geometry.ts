@@ -153,6 +153,7 @@ export class BrowserViewGeometry {
       entry.lastAppliedBounds === null
         ? null
         : boundsMaxComponentDelta(entry.lastAppliedBounds, bounds);
+    if (entry.view === null) return;
     entry.view.setBounds(bounds);
     entry.lastAppliedBounds = bounds;
     this.logZoomedApply(entry, bounds);
@@ -183,6 +184,7 @@ export class BrowserViewGeometry {
    */
   parkOffscreen(entry: BrowserViewEntry): boolean {
     const effective = applicableWindowBounds(entry, this.getZoomFactor());
+    if (entry.view === null) return false;
     if (effective === null || effective.width <= 0 || effective.height <= 0) {
       entry.view.setVisible(false);
       return false;
@@ -210,7 +212,7 @@ export class BrowserViewGeometry {
    * alone, so the compositor posture of a tile has exactly one owner.
    */
   hide(entry: BrowserViewEntry): void {
-    entry.view.setVisible(false);
+    entry.view?.setVisible(false);
   }
 
   applyVisibility(entry: BrowserViewEntry): void {
@@ -218,7 +220,7 @@ export class BrowserViewGeometry {
     if (surface === null) {
       entry.visible = false;
       entry.lastLoggedVisible = false;
-      entry.view.setVisible(false);
+      entry.view?.setVisible(false);
       return;
     }
     const window = this.getWindow(surface.windowId);
@@ -254,7 +256,7 @@ export class BrowserViewGeometry {
       });
       entry.lastLoggedVisible = visible;
     }
-    entry.view.setVisible(visible);
+    entry.view?.setVisible(visible);
     this.syncTileFrameFeed(entry, liveness);
   }
 
@@ -284,12 +286,12 @@ export class BrowserViewGeometry {
     }
     this.tileFrames.attach(keyId, {
       beginFrameSubscription: (callback) => {
-        entry.view.webContents.beginFrameSubscription((image) => {
+        entry.webContents.beginFrameSubscription((image) => {
           callback(image);
         });
       },
       endFrameSubscription: () => {
-        entry.view.webContents.endFrameSubscription();
+        entry.webContents.endFrameSubscription();
       },
     });
   }
@@ -398,7 +400,7 @@ export function entryLiveness(
       windowBounds.height > 0,
     loaded: entry.status !== "loading",
     notDead: entry.status !== "dead",
-    guestAlive: !entry.view.webContents.isDestroyed(),
+    guestAlive: !entry.webContents.isDestroyed(),
     windowAlive,
     windowOnScreen:
       window !== null &&

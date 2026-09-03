@@ -163,6 +163,7 @@ function makeEntry(
       lifecycle: new NativeBrowserViewLifecycle(),
     },
     profile: "primary" satisfies BrowserSessionProfile,
+    webContents: view.webContents,
     view,
     listeners: {},
     parentWindowId: WINDOW_ID,
@@ -196,6 +197,14 @@ function makeEntry(
     internalNavigation: false,
     closePromise: null,
   };
+}
+
+function nativeView(entry: BrowserViewEntry): ManagedBrowserView {
+  const view = entry.view;
+  if (view === null) {
+    throw new Error("expected native view");
+  }
+  return view;
 }
 
 describe("BrowserViewOverlay swap-source (invariant 6)", () => {
@@ -404,8 +413,8 @@ describe("BrowserViewOverlay restore handshake (invariant 4)", () => {
     deferred.resolve("captured");
     await occludePromise;
 
-    const setBoundsCallsBefore = vi.mocked(entry.view.setBounds).mock.calls
-      .length;
+    const view = nativeView(entry);
+    const setBoundsCallsBefore = vi.mocked(view.setBounds).mock.calls.length;
 
     const result = overlay.release({ overlayId: "overlay-1" });
 
@@ -414,10 +423,10 @@ describe("BrowserViewOverlay restore handshake (invariant 4)", () => {
     // registered - the ordering invariant 4 requires directly, not just
     // observed at the endpoints.
     expect(entry.overlayParked).toBe(false);
-    expect(vi.mocked(entry.view.setBounds).mock.calls.length).toBeGreaterThan(
+    expect(vi.mocked(view.setBounds).mock.calls.length).toBeGreaterThan(
       setBoundsCallsBefore,
     );
-    expect(vi.mocked(entry.view.setVisible)).toHaveBeenCalledWith(true);
+    expect(vi.mocked(view.setVisible)).toHaveBeenCalledWith(true);
     // Step two has not happened yet: the tile was parked, so it cannot
     // answer through the synchronous return value, and no restored event
     // has fired either.
@@ -427,7 +436,7 @@ describe("BrowserViewOverlay restore handshake (invariant 4)", () => {
     // Drive the exact subscription BT-201's `TileFrameCache` attached during
     // step one - no second frame source.
     const onFrame = vi
-      .mocked(entry.view.webContents.beginFrameSubscription)
+      .mocked(view.webContents.beginFrameSubscription)
       .mock.calls.at(-1)?.[0];
     if (onFrame === undefined)
       throw new Error("no frame subscription attached");
@@ -501,16 +510,17 @@ describe("BrowserViewOverlay restore handshake (invariant 4)", () => {
 
     // A rect streams in mid-window; `applyBounds`'s restore-token guard must
     // swallow it (no new `setBounds` call yet).
-    const setBoundsCallsBeforeStream = vi.mocked(entry.view.setBounds).mock
-      .calls.length;
+    const view = nativeView(entry);
+    const setBoundsCallsBeforeStream = vi.mocked(view.setBounds).mock.calls
+      .length;
     entry.bounds = { x: 0, y: 0, width: 400, height: 300 };
     geometry.applyBounds(entry);
-    expect(vi.mocked(entry.view.setBounds).mock.calls.length).toBe(
+    expect(vi.mocked(view.setBounds).mock.calls.length).toBe(
       setBoundsCallsBeforeStream,
     );
 
     const onFrame = vi
-      .mocked(entry.view.webContents.beginFrameSubscription)
+      .mocked(view.webContents.beginFrameSubscription)
       .mock.calls.at(-1)?.[0];
     if (onFrame === undefined)
       throw new Error("no frame subscription attached");
@@ -518,9 +528,7 @@ describe("BrowserViewOverlay restore handshake (invariant 4)", () => {
     await vi.runAllTimersAsync();
 
     // The swallowed rect is replayed BEFORE the restored event is sent.
-    const lastSetBounds = vi
-      .mocked(entry.view.setBounds)
-      .mock.calls.at(-1)?.[0];
+    const lastSetBounds = vi.mocked(view.setBounds).mock.calls.at(-1)?.[0];
     expect(lastSetBounds).toMatchObject({ width: 400, height: 300 });
     expect(sendCalls).toEqual([
       [WINDOW_ID, RunnerHostEvent.browserViewOverlayRestored, TILE],
@@ -541,7 +549,7 @@ describe("BrowserViewOverlay restore handshake (invariant 4)", () => {
 
     const { capturePage: capturePage2, deferred: deferred2 } =
       deferredCapture();
-    entry.view.webContents.capturePage = capturePage2;
+    nativeView(entry).webContents.capturePage = capturePage2;
     const reoccludePromise = overlay.occlude(WINDOW_ID, {
       overlayId: "overlay-2",
       tiles: [TILE],
@@ -553,7 +561,7 @@ describe("BrowserViewOverlay restore handshake (invariant 4)", () => {
     // The stale wait's own resolution (its frame subscription firing) must
     // not fire the restored event for the wait re-occlusion superseded.
     const onFrame = vi
-      .mocked(entry.view.webContents.beginFrameSubscription)
+      .mocked(nativeView(entry).webContents.beginFrameSubscription)
       .mock.calls.at(-1)?.[0];
     if (onFrame === undefined)
       throw new Error("no frame subscription attached");
@@ -585,7 +593,7 @@ describe("BrowserViewOverlay restore handshake (invariant 4)", () => {
 
     // The cancelled wait's own resolution must not send a second time.
     const onFrame = vi
-      .mocked(entry.view.webContents.beginFrameSubscription)
+      .mocked(nativeView(entry).webContents.beginFrameSubscription)
       .mock.calls.at(-1)?.[0];
     if (onFrame !== undefined) {
       onFrame(FRAME_IMAGE);

@@ -14,6 +14,7 @@ import { log } from "../app/logger";
 import {
   ensureBrowserViewSessionForPartition,
   gateBrowserViewGuestRequests,
+  registerBrowserViewWebContents,
 } from "./browser-session";
 
 /**
@@ -43,6 +44,7 @@ interface GuestBirth {
   readonly onExpired:
     | ((release: BrowserViewGuestReleaseRequested) => void)
     | null;
+  readonly settlement: PromiseWithResolvers<void>;
   embedderId: number | null;
   guest: WebContents | null;
   handedOff: boolean;
@@ -60,14 +62,17 @@ const births = new Map<string, GuestBirth>();
 const awaitingCreateByEmbedderId = new Map<number, string>();
 let watchingGuestCreation = false;
 
-export function mintAttachmentGrant(
-  input: MintAttachmentGrantInput,
-): BrowserViewGuestMountRequested {
+export function mintAttachmentGrant(input: MintAttachmentGrantInput): {
+  readonly mount: BrowserViewGuestMountRequested;
+  readonly ready: Promise<void>;
+} {
   ensureBrowserViewSessionForPartition(input.partition);
   const registrationId = randomUUID();
   const timeout = setTimeout(() => {
     expireBirth(registrationId);
   }, ATTACHMENT_GRANT_TTL_MS);
+  const settlement = Promise.withResolvers<void>();
+  void settlement.promise.catch(() => undefined);
   births.set(registrationId, {
     registrationId,
     windowId: input.windowId,
@@ -75,6 +80,7 @@ export function mintAttachmentGrant(
     timeout,
     onAttached: input.onAttached,
     onExpired: input.onExpired,
+    settlement,
     embedderId: null,
     guest: null,
     handedOff: false,
@@ -82,11 +88,14 @@ export function mintAttachmentGrant(
     disposeGate: null,
   });
   return {
-    registrationId,
-    partition: input.partition,
-    hostId: input.identity.hostId,
-    sessionId: input.identity.sessionId,
-    tabId: input.identity.tabId,
+    mount: {
+      registrationId,
+      partition: input.partition,
+      hostId: input.identity.hostId,
+      sessionId: input.identity.sessionId,
+      tabId: input.identity.tabId,
+    },
+    ready: settlement.promise,
   };
 }
 
@@ -241,6 +250,7 @@ function handleDidAttach(host: WebContents, guest: WebContents): void {
     return;
   }
   birth.handedOff = true;
+  registerBrowserViewWebContents(guest);
   try {
     birth.onAttached(guest).then(
       () => {
@@ -260,6 +270,7 @@ function finishReady(birth: GuestBirth): void {
   birth.ready = true;
   clearTimeout(birth.timeout);
   disposeGate(birth);
+  birth.settlement.resolve();
 }
 
 function hardenGuestPreferences(
@@ -298,6 +309,7 @@ function dropBirth(registrationId: string): void {
   births.delete(registrationId);
   clearTimeout(birth.timeout);
   disposeGate(birth);
+  birth.settlement.reject(new Error("webview guest birth failed"));
   if (
     birth.embedderId !== null &&
     awaitingCreateByEmbedderId.get(birth.embedderId) === registrationId

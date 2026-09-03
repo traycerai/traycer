@@ -1256,8 +1256,11 @@ export function requestRendererGuestMount(
     readonly identity: BrowserViewNativeTabKey;
     readonly onAttached: (guest: WebContents) => Promise<void>;
   },
-): BrowserViewGuestMountRequested {
-  const mount = mintAttachmentGrant({
+): {
+  readonly mount: BrowserViewGuestMountRequested;
+  readonly ready: Promise<void>;
+} {
+  const granted = mintAttachmentGrant({
     windowId,
     partition: input.partition,
     identity: input.identity,
@@ -1273,9 +1276,9 @@ export function requestRendererGuestMount(
   bridge.safeSendToWindow(
     windowId,
     RunnerHostEvent.browserViewGuestMountRequested,
-    mount,
+    granted.mount,
   );
-  return mount;
+  return granted;
 }
 
 export function requestRendererGuestRelease(

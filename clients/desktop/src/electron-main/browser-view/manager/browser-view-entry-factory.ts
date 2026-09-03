@@ -4,6 +4,7 @@ import { log } from "../../app/logger";
 import { guestNavigationGuards } from "../browser-guest-navigation";
 import type {
   BrowserViewPopupWindow,
+  BrowserViewWebContents,
   ManagedBrowserView,
 } from "../browser-view-port";
 import type {
@@ -40,7 +41,7 @@ interface BrowserViewEntryFactoryOptions {
   readonly debugSessions: BrowserViewDebugSessions;
   readonly observePrimaryProfileOrigin: (
     url: string,
-    webContents: ManagedBrowserView["webContents"],
+    webContents: BrowserViewWebContents,
     profile: BrowserSessionProfile,
   ) => void;
   readonly setStatus: (
@@ -72,7 +73,7 @@ export class BrowserViewEntryFactory {
   private readonly debugSessions: BrowserViewDebugSessions;
   private readonly observePrimaryProfileOrigin: (
     url: string,
-    webContents: ManagedBrowserView["webContents"],
+    webContents: BrowserViewWebContents,
     profile: BrowserSessionProfile,
   ) => void;
   private readonly setStatus: (
@@ -110,12 +111,38 @@ export class BrowserViewEntryFactory {
       profile,
       sessionId: identity.key.sessionId,
     });
+    return this.bindGuest(
+      requestedUrl,
+      identity,
+      profile,
+      view.webContents,
+      view,
+    );
+  }
+
+  createFromWebContents(
+    requestedUrl: string,
+    identity: BrowserViewNativeIdentity,
+    profile: BrowserSessionProfile,
+    webContents: BrowserViewWebContents,
+  ): BrowserViewEntry {
+    return this.bindGuest(requestedUrl, identity, profile, webContents, null);
+  }
+
+  private bindGuest(
+    requestedUrl: string,
+    identity: BrowserViewNativeIdentity,
+    profile: BrowserSessionProfile,
+    webContents: BrowserViewWebContents,
+    view: ManagedBrowserView | null,
+  ): BrowserViewEntry {
     const entry: BrowserViewEntry = {
       surface: null,
       surfaceBindingId: null,
       guestKey: nativeGuestKey(identity.key),
       identity,
       profile,
+      webContents,
       view,
       listeners: {
         "before-input-event": (event: Event, input: Input): void => {
@@ -160,7 +187,7 @@ export class BrowserViewEntryFactory {
         },
         "page-title-updated": (): void => {
           if (entry.internalNavigation) return;
-          entry.currentTitle = entry.view.webContents.getTitle();
+          entry.currentTitle = entry.webContents.getTitle();
           this.overlay.invalidateSnapshot(entry, "page-title-updated");
           this.emitStatus(entry);
         },
@@ -172,6 +199,9 @@ export class BrowserViewEntryFactory {
           details: RenderProcessGoneDetails,
         ): void => {
           this.handleRenderProcessGone(entry, details.reason);
+        },
+        destroyed: (): void => {
+          this.closeEntry(entry);
         },
       },
       parentWindowId: null,
@@ -205,7 +235,6 @@ export class BrowserViewEntryFactory {
       closePromise: null,
       internalNavigation: false,
     };
-    const webContents = view.webContents;
     webContents.setWindowOpenHandler((details) =>
       this.popups.handleWindowOpen(entry, details),
     );
@@ -236,12 +265,8 @@ export class BrowserViewEntryFactory {
     if (entry.internalNavigation) return;
     entry.currentUrl = url;
     entry.requestedUrl = url;
-    entry.currentTitle = entry.view.webContents.getTitle();
-    this.observePrimaryProfileOrigin(
-      url,
-      entry.view.webContents,
-      entry.profile,
-    );
+    entry.currentTitle = entry.webContents.getTitle();
+    this.observePrimaryProfileOrigin(url, entry.webContents, entry.profile);
     entry.certificateError = null;
     this.overlay.invalidateSnapshot(entry, "navigation-committed");
     this.setStatus(entry, "ready", null);
@@ -261,12 +286,8 @@ export class BrowserViewEntryFactory {
     if (!isMainFrame) return;
     entry.currentUrl = url;
     entry.requestedUrl = url;
-    entry.currentTitle = entry.view.webContents.getTitle();
-    this.observePrimaryProfileOrigin(
-      url,
-      entry.view.webContents,
-      entry.profile,
-    );
+    entry.currentTitle = entry.webContents.getTitle();
+    this.observePrimaryProfileOrigin(url, entry.webContents, entry.profile);
     this.annotations.end(entry, "navigation");
     this.overlay.invalidateSnapshot(entry, "in-page-navigation");
     this.emitStatus(entry);
@@ -325,7 +346,7 @@ export function applyEntryZoom(
   factor: number,
 ): boolean {
   if (entry.annotationSession?.zoomLocked() === true) return false;
-  entry.view.webContents.setZoomFactor(factor);
+  entry.webContents.setZoomFactor(factor);
   return true;
 }
 
@@ -333,7 +354,7 @@ export function steppedEntryZoom(
   entry: BrowserViewEntry,
   direction: 1 | -1,
 ): number {
-  const current = entry.view.webContents.getZoomFactor();
+  const current = entry.webContents.getZoomFactor();
   if (direction === 1) {
     return (
       BROWSER_ZOOM_FACTORS.find((factor) => factor > current + 0.001) ??

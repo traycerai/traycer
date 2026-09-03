@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { log } from "../../app/logger";
@@ -7,6 +8,8 @@ import type {
   BrowserViewCapturedImage,
   BrowserViewFrameImage,
   BrowserViewDebugger,
+  BrowserViewGuestAttachRequest,
+  BrowserViewGuestAttachResult,
   BrowserViewPopupWebContents,
   BrowserViewWebContents,
   BrowserViewWindow,
@@ -17,6 +20,7 @@ import type {
   BrowserViewDownloadChange,
   BrowserViewFindChange,
   BrowserViewNativeTabCapability,
+  BrowserViewNativeTabKey,
   BrowserViewOpenTileRequest,
   BrowserViewNativeTabStatusChange,
   BrowserViewSnapshotInvalidatedChange,
@@ -631,10 +635,22 @@ class FakeDevToolsWindow {
   }
 }
 
+interface GuestAttachMint {
+  readonly windowId: string;
+  readonly registrationId: string;
+  readonly partition: string;
+  readonly identity: BrowserViewNativeTabKey;
+  readonly requestKeys: readonly string[];
+}
+
 interface Harness {
   readonly manager: BrowserViewManager;
   readonly windows: Map<string, FakeWindow>;
   readonly views: FakeBrowserView[];
+  readonly guests: FakeBrowserView[];
+  readonly attachMints: GuestAttachMint[];
+  readonly releasedRendererGuests: string[];
+  readonly seededWebContents: BrowserViewWebContents[];
   readonly nativeTabStatuses: BrowserViewNativeTabStatusChange[];
   readonly nativeTabStatusWindowIds: string[];
   readonly finds: BrowserViewFindChange[];
@@ -654,12 +670,30 @@ interface Harness {
   emitWindowChange(): void;
   /** Re-zooms the app windows, as `WindowZoomController` does. */
   setZoomFactor(factor: number): void;
+  /** Hold `onAttached` until the test resolves the latch. */
+  holdNextGuestAttach(): PromiseWithResolvers<void>;
+  /** Hold `seedStorageState` until the test resolves the latch. */
+  holdNextGuestSeed(): PromiseWithResolvers<void>;
+  /** Reject `ready` without invoking `onAttached`. */
+  rejectNextGuestReady(error: Error): void;
+  /** Reject the in-flight mint `ready` while `onAttached` may still be pending. */
+  rejectPendingGuestReady(error: Error): void;
 }
 
 type HarnessOptions = {
   readonly boundsStreamLogIntervalMs?: number;
   readonly hostPlatform?: "darwin" | "other";
   readonly requireLoadedTargetForPageCommands?: boolean;
+  /**
+   * When set, `ensureTab` mints a renderer guest (`attachRendererGuest`)
+   * instead of allocating a `WebContentsView`. `createView` throws.
+   */
+  readonly guestBirth?: boolean;
+  /**
+   * Construct with only one of the guest seams so the constructor pair
+   * check can go red.
+   */
+  readonly pairMismatch?: "attach" | "release";
 };
 
 /**
@@ -707,6 +741,10 @@ function createHarnessWithOptions(
     ["window-2", new FakeWindow()],
   ]);
   const views: FakeBrowserView[] = [];
+  const guests: FakeBrowserView[] = [];
+  const attachMints: GuestAttachMint[] = [];
+  const releasedRendererGuests: string[] = [];
+  const seededWebContents: BrowserViewWebContents[] = [];
   const nativeTabStatuses: BrowserViewNativeTabStatusChange[] = [];
   const nativeTabStatusWindowIds: string[] = [];
   const finds: BrowserViewFindChange[] = [];
@@ -731,8 +769,85 @@ function createHarnessWithOptions(
     (change: BrowserSessionCertificateErrorChange) => void
   >();
   let nextWebContentsId = 1;
+  const guestBirth = harnessOptions?.guestBirth === true;
+  const pairMismatch = harnessOptions?.pairMismatch;
+  const guestByRegistrationId = new Map<string, FakeBrowserView>();
+  let pendingAttachHold: Promise<void> | null = null;
+  let pendingSeedHold: Promise<void> | null = null;
+  let pendingReadyReject: Error | null = null;
+  let currentReadySettlement: PromiseWithResolvers<void> | null = null;
+  const attachRendererGuest = (
+    windowId: string,
+    request: BrowserViewGuestAttachRequest,
+  ): BrowserViewGuestAttachResult => {
+    const registrationId = randomUUID();
+    attachMints.push({
+      windowId,
+      registrationId,
+      partition: request.partition,
+      identity: request.identity,
+      requestKeys: Object.keys(request).sort(),
+    });
+    if (pendingReadyReject !== null) {
+      const error = pendingReadyReject;
+      pendingReadyReject = null;
+      const ready = Promise.reject(error);
+      void ready.catch(() => undefined);
+      return { registrationId, ready };
+    }
+    const guest = new FakeBrowserView(
+      nextWebContentsId,
+      harnessOptions?.requireLoadedTargetForPageCommands ?? false,
+    );
+    nextWebContentsId += 1;
+    guests.push(guest);
+    guestByRegistrationId.set(registrationId, guest);
+    const readySettlement = Promise.withResolvers<void>();
+    currentReadySettlement = readySettlement;
+    void readySettlement.promise.catch(() => undefined);
+    // Production `onAttached` reads `mount.registrationId` after mint
+    // returns. A synchronous callback would throw on the TDZ.
+    // `ready` is an independent settlement: TTL/drop can reject it while
+    // `onAttached` is still pending (`attached.then()` cannot).
+    queueMicrotask(() => {
+      void (async () => {
+        const hold = pendingAttachHold;
+        pendingAttachHold = null;
+        if (hold !== null) await hold;
+        await request.onAttached(guest.webContents);
+      })().then(
+        () => {
+          readySettlement.resolve();
+        },
+        (error: unknown) => {
+          readySettlement.reject(error);
+        },
+      );
+    });
+    return { registrationId, ready: readySettlement.promise };
+  };
+  const releaseRendererGuest = (registrationId: string): void => {
+    releasedRendererGuests.push(registrationId);
+    const guest = guestByRegistrationId.get(registrationId);
+    if (guest !== undefined && !guest.webContents.isDestroyed()) {
+      guest.webContents.close();
+    }
+  };
+  const guestSeams =
+    pairMismatch === "attach"
+      ? { attachRendererGuest }
+      : pairMismatch === "release"
+        ? { releaseRendererGuest }
+        : guestBirth
+          ? { attachRendererGuest, releaseRendererGuest }
+          : {};
   const options: BrowserViewManagerOptions = {
     createView: (request) => {
+      if (guestBirth) {
+        throw new Error(
+          "createView must not mint a WebContentsView for a renderer guest",
+        );
+      }
       viewProfileRequests.push(request);
       const view = new FakeBrowserView(
         nextWebContentsId,
@@ -742,6 +857,7 @@ function createHarnessWithOptions(
       views.push(view);
       return view;
     },
+    ...guestSeams,
     getWindow: (windowId) => windows.get(windowId) ?? null,
     getZoomFactor: () => zoomFactor,
     onZoomChange: (listener) => {
@@ -813,7 +929,13 @@ function createHarnessWithOptions(
     },
     // The real one validates and narrows; this harness is about the manager,
     // so it echoes what it was handed - the narrowing has its own suite.
-    seedStorageState: (input) => Promise.resolve(input.seedStorageState),
+    seedStorageState: async (input, webContents) => {
+      seededWebContents.push(webContents);
+      const hold = pendingSeedHold;
+      pendingSeedHold = null;
+      if (hold !== null) await hold;
+      return input.seedStorageState;
+    },
     observePrimaryProfileOrigin: (url, _webContents, profile) => {
       if (profile !== "primary") return;
       primaryProfileObservedUrls.push(url);
@@ -831,6 +953,10 @@ function createHarnessWithOptions(
     manager,
     windows,
     views,
+    guests,
+    attachMints,
+    releasedRendererGuests,
+    seededWebContents,
     nativeTabStatuses,
     nativeTabStatusWindowIds,
     finds,
@@ -857,6 +983,25 @@ function createHarnessWithOptions(
     setZoomFactor: (factor) => {
       zoomFactor = factor;
       for (const listener of zoomListeners) listener();
+    },
+    holdNextGuestAttach: () => {
+      const latch = Promise.withResolvers<void>();
+      pendingAttachHold = latch.promise;
+      return latch;
+    },
+    holdNextGuestSeed: () => {
+      const latch = Promise.withResolvers<void>();
+      pendingSeedHold = latch.promise;
+      return latch;
+    },
+    rejectNextGuestReady: (error) => {
+      pendingReadyReject = error;
+    },
+    rejectPendingGuestReady: (error) => {
+      if (currentReadySettlement === null) {
+        throw new Error("no in-flight guest ready settlement");
+      }
+      currentReadySettlement.reject(error);
     },
   };
 }
@@ -3406,5 +3551,469 @@ describe("BrowserViewManager in-page window.open (Decision #22)", () => {
       popupOpenTileListeners,
     );
     expect(popup.webContents.windowOpenHandler).toBe(popupHandler);
+  });
+});
+
+function createGuestHarness(
+  harnessOptions: Omit<HarnessOptions, "guestBirth"> | undefined,
+): Harness {
+  return createHarnessWithOptions({
+    ...harnessOptions,
+    guestBirth: true,
+  });
+}
+
+function requireGuest(harness: Harness): FakeBrowserView {
+  const guest = harness.guests.at(-1);
+  if (guest === undefined) throw new Error("expected renderer guest");
+  return guest;
+}
+
+function expectNoNativeView(harness: Harness): void {
+  expect(harness.views).toEqual([]);
+  expect(harness.windows.get("window-1")?.contentView.children).toEqual([]);
+  expect(harness.windows.get("window-2")?.contentView.children).toEqual([]);
+}
+
+describe("BrowserViewManager renderer guest seams", () => {
+  it("throws unless attachRendererGuest and releaseRendererGuest are paired", () => {
+    const message =
+      "attachRendererGuest and releaseRendererGuest must both be set or both omitted";
+    expect(() => createHarnessWithOptions({ pairMismatch: "attach" })).toThrow(
+      message,
+    );
+    expect(() => createHarnessWithOptions({ pairMismatch: "release" })).toThrow(
+      message,
+    );
+  });
+});
+
+describe("BrowserViewManager renderer guest capability", () => {
+  const nativeKey = {
+    hostId: "host-1",
+    sessionId: "session-1",
+    tabId: "tab-1",
+  } as const;
+
+  it("provisions, accepts, and navigates a guest without allocating a view", async () => {
+    const harness = createGuestHarness({
+      requireLoadedTargetForPageCommands: true,
+    });
+    const provisioned = await harness.manager.ensureTab("window-1", {
+      ...nativeKey,
+      requestedUrl: "https://example.com/target",
+      profile: "primary",
+      seedStorageState: {
+        cookies: [],
+        origins: [
+          {
+            origin: "https://example.com",
+            localStorage: [{ name: "token", value: "carried" }],
+          },
+        ],
+      },
+      connectionId: null,
+    });
+
+    expectNoNativeView(harness);
+    expect(harness.attachMints).toEqual([
+      {
+        windowId: "window-1",
+        registrationId: provisioned.registrationId,
+        partition: expect.any(String),
+        identity: nativeKey,
+        requestKeys: ["identity", "onAttached", "partition"],
+      },
+    ]);
+    const guest = requireGuest(harness);
+    expect(harness.seededWebContents).toEqual([guest.webContents]);
+    expect(guest.webContents.loadUrls).toEqual(["about:blank"]);
+    expect(guest.webContents.lifecycle).toEqual([
+      "loadURL",
+      "Page.addScriptToEvaluateOnNewDocument",
+      "Page.enable",
+      "Runtime.enable",
+      "Log.enable",
+      "Network.enable",
+      "DOM.enable",
+    ]);
+
+    await harness.manager.acceptTab(provisioned);
+    await Promise.resolve();
+
+    expect(guest.webContents.loadUrls).toEqual([
+      "about:blank",
+      "https://example.com/target",
+    ]);
+    expect(guest.webContents.lifecycle).toEqual([
+      "loadURL",
+      "Page.addScriptToEvaluateOnNewDocument",
+      "Page.enable",
+      "Runtime.enable",
+      "Log.enable",
+      "Network.enable",
+      "DOM.enable",
+      "loadURL",
+      "Page.removeScriptToEvaluateOnNewDocument",
+    ]);
+    expectNoNativeView(harness);
+  });
+
+  it("reports guest status and tears the guest down on crash", async () => {
+    const harness = createGuestHarness(undefined);
+    const statuses: BrowserViewNativeTabStatusChange[] = [];
+    harness.manager.onNativeTabStatusChange((change) => {
+      statuses.push(change);
+    });
+    const ready = await harness.manager.ensureTab("window-1", {
+      ...nativeKey,
+      requestedUrl: "https://example.com/",
+      profile: "primary",
+      seedStorageState: null,
+      connectionId: null,
+    });
+    await harness.manager.acceptTab(ready);
+    const guest = requireGuest(harness);
+    guest.webContents.title = "Example Domain";
+    guest.webContents.emit(
+      "did-navigate",
+      {},
+      "https://example.com/",
+      200,
+      "OK",
+    );
+    await Promise.resolve();
+
+    expect(statuses.at(-1)).toMatchObject({
+      ...nativeKey,
+      registrationId: ready.registrationId,
+      url: "https://example.com/",
+      title: "Example Domain",
+      status: "ready",
+    });
+
+    guest.webContents.emit("render-process-gone", {}, { reason: "crashed" });
+    await flushCloseEntry();
+
+    expect(statuses.at(-1)).toMatchObject({
+      ...nativeKey,
+      registrationId: ready.registrationId,
+      status: "dead",
+      reason: "crashed",
+    });
+    expect(harness.releasedRendererGuests).toEqual([ready.registrationId]);
+    expect(guest.webContents.closeCalls).toBe(1);
+    expect(harness.manager.hasNativeTabsForWindow("window-1")).toBe(false);
+    expectNoNativeView(harness);
+  });
+
+  it("dispatches CDP against the guest capability", async () => {
+    const harness = createGuestHarness(undefined);
+    const ready = await harness.manager.ensureTab("window-1", {
+      ...nativeKey,
+      requestedUrl: "https://example.com/",
+      profile: "primary",
+      seedStorageState: null,
+      connectionId: null,
+    });
+    const guest = requireGuest(harness);
+
+    await expect(
+      harness.manager.dispatchElectronTabCdp({
+        ...nativeKey,
+        registrationId: ready.registrationId,
+        target: { kind: "root" },
+        command: { kind: "cdpGetFrameTree" },
+      }),
+    ).resolves.toMatchObject({ kind: "cdpGetFrameTree", ok: true });
+    expect(
+      guest.webContents.debugger.commands.some(
+        ({ method }) => method === "Page.getFrameTree",
+      ),
+    ).toBe(true);
+  });
+
+  it("captures a page from the guest webContents without a native view", async () => {
+    const harness = createGuestHarness(undefined);
+    const ready = await harness.manager.ensureTab("window-1", {
+      ...nativeKey,
+      requestedUrl: "https://example.com/",
+      profile: "primary",
+      seedStorageState: null,
+      connectionId: null,
+    });
+    await harness.manager.acceptTab(ready);
+    expect(
+      harness.manager.attachSurface("window-1", {
+        ...nativeKey,
+        registrationId: ready.registrationId,
+        bindingId: "binding-1",
+        surface: BASE_KEY,
+      }),
+    ).toBe(true);
+    harness.manager.updateBounds("window-1", {
+      ...BASE_KEY,
+      bounds: { x: 0, y: 0, width: 300, height: 200 },
+    });
+    const guest = requireGuest(harness);
+    guest.webContents.emit(
+      "did-navigate",
+      {},
+      "https://example.com/",
+      200,
+      "OK",
+    );
+    await Promise.resolve();
+
+    const capture = await harness.manager.capturePage("window-1", BASE_KEY);
+    expect(capture.mediaType).toBe("image/png");
+    expect(capture.byteLength).toBe(3);
+    expect(guest.webContents.lifecycle).toContain("capturePage");
+    expectNoNativeView(harness);
+  });
+
+  it("rejects a stale registration against a newer incarnation of the same tab", async () => {
+    const harness = createGuestHarness(undefined);
+    const input = {
+      ...nativeKey,
+      requestedUrl: "https://example.com/",
+      profile: "primary" as const,
+      seedStorageState: null,
+      connectionId: null,
+    };
+    const first = await harness.manager.ensureTab("window-1", input);
+    await harness.manager.acceptTab(first);
+    await expect(harness.manager.releaseTab(first)).resolves.toBe(true);
+    await flushCloseEntry();
+
+    const second = await harness.manager.ensureTab("window-1", input);
+    expect(second.registrationId).not.toBe(first.registrationId);
+    const live = requireGuest(harness);
+    expect(live.webContents.loadUrls).toEqual(["about:blank"]);
+
+    await expect(harness.manager.acceptTab(first)).rejects.toThrow(
+      "Electron browser tab is not provisioned.",
+    );
+    expect(live.webContents.loadUrls).toEqual(["about:blank"]);
+    await expect(
+      harness.manager.controlElectronTab("window-1", {
+        ...nativeKey,
+        registrationId: first.registrationId,
+        action: { kind: "reload" },
+      }),
+    ).resolves.toBe(false);
+    expect(live.webContents.reloadCalls).toBe(0);
+    await expect(
+      harness.manager.dispatchElectronTabCdp({
+        ...nativeKey,
+        registrationId: first.registrationId,
+        target: { kind: "root" },
+        command: { kind: "cdpGetFrameTree" },
+      }),
+    ).resolves.toMatchObject({
+      kind: "cdpGetFrameTree",
+      ok: false,
+      error: { kind: "tab_not_found" },
+    });
+    await expect(harness.manager.releaseTab(first)).resolves.toBe(false);
+    expect(live.webContents.closeCalls).toBe(0);
+    expect(harness.manager.hasNativeTabsForWindow("window-1")).toBe(true);
+
+    await harness.manager.acceptTab(second);
+    await Promise.resolve();
+    expect(live.webContents.loadUrls).toEqual([
+      "about:blank",
+      "https://example.com/",
+    ]);
+  });
+
+  it("releaseTab of a live guest calls releaseRendererGuest and does not leak the entry", async () => {
+    const harness = createGuestHarness(undefined);
+    const ready = await harness.manager.ensureTab("window-1", {
+      ...nativeKey,
+      requestedUrl: "https://example.com/",
+      profile: "primary",
+      seedStorageState: null,
+      connectionId: null,
+    });
+    await harness.manager.acceptTab(ready);
+    const guest = requireGuest(harness);
+
+    await expect(harness.manager.releaseTab(ready)).resolves.toBe(true);
+    await flushCloseEntry();
+
+    expect(harness.releasedRendererGuests).toEqual([ready.registrationId]);
+    expect(guest.webContents.closeCalls).toBe(1);
+    expect(harness.manager.hasNativeTabsForWindow("window-1")).toBe(false);
+    expect(harness.guests).toHaveLength(1);
+    expectNoNativeView(harness);
+  });
+
+  it("releases isolated-profile storage when the last guest tab of that session closes", async () => {
+    const harness = createGuestHarness(undefined);
+    const isolatedSession = "session-private";
+    const ensureIsolated = (
+      tabId: string,
+    ): Promise<BrowserViewNativeTabCapability> =>
+      harness.manager.ensureTab("window-1", {
+        hostId: "host-1",
+        sessionId: isolatedSession,
+        tabId,
+        requestedUrl: `https://example.com/${tabId}`,
+        profile: "isolated",
+        seedStorageState: null,
+        connectionId: null,
+      });
+
+    const first = await ensureIsolated("tab-1");
+    const second = await ensureIsolated("tab-2");
+    await harness.manager.acceptTab(first);
+    await harness.manager.acceptTab(second);
+
+    expect(harness.attachMints.map((mint) => mint.partition)).toEqual([
+      `traycer-isolated-${isolatedSession}`,
+      `traycer-isolated-${isolatedSession}`,
+    ]);
+    expectNoNativeView(harness);
+
+    await harness.manager.releaseTab(first);
+    await flushCloseEntry();
+    expect(harness.releasedIsolatedSessions).toEqual([]);
+    expect(harness.releasedRendererGuests).toEqual([first.registrationId]);
+
+    await harness.manager.releaseTab(second);
+    await flushCloseEntry();
+    expect(harness.releasedIsolatedSessions).toEqual([
+      { profile: "isolated", sessionId: isolatedSession },
+    ]);
+    expect(harness.releasedRendererGuests).toEqual([
+      first.registrationId,
+      second.registrationId,
+    ]);
+    expect(harness.manager.hasNativeTabsForWindow("window-1")).toBe(false);
+  });
+
+  it("buffers accept until post-gate ready, and does not navigate while onAttached is held", async () => {
+    const harness = createGuestHarness(undefined);
+    const latch = harness.holdNextGuestAttach();
+    const requestedUrl = "https://example.com/held";
+    const ensure = harness.manager.ensureTab("window-1", {
+      ...nativeKey,
+      requestedUrl,
+      profile: "primary",
+      seedStorageState: null,
+      connectionId: null,
+    });
+    let settled = false;
+    void ensure.finally(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+
+    expect(settled).toBe(false);
+    const mint = harness.attachMints[0];
+    if (mint === undefined) throw new Error("expected guest mint");
+    await expect(
+      harness.manager.acceptTab({
+        ...nativeKey,
+        registrationId: mint.registrationId,
+      }),
+    ).rejects.toThrow("Electron browser tab is not provisioned.");
+    const guest = requireGuest(harness);
+    expect(guest.webContents.loadUrls).toEqual([]);
+    expect(guest.webContents.loadUrls).not.toContain(requestedUrl);
+
+    latch.resolve();
+    const provisioned = await ensure;
+    expect(provisioned.registrationId).toBe(mint.registrationId);
+    expect(guest.webContents.loadUrls).toEqual(["about:blank"]);
+
+    await harness.manager.acceptTab(provisioned);
+    await Promise.resolve();
+    expect(guest.webContents.loadUrls).toEqual(["about:blank", requestedUrl]);
+    expectNoNativeView(harness);
+  });
+
+  it("rejects ensureTab when ready rejects without onAttached", async () => {
+    const harness = createGuestHarness(undefined);
+    harness.rejectNextGuestReady(new Error("webview guest birth failed"));
+
+    await expect(
+      harness.manager.ensureTab("window-1", {
+        ...nativeKey,
+        requestedUrl: "https://example.com/failed",
+        profile: "primary",
+        seedStorageState: null,
+        connectionId: null,
+      }),
+    ).rejects.toThrow("webview guest birth failed");
+
+    expect(harness.guests).toEqual([]);
+    expect(harness.views).toEqual([]);
+    expect(harness.manager.hasNativeTabsForWindow("window-1")).toBe(false);
+    expectNoNativeView(harness);
+  });
+
+  it("cleans up an isolated guest when ready rejects after the entry exists", async () => {
+    const harness = createGuestHarness(undefined);
+    const seedHold = harness.holdNextGuestSeed();
+    const isolatedSession = "session-private";
+    const ensure = harness.manager.ensureTab("window-1", {
+      hostId: "host-1",
+      sessionId: isolatedSession,
+      tabId: "tab-1",
+      requestedUrl: "https://example.com/isolated",
+      profile: "isolated",
+      seedStorageState: null,
+      connectionId: null,
+    });
+    let settled = false;
+    void ensure.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    await Promise.resolve();
+
+    expect(settled).toBe(false);
+    expect(harness.manager.hasNativeTabsForWindow("window-1")).toBe(true);
+    const mint = harness.attachMints[0];
+    if (mint === undefined) throw new Error("expected guest mint");
+
+    harness.rejectPendingGuestReady(new Error("webview guest birth failed"));
+    await expect(ensure).rejects.toThrow("webview guest birth failed");
+    expect(settled).toBe(true);
+    expect(harness.manager.hasNativeTabsForWindow("window-1")).toBe(false);
+    expect(harness.releasedRendererGuests).toEqual([mint.registrationId]);
+    expect(harness.releasedIsolatedSessions).toEqual([
+      { profile: "isolated", sessionId: isolatedSession },
+    ]);
+    seedHold.resolve();
+    await flushCloseEntry();
+    expectNoNativeView(harness);
+  });
+
+  it("tears down an accepted guest when its webContents is destroyed", async () => {
+    const harness = createGuestHarness(undefined);
+    const ready = await harness.manager.ensureTab("window-1", {
+      ...nativeKey,
+      requestedUrl: "https://example.com/",
+      profile: "primary",
+      seedStorageState: null,
+      connectionId: null,
+    });
+    await harness.manager.acceptTab(ready);
+    const guest = requireGuest(harness);
+
+    guest.webContents.emit("destroyed");
+    await flushCloseEntry();
+
+    expect(harness.releasedRendererGuests).toEqual([ready.registrationId]);
+    expect(guest.webContents.closeCalls).toBe(1);
+    expect(harness.manager.hasNativeTabsForWindow("window-1")).toBe(false);
+    expectNoNativeView(harness);
   });
 });

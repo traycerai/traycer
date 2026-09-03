@@ -103,7 +103,7 @@ async function raceCaptureAgainstDeadline(
       CAPTURE_STANDIN_DEADLINE_MS,
     );
   });
-  const capture = entry.view.webContents
+  const capture = entry.webContents
     .capturePage()
     .then(
       (image) =>
@@ -114,7 +114,7 @@ async function raceCaptureAgainstDeadline(
     .catch((err: unknown) => {
       log.warn("[browser-view] overlay snapshot capture failed", {
         error: describeLogError(err),
-        webContentsId: entry.view.webContents.id,
+        webContentsId: entry.webContents.id,
       });
       return null;
     });

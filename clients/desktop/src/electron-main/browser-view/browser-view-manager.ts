@@ -37,6 +37,8 @@ import type {
 import type {
   BrowserViewElectronTabCdpDispatch,
   BrowserViewEnsureTab,
+  BrowserViewGuestAttachRequest,
+  BrowserViewGuestAttachResult,
   BrowserViewDevToolsWindow,
   BrowserViewNavigationHistory,
   BrowserViewPopupWebContents,
@@ -93,6 +95,18 @@ interface BrowserViewManagerOptions {
   readonly createView: (
     request: BrowserSessionProfileRequest,
   ) => ManagedBrowserView;
+  /**
+   * Temporary birth seam: when set, `ensureTab` mints a renderer guest
+   * instead of allocating a `WebContentsView`. Production leaves this unset
+   * until cutover.
+   */
+  readonly attachRendererGuest?:
+    | ((
+        windowId: string,
+        request: BrowserViewGuestAttachRequest,
+      ) => BrowserViewGuestAttachResult)
+    | null;
+  readonly releaseRendererGuest?: ((registrationId: string) => void) | null;
   readonly getWindow: (windowId: string) => BrowserViewWindow | null;
   readonly createPopupWindowOptions: (
     request: BrowserSessionProfileRequest,
@@ -130,11 +144,11 @@ interface BrowserViewManagerOptions {
    */
   readonly seedStorageState: (
     input: BrowserViewEnsureTab,
-    webContents: ManagedBrowserView["webContents"],
+    webContents: BrowserViewWebContents,
   ) => Promise<BrowserStorageState | null>;
   readonly observePrimaryProfileOrigin: (
     url: string,
-    webContents: ManagedBrowserView["webContents"],
+    webContents: BrowserViewWebContents,
     profile: BrowserSessionProfile,
   ) => void;
   /**
@@ -164,6 +178,9 @@ export class BrowserViewManager {
     windowId: string,
   ) => BrowserViewDevToolsWindow;
   private readonly send: BrowserViewSend;
+  private readonly releaseRendererGuest:
+    | ((registrationId: string) => void)
+    | null;
   private readonly releaseSessionStorage: (
     request: BrowserSessionProfileRequest,
   ) => void;
@@ -194,6 +211,14 @@ export class BrowserViewManager {
     this.getWindow = options.getWindow;
     this.createDevToolsWindow = options.createDevToolsWindow;
     this.send = options.send;
+    const attachRendererGuest = options.attachRendererGuest ?? null;
+    const releaseRendererGuest = options.releaseRendererGuest ?? null;
+    if ((attachRendererGuest === null) !== (releaseRendererGuest === null)) {
+      throw new Error(
+        "attachRendererGuest and releaseRendererGuest must both be set or both omitted",
+      );
+    }
+    this.releaseRendererGuest = releaseRendererGuest;
     this.releaseSessionStorage = options.releaseSessionStorage;
     this.geometry = new BrowserViewGeometry({
       getWindow: options.getWindow,
@@ -275,6 +300,19 @@ export class BrowserViewManager {
       debugSessions: this.debugSessions,
       createEntry: (requestedUrl, identity, profile) =>
         this.entryFactory.create(requestedUrl, identity, profile),
+      createEntryFromWebContents: (
+        requestedUrl,
+        identity,
+        profile,
+        webContents,
+      ) =>
+        this.entryFactory.createFromWebContents(
+          requestedUrl,
+          identity,
+          profile,
+          webContents,
+        ),
+      attachRendererGuest,
       seedStorageState: options.seedStorageState,
       closeEntry: (entry) => this.closeEntry(entry),
       navigate: (entry, url) => this.navigate(entry, url),
@@ -497,9 +535,7 @@ export class BrowserViewManager {
       this.getWindow(surface.windowId),
       this.geometry.zoomFactor(),
     );
-    const bytes = Buffer.from(
-      (await entry.view.webContents.capturePage()).toPNG(),
-    );
+    const bytes = Buffer.from((await entry.webContents.capturePage()).toPNG());
     return {
       ...toTileKey(surface),
       mediaType: "image/png",
@@ -737,7 +773,7 @@ export class BrowserViewManager {
     this.overlay.invalidateSnapshot(entry, "navigation-started");
     this.emitStatus(entry);
     try {
-      await entry.view.webContents.loadURL(url);
+      await entry.webContents.loadURL(url);
     } catch (err: unknown) {
       log.warn("[browser-view] loadURL failed", {
         error: describeLogError(err),
@@ -754,7 +790,7 @@ export class BrowserViewManager {
   private reloadEntry(entry: BrowserViewEntry): void {
     this.setStatus(entry, "loading", null);
     this.overlay.invalidateSnapshot(entry, "reload");
-    entry.view.webContents.reload();
+    entry.webContents.reload();
     this.geometry.applyVisibility(entry);
   }
 
@@ -794,7 +830,7 @@ export class BrowserViewManager {
     } catch (err) {
       log.warn(`[browser-view] go ${direction} failed`, {
         error: describeLogError(err),
-        webContentsId: entry.view.webContents.id,
+        webContentsId: entry.webContents.id,
       });
       this.emitStatus(entry);
     }
@@ -822,8 +858,8 @@ export class BrowserViewManager {
     this.destroyDevToolsWindow(entry);
     const devToolsWindow = this.createDevToolsWindow(windowId);
     entry.devToolsWindow = devToolsWindow;
-    entry.view.webContents.setDevToolsWebContents(devToolsWindow.webContents);
-    entry.view.webContents.openDevTools({
+    entry.webContents.setDevToolsWebContents(devToolsWindow.webContents);
+    entry.webContents.openDevTools({
       mode: "detach",
       activate: true,
       title: DEVTOOLS_TITLE,
@@ -880,7 +916,7 @@ export class BrowserViewManager {
     webContentsId: number,
   ): BrowserViewEntry | null {
     for (const entry of this.entries.guestValues()) {
-      if (entry.view.webContents.id === webContentsId) return entry;
+      if (entry.webContents.id === webContentsId) return entry;
     }
     return null;
   }
@@ -985,7 +1021,7 @@ export class BrowserViewManager {
     entry: BrowserViewEntry,
   ): BrowserViewWebContents | null {
     if (!this.entries.isCurrent(entry)) return null;
-    const webContents = entry.view.webContents;
+    const webContents = entry.webContents;
     if (webContents.isDestroyed()) return null;
     return webContents;
   }
@@ -1035,7 +1071,7 @@ export class BrowserViewManager {
       this.windows.detachResetListenerIfUnused(surface.windowId);
     }
     this.windows.detachFromParentWindow(entry);
-    const webContents = entry.view.webContents;
+    const webContents = entry.webContents;
     for (const [event, handler] of Object.entries(entry.listeners)) {
       webContents.off(event, handler);
     }
@@ -1045,7 +1081,11 @@ export class BrowserViewManager {
     entry.debugSession?.dispose();
     entry.debugSession = null;
     this.geometry.hide(entry);
-    webContents.close();
+    if (entry.view === null && this.releaseRendererGuest !== null) {
+      this.releaseRendererGuest(entry.identity.registrationId);
+    } else if (!webContents.isDestroyed()) {
+      webContents.close();
+    }
     this.entries.remove(entry);
     this.releaseIsolatedSessionStorage(entry);
     this.windows.detachResetListenerIfUnused(entry.identity.lifecycleWindowId);

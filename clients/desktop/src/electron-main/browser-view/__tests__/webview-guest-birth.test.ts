@@ -2,13 +2,14 @@ import { EventEmitter } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WebContents, WebPreferences } from "electron";
 
-const { sessions, createdListeners, gate } = vi.hoisted(() => ({
+const { sessions, createdListeners, gate, registered } = vi.hoisted(() => ({
   sessions: new Map<string, object>(),
   createdListeners: [] as Array<(event: unknown, contents: unknown) => void>,
   gate: {
     calls: [] as number[],
     disposers: [] as Array<() => void>,
   },
+  registered: [] as number[],
 }));
 
 vi.mock("electron", () => ({
@@ -49,6 +50,11 @@ vi.mock("../browser-session", () => ({
     gate.calls.push(webContentsId);
     gate.disposers.push(dispose);
     return dispose;
+  },
+  registerBrowserViewWebContents: (webContents: {
+    readonly id: number;
+  }): void => {
+    registered.push(webContents.id);
   },
 }));
 
@@ -123,7 +129,7 @@ function hostFor(id: number, windowId: string): FakeHost {
   return host;
 }
 
-function mint(
+function mintGranted(
   windowId: string,
   onAttached: (guest: WebContents) => Promise<void>,
   onExpired: ((release: { registrationId: string }) => void) | null,
@@ -135,6 +141,14 @@ function mint(
     onAttached,
     onExpired,
   });
+}
+
+function mint(
+  windowId: string,
+  onAttached: (guest: WebContents) => Promise<void>,
+  onExpired: ((release: { registrationId: string }) => void) | null,
+) {
+  return mintGranted(windowId, onAttached, onExpired).mount;
 }
 
 function prefs(): TestPrefs {
@@ -181,6 +195,7 @@ afterEach(() => {
   sessions.clear();
   gate.calls.length = 0;
   gate.disposers.length = 0;
+  registered.length = 0;
   vi.useRealTimers();
 });
 
@@ -271,9 +286,11 @@ describe("webview guest birth", () => {
       const mount = mint(WINDOW_A, onAttached, null);
       const guest = new FakeGuest(10 + index, hostA, sessionFor(PARTITION));
       bind(hostA, mount.registrationId, guest);
+      expect(registered).toEqual([]);
       tweak(guest);
       hostA.emit("did-attach-webview", {}, guest);
       expect(onAttached).not.toHaveBeenCalled();
+      expect(registered).not.toContain(guest.id);
       expect(guest.close).toHaveBeenCalledOnce();
       expect(lastDispose()).toHaveBeenCalledOnce();
       expect(releaseAttachmentGrant(mount.registrationId)).toBeNull();
@@ -282,18 +299,22 @@ describe("webview guest birth", () => {
 
   it("calls onAttached once on did-attach, not on web-contents-created", async () => {
     const host = hostFor(1, WINDOW_A);
-    const onAttached = vi.fn(attachedOk);
+    const onAttached = vi.fn(async (attachedGuest: WebContents) => {
+      expect(registered).toEqual([attachedGuest.id]);
+    });
     const mount = mint(WINDOW_A, onAttached, null);
     const guest = new FakeGuest(11, host, sessionFor(PARTITION));
 
     expect(gate.calls).toEqual([]);
     bind(host, mount.registrationId, guest);
+    expect(registered).toEqual([]);
     expect(onAttached).not.toHaveBeenCalled();
     expect(lastDispose()).not.toHaveBeenCalled();
 
     host.emit("did-attach-webview", {}, guest);
     expect(onAttached).toHaveBeenCalledOnce();
     expect(onAttached).toHaveBeenCalledWith(guest);
+    expect(registered).toEqual([guest.id]);
     host.emit("did-attach-webview", {}, guest);
     expect(onAttached).toHaveBeenCalledOnce();
     await Promise.resolve();
@@ -449,5 +470,46 @@ describe("webview guest birth", () => {
       windowId: WINDOW_A,
     });
     expect(guest.close).toHaveBeenCalledOnce();
+  });
+
+  it("fulfills ready only after did-attach, onAttached resolve, and gate dispose", async () => {
+    const host = hostFor(1, WINDOW_A);
+    const attached = Promise.withResolvers<void>();
+    const onAttached = vi.fn(() => attached.promise);
+    const granted = mintGranted(WINDOW_A, onAttached, null);
+    const guest = new FakeGuest(50, host, sessionFor(PARTITION));
+    let readyDone = false;
+    void granted.ready.then(() => {
+      readyDone = true;
+    });
+
+    bind(host, granted.mount.registrationId, guest);
+    host.emit("did-attach-webview", {}, guest);
+    await Promise.resolve();
+    expect(onAttached).toHaveBeenCalledOnce();
+    expect(onAttached).toHaveBeenCalledWith(guest);
+    expect(readyDone).toBe(false);
+    expect(lastDispose()).not.toHaveBeenCalled();
+
+    attached.resolve();
+    await granted.ready;
+    expect(readyDone).toBe(true);
+    expect(lastDispose()).toHaveBeenCalledOnce();
+    expect(guest.close).not.toHaveBeenCalled();
+  });
+
+  it("rejects ready on timeout and on drop", async () => {
+    vi.useFakeTimers();
+    const timed = mintGranted(WINDOW_A, attachedOk, null);
+    vi.runAllTimers();
+    await expect(timed.ready).rejects.toThrow("webview guest birth failed");
+
+    vi.useRealTimers();
+    const dropped = mintGranted(WINDOW_A, attachedOk, null);
+    expect(releaseAttachmentGrant(dropped.mount.registrationId)).toEqual({
+      registrationId: dropped.mount.registrationId,
+      windowId: WINDOW_A,
+    });
+    await expect(dropped.ready).rejects.toThrow("webview guest birth failed");
   });
 });

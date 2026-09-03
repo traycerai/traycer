@@ -120,7 +120,7 @@ export class BrowserViewPopups {
       this.openWindows.delete(window);
     });
     log.info("[browser-view] popup created", {
-      openerWebContentsId: entry.view.webContents.id,
+      openerWebContentsId: entry.webContents.id,
       popupWebContentsId: window.webContents.id,
     });
   }
