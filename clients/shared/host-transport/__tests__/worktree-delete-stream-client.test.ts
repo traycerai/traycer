@@ -99,7 +99,6 @@ describe("WorktreeDeleteStreamClient", () => {
       worktreePath: "/wt/a",
       scripts: null,
       stopOwners: false,
-      expectedHoldersRevision: undefined,
       callbacks: {
         onStarted: () => {},
         onPhase: () => {},
@@ -124,7 +123,6 @@ describe("WorktreeDeleteStreamClient", () => {
       worktreePath: "/wt/a",
       scripts: null,
       stopOwners: true,
-      expectedHoldersRevision: undefined,
       callbacks: {
         onStarted: () => {},
         onPhase: () => {},
@@ -150,7 +148,6 @@ describe("WorktreeDeleteStreamClient", () => {
       worktreePath: "/wt/a",
       scripts: null,
       stopOwners: false,
-      expectedHoldersRevision: undefined,
       callbacks: {
         onStarted: () => {},
         onPhase: () => {},
@@ -170,7 +167,6 @@ describe("WorktreeDeleteStreamClient", () => {
       "Worktree is in use",
       HOLDERS,
       undefined,
-      undefined,
     );
     client.close();
   });
@@ -184,7 +180,6 @@ describe("WorktreeDeleteStreamClient", () => {
       worktreePath: "/wt/a",
       scripts: null,
       stopOwners: false,
-      expectedHoldersRevision: undefined,
       callbacks: {
         onStarted: () => {},
         onPhase: () => {},
@@ -203,12 +198,11 @@ describe("WorktreeDeleteStreamClient", () => {
       "Worktree is in use",
       undefined,
       undefined,
-      undefined,
     );
     client.close();
   });
 
-  it("sends expectedHoldersRevision on the 1.2 open request and forwards HOLDERS_CHANGED", () => {
+  it("does not send an expected holder revision and still forwards a legacy HOLDERS_CHANGED code", () => {
     const session = new StubSession();
     const wsStreamClient = makeWsStreamClient(session);
     const onFailed = vi.fn();
@@ -217,8 +211,6 @@ describe("WorktreeDeleteStreamClient", () => {
       worktreePath: "/wt/a",
       scripts: null,
       stopOwners: true,
-      expectedHoldersRevision:
-        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       callbacks: {
         onStarted: () => {},
         onPhase: () => {},
@@ -234,8 +226,6 @@ describe("WorktreeDeleteStreamClient", () => {
         worktreePath: "/wt/a",
         scripts: null,
         stopOwners: true,
-        expectedHoldersRevision:
-          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       },
     );
     session.emitFrame({
@@ -251,7 +241,6 @@ describe("WorktreeDeleteStreamClient", () => {
       "Holders changed",
       HOLDERS,
       "WORKTREE_HOLDERS_CHANGED",
-      "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
     );
     client.close();
   });
@@ -265,7 +254,6 @@ describe("WorktreeDeleteStreamClient", () => {
       worktreePath: "/wt/a",
       scripts: null,
       stopOwners: false,
-      expectedHoldersRevision: undefined,
       callbacks: {
         onStarted: () => {},
         onPhase: () => {},
@@ -285,7 +273,6 @@ describe("WorktreeDeleteStreamClient", () => {
     expect(onFailed).toHaveBeenCalledWith(
       "Worktree is in use",
       HOLDERS,
-      undefined,
       undefined,
     );
     client.close();
