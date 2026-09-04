@@ -135,6 +135,27 @@ describe("providerSignInUnavailableHint", () => {
     expect(hint).toContain("signed in from a terminal");
     expect(hint).not.toContain("browser sign-in");
   });
+
+  // A launch-the-CLI provider (Qwen, Droid, OMP, OpenCode) declares
+  // `terminalLogin` with `oauthArgs: null` - there is no headless command.
+  // The terminal branch must win over the "no browser sign-in, use its own
+  // CLI" one: Traycer opens that CLI for the user.
+  it("points at the terminal sign-in flow for a terminal-login provider with no oauthArgs", () => {
+    const hint = providerSignInUnavailableHint(
+      providerState({
+        providerId: "qwen",
+        loginCapability: {
+          oauthArgs: null,
+          token: null,
+          codePaste: null,
+          terminalLogin: {},
+        },
+      }),
+      true,
+    );
+    expect(hint).toContain("Qwen Code is signed in from a terminal");
+    expect(hint).not.toContain("its own CLI");
+  });
 });
 
 const TERMINAL_LOGIN_CAP: ProviderCliState["loginCapability"] = {
@@ -174,21 +195,13 @@ describe("providerSupportsTerminalLogin", () => {
     expect(providerSupportsTerminalLogin(undefined)).toBe(false);
   });
 
-  // Unified gate: `oauthArgs` is the command the terminal runs, so a
-  // provider advertising `terminalLogin` with no real command has nothing to
-  // offer. This one check is what keeps the banner, the picker gate, and
-  // this module's own `providerSignInUnavailableHint` from disagreeing about
-  // the same provider (each used to re-check `oauthArgs` separately, in a
-  // different order relative to its own `terminalLogin` branch).
-  it("is false when terminalLogin is present but oauthArgs is empty or null", () => {
-    expect(
-      providerSupportsTerminalLogin({
-        oauthArgs: [],
-        token: null,
-        codePaste: null,
-        terminalLogin: {},
-      }),
-    ).toBe(false);
+  // The command the terminal runs is host-owned, not `oauthArgs` - that is
+  // the HEADLESS command, and the providers whose sign-in lives inside their
+  // own TUI (Qwen, Droid, OMP, OpenCode) ship `terminalLogin` with
+  // `oauthArgs: null` so a client predating the field never offers them a
+  // headless button. This helper once required `oauthArgs` too, which hid
+  // the terminal button for exactly those four.
+  it("is true when terminalLogin is present even though oauthArgs is null or empty", () => {
     expect(
       providerSupportsTerminalLogin({
         oauthArgs: null,
@@ -196,6 +209,14 @@ describe("providerSupportsTerminalLogin", () => {
         codePaste: null,
         terminalLogin: {},
       }),
-    ).toBe(false);
+    ).toBe(true);
+    expect(
+      providerSupportsTerminalLogin({
+        oauthArgs: [],
+        token: null,
+        codePaste: null,
+        terminalLogin: {},
+      }),
+    ).toBe(true);
   });
 });

@@ -255,18 +255,20 @@ function deriveLoginOptions(
       ? loginCapability.token.vars
       : [];
   const oauthArgs = loginCapability !== null ? loginCapability.oauthArgs : null;
-  // Terminal-login providers HAVE real `oauthArgs` - that is the command the
-  // terminal runs - so they pass the check below and must be excluded first,
-  // or the banner offers a headless button the host refuses. No `isLocalHost`
-  // requirement: unlike browser OAuth there is no loopback here, so a device
-  // flow works just as well against a remote host. The `oauthArgs` requirement
-  // lives INSIDE the helper, so this surface and the two gate helpers cannot
-  // answer differently for the same provider.
+  // Terminal login is decided by `terminalLogin` alone, and it excludes the
+  // headless button whatever `oauthArgs` says: Copilot carries real ones (the
+  // host refuses them headlessly), Qwen / Droid / OMP / OpenCode carry `null`
+  // (they have no headless command; the host launches the CLI itself). No
+  // `isLocalHost` requirement: unlike browser OAuth there is no loopback here,
+  // so a device flow works just as well against a remote host. ONE helper for
+  // this surface and the two gate helpers, so they cannot answer differently
+  // for the same provider.
   const canTerminalLogin = providerSupportsTerminalLogin(loginCapability);
-  // A real login needs a non-empty subcommand. `null` = no OAuth; `[]` is also
-  // inert because the host would spawn the bare binary under piped stdio, which
-  // for an interactive-TUI CLI (e.g. droid) opens no browser and hangs the
-  // banner on "Waiting for browser sign-in…".
+  // A real HEADLESS login needs a non-empty subcommand. `null` = no OAuth;
+  // `[]` is also inert because the host would spawn the bare binary under
+  // piped stdio, which for an interactive-TUI CLI (e.g. droid) opens no
+  // browser and hangs the banner on "Waiting for browser sign-in…". (The
+  // terminal row above has no such constraint - a TUI is what it is for.)
   const canOauth =
     !canTerminalLogin &&
     isLocalHost &&

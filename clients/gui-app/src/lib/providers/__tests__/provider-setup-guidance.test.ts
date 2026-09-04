@@ -176,10 +176,13 @@ describe("resolveProviderTerminalSetup", () => {
     expect(setup?.guidance.terminalActionLabel).toBe("Set up in terminal");
   });
 
-  it("preserves reasonix's guidance with canStartTerminal: false when the capability is absent (oauthArgs empty) - the fix for old hosts losing Reasonix's manual instructions", () => {
+  it("preserves reasonix's guidance with canStartTerminal: false when the capability is absent (terminalLogin null) - the fix for old hosts losing Reasonix's manual instructions", () => {
     const setup = resolveProviderTerminalSetup(
       "reasonix",
-      stateWith(capabilityWithTerminalLogin([])),
+      stateWith({
+        ...capabilityWithTerminalLogin(["setup"]),
+        terminalLogin: null,
+      }),
     );
     expect(setup).not.toBeNull();
     expect(setup?.canStartTerminal).toBe(false);
@@ -196,11 +199,77 @@ describe("resolveProviderTerminalSetup", () => {
     expect(setup?.guidance.manualCommand).toBe("reasonix setup");
   });
 
-  it("returns null for copilot when the capability is absent (oauthArgs empty) - no copy-table override to fall back on", () => {
+  it("returns null for copilot when the capability is absent (terminalLogin null) - no copy-table override to fall back on", () => {
     expect(
       resolveProviderTerminalSetup(
         "copilot",
-        stateWith(capabilityWithTerminalLogin([])),
+        stateWith({
+          ...capabilityWithTerminalLogin(["login"]),
+          terminalLogin: null,
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  // The launch-the-CLI providers declare `terminalLogin` with `oauthArgs:
+  // null` (no headless command; the host launches the CLI itself). They get
+  // the terminal action on that capability alone, with the generic guidance
+  // re-worded to name the step inside the CLI - and, like copilot, nothing at
+  // all on a host that declares no capability.
+  it("gives a launch-the-CLI provider (qwen, oauthArgs null) the terminal action with copy naming the in-CLI step", () => {
+    const setup = resolveProviderTerminalSetup(
+      "qwen",
+      stateWith(capabilityWithTerminalLogin(null)),
+    );
+    expect(setup).not.toBeNull();
+    expect(setup?.canStartTerminal).toBe(true);
+    expect(setup?.guidance.terminalActionLabel).toBe("Sign in from a terminal");
+    expect(setup?.guidance.manualCommand).toBeNull();
+    expect(setup?.guidance.summary).toBe(
+      "Qwen Code signs in from inside its own terminal UI.",
+    );
+    expect(setup?.guidance.stepsAfterAction).toEqual([
+      "Type /auth in that terminal, choose a sign-in method and finish in the browser.",
+      "Refresh this list.",
+    ]);
+    expect(setup?.guidance.terminalHint).toContain("Type /auth");
+    expect(setup?.guidance.summary).not.toContain("sign-in code");
+  });
+
+  it("names the in-CLI step for each launch-the-CLI provider and keeps the generic labels", () => {
+    for (const [providerId, step] of [
+      ["droid", "Follow the sign-in prompt Droid shows when it starts."],
+      [
+        "omp",
+        "Type login followed by the provider (for example login anthropic) in that terminal and follow the prompts.",
+      ],
+      [
+        "opencode",
+        "Pick the provider and sign-in method in that terminal and follow the prompts.",
+      ],
+    ] as const) {
+      const guidance = defaultTerminalSignInGuidance(providerId);
+      expect(guidance.stepsAfterAction, providerId).toEqual([
+        step,
+        "Refresh this list.",
+      ]);
+      expect(guidance.terminalActionLabel, providerId).toBe(
+        "Sign in from a terminal",
+      );
+      expect(guidance.summary, providerId).not.toContain("sign-in code");
+      expect(guidance.terminalHint, providerId).not.toContain("sign-in code");
+      expect(guidance.manualCommand, providerId).toBeNull();
+    }
+  });
+
+  it("returns null for a launch-the-CLI provider on a host that declares no capability", () => {
+    expect(
+      resolveProviderTerminalSetup(
+        "droid",
+        stateWith({
+          ...capabilityWithTerminalLogin(null),
+          terminalLogin: null,
+        }),
       ),
     ).toBeNull();
   });
@@ -210,7 +279,10 @@ describe("providerSetupActionPlacement", () => {
   it("returns 'unsupported-host' whenever canStartTerminal is false, regardless of hasSurface", () => {
     const setup = resolveProviderTerminalSetup(
       "reasonix",
-      stateWith(capabilityWithTerminalLogin([])),
+      stateWith({
+        ...capabilityWithTerminalLogin(["setup"]),
+        terminalLogin: null,
+      }),
     );
     expect(setup).not.toBeNull();
     if (setup === null) return;

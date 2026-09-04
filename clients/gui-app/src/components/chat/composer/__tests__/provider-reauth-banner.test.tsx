@@ -561,22 +561,27 @@ describe("<ProviderReauthBanner />", () => {
     ).toBeNull();
   });
 
-  // Unified gate: `terminalLogin` present but no real `oauthArgs` (the
-  // command the terminal would run) must read the same way here as it does
-  // in `providerSupportsTerminalLogin` and `resolveCreateProfileGate` - the
-  // banner falls through to the CLI stub, offering neither button.
-  it("offers neither sign-in button when terminalLogin is present but oauthArgs is empty", () => {
+  // A launch-the-CLI provider (Qwen, Droid, OMP, OpenCode) declares
+  // `terminalLogin` with `oauthArgs: null`: there is no headless command, the
+  // host launches the CLI itself. The banner must offer the terminal button
+  // (never the headless one) - the same answer `providerSupportsTerminalLogin`
+  // and `resolveCreateProfileGate` give, so this surface cannot fall through
+  // to the CLI stub for a provider Traycer can open the CLI for.
+  it("offers the terminal button, not the headless one, when terminalLogin is present and oauthArgs is null", () => {
     render(
       <ProviderReauthBanner
         epicId="epic-1"
         viewTabId="tab-1"
-        providerId="copilot"
-        state={copilotState({
-          oauthArgs: [],
-          token: null,
-          codePaste: null,
-          terminalLogin: {},
-        })}
+        providerId="qwen"
+        state={{
+          ...copilotState({
+            oauthArgs: null,
+            token: null,
+            codePaste: null,
+            terminalLogin: {},
+          }),
+          providerId: "qwen",
+        }}
         reason="provider_unauthenticated"
         profileId={null}
         profileLabel={null}
@@ -587,7 +592,8 @@ describe("<ProviderReauthBanner />", () => {
     expect(screen.queryByRole("button", { name: /Authenticate/ })).toBeNull();
     expect(
       screen.queryByRole("button", { name: /Sign in from a terminal/ }),
-    ).toBeNull();
+    ).not.toBeNull();
+    expect(screen.queryByText(/from its CLI to continue/)).toBeNull();
   });
 
   // Row 3: unlike browser OAuth (a localhost loopback that only a local host
