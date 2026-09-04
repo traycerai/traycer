@@ -17,12 +17,18 @@ import { providerDisplayName } from "@/lib/provider-ordering";
  * cannot drift into offering the headless button for a provider the host will
  * refuse, or the terminal one for a provider it cannot open.
  *
- * It answers CAN, not merely `terminalLogin !== null`, because the command the
- * terminal runs is `oauthArgs` - a provider advertising `terminalLogin` with no
- * command has no terminal sign-in to offer. Folding that in here rather than
- * re-checking it per call site is what makes the consumers agree: they check
- * this in different orders relative to their own `oauthArgs` branches, and with
- * a laxer predicate those orders disagree about the same provider.
+ * It reads `terminalLogin` ALONE. The command the terminal runs is host-owned
+ * (the host's `CliProfile.terminalLaunchArgs`), not `oauthArgs`: `oauthArgs`
+ * is the HEADLESS command, and the providers whose sign-in lives inside their
+ * own TUI (Qwen, Droid, OMP, OpenCode) ship `terminalLogin` with
+ * `oauthArgs: null` precisely so a client that predates this field never
+ * offers them a headless button. Requiring `oauthArgs` here - which this
+ * helper once did, when Copilot and Reasonix were the only terminal-login
+ * providers and both happened to carry one - hid the terminal button for
+ * exactly those four. Every consumer's own `oauthArgs` branch is therefore
+ * ordered AFTER this check, never before it: a terminal-login provider with
+ * `oauthArgs: null` must not fall into a "no browser sign-in, use its CLI"
+ * sentence when Traycer can open that CLI for the user.
  *
  * The `!== null && !== undefined` spelling is load-bearing, not defensive
  * noise, though not for the reason it is tempting to assume. An old host's
@@ -38,9 +44,7 @@ export function providerSupportsTerminalLogin(
   loginCapability: ProviderCliState["loginCapability"] | undefined,
 ): boolean {
   const terminalLogin = loginCapability?.terminalLogin;
-  if (terminalLogin === null || terminalLogin === undefined) return false;
-  const oauthArgs = loginCapability?.oauthArgs ?? null;
-  return oauthArgs !== null && oauthArgs.length > 0;
+  return terminalLogin !== null && terminalLogin !== undefined;
 }
 
 /**
@@ -106,6 +110,16 @@ export function providerSignInUnavailableHint(
   state: ProviderCliState,
   isSelectedHostLocal: boolean,
 ): string | null {
+  if (providerSupportsTerminalLogin(state.loginCapability)) {
+    // A permanent provider property, so it outranks every situational reason
+    // below - and it has to precede the "no browser sign-in" branch too: a
+    // terminal-login provider may ship `oauthArgs: null` (Qwen, Droid, OMP
+    // and OpenCode have no headless command at all), and that branch would
+    // send its user to "its own CLI" when Traycer can open that CLI for them.
+    // It is also FALSE for the host check: a device flow needs no loopback,
+    // so terminal login works on a remote host.
+    return `${providerDisplayName(state.providerId)} is signed in from a terminal. Use the sign-in option in the chat composer.`;
+  }
   const oauthArgs = state.loginCapability?.oauthArgs ?? null;
   if (oauthArgs === null || oauthArgs.length === 0) {
     // A permanent property of the provider, so it outranks the situational
@@ -120,15 +134,6 @@ export function providerSignInUnavailableHint(
       return `${name} does not support browser sign-in.`;
     }
     return `${name} does not support browser sign-in. Authenticate with its own CLI, or set an API key on the Account tab.`;
-  }
-  if (providerSupportsTerminalLogin(state.loginCapability)) {
-    // Also a permanent provider property, and it outranks the host check
-    // below for the same reason - and additionally because it is FALSE there:
-    // a device flow needs no loopback, so terminal login works on a remote
-    // host. Reached only with real `oauthArgs` (both this branch and the one
-    // above require them), so the command exists; it just cannot run
-    // headlessly.
-    return `${providerDisplayName(state.providerId)} is signed in from a terminal. Use the sign-in option in the chat composer.`;
   }
   if (!isSelectedHostLocal) {
     return "Signing in opens a browser on the machine running Traycer, so it is only available on a local host.";
