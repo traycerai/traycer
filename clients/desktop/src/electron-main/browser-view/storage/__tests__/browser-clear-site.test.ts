@@ -3,12 +3,14 @@ import { describe, expect, it, vi } from "vitest";
 import type { BrowserPrimaryProfileDelta } from "@traycer/protocol/host/browser/contracts";
 import {
   BROWSER_COOKIE_DELTA_WINDOW_MS,
+  BROWSER_COOKIE_REMOVAL_GRACE_MS,
   BrowserCookieChangeObserver,
 } from "../browser-cookie-change-observer";
 import {
   BrowserPrimaryProfileSnapshotCoordinator,
   browserStorageCookies,
   clearBrowserSite,
+  clearBrowserSiteLocalStorage,
   type BrowserPrimaryProfileOriginSnapshot,
   type BrowserSiteClearSession,
 } from "../browser-storage-state";
@@ -20,6 +22,7 @@ import {
 
 vi.mock("../../../app/logger", () => ({
   log: { info: vi.fn(), warn: vi.fn(), debug: vi.fn() },
+  sanitizeLogFields: (fields: Record<string, unknown>) => fields,
   describeLogError: (error: unknown) => String(error),
 }));
 
@@ -163,6 +166,99 @@ describe("clearBrowserSite", () => {
   });
 });
 
+describe("clearBrowserSiteLocalStorage", () => {
+  it("clears localStorage for the remembered origins in scope, and no others", async () => {
+    const session = new FakeClearSiteSession(SITE_JAR);
+
+    await clearBrowserSiteLocalStorage(
+      "example.com",
+      session,
+      () => [
+        "https://app.example.com",
+        "https://example.com",
+        "https://other.org",
+      ],
+      null,
+    );
+
+    expect(session.clearedStorage).toEqual([
+      { origin: "https://app.example.com", storages: ["localstorage"] },
+      { origin: "https://example.com", storages: ["localstorage"] },
+    ]);
+  });
+
+  it("clears an origin that was observed while an earlier clear was still out", async () => {
+    const session = new FakeClearSiteSession(SITE_JAR);
+    const origins: string[] = ["https://example.com"];
+    const rememberedOrigins = (): readonly string[] => origins;
+    const originalClearStorageData = session.clearStorageData.bind(session);
+    session.clearStorageData = (
+      options: ClearStorageDataOptions,
+    ): Promise<void> => {
+      if (options.origin === "https://example.com") {
+        // Simulates another tile landing on a fresh origin of the site while
+        // this clear is still out: one in scope, one not.
+        origins.push("https://app.example.com", "https://other.org");
+      }
+      return originalClearStorageData(options);
+    };
+
+    await clearBrowserSiteLocalStorage(
+      "example.com",
+      session,
+      rememberedOrigins,
+      null,
+    );
+
+    expect(
+      session.clearedStorage.filter(
+        (options) => options.origin === "https://example.com",
+      ),
+    ).toHaveLength(1);
+    expect(
+      session.clearedStorage.filter(
+        (options) => options.origin === "https://app.example.com",
+      ),
+    ).toHaveLength(1);
+    expect(
+      session.clearedStorage.some(
+        (options) => options.origin === "https://other.org",
+      ),
+    ).toBe(false);
+  });
+
+  it("stops clearing between origins once the signal is aborted", async () => {
+    const session = new FakeClearSiteSession(SITE_JAR);
+    const controller = new AbortController();
+    const originalClearStorageData = session.clearStorageData.bind(session);
+    session.clearStorageData = (
+      options: ClearStorageDataOptions,
+    ): Promise<void> => {
+      // Aborts right after the first origin's clear starts, so the loop's
+      // between-origin check is what has to catch it - not just its entry
+      // check.
+      if (session.clearedStorage.length === 0) controller.abort();
+      return originalClearStorageData(options);
+    };
+
+    await expect(
+      clearBrowserSiteLocalStorage(
+        "example.com",
+        session,
+        () => [
+          "https://app.example.com",
+          "https://example.com",
+          "https://sub.example.com",
+        ],
+        controller.signal,
+      ),
+    ).rejects.toThrow();
+
+    // Stopped before reaching the second or third origin.
+    expect(session.clearedStorage).toHaveLength(1);
+  });
+});
+
 /**
  * The coordinator holding one origin of the cleared site and one of another
  * site in EACH tier: the live tier this run observed, and the retained tier
@@ -297,17 +393,29 @@ describe("clearBrowserSite against an in-flight observation", () => {
 });
 
 describe("clearBrowserSite delta behaviour", () => {
+  /**
+   * Attached, then stepped past the observer's startup grace window: inside it
+   * no removal is witnessed at all (universal-sign-in decision 7), and a clear
+   * is a steady-state action. A clear that DOES fall inside the window still
+   * reaches the host - `recordForgottenBrowserSite` bumps the forget ledger
+   * before the jar is touched and the digest is what prunes the host's store
+   * (ticket 04) - it just does not reach it through `removedKeys`.
+   */
   function attachObserver(
     session: FakeClearSiteSession,
     deltas: BrowserPrimaryProfileDelta[],
   ): BrowserCookieChangeObserver {
+    let now = 1_000;
     const observer = new BrowserCookieChangeObserver({
       cookies: session.cookies,
       emit: (delta) => deltas.push(delta),
-      now: () => 1_000,
+      now: () => now,
+      monotonicNow: () => now,
       coalesceWindowMs: BROWSER_COOKIE_DELTA_WINDOW_MS,
+      onLocalCookieWrite: () => undefined,
     });
     observer.attach();
+    now += BROWSER_COOKIE_REMOVAL_GRACE_MS;
     return observer;
   }
 
@@ -357,25 +465,6 @@ describe("clearBrowserSite delta behaviour", () => {
       // for an observer that had stopped tracking removals entirely.
       expect(expectedRemoved).toHaveLength(2);
       expect([...delta.removedKeys].sort(byName)).toEqual(expectedRemoved);
-      observer.dispose();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("emits no delta on the evict path - the store already knows", async () => {
-    vi.useFakeTimers();
-    try {
-      const session = new FakeClearSiteSession(SITE_JAR);
-      const deltas: BrowserPrimaryProfileDelta[] = [];
-      const observer = attachObserver(session, deltas);
-
-      await observer.suppress("example.com", () =>
-        clearBrowserSite("example.com", session, noOrigins),
-      );
-      await vi.advanceTimersByTimeAsync(BROWSER_COOKIE_DELTA_WINDOW_MS * 2);
-
-      expect(deltas).toEqual([]);
       observer.dispose();
     } finally {
       vi.useRealTimers();

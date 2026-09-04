@@ -1,6 +1,7 @@
 import type { Event, Input, RenderProcessGoneDetails, Result } from "electron";
 import type { BrowserViewStatus } from "@traycer-clients/shared/platform/browser-view";
 import { log } from "../../app/logger";
+import { guestNavigationGuards } from "../browser-guest-navigation";
 import type {
   BrowserViewPopupWindow,
   ManagedBrowserView,
@@ -48,6 +49,7 @@ interface BrowserViewEntryFactoryOptions {
     reason: string | null,
   ) => void;
   readonly emitStatus: (entry: BrowserViewEntry) => void;
+  readonly emitFocus: (entry: BrowserViewEntry) => void;
   readonly closeEntry: (entry: BrowserViewEntry) => void;
 }
 
@@ -80,6 +82,7 @@ export class BrowserViewEntryFactory {
     reason: string | null,
   ) => void;
   private readonly emitStatus: (entry: BrowserViewEntry) => void;
+  private readonly emitFocus: (entry: BrowserViewEntry) => void;
   private readonly closeEntry: (entry: BrowserViewEntry) => void;
 
   constructor(options: BrowserViewEntryFactoryOptions) {
@@ -95,6 +98,7 @@ export class BrowserViewEntryFactory {
     this.observePrimaryProfileOrigin = options.observePrimaryProfileOrigin;
     this.setStatus = options.setStatus;
     this.emitStatus = options.emitStatus;
+    this.emitFocus = options.emitFocus;
     this.closeEntry = options.closeEntry;
   }
 
@@ -134,6 +138,11 @@ export class BrowserViewEntryFactory {
         "did-navigate": (_event: Event, url: string): void => {
           this.handleCommittedNavigation(entry, url);
         },
+        // The page-initiated half of the guest scheme gate (browser security
+        // review, root cause C). `navigate` in the manager covers what this
+        // process asks for; these cover what the page asks for on its own -
+        // a link, a scripted `location =`, a server redirect, a subframe.
+        ...guestNavigationGuards(),
         "did-start-navigation": (
           _event: Event,
           _url: string,
@@ -151,6 +160,9 @@ export class BrowserViewEntryFactory {
         },
         "found-in-page": (_event: Event, result: Result): void => {
           this.find.handleFoundInPage(entry, result);
+        },
+        focus: (): void => {
+          this.emitFocus(entry);
         },
         "page-title-updated": (): void => {
           if (entry.internalNavigation) return;
@@ -192,6 +204,7 @@ export class BrowserViewEntryFactory {
       overlaySnapshotStale: false,
       overlayAwaitingPaintAck: false,
       overlayParked: false,
+      overlayRestoreToken: null,
       visible: null,
       lastLoggedVisible: null,
       rendererResetPending: false,

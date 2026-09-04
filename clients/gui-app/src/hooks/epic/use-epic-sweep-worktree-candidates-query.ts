@@ -23,7 +23,6 @@ import { toastFromHostError } from "@/lib/host-error-toast";
 import { withHostQueryErrorBoundary } from "@/lib/query/host-query-error-boundary";
 import { oldestResolvedAt } from "@/lib/worktree/oldest-resolved-at";
 import { sweepEligibleTier } from "@/lib/worktree/sweep-candidates";
-import { sanitizeHoldersRevision } from "@/lib/worktree/teardown-holder-copy";
 
 // Same bound as run-worktree-cleanup's fallback fan-out.
 const MAX_PARALLEL_CLEANUP_STREAMS = 2;
@@ -33,7 +32,6 @@ type PathHolderInventory =
   | {
       readonly kind: "ready";
       readonly holders: readonly WorktreeBusyHolder[];
-      readonly holdersRevision: string | undefined;
     };
 
 interface SweepCandidatesPayload {
@@ -74,12 +72,6 @@ export interface EpicSweepWorktreeRow {
    * never treated as empty.
    */
   readonly holdersStatus: "none" | "loading" | "ready" | "unknown";
-  /**
-   * Host digest of the ready inventory. Echo as
-   * `expectedHoldersRevision` on delete. Absent on old hosts and on
-   * the unknown fallback.
-   */
-  readonly holdersRevision: string | undefined;
 }
 
 export interface EpicSweepWorktreeCandidatesResult {
@@ -420,7 +412,7 @@ function applyHolderInventory(
   inventory: PathHolderInventory | undefined,
 ): EpicSweepWorktreeRow {
   if (row.note !== "in-use") {
-    return { ...row, holdersStatus: "none", holdersRevision: undefined };
+    return { ...row, holdersStatus: "none" };
   }
   if (inventory === undefined) {
     return {
@@ -428,7 +420,6 @@ function applyHolderInventory(
       disabled: true,
       holders: [],
       holdersStatus: "loading",
-      holdersRevision: undefined,
     };
   }
   if (inventory.kind === "unknown") {
@@ -437,7 +428,6 @@ function applyHolderInventory(
       disabled: false,
       holders: [],
       holdersStatus: "unknown",
-      holdersRevision: undefined,
     };
   }
   return {
@@ -445,7 +435,6 @@ function applyHolderInventory(
     disabled: false,
     holders: inventory.holders,
     holdersStatus: "ready",
-    holdersRevision: inventory.holdersRevision,
   };
 }
 
@@ -484,16 +473,12 @@ async function readPathHolderInventory(
       worktreePath,
       owner: null,
     });
-    const holdersRevision = sanitizeHoldersRevision(response.holdersRevision);
-    // Empty inventory or a missing digest cannot form consent — same
-    // unknown fallback as an unsupported host.
-    if (response.holders.length === 0 || holdersRevision === undefined) {
+    if (response.holders.length === 0) {
       return { kind: "unknown" };
     }
     return {
       kind: "ready",
       holders: response.holders,
-      holdersRevision,
     };
   } catch {
     return { kind: "unknown" };
@@ -511,7 +496,6 @@ function classifySweepRow(
     defaultChecked: false,
     holders: [],
     holdersStatus: "none" as const,
-    holdersRevision: undefined,
   };
   if (entry.inUse) {
     return {

@@ -53,7 +53,10 @@
  */
 import { z } from "zod";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
-import { managedCommandSchema } from "@traycer/protocol/host/managed-command/unary-schemas";
+import {
+  managedCommandSchema,
+  managedCommandSchemaPreRelaunch,
+} from "@traycer/protocol/host/managed-command/unary-schemas";
 
 /**
  * Ceiling on one `loadOlder` window. The viewer pages in screenfuls, so this is
@@ -109,12 +112,22 @@ export type ManagedCommandSubscribeOutputOpenRequest = z.infer<
   typeof managedCommandSubscribeOutputOpenRequestSchema
 >;
 
-export const managedCommandSubscribeOutputServerFrameSchema =
-  z.discriminatedUnion("kind", [
+/**
+ * The server frames, parameterized on the command shape the `snapshot` and
+ * `status` headers carry. `@1.0` shipped (cli-v1.2.0) with the pre-relaunch
+ * command; `@1.1` carries the live one. Everything else on the stream is
+ * identical across the two minors, and the host strips the flag from a `1.0`
+ * subscriber's headers (`managed-command-view.ts`) so the raw wire matches
+ * the negotiated contract - the same discipline `chat.subscribe` follows.
+ */
+function managedCommandSubscribeOutputServerFrames<
+  TCommand extends z.ZodTypeAny,
+>(commandSchema: TCommand) {
+  return z.discriminatedUnion("kind", [
     z.object({
       kind: z.literal("snapshot"),
       ...textFrameFields,
-      command: managedCommandSchema,
+      command: commandSchema,
       /** The opening tail, oldest line first. */
       lines: z.array(managedCommandLogLineSchema),
       /** Where `lines` begin - hand it back on `loadOlder` to page up. */
@@ -147,7 +160,7 @@ export const managedCommandSubscribeOutputServerFrameSchema =
     z.object({
       kind: z.literal("status"),
       ...textFrameFields,
-      command: managedCommandSchema,
+      command: commandSchema,
     }),
     // The command was deleted: its row, process and entire output history are
     // gone. The stream stays open so the window can show its dead-state banner
@@ -162,8 +175,20 @@ export const managedCommandSubscribeOutputServerFrameSchema =
       ...textFrameFields,
     }),
   ]);
+}
+
+/** The live (`@1.1`) frames: headers carry `relaunchOnHostRestart`. */
+export const managedCommandSubscribeOutputServerFrameSchema =
+  managedCommandSubscribeOutputServerFrames(managedCommandSchema);
 export type ManagedCommandSubscribeOutputServerFrame = z.infer<
   typeof managedCommandSubscribeOutputServerFrameSchema
+>;
+
+/** The shipped (`@1.0`) frames: headers carry the pre-relaunch command. */
+export const managedCommandSubscribeOutputServerFrameSchemaV10 =
+  managedCommandSubscribeOutputServerFrames(managedCommandSchemaPreRelaunch);
+export type ManagedCommandSubscribeOutputServerFrameV10 = z.infer<
+  typeof managedCommandSubscribeOutputServerFrameSchemaV10
 >;
 
 export const managedCommandSubscribeOutputClientFrameSchema =
@@ -199,6 +224,20 @@ export type ManagedCommandSubscribeOutputClientFrame = z.infer<
 export const managedCommandSubscribeOutputV10 = defineStreamRpcContract({
   method: "managedCommand.subscribeOutput",
   schemaVersion: { major: 1, minor: 0 } as const,
+  openRequestSchema: managedCommandSubscribeOutputOpenRequestSchema,
+  serverFrameSchema: managedCommandSubscribeOutputServerFrameSchemaV10,
+  clientFrameSchema: managedCommandSubscribeOutputClientFrameSchema,
+});
+
+// ─── `managedCommand.subscribeOutput@1.1` ───────────────────────────────────
+//
+// Adds `relaunchOnHostRestart` to the `snapshot` / `status` command headers.
+// Same open request, same client frames: a `1.0` peer negotiates and keeps
+// reading headers without the flag.
+
+export const managedCommandSubscribeOutputV11 = defineStreamRpcContract({
+  method: "managedCommand.subscribeOutput",
+  schemaVersion: { major: 1, minor: 1 } as const,
   openRequestSchema: managedCommandSubscribeOutputOpenRequestSchema,
   serverFrameSchema: managedCommandSubscribeOutputServerFrameSchema,
   clientFrameSchema: managedCommandSubscribeOutputClientFrameSchema,

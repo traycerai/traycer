@@ -15,3 +15,11 @@ export const FILE_EDIT_REASON_COPY: Record<FileEditReason, string> = {
   not_intercepted: "Skipped - edit was not intercepted.",
   denied: "Edit denied - the file was not changed.",
 };
+
+/**
+ * PDF-specific stand-in for a snapshot text diff. Snapshots retain only
+ * text content (binary captures are rejected at the store), so the only
+ * PDFs that reach a snapshot patch are ASCII-authored ones - and even for
+ * those, a line diff of PDF source is noise, not review material.
+ */
+export const PDF_FILE_DIFF_COPY = "PDF file - text diff not shown.";

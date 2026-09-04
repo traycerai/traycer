@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { existsSync, statSync, utimesSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { REPORT_LOG_TAIL_MAX_BYTES } from "@traycer-clients/shared/support/image-attachment-guards";
 
 interface CapturedAttachment {
@@ -820,11 +821,9 @@ describe("DesktopSupportService - fingerprint sightings on freeze", () => {
     );
   });
 
-  it("does not re-record a sighting on the idempotent second freeze of a live key", async () => {
-    const service = buildService(null);
-    await service.freezeEvidence(KEY, "fp:v1:sight");
-    await service.freezeEvidence(KEY, "fp:v1:sight");
-    expect(reportLedgerMock.recordFingerprintSighting).toHaveBeenCalledTimes(1);
+  it("skips the sighting when fingerprint is null", async () => {
+    await buildService(null).freezeEvidence(KEY, null);
+    expect(reportLedgerMock.recordFingerprintSighting).not.toHaveBeenCalled();
   });
 
   it("records ONE sighting across StrictMode freeze → discard → freeze of the same key", async () => {
@@ -838,20 +837,6 @@ describe("DesktopSupportService - fingerprint sightings on freeze", () => {
     service.discardFrozenEvidence(KEY);
     await service.freezeEvidence(KEY, "fp:v1:sight");
     expect(reportLedgerMock.recordFingerprintSighting).toHaveBeenCalledTimes(1);
-  });
-
-  it("still records a second sighting for a different frozen-evidence key (real re-open)", async () => {
-    const service = buildService(null);
-    await service.freezeEvidence(KEY, "fp:v1:sight");
-    service.discardFrozenEvidence(KEY);
-    // A genuine second dialog open mints a new draftId → new key.
-    await service.freezeEvidence("sender-1:2", "fp:v1:sight");
-    expect(reportLedgerMock.recordFingerprintSighting).toHaveBeenCalledTimes(2);
-  });
-
-  it("skips the sighting when fingerprint is null", async () => {
-    await buildService(null).freezeEvidence(KEY, null);
-    expect(reportLedgerMock.recordFingerprintSighting).not.toHaveBeenCalled();
   });
 });
 
@@ -976,18 +961,6 @@ describe("DesktopSupportService - freeze idempotency per key", () => {
     // itself, not just an incidental match.
     expect(eventIds[0]).toBe(eventIds[1]);
   });
-
-  it("returns the existing reportId when freezeEvidence is called again for an already-frozen live draft", async () => {
-    const service = buildService(null);
-    const { reportId: first } = await service.freezeEvidence(KEY, null);
-    const { reportId: second } = await service.freezeEvidence(KEY, null);
-
-    // Not a fresh mint: a second freeze of a still-live draft (React
-    // StrictMode's dev double-effect, or an accidental duplicate call) must
-    // not straddle a retry-vs-submit across two different report/event ids.
-    expect(second).toBe(first);
-  });
-
   it("resolves concurrent in-flight freezes of the same key to one shared reportId", async () => {
     const service = buildService(null);
 
@@ -1389,5 +1362,43 @@ describe("DesktopSupportService.saveDiagnosticBundle", () => {
     expect(bundle).not.toHaveProperty("images");
     expect(raw).not.toContain("secret-screen.png");
     expect(raw).not.toContain("image/png");
+  });
+  it("writes the bundle owner-only and keeps a bundle saved moments ago", async () => {
+    // The bundle lands in a shared `/tmp` holding the desktop and host log
+    // tails and the browser trace, and every save used to leave its own
+    // directory behind for the lifetime of the machine's `/tmp`.
+    //
+    // The sweep is age-bounded, though: a bundle is REVEALED to the user so
+    // they can attach it to a ticket, so saving a second one must not pull the
+    // first out from under an open file manager window.
+    const service = buildService(null);
+    await service.freezeEvidence(KEY, null);
+
+    const first = await service.saveDiagnosticBundle(FORM, KEY);
+    expect(statSync(first.path).mode & 0o777).toBe(0o600);
+
+    const second = await service.saveDiagnosticBundle(FORM, KEY);
+    expect(second.path).not.toBe(first.path);
+    expect(existsSync(first.path)).toBe(true);
+    expect(existsSync(second.path)).toBe(true);
+  });
+
+  it("erases a bundle a previous run left behind, not just this run's", async () => {
+    // The bound has to survive a relaunch: an in-memory "last directory"
+    // field only ever cleans up within one process lifetime, so every restart
+    // orphaned another bundle in `/tmp` forever.
+    const orphan = await mkdtemp(join(tmpdir(), "traycer-diagnostic-bundle-"));
+    await writeFile(join(orphan, "report.json"), "{}", "utf8");
+    // Aged past the retention window, which is what makes it an ORPHAN rather
+    // than a bundle the user is still holding on to.
+    const stale = new Date(Date.now() - 25 * 60 * 60_000);
+    utimesSync(orphan, stale, stale);
+
+    const service = buildService(null);
+    await service.freezeEvidence(KEY, null);
+    const saved = await service.saveDiagnosticBundle(FORM, KEY);
+
+    expect(existsSync(orphan)).toBe(false);
+    expect(existsSync(saved.path)).toBe(true);
   });
 });

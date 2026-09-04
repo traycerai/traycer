@@ -1,20 +1,19 @@
 import {
-  use,
   useCallback,
   type KeyboardEvent,
   type MouseEvent,
   type PointerEvent,
   type ReactNode,
 } from "react";
-import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link-mutation";
+import { useOpenLink } from "@/lib/links/open-link";
 import { cn } from "@/lib/utils";
-import { RunnerHostContext } from "@/providers/runner-host-context";
 import type { WorktreePrReference } from "@/components/worktree/worktree-pr-metadata-model";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import {
   PR_STATE_ICON,
   PR_STATE_TINT_CLASS,
 } from "@/components/worktree/worktree-pr-state-palette";
+import { onMiddleClick } from "@/lib/dom/on-middle-click";
 
 /**
  * Icon-only PR references for a sidebar chat row's second line: one glyph +
@@ -54,16 +53,8 @@ export function WorktreePrStateIcons(props: {
 function WorktreePrStateIcon(props: {
   readonly reference: WorktreePrReference;
 }): ReactNode {
-  const runnerHost = use(RunnerHostContext);
-  const openExternalLink = useRunnerOpenExternalLink();
+  const openLink = useOpenLink();
   const url = props.reference.url;
-  const open = useCallback((): void => {
-    if (runnerHost === null) {
-      window.open(url, "_blank", "noreferrer");
-      return;
-    }
-    openExternalLink.mutate(url);
-  }, [openExternalLink, runnerHost, url]);
   const openOnClick = useCallback(
     (event: MouseEvent<HTMLSpanElement>): void => {
       // `stopPropagation` keeps the row's onClick from opening the chat;
@@ -72,9 +63,9 @@ function WorktreePrStateIcon(props: {
       // than a bubbled handler.
       event.stopPropagation();
       event.preventDefault();
-      open();
+      void openLink(url, "github", event);
     },
-    [open],
+    [openLink, url],
   );
   const openOnKeyDown = useCallback(
     (event: KeyboardEvent<HTMLSpanElement>): void => {
@@ -83,9 +74,17 @@ function WorktreePrStateIcon(props: {
       // the enclosing row.
       event.stopPropagation();
       event.preventDefault();
-      open();
+      // Keyboard activation carries modifiers too (ctrl+Enter forces the OS
+      // browser); only the mouse button is missing (R7).
+      void openLink(url, "github", {
+        altKey: event.altKey,
+        ctrlKey: event.ctrlKey,
+        metaKey: event.metaKey,
+        shiftKey: event.shiftKey,
+        button: 0,
+      });
     },
-    [open],
+    [openLink, url],
   );
   const stopDragActivation = useCallback(
     (event: PointerEvent<HTMLSpanElement>): void => {
@@ -115,6 +114,7 @@ function WorktreePrStateIcon(props: {
           PR_STATE_TINT_CLASS[props.reference.state],
         )}
         onClick={openOnClick}
+        onAuxClick={onMiddleClick(openOnClick)}
         onKeyDown={openOnKeyDown}
         onPointerDown={stopDragActivation}
       >

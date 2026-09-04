@@ -1,4 +1,11 @@
-import { createContext, use, useCallback, useEffect, useMemo } from "react";
+import {
+  createContext,
+  use,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+} from "react";
 import { useDroppable } from "@dnd-kit/core";
 import { cn } from "@/lib/utils";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -27,6 +34,7 @@ import { useEmptyShellDropActive } from "@/components/epic-canvas/dnd/dnd-store"
 import { MobileEpicTileView } from "@/components/epic-canvas/mobile/mobile-epic-tile-view";
 import { MobileTabSwitcherMount } from "@/components/epic-canvas/mobile/mobile-tab-switcher-mount";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
+import { remeasureTileSurfaceGeometry } from "@/components/epic-canvas/surface-host/tile-surface-geometry-coordinator";
 
 interface TileCanvasPaneContextValue {
   readonly epicId: string;
@@ -131,6 +139,27 @@ function TileCanvasLive(
     [resizeSplitInTab, tabId],
   );
   const paneContext = useMemo(() => ({ epicId, tabId }), [epicId, tabId]);
+
+  // Hosted chat bodies (`StableTileSurfaceHost`) paint at rects the geometry
+  // coordinator reads inside a ResizeObserver callback, and a ResizeObserver
+  // reports SIZE changes only. A structural change to this tree can move a
+  // pane without resizing it: dropping a tab on the left edge of the only
+  // other pane in a 50/50 split inserts a new pane on that side and closes
+  // the emptied source, so the chat pane keeps its exact width and only its
+  // `left` changes - the same position-only move `TopLevelTabHost` handles
+  // for "Reverse views". The chat's `TabGroupView` is keyed by pane id and
+  // never remounts, so its slot registration is not re-created either;
+  // without this the hosted body stays painted at its old rect, over the pane
+  // that now holds it, while the chat's own pane draws empty. Sizes matter
+  // too: a middle pane between two inline (non-hosted) neighbours moves
+  // without resizing when they trade width, and nothing registered resizes.
+  // Layout effect, not effect: the flex geometry lands in this same commit
+  // and the re-read has to see it before paint. Parent layout effects run
+  // after the children's, so a slot mounted by this commit has already
+  // registered and measured itself.
+  useLayoutEffect(() => {
+    remeasureTileSurfaceGeometry();
+  }, [root, sizesByGroupId]);
 
   if (root === null) {
     // During a fresh create the eager-opened chat tab populates the canvas a

@@ -35,7 +35,7 @@ function makeHandoff(
       profileId: null,
     },
     worktreeIntent: null,
-    placement: { kind: "active-tile" },
+    placement: null,
     clientActionId: null,
     messageId: null,
     failureReason: null,

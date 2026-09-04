@@ -2,7 +2,8 @@ import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-ru
 import {
   cleanup,
   fireEvent,
-  render,
+  render as renderUi,
+  type RenderResult,
   screen,
   waitFor,
 } from "@testing-library/react";
@@ -14,13 +15,13 @@ import { TraycerMarkdown } from "@/markdown";
 import { classifyHref } from "@/markdown/links/classify-href";
 import { markdownUrlTransform } from "@/markdown/links/markdown-url-transform";
 import { MarkdownLinkContext } from "@/markdown/links/markdown-link-context";
-import { BrowserLinkRoutingProvider } from "@/lib/browser-view/link-routing/browser-link-routing";
+import { LinkTargetProvider } from "@/lib/links/link-target-provider";
 import {
   BrowserSessionsContext,
   type BrowserSessionsState,
 } from "@/components/epic-canvas/renderers/browser-sessions-context";
+import { BrowserSessionsSnapshotProvider } from "@/components/epic-canvas/renderers/browser-sessions-provider";
 import { createSingleTileCanvas } from "@/stores/epics/canvas/actions";
-import { collectPanes } from "@/stores/epics/canvas/tile-tree";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import {
   isBrowserSessionTileRef,
@@ -28,6 +29,15 @@ import {
 } from "@/stores/epics/canvas/types";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
+import { WithTestQueryClient } from "@/__tests__/with-test-query-client";
+
+/**
+ * Every link surface below reaches the external-link bridge mutation, which
+ * needs a `QueryClientProvider` above it.
+ */
+function render(ui: ReactNode): RenderResult {
+  return renderUi(ui, { wrapper: WithTestQueryClient });
+}
 
 const VIEW_TAB_ID = "markdown-view-tab";
 const SOURCE_TILE: EpicCanvasTileRef = {
@@ -55,9 +65,13 @@ afterEach(() => {
   openTab.mockClear();
   useEpicCanvasStore.setState({ canvasByTabId: {}, tabsById: {} });
   useSettingsStore.setState({
-    browserLinkDefaultMode: "in-app",
-    terminalBrowserLinkOpenMode: "in-app",
-    markdownBrowserLinkOpenMode: "in-app",
+    linkOpen: {
+      default: "in-app",
+      markdown: "in-app",
+      terminal: "in-app",
+      github: "in-app",
+      image: "in-app",
+    },
     browserDevOrigins: [],
   });
   useDesktopDialogStore.setState({
@@ -102,8 +116,6 @@ function renderMarkdownWithBrowserRouting(
   host: MockRunnerHost,
 ) {
   const canvas = createSingleTileCanvas(SOURCE_TILE);
-  const pane = collectPanes(canvas.root).at(0);
-  if (pane === undefined) throw new Error("expected source pane");
   useEpicCanvasStore.setState({
     tabsById: {
       [VIEW_TAB_ID]: {
@@ -116,53 +128,52 @@ function renderMarkdownWithBrowserRouting(
       [VIEW_TAB_ID]: canvas,
     },
   });
+  const sessions: BrowserSessionsState = {
+    hostId: SOURCE_TILE.hostId,
+    lifecycle: "live",
+    inventoryReady: true,
+    canMaterializeElectron: false,
+    items: [],
+    errorMessage: null,
+    retry: () => undefined,
+    openTab,
+    closeTab: () => Promise.resolve(),
+  };
   return render(
     <RunnerHostContext.Provider value={host}>
-      <BrowserSessionsContext.Provider
-        value={{
-          hostId: SOURCE_TILE.hostId,
-          lifecycle: "live",
-          inventoryReady: true,
-          canMaterializeElectron: false,
-          items: [],
-          errorMessage: null,
-          retry: () => undefined,
-          openTab,
-          closeTab: () => Promise.resolve(),
-        }}
-      >
-        <BrowserLinkRoutingProvider
-          source={{
-            viewTabId: VIEW_TAB_ID,
-            paneId: pane.id,
-            hostId: SOURCE_TILE.hostId,
-          }}
-        >
-          <TraycerMarkdown
-            className={null}
-            proseSize="normal"
-            components={null}
-            remarkPlugins={null}
-            rehypePlugins={null}
-            quotable={false}
-            isStreaming={false}
-          >
-            {markdown}
-          </TraycerMarkdown>
-        </BrowserLinkRoutingProvider>
+      <BrowserSessionsContext.Provider value={sessions}>
+        {/* The click-time reader lives on the snapshot context (C8). */}
+        <BrowserSessionsSnapshotProvider value={sessions}>
+          <LinkTargetProvider epicId="epic-markdown" viewTabId={VIEW_TAB_ID}>
+            <TraycerMarkdown
+              className={null}
+              proseSize="normal"
+              components={null}
+              remarkPlugins={null}
+              rehypePlugins={null}
+              quotable={false}
+              isStreaming={false}
+            >
+              {markdown}
+            </TraycerMarkdown>
+          </LinkTargetProvider>
+        </BrowserSessionsSnapshotProvider>
       </BrowserSessionsContext.Provider>
     </RunnerHostContext.Provider>,
   );
 }
 
 describe("MarkdownAnchor", () => {
-  it("routes web-safe links through the runner host", () => {
+  it("routes web-safe links through the runner host", async () => {
     const host = createRunnerHost();
     renderMarkdown("[Docs](https://example.com/docs)", host);
 
     fireEvent.click(screen.getByRole("link", { name: "Docs" }));
 
-    expect(host.openedExternalLinks).toEqual(["https://example.com/docs"]);
+    // The bridge is a mutation now, so the handoff lands a microtask later.
+    await waitFor(() => {
+      expect(host.openedExternalLinks).toEqual(["https://example.com/docs"]);
+    });
   });
 
   it("opens markdown http links through the host and places its session pointer", async () => {
@@ -188,6 +199,44 @@ describe("MarkdownAnchor", () => {
         },
       ]);
     });
+  });
+
+  it("routes a middle-click through the seam, which only auxclick carries", () => {
+    const host = createRunnerHost();
+    renderMarkdownWithBrowserRouting("[Docs](https://example.com/docs)", host);
+    const link = screen.getByRole("link", { name: "Docs" });
+
+    // A browser dispatches `auxclick` for the middle button and no `click` at
+    // all, so an onClick-only anchor would skip the seam AND keep its default.
+    const defaultAllowed = fireEvent(
+      link,
+      new MouseEvent("auxclick", {
+        bubbles: true,
+        cancelable: true,
+        button: 1,
+      }),
+    );
+
+    expect(defaultAllowed).toBe(false);
+    expect(openTab).toHaveBeenCalledWith(null, "https://example.com/docs");
+    expect(host.openedExternalLinks).toEqual([]);
+  });
+
+  it("leaves a right-click to the browser's context menu", () => {
+    const host = createRunnerHost();
+    renderMarkdownWithBrowserRouting("[Docs](https://example.com/docs)", host);
+
+    fireEvent(
+      screen.getByRole("link", { name: "Docs" }),
+      new MouseEvent("auxclick", {
+        bubbles: true,
+        cancelable: true,
+        button: 2,
+      }),
+    );
+
+    expect(openTab).not.toHaveBeenCalled();
+    expect(host.openedExternalLinks).toEqual([]);
   });
 
   it("lets in-page anchors keep browser default navigation", () => {

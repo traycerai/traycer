@@ -39,18 +39,14 @@ import {
   remoteAwareOwnerIdentity,
   remoteAwareOwnerIdentityKey,
 } from "@/lib/host/transport-key";
+import {
+  DEFAULT_INITIAL_BACKOFF_MS,
+  DEFAULT_MAX_BACKOFF_MS,
+  DEFAULT_OPEN_ACK_TIMEOUT_MS,
+  DEFAULT_PING_INTERVAL_MS,
+  DEFAULT_PONG_TIMEOUT_MS,
+} from "@traycer-clients/shared/host-transport/transport-config";
 
-/**
- * Per-session stream dial / handshake / heartbeat timings. Mirror the values
- * the app-wide `HostStreamProvider` builds its `WsStreamClient` with (those
- * constants are module-private there) so a transient client behaves
- * identically on the wire.
- */
-const OPEN_ACK_TIMEOUT_MS = 10_000;
-const PING_INTERVAL_MS = 25_000;
-const PONG_TIMEOUT_MS = 60_000;
-const INITIAL_BACKOFF_MS = 1_000;
-const MAX_BACKOFF_MS = 30_000;
 const TRANSPORT_KEY_SEPARATOR = "\u0000";
 
 const browserStreamWebSocketFactory = createWhatwgStreamWebSocketFactory();
@@ -317,11 +313,11 @@ export function buildHostStreamClient(params: {
     evidence: transportEvidenceRelay,
     webSocketFactory: browserStreamWebSocketFactory,
     dialTimeoutMs: DEFAULT_DIAL_TIMEOUT_MS,
-    openAckTimeoutMs: OPEN_ACK_TIMEOUT_MS,
-    pingIntervalMs: PING_INTERVAL_MS,
-    pongTimeoutMs: PONG_TIMEOUT_MS,
-    initialBackoffMs: INITIAL_BACKOFF_MS,
-    maxBackoffMs: MAX_BACKOFF_MS,
+    openAckTimeoutMs: DEFAULT_OPEN_ACK_TIMEOUT_MS,
+    pingIntervalMs: DEFAULT_PING_INTERVAL_MS,
+    pongTimeoutMs: DEFAULT_PONG_TIMEOUT_MS,
+    initialBackoffMs: DEFAULT_INITIAL_BACKOFF_MS,
+    maxBackoffMs: DEFAULT_MAX_BACKOFF_MS,
     clientIdentity: getGuiClientIdentity(),
   });
 }

@@ -156,6 +156,17 @@ export function useEpicConnectionStatus(): StreamConnectionStatus {
 }
 
 /**
+ * Input (i) of the sync pill on its own - the RAW GUI↔host transport, not the
+ * display blend above. The pill's cloud-link grace reads it to tell a
+ * cloud-only drop (host reachable, edits durable on the host) apart from a
+ * host-link drop (edits exist only in this window), which derive the same
+ * `reconnecting` verdict and must not get the same grace.
+ */
+export function useEpicHostTransportStatus(): StreamConnectionStatus {
+  return useEpicStore((s) => s.hostTransportStatus);
+}
+
+/**
  * Input (iii) of the sync pill: the control lane's aggregate dirty bit, known
  * only after this open cycle's atomic dirty snapshot. A clean-looking map
  * before then (or on a legacy connection that cannot produce one) is unknown

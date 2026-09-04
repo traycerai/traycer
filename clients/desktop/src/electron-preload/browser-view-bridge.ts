@@ -4,10 +4,8 @@ import {
   RunnerHostInvoke,
 } from "../ipc-contracts/ipc-channels";
 import type {
+  BrowserSessionsStreamEventEnvelope,
   BrowserViewBridge,
-  BrowserPrimaryProfileCaptureResult,
-  BrowserStoreKeyUnwrapResult,
-  BrowserStoreKeyWrapResult,
   BrowserViewCapturePageResult,
   BrowserViewCertificateErrorChange,
   BrowserViewDebugSnapshot,
@@ -18,13 +16,13 @@ import type {
   BrowserViewOverlayReleaseResult,
   BrowserViewSnapshotInvalidatedChange,
   BrowserViewTileCommandEvent,
+  BrowserViewTileKey,
   BrowserViewNativeTabCapability,
   BrowserViewNativeTabStatusChange,
+  LoginImportResult,
+  LoginImportScan,
+  LoginImportSource,
 } from "@traycer-clients/shared/platform/browser-view";
-import type {
-  BrowserCdpResult,
-  BrowserPrimaryProfileDelta,
-} from "@traycer/protocol/host/browser/contracts";
 import type {
   BrowserAnnotationAttachedIpcEvent,
   BrowserAnnotationSessionIpcEvent,
@@ -36,16 +34,26 @@ import { subscribe } from "./subscribe";
 export function buildBrowserViewBridge(): { browserView: BrowserViewBridge } {
   return {
     browserView: {
-      ensureTab: (input) =>
+      openSessionsStream: (input) =>
         ipcRenderer.invoke(
-          RunnerHostInvoke.browserViewEnsureTab,
-          input,
-        ) as Promise<BrowserViewNativeTabCapability>,
-      acceptTab: (input) =>
-        ipcRenderer.invoke(
-          RunnerHostInvoke.browserViewAcceptTab,
+          RunnerHostInvoke.browserViewSessionsOpen,
           input,
         ) as Promise<void>,
+      closeSessionsStream: (key) =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.browserViewSessionsClose,
+          key,
+        ) as Promise<void>,
+      sendSessionsFrame: (input) =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.browserViewSessionsSend,
+          input,
+        ) as Promise<void>,
+      onSessionsStreamEvent: (handler) =>
+        subscribe<BrowserSessionsStreamEventEnvelope>(
+          RunnerHostEvent.browserViewSessionsEvent,
+          handler,
+        ),
       attachSurface: (input) =>
         ipcRenderer.invoke(
           RunnerHostInvoke.browserViewAttachSurface,
@@ -56,11 +64,6 @@ export function buildBrowserViewBridge(): { browserView: BrowserViewBridge } {
           RunnerHostInvoke.browserViewDetachSurface,
           input,
         ) as Promise<void>,
-      releaseTab: (input) =>
-        ipcRenderer.invoke(
-          RunnerHostInvoke.browserViewReleaseTab,
-          input,
-        ) as Promise<boolean>,
       controlElectronTab: (input) =>
         ipcRenderer.invoke(
           RunnerHostInvoke.browserViewControlElectronTab,
@@ -151,29 +154,16 @@ export function buildBrowserViewBridge(): { browserView: BrowserViewBridge } {
           RunnerHostInvoke.browserViewSaveLoginsSet,
           enabled,
         ) as Promise<boolean>,
-      wrapStoreKey: (rawKey) =>
-        ipcRenderer.invoke(
-          RunnerHostInvoke.browserViewStoreKeyWrap,
-          rawKey,
-        ) as Promise<BrowserStoreKeyWrapResult>,
-      unwrapStoreKey: (wrappedKey) =>
-        ipcRenderer.invoke(
-          RunnerHostInvoke.browserViewStoreKeyUnwrap,
-          wrappedKey,
-        ) as Promise<BrowserStoreKeyUnwrapResult>,
       forgetLogins: () =>
         ipcRenderer.invoke(
           RunnerHostInvoke.browserViewForgetLogins,
-        ) as Promise<void>,
-      onPrimaryProfileDelta: (handler) =>
-        subscribe<BrowserPrimaryProfileDelta>(
-          RunnerHostEvent.browserViewPrimaryProfileDelta,
-          handler,
-        ),
-      capturePrimaryProfile: () =>
-        ipcRenderer.invoke(
-          RunnerHostInvoke.browserViewPrimaryProfileCapture,
-        ) as Promise<BrowserPrimaryProfileCaptureResult>,
+        ) as Promise<boolean>,
+      // A domain, and main confirms it before a single frame leaves: the
+      // renderer may ask for one row to be cleared, and may not perform it.
+      clearSavedLoginSite: (domain) =>
+        ipcRenderer.invoke(RunnerHostInvoke.browserViewClearSavedLoginSite, {
+          domain,
+        }) as Promise<boolean>,
       // The tile key, not a domain: main derives the site from that tile's own
       // URL, so no renderer can name a site it is not looking at.
       clearSite: (input) =>
@@ -181,10 +171,23 @@ export function buildBrowserViewBridge(): { browserView: BrowserViewBridge } {
           RunnerHostInvoke.browserViewClearSite,
           input,
         ) as Promise<void>,
-      evictSite: (domain) =>
-        ipcRenderer.invoke(RunnerHostInvoke.browserViewEvictSite, {
-          domain,
-        }) as Promise<void>,
+      listLoginImportSources: () =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.browserViewLoginImportListSources,
+        ) as Promise<readonly LoginImportSource[]>,
+      pickLoginImportFile: () =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.browserViewLoginImportPickFile,
+        ) as Promise<LoginImportSource | null>,
+      scanLoginImportSource: (sourceId) =>
+        ipcRenderer.invoke(RunnerHostInvoke.browserViewLoginImportScan, {
+          sourceId,
+        }) as Promise<LoginImportScan>,
+      importLogins: (input) =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.browserViewLoginImportRun,
+          input,
+        ) as Promise<LoginImportResult>,
       onFindChange: (handler) =>
         subscribe<BrowserViewFindChange>(
           RunnerHostEvent.browserViewFindChange,
@@ -210,9 +213,19 @@ export function buildBrowserViewBridge(): { browserView: BrowserViewBridge } {
           RunnerHostEvent.browserViewTileCommand,
           handler,
         ),
+      onTileFocused: (handler) =>
+        subscribe<BrowserViewTileKey>(
+          RunnerHostEvent.browserViewTileFocused,
+          handler,
+        ),
       onSnapshotInvalidated: (handler) =>
         subscribe<BrowserViewSnapshotInvalidatedChange>(
           RunnerHostEvent.browserViewSnapshotInvalidated,
+          handler,
+        ),
+      onOverlayTileRestored: (handler) =>
+        subscribe<BrowserViewTileKey>(
+          RunnerHostEvent.browserViewOverlayRestored,
           handler,
         ),
       onAnnotationEvent: (handler) =>
@@ -225,11 +238,6 @@ export function buildBrowserViewBridge(): { browserView: BrowserViewBridge } {
           RunnerHostEvent.browserViewAnnotationAttached,
           handler,
         ),
-      dispatchElectronTabCdp: (input) =>
-        ipcRenderer.invoke(
-          RunnerHostInvoke.browserViewElectronTabCdpDispatch,
-          input,
-        ) as Promise<BrowserCdpResult>,
       startPipCapture: (input) =>
         ipcRenderer.invoke(
           RunnerHostInvoke.pipCaptureStart,

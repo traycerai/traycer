@@ -35,6 +35,7 @@ import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { SegmentCopyButton } from "@/components/chat/segments/segment-copy-button";
 import { ManagedCommandChatBacklink } from "@/components/managed-commands/managed-command-chat-backlink";
 import { ManagedCommandLifecycleActions } from "@/components/managed-commands/managed-command-lifecycle-actions";
+import { useManagedCommandRelaunchOnHostRestart } from "@/hooks/managed-command/use-managed-command-lifecycle-mutations";
 import { ManagedCommandStatusDot } from "@/components/managed-commands/managed-command-status-dot";
 import {
   useHostReachability,
@@ -63,6 +64,7 @@ import {
 import {
   MANAGED_COMMAND_OUTPUT_WINDOW_TITLE,
   managedCommandStatusLabel,
+  relaunchOnHostRestartLabel,
 } from "@/lib/managed-commands/managed-command-copy";
 import {
   isShellOutputBanner,
@@ -814,7 +816,6 @@ function ManagedCommandOutputControls(props: {
       <span className="pointer-events-auto flex shrink-0 items-center">
         <ManagedCommandOutputDetails
           command={props.command}
-          epicId={props.epicId}
           hostId={props.hostId}
           viewTabId={props.viewTabId}
         />
@@ -846,12 +847,18 @@ function ManagedCommandOutputControls(props: {
  */
 function ManagedCommandOutputDetails(props: {
   readonly command: ManagedCommand;
-  readonly epicId: string;
   readonly hostId: string;
   readonly viewTabId: string;
 }) {
   const { command } = props;
   const pid = command.status.state === "running" ? command.status.pid : null;
+  // The same derived value the switch beside this popover shows: a configure
+  // write that already answered beats a streamed record that has not caught
+  // up, so the row and the switch cannot disagree during that gap.
+  const relaunchOnHostRestart = useManagedCommandRelaunchOnHostRestart(
+    { hostId: props.hostId, commandId: command.id },
+    command,
+  );
   return (
     <Popover>
       <TooltipWrapper
@@ -918,9 +925,13 @@ function ManagedCommandOutputDetails(props: {
               </span>
             </DetailRow>
           )}
+          <DetailRow label="Host restart">
+            <span data-testid="managed-command-output-details-relaunch">
+              {relaunchOnHostRestartLabel(relaunchOnHostRestart)}
+            </span>
+          </DetailRow>
           <DetailRow label="Started by">
             <ManagedCommandChatBacklink
-              epicId={props.epicId}
               tabId={props.viewTabId}
               chatId={command.chatId}
               fallbackHostId={props.hostId}

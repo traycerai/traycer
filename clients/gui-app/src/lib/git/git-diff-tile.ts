@@ -11,6 +11,7 @@ import type {
 import { createDiffTileViewState } from "@/lib/diff/diff-tile-view-state";
 import {
   isImageAssetPath,
+  isPdfAssetPath,
   isSvgAssetPath,
 } from "@/lib/assets/image-extension-allowlist";
 
@@ -87,7 +88,7 @@ export function gitImageDiffSides(file: GitChangedFile): GitImageDiffSides {
 
 /**
  * `<ImageDiffView>`'s `key` for a git-backed file (PR review P1): its own
- * `useImageAsset` request key covers `(path, stage)`, never `headSha`/
+ * `useFileAsset` request key covers `(path, stage)`, never `headSha`/
  * `stagedOid` - so a staged or HEAD-relative side that stays mounted through
  * a commit/amend/re-stage keeps showing the OLD bytes, since `(path, stage)`
  * alone is unchanged. The unstaged/worktree side already has its own re-stat
@@ -118,7 +119,7 @@ export function gitImageDiffSides(file: GitChangedFile): GitImageDiffSides {
  * JSON-encoded with an explicit `"oid"`/`"stats"` tag on each side, not
  * delimiter-joined into the OID's own slot: an OID and a stats fallback
  * must never be able to alias each other structurally, not just avoid
- * colliding by string luck (mirrors `requestKeyFor`/`buildImageAssetCacheKey`'s
+ * colliding by string luck (mirrors `requestKeyFor`/`buildFileAssetCacheKey`'s
  * own JSON-array discipline for the identical reason).
  */
 type GitRevisionSideKey =
@@ -185,6 +186,34 @@ export function gitImageDiffRouting(file: GitChangedFile): GitImageDiffRouting {
   const routeToImageDiff =
     (isImage || isPreviousImage) && (file.isBinary || isSvg || isConflicted);
   return { routeToImageDiff, isSvg };
+}
+
+/**
+ * Whether the single-file diff tile shows the PDF summary-card view (PDF
+ * preview design, Q7 follow-up): per-side "PDF · size · View" cards instead
+ * of the plain binary placeholder. Checked AFTER `gitImageDiffRouting` in
+ * the tile - a rename straddling both allowlists (`a.png -> b.pdf`) keeps
+ * routing to the image diff, whose non-image side already explains itself.
+ *
+ * Extension-only for the CURRENT side, no `isBinary` requirement - the SVG
+ * precedent: a PDF can be authored as pure ASCII (no NUL bytes), which git's
+ * content sniff calls text, yet the cards are still the right rendering and
+ * the asset stream's `%PDF-` magic check still guards the open tile. No
+ * host-version gate: the open tile's own stream negotiation is the authority
+ * on whether the host can serve the bytes.
+ */
+export function gitRoutesToPdfDiffCards(file: GitChangedFile): boolean {
+  if (isPdfAssetPath(file.path)) return true;
+  // Renamed OFF the allowlist. `old.pdf -> new.bin` keeps the cards, which at
+  // least offer the old side where a binary placeholder offers nothing - but
+  // `old.pdf -> new.txt` has a real source diff on the surviving side, and a
+  // summary card about a file that is no longer a PDF is a worse answer than
+  // the text it was turned into.
+  return (
+    file.previousPath !== null &&
+    isPdfAssetPath(file.previousPath) &&
+    file.isBinary
+  );
 }
 
 export function gitDiffRepositoryContextLabel(

@@ -82,6 +82,12 @@ vi.mock(
     }),
     useManagedCommandStopAllIsPending: () => stopAllSharedFlight.isPending,
     useManagedCommandDelete: () => ({ mutate: vi.fn(), isPending: false }),
+    useManagedCommandConfigureIsPending: () => false,
+    useManagedCommandRelaunchOnHostRestart: (
+      _target: unknown,
+      streamed: { relaunchOnHostRestart: boolean },
+    ) => streamed.relaunchOnHostRestart,
+    useManagedCommandConfigure: () => ({ mutate: vi.fn(), isPending: false }),
     useManagedCommandDeliverHeld: () => ({
       mutate: deliverHeldMutate,
       isPending: deliverHeldOwnFlight.isPending,
@@ -134,6 +140,7 @@ function command(over: Partial<ManagedCommand>): ManagedCommand {
     cadence: { debounceMs: 500, maxWaitMs: 15_000, throttleMs: 5_000 },
     status: { state: "running", pid: 4410, startedAtMs: 10 },
     chatId: CHAT_ID,
+    relaunchOnHostRestart: false,
     createdAtMs: 10,
     updatedAtMs: 10,
     ...over,

@@ -69,6 +69,7 @@ export const RunnerHostInvoke = {
   getRegisteredUrlSchemes: "runnerHost:getRegisteredUrlSchemes",
   requestMicrophoneAccess: "runnerHost:requestMicrophoneAccess",
   openMicrophoneSettings: "runnerHost:openMicrophoneSettings",
+  openFullDiskAccessSettings: "runnerHost:openFullDiskAccessSettings",
   notificationOpenSystemSettings: "runnerHost:notifications:openSystemSettings",
   notificationShow: "runnerHost:notifications:show",
   traySetEpics: "runnerHost:tray:setEpics",
@@ -112,8 +113,6 @@ export const RunnerHostInvoke = {
   respondToQuitRequest: "runnerHost:appLifecycle:respondToQuitRequest",
   freshUnsyncedSnapshotResponse:
     "runnerHost:appLifecycle:freshUnsyncedSnapshotResponse",
-  finalBrowserStateCaptured:
-    "runnerHost:appLifecycle:finalBrowserStateCaptured",
   // The CROSS-WINDOW unsyncable set, which no renderer can compute: each one
   // holds only its own Epic session registry, while `appUpdateInstall`
   // restarts the whole app and its quit path deliberately skips the
@@ -191,6 +190,7 @@ export const RunnerHostInvoke = {
   windowSetContentProtection: "runnerHost:window:setContentProtection",
   diagnosticsGetMetrics: "runnerHost:diagnostics:getMetrics",
   diagnosticsTakeHeapSnapshot: "runnerHost:diagnostics:takeHeapSnapshot",
+  diagnosticsMeasureJsHeaps: "runnerHost:diagnostics:measureJsHeaps",
   diagnosticsTraceStart: "runnerHost:diagnostics:trace:start",
   diagnosticsTraceStop: "runnerHost:diagnostics:trace:stop",
   appUpdateGetSnapshot: "runnerHost:appUpdate:getSnapshot",
@@ -325,14 +325,18 @@ export const RunnerHostInvoke = {
   zoomStepIn: "runnerHost:zoom:stepIn",
   zoomStepOut: "runnerHost:zoom:stepOut",
   zoomReset: "runnerHost:zoom:reset",
-  browserViewEnsureTab: "runnerHost:browserView:nativeTab:ensure",
-  browserViewAcceptTab: "runnerHost:browserView:nativeTab:accept",
+  // The main-owned `browser.sessions` stream (browser-security-hardening H10).
+  // The renderer says WHICH stream should exist and relays the three
+  // user-initiated requests; the socket, and with it every cookie-bearing
+  // frame on it, lives in main. `...Open` carries a host ID and no directory
+  // row - main resolves the row itself, because the row carries the host's
+  // static Noise key.
+  browserViewSessionsOpen: "runnerHost:browserView:sessions:open",
+  browserViewSessionsClose: "runnerHost:browserView:sessions:close",
+  browserViewSessionsSend: "runnerHost:browserView:sessions:send",
   browserViewAttachSurface: "runnerHost:browserView:nativeTab:attachSurface",
   browserViewDetachSurface: "runnerHost:browserView:nativeTab:detachSurface",
-  browserViewReleaseTab: "runnerHost:browserView:nativeTab:release",
   browserViewControlElectronTab: "runnerHost:browserView:nativeTab:control",
-  browserViewElectronTabCdpDispatch:
-    "runnerHost:browserView:nativeTab:cdp:dispatch",
   browserViewUpdateBounds: "runnerHost:browserView:updateBounds",
   browserViewSetReservedChords: "runnerHost:browserView:setReservedChords",
   browserViewOverlayPaintAck: "runnerHost:browserView:overlayPaintAck",
@@ -344,25 +348,36 @@ export const RunnerHostInvoke = {
   browserViewReleaseOverlay: "runnerHost:browserView:releaseOverlay",
   browserViewCapturePage: "runnerHost:browserView:capturePage",
   browserViewGetDebugSnapshot: "runnerHost:browserView:getDebugSnapshot",
-  browserViewPrimaryProfileCapture:
-    "runnerHost:browserView:primaryProfile:capture",
-  // Clear cookies for one site (keychain refactor ticket 07). `...ClearSite` is
-  // the user's tile-menu action and reports the emptied slice to the host;
-  // `...EvictSite` is the host telling this desktop the same site was cleared
-  // elsewhere, and deliberately reports nothing back.
+  // Clear cookies for one site (keychain refactor ticket 07): the user's
+  // tile-menu action, which reports the emptied slice to the host. There is no
+  // receiving half - universal-sign-in ticket 08 retired the host-driven
+  // eviction along with the `primaryProfileEvict` frame that drove it.
   browserViewClearSite: "runnerHost:browserView:primaryProfile:clearSite",
-  browserViewEvictSite: "runnerHost:browserView:primaryProfile:evictSite",
   // Saved browser logins: on by default, off only if the user says so in
   // Settings. `...Set` switches the partition and brings the live tiles back.
   browserViewSaveLoginsGet: "runnerHost:browserView:saveLogins:get",
   browserViewSaveLoginsSet: "runnerHost:browserView:saveLogins:set",
-  // Store-key handshake (keychain refactor ticket 05).
-  browserViewStoreKeyWrap: "runnerHost:browserView:storeKey:wrap",
-  browserViewStoreKeyUnwrap: "runnerHost:browserView:storeKey:unwrap",
-  // "Forget all browser logins" (keychain refactor ticket 08). Driven by the
-  // host's `primaryProfileForgotten`, never by the renderer on its own: the
-  // host shreds its slice first, then every connected desktop clears its jar.
+  // "Forget all browser logins" (keychain refactor ticket 08). Driven by
+  // Settings, alongside the `forgetLogins` frame that shreds each connected
+  // host's slice: this half empties the local jars and records the forget in
+  // the ledger, which is what reaches the hosts that were not connected
+  // (universal-sign-in decision 6).
   browserViewForgetLogins: "runnerHost:browserView:forgetLogins",
+  // "Clear" on one row of Settings > Browser. Main confirms it and main sends
+  // the `clearSite` frames: it is forget-all one domain at a time as far as a
+  // host's slice is concerned, so a renderer may ask for it and may not
+  // perform it (H05's residual for H10).
+  browserViewClearSavedLoginSite: "runnerHost:browserView:clearSavedLoginSite",
+  // Import logins from another browser on this machine. `listSources` and
+  // `scan` read metadata only; `pickFile` opens the native dialog from main
+  // so the renderer never names a path; `run` is the one call that opens the
+  // OS keystore and writes the durable jar, and the one that pushes it to the
+  // hosts. None of the four rejects.
+  browserViewLoginImportListSources:
+    "runnerHost:browserView:loginImport:listSources",
+  browserViewLoginImportPickFile: "runnerHost:browserView:loginImport:pickFile",
+  browserViewLoginImportScan: "runnerHost:browserView:loginImport:scan",
+  browserViewLoginImportRun: "runnerHost:browserView:loginImport:run",
   browserViewStartAnnotation: "runnerHost:browserView:annotation:start",
   browserViewCancelAnnotation: "runnerHost:browserView:annotation:cancel",
   browserViewSetAnnotationTargetChatLabel:
@@ -397,7 +412,6 @@ export const RunnerHostEvent = {
   trayEpicSelected: "runnerHost:event:trayEpicSelected",
   quitRequested: "runnerHost:event:quitRequested",
   getFreshUnsyncedSnapshot: "runnerHost:event:getFreshUnsyncedSnapshot",
-  captureFinalBrowserState: "runnerHost:event:captureFinalBrowserState",
   windowsChange: "runnerHost:event:windows:change",
   ownershipChange: "runnerHost:event:windows:ownership:change",
   perWindowStateChange: "runnerHost:event:windows:perWindowState:change",
@@ -406,6 +420,12 @@ export const RunnerHostEvent = {
   migrationRunChange: "runnerHost:event:migration:runChange",
   accessibilityThemeChange: "runnerHost:event:accessibilityTheme:change",
   certificateErrorPending: "runnerHost:event:cert:errorPending",
+  // A host answered the registry with a different Noise static key than the
+  // one this client pinned on first sight (browser-security-hardening H11).
+  // Same shape of channel as the certificate refusal above, and for the same
+  // reason: the refusal has already happened in main, and this is how a
+  // surface gets to say so.
+  hostKeyPinMismatch: "runnerHost:event:hostKeyPin:mismatch",
   appUpdateChange: "runnerHost:event:appUpdate:change",
   displayTopologyChange: "runnerHost:event:display:topologyChange",
   // Tray-driven host commands forwarded to the renderer's
@@ -434,13 +454,23 @@ export const RunnerHostEvent = {
   browserViewCertificateError: "runnerHost:event:browserView:certificateError",
   browserViewOpenTileRequest: "runnerHost:event:browserView:openTileRequest",
   browserViewTileCommand: "runnerHost:event:browserView:tileCommand",
+  browserViewTileFocused: "runnerHost:event:browserView:tileFocused",
   browserViewSnapshotInvalidated:
     "runnerHost:event:browserView:snapshotInvalidated",
+  // Ticket 04 exit-edge handshake: fired once the un-parked native view's
+  // first composited frame lands, telling the renderer it may now drop the
+  // stand-in it kept mounted since occlusion. Only for tiles that were
+  // actually parked; a tile released without ever parking keeps answering
+  // through `restoredTiles` on the occlude/release return value.
+  browserViewOverlayRestored: "runnerHost:event:browserView:overlayRestored",
   browserViewAnnotationEvent: "runnerHost:event:browserView:annotation",
   browserViewAnnotationAttached:
     "runnerHost:event:browserView:annotationAttached",
-  browserViewPrimaryProfileDelta:
-    "runnerHost:event:browserView:primaryProfile:delta",
+  // Everything main forwards from a window's `browser.sessions` stream: the
+  // UX frame projection, the stream's lifecycle, and the identity-only tab
+  // bindings. No cookie array, storage state or key material can appear here -
+  // the payload's frame type is the protocol's `BrowserSessionsUxServerFrame`.
+  browserViewSessionsEvent: "runnerHost:event:browserView:sessions:event",
   // Native-tab PiP capture frames (`started` / `frame` / `stalled`).
   pipCaptureFrame: "runnerHost:event:pipCapture:frame",
   globalShortcutsChange: "runnerHost:event:globalShortcuts:change",

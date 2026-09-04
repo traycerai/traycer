@@ -45,7 +45,10 @@ import type {
   TokenRotateResult,
   TokenStoreChange,
 } from "@traycer-clients/shared/platform/runner-host";
-import { DesktopAuthSession } from "../auth/desktop-auth-session";
+import {
+  DesktopAuthSession,
+  type VerifiedDesktopAuthSessionSnapshot,
+} from "../auth/desktop-auth-session";
 import {
   createEmptyPerWindowSnapshot,
   PER_WINDOW_STATE_CAPABILITIES,
@@ -86,6 +89,7 @@ import { registerGlobalShortcutsIpc } from "./global-shortcuts-ipc";
 import { registerZoomIpc } from "./zoom-ipc";
 import { zoomPercentToFactor } from "../windows/window-zoom";
 import { registerBrowserViewIpc } from "./browser-view-ipc";
+import type { BrowserSessionsRegistry } from "../browser-sessions/browser-sessions-owner";
 import { registerPipCaptureIpc } from "./pip-capture-ipc";
 import type { BrowserViewManager } from "../browser-view/browser-view-manager";
 import { registerMenuIpc } from "./menu-ipc";
@@ -204,12 +208,17 @@ export interface IpcShellQuitState {
 }
 
 type IpcAuthSessionChangeListener = (
-  snapshot: DesktopAuthSessionSnapshot,
+  snapshot: VerifiedDesktopAuthSessionSnapshot,
 ) => void;
 
 export interface IpcDesktopAuthSession {
-  get(): DesktopAuthSessionSnapshot;
+  get(): VerifiedDesktopAuthSessionSnapshot;
   set(snapshot: DesktopAuthSessionSnapshot): void;
+  /**
+   * Adopts a session whose bearer main verified itself. Only the auth IPC,
+   * which runs the verification, calls it.
+   */
+  setVerified(snapshot: DesktopAuthSessionSnapshot): void;
   on(event: "change", listener: IpcAuthSessionChangeListener): void;
   off(event: "change", listener: IpcAuthSessionChangeListener): void;
 }
@@ -291,18 +300,6 @@ type HostChangeListener = (
 ) => void;
 
 export const QUIT_REQUEST_SERVICE_ACK_TIMEOUT_MS = 1_000;
-
-/**
- * Upper bound on how long the quit/close path waits for a renderer to report
- * its final browser capture. A wedged renderer that never replies must not
- * make the app unquittable (`authorizeQuitAfterFlush` awaits this) or the
- * window unclosable (`handleWindowClose` already preventDefault'ed), so the
- * wait resolves as "captured as far as we can tell" instead of hanging. What
- * that costs is every login minted since the last successful capture: the
- * session re-materializes from the older jar, so those sites ask the user to
- * sign in again.
- */
-export const FINAL_BROWSER_CAPTURE_TIMEOUT_MS = 10_000;
 
 export interface QuitDecisionWaiter {
   readonly requestId: string;
@@ -487,13 +484,6 @@ interface FreshSnapshotWaiter {
   readonly resolveStale: () => void;
 }
 
-interface FinalBrowserCaptureWaiter {
-  readonly windowId: string;
-  readonly resolve: () => void;
-  readonly reject: (error: Error) => void;
-  readonly timer: NodeJS.Timeout;
-}
-
 /**
  * Installs `ipcMain.handle` endpoints that back the preload `contextBridge`
  * surface. Each handler mirrors the shape of `IRunnerHost` from
@@ -533,11 +523,8 @@ export class RunnerIpcBridge {
    * `setUnsyncedEditsSnapshot` pushes during the wait do NOT settle these.
    */
   readonly freshSnapshotWaiters = new Map<string, FreshSnapshotWaiter>();
-  private readonly finalBrowserCaptureWaiters = new Map<
-    string,
-    FinalBrowserCaptureWaiter
-  >();
   private browserViewManager: BrowserViewManager | null = null;
+  private browserSessions: BrowserSessionsRegistry | null = null;
 
   constructor(options: RunnerIpcBridgeOptions) {
     this.options = options;
@@ -586,9 +573,10 @@ export class RunnerIpcBridge {
     registerAppUpdateIpc(this);
     registerGlobalShortcutsIpc(this);
     registerZoomIpc(this);
-    const primaryBrowserViewManager = registerBrowserViewIpc(this);
-    this.browserViewManager = primaryBrowserViewManager;
-    registerPipCaptureIpc(this, primaryBrowserViewManager);
+    const browserView = registerBrowserViewIpc(this);
+    this.browserViewManager = browserView.manager;
+    this.browserSessions = browserView.sessions;
+    registerPipCaptureIpc(this, browserView.manager);
     registerMenuIpc(this);
     // Power IPC (renderer-driven sleep prevention) registers a `disposeFn`
     // that releases the OS power-save blocker on teardown.
@@ -830,31 +818,16 @@ export class RunnerIpcBridge {
   }
 
   /**
-   * Asks every mounted renderer, not only the ones holding a live native
-   * guest. What has to be flushed is the primary-profile store, and a window
-   * whose last native tab was already torn down (or whose tabs went dormant on
-   * a route change) still holds the coordinator that can report a jar. Only
-   * that coordinator knows whether it has anything to say, and it answers
-   * immediately when it does not.
+   * One last primary-profile capture per live `browser.sessions` stream this
+   * process holds, before the desktop routes go away.
+   *
+   * Main holds both the jar and the sockets now (H10), so this completes with
+   * no renderer involved - which is what makes a window closing mid-capture
+   * safe: the old path asked a renderer to capture and awaited an ack across a
+   * process that was being torn down.
    */
   async captureFinalBrowserState(): Promise<void> {
-    const windowIds = this.windowRegistry
-      .records()
-      .map((record) => record.windowId)
-      .filter((windowId) => this.appLifecycleReadyWindowIds.has(windowId));
-    // Every window gets its full chance BEFORE the first failure is re-raised.
-    // A bare `Promise.all` settles on the first rejection (an undeliverable
-    // window whose renderer is already gone), and `authorizeQuitAfterFlush`
-    // catches that and calls `app.quit()` with a healthy sibling's capture
-    // still in flight - losing the jar this path exists to save. The failure
-    // is still surfaced afterwards so the quit path can log it.
-    const attempts = windowIds.map((windowId) =>
-      this.requestFinalBrowserCapture(windowId),
-    );
-    await Promise.allSettled(attempts);
-    // Everything has settled, so this only re-raises the first failure for the
-    // caller to log; it never shortens the wait.
-    await Promise.all(attempts);
+    await this.browserSessions?.captureFinalPrimaryProfiles(null);
   }
 
   /** The native-teardown gate: this window owns guests that are about to die. */
@@ -871,61 +844,13 @@ export class RunnerIpcBridge {
       return;
     }
     try {
-      await this.requestFinalBrowserCapture(windowId);
+      await this.browserSessions?.captureFinalPrimaryProfiles(windowId);
     } finally {
       // Native teardown only. The host suspends the session to dormant on
       // route loss and re-materializes the same durable tabs later, so a
       // window close must never read as the user closing those tabs.
       await manager.closeNativeSessionsForWindow(windowId);
     }
-  }
-
-  /**
-   * Asks this window's renderer for one last browser capture and waits
-   * (bounded) for it to report back, before its native tabs are destroyed.
-   */
-  private requestFinalBrowserCapture(windowId: string): Promise<void> {
-    return new Promise<void>((resolve, reject) => {
-      const requestId = randomUUID();
-      const timer = setTimeout(() => {
-        if (!this.finalBrowserCaptureWaiters.delete(requestId)) return;
-        log.warn("[runner-ipc] final browser capture timed out", {
-          windowId,
-          timeoutMs: FINAL_BROWSER_CAPTURE_TIMEOUT_MS,
-        });
-        resolve();
-      }, FINAL_BROWSER_CAPTURE_TIMEOUT_MS);
-      this.finalBrowserCaptureWaiters.set(requestId, {
-        windowId,
-        resolve,
-        reject,
-        timer,
-      });
-      if (
-        this.safeSendToWindow(
-          windowId,
-          RunnerHostEvent.captureFinalBrowserState,
-          { requestId },
-        )
-      ) {
-        return;
-      }
-      this.finalBrowserCaptureWaiters.delete(requestId);
-      clearTimeout(timer);
-      reject(
-        new Error(
-          `Final browser capture request could not be delivered to window ${windowId}`,
-        ),
-      );
-    });
-  }
-
-  acknowledgeFinalBrowserCapture(windowId: string, requestId: string): void {
-    const waiter = this.finalBrowserCaptureWaiters.get(requestId);
-    if (waiter?.windowId !== windowId) return;
-    this.finalBrowserCaptureWaiters.delete(requestId);
-    clearTimeout(waiter.timer);
-    waiter.resolve();
   }
 
   markRendererUnavailable(windowId: string): void {
@@ -936,10 +861,6 @@ export class RunnerIpcBridge {
     );
     this.settleFreshSnapshotWaitersAsStale(
       (waiter) => waiter.windowId === windowId,
-    );
-    this.rejectFinalBrowserCaptureWaiters(
-      (waiter) => waiter.windowId === windowId,
-      new Error("Renderer reset before reporting its final browser capture"),
     );
   }
 
@@ -1025,12 +946,6 @@ export class RunnerIpcBridge {
     this.syncListeners.length = 0;
     this.rejectAllQuitDecisionWaiters(
       new Error("Runner IPC bridge disposed before quit decision resolved"),
-    );
-    this.rejectFinalBrowserCaptureWaiters(
-      () => true,
-      new Error(
-        "Runner IPC bridge disposed before the final browser capture resolved",
-      ),
     );
     // Mirrors the quit-decision cleanup above: a fresh-snapshot request left
     // armed past dispose() would either fire its setTimeout against a bridge
@@ -1373,10 +1288,10 @@ export class RunnerIpcBridge {
     this.settleFreshSnapshotWaitersAsStale(
       (waiter) => !liveWindowIds.has(waiter.windowId),
     );
-    this.rejectFinalBrowserCaptureWaiters(
-      (waiter) => !liveWindowIds.has(waiter.windowId),
-      new Error("Window closed before reporting its final browser capture"),
-    );
+    // The jar-plane streams go with their window too. Each is the Electron
+    // lifecycle owner for the native tabs that window held, so one left open
+    // would hold their placement against a window that is gone.
+    this.browserSessions?.retainWindows(liveWindowIds);
   }
 
   removeQuitDecisionWaiter(requestId: string): QuitDecisionWaiter | null {
@@ -1438,18 +1353,6 @@ export class RunnerIpcBridge {
       if (predicate(waiter)) {
         waiter.resolveStale();
       }
-    }
-  }
-
-  private rejectFinalBrowserCaptureWaiters(
-    predicate: (waiter: FinalBrowserCaptureWaiter) => boolean,
-    error: Error,
-  ): void {
-    for (const [requestId, waiter] of this.finalBrowserCaptureWaiters) {
-      if (!predicate(waiter)) continue;
-      this.finalBrowserCaptureWaiters.delete(requestId);
-      clearTimeout(waiter.timer);
-      waiter.reject(error);
     }
   }
 }

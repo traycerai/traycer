@@ -21,6 +21,10 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { prDetailTileId } from "@/lib/pr/pr-detail-tile";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { TilePane } from "@/stores/epics/canvas/tile-tree";
+import {
+  requestSidebarNodeReveal,
+  useSidebarNodeRevealStore,
+} from "@/stores/epics/sidebar-node-reveal-store";
 
 vi.mock("@/components/epic-canvas/hooks/use-canvas-host-id", () => ({
   useCanvasHostId: () => "host1",
@@ -47,16 +51,18 @@ vi.mock("@/components/epic-canvas/pr/pr-row", () => {
     },
     prefix: string,
   ) => (
-    <button
-      type="button"
-      key={mockLabel(entry.item)}
-      data-testid={`${prefix}-${mockLabel(entry.item)}`}
-      data-openable={entry.onOpen !== null ? "true" : "false"}
-      data-tile-id={entry.tileId ?? ""}
-      onClick={() => entry.onOpen?.()}
-    >
-      {mockLabel(entry.item)}
-    </button>
+    <div data-sidebar-node-id={entry.tileId ?? undefined}>
+      <button
+        type="button"
+        key={mockLabel(entry.item)}
+        data-testid={`${prefix}-${mockLabel(entry.item)}`}
+        data-openable={entry.onOpen !== null ? "true" : "false"}
+        data-tile-id={entry.tileId ?? ""}
+        onClick={() => entry.onOpen?.()}
+      >
+        {mockLabel(entry.item)}
+      </button>
+    </div>
   );
   return {
     PrRow: (props: {
@@ -156,6 +162,10 @@ describe("PrPanelBody card list", () => {
 
   beforeEach(() => {
     resetCanvas();
+    useSidebarNodeRevealStore.setState(
+      { requestsByViewTabId: {}, visibleByViewTabId: {} },
+      true,
+    );
     nestedFocusBoundaryMock.navigateNested.mockClear();
     queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
@@ -166,6 +176,10 @@ describe("PrPanelBody card list", () => {
   afterEach(() => {
     cleanup();
     resetCanvas();
+    useSidebarNodeRevealStore.setState(
+      { requestsByViewTabId: {}, visibleByViewTabId: {} },
+      true,
+    );
     queryClient.clear();
   });
 
@@ -192,6 +206,40 @@ describe("PrPanelBody card list", () => {
     expect(
       screen.getByTestId("mock-pr-card-feature/unknown-base"),
     ).toBeTruthy();
+  });
+
+  it("scrolls to and flash-highlights a revealed PR row", async () => {
+    const epicId = "epic-reveal";
+    const tabId = "tab-reveal";
+    const item = buildPrItem({
+      base: { owner: "acme", repo: "widgets", prNumber: 42 },
+      githubHost: "github.com",
+    });
+    const tileId = prDetailTileId({
+      hostId: "host1",
+      githubHost: "github.com",
+      owner: "acme",
+      repo: "widgets",
+      prNumber: 42,
+    });
+    const scrollIntoView = vi
+      .spyOn(Element.prototype, "scrollIntoView")
+      .mockImplementation(() => undefined);
+    requestSidebarNodeReveal(tabId, tileId);
+    renderPanel({ epicId, tabId });
+
+    await emitSnapshot(epicId, [item]);
+
+    const row = screen
+      .getByTestId("mock-pr-card-acme/widgets#42")
+      .closest<HTMLElement>("[data-sidebar-node-id]");
+    await waitFor(() => {
+      expect(scrollIntoView.mock.instances).toContain(row);
+    });
+    expect(row?.dataset.sidebarRevealHighlighted).toBe("true");
+    expect(
+      useSidebarNodeRevealStore.getState().requestsByViewTabId[tabId],
+    ).toBeUndefined();
   });
 
   it("gives an owned-submodule PR its own repo group directly under its superproject's", async () => {
