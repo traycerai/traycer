@@ -5,8 +5,6 @@ import { cn } from "@/lib/utils";
 import { usePaneAwareContentGuard } from "@/components/epic-tabs/pane-visibility-context";
 import { usePortalConcealed } from "@/components/ui/portal-concealment-context";
 import { useSafeAreaCollisionPadding } from "@/components/ui/safe-area-collision-padding";
-import { useComposedRefs } from "radix-ui/internal";
-import { useRegisterBrowserOverlay } from "@/lib/browser-view/tiles/use-register-browser-overlay";
 
 function ContextMenu({
   ...props
@@ -44,13 +42,11 @@ function ContextMenuContent({
   // cap; both are displaceable by a caller (see
   // `safe-area-collision-padding.ts` and `dropdown-menu.tsx`).
   const safeAreaInsets = useSafeAreaCollisionPadding();
-  const registerOverlayRef = useRegisterBrowserOverlay<HTMLDivElement>();
-  const composedRef = useComposedRefs(ref, registerOverlayRef);
   if (!paneFocused || concealed) return null;
   return (
     <ContextMenuPrimitive.Portal>
       <ContextMenuPrimitive.Content
-        ref={composedRef}
+        ref={ref}
         data-slot="context-menu-content"
         collisionPadding={collisionPadding ?? safeAreaInsets}
         className={cn(
@@ -172,11 +168,9 @@ function ContextMenuSubContent({
   // A submenu opens sideways from a row that is itself already near an edge, so
   // it is the surface most likely to need the clamp its parent content has.
   const safeAreaInsets = useSafeAreaCollisionPadding();
-  const registerOverlayRef = useRegisterBrowserOverlay<HTMLDivElement>();
-  const composedRef = useComposedRefs(ref, registerOverlayRef);
   return (
     <ContextMenuPrimitive.SubContent
-      ref={composedRef}
+      ref={ref}
       data-slot="context-menu-sub-content"
       collisionPadding={collisionPadding ?? safeAreaInsets}
       className={cn(

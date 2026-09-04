@@ -16,7 +16,6 @@ import {
 import { LANDING_ROUTE } from "@/lib/routes";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { EpicMigrationSlice } from "@/stores/epics/open-epic/store";
-import { useRegisterBrowserOverlay } from "@/lib/browser-view/tiles/use-register-browser-overlay";
 
 const TITLE_RUNNING = "Migrating your epic";
 const TITLE_ERROR = "Migration didn't finish";
@@ -66,7 +65,6 @@ export function EpicMigrationModal(props: EpicMigrationModalProps): ReactNode {
   const retryMigration = useEpicRetryMigration();
   const navigate = useNavigate();
   const modalRootRef = useRef<HTMLDivElement | null>(null);
-  const registerOverlayRef = useRegisterBrowserOverlay<HTMLDivElement>();
   const blocking = migration.status !== "idle";
   useInertEpicShell(modalRootRef, blocking);
   // The containment above is LOCAL - it inerts this epic's shell and nothing
@@ -116,7 +114,6 @@ export function EpicMigrationModal(props: EpicMigrationModalProps): ReactNode {
           className="absolute inset-0 bg-black/40 duration-100 supports-backdrop-filter:backdrop-blur-sm data-open:animate-in data-open:fade-in-0"
         />
         <DialogPrimitive.Content
-          ref={registerOverlayRef}
           data-slot="dialog-content"
           data-testid="epic-migration-modal"
           aria-describedby={undefined}

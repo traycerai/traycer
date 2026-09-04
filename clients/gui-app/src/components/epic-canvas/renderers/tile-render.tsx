@@ -15,6 +15,7 @@ import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 import type { TileKindId } from "@/stores/epics/canvas/tile-kinds";
 import type { TileKindToRefMap } from "@/stores/epics/canvas/tile-kind-types";
 import { LinkTargetProvider } from "@/lib/links/link-target-provider";
+import { TileErrorBoundary } from "./tile-error-boundary";
 import { BrowserSessionsHostBoundary } from "./browser-sessions-provider";
 import { BrowserSessionTile } from "./browser-session-tile";
 import { ChatTile } from "./chat-tile";
@@ -227,7 +228,12 @@ export function renderTile(args: TileRenderArgs<EpicCanvasTileRef>): ReactNode {
             isActive={args.isActive}
           >
             <TileMinimapScope tileInstanceId={args.node.instanceId}>
-              {tileRenderer(args.node.type)(args)}
+              <TileErrorBoundary
+                instanceId={args.node.instanceId}
+                resetKey={args.node.instanceId}
+              >
+                {tileRenderer(args.node.type)(args)}
+              </TileErrorBoundary>
             </TileMinimapScope>
           </TileFindScope>
         </LinkTargetProvider>
