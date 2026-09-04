@@ -167,9 +167,9 @@ const TERMINAL_SIGN_IN_COPY: {
 };
 
 /**
- * The generic terminal sign-in copy - the same sentences the composer banner
- * uses for a provider without an override, so the picker and the banner
- * describe one flow the same way. The launch-the-CLI providers re-word the
+ * The generic terminal sign-in copy for a provider with no override. Reached
+ * only through `providerTerminalGuidance`, which is what keeps the picker and
+ * the banner describing one flow the same way. The launch-the-CLI providers re-word the
  * three sentences that would otherwise describe a sign-in code nothing prints
  * (`TERMINAL_SIGN_IN_COPY`) and keep everything else.
  */
@@ -195,6 +195,30 @@ export function defaultTerminalSignInGuidance(
       copy?.terminalHint ??
       `${name} prints a sign-in code that only exists in the terminal. Complete the sign-in there, then use Refresh above.`,
   };
+}
+
+/**
+ * THE copy for a provider's terminal flow: its override if the table has one,
+ * the generic sign-in copy otherwise.
+ *
+ * Every surface that renders a terminal action resolves through this - the
+ * picker's setup CTA (via `resolveProviderTerminalSetup` below) and the
+ * composer banner's `TerminalLoginRow`. The banner used to fall back to its
+ * OWN inline copy of the generic sentences when the override table returned
+ * `null`, which is the same two sentences written twice, and the copy
+ * diverged the moment a provider needed different ones:
+ * `TERMINAL_SIGN_IN_COPY` reached the picker and the banner went on telling a
+ * Qwen user to read a sign-in code that nothing prints. A provider with no
+ * terminal sign-in at all never reaches either surface - the capability gate
+ * (`providerSupportsTerminalLogin`) decides that, not the copy.
+ */
+export function providerTerminalGuidance(
+  providerId: ProviderId,
+): ProviderSetupGuidance {
+  return (
+    providerSetupGuidance(providerId) ??
+    defaultTerminalSignInGuidance(providerId)
+  );
 }
 
 /**
@@ -244,7 +268,7 @@ export function resolveProviderTerminalSetup(
       : { guidance: override, canStartTerminal: false, packPreparing: null };
   }
   return {
-    guidance: override ?? defaultTerminalSignInGuidance(providerId),
+    guidance: providerTerminalGuidance(providerId),
     canStartTerminal: true,
     packPreparing: providerTerminalLoginPackBlock(state),
   };

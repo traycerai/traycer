@@ -504,6 +504,44 @@ describe("<ProviderReauthBanner />", () => {
     expect(screen.queryByText(/sign-in code/)).toBeNull();
   });
 
+  // The banner resolves its copy through the SAME resolver the picker's setup
+  // CTA uses (`providerTerminalGuidance`), so a launch-the-CLI provider's
+  // in-CLI instruction reaches it. It used to fall back to its own inline copy
+  // of the generic sentences whenever the override table returned null, which
+  // told a Qwen user to read a sign-in code that nothing prints.
+  it("shows the in-CLI instruction, not the generic sign-in-code hint, for a launch-the-CLI provider (qwen)", () => {
+    render(
+      <ProviderReauthBanner
+        epicId="epic-1"
+        viewTabId="tab-1"
+        providerId="qwen"
+        state={{
+          ...copilotState({
+            oauthArgs: null,
+            token: null,
+            codePaste: null,
+            terminalLogin: {},
+          }),
+          providerId: "qwen",
+        }}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", { name: "Sign in from a terminal" }),
+    ).toBeDefined();
+    expect(
+      screen.getByText(
+        "Qwen Code opens in that terminal. Type /auth and complete the sign-in there, then use Refresh above.",
+      ),
+    ).toBeDefined();
+    expect(screen.queryByText(/sign-in code/)).toBeNull();
+  });
+
   // Row 2: a provider whose whole `loginCapability` is `null` (Cursor,
   // Traycer, or any CLI with no OAuth session to reconnect) makes the
   // helper's optional chain yield `undefined` for `terminalLogin` -

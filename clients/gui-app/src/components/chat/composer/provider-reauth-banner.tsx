@@ -60,7 +60,7 @@ import {
   type ProviderPackPreparing,
 } from "@/components/providers/provider-pack-readiness";
 import { useProviderTerminalLogin } from "@/hooks/providers/use-provider-terminal-login";
-import { providerSetupGuidance } from "@/lib/providers/provider-setup-guidance";
+import { providerTerminalGuidance } from "@/lib/providers/provider-setup-guidance";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
 
 function noop(): void {}
@@ -492,7 +492,6 @@ function ReauthBannerInner({
       {terminalRow.kind === "button" ? (
         <TerminalLoginRow
           providerId={providerId}
-          providerLabel={providerLabel}
           epicId={terminalRow.epicId}
           viewTabId={terminalRow.viewTabId}
         />
@@ -532,12 +531,10 @@ function ReauthBannerInner({
  */
 function TerminalLoginRow({
   providerId,
-  providerLabel,
   epicId,
   viewTabId,
 }: {
   readonly providerId: ProviderId;
-  readonly providerLabel: string;
   readonly epicId: string;
   readonly viewTabId: string;
 }) {
@@ -549,11 +546,15 @@ function TerminalLoginRow({
     // host itself reports as replaced.
     launchedFromTile: null,
   });
-  // A provider whose terminal flow is a credential WIZARD rather than a
-  // device-code sign-in (Reasonix's `setup` asks for an API key) gets its own
-  // label and hint: "prints a sign-in code" is false there, and it is the copy
-  // the user reads while deciding what to do next.
-  const guidance = providerSetupGuidance(providerId);
+  // ONE resolver with the picker's setup CTA, never an inline fallback: the
+  // generic sentences are only generic until a provider needs different ones.
+  // A terminal flow that is a credential WIZARD rather than a device-code
+  // sign-in (Reasonix's `setup` asks for an API key) and one that opens the
+  // CLI's own UI (Qwen's `/auth`, Droid's first-run prompt, OMP's
+  // `login <provider>`, OpenCode's picker) each need their own label and hint
+  // - "prints a sign-in code" is false for both, and this is the copy the
+  // user reads while deciding what to do next.
+  const guidance = providerTerminalGuidance(providerId);
   return (
     <div className="flex flex-col gap-1.5">
       <div className="flex flex-wrap items-center gap-2">
@@ -563,16 +564,12 @@ function TerminalLoginRow({
           disabled={terminalLogin.isPending}
           onClick={terminalLogin.start}
         >
-          {guidance === null
-            ? "Sign in from a terminal"
-            : guidance.terminalActionLabel}
+          {guidance.terminalActionLabel}
           {terminalLogin.isPending ? <MutedAgentSpinner /> : null}
         </Button>
       </div>
       <span className="text-ui-xs text-muted-foreground">
-        {guidance === null
-          ? `${providerLabel} prints a sign-in code that only exists in the terminal. Complete the sign-in there, then use Refresh above.`
-          : guidance.terminalHint}
+        {guidance.terminalHint}
       </span>
     </div>
   );
