@@ -194,7 +194,7 @@ describe("LinkPhonePanel presentation", () => {
         address: "192.168.29.87",
         userAgent: "TraycerMobile/1.0 (iPhone)",
         location: "Bengaluru, IN",
-        matchCode: null,
+        matchCode: { kind: "unavailable" },
       },
       deadKind: null,
       code: codeQuery({ data: null, isError: false, error: null }),
@@ -216,7 +216,7 @@ describe("LinkPhonePanel presentation", () => {
       address: "192.168.29.87",
       userAgent: "TraycerMobile/1.0 (iPhone)",
       location: "Bengaluru, IN",
-      matchCode: null,
+      matchCode: { kind: "unavailable" },
     };
     mocks.useLinkLoginWatch.mockReturnValue({
       claim,
@@ -322,7 +322,7 @@ describe("LinkPhonePanel presentation", () => {
         address: null,
         userAgent: null,
         location: null,
-        matchCode: null,
+        matchCode: { kind: "unavailable" },
       },
       deadKind: null,
       code: codeQuery({ data: null, isError: false, error: null }),

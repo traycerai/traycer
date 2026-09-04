@@ -65,13 +65,20 @@ export type LinkLoginStatusResponse = {
     location: string | null;
     claimedAt: number | null;
     /**
-     * The claim's match code — the two digits the phone is showing. Present
-     * only while the record is `claimed`, only when the PHONE could show a
-     * code (the server mints none for a phone that predates it, so the
-     * desktop is never asked about a number that phone cannot display), and
-     * only when this request opted in. Absent otherwise, and from a server
-     * that predates it; `null` is tolerated for the same fallback. Either
-     * way the desktop renders the description-only prompt.
+     * The claim's match code, tri-state on purpose:
+     *
+     * - a two-digit string: the phone is showing it; the approver asks
+     *   "Does your phone show NN?".
+     * - `null`: the phone presented NO code. The server mints one only for
+     *   a claimant that declared it can show it (a phone that predates the
+     *   code must not produce a prompt it cannot satisfy) — but `/claim` is
+     *   unauthenticated and that declaration is the claimant's, so a
+     *   leaked-QR holder would simply withhold it. The approver therefore
+     *   renders this as a loud degraded-mode warning, never as the ordinary
+     *   description prompt.
+     * - absent: the record is not `claimed`, this request did not opt in,
+     *   or the server predates the code. The approver renders the
+     *   description-only prompt.
      */
     matchCode?: string | null;
   } | null;

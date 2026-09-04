@@ -147,6 +147,15 @@ const CLAIMED_WITH_CODE = {
   },
 };
 
+/** The server saying the phone presented no code at all. */
+const CLAIMED_WITHOUT_CODE = {
+  kind: "ok" as const,
+  response: {
+    status: "claimed" as const,
+    claimant: { ...CLAIMED.response.claimant, matchCode: null },
+  },
+};
+
 const UNCLAIMED = {
   kind: "ok" as const,
   response: { status: "unclaimed" as const, claimant: null },
@@ -299,6 +308,33 @@ describe("runLinkPhoneFlow", () => {
     // the description IS the prompt, exactly as before.
     expect(answer.lastPrompt).toContain("Approve sign-in from an iPhone");
     expect(answer.lastPrompt).not.toContain("Does your phone show");
+  });
+
+  it("warns loudly when the server says the phone presented no code", async () => {
+    // A legitimate older app and a leaked-QR holder withholding the code look
+    // identical from here, so this must read as a different, worse state than
+    // an ordinary claim - and still be decidable, so the older app gets
+    // through.
+    statusMock.mockResolvedValue(CLAIMED_WITHOUT_CODE);
+    answer.current = "";
+    const ctx = interactiveCtx();
+
+    const result = await runWithPolls(ctx, 1);
+
+    const output = printed(ctx);
+    expect(output).toContain("WARNING");
+    expect(output).toContain("did not show a sign-in code");
+    expect(output).toContain("otherwise reject and update the app");
+    expect(output).not.toContain("Details are approximate");
+    expect(answer.lastPrompt).toContain("No code shown by the phone");
+    expect(answer.lastPrompt).not.toContain("Does your phone show");
+    expect(respondMock).toHaveBeenCalledWith(
+      expect.any(String),
+      "bearer-1",
+      "ABCDE-FGHJK",
+      false,
+    );
+    expect(result.status).toBe("fulfilled");
   });
 
   it("asks about the match code when the claim carries one, with the device as context", async () => {

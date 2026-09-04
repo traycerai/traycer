@@ -430,27 +430,42 @@ export async function runLinkPhoneFlow(
     claim.claimant.location ?? "location unknown",
   ].join(" · ");
   const device = claimantDeviceLabel(claim.claimant.userAgent);
-  // With a match code the question IS the code: the phone in the user's hand
-  // shows the same two digits, and agreement between the two screens proves
-  // the prompt belongs to that phone — which the self-reported description
-  // cannot, since the claimant chooses it. Without one (an older server, or
-  // a phone that predates the code and so was minted none) the description
-  // is the prompt, exactly as before.
-  const matchCode = claim.claimant.matchCode ?? null;
-  ctx.output.humanRequired(
-    matchCode === null
-      ? `A phone scanned the code.\n` +
-          `  ${detail}\n` +
-          `Details are approximate. Only approve if you scanned this code yourself.`
-      : `A phone scanned the code and is showing the number ${matchCode}.\n` +
-          `  ${device} · ${detail}\n` +
-          `Only approve if the phone in your hand shows ${matchCode} and you scanned this code yourself.`,
-  );
+  // Three prompts. With a match code the question IS the code: the phone in
+  // the user's hand shows the same two digits, and agreement between the two
+  // screens proves the prompt belongs to that phone — which the self-reported
+  // description cannot, since the claimant chooses it. An explicit null is
+  // the server saying the phone presented NO code: a legitimate older app, or
+  // a leaked-QR holder withholding the flag to dodge the check — this
+  // terminal cannot tell, so it warns loudly rather than reading like an
+  // ordinary claim. No word at all (an older server) is today's prompt.
+  const matchCode = claim.claimant.matchCode;
+  if (matchCode === undefined) {
+    ctx.output.humanRequired(
+      `A phone scanned the code.\n` +
+        `  ${detail}\n` +
+        `Details are approximate. Only approve if you scanned this code yourself.`,
+    );
+  } else if (matchCode === null) {
+    ctx.output.humanRequired(
+      `WARNING: a phone scanned the code but did not show a sign-in code.\n` +
+        `  ${device} · ${detail}\n` +
+        `An up-to-date Traycer app always shows one. Only approve if you scanned this code yourself\n` +
+        `and your phone is waiting without a code; otherwise reject and update the app.`,
+    );
+  } else {
+    ctx.output.humanRequired(
+      `A phone scanned the code and is showing the number ${matchCode}.\n` +
+        `  ${device} · ${detail}\n` +
+        `Only approve if the phone in your hand shows ${matchCode} and you scanned this code yourself.`,
+    );
+  }
 
   const approve = await askApproval(
-    matchCode === null
+    matchCode === undefined
       ? `Approve sign-in from ${device} · ${claim.claimant.address ?? "address unknown"}? [y/N] `
-      : `Does your phone show ${matchCode}? Approve sign-in from ${device}? [y/N] `,
+      : matchCode === null
+        ? `No code shown by the phone. Approve sign-in from ${device} anyway? [y/N] `
+        : `Does your phone show ${matchCode}? Approve sign-in from ${device}? [y/N] `,
   );
 
   const responded = await respondLinkLoginViaHttp(

@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactElement } from "react";
-import { QrCode, Smartphone } from "lucide-react";
+import { QrCode, Smartphone, TriangleAlert } from "lucide-react";
 import type { MintLinkLoginCodeResponse } from "@traycer/protocol/auth/link-login";
 import { claimantDeviceLabel } from "@traycer-clients/shared/auth/link-login";
 import { LinkPhoneQrTile } from "@/components/settings/panels/link-phone-qr-tile";
@@ -82,22 +82,49 @@ function pendingRespondVerdict(
 }
 
 /**
- * The question the approver is actually asked. With a match code, the
- * question is the code: the phone in the user's hand shows the same two
- * digits, and agreement between the two screens proves the prompt belongs to
- * that phone — which the self-reported device description cannot, since the
- * claimant chooses it. The description then drops to secondary context.
+ * The question the approver is actually asked, one of three.
  *
- * Without one (a server that predates the code) the description IS the
- * prompt, exactly as before.
+ * With a match code, the question is the code: the phone in the user's hand
+ * shows the same two digits, and agreement between the two screens proves
+ * the prompt belongs to that phone — which the self-reported device
+ * description cannot, since the claimant chooses it. The description then
+ * drops to secondary context.
+ *
+ * When the server says the phone presented NO code, the card is a warning,
+ * and deliberately the loudest of the three: a legitimate older app looks
+ * exactly like a leaked-QR holder withholding the code to dodge the check,
+ * and the whole point is that this reads differently from a normal claim.
+ *
+ * Without any word on it (a server that predates the code) the description
+ * IS the prompt, exactly as before.
  */
 function ConfirmClaimHeadline(props: { readonly claim: LiveClaim }) {
   const device = claimantDeviceLabel(props.claim.userAgent);
-  if (props.claim.matchCode === null) {
+  const matchCode = props.claim.matchCode;
+  if (matchCode.kind === "unavailable") {
     return (
       <p className="text-ui-sm font-medium text-foreground">
         Approve sign-in from {device}?
       </p>
+    );
+  }
+  if (matchCode.kind === "not-presented") {
+    return (
+      <div
+        className="flex w-full flex-col items-center gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-4 py-3 text-destructive"
+        data-testid="link-phone-no-match-code"
+      >
+        <TriangleAlert aria-hidden="true" />
+        <p className="text-title-xs">
+          This phone did not show a sign-in code.
+        </p>
+        <p className="text-ui-xs">
+          An up-to-date Traycer app always shows one. Approve only if you just
+          scanned this code yourself and your phone is waiting without a code;
+          otherwise reject and update the app.
+        </p>
+        <p className="text-ui-xs">Sign-in request from {device}.</p>
+      </div>
     );
   }
   return (
@@ -111,7 +138,7 @@ function ConfirmClaimHeadline(props: { readonly claim: LiveClaim }) {
           className="font-mono text-title-md tabular-nums"
           data-testid="link-phone-match-code"
         >
-          {props.claim.matchCode}
+          {matchCode.code}
         </span>
         ?
       </p>
@@ -156,11 +183,13 @@ function ConfirmClaimCard(props: {
         >
           {detailLine}
         </p>
-        <p className="text-ui-xs text-muted-foreground">
-          {props.claim.matchCode === null
-            ? "These details are approximate. Approve only if you just scanned this code yourself."
-            : "Approve only if the code matches and you just scanned this code yourself."}
-        </p>
+        {props.claim.matchCode.kind === "not-presented" ? null : (
+          <p className="text-ui-xs text-muted-foreground">
+            {props.claim.matchCode.kind === "shown"
+              ? "Approve only if the code matches and you just scanned this code yourself."
+              : "These details are approximate. Approve only if you just scanned this code yourself."}
+          </p>
+        )}
       </div>
       {props.respondFailed ? (
         <p

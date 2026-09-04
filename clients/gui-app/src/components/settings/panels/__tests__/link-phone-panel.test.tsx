@@ -87,11 +87,15 @@ function claimedStatus(claimedAtMs: number, userAgent: string) {
   };
 }
 
-/** The same claim from a server that mints match codes. */
+/**
+ * The same claim from a server that knows about match codes: a string is
+ * the code the phone is showing, `null` is the server saying the phone
+ * presented none.
+ */
 function claimedStatusWithCode(
   claimedAtMs: number,
   userAgent: string,
-  matchCode: string,
+  matchCode: string | null,
 ) {
   const status = claimedStatus(claimedAtMs, userAgent);
   return { ...status, claimant: { ...status.claimant, matchCode } };
@@ -679,6 +683,36 @@ describe("LinkPhonePanel", () => {
       { code: "ABCDE-FGHJK", approve: true },
       expect.anything(),
     );
+  });
+
+  it("warns loudly when the server says the phone presented no code", () => {
+    // `/claim` is unauthenticated and the claimant decides whether a code is
+    // minted, so a leaked-QR holder can withhold it. The server reports that
+    // as an explicit null, and the card must read as a different, worse
+    // state than a normal claim — not as today's prompt with a detail gone.
+    mocks.useAuthLinkLoginCode.mockReturnValue(queryResultWithCode(Date.now()));
+    mocks.useAuthLinkLoginStatus.mockReturnValue(
+      statusResult(claimedStatusWithCode(Date.now(), "iPhone 16 Pro", null)),
+    );
+    render(<LinkPhonePanel />);
+    const warning = screen.getByTestId("link-phone-no-match-code");
+    expect(warning.textContent).toContain(
+      "This phone did not show a sign-in code.",
+    );
+    expect(warning.textContent).toContain("Sign-in request from iPhone 16 Pro.");
+    expect(warning.className).toContain("destructive");
+    expect(screen.queryByTestId("link-phone-match-code")).toBeNull();
+    const card = screen.getByTestId("link-phone-confirm");
+    expect(card.textContent).not.toContain("Approve sign-in from");
+    expect(card.textContent).not.toContain("Does your phone show");
+    // Announced like the other two: the warning is what a screen-reader
+    // user has to hear before the buttons.
+    expect(screen.getByRole("status").textContent).toContain(
+      "did not show a sign-in code",
+    );
+    // Still decidable — a legitimate older phone must get through.
+    expect(screen.getByRole("button", { name: "Approve" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Reject" })).toBeTruthy();
   });
 
   it("falls back to the description prompt when the server sends no match code", () => {
