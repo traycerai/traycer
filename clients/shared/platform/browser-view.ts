@@ -32,6 +32,21 @@ export interface BrowserViewNativeTabCapability extends BrowserViewNativeTabKey 
   readonly registrationId: string;
 }
 
+/**
+ * Main asks the trusted renderer to create a blank `<webview>` for this grant.
+ * The grant and its partition only - no tab identity, never seed or cookie
+ * material.
+ */
+export interface BrowserViewGuestMountRequested {
+  readonly registrationId: string;
+  readonly partition: string;
+}
+
+/** Main tells the renderer to drop the DOM guest for this grant or registration. */
+export interface BrowserViewGuestReleaseRequested {
+  readonly registrationId: string;
+}
+
 export interface BrowserViewAttachSurface extends BrowserViewNativeTabCapability {
   readonly bindingId: string;
   readonly surface: BrowserViewTileKey;
@@ -52,10 +67,6 @@ export type BrowserViewElectronTabControlAction =
   | { readonly kind: "reload" }
   | { readonly kind: "goBack" }
   | { readonly kind: "goForward" }
-  | {
-      readonly kind: "setViewportPreset";
-      readonly viewportPreset: BrowserViewViewportPresetId;
-    }
   | { readonly kind: "zoomIn" }
   | { readonly kind: "zoomOut" }
   | { readonly kind: "resetZoom" }
@@ -64,17 +75,6 @@ export type BrowserViewElectronTabControlAction =
 export type BrowserViewElectronTabControl = BrowserViewNativeTabCapability & {
   readonly action: BrowserViewElectronTabControlAction;
 };
-
-export interface BrowserViewBounds {
-  readonly x: number;
-  readonly y: number;
-  readonly width: number;
-  readonly height: number;
-}
-
-export interface BrowserViewBoundsUpdate extends BrowserViewTileKey {
-  readonly bounds: BrowserViewBounds;
-}
 
 export const BROWSER_VIEW_VIEWPORT_PRESET_IDS = [
   "responsive",
@@ -197,36 +197,6 @@ export interface BrowserViewReservedChord {
 
 export interface BrowserViewTileCommandEvent extends BrowserViewTileKey {
   readonly command: BrowserViewTileCommand;
-}
-
-export interface BrowserViewOverlayOcclusion {
-  readonly overlayId: string;
-  readonly tiles: readonly BrowserViewTileKey[];
-}
-
-export interface BrowserViewOverlayRelease {
-  readonly overlayId: string;
-}
-
-export interface BrowserViewOverlaySnapshot extends BrowserViewTileKey {
-  readonly dataUrl: string | null;
-  readonly stale: boolean;
-}
-
-export interface BrowserViewOverlayOcclusionResult {
-  readonly snapshots: readonly BrowserViewOverlaySnapshot[];
-  readonly restoredTiles: readonly BrowserViewTileKey[];
-  /**
-   * How many of the requested tiles the main process actually knows. Zero
-   * means the occlusion did not take at all (the scan raced tile teardown or
-   * a surface rebind), so the caller must be able to try that overlay again
-   * instead of remembering it as done.
-   */
-  readonly matchedCount: number;
-}
-
-export interface BrowserViewOverlayReleaseResult {
-  readonly restoredTiles: readonly BrowserViewTileKey[];
 }
 
 export interface BrowserViewSnapshotInvalidatedChange extends BrowserViewTileKey {
@@ -692,7 +662,6 @@ export interface BrowserSessionsStreamEventEnvelope {
 }
 
 export interface BrowserViewBridge {
-  updateBounds(input: BrowserViewBoundsUpdate): Promise<void>;
   setReservedChords(chords: readonly BrowserViewReservedChord[]): Promise<void>;
   findInPage(input: BrowserViewFindRequest): Promise<void>;
   stopFindInPage(input: BrowserViewFindStop): Promise<void>;
@@ -712,12 +681,6 @@ export interface BrowserViewBridge {
   reportAnnotationAttachResult(
     input: BrowserAnnotationAttachResultInput,
   ): Promise<void>;
-  occludeForOverlay(
-    input: BrowserViewOverlayOcclusion,
-  ): Promise<BrowserViewOverlayOcclusionResult>;
-  releaseOverlay(
-    input: BrowserViewOverlayRelease,
-  ): Promise<BrowserViewOverlayReleaseResult>;
   /**
    * Does this machine keep browser logins across restarts? On by default,
    * Chrome-style; the only way it is false is the user turning it off in
@@ -752,8 +715,6 @@ export interface BrowserViewBridge {
    * the caller must not send the host frames either.
    */
   forgetLogins(): Promise<boolean>;
-  /** Renderer confirms the replacement frame is painted before main parks the view. */
-  readonly overlayPaintAck: (overlayId: string) => Promise<void>;
   /**
    * "Clear cookies for this site" (spec §6.5): removes the tile's registrable
    * domain from the shared `primary` jars - cookies and the localStorage of
@@ -883,5 +844,11 @@ export interface BrowserViewBridge {
   ): { dispose: () => void };
   onNativeTabStatusChange(
     handler: (change: BrowserViewNativeTabStatusChange) => void,
+  ): { dispose: () => void };
+  onGuestMountRequested(
+    handler: (request: BrowserViewGuestMountRequested) => void,
+  ): { dispose: () => void };
+  onGuestReleaseRequested(
+    handler: (request: BrowserViewGuestReleaseRequested) => void,
   ): { dispose: () => void };
 }

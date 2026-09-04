@@ -1,4 +1,5 @@
 import { ChatUsageDialog } from "@/components/chat/chat-usage-dialog";
+import { PersistentBrowserGuestHost } from "@/components/epic-canvas/browser-guest/persistent-browser-guest-host";
 import { AppUpdateToastController } from "@/components/layout/bridges/app-update-toast-controller";
 import { LoginImportAnnouncementController } from "@/components/layout/bridges/login-import-announcement-controller";
 import { DesktopZoomController } from "@/components/layout/bridges/desktop-zoom-controller";
@@ -224,6 +225,7 @@ export function TraycerApp(props: TraycerAppProps): ReactNode {
 
   return (
     <RunnerHostProvider runnerHost={props.runnerHost}>
+      <PersistentBrowserGuestHost />
       <LazyMotion features={domMax}>
         <WindowsBridgeProvider>
           <ResourceTelemetryBridge />
