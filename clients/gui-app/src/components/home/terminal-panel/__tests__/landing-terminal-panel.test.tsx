@@ -644,6 +644,7 @@ function browserSessionsState(
     openTab: () => Promise.reject(new Error("not used in this test")),
     closeTab: () => Promise.reject(new Error("not used in this test")),
     attachTab: () => Promise.reject(new Error("not used in this test")),
+    moveTab: () => Promise.reject(new Error("not used in this test")),
     ...overrides,
   };
 }

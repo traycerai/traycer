@@ -145,6 +145,7 @@ function liveSessionsState(hostId: string): BrowserSessionsState {
     },
     closeTab: () => Promise.resolve(),
     attachTab: () => Promise.reject(new Error("not used")),
+    moveTab: () => Promise.reject(new Error("not used")),
   };
 }
 

@@ -231,6 +231,7 @@ function renderHostWithBrowserRouting(): void {
     openTab: xtermMocks.openTab,
     closeTab: () => Promise.resolve(),
     attachTab: () => Promise.reject(new Error("not used")),
+    moveTab: () => Promise.reject(new Error("not used")),
   };
   render(
     <BrowserSessionsContext.Provider value={sessions}>

@@ -38,6 +38,7 @@ import type {
   BrowserViewElectronTabCdpDispatch,
   BrowserViewEnsureTab,
   BrowserViewDevToolsWindow,
+  BrowserViewNativeTabTransfer,
   BrowserViewNavigationHistory,
   BrowserViewPopupWebContents,
   BrowserViewWebContents,
@@ -175,6 +176,9 @@ export class BrowserViewManager {
   private readonly nativeTabStatusListeners = new Set<
     (change: BrowserViewNativeTabStatusChange) => void
   >();
+  private readonly nativeTabTransferListeners = new Set<
+    (transfer: BrowserViewNativeTabTransfer) => void
+  >();
   private readonly geometry: BrowserViewGeometry;
   private readonly popups: BrowserViewPopups;
   private readonly debugSessions: BrowserViewDebugSessions;
@@ -288,6 +292,17 @@ export class BrowserViewManager {
       navigate: (entry, url) => this.navigate(entry, url),
       emitStatus: (entry) => {
         this.emitStatus(entry);
+      },
+      detachEntrySurface: (entry) => {
+        this.detachEntrySurface(entry);
+      },
+      endPipCapture: (entry) => {
+        if (this.pip.isCapturing(entry)) this.pip.stop();
+      },
+      notifyNativeTabTransferred: (transfer) => {
+        for (const listener of this.nativeTabTransferListeners) {
+          listener(transfer);
+        }
       },
     });
     this.offWindowChange = options.onWindowChange(() => {
@@ -989,6 +1004,27 @@ export class BrowserViewManager {
     this.nativeTabStatusListeners.add(listener);
     return () => {
       this.nativeTabStatusListeners.delete(listener);
+    };
+  }
+
+  /**
+   * Main-side subscription to guests moving between windows. Every window's
+   * lifecycle object hears every transfer and matches on
+   * `previousRegistrationId`, because the window that LOST a guest is the one
+   * with bookkeeping to drop and the manager does not know which one that is -
+   * `lifecycleWindowId` has already been read by then, and a birth's id is the
+   * only thing that identifies its holder.
+   *
+   * Its own disposer, for the reason `onNativeTabStatusChange` has one: a
+   * stream that closes stops hearing without touching another stream's
+   * subscription.
+   */
+  onNativeTabTransferred(
+    listener: (transfer: BrowserViewNativeTabTransfer) => void,
+  ): () => void {
+    this.nativeTabTransferListeners.add(listener);
+    return () => {
+      this.nativeTabTransferListeners.delete(listener);
     };
   }
 

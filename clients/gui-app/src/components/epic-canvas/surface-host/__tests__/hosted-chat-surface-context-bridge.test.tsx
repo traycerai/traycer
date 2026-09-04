@@ -112,6 +112,7 @@ vi.mock(
               openTab: () => Promise.reject(new Error("not used")),
               closeTab: () => Promise.resolve(),
               attachTab: () => Promise.reject(new Error("not used")),
+              moveTab: () => Promise.reject(new Error("not used")),
             },
           },
           props.children,

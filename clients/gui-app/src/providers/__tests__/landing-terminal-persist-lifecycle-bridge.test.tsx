@@ -124,6 +124,7 @@ function liveBrowserSessions(
     openTab: () => Promise.reject(new Error("not used in this test")),
     closeTab,
     attachTab: () => Promise.reject(new Error("not used in this test")),
+    moveTab: () => Promise.reject(new Error("not used in this test")),
   };
 }
 

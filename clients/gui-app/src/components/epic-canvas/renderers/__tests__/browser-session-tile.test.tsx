@@ -50,6 +50,7 @@ const harness = vi.hoisted(() => ({
     harness.frameOrder.push("attachTab");
     return Promise.resolve();
   }),
+  moveTab: vi.fn(() => Promise.resolve()),
   /**
    * Which frame each seam issued, in issue order, across the sessions stream
    * (`attachTab`) and the screencast stream (the peek tile's subscribe). The
@@ -149,10 +150,20 @@ function sessionsContextValue() {
     // This literal is untyped (no `BrowserSessionsState` annotation), so a
     // missing `attachTab` member is invisible to the type-check - only a
     // render of `BrowserTabTile` (which destructures `sessions.attachTab`)
-    // would ever have caught its absence.
+    // would ever have caught its absence. `moveTab` is added by hand for the
+    // same reason ("Show here").
     attachTab: harness.attachTab,
+    moveTab: harness.moveTab,
   };
 }
+const toastHarness = vi.hoisted(() => ({
+  error: vi.fn(),
+}));
+vi.mock("sonner", () => ({
+  toast: {
+    error: toastHarness.error,
+  },
+}));
 vi.mock("@/components/epic-canvas/renderers/browser-sessions-context", () => ({
   useBrowserSessionsContext: () => sessionsContextValue(),
   useMaybeBrowserSessionsContext: () => sessionsContextValue(),
@@ -371,6 +382,9 @@ describe("BrowserSessionTile lifecycle projection", () => {
     harness.openTab.mockClear();
     harness.closeTab.mockClear();
     harness.attachTab.mockClear();
+    harness.moveTab.mockReset();
+    harness.moveTab.mockImplementation(() => Promise.resolve());
+    toastHarness.error.mockClear();
     harness.frameOrder.length = 0;
     desktopWindowIdHarness.windowId = "window-a";
     reachabilityHarness.status = "reachable";
@@ -1230,6 +1244,95 @@ describe("BrowserSessionTile lifecycle projection", () => {
       "tab-1",
     );
     expect(screen.queryByTestId("browser-tab-other-window")).toBeNull();
+  });
+
+  /**
+   * The native `disabled` property, not `toBeDisabled()`: jest-dom's matchers
+   * are not wired into this suite.
+   */
+  function isDisabled(element: HTMLElement): boolean {
+    return element instanceof HTMLButtonElement && element.disabled;
+  }
+
+  it("renders the Show here button only when the tab is bound to another window", () => {
+    harness.items = [sessionBoundTo("window-b")];
+    renderTile();
+    expect(screen.getByRole("button", { name: "Show here" })).toBeTruthy();
+    cleanup();
+
+    harness.items = [sessionBoundTo("window-a")];
+    renderTile();
+    expect(screen.queryByRole("button", { name: "Show here" })).toBeNull();
+    cleanup();
+
+    harness.items = [sessionBoundTo(null)];
+    renderTile();
+    expect(screen.queryByRole("button", { name: "Show here" })).toBeNull();
+    cleanup();
+
+    harness.canMaterializeElectron = false;
+    harness.items = [sessionBoundTo("window-b")];
+    renderTile();
+    expect(screen.queryByRole("button", { name: "Show here" })).toBeNull();
+  });
+
+  it("sends exactly one moveTab on a Show here click", () => {
+    harness.items = [sessionBoundTo("window-b")];
+    renderTile();
+
+    fireEvent.click(screen.getByRole("button", { name: "Show here" }));
+
+    expect(harness.moveTab).toHaveBeenCalledTimes(1);
+    expect(harness.moveTab).toHaveBeenCalledWith("tab-1");
+  });
+
+  it("reads Moving… with the button disabled while the move is unresolved", async () => {
+    let releaseMove: () => void = () => undefined;
+    harness.moveTab.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseMove = resolve;
+        }),
+    );
+    harness.items = [sessionBoundTo("window-b")];
+    renderTile();
+
+    fireEvent.click(screen.getByRole("button", { name: "Show here" }));
+
+    const note = await screen.findByTestId("browser-tab-other-window");
+    expect(note.textContent).toBe("Moving…");
+    expect(isDisabled(screen.getByRole("button", { name: "Show here" }))).toBe(
+      true,
+    );
+
+    // Leaves the promise unresolved deliberately: a resolve unmounts this
+    // branch through the ordinary createElectronTab path, not through this
+    // note - so nothing here asserts on it settling.
+    releaseMove();
+  });
+
+  it("toasts the rejection reason and restores the button on a refused move", async () => {
+    harness.moveTab.mockImplementation(() =>
+      Promise.reject(
+        new Error("This browser tab is being driven by an agent."),
+      ),
+    );
+    harness.items = [sessionBoundTo("window-b")];
+    renderTile();
+
+    fireEvent.click(screen.getByRole("button", { name: "Show here" }));
+
+    await waitFor(() => {
+      expect(toastHarness.error).toHaveBeenCalledWith(
+        "This browser tab is being driven by an agent.",
+      );
+    });
+
+    const note = screen.getByTestId("browser-tab-other-window");
+    expect(note.textContent).toBe("Open in your other window");
+    expect(isDisabled(screen.getByRole("button", { name: "Show here" }))).toBe(
+      false,
+    );
   });
 });
 

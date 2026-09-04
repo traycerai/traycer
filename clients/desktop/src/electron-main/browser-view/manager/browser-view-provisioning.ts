@@ -5,6 +5,7 @@ import { describeLogError, log } from "../../app/logger";
 import type { BrowserSessionProfile } from "../browser-session";
 import type {
   BrowserViewEnsureTab,
+  BrowserViewNativeTabTransfer,
   ManagedBrowserView,
 } from "../browser-view-port";
 import { browserLocalStorageSeedScript } from "../storage/browser-storage-state";
@@ -36,6 +37,18 @@ interface BrowserViewProvisioningOptions {
   readonly closeEntry: (entry: BrowserViewEntry) => Promise<void>;
   readonly navigate: (entry: BrowserViewEntry, url: string) => Promise<void>;
   readonly emitStatus: (entry: BrowserViewEntry) => void;
+  /**
+   * The three collaborators the cross-window transfer needs, all of them the
+   * manager's own state rather than provisioning's: the surface binding, the
+   * PiP lease and the transferred-listener set. Options callbacks in the
+   * `emitStatus` / `closeEntry` pattern, so the transfer stays here without
+   * this module reaching into the manager.
+   */
+  readonly detachEntrySurface: (entry: BrowserViewEntry) => void;
+  readonly endPipCapture: (entry: BrowserViewEntry) => void;
+  readonly notifyNativeTabTransferred: (
+    transfer: BrowserViewNativeTabTransfer,
+  ) => void;
 }
 
 /**
@@ -63,6 +76,11 @@ export class BrowserViewProvisioning {
     url: string,
   ) => Promise<void>;
   private readonly emitStatus: (entry: BrowserViewEntry) => void;
+  private readonly detachEntrySurface: (entry: BrowserViewEntry) => void;
+  private readonly endPipCapture: (entry: BrowserViewEntry) => void;
+  private readonly notifyNativeTabTransferred: (
+    transfer: BrowserViewNativeTabTransfer,
+  ) => void;
 
   constructor(options: BrowserViewProvisioningOptions) {
     this.entries = options.entries;
@@ -73,6 +91,9 @@ export class BrowserViewProvisioning {
     this.closeEntry = options.closeEntry;
     this.navigate = options.navigate;
     this.emitStatus = options.emitStatus;
+    this.detachEntrySurface = options.detachEntrySurface;
+    this.endPipCapture = options.endPipCapture;
+    this.notifyNativeTabTransferred = options.notifyNativeTabTransferred;
   }
 
   ensureTab(
@@ -162,12 +183,58 @@ export class BrowserViewProvisioning {
     }
   }
 
+  /**
+   * Moves a live guest from the window that holds it to the window that just
+   * ensured it, WITHOUT touching its WebContents - the desktop half of "Show
+   * here". Same page, same scroll, same in-page state; only who owns it moves.
+   *
+   * Unconditional on the window differing, not on the create's reason. Two
+   * callers reach it. The host's `moveTab` is the one it exists for. The other
+   * is a rebind or reconcile that resolves a tab to a different window while
+   * the tab's own window is still open but holds no route - which the host
+   * routes away from today, and which now performs a REAL transfer rather than
+   * the silent adoption it used to. That is correct only because of step 3
+   * below: without retiring the old window's birth and the renderer binding it
+   * feeds, the old window would go on believing it owns a guest it no longer
+   * has, refuse the move back as an identity violation, and keep answering
+   * `isTabViewed` and CDP frames for it.
+   *
+   * In order, and the order matters:
+   *
+   * 1. Mint a new `registrationId`. That alone makes every consumer holding
+   *    the old one inert (`findExactNativeEntry` plus `releaseTab`'s own
+   *    check), so no per-consumer guard is needed - including the release the
+   *    old window may still send, which would otherwise close the guest the
+   *    new window just adopted.
+   * 2. Detach the old surface, or the new window's `attachSurface` is refused
+   *    as an active binding; and end any PiP lease, which the surface detach
+   *    deliberately does not touch and which `reconcileVisibility` SKIPS an
+   *    entry for - a moved tab in PiP would otherwise keep compositing in the
+   *    window it left. The detach runs before the `lifecycleWindowId` move so
+   *    its status emission still names the old window, and so the old window's
+   *    reset listener is still seen as in use until step 4 decides.
+   * 3. Tell the old window's `ElectronTabs`, which retires its accepted birth
+   *    and releases the renderer's directory entry through the ordinary
+   *    `tabReleased` path.
+   * 4. The lifecycle move itself, which `hasNativeTabsForWindow` (who owes the
+   *    final primary-profile capture) and `handleHostWindowRendererReset` (who
+   *    may close an unaccepted guest) both read, so both follow the guest.
+   */
   private transferNativeLifecycle(
     entry: BrowserViewEntry,
     windowId: string,
   ): void {
     const previousWindowId = entry.identity.lifecycleWindowId;
     if (previousWindowId === windowId) return;
+    const previousRegistrationId = entry.identity.registrationId;
+    entry.identity.registrationId = randomUUID();
+    this.detachEntrySurface(entry);
+    this.endPipCapture(entry);
+    this.notifyNativeTabTransferred({
+      key: entry.identity.key,
+      previousRegistrationId,
+      toWindowId: windowId,
+    });
     entry.identity.lifecycleWindowId = windowId;
     this.windows.ensureResetListener(windowId);
     this.windows.detachResetListenerIfUnused(previousWindowId);

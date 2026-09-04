@@ -6,6 +6,7 @@ import {
   useState,
 } from "react";
 import { X } from "lucide-react";
+import { toast } from "sonner";
 import type { BrowserSessionInfo } from "@traycer/protocol/host/browser/contracts";
 import type { BrowserViewViewportPresetId } from "@traycer-clients/shared/platform/browser-view";
 import type { HostUnavailability } from "@traycer-clients/shared/host-client/remote-fetcher";
@@ -120,6 +121,12 @@ interface BrowserTabTileSurfaceProps extends BrowserTabTileProps {
   readonly wakeRequested: boolean;
   readonly wakeExpired: boolean;
   readonly onRequestWake: () => void;
+  /**
+   * "Show here": move this tab's native guest out of the window that holds it
+   * and into this one, page state intact. Rejects with the host's reason,
+   * which the note toasts before putting its button back.
+   */
+  readonly onShowHere: () => Promise<void>;
 }
 
 /**
@@ -269,7 +276,7 @@ function BrowserTabTileSurface(props: BrowserTabTileSurfaceProps) {
     if (
       tabBoundInAnotherWindow(props.session, props.tab, props.desktopWindowId)
     ) {
-      return <BrowserTabOtherWindowNote />;
+      return <BrowserTabOtherWindowNote onShowHere={props.onShowHere} />;
     }
     return (
       <BrowserTabRebindWait
@@ -368,24 +375,65 @@ function BrowserTabRebindWait(props: {
 }
 
 /**
- * A tab whose native binding is held by another desktop window's route.
+ * A tab whose native binding is held by another desktop window's route, and
+ * the one gesture that moves it here.
  *
- * Deliberately inert: moving a tab between windows is a follow-up, and the
- * move is where the destructive race lives (the two windows' streams are
- * separate connections into separate renderers, and a release racing an
- * adopt closes the guest that was just adopted). So this states the fact and
- * offers nothing - the user's answer today is to look at the other window, or
- * close the tab and open one where they are. `role="status"` rather than
- * `alert`: nothing is wrong, and nothing is pending either.
+ * "Show here" is a `moveTab` frame, not an attach: the tile's ordinary
+ * per-activation `attachTab` is reject-never-relocate by construction, which
+ * is what keeps a tab from being yanked between windows by nothing more than
+ * being looked at. The move is a deliberate press, so it is the one frame
+ * allowed to displace a live guest - and the host serializes it against every
+ * competing attach, create and reconcile before touching anything.
+ *
+ * The button lives OUTSIDE the `browser-tab-other-window` node so that node
+ * stays exactly its copy: the note is what a reader is told, the button is
+ * what they may do about it, and a test that pins the wording should not have
+ * to spell the control too.
+ *
+ * Pending is the note's own state rather than a prop, because the only thing
+ * that ends it is this promise. A resolve deliberately leaves it pending: the
+ * binding arrives through this window's ordinary `createElectronTab` path and
+ * unmounts the whole branch, so clearing it here would flash the button back
+ * for a frame. A rejection is the reader's answer - the host's reason, toasted
+ * - and puts the button back. `role="status"` rather than `alert` throughout:
+ * nothing is wrong, and the copy change is exactly the kind of live update a
+ * status region is for.
  */
-function BrowserTabOtherWindowNote() {
+function BrowserTabOtherWindowNote(props: {
+  readonly onShowHere: () => Promise<void>;
+}) {
+  const [moving, setMoving] = useState(false);
+  const onShowHere = props.onShowHere;
+  const showHere = useCallback(() => {
+    setMoving(true);
+    void onShowHere().catch((error: unknown) => {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Couldn't show the browser tab here. Try again.",
+      );
+      setMoving(false);
+    });
+  }, [onShowHere]);
+
   return (
-    <div
-      role="status"
-      data-testid="browser-tab-other-window"
-      className="flex h-full w-full items-center justify-center px-4 text-center text-ui-sm text-muted-foreground"
-    >
-      Open in your other window
+    <div className="flex h-full w-full flex-col items-center justify-center gap-3 px-4 text-center">
+      <div
+        role="status"
+        data-testid="browser-tab-other-window"
+        className="text-ui-sm text-muted-foreground"
+      >
+        {moving ? "Moving…" : "Open in your other window"}
+      </div>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        disabled={moving}
+        onClick={showHere}
+      >
+        Show here
+      </Button>
     </div>
   );
 }
@@ -553,6 +601,7 @@ function useRuntimeDemotionNote(
 export function BrowserTabTile(props: BrowserTabTileProps) {
   const sessions = useBrowserSessionsContext();
   const attachTab = sessions.attachTab;
+  const moveTab = sessions.moveTab;
   const reachability = useHostReachability(props.node.hostId);
   const desktopWindowId = useDesktopWindowId();
   const session = sessions.items.find(
@@ -603,6 +652,15 @@ export function BrowserTabTile(props: BrowserTabTileProps) {
   const sendAttachTab = useCallback(() => {
     void attachTab(props.node.tabId).catch(() => undefined);
   }, [attachTab, props.node.tabId]);
+  /**
+   * The exact opposite of `sendAttachTab` in how its outcome is handled, for
+   * the reason stated on the note: this one is a press, so the rejection is
+   * the reader's answer and is returned to them rather than swallowed.
+   */
+  const sendMoveTab = useCallback(
+    () => moveTab(props.node.tabId),
+    [moveTab, props.node.tabId],
+  );
   /**
    * The wake sends the hint first, so it precedes the peek branch the two
    * `setState`s below are about to mount - the same ordering the activation
@@ -744,6 +802,7 @@ export function BrowserTabTile(props: BrowserTabTileProps) {
           wakeRequested={wakeActive}
           wakeExpired={wakeExpired}
           onRequestWake={requestWake}
+          onShowHere={sendMoveTab}
         />
       </div>
     </div>

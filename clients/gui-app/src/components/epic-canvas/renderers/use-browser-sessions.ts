@@ -219,5 +219,6 @@ function unavailableBrowserSessionsState(
     openTab: unavailable,
     closeTab: unavailable,
     attachTab: unavailable,
+    moveTab: unavailable,
   };
 }

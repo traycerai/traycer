@@ -476,4 +476,87 @@ describe("browser sessions coordinator registry", () => {
       vi.useRealTimers();
     }
   });
+
+  it("sends one moveTab frame carrying the tab id", async () => {
+    const harness = createTransportHarness();
+    const { key } = acquire({
+      scope: epicScope("epic-1"),
+      openTransport: harness.openTransport,
+    });
+    const session = soleSession(soleClient(harness.clients));
+    const state = browserSessionsCoordinatorState(key);
+    if (state === null) throw new Error("expected coordinator state");
+
+    const movePromise = state.moveTab("tab-1");
+    const moveFrames = session.sentFrames.filter(
+      (frame) => frame.kind === "moveTab",
+    );
+    expect(moveFrames).toHaveLength(1);
+    expect(moveFrames[0]).toMatchObject({ kind: "moveTab", tabId: "tab-1" });
+
+    // Settling it here is also the demux case (design D8): without
+    // `pendingMoves` wired into `handleActionAck`'s array, a `moveTab` ack is
+    // matched against no map, this promise never resolves, and the tile's
+    // button sits on "Moving…" until the coordinator's own 10s timeout.
+    const requestId = requestIdOf(sentFrameOfKind(session, "moveTab"));
+    session.emit(
+      {
+        kind: "actionAck",
+        hasBinaryPayload: false,
+        requestId,
+        ok: true,
+        reason: null,
+      },
+      null,
+    );
+    await expect(movePromise).resolves.toBeUndefined();
+  });
+
+  it("rejects moveTab with the host's reason on a refused actionAck", async () => {
+    const harness = createTransportHarness();
+    const { key } = acquire({
+      scope: epicScope("epic-1"),
+      openTransport: harness.openTransport,
+    });
+    const session = soleSession(soleClient(harness.clients));
+    const state = browserSessionsCoordinatorState(key);
+    if (state === null) throw new Error("expected coordinator state");
+
+    const movePromise = state.moveTab("tab-1");
+    const requestId = requestIdOf(sentFrameOfKind(session, "moveTab"));
+    session.emit(
+      {
+        kind: "actionAck",
+        hasBinaryPayload: false,
+        requestId,
+        ok: false,
+        reason: "This browser tab is being driven by an agent.",
+      },
+      null,
+    );
+
+    await expect(movePromise).rejects.toThrow(
+      "This browser tab is being driven by an agent.",
+    );
+  });
+
+  it("rejects an outstanding moveTab when the stream stops being live", async () => {
+    const harness = createTransportHarness();
+    const { key } = acquire({
+      scope: epicScope("epic-1"),
+      openTransport: harness.openTransport,
+    });
+    const session = soleSession(soleClient(harness.clients));
+    const state = browserSessionsCoordinatorState(key);
+    if (state === null) throw new Error("expected coordinator state");
+
+    const movePromise = state.moveTab("tab-1");
+    expect(sentFrameOfKind(session, "moveTab")).toBeDefined();
+
+    session.emitStatus("closed");
+
+    await expect(movePromise).rejects.toThrow(
+      "Browser sessions stream closed.",
+    );
+  });
 });

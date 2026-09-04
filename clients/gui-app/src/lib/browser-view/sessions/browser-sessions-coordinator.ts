@@ -63,6 +63,20 @@ export interface BrowserSessionsState {
    * request id, a pending entry, a timeout - is the coordinator's job.
    */
   readonly attachTab: (tabId: string) => Promise<void>;
+  /**
+   * "Show this tab HERE" - the same ask for a tab whose native binding is
+   * held by a route in ANOTHER window of this desktop, which `attachTab` is
+   * refused for by construction (it rejects, never relocates). Resolves on the
+   * host's `actionAck` and rejects with its reason on a refusal - an agent is
+   * driving the tab, a birth is in flight, the session is closing - or on
+   * {@link ATTACH_TAB_TIMEOUT_MS}.
+   *
+   * Unlike `attachTab` the caller SHOWS the outcome: it is a button press, so
+   * a refusal is toasted and the button comes back. A resolve needs nothing -
+   * the binding arrives through this window's ordinary `createElectronTab`
+   * path, exactly as any other native birth does.
+   */
+  readonly moveTab: (tabId: string) => Promise<void>;
 }
 
 /**
@@ -262,7 +276,7 @@ export function hasBrowserSessionsCoordinator(key: string): boolean {
 const TAB_PREVIEW_TIMEOUT_MS = 5_000;
 
 /**
- * Bound on one `attachTab` ack.
+ * Bound on one `attachTab` or `moveTab` ack.
  *
  * `closeTab` is deliberately unbounded and this is not, because the two have
  * different evidence behind them: a close is followed by a `sessionUpdated` or
@@ -272,6 +286,10 @@ const TAB_PREVIEW_TIMEOUT_MS = 5_000;
  * re-sends, so an unbounded promise here is one that is awaited and never
  * settles. Long enough to cover a dormant tab's wake and a native guest's
  * birth on the far side.
+ *
+ * A move is bounded by the same number for a stronger reason: a reader is
+ * watching a disabled button, and the whole cost of a move that never answers
+ * is that button never coming back.
  */
 const ATTACH_TAB_TIMEOUT_MS = 10_000;
 
@@ -434,6 +452,7 @@ function createBrowserSessionsCoordinator(args: {
 }): BrowserSessionsCoordinator {
   const pendingCloses: PendingRequests<void> = new Map();
   const pendingAttaches: PendingRequests<void> = new Map();
+  const pendingMoves: PendingRequests<void> = new Map();
   const pendingOpens: PendingRequests<BrowserTabIdentity> = new Map();
   const pendingPreviews: PendingRequests<BrowserTabPreview> = new Map();
   const runtimes = new Map<symbol, BrowserSessionsCoordinatorRuntime>([
@@ -543,6 +562,14 @@ function createBrowserSessionsCoordinator(args: {
       tabId,
     }));
 
+  const moveTab = (tabId: string): Promise<void> =>
+    sendRequest(pendingMoves, ATTACH_TAB_TIMEOUT_MS, (requestId) => ({
+      kind: "moveTab",
+      hasBinaryPayload: false,
+      requestId,
+      tabId,
+    }));
+
   const openTab = (
     sessionId: string | null,
     url: string,
@@ -567,6 +594,7 @@ function createBrowserSessionsCoordinator(args: {
     const closed = new Error("Browser sessions stream closed.");
     rejectPendingRequests(pendingCloses, closed);
     rejectPendingRequests(pendingAttaches, closed);
+    rejectPendingRequests(pendingMoves, closed);
     rejectPendingRequests(pendingOpens, closed);
     rejectPendingRequests(pendingPreviews, closed);
   };
@@ -608,6 +636,7 @@ function createBrowserSessionsCoordinator(args: {
       },
       pendingCloses,
       pendingAttaches,
+      pendingMoves,
       pendingOpens,
       pendingPreviews,
       presenters: selectBrowserSessionsPresenters(runtimes),
@@ -685,6 +714,7 @@ function createBrowserSessionsCoordinator(args: {
       openTab,
       closeTab,
       attachTab,
+      moveTab,
     },
     upsertConsumer: (consumerId, nextRuntime) => {
       runtimes.set(consumerId, nextRuntime);
@@ -762,6 +792,7 @@ function handleBrowserSessionsFrame(args: {
   readonly setItems: (items: readonly BrowserSessionInfo[]) => void;
   readonly pendingCloses: PendingRequests<void>;
   readonly pendingAttaches: PendingRequests<void>;
+  readonly pendingMoves: PendingRequests<void>;
   readonly pendingOpens: PendingRequests<BrowserTabIdentity>;
   readonly pendingPreviews: PendingRequests<BrowserTabPreview>;
   readonly presenters: readonly BrowserSessionsPresenter[];
@@ -777,7 +808,11 @@ function handleBrowserSessionsFrame(args: {
       return;
     }
     case "actionAck":
-      handleActionAck(frame, [args.pendingCloses, args.pendingAttaches]);
+      handleActionAck(frame, [
+        args.pendingCloses,
+        args.pendingAttaches,
+        args.pendingMoves,
+      ]);
       return;
     case "openTabResult":
       handleOpenTabResult(frame, args.pendingOpens);

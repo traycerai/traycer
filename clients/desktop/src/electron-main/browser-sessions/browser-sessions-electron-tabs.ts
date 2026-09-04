@@ -12,6 +12,7 @@ import {
 import type {
   BrowserViewElectronTabCdpDispatch,
   BrowserViewEnsureTab,
+  BrowserViewNativeTabTransfer,
 } from "../browser-view/browser-view-port";
 import { describeLogError, log } from "../app/logger";
 
@@ -49,6 +50,9 @@ export interface BrowserSessionsTabPort {
   ): Promise<BrowserCdpResult>;
   onNativeTabStatusChange(
     listener: (change: BrowserViewNativeTabStatusChange) => void,
+  ): () => void;
+  onNativeTabTransferred(
+    listener: (transfer: BrowserViewNativeTabTransfer) => void,
   ): () => void;
 }
 
@@ -149,6 +153,7 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
   const requestIdByTabKey = new Map<string, string>();
   const releaseByIncarnation = new Map<string, Promise<void>>();
   let disposeStatusSubscription: (() => void) | null = null;
+  let disposeTransferSubscription: (() => void) | null = null;
 
   const isCurrentConnection = (generation: number): boolean =>
     !disposed && connected && generation === connectionGeneration;
@@ -258,6 +263,47 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
     );
   };
 
+  /**
+   * The guest behind one of this window's births just moved to another window.
+   *
+   * Nothing else retires an ACCEPTED birth: the move sends no
+   * `releaseElectronTab`, and `rollbackUnacceptedBirth` returns early for one.
+   * Left standing it would refuse the move back (`canReplaceElectronTabBirth`
+   * answers `identity_violation`) and keep answering `isTabViewed` and CDP
+   * frames for a tab this window no longer owns.
+   *
+   * Matched on the registration id the transfer RETIRED, which is the only
+   * thing that names the losing window: the destination window's own birth for
+   * this tab is still `provisioned === null` inside its `ensureTab`, so it
+   * cannot match, and a window that held the tab in some earlier incarnation
+   * carries a different id. `notifyReleased` is true because this is the one
+   * retirement with no `releaseBirth` behind it to emit for it - and that
+   * notification, carrying the OLD id, is what the renderer's binding
+   * directory needs to drop its entry.
+   */
+  const retireTransferredBirths = (
+    transfer: BrowserViewNativeTabTransfer,
+  ): void => {
+    if (transfer.key.hostId !== options.hostId) return;
+    for (const birth of Array.from(birthByRequestId.values())) {
+      if (birth.cancelled) continue;
+      if (birth.create.sessionId !== transfer.key.sessionId) continue;
+      if (birth.create.tabId !== transfer.key.tabId) continue;
+      const registrationId = birth.provisioned?.registrationId ?? null;
+      if (registrationId !== transfer.previousRegistrationId) continue;
+      retireBirth(birth, true);
+    }
+  };
+
+  const ensureTransferSubscription = (): void => {
+    if (disposeTransferSubscription !== null) return;
+    disposeTransferSubscription = options.tabs.onNativeTabTransferred(
+      (transfer) => {
+        retireTransferredBirths(transfer);
+      },
+    );
+  };
+
   const activateAcceptedBirth = (birth: ElectronTabBirth): void => {
     const provisioned = acceptedProvisioning(birth);
     if (birth.activated || provisioned === null) return;
@@ -319,6 +365,7 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
       if (previous !== undefined) retireBirth(previous, true);
     }
     ensureStatusSubscription();
+    ensureTransferSubscription();
 
     const birth: ElectronTabBirth = {
       create: frame,
@@ -527,6 +574,8 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
       retireEveryBirth();
       disposeStatusSubscription?.();
       disposeStatusSubscription = null;
+      disposeTransferSubscription?.();
+      disposeTransferSubscription = null;
     },
   };
 }
@@ -664,11 +713,18 @@ function sameCreate(
   );
 }
 
+/**
+ * `move` joins `restore` as the belt for a birth that outlived the transferred
+ * event that should have retired it - a window that moved a tab away still
+ * remembers it, and the move back must not be refused for that. The birth
+ * retirement is the load-bearing half: `retireBirth` deletes the tab key
+ * outright, so a transfer this window HEARD never reaches this gate at all.
+ */
 function canReplaceElectronTabBirth(
   frame: CreateElectronTabFrame,
   previous: ElectronTabBirth | undefined,
 ): boolean {
-  if (frame.reason !== "restore") return false;
+  if (frame.reason !== "restore" && frame.reason !== "move") return false;
   return previous !== undefined && acceptedProvisioning(previous) !== null;
 }
 

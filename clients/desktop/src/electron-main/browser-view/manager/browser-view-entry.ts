@@ -117,7 +117,14 @@ export interface BrowserViewEntry {
 
 export interface BrowserViewNativeIdentity {
   readonly key: BrowserViewNativeTabKey;
-  readonly registrationId: string;
+  /**
+   * The incarnation every host-side capability quotes. Mutable because a
+   * cross-window transfer mints a new one: that mint is what makes the old
+   * window's release, detach, control and PiP calls inert in one stroke
+   * (`findExactNativeEntry` and `releaseTab`'s own check both compare it),
+   * rather than needing a guard per consumer.
+   */
+  registrationId: string;
   /** Current renderer connection that owns this guest's lifecycle stream. */
   lifecycleWindowId: string;
   readonly lifecycle: NativeBrowserViewLifecycle;

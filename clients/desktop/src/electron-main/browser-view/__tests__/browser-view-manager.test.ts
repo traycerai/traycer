@@ -7,6 +7,7 @@ import type {
   BrowserViewCapturedImage,
   BrowserViewFrameImage,
   BrowserViewDebugger,
+  BrowserViewNativeTabTransfer,
   BrowserViewPopupWebContents,
   BrowserViewWebContents,
   BrowserViewWindow,
@@ -1605,6 +1606,11 @@ describe("BrowserViewManager native tab lifecycle", () => {
     ).toBe(true);
   });
 
+  // Rewritten for the cross-window transfer (OSS ticket 11, "Show here"): a
+  // cross-window `ensureTab` now MINTS a new registrationId rather than
+  // handing back the incumbent's, so the old id this case used to attach with
+  // is stale by the time it runs. The rest of the case - the status emission
+  // naming window-2, and the guest surviving until `dispose()` - is unchanged.
   it("transfers the lifecycle notification lease on authoritative ensure", async () => {
     const harness = createHarness();
     const nativeKey = {
@@ -1624,13 +1630,17 @@ describe("BrowserViewManager native tab lifecycle", () => {
     if (view === undefined) throw new Error("expected native guest");
     await harness.manager.acceptTab(ready);
 
-    await harness.manager.ensureTab("window-2", ensureInput);
+    const transferred = await harness.manager.ensureTab(
+      "window-2",
+      ensureInput,
+    );
+    expect(transferred.registrationId).not.toBe(ready.registrationId);
     harness.nativeTabStatusWindowIds.length = 0;
 
     expect(
       harness.manager.attachSurface("window-2", {
         ...nativeKey,
-        registrationId: ready.registrationId,
+        registrationId: transferred.registrationId,
         bindingId: "binding-2",
         surface: {
           ...BASE_KEY,
@@ -1645,6 +1655,23 @@ describe("BrowserViewManager native tab lifecycle", () => {
     expect(view.webContents.closeCalls).toBe(1);
   });
 
+  // Rewritten, but the top-line assertion turns out to survive unchanged -
+  // verified by tracing the source rather than assuming the ticket's summary.
+  // `transferNativeLifecycle` mints the new registrationId and commits it to
+  // `entry.identity` SYNCHRONOUSLY, inside the second `ensureTab` call, well
+  // before the deferred debugger commands below are resolved. `firstEnsure`'s
+  // `initializeNativeTab` only computes its result (`resolveNativeTabProvisioned`,
+  // which reads `entry.identity.registrationId` at call time) AFTER that mint,
+  // and hands the SAME object to `completeProvisioning`, which resolves the one
+  // `lifecycle.provisioned` promise both `firstEnsure` and `reclaimedEnsure`
+  // are awaiting. `restoreExistingNativeTab` (the reclaim path) then computes
+  // its own `resolveNativeTabProvisioned(entry)` a second time, but nothing
+  // mutates `entry.identity.registrationId` between the two reads - so
+  // `reclaimedReady` and `firstReady` are the same value, both carrying the
+  // NEW (window-2) registrationId, not the guest's original one. This is the
+  // cold-birth case the design calls out: window-1's own `ensureTab` resolves
+  // with window-2's id because the mint lands before window-1's promise
+  // settles, not because of anything reclaim-specific.
   it("transfers a provisioning tab's lifecycle lease before awaiting readiness", async () => {
     const harness = createHarness();
     const ensureInput = {
@@ -2254,6 +2281,264 @@ describe("BrowserViewManager native tab lifecycle", () => {
       view,
     );
     expect(view.visible).toBe(false);
+  });
+});
+
+describe("BrowserViewManager cross-window tab move (moved, not reloaded)", () => {
+  const NATIVE_KEY = {
+    hostId: "host-1",
+    sessionId: "session-1",
+    tabId: "tab-1",
+  } as const;
+
+  function ensureInput(): {
+    readonly hostId: string;
+    readonly sessionId: string;
+    readonly tabId: string;
+    readonly requestedUrl: string;
+    readonly profile: "primary";
+    readonly seedStorageState: null;
+    readonly connectionId: null;
+  } {
+    return {
+      ...NATIVE_KEY,
+      requestedUrl: "https://example.com/",
+      profile: "primary",
+      seedStorageState: null,
+      connectionId: null,
+    };
+  }
+
+  it("returns a new registration id for the same guest, with no second loadURL and no close", async () => {
+    const harness = createHarness();
+    const input = ensureInput();
+    const original = await harness.manager.ensureTab("window-1", input);
+    await harness.manager.acceptTab(original);
+    const view = harness.views[0];
+    if (view === undefined) throw new Error("expected native guest");
+    const loadUrlsBeforeMove = [...view.webContents.loadUrls];
+    const webContentsId = view.webContents.id;
+
+    const moved = await harness.manager.ensureTab("window-2", input);
+
+    expect(moved.registrationId).not.toBe(original.registrationId);
+    expect(moved).toMatchObject(NATIVE_KEY);
+    expect(view.webContents.id).toBe(webContentsId);
+    expect(view.webContents.closeCalls).toBe(0);
+    expect(view.webContents.loadUrls).toEqual(loadUrlsBeforeMove);
+    expect(harness.views).toHaveLength(1);
+  });
+
+  it("makes every old-id call inert without touching the guest", async () => {
+    const harness = createHarness();
+    const input = ensureInput();
+    const original = await harness.manager.ensureTab("window-1", input);
+    await harness.manager.acceptTab(original);
+    const view = harness.views[0];
+    if (view === undefined) throw new Error("expected native guest");
+    // Attached first, so the detach below is a call that WOULD have worked a
+    // moment earlier - the scenario the inertness is for. (It is the one
+    // assertion here that is over-determined afterwards: the transfer both
+    // mints a new id AND drops the surface, and either alone refuses it.)
+    expect(
+      harness.manager.attachSurface("window-1", {
+        ...original,
+        bindingId: "binding-1",
+        surface: BASE_KEY,
+      }),
+    ).toBe(true);
+
+    await harness.manager.ensureTab("window-2", input);
+
+    await expect(harness.manager.releaseTab(original)).resolves.toBe(false);
+    expect(
+      harness.manager.detachSurface("window-1", {
+        ...original,
+        bindingId: "binding-1",
+      }),
+    ).toBe(false);
+    await expect(
+      harness.manager.controlElectronTab("window-1", {
+        ...original,
+        action: { kind: "reload" },
+      }),
+    ).resolves.toBe(false);
+    await expect(
+      harness.manager.startPipCapture(
+        "window-1",
+        {
+          ...original,
+          maxWidth: 640,
+          maxHeight: 360,
+          quality: 75,
+        },
+        () => undefined,
+      ),
+    ).resolves.toBe(false);
+
+    expect(view.webContents.closeCalls).toBe(0);
+  });
+
+  it("fires the transferred listener exactly once with the old id, and stops once its disposer runs", async () => {
+    const harness = createHarness();
+    const input = ensureInput();
+    const original = await harness.manager.ensureTab("window-1", input);
+    await harness.manager.acceptTab(original);
+
+    const transfers: BrowserViewNativeTabTransfer[] = [];
+    const unsubscribe = harness.manager.onNativeTabTransferred((transfer) => {
+      transfers.push(transfer);
+    });
+
+    await harness.manager.ensureTab("window-2", input);
+
+    expect(transfers).toEqual([
+      {
+        key: NATIVE_KEY,
+        previousRegistrationId: original.registrationId,
+        toWindowId: "window-2",
+      },
+    ]);
+
+    unsubscribe();
+    await harness.manager.ensureTab("window-1", input);
+    expect(transfers).toHaveLength(1);
+  });
+
+  it("detaches the old surface so the new window's attachSurface succeeds, where an un-moved attach is refused", async () => {
+    const harness = createHarness();
+    const input = ensureInput();
+    const original = await harness.manager.ensureTab("window-1", input);
+    await harness.manager.acceptTab(original);
+    const view = harness.views[0];
+    if (view === undefined) throw new Error("expected native guest");
+    expect(
+      harness.manager.attachSurface("window-1", {
+        ...original,
+        bindingId: "binding-1",
+        surface: BASE_KEY,
+      }),
+    ).toBe(true);
+
+    const moved = await harness.manager.ensureTab("window-2", input);
+
+    // Counter-proof, pinned elsewhere too: the OLD id is refused everywhere,
+    // including a same-window attach that never moved.
+    expect(
+      harness.manager.attachSurface("window-1", {
+        ...original,
+        bindingId: "binding-1b",
+        surface: { ...BASE_KEY, tileInstanceId: "native-tile-retry" },
+      }),
+    ).toBe(false);
+
+    expect(
+      harness.manager.attachSurface("window-2", {
+        ...moved,
+        bindingId: "binding-2",
+        surface: { ...BASE_KEY, tileInstanceId: "native-tile-window-2" },
+      }),
+    ).toBe(true);
+    expect(harness.windows.get("window-2")?.contentView.children).toContain(
+      view,
+    );
+  });
+
+  it("ends a PiP lease on the entry when it moves, without a manual pip.stop()", async () => {
+    const harness = createHarness();
+    const input = ensureInput();
+    const original = await harness.manager.ensureTab("window-1", input);
+    await harness.manager.acceptTab(original);
+    const view = harness.views[0];
+    if (view === undefined) throw new Error("expected native guest");
+
+    await expect(
+      harness.manager.startPipCapture(
+        "window-1",
+        {
+          ...original,
+          maxWidth: 640,
+          maxHeight: 360,
+          quality: 75,
+        },
+        () => undefined,
+      ),
+    ).resolves.toBe(true);
+    expect(harness.windows.get("window-1")?.contentView.children).toContain(
+      view,
+    );
+    expect(view.visible).toBe(true);
+
+    await harness.manager.ensureTab("window-2", input);
+
+    expect(harness.windows.get("window-1")?.contentView.children).not.toContain(
+      view,
+    );
+    expect(view.visible).toBe(false);
+  });
+
+  it("leaves the moved guest alive when the old window closes, and closes it when the new window closes", async () => {
+    const harness = createHarness();
+    const input = ensureInput();
+    const original = await harness.manager.ensureTab("window-1", input);
+    await harness.manager.acceptTab(original);
+    const view = harness.views[0];
+    if (view === undefined) throw new Error("expected native guest");
+
+    await harness.manager.ensureTab("window-2", input);
+
+    expect(harness.manager.hasNativeTabsForWindow("window-1")).toBe(false);
+    expect(harness.manager.hasNativeTabsForWindow("window-2")).toBe(true);
+
+    await harness.manager.closeNativeSessionsForWindow("window-1");
+    expect(view.webContents.closeCalls).toBe(0);
+
+    await harness.manager.closeNativeSessionsForWindow("window-2");
+    expect(view.webContents.closeCalls).toBe(1);
+  });
+
+  it("survives a renderer reset of either window mid-move", async () => {
+    const harness = createHarness();
+    const input = ensureInput();
+    const original = await harness.manager.ensureTab("window-1", input);
+    await harness.manager.acceptTab(original);
+    const view = harness.views[0];
+    if (view === undefined) throw new Error("expected native guest");
+
+    const moved = await harness.manager.ensureTab("window-2", input);
+
+    const oldHostWebContents = harness.windows.get("window-1")?.webContents;
+    const newHostWebContents = harness.windows.get("window-2")?.webContents;
+    if (oldHostWebContents === undefined || newHostWebContents === undefined) {
+      throw new Error("expected host windows");
+    }
+    oldHostWebContents.emit(
+      "did-start-navigation",
+      {},
+      "http://localhost:31873/",
+      false,
+      true,
+      1,
+      1,
+    );
+    newHostWebContents.emit(
+      "did-start-navigation",
+      {},
+      "http://localhost:31873/",
+      false,
+      true,
+      1,
+      1,
+    );
+
+    expect(view.webContents.closeCalls).toBe(0);
+    expect(
+      harness.manager.attachSurface("window-2", {
+        ...moved,
+        bindingId: "binding-2",
+        surface: BASE_KEY,
+      }),
+    ).toBe(true);
   });
 });
 

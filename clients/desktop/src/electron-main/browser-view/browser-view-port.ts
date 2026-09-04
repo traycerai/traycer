@@ -46,6 +46,28 @@ export interface BrowserViewElectronTabCdpDispatch extends BrowserViewNativeTabC
   readonly command: BrowserCdpCommand;
 }
 
+/**
+ * A live guest whose lifecycle just moved from the window that held it to the
+ * window that ensured it - the desktop half of "Show here".
+ *
+ * MAIN-side only, deliberately: the window that LOST the tab still holds an
+ * accepted birth for it, and nothing else retires one (the move sends no
+ * `releaseElectronTab`, and the rollback path returns early for an accepted
+ * birth). That window's `ElectronTabs` is a main-process object, so this
+ * reaches it directly rather than through a renderer event - and its
+ * `retireBirth` already emits `tabReleased`, which is how the renderer's
+ * binding directory hears about it.
+ *
+ * `previousRegistrationId` is the incarnation the OLD window knows the guest
+ * by; the transfer minted a new one, so it is also the id every stale
+ * capability in that window now quotes.
+ */
+export interface BrowserViewNativeTabTransfer {
+  readonly key: BrowserViewNativeTabKey;
+  readonly previousRegistrationId: string;
+  readonly toWindowId: string;
+}
+
 export interface BrowserViewDebugger {
   isAttached(): boolean;
   attach(protocolVersion: string): void;

@@ -108,6 +108,7 @@ const sessionsState = vi.hoisted<{ value: BrowserSessionsState }>(() => ({
     openTab: forwardOpenTab,
     closeTab: forwardCloseTab,
     attachTab: vi.fn(() => Promise.reject(new Error("not used"))),
+    moveTab: vi.fn(() => Promise.reject(new Error("not used"))),
   },
 }));
 

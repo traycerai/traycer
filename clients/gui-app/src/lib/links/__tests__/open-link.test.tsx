@@ -121,6 +121,7 @@ function liveSessions(
     openTab,
     closeTab: () => Promise.resolve(),
     attachTab: () => Promise.reject(new Error("not used")),
+    moveTab: () => Promise.reject(new Error("not used")),
   };
 }
 

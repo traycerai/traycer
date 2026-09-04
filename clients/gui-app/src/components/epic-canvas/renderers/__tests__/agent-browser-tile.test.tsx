@@ -378,6 +378,7 @@ function liveSessions(): BrowserSessionsState {
     openTab: state.openTab,
     closeTab: state.closeTab,
     attachTab: () => Promise.reject(new Error("not used")),
+    moveTab: () => Promise.reject(new Error("not used")),
   };
 }
 
