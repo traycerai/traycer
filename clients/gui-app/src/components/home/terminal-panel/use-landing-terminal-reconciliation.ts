@@ -457,17 +457,19 @@ function adoptListedSignInSessions(args: {
     providerLoginProviderFor: (sessionId) =>
       providerLoginTerminalProviderId(activeHostId, sessionId),
   });
-  if (adopted.length === 0) return;
-  // The predecessors these adoptions supersede - a restart another window
-  // pressed killed them, and only that window retired its tab.
+  // The predecessors the listing supersedes - a restart another window
+  // pressed killed them, and only that window retired its tab. Independent of
+  // what this pass adopted: the successor may already be a tab here.
   const retired = new Set(
     retiredProviderLoginPredecessors({
       tabs: current.tabs,
       activeHostId,
       sessions: args.sessions,
-      adopted,
+      providerLoginProviderFor: (sessionId) =>
+        providerLoginTerminalProviderId(activeHostId, sessionId),
     }),
   );
+  if (adopted.length === 0 && retired.size === 0) return;
   current.applyReconciliation(
     args.landingPageId,
     [...current.tabs.filter((tab) => !retired.has(tab.instanceId)), ...adopted],

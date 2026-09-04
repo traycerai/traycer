@@ -1157,8 +1157,13 @@ describe("retiredProviderLoginPredecessors", () => {
     origin: "provider-login",
     originProviderId: input.providerId,
   });
+  const providerLoginProviderFor = (sessionId: string) => {
+    if (sessionId.startsWith("signin-")) return "reasonix" as const;
+    if (sessionId.startsWith("copilot-")) return "copilot" as const;
+    return null;
+  };
 
-  it("retires this host's exited sign-in tab for a provider whose successor is being adopted", () => {
+  it("retires this host's exited sign-in tab for a provider the listing shows a running successor for", () => {
     // Another window pressed "Start again": the host killed the predecessor
     // this window still shows as an ended tab, and lists the successor.
     const retired = retiredProviderLoginPredecessors({
@@ -1168,7 +1173,7 @@ describe("retiredProviderLoginPredecessors", () => {
           sessionId: "signin-old",
           providerId: "reasonix",
         }),
-        // Another provider's ended tab is untouched.
+        // Another provider's ended tab is untouched: nothing newer listed.
         signInTab({
           instanceId: "copilot-ended",
           sessionId: "copilot-old",
@@ -1181,52 +1186,94 @@ describe("retiredProviderLoginPredecessors", () => {
       sessions: [
         session({ sessionId: "signin-old", status: "exited" }),
         session({ sessionId: "signin-new", status: "running" }),
+        session({ sessionId: "copilot-old", status: "exited" }),
       ],
-      adopted: [
+      providerLoginProviderFor,
+    });
+    expect(retired).toEqual(["old-signin"]);
+  });
+
+  it("retires the predecessor even when the successor is ALREADY a tab here - adopted as ordinary before its record arrived, classified since", () => {
+    const retired = retiredProviderLoginPredecessors({
+      tabs: [
+        signInTab({
+          instanceId: "old-signin",
+          sessionId: "signin-old",
+          providerId: "reasonix",
+        }),
         signInTab({
           instanceId: "new-signin",
           sessionId: "signin-new",
           providerId: "reasonix",
         }),
       ],
+      activeHostId: HOST_A,
+      sessions: [
+        session({ sessionId: "signin-old", status: "exited" }),
+        session({ sessionId: "signin-new", status: "running" }),
+      ],
+      providerLoginProviderFor,
     });
+    // Nothing is adopted in this pass (both sessions are tabbed), and the
+    // predecessor still has to go.
     expect(retired).toEqual(["old-signin"]);
   });
 
-  it("does not retire a predecessor whose session is still running, nor anything when nothing was adopted", () => {
-    const tabs = [
-      signInTab({
-        instanceId: "live-signin",
-        sessionId: "signin-live",
-        providerId: "reasonix",
-      }),
-    ];
-    const sessions = [
-      session({ sessionId: "signin-live", status: "running" }),
-      session({ sessionId: "signin-new", status: "running" }),
-    ];
-    expect(
-      retiredProviderLoginPredecessors({
-        tabs,
-        activeHostId: HOST_A,
-        sessions,
-        adopted: [
-          signInTab({
-            instanceId: "new-signin",
-            sessionId: "signin-new",
-            providerId: "reasonix",
-          }),
-        ],
-      }),
-    ).toEqual([]);
-    expect(
-      retiredProviderLoginPredecessors({
-        tabs,
-        activeHostId: HOST_A,
-        sessions: [session({ sessionId: "signin-live", status: "exited" })],
-        adopted: [],
-      }),
-    ).toEqual([]);
+  it("retires an older exited tab when a newer exited sign-in is listed, and keeps the tab that IS the newest", () => {
+    const retired = retiredProviderLoginPredecessors({
+      tabs: [
+        signInTab({
+          instanceId: "older",
+          sessionId: "signin-older",
+          providerId: "reasonix",
+        }),
+        signInTab({
+          instanceId: "newest",
+          sessionId: "signin-newest",
+          providerId: "reasonix",
+        }),
+      ],
+      activeHostId: HOST_A,
+      sessions: [
+        {
+          ...session({ sessionId: "signin-older", status: "exited" }),
+          createdAt: 1,
+        },
+        {
+          ...session({ sessionId: "signin-newest", status: "exited" }),
+          createdAt: 2,
+        },
+      ],
+      providerLoginProviderFor,
+    });
+    expect(retired).toEqual(["older"]);
+  });
+
+  it("never retires a tab whose own session is still running, nor one whose provider has nothing newer listed", () => {
+    const retired = retiredProviderLoginPredecessors({
+      tabs: [
+        signInTab({
+          instanceId: "live-signin",
+          sessionId: "signin-live",
+          providerId: "reasonix",
+        }),
+        // Aged out of the grace listing entirely, and nothing newer listed
+        // for its provider: the ended tab stays, it is still the restart
+        // surface.
+        signInTab({
+          instanceId: "copilot-absent",
+          sessionId: "copilot-gone",
+          providerId: "copilot",
+        }),
+      ],
+      activeHostId: HOST_A,
+      sessions: [
+        session({ sessionId: "signin-live", status: "running" }),
+        session({ sessionId: "signin-new", status: "running" }),
+      ],
+      providerLoginProviderFor,
+    });
+    expect(retired).toEqual([]);
   });
 
   it("the legacy arm drops the retired predecessor while adopting its successor", () => {
@@ -1246,13 +1293,53 @@ describe("retiredProviderLoginPredecessors", () => {
       ],
       excludedSessionKeys: new Set(),
       mintInstanceId: () => "new-signin",
-      providerLoginProviderFor: (sessionId) =>
-        sessionId.startsWith("signin-") ? "reasonix" : null,
+      providerLoginProviderFor,
     });
     expect(result.tabs.map((entry) => entry.instanceId)).toEqual([
       "new-signin",
     ]);
     expect(result.activeInstanceId).toBe("new-signin");
+  });
+
+  it("a tombstoned newest retry still outranks the older exited retries: closing it promotes none of them", () => {
+    // The user closed the newest exited sign-in here; its kill is in flight
+    // and the host still lists it. The older retries beside it in the grace
+    // listing must not become fresh "Start again" tabs.
+    const sessions = [
+      {
+        ...session({ sessionId: "signin-older", status: "exited" }),
+        createdAt: 1,
+      },
+      {
+        ...session({ sessionId: "signin-newest", status: "exited" }),
+        createdAt: 2,
+      },
+    ];
+    const excludedSessionKeys = new Set([
+      terminalSessionKey(HOST_A, "signin-newest"),
+    ]);
+    expect(
+      adoptListedProviderLoginSessions({
+        tabs: [],
+        activeHostId: HOST_A,
+        sessions,
+        excludedSessionKeys,
+        mintInstanceId: () => "never",
+        providerLoginProviderFor,
+      }),
+    ).toEqual([]);
+    // Same through the legacy arm, which filters tombstoned sessions out of
+    // its own matching but must not hide them from this rule.
+    const result = reconcileLandingTerminalTabs({
+      tabs: [],
+      activeInstanceId: null,
+      activeHostId: HOST_A,
+      sessions,
+      excludedSessionKeys,
+      mintInstanceId: () => "never",
+      providerLoginProviderFor,
+    });
+    expect(result.adoptedTabs).toEqual([]);
   });
 });
 

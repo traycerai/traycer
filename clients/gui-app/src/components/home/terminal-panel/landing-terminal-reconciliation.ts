@@ -202,8 +202,8 @@ export function reconcileLandingTerminalTabs(
     retiredProviderLoginPredecessors({
       tabs,
       activeHostId: input.activeHostId,
-      sessions,
-      adopted: signInTabs,
+      sessions: input.sessions,
+      providerLoginProviderFor: input.providerLoginProviderFor,
     }),
   );
   const nextTabs = [
@@ -254,32 +254,108 @@ function providerLoginLandingTab(input: {
 }
 
 /**
- * The CAPABLE host's adoption of sign-in sessions, from `terminal.list`.
+ * What the registry-claimed sessions the host lists say about each provider:
+ * which are running, and which exited one is newest. Computed over EVERY
+ * listed claimed session, tombstoned ones included - a tombstone means "raise
+ * no tab for this session", not "this session did not happen". The newest
+ * retry the user just closed still outranks the older retries beside it in
+ * the exit-grace listing; dropping it from the summary would promote one of
+ * them into a fresh "Start again" tab the moment the close landed.
+ */
+interface ProviderLoginListing {
+  readonly runningSessionIds: ReadonlySet<string>;
+  readonly newestExited: Pick<
+    CanonicalTerminalSessionInfo,
+    "sessionId" | "createdAt"
+  > | null;
+}
+
+function listedProviderLoginSessions(
+  sessions: LandingTerminalReconciliationInput["sessions"],
+): LandingTerminalReconciliationInput["sessions"] {
+  return sessions.filter(
+    (session) =>
+      session.scope.kind === "independent" &&
+      session.sessionKind === "terminal",
+  );
+}
+
+function summarizeProviderLoginListing(
+  sessions: LandingTerminalReconciliationInput["sessions"],
+  providerLoginProviderFor: (sessionId: string) => ProviderId | null,
+): ReadonlyMap<ProviderId, ProviderLoginListing> {
+  const summary = new Map<
+    ProviderId,
+    {
+      runningSessionIds: Set<string>;
+      newestExited: ProviderLoginListing["newestExited"];
+    }
+  >();
+  for (const session of sessions) {
+    const providerId = providerLoginProviderFor(session.sessionId);
+    if (providerId === null) continue;
+    const entry = summary.get(providerId) ?? {
+      runningSessionIds: new Set<string>(),
+      newestExited: null,
+    };
+    if (session.status === "running") {
+      entry.runningSessionIds.add(session.sessionId);
+    } else if (
+      entry.newestExited === null ||
+      session.createdAt > entry.newestExited.createdAt
+    ) {
+      entry.newestExited = session;
+    }
+    summary.set(providerId, entry);
+  }
+  return summary;
+}
+
+/**
+ * Whether a sign-in session (or the tab standing for it) is one this window
+ * should show for its provider: every running one, else the newest exited
+ * one. Rapid retries can leave several exited sign-ins for one provider in
+ * the grace listing; only the newest is the one a "Start again" should stand
+ * for, the rest are the predecessors those retries killed. An absent session
+ * (aged out of the grace window, or gone with a host restart) is outranked by
+ * anything listed - it is by construction older.
+ */
+function providerLoginSessionIsCurrent(
+  listing: ProviderLoginListing | undefined,
+  sessionId: string,
+): boolean {
+  if (listing === undefined) return true;
+  if (listing.runningSessionIds.has(sessionId)) return true;
+  if (listing.runningSessionIds.size > 0) return false;
+  return listing.newestExited === null
+    ? true
+    : listing.newestExited.sessionId === sessionId;
+}
+
+/**
+ * The sign-in sessions the host lists that this window should hold a tab for
+ * and does not, as sign-in tabs. Shared by both arms.
  *
  * The capable arm reconciles against the plain-terminal projection, and a
  * host-created sign-in session is never in it: the host made it for
  * `providers.startTerminalLogin`, through the session manager, so the plain
- * registry has no row for it. The legacy arm adopts such a session from
- * `terminal.list` (above); without this the capable arm could classify a tab
- * that already existed but never CREATE one - so a sign-in started in another
- * window, whose record arrived through the shared registry, had no tab on a
- * capable host and its code stayed invisible there.
+ * registry has no row for it. Without this the capable arm could classify a
+ * tab that already existed but never CREATE one - so a sign-in started in
+ * another window, whose record arrived through the shared registry, had no
+ * tab on a capable host and its code stayed invisible there.
  *
  * Sign-in sessions ONLY - a session the registry does not claim is left to the
  * projection, which is the capable host's authority over ordinary terminals.
- * A tombstoned session (closed here, kill still in flight) is excluded for the
- * same reason the legacy arm excludes it: adopting it back would resurrect a
- * tab the user just closed.
+ * A tombstoned session (closed here, kill still in flight) is never adopted:
+ * that would resurrect a tab the user just closed. It still counts in the
+ * per-provider listing above, so closing the newest retry does not promote an
+ * older one.
  *
  * An EXITED sign-in is adopted too, unlike an ordinary session. A sign-in tab
  * keeps its ended state on purpose - that is the "Start again" surface - and
  * a short-lived sign-in can end before this window learns what it was, while
  * the host still lists it through its exit grace window; adopting running
- * sessions only would leave this window without that surface for good. The
- * one exited sign-in NOT adopted is one the same provider has a running
- * successor for on this host: a restart kills its predecessor, and the
- * window that pressed it retires that tab, so this window should not raise
- * the dead one beside the live one.
+ * sessions only would leave this window without that surface for good.
  */
 export function adoptListedProviderLoginSessions(
   input: Pick<
@@ -297,44 +373,24 @@ export function adoptListedProviderLoginSessions(
       .filter((tab) => tab.hostId === input.activeHostId)
       .map((tab) => tab.sessionId),
   );
-  const listed = input.sessions.filter(
-    (session) =>
-      session.scope.kind === "independent" &&
-      session.sessionKind === "terminal" &&
-      !input.excludedSessionKeys.has(
-        terminalSessionKey(input.activeHostId, session.sessionId),
-      ),
+  const listed = listedProviderLoginSessions(input.sessions);
+  const listing = summarizeProviderLoginListing(
+    listed,
+    input.providerLoginProviderFor,
   );
-  // Per provider: is a sign-in running, and which exited one is newest.
-  // Rapid retries can leave several exited sign-ins for one provider in the
-  // grace listing; only the newest is the one a "Start again" should stand
-  // for, the rest are the predecessors those retries killed.
-  const providersWithRunningSignIn = new Set<ProviderId>();
-  const newestExitedSessionIdByProvider = new Map<
-    ProviderId,
-    Pick<CanonicalTerminalSessionInfo, "sessionId" | "createdAt">
-  >();
-  for (const session of listed) {
-    const providerId = input.providerLoginProviderFor(session.sessionId);
-    if (providerId === null) continue;
-    if (session.status === "running") {
-      providersWithRunningSignIn.add(providerId);
-      continue;
-    }
-    const newest = newestExitedSessionIdByProvider.get(providerId);
-    if (newest === undefined || session.createdAt > newest.createdAt) {
-      newestExitedSessionIdByProvider.set(providerId, session);
-    }
-  }
   return listed.flatMap((session) => {
-    if (tabbedSessionIds.has(session.sessionId)) return [];
+    if (
+      tabbedSessionIds.has(session.sessionId) ||
+      input.excludedSessionKeys.has(
+        terminalSessionKey(input.activeHostId, session.sessionId),
+      )
+    ) {
+      return [];
+    }
     const providerId = input.providerLoginProviderFor(session.sessionId);
     if (providerId === null) return [];
     if (
-      session.status !== "running" &&
-      (providersWithRunningSignIn.has(providerId) ||
-        newestExitedSessionIdByProvider.get(providerId)?.sessionId !==
-          session.sessionId)
+      !providerLoginSessionIsCurrent(listing.get(providerId), session.sessionId)
     ) {
       return [];
     }
@@ -350,47 +406,49 @@ export function adoptListedProviderLoginSessions(
 }
 
 /**
- * The sign-in tabs an adoption SUPERSEDES: this host's existing tabs for the
- * same provider as an adopted session, whose own session is no longer
- * running. Returned as instance ids for the caller to drop alongside the
- * adoption, in both arms.
+ * The sign-in tabs the host's listing has SUPERSEDED: this host's tabs whose
+ * session is no longer the one to show for its provider (a running sign-in
+ * exists, or a newer exited one does). Returned as instance ids for the
+ * caller to drop in the same pass that adopts, in both arms.
  *
  * A restart kills its predecessor, and only the window that pressed it
- * retires that tab (`openLandingSignInTerminal`). Every other window that had
- * adopted the predecessor - the ended-state tab is kept on purpose - would
- * otherwise adopt the successor beside it and hold two "Start again" tabs
- * for one provider, the stale one restarting only itself. A predecessor
- * whose session is still running is NOT retired: that is two live sign-ins,
- * which is the host's to resolve, not this window's to hide.
+ * retires that tab (`openLandingSignInTerminal`). Every other window that
+ * shows the predecessor - adopted, or reclassified once its provenance
+ * arrived - would otherwise hold it beside the successor and have two
+ * "Start again" tabs for one provider, the stale one restarting only itself.
+ * Judged from the listing rather than from what THIS pass adopted: the
+ * successor may already be a tab here, adopted as an ordinary terminal
+ * before its record arrived and classified since, in which case nothing is
+ * adopted and the predecessor still has to go. A tab whose own session is
+ * still running is never retired: two live sign-ins are the host's to
+ * resolve, not this window's to hide.
  */
 export function retiredProviderLoginPredecessors(input: {
   readonly tabs: ReadonlyArray<LandingTerminalTabRef>;
   readonly activeHostId: string;
   readonly sessions: LandingTerminalReconciliationInput["sessions"];
-  readonly adopted: ReadonlyArray<LandingTerminalTabRef>;
+  readonly providerLoginProviderFor: (sessionId: string) => ProviderId | null;
 }): ReadonlyArray<string> {
-  if (input.adopted.length === 0) return [];
-  const runningSessionIds = new Set(
-    input.sessions
-      .filter((session) => session.status === "running")
-      .map((session) => session.sessionId),
-  );
-  const adoptedSessionIds = new Set(input.adopted.map((tab) => tab.sessionId));
-  const adoptedProviders = new Set(
-    input.adopted.flatMap((tab) =>
-      tab.originProviderId === undefined ? [] : [tab.originProviderId],
-    ),
+  const listing = summarizeProviderLoginListing(
+    listedProviderLoginSessions(input.sessions),
+    input.providerLoginProviderFor,
   );
   return input.tabs
-    .filter(
-      (tab) =>
-        tab.hostId === input.activeHostId &&
-        isProviderLoginLandingTab(tab) &&
-        tab.originProviderId !== undefined &&
-        adoptedProviders.has(tab.originProviderId) &&
-        !adoptedSessionIds.has(tab.sessionId) &&
-        !runningSessionIds.has(tab.sessionId),
-    )
+    .filter((tab) => {
+      if (
+        tab.hostId !== input.activeHostId ||
+        !isProviderLoginLandingTab(tab)
+      ) {
+        return false;
+      }
+      const providerId =
+        tab.originProviderId ?? input.providerLoginProviderFor(tab.sessionId);
+      if (providerId === null) return false;
+      return !providerLoginSessionIsCurrent(
+        listing.get(providerId),
+        tab.sessionId,
+      );
+    })
     .map((tab) => tab.instanceId);
 }
 
