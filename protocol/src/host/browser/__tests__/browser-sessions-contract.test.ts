@@ -26,7 +26,7 @@ import {
 
 const SAMPLE_SESSION = {
   sessionId: "session-1",
-  epicId: "epic-1",
+  scope: { kind: "epic" as const, epicId: "epic-1" },
   hostId: "host-1",
   profile: "primary" as const,
   lastActivityAt: 20,
@@ -269,16 +269,34 @@ describe("browser.sessions@1.0 epic-scoped open + tab-shaped session info", () =
     ).toBe(false);
   });
 
-  it("requires only the authorizing epicId on the open request", () => {
+  it("requires only the authorizing scope on the open request", () => {
     expect(
       browserSessionsOpenRequestSchema.safeParse({
-        epicId: "epic-1",
+        scope: { kind: "epic", epicId: "epic-1" },
         chatId: "legacy-route",
       }).success,
     ).toBe(false);
     expect(
-      browserSessionsOpenRequestSchema.safeParse({ epicId: "epic-1" }).success,
+      browserSessionsOpenRequestSchema.safeParse({
+        scope: { kind: "epic", epicId: "epic-1" },
+      }).success,
     ).toBe(true);
+    expect(
+      browserSessionsOpenRequestSchema.safeParse({
+        scope: { kind: "independent" },
+      }).success,
+    ).toBe(true);
+    // The pre-scope shape. It parsed until this contract was edited in place,
+    // and a host on the old pin answers it - which is exactly why the wire
+    // change and the host change land coupled.
+    expect(
+      browserSessionsOpenRequestSchema.safeParse({ epicId: "epic-1" }).success,
+    ).toBe(false);
+    expect(
+      browserSessionsOpenRequestSchema.safeParse({
+        scope: { kind: "independent", epicId: "epic-1" },
+      }).success,
+    ).toBe(false);
     expect(
       browserSessionsOpenRequestSchema.safeParse({ chatId: "chat-1" }).success,
     ).toBe(false);
@@ -394,10 +412,22 @@ describe("browser.sessions@1.0 epic-scoped open + tab-shaped session info", () =
     ).toBe(false);
   });
 
-  it("requires epicId and tabId on screencast open requests", () => {
+  it("requires scope and tabId on screencast open requests", () => {
     expect(
       browserScreencastOpenRequestSchema.safeParse({
-        epicId: "epic-1",
+        scope: { kind: "epic", epicId: "epic-1" },
+        sessionId: "session-1",
+        tabId: "session-1",
+        maxWidth: 1280,
+        maxHeight: 720,
+        quality: 80,
+        format: "jpeg",
+        role: "tile",
+      }).success,
+    ).toBe(true);
+    expect(
+      browserScreencastOpenRequestSchema.safeParse({
+        scope: { kind: "independent" },
         sessionId: "session-1",
         tabId: "session-1",
         maxWidth: 1280,
@@ -420,7 +450,7 @@ describe("browser.sessions@1.0 epic-scoped open + tab-shaped session info", () =
     ).toBe(false);
     expect(
       browserScreencastOpenRequestSchema.safeParse({
-        epicId: "epic-1",
+        scope: { kind: "epic", epicId: "epic-1" },
         sessionId: "session-1",
         maxWidth: 1280,
         maxHeight: 720,
