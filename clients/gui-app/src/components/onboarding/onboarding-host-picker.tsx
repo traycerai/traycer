@@ -61,7 +61,7 @@ export function OnboardingHostPickerBar(props: {
           <span className="size-2 rounded-full bg-[#28c840]" />
         </div>
       ) : null}
-      {scope.hosts.length < 2 ? (
+      {scope.hosts.length === 1 && scope.hosts[0]?.hostId === scope.hostId ? (
         <span
           data-testid="onboarding-host-name"
           className="min-w-0 truncate px-3 py-2 text-ui-xs text-muted-foreground"

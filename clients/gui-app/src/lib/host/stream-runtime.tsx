@@ -213,14 +213,37 @@ export function HostStreamProvider(props: HostStreamProviderProps): ReactNode {
     // `target` — so publishing the render-time name would ship
     // `{ client for B, hostId: A }` until a later render corrected it. The name
     // has to come from the same read as the thing it names.
-    // `retain: null` - this client is not reference-counted by its readers.
-    // It is rebuilt only on an identity change, and the effect below owns the
-    // one close there is, so there is no lease for a consumer to hold.
-    setValue({ wsStreamClient, hostId: target.hostId, retain: null });
+    // A lease over this client, for a consumer that outlives the binding: an
+    // import or migration started on the window's own host subscribes on
+    // this transport and keeps running after the window points elsewhere.
+    // Without a lease the identity-change teardown below closed the socket
+    // under that run, the run's slice went to `error`, and a completion the
+    // host reported to nobody never reached the toast or the task list. The
+    // close is deferred until the last hold is released; the teardown flag
+    // guards only the immediate close, since a deferred one lands after the
+    // rebuild watcher has already moved to the successor client.
+    let holds = 0;
+    let tornDown = false;
+    const closeIfUnheld = (): void => {
+      if (!tornDown || holds > 0) return;
+      wsStreamClient.close("app-stream-provider-teardown");
+    };
+    const retain = (): (() => void) => {
+      holds += 1;
+      let released = false;
+      return () => {
+        if (released) return;
+        released = true;
+        holds -= 1;
+        closeIfUnheld();
+      };
+    };
+    setValue({ wsStreamClient, hostId: target.hostId, retain });
 
     return () => {
+      tornDown = true;
       teardownInProgressRef.current = true;
-      wsStreamClient.close("app-stream-provider-teardown");
+      closeIfUnheld();
       teardownInProgressRef.current = false;
     };
   }, [
