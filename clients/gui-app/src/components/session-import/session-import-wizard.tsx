@@ -49,6 +49,7 @@ import {
   useSessionImportRun,
   useSessionImportRunStore,
 } from "@/stores/session-import/session-import-run-store";
+import { useFeatureAnnouncementsStore } from "@/stores/settings/feature-announcements-store";
 
 export interface SessionImportSecondaryAction {
   readonly label: string;
@@ -84,6 +85,19 @@ export function SessionImportWizard(props: {
   const streamBinding = useStreamRuntimeBinding();
   const hostId = streamBinding?.hostId ?? null;
   const runIdle = useSessionImportRun(hostId).status === "idle";
+  // Meeting the wizard on any surface - the tour act, the Settings dialog,
+  // the release toast's own dialog - is the announcement: the id is consumed
+  // on mount so the toast never follows for a user who has already opened
+  // the feature, whether or not they imported anything. Only reaching the
+  // wizard counts; skipping the tour before its act does not, so a skipper
+  // still gets the toast (unlike `login-import`, which the tour's finish
+  // consumes unconditionally).
+  const consumeAnnouncement = useFeatureAnnouncementsStore(
+    (state) => state.consume,
+  );
+  useEffect(() => {
+    consumeAnnouncement("session-import");
+  }, [consumeAnnouncement]);
 
   // Opening the wizard retires a FINISHED run's summary, so a second visit
   // scans afresh instead of re-reading last time's result. It does not re-run
