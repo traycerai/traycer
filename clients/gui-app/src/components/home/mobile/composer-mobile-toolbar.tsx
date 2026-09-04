@@ -20,6 +20,8 @@ import type { DictationPreparingStatus } from "@/hooks/composer/use-dictation-av
 import type { ChatActiveTurn } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { ComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
 
+import type { ProviderTerminalLoginSurface } from "@/lib/providers/provider-terminal-login-surface";
+
 interface ComposerMobileToolbarProps {
   readonly store: ComposerToolbarStore;
   readonly onAttachImages: (files: ReadonlyArray<File>) => void;
@@ -36,6 +38,8 @@ interface ComposerMobileToolbarProps {
   /** The host "Create new profile" creates on - see `HarnessModelPicker`. */
   readonly createProfileHostId: string | null;
   readonly runTargetHostId: string | null;
+  /** Where the picker's setup terminal lands - see `HarnessModelPicker`. */
+  readonly terminalLoginSurface: ProviderTerminalLoginSurface | null;
 }
 
 /**
@@ -64,6 +68,7 @@ function ComposerMobileToolbarImpl(props: ComposerMobileToolbarProps) {
     settingsLocked,
     createProfileHostId,
     runTargetHostId,
+    terminalLoginSurface,
   } = props;
 
   const [optionsOpen, setOptionsOpen] = useState(false);
@@ -142,6 +147,7 @@ function ComposerMobileToolbarImpl(props: ComposerMobileToolbarProps) {
           registerActivation
           createProfileHostId={createProfileHostId}
           runTargetHostId={runTargetHostId}
+          terminalLoginSurface={terminalLoginSurface}
           // Per-row profile admission is the TUI fork dialog's concern only.
           profileAdmission={null}
           // Model name only: the row has room for it, but the thinking-effort
@@ -160,10 +166,6 @@ function ComposerMobileToolbarImpl(props: ComposerMobileToolbarProps) {
           stopDisabled={stopDisabled}
           onStopTurn={onStopTurn}
           disabledHint={composerDisabledHint}
-          // Return is a newline on a soft keyboard, so this button is the only
-          // way to queue a message mid-turn: Stop sits beside it, never in
-          // its place.
-          stopPlacement="beside"
         />
       </div>
       <ComposerOptionsSheet

@@ -9,6 +9,7 @@ import {
 } from "react";
 import { useStore } from "zustand";
 import { AlertTriangle } from "lucide-react";
+import type { ProviderTerminalLoginSurface } from "@/lib/providers/provider-terminal-login-surface";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import type {
@@ -288,6 +289,16 @@ function ChatComposerImpl(props: ChatComposerProps) {
   const runnerHost = useRunnerHost();
   const hostClient = useTabHostClient();
   const tabHostId = useTabHostId();
+  // Where the picker's setup terminal lands: this epic, in THIS view - in a
+  // split view each pane's composer names its own, exactly as the reauth
+  // banner does. Memoized because the toolbar and picker are memo'd.
+  const terminalLoginSurface = useMemo<ProviderTerminalLoginSurface | null>(
+    () =>
+      currentEpicId === null || viewTabId === null
+        ? null
+        : { kind: "epic", epicId: currentEpicId, viewTabId },
+    [currentEpicId, viewTabId],
+  );
   const resolvedMentionRoots = useWorkspaceMentionRoots(
     mentionRoots,
     fallbackToGlobalMentionRoots,
@@ -744,6 +755,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
                     settingsLocked={false}
                     createProfileHostId={tabHostId}
                     runTargetHostId={tabHostId}
+                    terminalLoginSurface={terminalLoginSurface}
                   />
                 }
               />

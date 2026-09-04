@@ -1,5 +1,5 @@
 import { Globe2, Plus, RotateCcw, Search, TriangleAlert } from "lucide-react";
-import { useCallback, useMemo } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef } from "react";
 import type {
   BrowserSessionInfo,
   BrowserTabDriver,
@@ -32,10 +32,19 @@ import {
   useTabSurfaceKey,
 } from "@/hooks/host/use-surface-host-pin";
 import { useEpicChatRecords } from "@/lib/epic-selectors";
-import { makeBrowserSessionTileRef } from "@/stores/epics/canvas/tile-schema/browser-tile";
+import {
+  browserSessionTileId,
+  makeBrowserSessionTileRef,
+} from "@/stores/epics/canvas/tile-schema/browser-tile";
 import { makeOpenableNodeRef } from "@/stores/epics/canvas/types";
 import { usePanelHeaderSearchQuery } from "@/stores/epics/panel-header-search-store";
 import { tileIntent } from "@/lib/canvas/tile-open/intent";
+import {
+  clearSidebarNodeRevealRequest,
+  useSidebarNodeRevealRequest,
+  useVisibleSidebarNodeRevealRequest,
+} from "@/stores/epics/sidebar-node-reveal-store";
+import { revealSidebarNode } from "@/components/epic-canvas/sidebar/epic-sidebar-tree-shared";
 
 /**
  * The browsers panel's header cluster lives in
@@ -74,6 +83,9 @@ function BrowsersPanelBodyLive(props: {
   readonly tabId: string;
 }) {
   const sessions = useBrowserSessionsContext();
+  const listRef = useRef<HTMLUListElement>(null);
+  const revealRequest = useSidebarNodeRevealRequest(props.tabId);
+  const visibleRevealRequest = useVisibleSidebarNodeRevealRequest(props.tabId);
   const searchQuery = usePanelHeaderSearchQuery(props.tabId, BROWSERS_PANEL_ID);
   const chats = useEpicChatRecords();
   const chatById = useMemo(
@@ -82,12 +94,35 @@ function BrowsersPanelBodyLive(props: {
   );
   const tabs = useBrowserSidebarTabRows(sessions.items);
   const { secondaryByKey, duplicateTitles } = useBrowserTabRowLabels(tabs);
-  const filteredTabs = useMemo(
-    () => filterBrowserTabRows(tabs, searchQuery),
-    [searchQuery, tabs],
-  );
+  const filteredTabs = useMemo(() => {
+    const matches = filterBrowserTabRows(tabs, searchQuery);
+    if (visibleRevealRequest === null) return matches;
+    const matchKeys = new Set(matches.map((row) => row.key));
+    return tabs.filter(
+      (row) =>
+        matchKeys.has(row.key) ||
+        browserSessionTileId({
+          sessionId: row.session.sessionId,
+          tabId: row.tab.tabId,
+        }) === visibleRevealRequest.nodeId,
+    );
+  }, [searchQuery, tabs, visibleRevealRequest]);
   const { openTile } = useEpicTileNavigation();
   const { add: addBrowser, isAdding } = useAddBrowserAction(props.tabId, null);
+
+  useLayoutEffect(() => {
+    if (revealRequest === null || listRef.current === null) return;
+    if (
+      !revealSidebarNode(
+        listRef.current,
+        revealRequest.nodeId,
+        revealRequest.nonce,
+      )
+    ) {
+      return;
+    }
+    clearSidebarNodeRevealRequest(props.tabId, revealRequest.nonce);
+  }, [filteredTabs, props.tabId, revealRequest]);
 
   const openTab = useCallback(
     (session: BrowserSessionInfo, tab: BrowserTabInfo) => {
@@ -142,7 +177,9 @@ function BrowsersPanelBodyLive(props: {
     [chatById, openTile, props.tabId],
   );
   const isUnavailable =
-    sessions.lifecycle === "failed" || sessions.lifecycle === "closed";
+    sessions.lifecycle === "failed" ||
+    sessions.lifecycle === "closed" ||
+    sessions.lifecycle === "unsupported";
   const isLoading =
     (sessions.lifecycle === "connecting" ||
       sessions.lifecycle === "reconnecting") &&
@@ -161,7 +198,7 @@ function BrowsersPanelBodyLive(props: {
       {isUnavailable ? (
         <BrowsersPanelUnavailableState
           message={sessions.errorMessage}
-          onRetry={sessions.retry}
+          onRetry={sessions.lifecycle === "unsupported" ? null : sessions.retry}
         />
       ) : null}
       {isEmpty ? (
@@ -173,6 +210,7 @@ function BrowsersPanelBodyLive(props: {
       {hasNoResults ? <BrowsersPanelNoResultsState /> : null}
       {hasResults ? (
         <ul
+          ref={listRef}
           aria-label="Browser tabs"
           className="space-y-0.5"
           data-testid="epic-browsers-panel-list"
@@ -224,9 +262,14 @@ export function BrowsersPanelNoResultsState() {
   );
 }
 
+/**
+ * `onRetry` is `null` when retrying cannot change the answer - a host with no
+ * browser support at all. The message then carries the remedy (update the
+ * host), and offering a Retry would only promise what the phone cannot do.
+ */
 export function BrowsersPanelUnavailableState(props: {
   readonly message: string | null;
-  readonly onRetry: () => void;
+  readonly onRetry: (() => void) | null;
 }) {
   return (
     <div className="flex h-full min-h-0 flex-1 flex-col items-center justify-center gap-3 px-4 py-8 text-center text-muted-foreground">
@@ -237,10 +280,17 @@ export function BrowsersPanelUnavailableState(props: {
           <p className="text-ui-xs text-muted-foreground">{props.message}</p>
         )}
       </div>
-      <Button type="button" variant="outline" size="sm" onClick={props.onRetry}>
-        <RotateCcw className="size-3.5" aria-hidden />
-        Retry
-      </Button>
+      {props.onRetry === null ? null : (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={props.onRetry}
+        >
+          <RotateCcw className="size-3.5" aria-hidden />
+          Retry
+        </Button>
+      )}
     </div>
   );
 }

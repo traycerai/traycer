@@ -81,6 +81,9 @@ export const runnerMutationKeys = {
   // heap walk.
   captureHeapSnapshot: () =>
     ["runner.diagnostics.captureHeapSnapshot"] as const,
+  // Per-isolate JS heap readout of this renderer (Diagnostics → Memory): the
+  // page plus every dedicated worker, which a heap snapshot cannot see.
+  measureJsHeaps: () => ["runner.diagnostics.measureJsHeaps"] as const,
   // Force-refresh the registry update probe (bypasses the desktop's 24h
   // on-disk cache). Used by the Settings → Host Updates row's
   // "Check now" / "Retry" buttons so stale cached failures don't survive

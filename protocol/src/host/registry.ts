@@ -595,7 +595,10 @@ import {
 import { sessionImportScanV10 } from "@traycer/protocol/host/session-import/scan";
 import { sessionImportRunV10 } from "@traycer/protocol/host/session-import/run";
 import { sessionImportStatusV10 } from "@traycer/protocol/host/session-import/contracts";
-import { worktreeDeleteBatchByPathStreamV10 } from "@traycer/protocol/host/worktree-delete-batch-stream";
+import {
+  worktreeDeleteBatchByPathStreamV10,
+  worktreeDeleteBatchByPathStreamV11,
+} from "@traycer/protocol/host/worktree-delete-batch-stream";
 import {
   worktreeDeleteByPathStreamV10,
   worktreeDeleteByPathStreamV11,
@@ -754,6 +757,7 @@ import {
   providersTouchLoginRequestSchema,
   providersTouchLoginResponseSchema,
   providersStartTerminalLoginRequestSchema,
+  providersStartTerminalLoginRequestSchemaV20,
   providersStartTerminalLoginResponseSchema,
   providersEnsurePackRequestSchema,
   providersEnsurePackResponseSchema,
@@ -3207,6 +3211,59 @@ export const providersStartTerminalLoginV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: providersStartTerminalLoginRequestSchema,
   responseSchema: providersStartTerminalLoginResponseSchema,
+});
+
+/**
+ * `scope` replaces the v1.0 request's `epicId` so a sign-in terminal can be
+ * minted in the landing page's independent scope. A field rename is not
+ * additive (the minor-additivity checker rejects it inside a line), so this
+ * is a new major on the `terminal.create@2.0` pattern: the upgrade folds an
+ * old client's `epicId` into `{ kind: "epic" }`, the downgrade folds an epic
+ * scope back and REFUSES an independent one - an old host has no surface to
+ * put it in, and that typed refusal is the feature gate. The response is
+ * byte-identical across the majors.
+ */
+export const providersStartTerminalLoginV20 = defineRpcContract({
+  method: "providers.startTerminalLogin",
+  schemaVersion: { major: 2, minor: 0 } as const,
+  requestSchema: providersStartTerminalLoginRequestSchemaV20,
+  responseSchema: providersStartTerminalLoginResponseSchema,
+});
+
+export const providersStartTerminalLoginUpgradeV10ToV20 = defineUpgradePath<
+  typeof providersStartTerminalLoginV10,
+  typeof providersStartTerminalLoginV20
+>({
+  from: providersStartTerminalLoginV10.schemaVersion,
+  to: providersStartTerminalLoginV20.schemaVersion,
+  upgradeRequest: (request) => {
+    const { epicId, ...rest } = request;
+    return { ...rest, scope: { kind: "epic", epicId } };
+  },
+  upgradeResponse: (response) => response,
+});
+
+export const providersStartTerminalLoginDowngradeV20ToV10 = defineDowngradePath<
+  typeof providersStartTerminalLoginV20,
+  typeof providersStartTerminalLoginV10
+>({
+  from: providersStartTerminalLoginV20.schemaVersion,
+  to: providersStartTerminalLoginV10.schemaVersion,
+  downgradeRequest: (request) => {
+    const { scope, ...rest } = request;
+    if (scope.kind === "independent") {
+      return {
+        ok: false,
+        error: {
+          code: "DOWNGRADE_UNSUPPORTED",
+          message:
+            "Independent-scope sign-in terminals have no representation in providers.startTerminalLogin@1.0",
+        },
+      };
+    }
+    return { ok: true, value: { ...rest, epicId: scope.epicId } };
+  },
+  downgradeResponse: (response) => ({ ok: true, value: response }),
 });
 
 /**
@@ -8432,6 +8489,19 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
       },
       downgradePathsFromLatest: {},
     },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersStartTerminalLoginV20,
+          upgradeFromPreviousVersion:
+            providersStartTerminalLoginUpgradeV10ToV20,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: providersStartTerminalLoginDowngradeV20ToV10,
+      },
+    },
   },
   "providers.ensurePack": {
     degrade: { kind: "unsupported" },
@@ -9291,10 +9361,13 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   // which is what makes fallback safe for a destructive operation.
   "worktree.deleteBatchByPath": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: worktreeDeleteBatchByPathStreamV10,
+        },
+        1: {
+          contract: worktreeDeleteBatchByPathStreamV11,
         },
       },
     },

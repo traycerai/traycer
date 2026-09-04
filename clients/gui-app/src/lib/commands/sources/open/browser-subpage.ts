@@ -1,4 +1,5 @@
 import { toast } from "sonner";
+import { browserSessionsRefusal } from "@traycer-clients/shared/platform/browser-view";
 import { useBrowserSessionsForHost } from "@/components/epic-canvas/renderers/use-browser-sessions";
 import {
   browserTabHostname,
@@ -156,7 +157,7 @@ export function useBrowserOpenerItems(
     keywords: ["new", "browser", "web", "page", hostLabel],
     run: () => {
       if (sessions.lifecycle !== "live" || sessions.hostId === null) {
-        toast.error("Browsers are not connected yet.");
+        toast.error(browserSessionsRefusal(sessions));
         return;
       }
       const hostId = sessions.hostId;
@@ -207,6 +208,23 @@ export function useBrowserOpenerItems(
     }),
   );
   if (openTabs.length > 0) return [changeHost, newBrowser, ...openTabs];
+  if (sessions.lifecycle === "unsupported") {
+    // No retry leaf: nothing this app can do changes the host's answer, and
+    // the "Loading…" leaf below would otherwise sit there forever.
+    return [
+      changeHost,
+      newBrowser,
+      {
+        ...openerActionLeaf({
+          id: "open:browser:unsupported",
+          label: browserSessionsRefusal(sessions),
+          keywords: ["browser", "unsupported", "update", hostLabel],
+          run: () => undefined,
+        }),
+        disabled: true,
+      },
+    ];
+  }
   if (sessions.lifecycle === "failed" || sessions.lifecycle === "closed") {
     return [
       changeHost,

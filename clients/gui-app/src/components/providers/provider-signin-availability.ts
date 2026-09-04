@@ -3,6 +3,7 @@ import {
   providerPackBlocksExecution,
   providerPackPreparingForProvider,
   providerPackPreparingLabel,
+  type ProviderPackPreparing,
 } from "@/components/providers/provider-pack-readiness";
 import { providerDisplayName } from "@/lib/provider-ordering";
 
@@ -10,10 +11,11 @@ import { providerDisplayName } from "@/lib/provider-ordering";
  * Whether this provider can actually be signed in from a real terminal, rather
  * than through a headless browser-OAuth child.
  *
- * ONE helper, four consumers (this module's two exports, the composer re-auth
- * banner's `deriveLoginOptions`, and the picker's `resolveCreateProfileGate`)
- * so a surface cannot drift into offering the headless button for a provider
- * the host will refuse.
+ * ONE helper, five consumers (this module's two exports, the composer re-auth
+ * banner's `deriveLoginOptions`, the picker's `resolveCreateProfileGate`, and
+ * the picker's setup CTA via `resolveProviderTerminalSetup`) so a surface
+ * cannot drift into offering the headless button for a provider the host will
+ * refuse, or the terminal one for a provider it cannot open.
  *
  * It answers CAN, not merely `terminalLogin !== null`, because the command the
  * terminal runs is `oauthArgs` - a provider advertising `terminalLogin` with no
@@ -39,6 +41,35 @@ export function providerSupportsTerminalLogin(
   if (terminalLogin === null || terminalLogin === undefined) return false;
   const oauthArgs = loginCapability?.oauthArgs ?? null;
   return oauthArgs !== null && oauthArgs.length > 0;
+}
+
+/**
+ * The pack state that BLOCKS a terminal sign-in right now, or `null` when the
+ * host would spawn the provider's CLI.
+ *
+ * A terminal login spawns that CLI exactly as a chat turn does, so it is gated
+ * by the same question (`providerPackBlocksExecution`, which reads
+ * `fallbackRunnable`). The headless path already folds this into
+ * `providerSignInUnavailableHint` below - but that helper answers the terminal
+ * case FIRST, with a permanent "signed in from a terminal" sentence, so the
+ * pack check there is never reached for a terminal-login provider. Every
+ * terminal action (the picker's setup CTA on both of its surfaces, the composer
+ * banner's row) asks this instead, so none of them can offer a button whose
+ * only possible answer is the host's `preparing` error.
+ *
+ * `null` state (the `providers.list` row has not arrived) reads as not blocked:
+ * the same fail-open every pack gate takes, with the host resolver's typed
+ * outcome as the backstop.
+ */
+export function providerTerminalLoginPackBlock(
+  state: ProviderCliState | null,
+): ProviderPackPreparing | null {
+  if (state === null) return null;
+  const preparing = providerPackPreparingForProvider(state);
+  if (preparing === null || !providerPackBlocksExecution(preparing)) {
+    return null;
+  }
+  return preparing;
 }
 
 /**

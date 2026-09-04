@@ -197,6 +197,9 @@ export const CommGraphAgentNodeView = memo(function CommGraphAgentNodeView(
       ownerHostUnreachable={hoverHostReachability.status === "unreachable"}
       ownerKind={hoverOwnerKind}
       roleClaims={roleClaims}
+      // The graph node adds nothing of its own: everything it knows about an
+      // agent is already in the shared card.
+      extraContent={null}
       // Upward: a node can sit anywhere on the canvas, and the space below it
       // is where the transport bar is docked.
       side="top"

@@ -33,6 +33,7 @@ import type {
   BrowserViewTileKey,
   BrowserViewViewportPresetId,
 } from "@traycer-clients/shared/platform/browser-view";
+import { browserSessionsRefusal } from "@traycer-clients/shared/platform/browser-view";
 import type {
   ElectronTabBinding,
   ElectronTabSurfaceLease,
@@ -47,6 +48,7 @@ import {
   DEFAULT_BROWSER_TILE_URL,
   makeBrowserSessionTileRef,
 } from "@/stores/epics/canvas/tile-schema/browser-tile";
+import { claimHostedPaneActivationFocus } from "@/components/epic-canvas/pane-activation";
 
 interface ElectronTabSurfaceNode {
   readonly id: string;
@@ -275,7 +277,7 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
         browserSessions.lifecycle !== "live" ||
         browserSessions.hostId !== props.node.hostId
       ) {
-        toast.error("Browsers are not connected yet.");
+        toast.error(browserSessionsRefusal(browserSessions));
         return;
       }
       void browserSessions
@@ -319,6 +321,21 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
       props.viewTabId,
     ],
   );
+
+  useEffect(() => {
+    if (browserView === null) return;
+    const subscription = browserView.onTileFocused((focusedTile) => {
+      if (!isSameBrowserViewTile(focusedTile, tileKey)) return;
+      claimHostedPaneActivationFocus(props.viewTabId, props.paneId, {
+        defaultPrevented: false,
+        scope: null,
+        target: null,
+      });
+    });
+    return () => {
+      subscription.dispose();
+    };
+  }, [browserView, props.paneId, props.viewTabId, tileKey]);
 
   useEffect(() => {
     if (browserView === null) return;

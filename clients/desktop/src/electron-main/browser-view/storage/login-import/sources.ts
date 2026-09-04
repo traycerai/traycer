@@ -80,6 +80,8 @@ const BROWSER_ORDER: readonly LoginImportBrowser[] = [
   "arc",
   "vivaldi",
   "opera",
+  "aside",
+  "helium",
   "chromium",
   "firefox",
   "safari",
@@ -141,6 +143,10 @@ function chromiumRoots(
       root("arc", join(support, "Arc", "User Data")),
       root("vivaldi", join(support, "Vivaldi")),
       profilelessRoot("opera", join(support, "com.operasoftware.Opera")),
+      // Aside and Helium ship macOS builds only as far as this list has
+      // verified; their Windows and Linux roots are not listed below.
+      root("aside", join(support, "Aside")),
+      root("helium", join(support, "net.imput.helium")),
     ];
   }
   if (environment.platform === "win32") {

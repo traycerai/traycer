@@ -12,7 +12,9 @@ import type {
   BrowserViewDownloadChange,
   BrowserViewFindChange,
   BrowserViewOpenTileRequest,
+  BrowserViewSnapshotInvalidatedChange,
   BrowserViewTileCommandEvent,
+  BrowserViewTileKey,
   BrowserViewNativeTabCapability,
   BrowserViewNativeTabStatusChange,
   BrowserViewGuestMountRequested,
@@ -189,6 +191,21 @@ export function buildBrowserViewBridge(): { browserView: BrowserViewBridge } {
       onTileCommand: (handler) =>
         subscribe<BrowserViewTileCommandEvent>(
           RunnerHostEvent.browserViewTileCommand,
+          handler,
+        ),
+      onTileFocused: (handler) =>
+        subscribe<BrowserViewTileKey>(
+          RunnerHostEvent.browserViewTileFocused,
+          handler,
+        ),
+      onSnapshotInvalidated: (handler) =>
+        subscribe<BrowserViewSnapshotInvalidatedChange>(
+          RunnerHostEvent.browserViewSnapshotInvalidated,
+          handler,
+        ),
+      onOverlayTileRestored: (handler) =>
+        subscribe<BrowserViewTileKey>(
+          RunnerHostEvent.browserViewOverlayRestored,
           handler,
         ),
       onAnnotationEvent: (handler) =>

@@ -556,6 +556,7 @@ interface Harness {
   readonly seededWebContents: BrowserViewWebContents[];
   readonly nativeTabStatuses: BrowserViewNativeTabStatusChange[];
   readonly nativeTabStatusWindowIds: string[];
+  readonly focusedTiles: BrowserViewTileKey[];
   readonly finds: BrowserViewFindChange[];
   readonly downloads: BrowserViewDownloadChange[];
   readonly certificateErrors: BrowserViewCertificateErrorChange[];
@@ -636,6 +637,7 @@ function createHarnessWithOptions(
   const seededWebContents: BrowserViewWebContents[] = [];
   const nativeTabStatuses: BrowserViewNativeTabStatusChange[] = [];
   const nativeTabStatusWindowIds: string[] = [];
+  const focusedTiles: BrowserViewTileKey[] = [];
   const finds: BrowserViewFindChange[] = [];
   const downloads: BrowserViewDownloadChange[] = [];
   const certificateErrors: BrowserViewCertificateErrorChange[] = [];
@@ -776,6 +778,9 @@ function createHarnessWithOptions(
         case RunnerHostEvent.browserViewOpenTileRequest:
           record(openTileRequests, payload);
           return true;
+        case RunnerHostEvent.browserViewTileFocused:
+          record(focusedTiles, payload);
+          return true;
         case RunnerHostEvent.browserViewAnnotationEvent:
           record(annotationEvents, payload);
           return true;
@@ -815,6 +820,7 @@ function createHarnessWithOptions(
     seededWebContents,
     nativeTabStatuses,
     nativeTabStatusWindowIds,
+    focusedTiles,
     finds,
     downloads,
     certificateErrors,
@@ -1042,6 +1048,20 @@ describe("BrowserViewManager isolated sessions", () => {
 });
 
 describe("BrowserViewManager native tab lifecycle", () => {
+  it("notifies the owning renderer when an attached native guest receives focus", async () => {
+    const harness = createHarness();
+    const { view } = await attachNativeTab(
+      harness,
+      "window-1",
+      BASE_KEY,
+      "https://example.com/",
+    );
+
+    view.emit("focus");
+
+    expect(harness.focusedTiles).toEqual([BASE_TILE_KEY]);
+  });
+
   it("provisions CDP before acceptance and starts navigation only after acceptance", async () => {
     const harness = createHarnessWithOptions({
       requireLoadedTargetForPageCommands: true,
@@ -1427,7 +1447,6 @@ describe("BrowserViewManager native tab lifecycle", () => {
       },
     ]);
   });
-
   it("guards a popup's own navigation and window.open", async () => {
     const harness = createHarness();
     const { view } = await attachNativeTab(
@@ -1807,7 +1826,6 @@ describe("BrowserViewManager native tab lifecycle", () => {
     expect(harness.guests).toHaveLength(1);
     expect(harness.manager.hasNativeTabsForWindow("window-1")).toBe(true);
   });
-
   it("echoes an existing native tab's current status when a renderer ensures it again", async () => {
     const harness = createHarness();
     const input = {

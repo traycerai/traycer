@@ -18,6 +18,7 @@ import type {
   BrowserViewGuestMountRequested,
   BrowserViewGuestReleaseRequested,
   BrowserViewReservedChord,
+  BrowserViewSnapshotInvalidatedChange,
   BrowserViewTileCommandEvent,
   BrowserViewTileKey,
   LoginImportRequest,
@@ -55,6 +56,9 @@ export class FakeBrowserViewBridge implements BrowserViewBridge {
   >();
   private readonly guestReleaseHandlers = new Set<
     (request: BrowserViewGuestReleaseRequested) => void
+  >();
+  private readonly snapshotInvalidationHandlers = new Set<
+    (change: BrowserViewSnapshotInvalidatedChange) => void
   >();
 
   constructor(input?: { readonly saveLogins?: boolean }) {
@@ -270,6 +274,38 @@ export class FakeBrowserViewBridge implements BrowserViewBridge {
         );
       },
     };
+  }
+
+  onTileFocused(_handler: (tile: BrowserViewTileKey) => void): {
+    dispose: () => void;
+  } {
+    return { dispose: () => undefined };
+  }
+
+  onSnapshotInvalidated(
+    handler: (change: BrowserViewSnapshotInvalidatedChange) => void,
+  ): {
+    dispose: () => void;
+  } {
+    this.snapshotInvalidationHandlers.add(handler);
+    return {
+      dispose: () => {
+        this.snapshotInvalidationHandlers.delete(handler);
+      },
+    };
+  }
+
+  /** Drives whatever suite is holding the overlay coordinator's subscription. */
+  emitSnapshotInvalidated(change: BrowserViewSnapshotInvalidatedChange): void {
+    this.snapshotInvalidationHandlers.forEach((handler) => {
+      handler(change);
+    });
+  }
+
+  onOverlayTileRestored(_handler: (tile: BrowserViewTileKey) => void): {
+    dispose: () => void;
+  } {
+    return { dispose: () => undefined };
   }
 
   onAnnotationEvent() {

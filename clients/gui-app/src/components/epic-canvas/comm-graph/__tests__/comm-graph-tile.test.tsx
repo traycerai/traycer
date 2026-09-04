@@ -113,6 +113,7 @@ import type {
   CommGraphSubscriptionRequest,
 } from "@/lib/comm-graph/comm-graph-subscription";
 import { makeCommGraphTileRef } from "@/stores/epics/canvas/tile-schema/comm-graph-tile";
+import type { CommGraphTileRef } from "@/stores/epics/canvas/types";
 import { TestEpicSessionWrapper } from "@/components/epic-canvas/__tests__/test-epic-session";
 import { createEpicSessionTestHarness } from "@/components/epic-canvas/__tests__/test-epic-session-harness";
 import { TileFindContext } from "@/components/epic-canvas/tile-find/tile-find-adapter-context";
@@ -194,6 +195,16 @@ function seedEmptyDoc(doc: Y.Doc): void {
   epic.set("chats", new Y.Map<unknown>());
 }
 
+/**
+ * Every case below asserts on React Flow nodes, so the tile is opened in the
+ * NODE-GRAPH mode explicitly. The tile's own default is the office floor, which
+ * draws to a canvas and mounts no nodes at all.
+ */
+function graphModeTileRef(): CommGraphTileRef {
+  const ref = makeCommGraphTileRef(EPIC_ID);
+  return { ...ref, view: { ...ref.view, mode: "graph" } };
+}
+
 async function renderTile(): Promise<void> {
   await renderTileWithFindRegistration(undefined);
 }
@@ -201,7 +212,7 @@ async function renderTile(): Promise<void> {
 async function renderTileWithFindRegistration(
   onRegister: ((adapter: TileFindAdapter) => void) | undefined,
 ): Promise<void> {
-  const node = makeCommGraphTileRef(EPIC_ID);
+  const node = graphModeTileRef();
   const tile = <CommGraphTile node={node} viewTabId={EPIC_ID} />;
   render(
     <QueryClientProvider client={queryClient}>
