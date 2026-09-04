@@ -38,8 +38,10 @@ import {
   type LandingTerminalPendingKill,
 } from "@/stores/home/landing-terminal-store";
 import {
+  adoptListedProviderLoginSessions,
   reconcileHostAuthoritativeLandingTerminalTabs,
   reconcileLandingTerminalTabs,
+  type LandingTerminalReconciliationInput,
 } from "./landing-terminal-reconciliation";
 import type { LandingTerminalAvailability } from "./landing-terminal-availability";
 import type { LandingTerminalAuthorityEntry } from "./landing-terminal-authority-fleet";
@@ -333,6 +335,18 @@ export function useLandingTerminalReconciliation(
           releaseLatch();
           return;
         }
+        // From `terminal.list`, which the capable pass above never reads: a
+        // host-created sign-in session has no plain-terminal row, so the
+        // projection cannot adopt it, and a sign-in started in another window
+        // - whose record reached this one through the shared registry - would
+        // otherwise have no tab here. Only for the selected host: the bound
+        // host fleet reconciles other hosts from their projections alone and
+        // fetches no list for them.
+        adoptListedSignInSessions({
+          activeHostId,
+          landingPageId,
+          sessions: freshSessions,
+        });
         onReconciled(hostContext);
         onSettled(generation, hostContext);
         return;
@@ -409,6 +423,42 @@ export function useLandingTerminalReconciliation(
     provenanceRevision,
     queryClient,
   ]);
+}
+
+/**
+ * Adds a tab for every registry-claimed sign-in session the host lists that
+ * has none, keeping the current selection. See
+ * `adoptListedProviderLoginSessions` for why the capable arm needs this.
+ */
+function adoptListedSignInSessions(args: {
+  readonly activeHostId: string;
+  readonly landingPageId: string;
+  readonly sessions: LandingTerminalReconciliationInput["sessions"];
+}): void {
+  const { activeHostId } = args;
+  const current = useLandingTerminalStore.getState();
+  const adopted = adoptListedProviderLoginSessions({
+    tabs: current.tabs,
+    activeHostId,
+    sessions: args.sessions,
+    excludedSessionKeys: new Set(
+      current.pendingKills
+        .filter((pending) => pending.hostId === activeHostId)
+        .map((pending) =>
+          terminalSessionKey(pending.hostId, pending.sessionId),
+        ),
+    ),
+    mintInstanceId: () => `landing-terminal-${uuidv4()}`,
+    providerLoginProviderFor: (sessionId) =>
+      providerLoginTerminalProviderId(activeHostId, sessionId),
+  });
+  if (adopted.length === 0) return;
+  current.applyReconciliation(
+    args.landingPageId,
+    [...current.tabs, ...adopted],
+    current.activeInstanceId,
+    false,
+  );
 }
 
 /**

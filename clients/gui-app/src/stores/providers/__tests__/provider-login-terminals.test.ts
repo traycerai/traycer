@@ -146,6 +146,53 @@ describe("useProviderLoginTerminalsStore", () => {
     expect(useProviderLoginTerminalsStore.getState().revision).toBe(2);
   });
 
+  it("writes nothing back, and does not bump `revision`, for a peer payload that adds no record - the same set in the peer's order", () => {
+    recordProviderLoginTerminal({
+      hostId: HOST_A,
+      sessionId: "session-a",
+      providerId: "reasonix",
+    });
+    recordProviderLoginTerminal({
+      hostId: HOST_B,
+      sessionId: "session-b",
+      providerId: "copilot",
+    });
+    const before = useProviderLoginTerminalsStore.getState();
+    const onDisk = window.localStorage.getItem(PERSIST_KEY);
+    expect(before.recentKeys).toEqual([
+      `${HOST_B}:session-b`,
+      `${HOST_A}:session-a`,
+    ]);
+
+    // The peer holds the identical two records with ITS own record first.
+    // Merging keeps this window's order, so the result equals what is already
+    // here - and a `setState` on it would go through persist, write the whole
+    // payload, and fire the peer's `storage` event in turn: the peer would
+    // merge, keep ITS order, write, and fire ours. Two windows would trade
+    // orders forever, bumping `revision` and re-running reconciliation on
+    // every hop.
+    window.dispatchEvent(
+      new StorageEvent("storage", {
+        key: PERSIST_KEY,
+        newValue: JSON.stringify({
+          state: {
+            providerBySessionKey: {
+              [`${HOST_A}:session-a`]: "reasonix",
+              [`${HOST_B}:session-b`]: "copilot",
+            },
+            recentKeys: [`${HOST_A}:session-a`, `${HOST_B}:session-b`],
+          },
+          version: CURRENT_PERSIST_VERSION,
+        }),
+      }),
+    );
+
+    const after = useProviderLoginTerminalsStore.getState();
+    expect(after).toBe(before);
+    expect(after.revision).toBe(before.revision);
+    expect(window.localStorage.getItem(PERSIST_KEY)).toBe(onDisk);
+  });
+
   it("does not persist `revision`, and hydration does not reset it", async () => {
     recordProviderLoginTerminal({
       hostId: HOST_A,

@@ -181,22 +181,14 @@ export function reconcileLandingTerminalTabs(
     }
     const originProviderId = input.providerLoginProviderFor(session.sessionId);
     if (originProviderId !== null) {
-      // Same ref shape the opening path writes, so every reader downstream -
-      // the adopt-only tile, the legacy-import exclusion, the close and rename
-      // paths - classifies a session discovered here exactly as one this
-      // window opened. Manual title for the same reason: the host names it
-      // "<Provider> sign-in" and reconciliation must not retitle it from cwd.
-      const signInTab: LandingTerminalTabRef = {
-        instanceId: input.mintInstanceId(),
-        sessionId: session.sessionId,
-        hostId: input.activeHostId,
-        cwd: session.cwd,
-        name: `${PROVIDER_DISPLAY_NAMES[originProviderId]} sign-in`,
-        titleSource: "manual",
-        origin: "provider-login",
-        originProviderId,
-      };
-      return [signInTab];
+      return [
+        providerLoginLandingTab({
+          instanceId: input.mintInstanceId(),
+          hostId: input.activeHostId,
+          session,
+          providerId: originProviderId,
+        }),
+      ];
     }
     const tab: LandingTerminalTabRef = {
       instanceId: input.mintInstanceId(),
@@ -224,6 +216,91 @@ export function reconcileLandingTerminalTabs(
       (exitedInstanceIds.length > 0 ||
         survivingTabs.length !== input.tabs.length),
   };
+}
+
+/**
+ * The ref for a listed sign-in session this window did not open. Same shape
+ * the opening path writes, so every reader downstream - the adopt-only tile,
+ * the legacy-import exclusion, the close and rename paths - classifies a
+ * session discovered here exactly as one this window opened. Manual title for
+ * the same reason: the host names it "<Provider> sign-in" and reconciliation
+ * must not retitle it from cwd.
+ */
+function providerLoginLandingTab(input: {
+  readonly instanceId: string;
+  readonly hostId: string;
+  readonly session: Pick<CanonicalTerminalSessionInfo, "sessionId" | "cwd">;
+  readonly providerId: ProviderId;
+}): LandingTerminalTabRef {
+  return {
+    instanceId: input.instanceId,
+    sessionId: input.session.sessionId,
+    hostId: input.hostId,
+    cwd: input.session.cwd,
+    name: `${PROVIDER_DISPLAY_NAMES[input.providerId]} sign-in`,
+    titleSource: "manual",
+    origin: "provider-login",
+    originProviderId: input.providerId,
+  };
+}
+
+/**
+ * The CAPABLE host's adoption of sign-in sessions, from `terminal.list`.
+ *
+ * The capable arm reconciles against the plain-terminal projection, and a
+ * host-created sign-in session is never in it: the host made it for
+ * `providers.startTerminalLogin`, through the session manager, so the plain
+ * registry has no row for it. The legacy arm adopts such a session from
+ * `terminal.list` (above); without this the capable arm could classify a tab
+ * that already existed but never CREATE one - so a sign-in started in another
+ * window, whose record arrived through the shared registry, had no tab on a
+ * capable host and its code stayed invisible there.
+ *
+ * Sign-in sessions ONLY - a session the registry does not claim is left to the
+ * projection, which is the capable host's authority over ordinary terminals.
+ * A tombstoned session (closed here, kill still in flight) is excluded for the
+ * same reason the legacy arm excludes it: adopting it back would resurrect a
+ * tab the user just closed.
+ */
+export function adoptListedProviderLoginSessions(
+  input: Pick<
+    LandingTerminalReconciliationInput,
+    | "tabs"
+    | "activeHostId"
+    | "sessions"
+    | "excludedSessionKeys"
+    | "mintInstanceId"
+    | "providerLoginProviderFor"
+  >,
+): ReadonlyArray<LandingTerminalTabRef> {
+  const tabbedSessionIds = new Set(
+    input.tabs
+      .filter((tab) => tab.hostId === input.activeHostId)
+      .map((tab) => tab.sessionId),
+  );
+  return input.sessions.flatMap((session) => {
+    if (
+      session.scope.kind !== "independent" ||
+      session.sessionKind !== "terminal" ||
+      session.status !== "running" ||
+      tabbedSessionIds.has(session.sessionId) ||
+      input.excludedSessionKeys.has(
+        terminalSessionKey(input.activeHostId, session.sessionId),
+      )
+    ) {
+      return [];
+    }
+    const providerId = input.providerLoginProviderFor(session.sessionId);
+    if (providerId === null) return [];
+    return [
+      providerLoginLandingTab({
+        instanceId: input.mintInstanceId(),
+        hostId: input.activeHostId,
+        session,
+        providerId,
+      }),
+    ];
+  });
 }
 
 /**

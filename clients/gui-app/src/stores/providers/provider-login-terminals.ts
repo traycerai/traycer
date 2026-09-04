@@ -149,6 +149,24 @@ function mergeRecords(
   return { providerBySessionKey, recentKeys };
 }
 
+/** Same keys in the same order, mapped to the same providers. */
+function sameRecords(
+  a: SharedProviderLoginRecords,
+  b: SharedProviderLoginRecords,
+): boolean {
+  if (a.recentKeys.length !== b.recentKeys.length) return false;
+  if (a.recentKeys.some((entry, index) => entry !== b.recentKeys[index])) {
+    return false;
+  }
+  const aEntries = Object.entries(a.providerBySessionKey);
+  if (aEntries.length !== Object.keys(b.providerBySessionKey).length) {
+    return false;
+  }
+  return aEntries.every(
+    ([entry, value]) => b.providerBySessionKey[entry] === value,
+  );
+}
+
 function parsePersistedPayload(raw: string | null): SharedProviderLoginRecords {
   if (raw === null) return NO_SHARED_RECORDS;
   try {
@@ -273,10 +291,22 @@ if (typeof window !== "undefined") {
     //
     // A `removeItem` arrives with `newValue: null` and merges as "nothing
     // new", for the same reason a `clear()` is ignored above.
-    useProviderLoginTerminalsStore.setState((state) => ({
-      ...mergeRecords(state, parsePersistedPayload(event.newValue)),
-      revision: state.revision + 1,
-    }));
+    const current = useProviderLoginTerminalsStore.getState();
+    const merged = mergeRecords(current, parsePersistedPayload(event.newValue));
+    // A merge that adds nothing writes nothing. `setState` goes through
+    // persist, which writes the WHOLE payload back to storage, and that write
+    // is a `storage` event in the peer. Two windows holding the same set in
+    // different orders (each put its own record first) would otherwise trade
+    // it forever: A's write fires B's event, B's merge keeps B's order and
+    // writes it, which fires A's event, and so on - every hop bumping
+    // `revision` and re-running each reconciliation keyed on it. The peer's
+    // ORDER is not something this window needs: the union is what the
+    // classifier reads, and the bound evicts by this window's own recency.
+    if (sameRecords(current, merged)) return;
+    useProviderLoginTerminalsStore.setState({
+      ...merged,
+      revision: current.revision + 1,
+    });
   });
 }
 

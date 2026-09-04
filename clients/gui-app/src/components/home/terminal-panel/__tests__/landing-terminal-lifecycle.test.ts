@@ -13,6 +13,7 @@ import {
 } from "@/stores/home/landing-terminal-store";
 import {
   reconcileHostAuthoritativeLandingTerminalTabs,
+  adoptListedProviderLoginSessions,
   reconcileLandingTerminalTabs,
   resolveLandingTerminalSyncedTitle,
   resolveLandingTerminalTitleCwd,
@@ -945,6 +946,173 @@ describe("landing terminal lifecycle", () => {
     });
 
     expect(result.tabs).toEqual([{ ...defaultTab, name: "vim" }]);
+  });
+});
+
+describe("adoptListedProviderLoginSessions", () => {
+  const providerLoginProviderFor = (sessionId: string) =>
+    sessionId === "signin-session" ? ("reasonix" as const) : null;
+
+  it("adopts a registry-claimed running session that has no tab, in the sign-in shape", () => {
+    const adopted = adoptListedProviderLoginSessions({
+      tabs: [],
+      activeHostId: HOST_A,
+      sessions: [
+        session({ sessionId: "signin-session", status: "running" }),
+        session({ sessionId: "ordinary-session", status: "running" }),
+      ],
+      excludedSessionKeys: new Set(),
+      mintInstanceId: () => "adopted-signin-instance",
+      providerLoginProviderFor,
+    });
+
+    // The ordinary session is left alone: on a capable host the plain
+    // projection is the authority over it, and adopting it from the list
+    // would race that arm with a second, unacknowledged tab.
+    expect(adopted).toEqual([
+      {
+        instanceId: "adopted-signin-instance",
+        sessionId: "signin-session",
+        hostId: HOST_A,
+        cwd: "/workspace/project",
+        name: "Reasonix sign-in",
+        titleSource: "manual",
+        origin: "provider-login",
+        originProviderId: "reasonix",
+      },
+    ]);
+  });
+
+  it("adopts nothing for a session that already has a tab on this host, whatever that tab's shape", () => {
+    const adopted = adoptListedProviderLoginSessions({
+      tabs: [
+        tab({
+          instanceId: "existing",
+          sessionId: "signin-session",
+          hostId: HOST_A,
+        }),
+      ],
+      activeHostId: HOST_A,
+      sessions: [session({ sessionId: "signin-session", status: "running" })],
+      excludedSessionKeys: new Set(),
+      mintInstanceId: () => "never",
+      providerLoginProviderFor,
+    });
+
+    // Reclassifying that tab is the reconciliation pass's job
+    // (`classifyLandingTab`); this only fills an ABSENCE.
+    expect(adopted).toEqual([]);
+  });
+
+  it("adopts nothing for a tombstoned session or one that is not running", () => {
+    const tombstoned = adoptListedProviderLoginSessions({
+      tabs: [],
+      activeHostId: HOST_A,
+      sessions: [session({ sessionId: "signin-session", status: "running" })],
+      // Closed here; the kill is still in flight, so the host still lists it.
+      excludedSessionKeys: new Set([
+        terminalSessionKey(HOST_A, "signin-session"),
+      ]),
+      mintInstanceId: () => "never",
+      providerLoginProviderFor,
+    });
+    expect(tombstoned).toEqual([]);
+
+    const exited = adoptListedProviderLoginSessions({
+      tabs: [],
+      activeHostId: HOST_A,
+      sessions: [session({ sessionId: "signin-session", status: "exited" })],
+      excludedSessionKeys: new Set(),
+      mintInstanceId: () => "never",
+      providerLoginProviderFor,
+    });
+    expect(exited).toEqual([]);
+  });
+
+  it("does not let another host's tab for the same session id stand in", () => {
+    const adopted = adoptListedProviderLoginSessions({
+      tabs: [
+        tab({
+          instanceId: "other-host",
+          sessionId: "signin-session",
+          hostId: HOST_B,
+        }),
+      ],
+      activeHostId: HOST_A,
+      sessions: [session({ sessionId: "signin-session", status: "running" })],
+      excludedSessionKeys: new Set(),
+      mintInstanceId: () => "adopted-signin-instance",
+      providerLoginProviderFor,
+    });
+
+    expect(adopted.map((entry) => entry.instanceId)).toEqual([
+      "adopted-signin-instance",
+    ]);
+  });
+});
+
+describe("revealPanel", () => {
+  beforeEach(() => {
+    useLandingTerminalStore.getState().resetForTests();
+  });
+
+  it("opens the named pages and records the reveal; clearPanelReveal retires it", () => {
+    const store = useLandingTerminalStore.getState();
+    store.setPanelOpen("page-a", false);
+    store.setPanelOpen("page-b", false);
+
+    store.revealPanel({
+      landingPageIds: ["page-a", "page-b"],
+      everyPage: false,
+      instanceId: "sign-in-instance",
+    });
+
+    const state = useLandingTerminalStore.getState();
+    expect(landingTerminalLayoutFor(state, "page-a").panelOpen).toBe(true);
+    expect(landingTerminalLayoutFor(state, "page-b").panelOpen).toBe(true);
+    // A page it did not name keeps its own layout.
+    expect(state.fallbackLayout?.panelOpen ?? false).toBe(false);
+    expect(state.panelReveal).toBe("sign-in-instance");
+
+    state.clearPanelReveal();
+    expect(useLandingTerminalStore.getState().panelReveal).toBeNull();
+  });
+
+  it("with everyPage opens the named pages AND every other - each keyed layout and the fallback - and still records the reveal", () => {
+    const store = useLandingTerminalStore.getState();
+    store.setPanelOpen("page-closed", false);
+
+    store.revealPanel({
+      landingPageIds: ["page-initiating"],
+      everyPage: true,
+      instanceId: "sign-in-instance",
+    });
+
+    const state = useLandingTerminalStore.getState();
+    expect(landingTerminalLayoutFor(state, "page-closed").panelOpen).toBe(true);
+    expect(landingTerminalLayoutFor(state, "page-never-seen").panelOpen).toBe(
+      true,
+    );
+    // The initiating page still records a layout of its own.
+    expect(state.layoutsByLandingPageId["page-initiating"]?.panelOpen).toBe(
+      true,
+    );
+    expect(state.panelReveal).toBe("sign-in-instance");
+  });
+
+  it("does not persist the reveal", async () => {
+    useLandingTerminalStore.getState().revealPanel({
+      landingPageIds: [],
+      everyPage: true,
+      instanceId: "sign-in-instance",
+    });
+    await useLandingTerminalStore.persist.rehydrate();
+    const persisted = JSON.parse(
+      window.localStorage.getItem(
+        useLandingTerminalStore.persist.getOptions().name ?? "",
+      ) ?? "{}",
+    ) as { state?: Record<string, unknown> };
+    expect(persisted.state).not.toHaveProperty("panelReveal");
   });
 });
 

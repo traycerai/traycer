@@ -6,10 +6,17 @@ import {
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 
-const mocks = vi.hoisted(() => ({ addressableHostId: { current: "host-1" } }));
-
+// The pickers that render this gate are drawn inside Epic TABS as well as on
+// the start page, and a tab resolves host identity through its lifetime
+// binding only. Any read of the app-wide host authority from this hook is a
+// violation, whichever surface then ignores the answer - so the module is
+// mocked to THROW, and every case below runs through it.
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({
-  useAddressableHostId: () => mocks.addressableHostId.current,
+  useAddressableHostId: (): string => {
+    throw new Error(
+      "useProviderTerminalLoginScopeSupported must not read the addressable host",
+    );
+  },
 }));
 
 import {
@@ -45,7 +52,6 @@ function scopeSupported(
 describe("useProviderTerminalLoginScopeSupported", () => {
   beforeEach(() => {
     resetNegotiatedManifests();
-    mocks.addressableHostId.current = HOST_ID;
   });
 
   afterEach(() => {
@@ -71,6 +77,11 @@ describe("useProviderTerminalLoginScopeSupported", () => {
     expect(scopeSupported(EPIC_SURFACE, HOST_ID)).toBe(true);
   });
 
+  it("is true for the EPIC surface with no manifest recorded at all - the epic path never consults the registry", () => {
+    expect(scopeSupported(EPIC_SURFACE, HOST_ID)).toBe(true);
+    expect(scopeSupported(EPIC_SURFACE, null)).toBe(true);
+  });
+
   it("is true for the landing surface once the host negotiates the scoped major", () => {
     recordNegotiatedHostManifest(HOST_ID, manifestWithMajor(2));
 
@@ -85,21 +96,22 @@ describe("useProviderTerminalLoginScopeSupported", () => {
     expect(scopeSupported(null, HOST_ID)).toBe(true);
   });
 
-  it("resolves a null run target through the addressable host, not as an unknown host", () => {
+  it("reads a null landing run target as unsupported rather than filling it from the app-wide host", () => {
     recordNegotiatedHostManifest(HOST_ID, manifestWithMajor(2));
 
-    // `null` means "follow the app-wide default", which is the picker's COMMON
-    // case. Reading it as an unknown host would hide the action there.
-    expect(scopeSupported(LANDING_SURFACE, null)).toBe(true);
+    // The landing composer resolves its placement host itself and hands it
+    // down; `null` reaches the picker only in the ∅ case, where there is
+    // nothing usable to create on and submit refuses too. Resolving it here
+    // through the app-wide authority would be exactly the read a tab-bound
+    // picker must never make.
+    expect(scopeSupported(LANDING_SURFACE, null)).toBe(false);
   });
 
-  it("follows the addressable host's answer, not the last host recorded", () => {
+  it("answers for the host it was given, not the last host recorded", () => {
     recordNegotiatedHostManifest(HOST_ID, manifestWithMajor(2));
     recordNegotiatedHostManifest("host-2", manifestWithMajor(1));
-    mocks.addressableHostId.current = "host-2";
 
-    expect(scopeSupported(LANDING_SURFACE, null)).toBe(false);
-    // An explicit run target still outranks the app-wide default.
+    expect(scopeSupported(LANDING_SURFACE, "host-2")).toBe(false);
     expect(scopeSupported(LANDING_SURFACE, HOST_ID)).toBe(true);
   });
 });
