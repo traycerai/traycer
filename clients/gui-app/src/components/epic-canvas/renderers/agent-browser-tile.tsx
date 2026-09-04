@@ -552,6 +552,10 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
         />
         <div
           hidden={showStartPage}
+          // Transparent is not hidden: without this a presented, live guest
+          // still exposes the loader's role and "Reconnecting" text to
+          // assistive tech. Hide it from AT whenever it is not the shown layer.
+          aria-hidden={!overlay.visible}
           className={cn(
             "absolute inset-0 z-20 flex min-h-0 flex-col items-center justify-center gap-3 px-4 text-center",
             overlay.visible ? "opacity-100" : "opacity-0",

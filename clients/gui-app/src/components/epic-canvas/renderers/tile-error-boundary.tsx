@@ -2,10 +2,7 @@ import { Component, type ErrorInfo, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { appLogger } from "@/lib/logger";
-import {
-  captureReportIssueError,
-  type ReportIssueErrorCapture,
-} from "@/lib/report-issue-error-capture";
+import { captureReportIssueError } from "@/lib/report-issue-error-capture";
 
 interface TileErrorBoundaryProps {
   /** Tile identity - keys the log line and clears a stuck error on re-point. */
@@ -24,10 +21,9 @@ interface TileErrorBoundaryProps {
 
 interface TileErrorBoundaryState {
   readonly error: Error | null;
-  readonly capture: ReportIssueErrorCapture | null;
 }
 
-const CLEARED: TileErrorBoundaryState = { error: null, capture: null };
+const CLEARED: TileErrorBoundaryState = { error: null };
 
 /**
  * Per-tile error boundary wrapping the kind-specific body in `renderTile`. A
@@ -52,7 +48,7 @@ export class TileErrorBoundary extends Component<
   }
 
   static getDerivedStateFromError(error: Error): TileErrorBoundaryState {
-    return { error, capture: null };
+    return { error };
   }
 
   override componentDidCatch(error: Error, info: ErrorInfo): void {
@@ -64,7 +60,6 @@ export class TileErrorBoundary extends Component<
       errorCode: null,
       sourceAction: "Canvas tile",
     });
-    this.setState({ capture });
     appLogger.errorSummary(
       "[epic-canvas] tile crashed",
       {

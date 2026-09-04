@@ -37,6 +37,10 @@ vi.mock("@/lib/logger", async (importOriginal) => ({
 
 afterEach(() => {
   cleanup();
+  // restoreAllMocks() puts back console.error (and any other spyOn target)
+  // even when an assertion threw before a per-test restore could run; the
+  // module mocks still need their call history cleared explicitly.
+  vi.restoreAllMocks();
   captureReportIssueError.mockClear();
   errorSummary.mockClear();
 });
@@ -66,9 +70,7 @@ function ReloadHarness(): ReactNode {
 
 describe("<TileErrorBoundary />", () => {
   it("shows the compact fallback for a crashing tile while a sibling tile keeps rendering", () => {
-    const consoleError = vi
-      .spyOn(console, "error")
-      .mockImplementation(() => undefined);
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
 
     render(
       <div>
@@ -93,14 +95,10 @@ describe("<TileErrorBoundary />", () => {
     expect(errorSummary).toHaveBeenCalledTimes(1);
     const [, summaryDetails] = errorSummary.mock.calls[0];
     expect(summaryDetails).toMatchObject({ instanceId: "tile-1" });
-
-    consoleError.mockRestore();
   });
 
   it("Reload rebuilds the tile once it has stopped throwing", () => {
-    const consoleError = vi
-      .spyOn(console, "error")
-      .mockImplementation(() => undefined);
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
 
     render(<ReloadHarness />);
     expect(screen.getByRole("alert")).not.toBeNull();
@@ -110,7 +108,5 @@ describe("<TileErrorBoundary />", () => {
 
     expect(screen.queryByRole("alert")).toBeNull();
     expect(screen.getByTestId("tile-body").textContent).toBe("ok");
-
-    consoleError.mockRestore();
   });
 });
