@@ -130,7 +130,7 @@ export function SessionImportProgress(props: {
             <p className={cn("text-ui-xs", tone.muted)}>
               {tone.surface === "onboarding"
                 ? "They'll be in your task list when you finish the tour."
-                : "Your tasks are in the list on the left."}
+                : "They're in your task list."}
             </p>
           ) : null}
           {counts.skippedAlreadyImported > 0 ? (

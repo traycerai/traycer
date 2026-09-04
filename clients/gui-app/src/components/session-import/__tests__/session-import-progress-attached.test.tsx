@@ -147,9 +147,7 @@ describe("SessionImportProgress", () => {
         hostId={HOST}
       />,
     );
-    expect(
-      screen.getByText("Your tasks are in the list on the left."),
-    ).toBeTruthy();
+    expect(screen.getByText("They're in your task list.")).toBeTruthy();
   });
 
   it("says nothing was imported and omits the destination line when nothing landed", () => {
@@ -170,9 +168,7 @@ describe("SessionImportProgress", () => {
     );
 
     expect(screen.getByText("Nothing was imported")).toBeTruthy();
-    expect(
-      screen.queryByText("Your tasks are in the list on the left."),
-    ).toBeNull();
+    expect(screen.queryByText("They're in your task list.")).toBeNull();
   });
 
   it("reports how many were already in Traycer", () => {
