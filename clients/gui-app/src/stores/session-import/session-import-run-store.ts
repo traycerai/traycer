@@ -135,27 +135,6 @@ export interface SessionImportRunEntry {
   readonly run: SessionImportRunState;
 }
 
-/**
- * The one run an app-wide surface speaks for: the most recently started run
- * that is still live, and otherwise the most recently started run at all - so
- * a run that has just finished still gets its summary.
- *
- * A toast per running host would be a column of toasts for a case (two
- * machines importing at once) that is already rare; one voice, always the
- * newest, is what the ambient surfaces promise.
- */
-export function latestSessionImportRun(
-  runs: ReadonlyMap<string, SessionImportRunState>,
-): SessionImportRunEntry | null {
-  let latest: SessionImportRunEntry | null = null;
-  let latestRunning: SessionImportRunEntry | null = null;
-  for (const [hostId, run] of runs) {
-    latest = { hostId, run };
-    if (sessionImportIsRunning(run)) latestRunning = { hostId, run };
-  }
-  return latestRunning ?? latest;
-}
-
 /** Sessions the run has reported on, however they turned out. */
 export function sessionImportDoneCount(state: SessionImportRunState): number {
   return state.outcomes.size;

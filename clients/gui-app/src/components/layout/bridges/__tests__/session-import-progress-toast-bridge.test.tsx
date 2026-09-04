@@ -11,6 +11,17 @@ vi.mock("@/lib/toast/progress-toast", () => ({
   progressSuccessToast: progressSuccessToastMock,
 }));
 
+// The bridge names the machine a toast speaks for; the directory is app
+// runtime this suite does not stand up, so the lookup answers from a table.
+const HOST_LABELS: Record<string, string> = {
+  "host-a": "Host A",
+  "host-b": "Host B",
+};
+vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+  useHostDirectoryEntry: (hostId: string | null) =>
+    hostId === null ? null : { hostId, label: HOST_LABELS[hostId] },
+}));
+
 const toastMessageMock = vi.hoisted(() => vi.fn());
 const toastDismissMock = vi.hoisted(() => vi.fn());
 vi.mock("sonner", () => ({
@@ -22,12 +33,17 @@ vi.mock("sonner", () => ({
 
 const HOST = "host-a";
 
-function startRun(input: { readonly total: number }): void {
+function startRun(input: {
+  readonly total: number;
+  readonly hostId?: string;
+  readonly runId?: string;
+}): void {
+  const hostId = input.hostId ?? HOST;
   act(() => {
     const store = useSessionImportRunStore.getState();
-    store.markStarting(HOST, new Map());
-    store.applyStarted(HOST, {
-      runId: "run-1",
+    store.markStarting(hostId, new Map());
+    store.applyStarted(hostId, {
+      runId: input.runId ?? "run-1",
       total: input.total,
       attached: false,
     });
@@ -68,7 +84,7 @@ describe("<SessionImportProgressToastBridge />", () => {
     expect(progressSuccessToastMock).toHaveBeenCalledTimes(1);
     expect(progressSuccessToastMock).toHaveBeenCalledWith(
       "Imported 2 sessions",
-      expect.objectContaining({ description: "1 failed" }),
+      expect.objectContaining({ description: "Host A · 1 failed" }),
     );
   });
 
@@ -115,7 +131,7 @@ describe("<SessionImportProgressToastBridge />", () => {
     expect(progressSuccessToastMock).not.toHaveBeenCalled();
     expect(toastMessageMock).toHaveBeenCalledWith(
       "Nothing was imported",
-      expect.objectContaining({ description: "1 already in Traycer" }),
+      expect.objectContaining({ description: "Host A · 1 already in Traycer" }),
     );
   });
 
@@ -131,5 +147,62 @@ describe("<SessionImportProgressToastBridge />", () => {
     expect(toastDismissMock).toHaveBeenCalledTimes(1);
     expect(progressSuccessToastMock).not.toHaveBeenCalled();
     expect(toastMessageMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps one independent toast per importing host", () => {
+    render(<SessionImportProgressToastBridge />);
+
+    startRun({ total: 3, hostId: "host-a", runId: "run-a" });
+    startRun({ total: 8, hostId: "host-b", runId: "run-b" });
+    expect(progressToastMock).toHaveBeenCalledWith(
+      "Importing 0 of 3…",
+      expect.objectContaining({ id: "session-import-progress:host-a" }),
+    );
+    expect(progressToastMock).toHaveBeenCalledWith(
+      "Importing 0 of 8…",
+      expect.objectContaining({ id: "session-import-progress:host-b" }),
+    );
+
+    // A's progress does not move B's line, and each names its own machine.
+    progressToastMock.mockClear();
+    act(() => {
+      useSessionImportRunStore.getState().applyProgress("host-a", {
+        runId: "run-a",
+        selectionKey: "claude:s1",
+        harness: "claude",
+        nativeSessionId: "s1",
+        outcome: { kind: "imported", epicId: "epic-1", chatId: "chat-1" },
+      });
+    });
+    expect(progressToastMock).toHaveBeenCalledTimes(1);
+    expect(progressToastMock).toHaveBeenCalledWith(
+      "Importing 1 of 3…",
+      expect.objectContaining({ id: "session-import-progress:host-a" }),
+    );
+
+    // A completes: its own summary, under its own id; B's toast is untouched.
+    act(() => {
+      useSessionImportRunStore.getState().applyComplete("host-a", {
+        runId: "run-a",
+        counts: { imported: 3, skippedAlreadyImported: 0, failed: 0 },
+      });
+    });
+    expect(progressSuccessToastMock).toHaveBeenCalledWith(
+      "Imported 3 sessions",
+      expect.objectContaining({
+        id: "session-import-progress:host-a",
+        description: "Host A",
+      }),
+    );
+    expect(toastDismissMock).not.toHaveBeenCalled();
+
+    // Retiring B's slice takes B's progress toast down, and only B's.
+    act(() => {
+      useSessionImportRunStore.getState().reset("host-b");
+    });
+    expect(toastDismissMock).toHaveBeenCalledTimes(1);
+    expect(toastDismissMock).toHaveBeenCalledWith(
+      "session-import-progress:host-b",
+    );
   });
 });

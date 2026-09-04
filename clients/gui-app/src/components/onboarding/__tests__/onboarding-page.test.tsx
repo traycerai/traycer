@@ -35,6 +35,9 @@ import {
   type StreamRuntimeBinding,
 } from "@/lib/host/stream-runtime-context";
 import { RunnerHostContext } from "@/providers/runner-host-context";
+import { SessionImportProgress } from "@/components/session-import/session-import-progress";
+import { sessionImportTone } from "@/components/session-import/session-import-tone";
+import { useSessionImportRun } from "@/stores/session-import/session-import-run-store";
 
 type GuideQueryState = {
   readonly data:
@@ -64,13 +67,28 @@ vi.mock("@/components/onboarding/onboarding-theme-picker", () => ({
 vi.mock("@/components/session-import/session-import-wizard", () => ({
   // Prints the host of the stream binding the tour re-provided above it, which
   // is the whole point of the picker: the wizard's scan, and the run it starts,
-  // must move to whichever machine the title bar names.
-  SessionImportWizard: () => (
-    <div
-      data-testid="session-import-wizard-stub"
-      data-stream-host={useStreamHostId() ?? ""}
-    />
-  ),
+  // must move to whichever machine the title bar names. Also renders the real
+  // (unmocked) `SessionImportProgress` behind the same `runIdle` gate the real
+  // wizard uses, so a suite about switching between two importing hosts can
+  // drive the actual run store and read the actual progress copy instead of a
+  // second, hand-rolled stand-in for it.
+  SessionImportWizard: () => {
+    const hostId = useStreamHostId();
+    const runIdle = useSessionImportRun(hostId).status === "idle";
+    return (
+      <div
+        data-testid="session-import-wizard-stub"
+        data-stream-host={hostId ?? ""}
+      >
+        {runIdle ? null : (
+          <SessionImportProgress
+            tone={sessionImportTone("onboarding")}
+            hostId={hostId}
+          />
+        )}
+      </div>
+    );
+  },
 }));
 
 // The scan subscribes over the stream transport the moment one exists, and
@@ -356,6 +374,10 @@ import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { WithTestQueryClient } from "@/__tests__/with-test-query-client";
 import { browserMutationKeys } from "@/lib/query-keys";
+import {
+  progressEntryFrom,
+  useSessionImportRunStore,
+} from "@/stores/session-import/session-import-run-store";
 
 /**
  * Every link surface below reaches the external-link bridge mutation, which
@@ -1348,5 +1370,122 @@ describe("OnboardingPage", () => {
       "host-a",
     );
     expect(screen.queryByTestId("settings-host-switcher")).toBeNull();
+  });
+
+  function progressText(): string {
+    return screen.getByTestId("session-import-progress").textContent;
+  }
+
+  function pickHost(hostId: string): void {
+    fireEvent.click(screen.getByTestId("settings-host-switcher"));
+    fireEvent.click(
+      screen.getByTestId(`settings-host-switcher-option-${hostId}`),
+    );
+  }
+
+  it("shows each host's own import progress when switching between two hosts that are both importing", async () => {
+    hostsMock.ids = ["host-a", "host-b"];
+    // Both hosts' slices are host-scoped in the run store, but the store is a
+    // module singleton this suite does not otherwise touch - clear both
+    // before seeding so an earlier test's run (there is none today) could
+    // never bleed in.
+    useSessionImportRunStore.setState({ runs: new Map() });
+
+    renderPage({ replay: false });
+    await advanceToAct("session-import");
+
+    // The tour opens FOLLOWING host A, which rides the ambient (here: absent)
+    // ws-stream transport rather than a scoped one - see
+    // `useScopedStreamBinding`'s `isViewingActive` branch. Picking host A
+    // explicitly through the switcher is what the real app does the moment a
+    // user glances at the picker, and it is the only way this harness ever
+    // resolves the wizard's stream to a real "host-a", which
+    // `SessionImportProgress` needs in order to read host A's own slice
+    // rather than the idle fallback a `null` host id resolves to.
+    pickHost("host-a");
+    await waitFor(() => {
+      expect(streamHostOfWizard()).toBe("host-a");
+    });
+
+    act(() => {
+      const store = useSessionImportRunStore.getState();
+      store.markStarting("host-a", new Map());
+      store.applyStarted("host-a", {
+        runId: "run-a",
+        total: 4,
+        attached: false,
+      });
+      store.applyProgress(
+        "host-a",
+        progressEntryFrom({
+          runId: "run-a",
+          harness: "claude",
+          nativeSessionId: "a1",
+          outcome: { kind: "imported", epicId: "epic-a1", chatId: "chat-a1" },
+        }),
+      );
+      store.applyProgress(
+        "host-a",
+        progressEntryFrom({
+          runId: "run-a",
+          harness: "claude",
+          nativeSessionId: "a2",
+          outcome: { kind: "imported", epicId: "epic-a2", chatId: "chat-a2" },
+        }),
+      );
+    });
+    expect(progressText()).toContain("Importing 2 of 4…");
+
+    // Switch to host B, which is also mid-import - a separate slice under a
+    // separate key in the same store.
+    pickHost("host-b");
+    await waitFor(() => {
+      expect(streamHostOfWizard()).toBe("host-b");
+    });
+
+    act(() => {
+      const store = useSessionImportRunStore.getState();
+      store.markStarting("host-b", new Map());
+      store.applyStarted("host-b", {
+        runId: "run-b",
+        total: 10,
+        attached: false,
+      });
+      store.applyProgress(
+        "host-b",
+        progressEntryFrom({
+          runId: "run-b",
+          harness: "claude",
+          nativeSessionId: "b1",
+          outcome: { kind: "imported", epicId: "epic-b1", chatId: "chat-b1" },
+        }),
+      );
+    });
+    expect(progressText()).toContain("Importing 1 of 10…");
+
+    // A frame lands for host A while B is the one on screen. It must be
+    // folded into A's slice - the wizard reads `useSessionImportRun`, keyed
+    // by host - and must not touch what B's view is showing.
+    act(() => {
+      useSessionImportRunStore.getState().applyProgress(
+        "host-a",
+        progressEntryFrom({
+          runId: "run-a",
+          harness: "claude",
+          nativeSessionId: "a3",
+          outcome: { kind: "imported", epicId: "epic-a3", chatId: "chat-a3" },
+        }),
+      );
+    });
+    expect(progressText()).toContain("Importing 1 of 10…");
+
+    // Switching back to host A shows A's own progress, including the frame
+    // that landed while B was on screen - nothing was lost, and nothing of
+    // B's leaked in.
+    pickHost("host-a");
+    await waitFor(() => {
+      expect(streamHostOfWizard()).toBe("host-a");
+    });
+    expect(progressText()).toContain("Importing 3 of 4…");
   });
 });

@@ -58,6 +58,7 @@ import {
   useHostScopeFor,
   type HostScope,
 } from "@/components/settings/host-scope/use-host-scope";
+import { isHostScopeUsable } from "@/components/settings/host-scope/host-scope-status";
 import { useScopedHostBinding } from "@/components/settings/host-scope/use-scoped-host-binding";
 import { useScopedStreamBinding } from "@/components/settings/host-scope/use-scoped-stream-binding";
 import { isMobileApp } from "@/lib/mobile-app";
@@ -981,6 +982,13 @@ function useOnboardingHostPicker(input: {
   readonly scopedHostId: string | null;
   readonly setScopedHostId: (hostId: string) => void;
   readonly saveAgentGuideDraft: () => Promise<boolean>;
+  /**
+   * Whether there is an edit to carry AND a host to carry it to. A save that
+   * cannot succeed must not be the thing standing between the user and the
+   * pick: a host that went away mid-tour would otherwise refuse every write,
+   * and with it every attempt to leave it.
+   */
+  readonly hasDraftToSaveBeforeSwitch: () => boolean;
   readonly resetAgentGuideDraftForNextHost: () => void;
 }): OnboardingHostPicker {
   const {
@@ -988,6 +996,7 @@ function useOnboardingHostPicker(input: {
     scopedHostId,
     setScopedHostId,
     saveAgentGuideDraft,
+    hasDraftToSaveBeforeSwitch,
     resetAgentGuideDraftForNextHost,
   } = input;
   // The host a settling guide save should land the tour on, and whether one is
@@ -1012,6 +1021,13 @@ function useOnboardingHostPicker(input: {
       // starting a second write of the same draft.
       pendingHostPickRef.current = hostId;
       if (hostPickSaveInFlightRef.current) return;
+      if (!hasDraftToSaveBeforeSwitch()) {
+        // Nothing to carry, or nowhere reachable to carry it: switch now.
+        pendingHostPickRef.current = null;
+        resetAgentGuideDraftForNextHost();
+        setScopedHostId(hostId);
+        return;
+      }
       hostPickSaveInFlightRef.current = true;
       void saveAgentGuideDraft().then((saved) => {
         hostPickSaveInFlightRef.current = false;
@@ -1025,6 +1041,7 @@ function useOnboardingHostPicker(input: {
       });
     },
     [
+      hasDraftToSaveBeforeSwitch,
       resetAgentGuideDraftForNextHost,
       saveAgentGuideDraft,
       scope.hostId,
@@ -1281,11 +1298,20 @@ function OnboardingTour(props: {
     agentGuideLastDefaultRef.current = "";
     agentGuideDraftRef.current = null;
   }, []);
+  // Read at switch time, not render time: the dirty bit is a ref the editor
+  // flips on every keystroke, and whether the departing host can still take
+  // a write is `scope.status` as of the click.
+  const scopeStatus = scope.status;
+  const hasDraftToSaveBeforeSwitch = useCallback(
+    (): boolean => agentGuideDirtyRef.current && isHostScopeUsable(scopeStatus),
+    [scopeStatus],
+  );
   const hostPicker = useOnboardingHostPicker({
     scope,
     scopedHostId,
     setScopedHostId,
     saveAgentGuideDraft,
+    hasDraftToSaveBeforeSwitch,
     resetAgentGuideDraftForNextHost,
   });
 
