@@ -65,10 +65,13 @@ export type LinkLoginStatusResponse = {
     location: string | null;
     claimedAt: number | null;
     /**
-     * The claim's match code — the two digits the phone is showing — while
-     * the record is `claimed` and the request opted in; `null` once decided.
-     * Absent altogether from a server that predates it, which the desktop
-     * renders as the description-only prompt.
+     * The claim's match code — the two digits the phone is showing. Present
+     * only while the record is `claimed`, only when the PHONE could show a
+     * code (the server mints none for a phone that predates it, so the
+     * desktop is never asked about a number that phone cannot display), and
+     * only when this request opted in. Absent otherwise, and from a server
+     * that predates it; `null` is tolerated for the same fallback. Either
+     * way the desktop renders the description-only prompt.
      */
     matchCode?: string | null;
   } | null;
