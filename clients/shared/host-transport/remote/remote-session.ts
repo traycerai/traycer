@@ -3714,7 +3714,8 @@ export class RemoteSession<
     // A newly armed timer has not been collapsed, so the next wake gets its
     // one draw against it.
     this.backoffCollapsed = false;
-    this.armBackoffTimer(Date.now(), delay);
+    const now = Date.now();
+    this.armBackoffTimer(now, delay, now);
     return delay;
   }
 
@@ -3758,10 +3759,14 @@ export class RemoteSession<
    *
    * The delay is expressed against `armedAt`, not against now, so re-arming an
    * EXISTING deadline stays a deadline: the timer is set to whatever is left of
-   * it. Passing `Date.now()` as `armedAt` - what a fresh backoff does - makes
-   * the two the same thing.
+   * it. Passing the same instant as both `armedAt` and `now` - what a fresh
+   * backoff does - makes the two the same thing, and EXACTLY so: `now` is the
+   * caller's one clock read rather than a second read in here, because the
+   * millisecond that could tick between the two turned a 1000ms rung into a
+   * 999ms timer, which the reattach-duration log then reported and the ladder
+   * tests caught.
    */
-  private armBackoffTimer(armedAt: number, delayMs: number): void {
+  private armBackoffTimer(armedAt: number, delayMs: number, now: number): void {
     this.backoffArmedAt = armedAt;
     this.backoffDelayMs = delayMs;
     this.backoffTimer = setTimeout(
@@ -3769,7 +3774,7 @@ export class RemoteSession<
         this.backoffTimer = null;
         this.beginConnectGuarded();
       },
-      Math.max(0, armedAt + delayMs - Date.now()),
+      Math.max(0, armedAt + delayMs - now),
     );
   }
 
@@ -3827,7 +3832,7 @@ export class RemoteSession<
     console.info(
       `[remote-session] remote session (host ${this.options.hostId}) redialing early (${reason}) in ${wokenDelayMs}ms - ${Math.round(armedRemainingMs)}ms of backoff left`,
     );
-    this.armBackoffTimer(now, wokenDelayMs);
+    this.armBackoffTimer(now, wokenDelayMs, now);
   }
 
   /**
@@ -3896,7 +3901,8 @@ export class RemoteSession<
     console.info(
       `[remote-session] remote session (host ${this.options.hostId}) redialing now (${reason})`,
     );
-    this.armBackoffTimer(Date.now(), 0);
+    const now = Date.now();
+    this.armBackoffTimer(now, 0, now);
   }
 
   /**
