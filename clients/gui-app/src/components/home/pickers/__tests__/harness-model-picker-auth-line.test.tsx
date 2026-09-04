@@ -404,7 +404,16 @@ describe("<PickerProviderAuthLine />", () => {
     expect(
       screen.queryByRole("button", { name: /Set up in terminal/ }),
     ).toBeNull();
-    expect(screen.getByRole("note", { name: "Setup required" })).toBeDefined();
+    const note = screen.getByRole("note", { name: "Setup required" });
+    // And no claim about the machine either: "this host's version can open
+    // the setup wizard from a chat" is only true of a RECORDED pre-scope
+    // manifest, and there is no host here to have recorded one. The
+    // claim-free copy leads with the manual route.
+    const items = Array.from(note.querySelectorAll("ol li"));
+    expect(items.map((item) => item.textContent)).toEqual([
+      "Paste your provider API key when asked (DeepSeek by default).",
+      "Refresh this list.",
+    ]);
   });
 
   it("shows the pack's preparing state instead of the button while the provider cannot spawn", () => {

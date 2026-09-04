@@ -11,6 +11,7 @@ import {
   providerPackPreparingLabel,
   type ProviderPackPreparing,
 } from "@/components/providers/provider-pack-readiness";
+import type { ProviderTerminalLoginScopeSupport } from "@/hooks/providers/use-provider-terminal-login-scope-support";
 
 /**
  * What the picker says and does for a provider whose sign-in has to happen in
@@ -211,7 +212,11 @@ export type ProviderSetupActionPlacement =
   | "here"
   /** A button, but on another surface (a fork dialog's picker). */
   | "other-surface"
-  /** No button anywhere on this host - the manual command is the route. */
+  /**
+   * No button this copy can vouch for: the host declares no terminal
+   * sign-in, or there is no host to ask / its manifest is not recorded yet.
+   * The manual command is the route; no claim is made about the machine.
+   */
   | "unsupported-host"
   /**
    * A button on this host, but only in an Epic: the host negotiated the
@@ -234,7 +239,7 @@ export type ProviderSetupActionPlacement =
  * so the auth line and the model list cannot classify the same state
  * differently - the reason they were wrong about old hosts in the first place.
  *
- * `scopeSupported` is the third because the first two cannot see it: the
+ * `scopeSupport` is the third because the first two cannot see it: the
  * provider row says this provider HAS a terminal sign-in, and the surface says
  * where a button would go, but neither knows whether this host's negotiated
  * `providers.startTerminalLogin` can carry the scope that surface needs. On the
@@ -246,12 +251,16 @@ export type ProviderSetupActionPlacement =
 export function providerSetupActionPlacement(
   setup: ProviderTerminalSetup,
   hasSurface: boolean,
-  scopeSupported: boolean,
+  scopeSupport: ProviderTerminalLoginScopeSupport,
 ): ProviderSetupActionPlacement {
   // Permanent reasons first: a pack that will finish downloading does not
   // change a host that can never carry this scope.
   if (!setup.canStartTerminal) return "unsupported-host";
-  if (!scopeSupported) return "unsupported-scope";
+  // `unsupported-scope` leads the steps with "this host's version can open
+  // the sign-in from a chat" - a claim only a RECORDED pre-scope manifest
+  // proves. An unknown manifest, or no host at all, gets the claim-free copy.
+  if (scopeSupport === "unknown") return "unsupported-host";
+  if (scopeSupport === "unsupported") return "unsupported-scope";
   if (setup.packPreparing !== null) return "preparing";
   return hasSurface ? "here" : "other-surface";
 }

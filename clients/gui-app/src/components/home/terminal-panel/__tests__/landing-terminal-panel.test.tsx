@@ -1546,6 +1546,39 @@ describe("<LandingTerminalPanel />", () => {
     expect(mocks.plainImportAsync).not.toHaveBeenCalled();
   });
 
+  it("adopts a listed sign-in even while the capable host's plain stream is read-only - the list that answered is all it needs", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = listWith(
+      [runningSession("term-peer-sign-in")],
+      "/Users/dev",
+    );
+    mocks.freshProbeData = mocks.probeData;
+    mocks.plainAuthorityStatus = "capable";
+    // A reconnecting list stream: the capable pass waits for mutability and
+    // returns without settling. A sign-in is short-lived; one that exits
+    // during that wait could never be adopted afterwards (running sessions
+    // only), and its restart surface with it.
+    mocks.plainCanMutate = false;
+    mocks.plainCollection = freshPlainCollection([]);
+    recordProviderLoginTerminal({
+      hostId: "host-a",
+      sessionId: "term-peer-sign-in",
+      providerId: "reasonix",
+    });
+    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+
+    await waitFor(() => {
+      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+    });
+    expect(useLandingTerminalStore.getState().tabs[0]).toMatchObject({
+      sessionId: "term-peer-sign-in",
+      origin: "provider-login",
+    });
+  });
+
   it("leaves the tombstone to the owner when its close merely joins one", async () => {
     // The close coordinator keys by the terminal's LIFETIME, not by RPC, so
     // this close can join an in-flight `terminal.kill` the recovery bridge

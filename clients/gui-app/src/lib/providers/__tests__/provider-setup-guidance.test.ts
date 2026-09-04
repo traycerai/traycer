@@ -215,10 +215,10 @@ describe("providerSetupActionPlacement", () => {
     expect(setup).not.toBeNull();
     if (setup === null) return;
     expect(setup.canStartTerminal).toBe(false);
-    expect(providerSetupActionPlacement(setup, true, true)).toBe(
+    expect(providerSetupActionPlacement(setup, true, "supported")).toBe(
       "unsupported-host",
     );
-    expect(providerSetupActionPlacement(setup, false, true)).toBe(
+    expect(providerSetupActionPlacement(setup, false, "supported")).toBe(
       "unsupported-host",
     );
   });
@@ -230,7 +230,7 @@ describe("providerSetupActionPlacement", () => {
     );
     expect(setup).not.toBeNull();
     if (setup === null) return;
-    expect(providerSetupActionPlacement(setup, true, true)).toBe("here");
+    expect(providerSetupActionPlacement(setup, true, "supported")).toBe("here");
   });
 
   it("returns 'unsupported-scope' when the host cannot carry this surface's scope, even with a surface and the capability", () => {
@@ -245,8 +245,27 @@ describe("providerSetupActionPlacement", () => {
     // 'here' would lead the steps with a button that can only ever fail, and
     // 'unsupported-host' would lead with nothing - but this host DOES draw
     // the button, in an Epic, and the steps have to say so.
-    expect(providerSetupActionPlacement(setup, true, false)).toBe(
+    expect(providerSetupActionPlacement(setup, true, "unsupported")).toBe(
       "unsupported-scope",
+    );
+  });
+
+  it("returns 'unsupported-host', not 'unsupported-scope', while the host's scope support is unknown", () => {
+    const setup = resolveProviderTerminalSetup(
+      "reasonix",
+      stateWith(capabilityWithTerminalLogin(["setup"])),
+    );
+    expect(setup).not.toBeNull();
+    if (setup === null) return;
+    // No manifest recorded, or no host at all: the button stays hidden, but
+    // the epic-only sentence claims this host negotiated the pre-scope major,
+    // which nothing has proven. The claim-free copy leads with the manual
+    // route instead.
+    expect(providerSetupActionPlacement(setup, true, "unknown")).toBe(
+      "unsupported-host",
+    );
+    expect(providerSetupActionPlacement(setup, false, "unknown")).toBe(
+      "unsupported-host",
     );
   });
 
@@ -262,9 +281,13 @@ describe("providerSetupActionPlacement", () => {
     if (setup === null) return;
     expect(setup.canStartTerminal).toBe(true);
     expect(setup.packPreparing).not.toBeNull();
-    expect(providerSetupActionPlacement(setup, true, true)).toBe("preparing");
+    expect(providerSetupActionPlacement(setup, true, "supported")).toBe(
+      "preparing",
+    );
     // A transient wait never becomes "the button is on another surface".
-    expect(providerSetupActionPlacement(setup, false, true)).toBe("preparing");
+    expect(providerSetupActionPlacement(setup, false, "supported")).toBe(
+      "preparing",
+    );
     // The wait reads as the same sentence every other gated surface shows.
     expect(providerSetupPreparingLabel(setup, "reasonix")).toBe(
       "Preparing Reasonix… 30%",
@@ -295,7 +318,7 @@ describe("providerSetupActionPlacement", () => {
     if (setup === null) return;
     expect(setup.packPreparing).toBeNull();
     expect(providerSetupPreparingLabel(setup, "reasonix")).toBeNull();
-    expect(providerSetupActionPlacement(setup, true, true)).toBe("here");
+    expect(providerSetupActionPlacement(setup, true, "supported")).toBe("here");
   });
 
   it("permanent reasons outrank the transient one: an unsupported scope on a preparing pack is 'unsupported-scope'", () => {
@@ -308,7 +331,7 @@ describe("providerSetupActionPlacement", () => {
     );
     expect(setup).not.toBeNull();
     if (setup === null) return;
-    expect(providerSetupActionPlacement(setup, true, false)).toBe(
+    expect(providerSetupActionPlacement(setup, true, "unsupported")).toBe(
       "unsupported-scope",
     );
   });
@@ -320,7 +343,7 @@ describe("providerSetupActionPlacement", () => {
     );
     expect(setup).not.toBeNull();
     if (setup === null) return;
-    expect(providerSetupActionPlacement(setup, false, true)).toBe(
+    expect(providerSetupActionPlacement(setup, false, "supported")).toBe(
       "other-surface",
     );
   });

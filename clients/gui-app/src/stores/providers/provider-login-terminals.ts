@@ -154,16 +154,36 @@ function sameRecords(
   a: SharedProviderLoginRecords,
   b: SharedProviderLoginRecords,
 ): boolean {
-  if (a.recentKeys.length !== b.recentKeys.length) return false;
-  if (a.recentKeys.some((entry, index) => entry !== b.recentKeys[index])) {
-    return false;
-  }
+  return (
+    a.recentKeys.length === b.recentKeys.length &&
+    a.recentKeys.every((entry, index) => entry === b.recentKeys[index]) &&
+    sameRecordSet(a, b)
+  );
+}
+
+/** Same keys mapped to the same providers, in any order. */
+function sameRecordSet(
+  a: SharedProviderLoginRecords,
+  b: SharedProviderLoginRecords,
+): boolean {
   const aEntries = Object.entries(a.providerBySessionKey);
-  if (aEntries.length !== Object.keys(b.providerBySessionKey).length) {
-    return false;
-  }
-  return aEntries.every(
-    ([entry, value]) => b.providerBySessionKey[entry] === value,
+  return (
+    aEntries.length === Object.keys(b.providerBySessionKey).length &&
+    aEntries.every(([entry, value]) => b.providerBySessionKey[entry] === value)
+  );
+}
+
+/** Every record of `subset` is in `superset`, which has more. */
+function strictRecordSubset(
+  subset: SharedProviderLoginRecords,
+  superset: SharedProviderLoginRecords,
+): boolean {
+  const subsetEntries = Object.entries(subset.providerBySessionKey);
+  return (
+    subsetEntries.length < Object.keys(superset.providerBySessionKey).length &&
+    subsetEntries.every(
+      ([entry, value]) => superset.providerBySessionKey[entry] === value,
+    )
   );
 }
 
@@ -292,21 +312,42 @@ if (typeof window !== "undefined") {
     // A `removeItem` arrives with `newValue: null` and merges as "nothing
     // new", for the same reason a `clear()` is ignored above.
     const current = useProviderLoginTerminalsStore.getState();
-    const merged = mergeRecords(current, parsePersistedPayload(event.newValue));
-    // A merge that adds nothing writes nothing. `setState` goes through
-    // persist, which writes the WHOLE payload back to storage, and that write
-    // is a `storage` event in the peer. Two windows holding the same set in
-    // different orders (each put its own record first) would otherwise trade
-    // it forever: A's write fires B's event, B's merge keeps B's order and
-    // writes it, which fires A's event, and so on - every hop bumping
-    // `revision` and re-running each reconciliation keyed on it. The peer's
-    // ORDER is not something this window needs: the union is what the
-    // classifier reads, and the bound evicts by this window's own recency.
-    if (sameRecords(current, merged)) return;
-    useProviderLoginTerminalsStore.setState({
-      ...merged,
-      revision: current.revision + 1,
-    });
+    const peer = parsePersistedPayload(event.newValue);
+    const merged = mergeRecords(current, peer);
+    // `setState` goes through persist, which writes the WHOLE payload back to
+    // storage, and that write is a `storage` event in the peer - so every
+    // write here must be one the peer cannot answer with another. Two windows
+    // holding the same set in different orders (each put its own record
+    // first) would otherwise trade it forever: A's write fires B's event, B's
+    // merge keeps B's order and writes it, which fires A's event, and so on -
+    // every hop bumping `revision` and re-running each reconciliation keyed
+    // on it. The peer's ORDER is not something this window needs: the union
+    // is what the classifier reads, and the bound evicts by this window's own
+    // recency.
+    //
+    // So: learn what the peer has (and write the union), or, when there is
+    // nothing to learn but the peer wrote a strict SUBSET of it, republish
+    // the union without changing anything here. A subset on disk is a stale
+    // concurrent write, and a window opened later hydrates from disk - it
+    // would lack the omitted records and recreate their live sessions as
+    // bare shells. Strict subset rather than "differs": at the bound two
+    // windows can hold sets neither can absorb without evicting, and each
+    // republishing its own would be the same loop by another name. A learn
+    // strictly grows this window's set (bounded), and a republish is
+    // answered only by a learn or by silence, so the exchange terminates.
+    if (!sameRecords(current, merged)) {
+      useProviderLoginTerminalsStore.setState({
+        ...merged,
+        revision: current.revision + 1,
+      });
+      return;
+    }
+    if (sameRecordSet(peer, merged) || !strictRecordSubset(peer, merged)) {
+      return;
+    }
+    // Persist writes on every `setState`, changed or not; `revision` stays,
+    // because nothing this window classifies against has changed.
+    useProviderLoginTerminalsStore.setState({});
   });
 }
 

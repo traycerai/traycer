@@ -287,6 +287,22 @@ export function useLandingTerminalReconciliation(
       const initial = useLandingTerminalStore.getState();
 
       if (plainAuthority.authority.capability.status === "capable") {
+        // From `terminal.list`, which the capable pass below never reads: a
+        // host-created sign-in session has no plain-terminal row, so the
+        // projection cannot adopt it, and a sign-in started in another window
+        // - whose record reached this one through the shared registry - would
+        // otherwise have no tab here. FIRST, ahead of the plain authority's
+        // own gates: the list that just answered is all this needs, and a
+        // sign-in is short-lived - one that exits while the stream is
+        // read-only or non-fresh could never be adopted afterwards (running
+        // sessions only), and its restart surface with it. Only for the
+        // selected host: the bound host fleet reconciles other hosts from
+        // their projections alone and fetches no list for them.
+        adoptListedSignInSessions({
+          activeHostId,
+          landingPageId,
+          sessions: freshSessions,
+        });
         // A read-only authority is a reconnecting list stream, not a failed
         // fetch. `onError` clears the picker's selected target and reports
         // "The terminal directory could not be opened.", which is simply
@@ -335,18 +351,6 @@ export function useLandingTerminalReconciliation(
           releaseLatch();
           return;
         }
-        // From `terminal.list`, which the capable pass above never reads: a
-        // host-created sign-in session has no plain-terminal row, so the
-        // projection cannot adopt it, and a sign-in started in another window
-        // - whose record reached this one through the shared registry - would
-        // otherwise have no tab here. Only for the selected host: the bound
-        // host fleet reconciles other hosts from their projections alone and
-        // fetches no list for them.
-        adoptListedSignInSessions({
-          activeHostId,
-          landingPageId,
-          sessions: freshSessions,
-        });
         onReconciled(hostContext);
         onSettled(generation, hostContext);
         return;

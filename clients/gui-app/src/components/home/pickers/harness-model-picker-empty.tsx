@@ -278,7 +278,7 @@ function ProviderSetupCta(props: {
 }): ReactNode {
   const { setup, terminalLoginSurface } = props;
   const { guidance } = setup;
-  const scopeSupported = useProviderTerminalLoginScopeSupported(
+  const scopeSupport = useProviderTerminalLoginScopeSupported(
     terminalLoginSurface,
     props.runTargetHostId,
   );
@@ -287,7 +287,7 @@ function ProviderSetupCta(props: {
   const placement = providerSetupActionPlacement(
     setup,
     terminalLoginSurface !== null,
-    scopeSupported,
+    scopeSupport,
   );
   const preparingLabel = providerSetupPreparingLabel(setup, props.providerId);
   return (
