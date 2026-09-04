@@ -77,6 +77,20 @@ vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
   useHostDirectoryList: () => ({ data: directoryState.data }),
 }));
 
+// `<TabHostProvider>` also mounts the cross-device drafts mirror, whose
+// session reaches `useHostDirectory()` / `useAuthService()` and a
+// `useHostQuery` - all of which want a real `<HostRuntimeProvider>` and a
+// `QueryClientProvider` around a suite that deliberately has neither. Every
+// other tile suite dodges it through the mount's own escape hatch (a `null`
+// `useHostBinding`, which makes it render nothing), but this one CANNOT: its
+// subject, `useHostClientForHostId`, reads that binding to resolve a named
+// host, so the mock above has to hand back a real one. Stub the mount
+// instead - it renders `null` in both branches and carries only effects,
+// none of which this suite is about.
+vi.mock("@/hooks/drafts/use-tab-draft-mirror", () => ({
+  TabDraftMirrorMount: () => null,
+}));
+
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 
