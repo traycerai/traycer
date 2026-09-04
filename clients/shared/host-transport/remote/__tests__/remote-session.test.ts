@@ -89,6 +89,7 @@ import {
   BULK_CHUNK_SIZE_BYTES,
   ChunkReassembler,
   encodeMuxMessageBody,
+  nextSeqValue,
   OutboundChunkSource,
   type OutboundMessage,
   type ReassembledMessage,
@@ -265,6 +266,17 @@ interface FakeConnection {
   readonly reassembler: ChunkReassembler;
   readonly seqByStream: Map<number, number>;
   /**
+   * Host-side H11 mirror (`RemoteClientSession.inboundSeqByStream`): the
+   * `seq` due next on each client stream. The production host closes the
+   * whole session with `SESSION_FRAME_SEQUENCE_MISMATCH` when an unchunked
+   * frame skips or repeats one, so the fake fails the same way - into
+   * `errors`, which the suites assert empty. Without it a client that
+   * retired a stream's counter and THEN sent the CLOSE (seq 0 where 1 was
+   * due) passed every test here and killed every real session on the first
+   * unsubscribe.
+   */
+  readonly inboundSeqByStream: Map<number, number>;
+  /**
    * Host-side R-2 mirror (`r2-host-stream-tombstone`), enforced per
    * connection exactly like `RemoteClientSession.terminalStreamIds`: once the
    * fake sends a FATAL for a stream, every later CLIENT frame for that id -
@@ -403,6 +415,7 @@ class FakeRelayHost {
         handshake: null,
         reassembler: new ChunkReassembler(undefined),
         seqByStream: new Map(),
+        inboundSeqByStream: new Map(),
         terminalStreamIds: new Set(),
         queue: Promise.resolve(),
         closed: false,
@@ -520,6 +533,7 @@ class FakeRelayHost {
     // every later client frame for the id, so a client re-open must arrive
     // under a fresh id to be heard.
     connection.terminalStreamIds.add(streamId);
+    connection.inboundSeqByStream.delete(streamId);
     await this.sendMux(connection, {
       type: MuxFrameType.FATAL,
       streamId,
@@ -539,6 +553,7 @@ class FakeRelayHost {
   async sendStreamClose(streamId: number, reason: string): Promise<void> {
     const connection = this.liveConnection();
     connection.terminalStreamIds.add(streamId);
+    connection.inboundSeqByStream.delete(streamId);
     await this.sendMux(connection, {
       type: MuxFrameType.CLOSE,
       streamId,
@@ -634,7 +649,22 @@ class FakeRelayHost {
       });
       return;
     }
+    // H11 mirror, same placement and predicate as the production host's
+    // `feedInbound`: after the tombstone drop, before `accept()`, unchunked
+    // frames only (chunk sequences are ordered by the reassembler itself).
+    const expectedSeq = connection.inboundSeqByStream.get(frame.streamId);
+    if (
+      !frame.chunked &&
+      expectedSeq !== undefined &&
+      frame.seq !== expectedSeq
+    ) {
+      throw new Error(
+        `SESSION_FRAME_SEQUENCE_MISMATCH: frame ${frame.seq} (type ${frame.type}) arrived on stream ${frame.streamId} where ${expectedSeq} was due`,
+      );
+    }
     const message = connection.reassembler.accept(frame);
+    // Advanced only once the reassembler accepted the frame, as on the host.
+    connection.inboundSeqByStream.set(frame.streamId, nextSeqValue(frame.seq));
     if (message === null) {
       return;
     }
@@ -7267,6 +7297,132 @@ describe("RemoteSession clock-skew park re-entrancy", () => {
         expect(recoveryListeners.size).toBe(0);
       } finally {
         live.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+});
+
+/**
+ * The host's H11 gate (`RemoteClientSession.feedInbound`) closes the whole
+ * session when an unchunked frame arrives out of sequence on its stream. A
+ * stream's CLOSE is the last frame the client sends on it, and every path
+ * that retires the stream's `seq` counter must therefore draw the CLOSE's
+ * `seq` from the retired counter, not from a fresh one - a CLOSE at seq 0 on
+ * a stream whose SUBSCRIBE already drew 0 is `SESSION_FRAME_SEQUENCE_MISMATCH`
+ * on the host, which is how every remote session on mobile died on the first
+ * screen change. `FakeRelayHost` enforces the same gate, so each of these
+ * also proves the fake would have caught the regression.
+ */
+describe("RemoteSession outbound seq continuity across a stream's CLOSE (host H11 gate)", () => {
+  function seqsOnStream(
+    relay: FakeRelayHost,
+    streamId: number,
+  ): { type: MuxFrameTypeValue; seq: number }[] {
+    return relay.clientFrames
+      .filter((frame) => frame.streamId === streamId)
+      .map((frame) => ({ type: frame.type, seq: frame.seq }));
+  }
+
+  it(
+    "a caller close sends its CLOSE at the seq after the SUBSCRIBE",
+    async () => {
+      const relay = new FakeRelayHost();
+      relay.streamManifest = buildStreamManifest(
+        cursorStreamRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      );
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        streamRegistry: cursorStreamRegistry,
+      });
+      const stream = session.subscribe("cursor.subscribe", { cursor: null });
+      try {
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(1),
+          WAIT,
+        );
+        const streamId = relay.subscribeStreamIds[0];
+        stream.close();
+        // The host HANDLED the CLOSE (it is in `closesSent`, past the seq
+        // gate) - not merely that the client put one on the wire.
+        await vi.waitFor(
+          () => expect(relay.closesSent).toContain(streamId),
+          WAIT,
+        );
+        expect(seqsOnStream(relay, streamId)).toEqual([
+          { type: MuxFrameType.SUBSCRIBE, seq: 0 },
+          { type: MuxFrameType.CLOSE, seq: 1 },
+        ]);
+        expect(relay.errors).toEqual([]);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "a unary that times out sends its CLOSE at the seq after the REQUEST",
+    async () => {
+      const statusContract = defineRpcContract({
+        method: "host.status",
+        schemaVersion: { major: 1, minor: 0 } as const,
+        requestSchema: z.object({}),
+        responseSchema: z.object({ ready: z.boolean() }),
+      });
+      const statusRegistry: VersionedRpcRegistry =
+        defineFloorAwareVersionedRpcRegistry(["host.status"] as const, {
+          "host.status": {
+            1: {
+              latestMinor: 0,
+              versions: {
+                0: {
+                  contract: statusContract,
+                  upgradeFromPreviousVersion: null,
+                },
+              },
+              downgradePathsFromLatest: {},
+            },
+          },
+        });
+      const relay = new FakeRelayHost();
+      relay.floorRpcManifest = { "host.status": { major: 1, minor: 0 } };
+      relay.skipUnaryAutoRespond = true;
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        rpcRegistry: statusRegistry,
+      });
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        const pending = session.sendUnary(
+          "host.status",
+          {},
+          null,
+          null,
+          60,
+          false,
+        );
+        await expect(pending).rejects.toBeInstanceOf(HostRpcError);
+        await vi.waitFor(
+          () => expect(relay.unaryRequests).toHaveLength(1),
+          WAIT,
+        );
+        const streamId = relay.unaryRequests[0].streamId;
+        await vi.waitFor(
+          () => expect(relay.closesSent).toContain(streamId),
+          WAIT,
+        );
+        expect(seqsOnStream(relay, streamId)).toEqual([
+          { type: MuxFrameType.REQUEST, seq: 0 },
+          { type: MuxFrameType.CLOSE, seq: 1 },
+        ]);
+        expect(relay.errors).toEqual([]);
+      } finally {
+        session.close();
       }
     },
     TEST_BUDGET_MS,
