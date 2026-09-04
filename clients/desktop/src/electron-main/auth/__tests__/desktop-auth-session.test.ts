@@ -1,9 +1,30 @@
 import { describe, expect, it } from "vitest";
 import { DesktopAuthSession } from "../desktop-auth-session";
 
+/**
+ * A bearer-SHAPED token: three base64url segments with a numeric `exp`. Not
+ * signed - nothing here verifies - but a revocation is retained for the
+ * bearer's lifetime, and a string that does not decode as a bearer is not
+ * retained at all, so the fixtures have to look like the real thing.
+ */
+function bearer(name: string, expiresAtMs: number): string {
+  const segment = (value: unknown): string =>
+    Buffer.from(JSON.stringify(value), "utf8").toString("base64url");
+  return `${segment({ alg: "RS256", kid: "k" })}.${segment({
+    id: name,
+    exp: Math.floor(expiresAtMs / 1_000),
+  })}.sig`;
+}
+
+const ONE_HOUR_MS = 60 * 60_000;
+const BEARER_1 = bearer("one", Date.now() + ONE_HOUR_MS);
+const BEARER_2 = bearer("two", Date.now() + ONE_HOUR_MS);
+const BEARER_3 = bearer("three", Date.now() + ONE_HOUR_MS);
+const BEARER_4 = bearer("four", Date.now() + ONE_HOUR_MS);
+
 const SIGNED_IN = {
   status: "signed-in" as const,
-  token: "bearer-1",
+  token: BEARER_1,
   profile: { userId: "u1", userName: "Ada", email: "ada@example.com" },
 };
 
@@ -33,10 +54,7 @@ describe("DesktopAuthSession.revokeVerification", () => {
     // unordered. The stale revoke must not strip the new session.
     const session = new DesktopAuthSession();
     session.setVerified(SIGNED_IN, session.beginSet());
-    session.setVerified(
-      { ...SIGNED_IN, token: "bearer-2" },
-      session.beginSet(),
-    );
+    session.setVerified({ ...SIGNED_IN, token: BEARER_2 }, session.beginSet());
     let changes = 0;
     session.on("change", () => {
       changes += 1;
@@ -46,7 +64,7 @@ describe("DesktopAuthSession.revokeVerification", () => {
 
     expect(session.get()).toEqual({
       ...SIGNED_IN,
-      token: "bearer-2",
+      token: BEARER_2,
       verified: true,
     });
     expect(changes).toBe(0);
@@ -65,27 +83,21 @@ describe("DesktopAuthSession.revokeVerification", () => {
       changes += 1;
     });
 
-    session.revokeVerification("bearer-2");
+    session.revokeVerification(BEARER_2);
     // The held session is untouched by a revoke it does not name.
     expect(session.get()).toEqual({ ...SIGNED_IN, verified: true });
     expect(changes).toBe(0);
 
-    session.setVerified(
-      { ...SIGNED_IN, token: "bearer-2" },
-      session.beginSet(),
-    );
+    session.setVerified({ ...SIGNED_IN, token: BEARER_2 }, session.beginSet());
 
     expect(session.get()).toEqual({
       ...SIGNED_IN,
-      token: "bearer-2",
+      token: BEARER_2,
       verified: false,
     });
     expect(changes).toBe(1);
     // Non-vacuity: a bearer nobody revoked still verifies.
-    session.setVerified(
-      { ...SIGNED_IN, token: "bearer-3" },
-      session.beginSet(),
-    );
+    session.setVerified({ ...SIGNED_IN, token: BEARER_3 }, session.beginSet());
     expect(session.get().verified).toBe(true);
   });
 
@@ -114,10 +126,7 @@ describe("DesktopAuthSession.revokeVerification", () => {
     // account the cloud still vouches for. The set is dropped whole.
     const session = new DesktopAuthSession();
     const generationA = session.beginSet();
-    session.setVerified(
-      { ...SIGNED_IN, token: "bearer-2" },
-      session.beginSet(),
-    );
+    session.setVerified({ ...SIGNED_IN, token: BEARER_2 }, session.beginSet());
     session.revokeVerification(SIGNED_IN.token);
     let changes = 0;
     session.on("change", () => {
@@ -128,7 +137,7 @@ describe("DesktopAuthSession.revokeVerification", () => {
 
     expect(session.get()).toEqual({
       ...SIGNED_IN,
-      token: "bearer-2",
+      token: BEARER_2,
       verified: true,
     });
     expect(changes).toBe(0);
@@ -137,12 +146,9 @@ describe("DesktopAuthSession.revokeVerification", () => {
     // never-revoked bearer would otherwise have replaced B's session as
     // VERIFIED, which is the same wrong account with a better badge.
     const generationC = session.beginSet();
-    session.setVerified(
-      { ...SIGNED_IN, token: "bearer-4" },
-      session.beginSet(),
-    );
-    session.setVerified({ ...SIGNED_IN, token: "bearer-3" }, generationC);
-    expect(session.get().token).toBe("bearer-4");
+    session.setVerified({ ...SIGNED_IN, token: BEARER_4 }, session.beginSet());
+    session.setVerified({ ...SIGNED_IN, token: BEARER_3 }, generationC);
+    expect(session.get().token).toBe(BEARER_4);
   });
 
   it("drops a verified set that a sign-out overtook while it awaited JWKS", () => {
@@ -155,6 +161,67 @@ describe("DesktopAuthSession.revokeVerification", () => {
     session.setVerified(SIGNED_IN, generationA);
 
     expect(session.get().status).toBe("signed-out");
+  });
+
+  it("lets an older valid set commit when the newer set never committed (refused, or still verifying)", () => {
+    // Two windows publish at once. A's set begins, then B's begins and is
+    // REFUSED by verification (or is simply still awaiting JWKS). Fencing on
+    // "a newer set began" dropped A as stale while telling A's sender it was
+    // accepted - main stayed on the previous or empty session and nobody
+    // retried. Only a set that COMMITTED supersedes.
+    const session = new DesktopAuthSession();
+    const generationA = session.beginSet();
+    session.beginSet(); // B: refused by authn, never reaches setVerified.
+
+    expect(session.setVerified(SIGNED_IN, generationA)).toBe(true);
+    expect(session.get()).toEqual({ ...SIGNED_IN, verified: true });
+
+    // And the report is truthful in the other direction: a set a newer
+    // COMMIT overtook says so, rather than "accepted".
+    const generationC = session.beginSet();
+    session.setVerified({ ...SIGNED_IN, token: BEARER_2 }, session.beginSet());
+    expect(
+      session.setVerified({ ...SIGNED_IN, token: BEARER_3 }, generationC),
+    ).toBe(false);
+    expect(session.get().token).toBe(BEARER_2);
+  });
+
+  it("keeps a revocation for the bearer's lifetime, however many other revocations arrive", () => {
+    // The revoke IPC takes any string from any renderer. The eight-entry ring
+    // this replaces evicted the oldest revocation on the ninth revoke, so a
+    // compromised renderer could push a real bearer's revocation out and let
+    // a pending set for that still-unexpired bearer verify clean again.
+    const session = new DesktopAuthSession();
+    session.revokeVerification(BEARER_2);
+    for (let i = 0; i < 64; i += 1) {
+      session.revokeVerification(
+        bearer(`bogus-${i}`, Date.now() + ONE_HOUR_MS),
+      );
+    }
+
+    session.setVerified({ ...SIGNED_IN, token: BEARER_2 }, session.beginSet());
+
+    expect(session.get().verified).toBe(false);
+  });
+
+  it("forgets a revocation once its bearer has expired, and never retains one for a non-bearer", () => {
+    // Past `exp` (plus the verifier's tolerance) no set for the bearer can
+    // verify, so the memory protects nothing; and a string that is not a
+    // bearer could never have verified, so it is not the growth a hostile
+    // renderer gets to cause.
+    const session = new DesktopAuthSession();
+    const expired = bearer("expired", Date.now() - 10 * 60_000);
+    session.revokeVerification(expired);
+    session.revokeVerification("not-a-bearer");
+    // Both would still be "revoked" under a plain string set; neither is
+    // retained here, so the same tokens verify as any unrevoked one would.
+    session.setVerified({ ...SIGNED_IN, token: expired }, session.beginSet());
+    expect(session.get().verified).toBe(true);
+    session.setVerified(
+      { ...SIGNED_IN, token: "not-a-bearer" },
+      session.beginSet(),
+    );
+    expect(session.get().verified).toBe(true);
   });
 
   it("is a no-op on a session main never verified", () => {

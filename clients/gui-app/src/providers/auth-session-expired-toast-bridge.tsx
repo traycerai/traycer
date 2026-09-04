@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import {
   AUTH_ERROR_ACCOUNT_UNAVAILABLE,
   AUTH_ERROR_SESSION_EXPIRED,
+  AUTH_ERROR_SIGNED_OUT_EVERYWHERE,
 } from "@/lib/auth/auth-service";
 import { useAuthServiceError } from "@/hooks/auth/use-auth-service-error";
 import { useAuthService } from "@/lib/host";
@@ -46,6 +47,16 @@ export function AuthSessionExpiredToastBridge(): null {
       authSessionExpiredToast.error("Session expired - sign in again.");
       // Transient: the toast has delivered it, so clear the durable signal
       // before an inline surface renders stale copy.
+      auth.clearLastError();
+      return;
+    }
+    if (lastError === AUTH_ERROR_SIGNED_OUT_EVERYWHERE) {
+      // The same hold and the same recovery as an expiry; only the copy
+      // differs, because "expired" for something the user did themselves
+      // reads as a fault.
+      authSessionExpiredToast.error(
+        "You signed out everywhere - sign in again to continue.",
+      );
       auth.clearLastError();
       return;
     }

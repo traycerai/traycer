@@ -1293,6 +1293,14 @@ export interface TokenRotateResult {
   // `spend-pending`/`refresh-rejected-credential`/`refresh-rejected-account`/
   // `refresh-network`).
   readonly pair: StoredCredentials | null;
+  /**
+   * WHAT a `refresh-rejected-*` outcome was about - {@link AuthRefreshRejection},
+   * carried through from the mutation layer rather than collapsed into the
+   * outcome string, so the renderer can tell the user's own "sign out
+   * everywhere" (`revocation: "user-epoch"`) from an expiry or a
+   * fork-suspicious reject. `null` for every other outcome.
+   */
+  readonly rejection: AuthRefreshRejection | null;
 }
 
 /**

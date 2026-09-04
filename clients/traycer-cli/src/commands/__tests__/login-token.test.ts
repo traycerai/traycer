@@ -100,7 +100,11 @@ function stubStdin(value: { isTTY: boolean; chunks: string[] }): void {
 beforeEach(() => {
   vi.clearAllMocks();
   identityMock.mockResolvedValue({ kind: "valid", user: signedInUser });
-  signInMock.mockResolvedValue({ outcome: "applied", credentials: null });
+  signInMock.mockResolvedValue({
+    outcome: "applied",
+    credentials: null,
+    rejection: null,
+  });
 });
 
 afterEach(() => {
@@ -195,6 +199,7 @@ describe("buildLoginCommand with --token", () => {
     signInMock.mockResolvedValue({
       outcome: "commit-failed",
       credentials: null,
+      rejection: null,
     });
     stubStdin({
       isTTY: false,

@@ -343,8 +343,9 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
       }
       // Taken before the await: this set is the newest intent from here until
       // another begins, and the JWKS round-trip is where a sibling window's
-      // set (or sign-out) can overtake it. The commit below is dropped if one
-      // did - see `DesktopAuthSession.setVerified`.
+      // set (or sign-out) can overtake it. The commit below is dropped if a
+      // newer one COMMITTED meanwhile - a newer set that was refused, or is
+      // still verifying, supersedes nothing (`DesktopAuthSession.setVerified`).
       const generation = bridge.authSession.beginSet();
       const reason = await bearerVerifier.verify(
         parsed.token,
@@ -357,8 +358,11 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
         log.warn("[auth] refused an unverifiable auth session", { reason });
         return { outcome: "refused", reason };
       }
-      bridge.authSession.setVerified(parsed, generation);
-      return { outcome: "accepted" };
+      // Reported, not swallowed: an `accepted` for a set main did not install
+      // would leave the sender believing main holds what it sent.
+      return bridge.authSession.setVerified(parsed, generation)
+        ? { outcome: "accepted" }
+        : { outcome: "superseded" };
     },
   );
 

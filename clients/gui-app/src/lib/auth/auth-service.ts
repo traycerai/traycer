@@ -6,6 +6,7 @@ import type {
   StoredAuthTokens,
   StoredCredentials,
   StoredCredentialsIdentity,
+  AuthRefreshRejection,
   TokenRotateOutcome,
   TokenRotateResult,
 } from "@traycer-clients/shared/platform/runner-host";
@@ -265,6 +266,16 @@ export const AUTH_ERROR_LAUNCH_FAILED = "auth-launch-failed";
 export const AUTH_ERROR_SESSION_EXPIRED = "session-expired";
 
 /**
+ * The credential-scoped rejection that was the user's OWN doing: a "sign out
+ * everywhere" (authn's per-user epoch gate, a 401 stamped
+ * `revocation_scope: user_epoch`). Held and recovered exactly like
+ * {@link AUTH_ERROR_SESSION_EXPIRED} - it is still a verdict about tokens -
+ * and distinct only so the copy can say the true thing: "expired" for an
+ * action the user took is the kind of message that reads as our bug.
+ */
+export const AUTH_ERROR_SIGNED_OUT_EVERYWHERE = "signed-out-everywhere";
+
+/**
  * Stable error identifier emitted when AuthnV3 rejects (or the network fails
  * for) a token delivered through the OAuth callback during an active sign-in
  * attempt. Distinct from `AUTH_ERROR_SESSION_EXPIRED` so the signed-out auth
@@ -290,6 +301,7 @@ function classifyAuthFailureForLog(error: string): string {
   if (
     error === AUTH_ERROR_LAUNCH_FAILED ||
     error === AUTH_ERROR_SESSION_EXPIRED ||
+    error === AUTH_ERROR_SIGNED_OUT_EVERYWHERE ||
     error === AUTH_ERROR_SIGN_IN_FAILED ||
     error === AUTH_ERROR_DEVICE_DENIED ||
     error === AUTH_ERROR_DEVICE_EXPIRED ||
@@ -1356,7 +1368,12 @@ export class AuthService {
       this.settleSessionRecovery("rotated-pair-rejected");
       return;
     }
-    this.applyUnadoptedStoredRotateOutcome(rotated.outcome, trigger, stored);
+    this.applyUnadoptedStoredRotateOutcome(
+      rotated.outcome,
+      rotated.rejection,
+      trigger,
+      stored,
+    );
   }
 
   /**
@@ -1366,6 +1383,7 @@ export class AuthService {
    */
   private applyUnadoptedStoredRotateOutcome(
     outcome: TokenRotateOutcome,
+    rejection: AuthRefreshRejection | null,
     trigger: string,
     stored: StoredCredentials,
   ): void {
@@ -1389,8 +1407,22 @@ export class AuthService {
         // This arm is where authn's 400/401 land, INCLUDING a user-initiated
         // "sign out everywhere" (the per-user epoch gate, which answers 401 and
         // stamps `revocation_scope`). A global sign-out is still a statement
-        // about tokens, so it holds the plane exactly like an expiry does.
-        this.setLastError(AUTH_ERROR_SESSION_EXPIRED);
+        // about tokens, so it holds the plane exactly like an expiry does -
+        // what differs is what the user is TOLD, and what an operator reading
+        // the log can tell apart: their own sign-out from a fork-suspicious
+        // reject. That is what `rejection.revocation` travelled here for.
+        const revocation =
+          rejection?.kind === "credential" ? rejection.revocation : null;
+        appLogger.info("[auth] stored session refresh rejected", {
+          trigger,
+          scope: "credential",
+          revocation,
+        });
+        this.setLastError(
+          revocation === "user-epoch"
+            ? AUTH_ERROR_SIGNED_OUT_EVERYWHERE
+            : AUTH_ERROR_SESSION_EXPIRED,
+        );
         this.applyUnverifiedSession(stored);
         this.sessionRecoveryTerminallyRejected = true;
         this.settleSessionRecovery("refresh-rejected-credential");

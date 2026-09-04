@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
 import type { DesktopAuthSessionSnapshot } from "../../ipc-contracts/window-types";
+import { readBearerExpiryMs } from "./bearer-verifier";
 
 /**
  * What main HOLDS, as opposed to what a renderer sent: the same snapshot plus
@@ -19,11 +20,22 @@ type DesktopAuthSessionListener = (
 ) => void;
 
 /**
- * How many revoked bearers main remembers. A verdict is per bearer and bearers
- * rotate, so only the most recent few can still have a verification in
- * flight; the list is a ring, not a ledger.
+ * The bearer verifier's own tolerance on `exp`, so a revocation is remembered
+ * for exactly as long as the bearer could still pass verification.
  */
-const REVOKED_BEARERS_RETAINED = 8;
+const REVOCATION_CLOCK_TOLERANCE_MS = 60_000;
+
+/**
+ * Ceiling on how long any single revocation is remembered, whatever `exp` the
+ * token claims. Authn's interactive bearer lives hours (`ACCESS_TOKEN_EXPIRY_IN_
+ * HOURS`, default 4), so a real bearer is always well inside this; the ceiling
+ * exists for the OTHER input - a renderer can revoke any string, and one that
+ * decodes as a JWT with a far-future `exp` would otherwise be remembered
+ * forever. The residual is that a compromised renderer can grow the map by one
+ * entry per distinct token-shaped string until each ages out; it cannot
+ * DISPLACE a real revocation, which is what a count-bounded ring let it do.
+ */
+const MAX_REVOCATION_RETENTION_MS = 7 * 24 * 60 * 60 * 1_000;
 
 export class DesktopAuthSession {
   private readonly events = new EventEmitter();
@@ -34,26 +46,41 @@ export class DesktopAuthSession {
     verified: false,
   };
   /**
-   * Bearers a renderer revoked while main was NOT holding them - because their
-   * `authSessionSet` was still awaiting JWKS verification. `setVerified`
-   * consults this, so a verification that lands after its bearer's terminal
-   * verdict installs the session UNVERIFIED instead of re-enabling the jar
-   * plane on a credential authn already rejected. Without it the revoke was
-   * dropped as stale (main held the previous token) and the pending set then
-   * completed as `verified`.
+   * Bearers a renderer revoked, each with the instant after which the
+   * revocation no longer matters - the bearer's own `exp` (plus the
+   * verifier's tolerance), because past it no set for that bearer can verify
+   * anyway. `setVerified` consults this, so a verification that lands after
+   * its bearer's terminal verdict installs the session UNVERIFIED instead of
+   * re-enabling the jar plane on a credential authn already rejected.
+   *
+   * Bounded by TIME, never by count. The eight-entry ring this replaces
+   * evicted the oldest entry on the ninth revoke, and the revoke IPC accepts
+   * any string from any renderer - so eight bogus revocations pushed a real
+   * bearer's out, and a set for that still-unexpired bearer then verified
+   * clean and restored `verified: true` after authn had terminally rejected
+   * it. A string that does not decode as a bearer with an `exp` is not
+   * retained at all: it could never have verified, so remembering it protects
+   * nothing and would only be the growth the ceiling above guards against.
    */
-  private readonly revokedBearers: string[] = [];
+  private readonly revokedBearers = new Map<string, number>();
   /**
-   * The newest set anyone has BEGUN, verified or not. A verified set awaits
-   * JWKS before it can store, and IPC across renderers is unordered, so a
-   * set begun earlier can complete later - after a sibling window's fresh
-   * sign-in was verified and stored, or after a sign-out. Committing it then
-   * replaced the newer session with the older one: a stale signed-in snapshot
-   * fanned out to every window, and the jar plane's principal moved to an
-   * account nobody is signed in to any more. Each set therefore commits only
-   * while it is still the newest begun.
+   * Sets are fenced by GENERATION, and only a COMMITTED set supersedes.
+   *
+   * A verified set awaits JWKS before it can store, and IPC across renderers
+   * is unordered, so a set begun earlier can complete later - after a sibling
+   * window's fresh sign-in was verified and stored, or after a sign-out.
+   * Committing it then replaced the newer session with the older one: a stale
+   * signed-in snapshot fanned out to every window, and the jar plane's
+   * principal moved to an account nobody is signed in to any more.
+   *
+   * The fence is against sets that COMMITTED, not sets that merely began: a
+   * newer set that authn refused, or that is still verifying, installed
+   * nothing, and dropping the older valid one behind it would leave main on
+   * the previous (or empty) session while telling the older set's sender it
+   * was accepted - a sender that then never retries.
    */
-  private setGeneration = 0;
+  private nextGeneration = 0;
+  private latestCommittedGeneration = 0;
 
   get(): VerifiedDesktopAuthSessionSnapshot {
     return this.snapshotValue;
@@ -62,13 +89,13 @@ export class DesktopAuthSession {
   /**
    * Marks the start of a set whose commit is deferred (a verified set
    * awaiting JWKS). The returned generation is handed back to `setVerified`,
-   * which drops the commit if any set - verified or shape-only - began after
-   * it. Taken BEFORE the verification, not after: the fence is about which
+   * which drops the commit if a set begun after it has committed meanwhile.
+   * Taken BEFORE the verification, not after: the fence is about which
    * intent is newest, and the intent is formed when the renderer sends it.
    */
   beginSet(): number {
-    this.setGeneration += 1;
-    return this.setGeneration;
+    this.nextGeneration += 1;
+    return this.nextGeneration;
   }
 
   /**
@@ -76,13 +103,12 @@ export class DesktopAuthSession {
    * account may rest on one - it is the shape-only trust the jar plane was
    * found resting on - so the stored snapshot says so.
    *
-   * Synchronous, so it is its own newest intent: it begins and commits in one
-   * step, and a verified set still in flight from before it is superseded
-   * (a sign-out must not be undone by the sign-in it followed).
+   * Synchronous, so it begins and commits in one step: a verified set still
+   * in flight from before it is superseded (a sign-out must not be undone by
+   * the sign-in it followed).
    */
   set(snapshot: DesktopAuthSessionSnapshot): void {
-    this.beginSet();
-    this.store(snapshot, false);
+    this.commit(snapshot, false, this.beginSet());
   }
 
   /**
@@ -90,19 +116,23 @@ export class DesktopAuthSession {
    * (`auth/bearer-verifier.ts`): the signature, the issuer and audience, the
    * expiry, and the subject against `profile.userId`.
    *
-   * `generation` is what `beginSet` returned when this set began. A set that
-   * is no longer the newest begun is dropped whole - not installed
-   * unverified, which would still replace the newer session's status and
-   * profile with the older one's.
+   * `generation` is what `beginSet` returned when this set began. Returns
+   * `false` - and installs nothing, not even an unverified session, which
+   * would still replace the newer session's status and profile with the
+   * older one's - when a set begun after this one has already committed.
    */
-  setVerified(snapshot: DesktopAuthSessionSnapshot, generation: number): void {
-    if (generation !== this.setGeneration) return;
+  setVerified(
+    snapshot: DesktopAuthSessionSnapshot,
+    generation: number,
+  ): boolean {
+    if (generation < this.latestCommittedGeneration) return false;
     // A bearer revoked while its verification was in flight (see
     // `revokedBearers`) lands as the session it is, minus the verification
     // the renderer has already withdrawn for it.
     const revoked =
-      snapshot.token !== null && this.revokedBearers.includes(snapshot.token);
-    this.store(snapshot, !revoked);
+      snapshot.token !== null && this.isRevoked(snapshot.token, Date.now());
+    this.commit(snapshot, !revoked, generation);
+    return true;
   }
 
   /**
@@ -139,20 +169,43 @@ export class DesktopAuthSession {
     // `authSessionSet` for this SAME bearer may still be awaiting JWKS, and
     // its `setVerified` landing after this revoke must not restore the
     // verification the renderer has already withdrawn.
-    this.retainRevocation(rejectedToken);
+    this.retainRevocation(rejectedToken, Date.now());
     if (this.snapshotValue.token !== rejectedToken) return;
-    this.store(this.snapshotValue, false);
+    this.commit(this.snapshotValue, false, this.latestCommittedGeneration);
   }
 
-  private retainRevocation(rejectedToken: string): void {
-    if (this.revokedBearers.includes(rejectedToken)) return;
-    this.revokedBearers.push(rejectedToken);
-    if (this.revokedBearers.length > REVOKED_BEARERS_RETAINED) {
-      this.revokedBearers.shift();
+  private retainRevocation(rejectedToken: string, now: number): void {
+    this.pruneRevocations(now);
+    const expiresAt = readBearerExpiryMs(rejectedToken);
+    if (expiresAt === null) return;
+    const retainUntil = Math.min(
+      expiresAt + REVOCATION_CLOCK_TOLERANCE_MS,
+      now + MAX_REVOCATION_RETENTION_MS,
+    );
+    if (retainUntil <= now) return;
+    this.revokedBearers.set(rejectedToken, retainUntil);
+  }
+
+  private isRevoked(token: string, now: number): boolean {
+    this.pruneRevocations(now);
+    return this.revokedBearers.has(token);
+  }
+
+  private pruneRevocations(now: number): void {
+    for (const [token, retainUntil] of this.revokedBearers) {
+      if (retainUntil <= now) this.revokedBearers.delete(token);
     }
   }
 
-  private store(snapshot: DesktopAuthSessionSnapshot, verified: boolean): void {
+  private commit(
+    snapshot: DesktopAuthSessionSnapshot,
+    verified: boolean,
+    generation: number,
+  ): void {
+    this.latestCommittedGeneration = Math.max(
+      this.latestCommittedGeneration,
+      generation,
+    );
     const base = normalizeDesktopAuthSession(snapshot);
     const normalized: VerifiedDesktopAuthSessionSnapshot = {
       ...base,

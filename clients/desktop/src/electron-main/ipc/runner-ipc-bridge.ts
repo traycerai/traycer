@@ -223,9 +223,13 @@ export interface IpcDesktopAuthSession {
   /**
    * Adopts a session whose bearer main verified itself. Only the auth IPC,
    * which runs the verification, calls it, with the generation it took from
-   * `beginSet` before verifying.
+   * `beginSet` before verifying. `false` when a newer set had already
+   * committed and this one was dropped.
    */
-  setVerified(snapshot: DesktopAuthSessionSnapshot, generation: number): void;
+  setVerified(
+    snapshot: DesktopAuthSessionSnapshot,
+    generation: number,
+  ): boolean;
   /**
    * Drops the verification alone, and only while `rejectedToken` is still the
    * bearer held; see `DesktopAuthSession.revokeVerification`.
@@ -1475,7 +1479,7 @@ class NullAuthTokenStore implements IpcAuthTokenStore {
   }
 
   rotate(): Promise<TokenRotateResult> {
-    return Promise.resolve({ outcome: "deleted", pair: null });
+    return Promise.resolve({ outcome: "deleted", pair: null, rejection: null });
   }
 
   delete(): Promise<void> {

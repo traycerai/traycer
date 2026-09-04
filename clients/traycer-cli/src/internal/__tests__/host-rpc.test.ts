@@ -343,6 +343,7 @@ describe("callHostRpc", () => {
     rotateMock.mockResolvedValue({
       outcome: "refresh-rejected-credential",
       credentials: null,
+      rejection: null,
     });
 
     await expect(

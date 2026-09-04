@@ -64,6 +64,7 @@ describe("createStoreBackedRevalidator", () => {
     const store = storeReturning(async () => ({
       outcome: "applied",
       credentials: pair("fresh"),
+      rejection: null,
     }));
     const reval = createStoreBackedRevalidator({ store, lease, signal: null });
     await reval.revalidateCurrentContext();
@@ -87,6 +88,7 @@ describe("createStoreBackedRevalidator", () => {
     const store = storeReturning(async () => ({
       outcome: "applied",
       credentials: pair("fresh"),
+      rejection: null,
     }));
     const reval = createStoreBackedRevalidator({
       store,
@@ -110,6 +112,7 @@ describe("createStoreBackedRevalidator", () => {
     const store = storeReturning(async () => ({
       outcome: "commit-failed",
       credentials: pair("minted"),
+      rejection: null,
     }));
     const reval = createStoreBackedRevalidator({ store, lease, signal: null });
     const pending = reval.revalidateCurrentContext();
@@ -175,6 +178,7 @@ describe("withCommitRetry", () => {
     const op = vi.fn(async (): Promise<MutationResult> => ({
       outcome: "applied",
       credentials: pair("x"),
+      rejection: null,
     }));
     const result = await withCommitRetry(op, null);
     expect(result.outcome).toBe("applied");
@@ -188,8 +192,13 @@ describe("withCommitRetry", () => {
       .mockResolvedValueOnce({
         outcome: "commit-failed",
         credentials: pair("m"),
+        rejection: null,
       })
-      .mockResolvedValueOnce({ outcome: "superseded", credentials: pair("m") });
+      .mockResolvedValueOnce({
+        outcome: "superseded",
+        credentials: pair("m"),
+        rejection: null,
+      });
     const pending = withCommitRetry(op, null);
     await vi.runAllTimersAsync();
     expect((await pending).outcome).toBe("superseded");
@@ -201,6 +210,7 @@ describe("withCommitRetry", () => {
     const op = vi.fn(async (): Promise<MutationResult> => ({
       outcome: "commit-failed",
       credentials: pair("m"),
+      rejection: null,
     }));
     const pending = withCommitRetry(op, null);
     await vi.runAllTimersAsync();
@@ -222,6 +232,7 @@ describe("withCommitRetry", () => {
     const op = vi.fn(async (): Promise<MutationResult> => ({
       outcome: "commit-failed",
       credentials: pair("m"),
+      rejection: null,
     }));
 
     const result = await withCommitRetry(op, controller.signal);
@@ -238,6 +249,7 @@ describe("withCommitRetry", () => {
     const op = vi.fn(async (): Promise<MutationResult> => ({
       outcome: "commit-failed",
       credentials: pair("m"),
+      rejection: null,
     }));
 
     const pending = withCommitRetry(op, controller.signal);

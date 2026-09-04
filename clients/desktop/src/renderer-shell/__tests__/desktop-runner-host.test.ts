@@ -100,7 +100,11 @@ function buildFakeBridge(
             user: identity,
           };
         },
-        rotate: async () => ({ outcome: "deleted", pair: null }),
+        rotate: async () => ({
+          outcome: "deleted",
+          pair: null,
+          rejection: null,
+        }),
         delete: async () => {
           stored = null;
         },

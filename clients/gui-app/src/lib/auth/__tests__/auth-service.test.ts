@@ -26,6 +26,7 @@ import {
   AUTH_ERROR_LAUNCH_FAILED,
   AUTH_ERROR_ACCOUNT_UNAVAILABLE,
   AUTH_ERROR_SESSION_EXPIRED,
+  AUTH_ERROR_SIGNED_OUT_EVERYWHERE,
   AUTH_ERROR_SIGN_IN_FAILED,
   AUTH_ERROR_STORE_UNAVAILABLE,
 } from "@/lib/auth/auth-service";
@@ -1291,6 +1292,47 @@ describe("AuthService", () => {
     );
     expect(calls.filter((call) => call === `POST ${REFRESH_URL}`)).toHaveLength(
       1,
+    );
+  });
+
+  it("says signed-out-everywhere, not expired, when the refresh reject is the user's own epoch revoke", async () => {
+    // Same hold, same recovery, same kept file as the expiry case above: a
+    // "sign out everywhere" is a verdict about tokens. What differs is the
+    // copy, and the copy needs the `revocation_scope` authn stamps on that
+    // 401 to travel from the refresh spend, through the mutation and rotate
+    // results, to here - where it used to be collapsed into the outcome
+    // string and lost.
+    vi.useFakeTimers();
+    const { service, host } = makeService();
+    await host.tokenStore.signIn(
+      { token: "stale-token", refreshToken: "stale-token-refresh" },
+      { id: "user-1", email: "test@example.com", name: "Test User" },
+    );
+    restoreFetch();
+    restoreFetch = installFetch((input) => {
+      const url = typeof input === "string" ? input : String(input);
+      if (url === VALIDATION_URL) return status(401);
+      if (url === REFRESH_URL) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              error: "needs_reauth",
+              revocation_scope: "user_epoch",
+            }),
+            { status: 401, headers: { "content-type": "application/json" } },
+          ),
+        );
+      }
+      return status(500);
+    });
+
+    await service.start();
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(useAuthStore.getState().status).toBe("unverified");
+    expect(service.getLastError()).toBe(AUTH_ERROR_SIGNED_OUT_EVERYWHERE);
+    expect(await host.tokenStore.get()).toEqual(
+      expectedStored("stale-token", "stale-token-refresh"),
     );
   });
 
@@ -3316,6 +3358,7 @@ describe("AuthService", () => {
       host.tokenStore.rotate = () =>
         Promise.resolve({
           outcome: "commit-failed" as const,
+          rejection: null,
           pair: {
             token: "foreign-token",
             refreshToken: "foreign-refresh",

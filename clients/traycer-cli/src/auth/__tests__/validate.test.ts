@@ -118,8 +118,13 @@ beforeEach(() => {
   updateProfileMock.mockResolvedValue({
     outcome: "applied",
     credentials: null,
+    rejection: null,
   });
-  rotateMock.mockResolvedValue({ outcome: "applied", credentials: null });
+  rotateMock.mockResolvedValue({
+    outcome: "applied",
+    credentials: null,
+    rejection: null,
+  });
 });
 
 afterEach(() => {
@@ -197,6 +202,7 @@ describe("validateStoredCredentials", () => {
     updateProfileMock.mockResolvedValue({
       outcome: "commit-failed",
       credentials: null,
+      rejection: null,
     });
 
     const outcome = await validateStoredCredentials();
@@ -297,6 +303,7 @@ describe("validateStoredCredentials", () => {
     rotateMock.mockResolvedValue({
       outcome: "refresh-rejected-credential",
       credentials: null,
+      rejection: null,
     });
     // The server refused the refresh token, so nothing was minted and nothing
     // was written - `none` here is a fact, not an assumption.
@@ -315,6 +322,7 @@ describe("validateStoredCredentials", () => {
     rotateMock.mockResolvedValue({
       outcome: "refresh-network",
       credentials: null,
+      rejection: null,
     });
     expect(await validateStoredCredentials()).toEqual({
       kind: "network-error",
@@ -406,7 +414,11 @@ describe("validateStoredCredentials", () => {
     // outcome alone.
     identityMock.mockResolvedValue({ kind: "rejected" });
     rotateMock
-      .mockResolvedValueOnce({ outcome: "commit-failed", credentials: null })
+      .mockResolvedValueOnce({
+        outcome: "commit-failed",
+        credentials: null,
+        rejection: null,
+      })
       .mockResolvedValueOnce({
         outcome: "superseded",
         credentials: {
@@ -463,7 +475,11 @@ describe("validateStoredCredentials", () => {
 
   it("maps a tombstoned file (a sign-out stands) to rejected", async () => {
     identityMock.mockResolvedValue({ kind: "rejected" });
-    rotateMock.mockResolvedValue({ outcome: "tombstoned", credentials: null });
+    rotateMock.mockResolvedValue({
+      outcome: "tombstoned",
+      credentials: null,
+      rejection: null,
+    });
     expect(await validateStoredCredentials()).toEqual({
       kind: "rejected",
       effect: "none",

@@ -132,7 +132,11 @@ beforeEach(() => {
     refreshToken: "minted-refresh",
   });
   identityMock.mockResolvedValue({ kind: "valid", user: signedInUser });
-  signInMock.mockResolvedValue({ outcome: "applied", credentials: null });
+  signInMock.mockResolvedValue({
+    outcome: "applied",
+    credentials: null,
+    rejection: null,
+  });
 });
 
 afterEach(() => {
@@ -178,6 +182,7 @@ describe("runDeviceAuthFlow", () => {
     signInMock.mockResolvedValue({
       outcome: "commit-failed",
       credentials: null,
+      rejection: null,
     });
     const promise = runDeviceAuthFlow(makeCtx()).catch((e: unknown) => e);
     await vi.advanceTimersByTimeAsync(10_000);

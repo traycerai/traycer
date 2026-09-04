@@ -4,6 +4,7 @@ import {
   AUTH_ERROR_DEVICE_EXPIRED,
   AUTH_ERROR_LAUNCH_FAILED,
   AUTH_ERROR_SESSION_EXPIRED,
+  AUTH_ERROR_SIGNED_OUT_EVERYWHERE,
   AUTH_ERROR_SIGN_IN_FAILED,
   AUTH_ERROR_STORE_UNAVAILABLE,
 } from "@/lib/auth/auth-service";
@@ -39,7 +40,8 @@ export function SignInErrorMessage(props: {
   if (
     !statusCarriesError ||
     props.lastError === null ||
-    props.lastError === AUTH_ERROR_SESSION_EXPIRED
+    props.lastError === AUTH_ERROR_SESSION_EXPIRED ||
+    props.lastError === AUTH_ERROR_SIGNED_OUT_EVERYWHERE
   ) {
     return null;
   }
@@ -82,6 +84,9 @@ function messageForError(error: string): string {
   }
   if (error === AUTH_ERROR_SESSION_EXPIRED) {
     return "Session expired - sign in again.";
+  }
+  if (error === AUTH_ERROR_SIGNED_OUT_EVERYWHERE) {
+    return "You signed out everywhere - sign in again to continue.";
   }
   if (error === AUTH_ERROR_ACCOUNT_UNAVAILABLE) {
     // Deliberately does NOT say "sign in again": this arm is reached when authn
