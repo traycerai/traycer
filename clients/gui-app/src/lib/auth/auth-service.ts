@@ -1392,7 +1392,7 @@ export class AuthService {
     // definition in `stores/auth/auth-store.ts`. Read it before moving a case
     // across the boundary.
     switch (outcome) {
-      case "refresh-rejected-credential":
+      case "refresh-rejected-credential": {
         // CREDENTIAL-scoped: a verdict about a TOKEN, not about the account or
         // the person. The file is deliberately KEPT here, and with it the
         // identity that names this machine's local epics - so the person at
@@ -1427,6 +1427,7 @@ export class AuthService {
         this.sessionRecoveryTerminallyRejected = true;
         this.settleSessionRecovery("refresh-rejected-credential");
         return;
+      }
       case "refresh-rejected-account":
         // HOLDS, by product ruling, and it is the one arm on this side of the
         // line that does. The three below are statements about the LOCAL file -
