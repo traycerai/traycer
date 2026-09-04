@@ -19,6 +19,7 @@ import { parsePerfRendererLog } from "../perf/perf-renderer-log";
 import { safelyOpenExternal, installNavigationGuard } from "../app/security";
 import { installContextMenu } from "../app/spell-check";
 import { installResponsivenessListeners } from "../app/responsiveness";
+import { installWebviewAttachGuards } from "../browser-view/webview-guest-birth";
 import { buildAppUrl } from "../app/app-protocol";
 import { devRendererUrlFromEnv } from "../../ipc-contracts/dev-renderer-origin";
 import { minimumWindowSize } from "./window-layout";
@@ -120,6 +121,10 @@ export function createMainWindow(options: MainWindowOptions): BrowserWindow {
       // `process.argv`), so the flip is mechanical. All OS-touching work
       // already lives in main behind IPC.
       sandbox: true,
+      // Trusted-renderer guest birth (webview migration stage 1). Only this
+      // window may create `<webview>` tags; attach is fail-closed in
+      // `installWebviewAttachGuards` before the renderer loads.
+      webviewTag: true,
       // An occluded window's timers are throttled to ~1/min by default, which
       // collapses the WebRTC receiver's own reporting and stops
       // `requestVideoFrameCallback` entirely. The browser tile's sender reads
@@ -146,6 +151,7 @@ export function createMainWindow(options: MainWindowOptions): BrowserWindow {
   installNavigationGuard(window.webContents);
   installContextMenu(window.webContents);
   installResponsivenessListeners(window.webContents);
+  installWebviewAttachGuards(window.webContents, options.windowId);
 
   const devWindowTitle = options.devWindowTitle;
   if (devWindowTitle !== null) {

@@ -60,7 +60,6 @@ import {
   gitStageLabel,
 } from "@/lib/git/git-diff-tile";
 import { getBasename } from "@/lib/path/cross-platform-path";
-import { useRegisterBrowserOverlay } from "@/lib/browser-view/tiles/use-register-browser-overlay";
 
 const CHIP_CLASS =
   "pointer-events-none flex h-9 w-max max-w-[min(80vw,24rem)] cursor-grabbing select-none items-center gap-1.5 rounded-md border border-canvas-border/80 bg-canvas px-3 text-ui-sm text-canvas-foreground shadow-lg";
@@ -111,18 +110,12 @@ export function EpicRootDragOverlayContent() {
     activeSource?.kind === LEFT_PANEL_RAIL_ITEM_DND_TYPE ? activeSource : null;
   const folderSource =
     activeSource?.kind === WORKSPACE_FOLDER_DND_TYPE ? activeSource : null;
-  const registerOverlayRef = useRegisterBrowserOverlay<HTMLDivElement>();
 
   return (
-    // One native-view occlusion marker for every chip: registering the
-    // ancestor is read exactly like a chip root as long as it hugs the chip -
-    // hence `w-max`. Registering here rather than per chip is what stops the
-    // next chip variant from being born invisible over a live browser tile,
-    // the way the published-chat one was. dnd-kit's `<DragOverlay>` takes no
+    // One wrapper for every chip variant. dnd-kit's `<DragOverlay>` takes no
     // ref of its own, so this is the outermost element we own; it exists only
-    // while a drag is active.
+    // while a drag is active. `w-max` keeps the wrapper hugging the chip.
     <div
-      ref={registerOverlayRef}
       data-testid="drag-overlay-marker"
       className="pointer-events-none w-max"
     >

@@ -164,7 +164,6 @@ describe("guest-focused dispositions", () => {
     });
     const chords = new BrowserViewChords({
       getWindow: () => ({
-        contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
         webContents: {
           on: vi.fn(),
           off: vi.fn(),
@@ -175,8 +174,6 @@ describe("guest-focused dispositions", () => {
           sendInputEvent,
         },
         isDestroyed: () => false,
-        isVisible: () => true,
-        isMinimized: () => false,
       }),
       hostPlatform: "darwin",
       send,

@@ -1,11 +1,11 @@
 import {
   BrowserWindow,
-  WebContentsView,
   app,
   dialog,
   type BrowserWindowConstructorOptions,
   type IpcMainInvokeEvent,
   type Session,
+  type WebContents,
 } from "electron";
 import {
   RunnerHostEvent,
@@ -16,13 +16,12 @@ import {
   parseReservedChords,
 } from "./browser-view-ipc-payload";
 import type { IpcManagedWindow } from "./runner-ipc-bridge";
-import {
-  BOUNDS_STREAM_LOG_INTERVAL_MS,
-  BrowserViewManager,
-} from "../browser-view/browser-view-manager";
+import { BrowserViewManager } from "../browser-view/browser-view-manager";
 import type {
+  BrowserViewGuestAttachResult,
+  BrowserViewPopupCreateWindowOptions,
+  BrowserViewPopupWindow,
   BrowserViewWindow,
-  ManagedBrowserView,
 } from "../browser-view/browser-view-port";
 import { hostPlatformFromProcessPlatform } from "../browser-view/manager/browser-view-chords";
 import {
@@ -112,6 +111,11 @@ import type {
   LoginImportScan,
   LoginImportSource,
 } from "@traycer-clients/shared/platform/browser-view";
+import {
+  clearAllAttachmentGrants,
+  mintAttachmentGrant,
+  releaseAttachmentGrant,
+} from "../browser-view/webview-guest-birth";
 
 /**
  * The whole-jar capture reads the one shared `primary` identity, so its
@@ -333,13 +337,18 @@ export function registerBrowserViewIpc(
     };
   };
   const manager = new BrowserViewManager({
-    createView: createElectronBrowserView,
+    attachRendererGuest: (windowId, request) =>
+      requestRendererGuestMount(bridge, windowId, request),
+    releaseRendererGuest: (registrationId, windowId) => {
+      requestRendererGuestRelease(bridge, registrationId, windowId);
+    },
     getWindow: (windowId) =>
       toBrowserViewWindow(
         bridge.windowRegistry.getRecordById(windowId)?.window,
       ),
-    createPopupWindowOptions: (request) =>
-      createBrowserPopupWindowOptions(request),
+    localHostId: () => bridge.options.host.getSnapshot()?.hostId ?? null,
+    createPopupWindowOptions: () => createBrowserPopupWindowOptions(),
+    createPopupWindow: (input) => createBrowserPopupWindow(input),
     createDevToolsWindow: (windowId) =>
       createBrowserDevToolsWindow(bridge, windowId),
     registerPopupWebContents: (webContents) => {
@@ -348,20 +357,11 @@ export function registerBrowserViewIpc(
     onDownloadChange: onBrowserViewDownloadChange,
     onCertificateError: onBrowserViewCertificateError,
     onWindowChange: (listener) => {
-      // Native views follow both the windows list and pure geometry
-      // transitions (minimize/restore/maximize), which the list does not
-      // carry - see WindowRegistry's `geometry` signal.
       bridge.windowRegistry.on("change", listener);
-      bridge.windowRegistry.on("geometry", listener);
       return () => {
         bridge.windowRegistry.off("change", listener);
-        bridge.windowRegistry.off("geometry", listener);
       };
     },
-    // Tile rects are renderer CSS pixels; the native rect they map to depends
-    // on the app's page zoom, which is a single app-wide preference.
-    getZoomFactor: () => bridge.zoomController.getZoomFactor(),
-    onZoomChange: (listener) => bridge.zoomController.onChange(listener),
     notifyHostWindowRendererReset: (windowId) => {
       bridge.markRendererUnavailable(windowId);
       // The renderer's tab bindings die with it, so the host-side rebind is
@@ -471,7 +471,6 @@ export function registerBrowserViewIpc(
         });
       });
     },
-    boundsStreamLogIntervalMs: BOUNDS_STREAM_LOG_INTERVAL_MS,
     hostPlatform: hostPlatformFromProcessPlatform(process.platform),
   });
 
@@ -774,27 +773,6 @@ export function registerBrowserViewIpc(
     },
   );
 
-  bridge.handleInvoke(
-    RunnerHostInvoke.browserViewUpdateBounds,
-    (event, payload) => {
-      const windowId = readSenderWindowId(bridge, event);
-      manager.updateBounds(
-        windowId,
-        browserViewIpcPayload.boundsUpdate.parse(payload),
-      );
-    },
-  );
-
-  // Flicker fix: renderer confirms the replacement frame is decoded and on
-  // screen; only then does the manager move the native view offscreen.
-  bridge.handleInvoke(
-    RunnerHostInvoke.browserViewOverlayPaintAck,
-    (_event, payload) => {
-      const parsed = browserViewIpcPayload.overlayPaintAck.safeParse(payload);
-      if (parsed.success) manager.overlay.paintAck(parsed.data.overlayId);
-    },
-  );
-
   // BT-302/BT-303: the renderer is the source of truth for the guest-focused
   // input policy - which chords outrank guest keystrokes and what each one
   // means. It pushes the whole table at startup.
@@ -872,25 +850,6 @@ export function registerBrowserViewIpc(
       clearBrowserViewPendingCertificateError(input.certificateErrorId);
       manager.clearCertificateError(windowId, input);
     },
-  );
-
-  bridge.handleInvoke(
-    RunnerHostInvoke.browserViewOccludeForOverlay,
-    (event, payload) => {
-      const windowId = readSenderWindowId(bridge, event);
-      return manager.overlay.occlude(
-        windowId,
-        browserViewIpcPayload.overlayOcclusion.parse(payload),
-      );
-    },
-  );
-
-  bridge.handleInvoke(
-    RunnerHostInvoke.browserViewReleaseOverlay,
-    (_event, payload) =>
-      manager.overlay.release(
-        browserViewIpcPayload.overlayRelease.parse(payload),
-      ),
   );
 
   bridge.handleInvoke(
@@ -1235,28 +1194,65 @@ export function registerBrowserViewIpc(
   bridge.disposeFns.push(() => {
     sessions.dispose();
     manager.dispose();
+    clearAllAttachmentGrants();
   });
   return { manager, sessions };
 }
 
-function createElectronBrowserView(
-  request: BrowserSessionProfileRequest,
-): ManagedBrowserView {
-  // Browser page webContents are intentionally not registered as trusted IPC
-  // senders. They get no preload / Node integration; the Traycer renderer
-  // mediates all browser-view IPC through RunnerIpcBridge's existing sender
-  // gate.
-  ensureBrowserViewSession(request);
-  const view = new WebContentsView({
-    webPreferences: createBrowserViewWebPreferences(request),
+export function requestRendererGuestMount(
+  bridge: RunnerIpcBridge,
+  windowId: string,
+  input: {
+    readonly partition: string;
+    readonly onAttached: (guest: WebContents) => Promise<void>;
+  },
+): BrowserViewGuestAttachResult {
+  const granted = mintAttachmentGrant({
+    windowId,
+    partition: input.partition,
+    onAttached: input.onAttached,
+    onExpired: (release) => {
+      bridge.safeSendToWindow(
+        windowId,
+        RunnerHostEvent.browserViewGuestReleaseRequested,
+        release,
+      );
+    },
   });
-  registerBrowserViewWebContents(view.webContents);
-  return view;
+  bridge.safeSendToWindow(
+    windowId,
+    RunnerHostEvent.browserViewGuestMountRequested,
+    granted.mount,
+  );
+  return {
+    registrationId: granted.mount.registrationId,
+    ready: granted.ready,
+  };
 }
 
-function createBrowserPopupWindowOptions(
-  request: BrowserSessionProfileRequest,
-): BrowserWindowConstructorOptions {
+export function requestRendererGuestRelease(
+  bridge: RunnerIpcBridge,
+  registrationId: string,
+  windowId: string,
+): void {
+  // The grant may already be gone (the guest's own `destroyed` listener drops
+  // it first), so the release IPC is sent unconditionally - the renderer's
+  // handler is idempotent, and without it the `<webview>` wrapper leaks.
+  releaseAttachmentGrant(registrationId);
+  bridge.safeSendToWindow(
+    windowId,
+    RunnerHostEvent.browserViewGuestReleaseRequested,
+    { registrationId },
+  );
+}
+
+// Chrome-only: the popup ADOPTS the contents Chromium pre-created (see
+// createBrowserPopupWindow), and passing `webPreferences` alongside an adopted
+// `webContents` is rejected by Electron - the adopted contents already carry
+// the opener's hardened prefs, partition and session. That inheritance is the
+// fix: it is what preserves `window.opener` and the login the popup's OAuth/SSO
+// flow relays through.
+function createBrowserPopupWindowOptions(): BrowserWindowConstructorOptions {
   return {
     show: true,
     width: 900,
@@ -1270,8 +1266,24 @@ function createBrowserPopupWindowOptions(
     fullscreenable: false,
     modal: false,
     kiosk: false,
-    webPreferences: createBrowserViewWebPreferences(request),
   };
+}
+
+// Adopts `createWindowOptions.webContents` - the popup contents Chromium
+// already created - instead of letting `new BrowserWindow` mint fresh ones.
+// Adopting is what carries `window.opener` and the inherited session into the
+// popup, so a nested OAuth "add account" popup still has the channel it relays
+// its params through.
+function createBrowserPopupWindow(input: {
+  readonly windowOptions: BrowserWindowConstructorOptions;
+  readonly createWindowOptions: BrowserViewPopupCreateWindowOptions;
+}): BrowserViewPopupWindow {
+  const adopted = input.createWindowOptions.webContents;
+  const options: BrowserViewPopupCreateWindowOptions =
+    adopted === undefined
+      ? input.windowOptions
+      : { ...input.windowOptions, webContents: adopted };
+  return new BrowserWindow(options);
 }
 
 function createBrowserDevToolsWindow(
@@ -1300,22 +1312,8 @@ function toBrowserViewWindow(
 ): BrowserViewWindow | null {
   if (!isElectronBrowserWindow(value)) return null;
   return {
-    contentView: {
-      addChildView: (view) => {
-        if (!(view instanceof WebContentsView)) {
-          throw new Error("Browser manager produced a non-Electron view");
-        }
-        value.contentView.addChildView(view);
-      },
-      removeChildView: (view) => {
-        if (!(view instanceof WebContentsView)) return;
-        value.contentView.removeChildView(view);
-      },
-    },
     webContents: value.webContents,
     isDestroyed: () => value.isDestroyed(),
-    isVisible: () => value.isVisible(),
-    isMinimized: () => value.isMinimized(),
   };
 }
 

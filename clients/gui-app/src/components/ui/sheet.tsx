@@ -5,8 +5,6 @@ import { cn } from "@/lib/utils";
 import { usePortalConcealed } from "@/components/ui/portal-concealment-context";
 import { Button } from "@/components/ui/button";
 import { XIcon } from "lucide-react";
-import { useComposedRefs } from "radix-ui/internal";
-import { useRegisterBrowserOverlay } from "@/lib/browser-view/tiles/use-register-browser-overlay";
 
 function Sheet({ ...props }: React.ComponentProps<typeof SheetPrimitive.Root>) {
   return <SheetPrimitive.Root data-slot="sheet" {...props} />;
@@ -60,14 +58,12 @@ function SheetContent({
   // Concealed region (see `portal-concealment-context`): un-present the
   // portal; the root keeps its open state and it re-presents on return.
   const concealed = usePortalConcealed();
-  const registerOverlayRef = useRegisterBrowserOverlay<HTMLDivElement>();
-  const composedRef = useComposedRefs(ref, registerOverlayRef);
   if (concealed) return null;
   return (
     <SheetPortal>
       <SheetOverlay />
       <SheetPrimitive.Content
-        ref={composedRef}
+        ref={ref}
         data-slot="sheet-content"
         data-side={side}
         className={cn(

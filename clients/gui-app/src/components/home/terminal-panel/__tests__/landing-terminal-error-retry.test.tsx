@@ -6,7 +6,7 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
-import type { LandingTerminalTabRef } from "@/stores/home/landing-terminal-store";
+import type { LandingTerminalTabRef } from "@/stores/home/landing-panel-store";
 
 const bootstrapState = vi.hoisted(() => ({
   createIsError: true,
@@ -68,6 +68,7 @@ import {
 } from "@/components/home/terminal-panel/landing-terminal-tile";
 
 const TAB: LandingTerminalTabRef = {
+  kind: "terminal",
   instanceId: "instance-1",
   sessionId: "terminal-1",
   hostId: "host-a",

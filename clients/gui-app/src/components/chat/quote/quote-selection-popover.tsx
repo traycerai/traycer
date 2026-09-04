@@ -17,8 +17,6 @@ import {
 } from "./append-quote-to-draft";
 import { firstLineRect, firstVisibleLineRect } from "./quote-anchor-rect";
 import type { QuoteSelectionSnapshot } from "./use-quote-selection";
-import { useComposedRefs } from "radix-ui/internal";
-import { useRegisterBrowserOverlay } from "@/lib/browser-view/tiles/use-register-browser-overlay";
 
 interface QuoteSelectionPopoverProps {
   readonly taskId: string;
@@ -50,8 +48,6 @@ export function QuoteSelectionPopover(props: QuoteSelectionPopoverProps) {
   const { taskId, snapshot, onDismiss, boundaryRef, bottomOverlayInsetPx } =
     props;
   const floatingRef = useRef<HTMLDivElement | null>(null);
-  const registerOverlayRef = useRegisterBrowserOverlay<HTMLDivElement>();
-  const composedFloatingRef = useComposedRefs(floatingRef, registerOverlayRef);
   const paneFocused = usePaneFocused();
 
   useLayoutEffect(() => {
@@ -145,7 +141,7 @@ export function QuoteSelectionPopover(props: QuoteSelectionPopoverProps) {
 
   return createPortal(
     <div
-      ref={composedFloatingRef}
+      ref={floatingRef}
       data-slot="quote-selection-popover"
       // No entrance animation: `animate-in` runs the `enter` keyframe, whose
       // only `from` frame drives `transform` to the element's underlying value.

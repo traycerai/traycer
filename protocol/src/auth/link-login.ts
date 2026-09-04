@@ -34,6 +34,15 @@ export type ClaimLinkLoginCodeResponse = {
   secret: string;
   /** Server-directed minimum spacing between result polls, seconds. */
   interval: number;
+  /**
+   * The claim's MATCH CODE: two server-chosen digits the approver's prompt
+   * shows as well, so the human can confirm the prompt on their desktop is
+   * for the phone in their hand. An attention proof, not a credential — it
+   * gates nothing, and the poll below is bound to `secret` alone. Present
+   * only when the request opted in AND the server is new enough to mint one;
+   * a surface without it falls back to the description-only prompt.
+   */
+  matchCode?: string;
 };
 
 export type LinkLoginTokenResponse = {
@@ -55,6 +64,23 @@ export type LinkLoginStatusResponse = {
     userAgent: string | null;
     location: string | null;
     claimedAt: number | null;
+    /**
+     * The claim's match code, tri-state on purpose:
+     *
+     * - a two-digit string: the phone is showing it; the approver asks
+     *   "Does your phone show NN?".
+     * - `null`: the phone presented NO code. The server mints one only for
+     *   a claimant that declared it can show it (a phone that predates the
+     *   code must not produce a prompt it cannot satisfy) — but `/claim` is
+     *   unauthenticated and that declaration is the claimant's, so a
+     *   leaked-QR holder would simply withhold it. The approver therefore
+     *   renders this as a loud degraded-mode warning, never as the ordinary
+     *   description prompt.
+     * - absent: the record is not `claimed`, this request did not opt in,
+     *   or the server predates the code. The approver renders the
+     *   description-only prompt.
+     */
+    matchCode?: string | null;
   } | null;
 };
 
@@ -71,12 +97,20 @@ export const mintLinkLoginCodeResponseSchema: z.ZodType<MintLinkLoginCodeRespons
     })
     .strict();
 
+/**
+ * The match code's exact wire shape. Anything else is a contract drift and
+ * fails the parse like any other, rather than putting an unreadable "code"
+ * in front of the human who is asked to compare it.
+ */
+const linkLoginMatchCodeSchema = z.string().regex(/^[0-9]{2}$/);
+
 export const claimLinkLoginCodeResponseSchema: z.ZodType<ClaimLinkLoginCodeResponse> =
   z
     .object({
       status: z.literal("claimed"),
       secret: z.string().min(1),
       interval: z.number().int().positive(),
+      matchCode: linkLoginMatchCodeSchema.optional(),
     })
     .strict();
 
@@ -98,6 +132,7 @@ export const linkLoginStatusResponseSchema: z.ZodType<LinkLoginStatusResponse> =
           userAgent: z.string().nullable(),
           location: z.string().nullable(),
           claimedAt: z.number().nullable(),
+          matchCode: linkLoginMatchCodeSchema.nullable().optional(),
         })
         .strict()
         .nullable(),

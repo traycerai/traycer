@@ -989,11 +989,18 @@ export const providerLoginCapabilitySchema = z.object({
    * SDK exposes that code natively, so Traycer never parses it out - the user
    * reads it from the terminal Traycer opened.
    *
-   * Set here, `oauthArgs` stays the command source but the GUI must NOT offer
-   * headless browser OAuth; the host refuses `providers.startLogin` for the
-   * same reason, so a released client that predates this field cannot start a
-   * concurrent broken flow. Shape carries no fields today - existence alone is
-   * the signal - but stays an object for the same reason `codePaste` does.
+   * Set here, the GUI must NOT offer headless browser OAuth, whatever
+   * `oauthArgs` says; the host refuses `providers.startLogin` for the same
+   * reason, so a released client that predates this field cannot start a
+   * concurrent broken flow. The command the terminal runs is host-owned and is
+   * NOT `oauthArgs` - that is the headless command. A provider with no
+   * headless command at all (Qwen, Droid, OMP, OpenCode: the sign-in lives
+   * inside their own TUI, so the host launches the CLI itself) declares this
+   * with `oauthArgs: null`, which is exactly what keeps the headless button
+   * hidden on older clients - so a GUI gate reads this field alone and never
+   * requires `oauthArgs` beside it. Shape carries no fields today - existence
+   * alone is the signal - but stays an object for the same reason `codePaste`
+   * does.
    *
    * `.catch(null)` hardens a present-but-unrecognized value. A genuinely
    * ABSENT key (an old host that predates the field, decoded through the

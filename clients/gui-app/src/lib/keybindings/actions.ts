@@ -57,6 +57,7 @@ export const ACTION_IDS = [
   "app.palette.open",
   "app.terminal.toggle",
   "app.terminal.new",
+  "app.browser.new",
   "app.terminal.maximize",
   "app.zoom.in",
   "app.zoom.out",
@@ -594,6 +595,21 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
     kind: "chord",
     defaultChord: "mod+shift+j",
     secondaryChord: undefined,
+    terminalPolicy: "app",
+    secondaryTerminalPolicy: undefined,
+  },
+  "app.browser.new": {
+    id: "app.browser.new",
+    label: "New browser tab",
+    description:
+      "Open a new browser tab in the start page's panel, on the selected device.",
+    category: "app",
+    kind: "chord",
+    defaultChord: "mod+shift+b",
+    secondaryChord: undefined,
+    // `app`, like its terminal twin: the chord has to reach the panel from
+    // inside a focused terminal, which is the whole point of opening a second
+    // kind of tab beside one.
     terminalPolicy: "app",
     secondaryTerminalPolicy: undefined,
   },

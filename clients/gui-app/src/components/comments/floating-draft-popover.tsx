@@ -30,8 +30,6 @@ import {
 } from "@/stores/comments/comment-threads-store";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useCreateCommentThreadForClient } from "@/hooks/comments/use-comment-thread-mutations";
-import { useComposedRefs } from "radix-ui/internal";
-import { useRegisterBrowserOverlay } from "@/lib/browser-view/tiles/use-register-browser-overlay";
 import { CommentComposer } from "./comment-composer";
 
 export interface FloatingDraftPopoverProps {
@@ -86,8 +84,6 @@ export function FloatingDraftPopover(props: FloatingDraftPopoverProps) {
   const setDraft = useCommentThreadsStore((s) => s.setDraft);
   const createThread = useCreateCommentThreadForClient(hostClient);
   const floatingRef = useRef<HTMLDialogElement | null>(null);
-  const registerOverlayRef = useRegisterBrowserOverlay<HTMLDialogElement>();
-  const composedFloatingRef = useComposedRefs(floatingRef, registerOverlayRef);
   const isDirtyRef = useRef(false);
   // Render into the pane's portal host so this kept-mounted composer (its typed
   // draft survives focus changes) is hidden with the pane instead of covering a
@@ -232,7 +228,7 @@ export function FloatingDraftPopover(props: FloatingDraftPopoverProps) {
 
   return createPortal(
     <dialog
-      ref={composedFloatingRef}
+      ref={floatingRef}
       open
       aria-label="New comment"
       data-slot="floating-draft-popover"

@@ -107,6 +107,22 @@ class FakePolicySession {
     | null = null;
   displayMediaRequestHandler: BrowserDisplayMediaRequestHandler | null = null;
   readonly downloadListeners: BrowserDownloadListener[] = [];
+  beforeRequestListener:
+    | ((
+        details: { readonly url: string; readonly webContentsId?: number },
+        callback: (response: { readonly cancel?: boolean }) => void,
+      ) => void)
+    | null = null;
+  readonly webRequest = {
+    onBeforeRequest: (
+      listener: (
+        details: { readonly url: string; readonly webContentsId?: number },
+        callback: (response: { readonly cancel?: boolean }) => void,
+      ) => void,
+    ): void => {
+      this.beforeRequestListener = listener;
+    },
+  };
 
   /**
    * The `Session["cookies"]` slice the primary-profile delta observer
@@ -164,6 +180,12 @@ class FakePolicySession {
   on(event: "will-download", listener: BrowserDownloadListener): void {
     expect(event).toBe("will-download");
     this.downloadListeners.push(listener);
+  }
+
+  userAgent: string | null = null;
+
+  setUserAgent(userAgent: string): void {
+    this.userAgent = userAgent;
   }
 
   clearStorageDataCalls = 0;
@@ -368,6 +390,17 @@ describe("browser view session policy", () => {
     expect(electronState.defaultSession?.permissionRequestHandler).toBeNull();
     expect(electronState.defaultSession?.permissionCheckHandler).toBeNull();
     expect(electronState.defaultSession?.downloadListeners).toEqual([]);
+  });
+
+  it("exports a clean desktop Chrome UA (no Electron, no product token) for the app-level fallback", async () => {
+    const mod = await import("../browser-session");
+
+    const ua = mod.guestBrowserUserAgent();
+
+    expect(ua).not.toMatch(/Electron/i);
+    expect(ua).not.toMatch(/Traycer/i);
+    expect(ua).toContain(`Chrome/${process.versions.chrome}`);
+    expect(ua).toContain("Safari/537.36");
   });
 
   it("uses the ephemeral partition when saved logins is turned off", async () => {
@@ -693,5 +726,35 @@ describe("browser view session policy", () => {
       mod.readBrowserViewPendingCertificateError(certificateErrorId),
     ).toBeNull();
     stop();
+  });
+
+  it("cancels gated guest https until a disposer runs", async () => {
+    const mod = await import("../browser-session");
+    const session = electronState.browserSession;
+    if (session === null) throw new Error("browser session fake missing");
+    mod.ensureBrowserViewSession(PRIMARY);
+    const listener = session.beforeRequestListener;
+    if (listener === null) throw new Error("beforeRequest listener missing");
+
+    const replies: Array<{ readonly cancel?: boolean }> = [];
+    const ask = (details: {
+      readonly url: string;
+      readonly webContentsId: number;
+    }): void => {
+      listener(details, (response) => {
+        replies.push(response);
+      });
+    };
+
+    const dispose = mod.gateBrowserViewGuestRequests(77);
+    ask({ url: "https://example/", webContentsId: 77 });
+    ask({ url: "about:blank", webContentsId: 77 });
+    ask({ url: "https://example/", webContentsId: 78 });
+    expect(replies).toEqual([{ cancel: true }, {}, {}]);
+
+    replies.length = 0;
+    dispose();
+    ask({ url: "https://example/", webContentsId: 77 });
+    expect(replies).toEqual([{}]);
   });
 });

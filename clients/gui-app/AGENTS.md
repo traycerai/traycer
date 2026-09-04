@@ -116,21 +116,12 @@ inset-0` and marked `data-full-bleed-surface`, so it takes the viewport
 - No `key={x ?? fallback}` when `undefined` already remounts correctly.
 - Zustand = client UI state; TanStack Query = server/host data.
 - Keep browser-safe unless the task adds a native host.
-- **Browser-tile overlay registration is explicit, not a DOM scan**
-  (`docs/adr/0001-browser-tile-rendering.md`). Mounting an overlay
-  primitive registers a live rect with the browser-tile occlusion
-  coordinator; unmounting deregisters. The shadcn wrappers in
-  `src/components/ui/` (Dialog, Popover, Select, DropdownMenu, Tooltip,
-  ContextMenu, sonner's `Toaster`) are the **only** registration seam -
-  importing a Radix portal primitive directly outside them is banned by the
-  `overlayPortal` ESLint block, and a dev-build tripwire
-  (`unregistered-portal-tripwire.ts`) flags any portal-root child painting
-  without a matching registry entry, to catch hand-rolled and third-party
-  portals the lint rule can't see. The visibility predicate reads paint
-  signals only - `aria-hidden` must never enter it; that exact misread
-  caused a settings-panel flash. Canvas motion (scroll/pane animation/resize)
-  freezes a tile through the same registry as a synthetic owner
-  (`browser-overlay-motion:<tileKey>`), not a second mechanism.
+- **Local browser tiles are CSS-anchored `<webview>` guests.** Overlay
+  primitives paint in ordinary DOM stacking above the guest. Importing a
+  Radix portal primitive directly outside `src/components/ui/` is still
+  banned by the `overlayPortal` ESLint block so portal behavior stays in the
+  shadcn wrappers. Toast placement may consult live tile rects; there is no
+  native-view occlusion coordinator, snapshot stand-in, or motion freeze.
 
 ## Backend calls → TanStack Query
 

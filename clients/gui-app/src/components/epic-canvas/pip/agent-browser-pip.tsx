@@ -51,8 +51,6 @@ import {
   type PipTarget,
 } from "@/lib/browser-view/pip/pip-store";
 import { cn } from "@/lib/utils";
-import { useComposedRefs } from "radix-ui/internal";
-import { useRegisterBrowserOverlay } from "@/lib/browser-view/tiles/use-register-browser-overlay";
 import { useEpicChatRecords } from "@/lib/epic-selectors";
 import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -145,8 +143,6 @@ function AgentBrowserPipSurface(props: {
     rawGeometry.previewHeight,
   );
   const rootRef = useRef<HTMLDivElement | null>(null);
-  const registerOverlayRef = useRegisterBrowserOverlay<HTMLDivElement>();
-  const composedRootRef = useComposedRefs(rootRef, registerOverlayRef);
   const dragRef = useRef<PipPointerSession | null>(null);
   const dragMovedRef = useRef(false);
 
@@ -345,7 +341,7 @@ function AgentBrowserPipSurface(props: {
 
   return (
     <div
-      ref={composedRootRef}
+      ref={rootRef}
       role="group"
       aria-label="Browser picture in picture"
       aria-hidden={!displayed}

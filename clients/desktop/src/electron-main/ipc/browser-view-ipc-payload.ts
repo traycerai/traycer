@@ -4,17 +4,16 @@ import {
   browserSessionsClientFrameSchema,
 } from "@traycer/protocol/host/browser/contracts";
 import { registrableDomain } from "@traycer/protocol/host/browser/registrable-domain";
+import { hostResourceScopeSchema } from "@traycer/protocol/host/resource-scope";
 import type {
   BrowserAnnotationAttachResultInput,
   BrowserAnnotationSetTargetChatLabelInput,
   BrowserAnnotationStartInput,
 } from "../../ipc-contracts/browser-annotation-types";
-import { BROWSER_VIEW_VIEWPORT_PRESET_IDS } from "@traycer-clients/shared/platform/browser-view";
 import type {
   BrowserSessionsStreamKey,
   BrowserSessionsStreamSend,
   BrowserViewAttachSurface,
-  BrowserViewBoundsUpdate,
   BrowserViewCertificateTrust,
   BrowserViewDetachSurface,
   BrowserViewDownloadCancel,
@@ -22,14 +21,11 @@ import type {
   BrowserViewFindRequest,
   BrowserViewFindStop,
   LoginImportRequest,
-  BrowserViewOverlayOcclusion,
-  BrowserViewOverlayRelease,
   BrowserViewReservedChord,
 } from "@traycer-clients/shared/platform/browser-view";
 import type { PipCaptureStartInput } from "@traycer-clients/shared/platform/browser-view";
 
 const nonEmptyStringSchema = z.string().min(1);
-const viewportPresetSchema = z.enum(BROWSER_VIEW_VIEWPORT_PRESET_IDS);
 const tileKeySchema = z.object({
   viewTabId: nonEmptyStringSchema,
   paneId: nonEmptyStringSchema,
@@ -63,29 +59,17 @@ const nativeTabKeySchema = z.object({
 const nativeTabCapabilitySchema = nativeTabKeySchema.extend({
   registrationId: nonEmptyStringSchema,
 });
-const boundsSchema = z.object({
-  x: z.number(),
-  y: z.number(),
-  width: z.number(),
-  height: z.number(),
-});
 const electronTabControlActionSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("navigate"), url: nonEmptyStringSchema }),
   z.object({ kind: z.literal("reload") }),
   z.object({ kind: z.literal("goBack") }),
   z.object({ kind: z.literal("goForward") }),
-  z.object({
-    kind: z.literal("setViewportPreset"),
-    viewportPreset: viewportPresetSchema,
-  }),
   z.object({ kind: z.literal("zoomIn") }),
   z.object({ kind: z.literal("zoomOut") }),
   z.object({ kind: z.literal("resetZoom") }),
   z.object({ kind: z.literal("openDevTools") }),
 ]);
 
-const boundsUpdateSchema: z.ZodType<BrowserViewBoundsUpdate> =
-  tileKeySchema.extend({ bounds: boundsSchema });
 const annotationStartSchema: z.ZodType<BrowserAnnotationStartInput> =
   tileKeySchema.extend({ theme: annotationThemeSchema });
 const annotationTargetChatLabelSchema: z.ZodType<BrowserAnnotationSetTargetChatLabelInput> =
@@ -117,16 +101,6 @@ const downloadCancelSchema: z.ZodType<BrowserViewDownloadCancel> = z.object({
 });
 const certificateTrustSchema: z.ZodType<BrowserViewCertificateTrust> =
   tileKeySchema.extend({ certificateErrorId: z.string() });
-const overlayOcclusionSchema: z.ZodType<BrowserViewOverlayOcclusion> = z.object(
-  {
-    overlayId: z.string(),
-    tiles: z.array(tileKeySchema),
-  },
-);
-const overlayReleaseSchema: z.ZodType<BrowserViewOverlayRelease> = z.object({
-  overlayId: z.string(),
-});
-const overlayPaintAckSchema = z.object({ overlayId: z.string() });
 const attachSurfaceSchema: z.ZodType<BrowserViewAttachSurface> =
   nativeTabCapabilitySchema.extend({
     bindingId: nonEmptyStringSchema,
@@ -147,6 +121,31 @@ const pipCaptureStartSchema: z.ZodType<PipCaptureStartInput> =
 const saveLoginsSchema = z.boolean();
 
 /**
+ * The renderer-supplied resource scope, DERIVED from the protocol's own union
+ * rather than restated here.
+ *
+ * The restatement it replaces was a second definition of an authorization
+ * scope, which is the thing `host/resource-scope.ts` exists to prevent: the
+ * field is typed `HostResourceScope`, so a scope kind added there would
+ * type-check at every call site in this process and then be rejected at
+ * runtime by this parser alone - a mismatch no compile can see.
+ *
+ * The 128-character bound survives as a refinement instead of a re-typed
+ * member, because the reason for it is local to this file and not a protocol
+ * fact: a renderer-supplied epic id is echoed into a map key and a log line
+ * here, and the fields beside it are bounded for the same reason. Applying it
+ * outside the union is what lets the union stay derived.
+ */
+const MAX_RENDERER_EPIC_ID_LENGTH = 128;
+const sessionsStreamScopeSchema = hostResourceScopeSchema.refine(
+  (scope) =>
+    scope.kind !== "epic" || scope.epicId.length <= MAX_RENDERER_EPIC_ID_LENGTH,
+  {
+    message: `epicId must be at most ${String(MAX_RENDERER_EPIC_ID_LENGTH)} characters`,
+  },
+);
+
+/**
  * Which main-owned `browser.sessions` stream a renderer means.
  *
  * A host ID, never a directory row: the row carries the host's static Noise
@@ -156,15 +155,15 @@ const saveLoginsSchema = z.boolean();
  */
 const sessionsStreamKeySchema: z.ZodType<BrowserSessionsStreamKey> =
   z.strictObject({
-    epicId: nonEmptyStringSchema.max(128),
+    scope: sessionsStreamScopeSchema,
     hostId: nonEmptyStringSchema.max(128),
     identityKey: nonEmptyStringSchema.max(512),
   });
 
 /**
  * One user-initiated request onto that stream, parsed against the PROTOCOL's
- * own client-frame schema and then narrowed to the three kinds a renderer may
- * ask for.
+ * own client-frame schema and then narrowed to the kinds a renderer may ask
+ * for.
  *
  * The narrowing is the gate, not the parse: `forgetLogins` and `clearSite`
  * shred every connected host's slice of the user's logins, so they are
@@ -235,7 +234,6 @@ export const browserViewIpcPayload = {
   annotationStart: annotationStartSchema,
   annotationTargetChatLabel: annotationTargetChatLabelSchema,
   attachSurface: attachSurfaceSchema,
-  boundsUpdate: boundsUpdateSchema,
   certificateTrust: certificateTrustSchema,
   detachSurface: detachSurfaceSchema,
   downloadCancel: downloadCancelSchema,
@@ -245,9 +243,6 @@ export const browserViewIpcPayload = {
   loginImportRun: loginImportRunSchema,
   loginImportScan: loginImportScanSchema,
   nativeTabCapability: nativeTabCapabilitySchema,
-  overlayOcclusion: overlayOcclusionSchema,
-  overlayPaintAck: overlayPaintAckSchema,
-  overlayRelease: overlayReleaseSchema,
   pipCaptureStart: pipCaptureStartSchema,
   savedLoginSite: savedLoginSiteSchema,
   saveLogins: saveLoginsSchema,

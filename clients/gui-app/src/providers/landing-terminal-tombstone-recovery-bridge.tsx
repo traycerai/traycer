@@ -14,21 +14,29 @@ import { useRemoteSessionsPollReadiness } from "@/hooks/host/use-remote-sessions
 import { dialableHostEndpointFor } from "@/lib/host/transport-key";
 import {
   absentListingProvesDeath,
-  useLandingTerminalStore,
+  useLandingPanelStore,
   type LandingTerminalPendingKill,
-} from "@/stores/home/landing-terminal-store";
+} from "@/stores/home/landing-panel-store";
 import {
   useLandingTerminalKill,
   type LandingTerminalKillVariables,
 } from "@/components/home/terminal-panel/use-landing-terminal-kill-mutation";
 import {
   LandingTerminalAuthorityFleet,
+  type LandingBrowserSessionEntries,
   type LandingTerminalAuthorityEntries,
   type LandingTerminalAuthorityEntry,
 } from "@/components/home/terminal-panel/landing-terminal-authority-fleet";
-import { terminalSessionKey } from "@/stores/home/landing-terminal-store";
+import type { BrowserSessionsState } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
+import { useLandingBrowserTombstoneDrain } from "@/providers/landing-browser-tombstone-drain";
+import {
+  landingBrowserPendingKills,
+  landingTabRefKey,
+  landingTerminalPendingKills,
+} from "@/stores/home/landing-panel-store";
 import { getPlainTerminal } from "@/lib/terminals/plain-terminal-authority";
 import { requestLandingTerminalClose } from "@/lib/terminals/landing-terminal-close-coordinator";
+import { terminalTombstoneOutstanding } from "@/providers/landing-terminal-tombstone-outstanding";
 
 const CAPABLE_CLOSE_RETRY_BASE_MS = 500;
 /**
@@ -107,6 +115,14 @@ const PENDING_CREATE_KILL_ANSWER_BUDGET = 10;
 type TombstoneCloseArm = "plain" | "kill";
 
 interface CapableCloseRetry {
+  /**
+   * The host this tombstone's retries belong to, carried rather than parsed
+   * back out of the map key. The key is `landingTabRefKey`'s opaque encoding
+   * and its segment layout is not this file's to know: reading the host by
+   * position silently broke the moment that key grew a leading `kind` segment,
+   * cancelling every armed retry on the following pass.
+   */
+  readonly hostId: string;
   attempt: number;
   /**
    * Settlements where the HOST ANSWERED - a close that resolved and still left
@@ -200,14 +216,13 @@ function cancelUndrainableCapableCloseRetries(args: {
   readonly pendingKeys: ReadonlySet<string>;
   readonly drainableByHostId: ReadonlyMap<string, TombstoneDrainability>;
 }): void {
-  for (const key of args.retries.keys()) {
-    const hostId = key.slice(0, key.indexOf("\u0000"));
+  for (const [key, retry] of args.retries) {
     // Keyed on the `kill` arm, the weaker of the two: a host whose listing has
     // merely gone stale can still serve a kill, so tearing its retry down here
     // would strand the arm that had no reason to stop.
     if (
       args.pendingKeys.has(key) &&
-      args.drainableByHostId.get(hostId)?.kill === true
+      args.drainableByHostId.get(retry.hostId)?.kill === true
     ) {
       continue;
     }
@@ -234,14 +249,7 @@ function closeRetryStillWarranted(args: {
   readonly refs: TombstoneRetryRefs;
   readonly arm: TombstoneCloseArm;
 }): boolean {
-  const stillPending = useLandingTerminalStore
-    .getState()
-    .pendingKills.some(
-      (candidate) =>
-        candidate.hostId === args.pending.hostId &&
-        candidate.sessionId === args.pending.sessionId,
-    );
-  if (!stillPending) return false;
+  if (!terminalTombstoneOutstanding(args.pending)) return false;
   // Per-arm, so a stale listing stops only the arm that reads one.
   const drainable = args.refs.dialable.current.get(args.pending.hostId);
   if (drainable === undefined) return false;
@@ -294,6 +302,7 @@ function scheduleCloseRetry(args: {
     CAPABLE_CLOSE_RETRY_MAX_MS,
   );
   const nextRetry: CapableCloseRetry = {
+    hostId: args.pending.hostId,
     attempt,
     // Carried across attempts on the same arm, and reset with the record when
     // the arm changes - a `plain` rejection says nothing about what `kill` was
@@ -504,9 +513,7 @@ function dispatchCapableClose(args: {
           scheduleCloseRetry({ ...args, answered: false, arm: "plain" });
           return;
         }
-        useLandingTerminalStore
-          .getState()
-          .clearPendingKill(args.pending.hostId, args.pending.sessionId);
+        useLandingPanelStore.getState().clearPendingKill(args.pending);
         clearCapableCloseRetry(args.refs.retries.current, args.key);
       },
       () => scheduleCloseRetry({ ...args, answered: false, arm: "plain" }),
@@ -580,15 +587,7 @@ function dispatchLegacyClose(args: {
       // resolved close is a kill that is still owed, so it is retried on the
       // same backoff a rejection would have earned.
       () => {
-        if (
-          useLandingTerminalStore
-            .getState()
-            .pendingKills.some(
-              (candidate) =>
-                candidate.hostId === args.pending.hostId &&
-                candidate.sessionId === args.pending.sessionId,
-            )
-        ) {
+        if (terminalTombstoneOutstanding(args.pending)) {
           scheduleCloseRetry({ ...args, answered: true, arm: "kill" });
           return;
         }
@@ -632,9 +631,7 @@ function dispatchTombstoneClose(args: {
     //   (`PENDING_CREATE_KILL_ANSWER_BUDGET`). The host has answered "no such
     //   session" for the whole attempt ladder, and the create that could have
     //   contradicted it can no longer be observed from here.
-    useLandingTerminalStore
-      .getState()
-      .clearPendingKill(args.pending.hostId, args.pending.sessionId);
+    useLandingPanelStore.getState().clearPendingKill(args.pending);
     clearCapableCloseRetry(args.refs.retries.current, args.key);
     return;
   }
@@ -667,7 +664,16 @@ function dispatchTombstoneClose(args: {
 export function LandingTerminalTombstoneRecoveryBridge(): ReactNode {
   const directory = useHostDirectoryList();
   const binding = useHostBinding();
-  const pendingKills = useLandingTerminalStore((state) => state.pendingKills);
+  // Subscribed to the WHOLE tombstone set, then narrowed at each use. The
+  // subscription has to stay the store's own array: this bridge re-examines the
+  // set on every write to it, including a write that removed nothing, and a
+  // derived array would only re-run the drain when the terminal slice happened
+  // to change.
+  //
+  // Everything below routes a tombstone to `terminal.plain.close` or
+  // `terminal.kill`, neither of which can serve a browser tab; the browser arm
+  // drains through its own device coordinator.
+  const allPendingKills = useLandingPanelStore((state) => state.pendingKills);
   const kill = useLandingTerminalKill();
   const killRef = useRef(kill);
   const inFlightRef = useRef<ReadonlySet<string>>(new Set());
@@ -696,6 +702,23 @@ export function LandingTerminalTombstoneRecoveryBridge(): ReactNode {
         if (entry !== null) {
           if (current[hostId] === entry) return current;
           return { ...current, [hostId]: entry };
+        }
+        if (current[hostId] === undefined) return current;
+        const next = { ...current };
+        delete next[hostId];
+        return next;
+      });
+    },
+    [],
+  );
+  const [browserSessions, setBrowserSessions] =
+    useState<LandingBrowserSessionEntries>({});
+  const handleBrowserSessions = useCallback(
+    (hostId: string, state: BrowserSessionsState | null): void => {
+      setBrowserSessions((current) => {
+        if (state !== null) {
+          if (current[hostId] === state) return current;
+          return { ...current, [hostId]: state };
         }
         if (current[hostId] === undefined) return current;
         const next = { ...current };
@@ -772,12 +795,35 @@ export function LandingTerminalTombstoneRecoveryBridge(): ReactNode {
   // makes an auth-identity transition harmless.
   const authorityHostIds = useMemo(() => {
     const tombstoned = [
-      ...new Set(pendingKills.map((pending) => pending.hostId)),
+      ...new Set(
+        landingTerminalPendingKills(allPendingKills).map(
+          (pending) => pending.hostId,
+        ),
+      ),
     ];
     if (!fleetSettled) return tombstoned;
     const fleet = new Set(directoryHostIds);
     return tombstoned.filter((hostId) => fleet.has(hostId));
-  }, [directoryHostIds, fleetSettled, pendingKills]);
+  }, [allPendingKills, directoryHostIds, fleetSettled]);
+  const browserPendingKills = useMemo(
+    () => landingBrowserPendingKills(allPendingKills),
+    [allPendingKills],
+  );
+  // The same scoping rule as `authorityHostIds`, for the same reason: a
+  // departed host cannot answer, and the browser tombstone survives its
+  // absence exactly as the terminal one does.
+  const browserHostIds = useMemo(() => {
+    const tombstoned = [
+      ...new Set(browserPendingKills.map((pending) => pending.hostId)),
+    ];
+    if (!fleetSettled) return tombstoned;
+    const fleet = new Set(directoryHostIds);
+    return tombstoned.filter((hostId) => fleet.has(hostId));
+  }, [browserPendingKills, directoryHostIds, fleetSettled]);
+  useLandingBrowserTombstoneDrain({
+    pendingKills: browserPendingKills,
+    browserSessions,
+  });
   const hasReadySessionFor = useRemoteSessionsPollReadiness(directoryHostIds);
   const authorityEntriesRef = useRef(authorityEntries);
 
@@ -843,10 +889,9 @@ export function LandingTerminalTombstoneRecoveryBridge(): ReactNode {
       retries: retriesRef,
     };
 
+    const pendingKills = landingTerminalPendingKills(allPendingKills);
     const pendingKeys = new Set(
-      pendingKills.map((pending) =>
-        terminalSessionKey(pending.hostId, pending.sessionId),
-      ),
+      pendingKills.map((pending) => landingTabRefKey(pending)),
     );
     cancelUndrainableCapableCloseRetries({
       retries: retriesRef.current,
@@ -868,7 +913,7 @@ export function LandingTerminalTombstoneRecoveryBridge(): ReactNode {
       // freshness parked the tombstones that never needed it.
       const drainable = currentDrainable.get(pending.hostId);
       if (drainable?.kill !== true) continue;
-      const key = terminalSessionKey(pending.hostId, pending.sessionId);
+      const key = landingTabRefKey(pending);
       const retry = retriesRef.current.get(key);
       const entry = authorityEntries[pending.hostId];
       const decision = tombstoneDispatchDecision({
@@ -904,7 +949,7 @@ export function LandingTerminalTombstoneRecoveryBridge(): ReactNode {
   }, [
     authorityEntries,
     directory.data,
-    pendingKills,
+    allPendingKills,
     hasReadySessionFor,
     retryGeneration,
   ]);
@@ -912,7 +957,13 @@ export function LandingTerminalTombstoneRecoveryBridge(): ReactNode {
   return (
     <LandingTerminalAuthorityFleet
       hostIds={authorityHostIds}
+      browserHostIds={browserHostIds}
+      // Report only. The panel owns the reconciliation of the browser slice;
+      // this bridge is mounted above the router and would otherwise adopt and
+      // drop against snapshots the panel had already acted on.
+      browserArm="report-only"
       onEntry={handleAuthorityEntry}
+      onBrowserSessions={handleBrowserSessions}
     />
   );
 }

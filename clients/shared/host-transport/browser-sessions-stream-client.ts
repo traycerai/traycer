@@ -32,9 +32,17 @@ export type BrowserSessionsStreamClientOptions = BrowserSessionsOpenRequest & {
 };
 
 /**
- * Typed wrapper over one `browser.sessions` subscription. `epicId` is the
+ * Typed wrapper over one `browser.sessions` subscription. `scope` is the
  * stream's sole authorization and routing scope, so one client speaks for one
- * epic's whole browser inventory.
+ * epic's whole browser inventory, or for the device's epic-less `independent`
+ * one - never for both.
+ *
+ * It has only `sendClientFrame`: request correlation (an `openTab` awaiting its
+ * `openTabResult`, an `attachTab` or a `closeTab` awaiting its `actionAck`)
+ * lives in the GUI's coordinator, which is the thing that owns the pending
+ * maps and the timeouts. Adding a request method here would put half of one
+ * correlation on each side of the process boundary the desktop draws through
+ * this client.
  *
  * `browser.sessions` serves a single minor (`@1.0`) - when the first additive
  * minor lands, the per-session schema selection belongs in

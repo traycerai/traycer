@@ -352,6 +352,18 @@ export function createEpicRecordsReplica(
    * write is how a projection gets built from half-updated state.
    */
   let laneSlices: EpicLaneStateSlices = EMPTY_LANE_STATE_SLICES;
+  /**
+   * Which head the projector is bound to, so a replica replacement can rebind
+   * the SAME one. `replaceReplica` used to end with `projector.attach(doc)`
+   * unconditionally, which on the lane arm silently swapped the lane head for
+   * the brand-new, forever-empty root doc: every later `applyLaneState`
+   * re-projected from that doc, and a tab that went through one authority
+   * replacement showed zero artifacts for the rest of its life (staging,
+   * 2026-09-04: a host restart minted a new replica identity for one epic;
+   * the tab's next lead was `authorityEpochChanged`, the rows landed in the
+   * lane replica, and the projection never read them).
+   */
+  let attachedHead: "doc" | "lane" | null = null;
   const coverage: HostCoverage = createHostCoverage();
   const unsynced = createUnsyncedRootQueue();
   let observedAtMs: number | null = null;
@@ -569,6 +581,14 @@ export function createEpicRecordsReplica(
     if (touched.length === 0) return;
     sendAwareness(encodeAwarenessUpdate(awareness, touched));
   };
+
+  /** Bind the lane head over whatever `laneSlices` currently holds. */
+  function attachLaneSources(): void {
+    projector.attachLaneSources(
+      () => laneRawProjectionSources(laneSlices),
+      projectorSink,
+    );
+  }
 
   function bindCurrentReplica(): void {
     doc.on("update", handleDocUpdate);
@@ -1351,16 +1371,22 @@ export function createEpicRecordsReplica(
         awareness.setLocalState(localAwarenessState);
       }
       destroyReplica(previousDoc, previousAwareness);
+      if (attachedHead === "lane") {
+        // The lane populations are part of what is being replaced: the arm's
+        // own reset republishes them empty a step later, but this replica must
+        // not depend on that ordering to stop serving the old rows.
+        laneSlices = EMPTY_LANE_STATE_SLICES;
+        attachLaneSources();
+        return;
+      }
       projector.attach(doc, projectorSink);
     },
 
     readSeedOffer: () => coverage.readSeedOffer(),
 
     attachLaneHead(): void {
-      projector.attachLaneSources(
-        () => laneRawProjectionSources(laneSlices),
-        projectorSink,
-      );
+      attachedHead = "lane";
+      attachLaneSources();
     },
 
     applyLaneState(slices): void {
@@ -1545,6 +1571,7 @@ export function createEpicRecordsReplica(
       // Wired last so the initial full projection runs after the consumer is
       // fully constructed - otherwise the publication from `attach` would race
       // with the persist middleware's hydration write.
+      attachedHead = "doc";
       projector.attach(doc, projectorSink);
     },
 

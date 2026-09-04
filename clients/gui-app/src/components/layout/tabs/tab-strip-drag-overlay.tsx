@@ -2,7 +2,6 @@ import { type Transition } from "motion/react";
 import * as m from "motion/react-m";
 import { useEpicDndStore } from "@/components/epic-canvas/dnd/dnd-store";
 import { displayTitle } from "@/lib/display-title";
-import { useRegisterBrowserOverlay } from "@/lib/browser-view/tiles/use-register-browser-overlay";
 import type { HeaderTab, TabIcon } from "@/stores/tabs/types";
 
 const HEADER_TAB_OVERLAY_TRANSITION = {
@@ -30,10 +29,8 @@ export function HeaderTabDragOverlay(props: HeaderTabDragOverlayProps) {
   // only - never mutate the tab.
   const displayName =
     tab.kind === "epic" ? displayTitle(tab.name, "epic") : tab.name;
-  const registerOverlayRef = useRegisterBrowserOverlay<HTMLDivElement>();
   return (
     <m.div
-      ref={registerOverlayRef}
       // Named so an instrument can find it by identity rather than by a
       // heuristic. It was previously located as "the first `.cursor-grabbing`
       // element under 500px wide, excluding the shield" - which happened to be
