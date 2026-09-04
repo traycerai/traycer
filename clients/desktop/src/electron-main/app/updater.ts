@@ -2231,17 +2231,118 @@ function handleUpdaterError(error: unknown): void {
     return;
   }
   if (isStagingAuthFailure(error)) {
-    const intent =
-      downloadIntent ??
-      checkIntent ??
-      currentSnapshot.lastCheckIntent ??
-      "automatic";
-    const rejectedToken = discardStagingUpdateTokenForLog();
-    downloadInProgress = false;
-    downloadIntent = null;
-    emitStagingAuthUnavailable(intent, error, rejectedToken);
+    emitStagingAuthRejection(error);
     return;
   }
+  // The MASKED-404 half of the same question, asked on behalf of the paths
+  // that cannot ask it themselves.
+  //
+  // GitHub answers "this credential cannot see this repository" with 404
+  // rather than 403, and `isStagingAuthFailure` matches only 401/403. Release
+  // discovery already resolves that ambiguity itself, with the
+  // repository-visibility probe in `collectDesktopReleaseCandidates`. The
+  // DOWNLOAD cannot: `ExactReleaseAssetProvider` hands its copied token
+  // straight to electron-updater's downloader via `fileExtraDownloadHeaders`
+  // and never passes through `fetchStagingGitHubRelease`, so a token that
+  // lost access between discovery and `downloadUpdate()` arrived here as a
+  // generic error - reported as a plain failure AND leaving the rejected
+  // lease cached, which every later check in the process then reused, even
+  // after the user re-authenticated.
+  //
+  // Routed through the SAME probe rather than by widening the message match:
+  // a genuinely absent repository, an unpublished tag and an asset deleted
+  // mid-flight all 404 with a perfectly good token, and only the probe
+  // distinguishes those from a revoked one. Costs one request, on the 404
+  // path only, and only when a staging token is actually configured.
+  if (isStagingMasked404Candidate(error)) {
+    // The only asynchronous branch in this handler, so it is also the only one
+    // that can turn a throwing listener into an unhandled rejection instead of
+    // propagating to the emitter. Terminate the chain here.
+    void settleMasked404(error).catch((settleError: unknown) => {
+      log.warn(
+        "[updater] masked-404 settle failed",
+        credentialSafeLogValue(settleError),
+      );
+    });
+    return;
+  }
+  emitOrdinaryUpdaterError(error);
+}
+
+// The rejected-credential outcome, shared by the synchronous 401/403 verdict
+// and the asynchronous masked-404 one so both discard the lease identically.
+function emitStagingAuthRejection(error: unknown): void {
+  const intent =
+    downloadIntent ??
+    checkIntent ??
+    currentSnapshot.lastCheckIntent ??
+    "automatic";
+  const rejectedToken = discardStagingUpdateTokenForLog();
+  downloadInProgress = false;
+  downloadIntent = null;
+  emitStagingAuthUnavailable(intent, error, rejectedToken);
+}
+
+/**
+ * Whether `error` could be GitHub masking a lost credential as "not found".
+ *
+ * Only a CANDIDATE: it selects which errors are worth one probe, and never
+ * decides the verdict on its own. Gated on a configured staging token because
+ * without one a 404 carries no ambiguity at all - an absent or public
+ * repository answers exactly the same way.
+ */
+function isStagingMasked404Candidate(error: unknown): boolean {
+  if (!stagingReleaseAuthRequired()) return false;
+  if (currentPrivateUpdateToken().trim().length === 0) return false;
+  return /\b404\b/u.test(rawErrorMessage(error));
+}
+
+/**
+ * Resolves a candidate masked 404 against the repository, then emits exactly
+ * one outcome - never both. A probe that fails for its own reasons (offline,
+ * rate limited) leaves the original error standing and the lease untouched,
+ * which is the same fail-safe direction discovery takes.
+ */
+async function settleMasked404(error: unknown): Promise<void> {
+  const rejected = await stagingCredentialRejected();
+  // Re-checked AFTER the probe, not before. `handleUpdaterError` applies this
+  // guard on entry so a late error cannot clobber a finished download; putting
+  // a request in front of the decision widens exactly that window, so the
+  // guard has to be re-asserted on the far side of it rather than inherited
+  // from a check made before the await.
+  if (currentSnapshot.status === "ready") {
+    return;
+  }
+  if (rejected) {
+    emitStagingAuthRejection(error);
+    return;
+  }
+  emitOrdinaryUpdaterError(error);
+}
+
+async function stagingCredentialRejected(): Promise<boolean> {
+  const coordinate = resolveUpdateRepo();
+  if (coordinate === null) return false;
+  const token = currentPrivateUpdateToken().trim();
+  if (token.length === 0) return false;
+  try {
+    await assertStagingRepositoryVisible(
+      coordinate,
+      {
+        accept: "application/vnd.github+json",
+        authorization: `token ${token}`,
+      },
+      undefined,
+    );
+    return false;
+  } catch (probeError) {
+    return isAuthenticationRequiredError(probeError);
+  }
+}
+
+// The ordinary (non-authentication) error path, extracted so the masked-404
+// probe can fall back to it after the fact instead of duplicating it.
+function emitOrdinaryUpdaterError(error: unknown): void {
   const errorMessage = readErrorMessage(error);
   const lastCheckedAt = new Date().toISOString();
   if (downloadInProgress || currentSnapshot.status === "downloading") {
