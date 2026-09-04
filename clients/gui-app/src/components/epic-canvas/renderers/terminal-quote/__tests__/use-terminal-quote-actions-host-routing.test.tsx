@@ -75,6 +75,17 @@ vi.mock("@/hooks/host/use-addressable-host-id", () => ({
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHost: () => ({ authnBaseUrl: "https://authn.test" }),
 }));
+// `<TabHostProvider>` also mounts the cross-device drafts mirror, whose
+// session reaches `useHostDirectory()` / `useAuthService()` off a real
+// `<HostRuntimeProvider>` this suite deliberately does not stand up. The
+// mount's own escape hatch is a `null` `useHostBinding`, which is not
+// available here: the routing under test resolves a named host through that
+// binding, so it has to be non-null. Stub the mount - it renders `null`
+// either way and carries only drafts effects, which are not this suite's
+// subject.
+vi.mock("@/hooks/drafts/use-tab-draft-mirror", () => ({
+  TabDraftMirrorMount: () => null,
+}));
 
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
