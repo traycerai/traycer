@@ -702,7 +702,14 @@ describe("LinkPhonePanel", () => {
     expect(warning.textContent).toContain(
       "Sign-in request from iPhone 16 Pro.",
     );
-    expect(warning.className).toContain("destructive");
+    // The BLOCK treatment, not just the text color: a warning that collapsed
+    // to a destructive-tinted subtitle would read as a detail, not a state.
+    // Background, border, icon and heading are what make it loud.
+    expect(warning.className).toContain("bg-destructive/");
+    expect(warning.className).toContain("border-destructive/");
+    expect(warning.className).toContain("text-destructive");
+    expect(warning.querySelector("svg")).not.toBeNull();
+    expect(warning.querySelector("p")?.className).toContain("text-title-");
     expect(screen.queryByTestId("link-phone-match-code")).toBeNull();
     const card = screen.getByTestId("link-phone-confirm");
     expect(card.textContent).not.toContain("Approve sign-in from");
