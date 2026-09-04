@@ -1682,7 +1682,30 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     const rect = container.getBoundingClientRect();
     const dpr = window.devicePixelRatio || 1;
     appliedDprRef.current = dpr;
-    runtime.setViewport({ width: rect.width, height: rect.height });
+    const previous = runtime.getViewport();
+    const next: ScreenSize = { width: rect.width, height: rect.height };
+    // The camera is anchored at the tile's top-left, so a tile that shrinks
+    // or grows around it - a split, a drag of the pane divider - would keep
+    // that corner and let whatever was in the MIDDLE slide toward an edge.
+    // Shifting by half the size delta keeps the floor point that was under
+    // the centre under the centre, which is what a resize should look like
+    // from inside the tile. A first measurement has nothing to keep. A tile
+    // that is still fitting itself is left alone: the frame loop re-fits it
+    // to the new viewport, and persisting a shifted camera here would turn a
+    // never-framed tile into a framed one, costing it that fit on the next
+    // open.
+    if (
+      previous.width > 0 &&
+      previous.height > 0 &&
+      (next.width !== previous.width || next.height !== previous.height) &&
+      !runtime.isAutoFitEnabled()
+    ) {
+      const camera = runtime.getCamera();
+      camera.x += (next.width - previous.width) / 2;
+      camera.y += (next.height - previous.height) / 2;
+      persistView();
+    }
+    runtime.setViewport(next);
     const width = Math.max(1, Math.round(rect.width * dpr));
     const height = Math.max(1, Math.round(rect.height * dpr));
     if (canvas.width === width && canvas.height === height) return;
@@ -1692,7 +1715,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     // the idle skip assumes is still there. Without this a resize of a still
     // floor leaves the tile blank until something happens to move.
     runtime.invalidateFrame();
-  }, [runtime]);
+  }, [persistView, runtime]);
 
   useEffect(() => {
     const container = containerRef.current;

@@ -37,7 +37,7 @@ import {
   screen,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import { CommGraphOfficeCanvas } from "@/components/epic-canvas/comm-graph/office/comm-graph-office-canvas";
 import {
@@ -129,6 +129,44 @@ function officeElement(
 
 function renderOffice(visibleIds: ReadonlySet<string>) {
   return render(withQueryClient(officeElement(visibleIds, STATIC_OFFICE)));
+}
+
+/**
+ * The same office element as {@link officeElement}, but with the view and its
+ * change callback named explicitly - what the resize tests need to control
+ * whether the runtime starts auto-fitting or already framed.
+ */
+function officeElementWithView(
+  visibleIds: ReadonlySet<string>,
+  options: OfficeRenderOptions,
+  view: CommGraphTileViewState,
+  onViewChange: (next: CommGraphTileViewState) => void,
+) {
+  return (
+    <CommGraphOfficeCanvas
+      epicId="epic-1"
+      tileInstanceId="comm-graph-instance-1"
+      agents={[ORCHESTRATOR, REVIEWER]}
+      agentIds={visibleIds}
+      events={options.events}
+      hosts={[]}
+      initialHistoryCaughtUp={false}
+      playing={false}
+      pulse={options.pulse}
+      pulseKey={options.pulseKey}
+      modeToggle={null}
+      view={view}
+      onViewChange={onViewChange}
+      canOpenAgentForEvent={() => true}
+      canJump={() => false}
+      onJump={vi.fn()}
+      canJumpToSender={() => false}
+      onJumpToSender={vi.fn()}
+      canJumpToCreated={() => false}
+      onJumpToCreated={vi.fn()}
+      onOpenAgent={vi.fn()}
+    />
+  );
 }
 
 function withQueryClient(children: ReactNode) {
@@ -453,5 +491,185 @@ describe("CommGraphOfficeCanvas", () => {
     expect(screen.getByTestId("comm-graph-office-zoom-in")).toBeDefined();
     expect(screen.getByTestId("comm-graph-office-zoom-out")).toBeDefined();
     expect(screen.getByTestId("comm-graph-office-fit")).toBeDefined();
+  });
+});
+
+/**
+ * The global `MockResizeObserver` installed by `test-browser-apis.ts` is a
+ * total no-op - it never invokes its callback. This suite installs a
+ * controllable replacement for its own tests only, restored afterward so the
+ * rest of the file keeps the shared no-op.
+ */
+class ControllableResizeObserver implements ResizeObserver {
+  readonly callback: ResizeObserverCallback;
+
+  constructor(callback: ResizeObserverCallback) {
+    this.callback = callback;
+    latestControllableResizeObserver = this;
+  }
+
+  observe(): void {}
+  unobserve(): void {}
+  disconnect(): void {}
+}
+
+let latestControllableResizeObserver: ControllableResizeObserver | null = null;
+
+function fireResizeObserverCallback(): void {
+  const observer = latestControllableResizeObserver;
+  if (observer === null) throw new Error("ResizeObserver was not created");
+  // `applyCanvasSize` reads `container.getBoundingClientRect()` itself and
+  // ignores the entry it is handed, so an empty list is enough to invoke it.
+  observer.callback([], observer);
+}
+
+/**
+ * Answers `comm-graph-office-canvas`'s `getBoundingClientRect()` from a
+ * mutable size, and every other element with the zero rect jsdom already
+ * reports by default. Installed on the prototype because the container does
+ * not exist until the component mounts, so it cannot be stubbed by reference
+ * the way an already-rendered element can be.
+ */
+function stubContainerRect(size: { width: number; height: number }): {
+  readonly setSize: (next: { width: number; height: number }) => void;
+  readonly restore: () => void;
+} {
+  let current = size;
+  const originalDescriptor = Object.getOwnPropertyDescriptor(
+    Element.prototype,
+    "getBoundingClientRect",
+  );
+  Element.prototype.getBoundingClientRect = function (this: Element): DOMRect {
+    if (this.getAttribute("data-testid") === "comm-graph-office-canvas") {
+      return DOMRect.fromRect(current);
+    }
+    return DOMRect.fromRect({ width: 0, height: 0 });
+  };
+  return {
+    setSize: (next) => {
+      current = next;
+    },
+    restore: () => {
+      if (originalDescriptor !== undefined) {
+        Object.defineProperty(
+          Element.prototype,
+          "getBoundingClientRect",
+          originalDescriptor,
+        );
+      } else {
+        Reflect.deleteProperty(Element.prototype, "getBoundingClientRect");
+      }
+    },
+  };
+}
+
+/**
+ * The camera keeps the tile's centre fixed across a resize: it shifts by half
+ * the size delta rather than anchoring the top-left corner, which is what a
+ * pane split or a divider drag should look like from inside the tile - but
+ * only once the tile has been framed. A tile still auto-fitting itself is
+ * left for the frame loop instead, so persisting here cannot turn a
+ * never-framed tile into a framed one.
+ */
+describe("resizing the tile container", () => {
+  let originalResizeObserver: typeof ResizeObserver;
+
+  beforeEach(() => {
+    originalResizeObserver = globalThis.ResizeObserver;
+    latestControllableResizeObserver = null;
+    Object.defineProperty(globalThis, "ResizeObserver", {
+      configurable: true,
+      writable: true,
+      value: ControllableResizeObserver,
+    });
+  });
+
+  afterEach(() => {
+    Object.defineProperty(globalThis, "ResizeObserver", {
+      configurable: true,
+      writable: true,
+      value: originalResizeObserver,
+    });
+    vi.useRealTimers();
+  });
+
+  it("shifts the camera by half the size delta once the tile has been framed", () => {
+    vi.useFakeTimers();
+    const rect = stubContainerRect({ width: 400, height: 300 });
+    const onViewChange = vi.fn();
+    // Non-default: `isDefaultCommGraphView` reads false, so the runtime is
+    // created with auto-fit already off, as a tile the user has framed once.
+    const framedView: CommGraphTileViewState = {
+      x: 40,
+      y: 30,
+      zoom: 1,
+      mode: "office",
+    };
+
+    try {
+      render(
+        withQueryClient(
+          officeElementWithView(
+            new Set([ORCHESTRATOR.id, REVIEWER.id]),
+            STATIC_OFFICE,
+            framedView,
+            onViewChange,
+          ),
+        ),
+      );
+
+      rect.setSize({ width: 200, height: 300 });
+      act(() => {
+        fireResizeObserverCallback();
+      });
+      // Past `VIEW_PERSIST_DEBOUNCE_MS` (150ms in the source), which
+      // coalesces the resize into one persisted write.
+      act(() => {
+        vi.advanceTimersByTime(200);
+      });
+
+      expect(onViewChange).toHaveBeenCalledWith({
+        x: -60,
+        y: 30,
+        zoom: 1,
+        mode: "office",
+      });
+    } finally {
+      rect.restore();
+    }
+  });
+
+  it("does not persist a view on resize while a never-framed tile is still auto-fitting", () => {
+    vi.useFakeTimers();
+    const rect = stubContainerRect({ width: 400, height: 300 });
+    const onViewChange = vi.fn();
+
+    try {
+      render(
+        withQueryClient(
+          officeElementWithView(
+            new Set([ORCHESTRATOR.id, REVIEWER.id]),
+            STATIC_OFFICE,
+            OFFICE_VIEW,
+            onViewChange,
+          ),
+        ),
+      );
+
+      rect.setSize({ width: 200, height: 300 });
+      act(() => {
+        fireResizeObserverCallback();
+      });
+      act(() => {
+        vi.advanceTimersByTime(200);
+      });
+
+      // The frame loop's own auto-fit re-frames a never-framed tile; had this
+      // resize persisted a shifted camera it would have turned the tile into
+      // a framed one and cost it that fit on the next open.
+      expect(onViewChange).not.toHaveBeenCalled();
+    } finally {
+      rect.restore();
+    }
   });
 });
