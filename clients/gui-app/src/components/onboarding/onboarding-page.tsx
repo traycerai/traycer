@@ -1107,7 +1107,9 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
         // no act; an act the list held can be dropped again before it is
         // reached; and on a shell with no bridge the toast never shows, so
         // consuming costs nothing. Before `complete()`, which is what makes
-        // the toast eligible.
+        // the toast eligible. `session-import` is deliberately NOT consumed
+        // here: its toast exists to reach the user who never saw the import
+        // act, and the wizard consumes the id itself on mount.
         consumeAnnouncement("login-import");
         complete();
         if (replay) {
