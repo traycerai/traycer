@@ -43,6 +43,7 @@ const SETTINGS_PATHS = new Set([
   "host",
   "keybindings",
   "notifications",
+  "opening-behavior",
   "providers",
   "service",
   "shell",

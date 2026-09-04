@@ -68,6 +68,7 @@ describe("<EpicRootDragOverlayContent />", () => {
           cadence: { debounceMs: 500, maxWaitMs: 15_000, throttleMs: 5_000 },
           status: { state: "running", pid: 7, startedAtMs: 1 },
           chatId: "chat-1",
+          relaunchOnHostRestart: false,
           createdAtMs: 1,
           updatedAtMs: 1,
         }),
@@ -134,25 +135,23 @@ describe("<EpicRootDragOverlayContent />", () => {
   });
 
   /**
-   * Native-view occlusion: a chip that is not inside a `[data-browser-overlay]`
-   * element paints UNDER a live browser tile's `WebContentsView`, i.e. it is
-   * invisible exactly while it is being dragged over one. The published-chat
-   * chip shipped that way when the marker was pasted per chip, so the marker
-   * now lives once on the shared overlay wrapper and these cases pin that every
-   * variant renders inside it - the coordinator matches
-   * `[data-browser-overlay]` and uses that element's own rect
-   * (`collectBrowserOverlaySurfaces`), so an ancestor counts.
+   * Native-view occlusion: a chip that is not registered with the overlay
+   * coordinator paints UNDER a live browser tile's `WebContentsView`, i.e. it
+   * is invisible exactly while it is being dragged over one. The
+   * published-chat chip shipped that way when the marker was pasted per
+   * chip, so the registration now lives once on the shared overlay wrapper
+   * and these cases pin that every variant renders inside it - the
+   * coordinator reads the registered element's own rect, so an ancestor
+   * registration covers every descendant chip.
    */
   describe("native-view occlusion marker", () => {
     function overlayMarker(): HTMLElement {
-      const markers = document.querySelectorAll<HTMLElement>(
-        '[data-browser-overlay="drag-overlay"]',
-      );
+      const markers = screen.getAllByTestId("drag-overlay-marker");
       // Exactly one: a per-chip marker re-added under this wrapper would nest a
       // second occlusion surface for the same chip, which is the shape the
       // published-chat miss came from.
       expect(markers.length).toBe(1);
-      return markers.item(0);
+      return markers[0];
     }
 
     function startTileDrag(tile: EpicCanvasTileRef): void {

@@ -1,4 +1,5 @@
 import { SessionImportWizard } from "@/components/session-import/session-import-wizard";
+import type { SessionImportScanHandle } from "@/components/session-import/use-session-import-scan";
 
 /**
  * The session-import act's stage: the real wizard, dressed as the same mini-app
@@ -10,11 +11,14 @@ import { SessionImportWizard } from "@/components/session-import/session-import-
  * height comes from the diorama's own budget so the two windows are the same
  * object from act to act, and the flex chain below it is what gives the list a
  * bounded box to scroll inside.
+ *
+ * The scan is the page's, not this stage's: it has been running since the tour
+ * opened, so the list is already filled in by the time this act is reached.
  */
 export function OnboardingSessionImportStage(props: {
-  readonly registerSubmit: (submit: () => void) => void;
+  readonly scan: SessionImportScanHandle;
 }) {
-  const { registerSubmit } = props;
+  const { scan } = props;
   return (
     <div
       data-testid="onboarding-session-import-stage"
@@ -35,11 +39,12 @@ export function OnboardingSessionImportStage(props: {
       </header>
       <SessionImportWizard
         surface="onboarding"
-        // The tour advances on Continue, which is also what submits - so the
-        // wizard has nothing left to tell the page when a run starts.
+        scan={scan}
+        // The wizard switches to its progress view on its own, and the tour's
+        // "Start building" stays where it is - there is nothing for the page
+        // to do when a run starts.
         onImportStarted={() => undefined}
         secondaryAction={null}
-        registerSubmit={registerSubmit}
       />
     </div>
   );

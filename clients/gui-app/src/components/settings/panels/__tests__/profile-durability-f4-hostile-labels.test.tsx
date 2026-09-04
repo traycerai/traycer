@@ -150,7 +150,7 @@ vi.mock("@/hooks/providers/use-refresh-providers", () => ({
   useRefreshProviders: () => () => Promise.resolve(),
 }));
 vi.mock("@/providers/use-runner-host", () => ({
-  useRunnerHost: () => ({ openExternalLink: vi.fn() }),
+  useRunnerHost: () => ({}),
 }));
 vi.mock("@/hooks/auth/use-auth-user-query", () => ({
   useAuthUser: () => ({

@@ -3,7 +3,6 @@ import { openProjectedSidebarNodeInTabWhenAvailable } from "../open-projected-si
 import type { ProjectedSidebarNodeOpenArgs } from "../open-projected-sidebar-node";
 import type { OpenEpicState } from "@/stores/epics/open-epic/store";
 
-const TAB_ID = "tab-1";
 const NODE_ID = "artifact-1";
 const FALLBACK_HOST_ID = "host-fallback";
 
@@ -58,10 +57,9 @@ function makeArgs(
 ): ProjectedSidebarNodeOpenArgs {
   return {
     epicHandle: { store } as never,
-    tabId: TAB_ID,
     nodeId: NODE_ID,
     fallbackHostId: FALLBACK_HOST_ID,
-    openTileInTab: vi.fn(),
+    openNode: vi.fn(),
     onBeforeOpen: null,
     onOpened: vi.fn(),
     onUnavailable: vi.fn(),
@@ -81,15 +79,15 @@ afterEach(() => {
 describe("openProjectedSidebarNodeInTabWhenAvailable", () => {
   it("opens synchronously when the node is already projected and returns a no-op cancel", () => {
     const store = makeFakeStore(stateWithArtifact());
-    const openTileInTab = vi.fn();
+    const openNode = vi.fn();
     const onOpened = vi.fn();
     const onUnavailable = vi.fn();
 
     const cancel = openProjectedSidebarNodeInTabWhenAvailable(
-      makeArgs(store, { openTileInTab, onOpened, onUnavailable }),
+      makeArgs(store, { openNode, onOpened, onUnavailable }),
     );
 
-    expect(openTileInTab).toHaveBeenCalledTimes(1);
+    expect(openNode).toHaveBeenCalledTimes(1);
     expect(onOpened).toHaveBeenCalledTimes(1);
     expect(onUnavailable).not.toHaveBeenCalled();
     // The no-op cancel must not fire onUnavailable either.
@@ -99,17 +97,17 @@ describe("openProjectedSidebarNodeInTabWhenAvailable", () => {
 
   it("opens once the node projects into the store", () => {
     const store = makeFakeStore(emptyState());
-    const openTileInTab = vi.fn();
+    const openNode = vi.fn();
     const onOpened = vi.fn();
     const onUnavailable = vi.fn();
 
     openProjectedSidebarNodeInTabWhenAvailable(
-      makeArgs(store, { openTileInTab, onOpened, onUnavailable }),
+      makeArgs(store, { openNode, onOpened, onUnavailable }),
     );
-    expect(openTileInTab).not.toHaveBeenCalled();
+    expect(openNode).not.toHaveBeenCalled();
 
     store.setState(stateWithArtifact());
-    expect(openTileInTab).toHaveBeenCalledTimes(1);
+    expect(openNode).toHaveBeenCalledTimes(1);
     expect(onOpened).toHaveBeenCalledTimes(1);
     expect(onUnavailable).not.toHaveBeenCalled();
   });
@@ -131,12 +129,12 @@ describe("openProjectedSidebarNodeInTabWhenAvailable", () => {
 
   it("caller-cancel is SILENT: no onUnavailable, tears down the wait, notifies onCleanup", () => {
     const store = makeFakeStore(emptyState());
-    const openTileInTab = vi.fn();
+    const openNode = vi.fn();
     const onUnavailable = vi.fn();
     const onCleanup = vi.fn();
 
     const cancel = openProjectedSidebarNodeInTabWhenAvailable(
-      makeArgs(store, { openTileInTab, onUnavailable, onCleanup }),
+      makeArgs(store, { openNode, onUnavailable, onCleanup }),
     );
 
     cancel();
@@ -148,7 +146,7 @@ describe("openProjectedSidebarNodeInTabWhenAvailable", () => {
 
     // The subscription was torn down: a late projection no longer opens.
     store.setState(stateWithArtifact());
-    expect(openTileInTab).not.toHaveBeenCalled();
+    expect(openNode).not.toHaveBeenCalled();
 
     // And the timeout no longer fires onUnavailable after cancel.
     vi.advanceTimersByTime(30_000);

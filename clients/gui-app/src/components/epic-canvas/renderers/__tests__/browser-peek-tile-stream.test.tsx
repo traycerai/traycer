@@ -1,14 +1,11 @@
 import "../../../../../__tests__/test-browser-apis";
-import {
-  act,
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-} from "@testing-library/react";
+import { act, cleanup, fireEvent, screen } from "@testing-library/react";
+import { renderPeekTile } from "@/components/epic-canvas/renderers/__tests__/browser-peek-tile-render";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   FakeStreamClient,
+  runnerOpenExternalLinkModule,
+  tileRoleRunnerHostModule,
   type FakeStreamSession,
   PEEK_NODE,
   epicNestedFocusNavigationModule,
@@ -25,6 +22,12 @@ const hookState = vi.hoisted(() => ({
   streamClientFactory: null as (() => FakeStreamClient | null) | null,
   visible: true,
 }));
+
+vi.mock("@/providers/use-runner-host", () => tileRoleRunnerHostModule());
+
+vi.mock("@/hooks/runner/use-open-external-link-mutation", () =>
+  runnerOpenExternalLinkModule(),
+);
 
 vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () =>
   tabHostIdModule(),
@@ -151,12 +154,13 @@ describe("BrowserPeekTile", () => {
       return undefined;
     });
 
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
 
@@ -169,12 +173,13 @@ describe("BrowserPeekTile", () => {
   });
 
   it("renders JPEG frames and acks on arrival, before the image is presented", () => {
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -232,12 +237,13 @@ describe("BrowserPeekTile", () => {
   });
 
   it("renders a terminal screencast frame", () => {
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -256,13 +262,84 @@ describe("BrowserPeekTile", () => {
     expect(screen.getByText("Screencast ended.")).toBeTruthy();
   });
 
-  it("ignores callbacks from a replaced screencast subscription", () => {
-    const rendered = render(
+  it("reads a native-handoff complete frame as a handoff spinner, not a dead cast", () => {
+    // `completeMeans="native-handoff"`: this client is the one placing the
+    // native tab, so the host's `complete` frame (browser-screencast-plane.ts's
+    // `subscribeScreencast`) means "attached, going native" - pins existing
+    // behavior for the electron-capable client (browser-session-tile.tsx's
+    // `browserPeekCompleteMeaning`).
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="native-handoff"
+      />,
+    );
+    const stream = liveStream();
+
+    act(() => {
+      stream.emit(
+        {
+          kind: "complete",
+          hasBinaryPayload: false,
+        },
+        null,
+      );
+    });
+
+    expect(screen.getByText("Going native")).toBeTruthy();
+    expect(screen.getByText("Handing off to the native tab.")).toBeTruthy();
+    expect(screen.queryByText("Ended")).toBeNull();
+  });
+
+  it("reads a native-elsewhere complete frame as an honest terminal state, not a handoff spinner", () => {
+    // `completeMeans="native-elsewhere"`: a client with no native window of
+    // its own for the session's host (e.g. a viewer-only client, or an
+    // electron-capable client on a DIFFERENT host than the session's) gets the
+    // same `complete` frame for a tab that will never stream here. It must not
+    // read as "Going native" (nothing is arriving) nor as "Ended" (the tab is
+    // not dead, it is just unreachable from this client).
+    renderPeekTile(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+        completeMeans="native-elsewhere"
+      />,
+    );
+    const stream = liveStream();
+
+    act(() => {
+      stream.emit(
+        {
+          kind: "complete",
+          hasBinaryPayload: false,
+        },
+        null,
+      );
+    });
+
+    expect(screen.getByText("Open natively")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "This tab is open in the desktop app on that host, so it can't be streamed here.",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText("Going native")).toBeNull();
+    expect(screen.queryByText("Ended")).toBeNull();
+  });
+
+  it("ignores callbacks from a replaced screencast subscription", () => {
+    const rendered = renderPeekTile(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
     const retired = liveStream();
@@ -273,6 +350,7 @@ describe("BrowserPeekTile", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
     hookState.visible = true;
@@ -282,6 +360,7 @@ describe("BrowserPeekTile", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
     const current = liveStream();
@@ -306,12 +385,13 @@ describe("BrowserPeekTile", () => {
   });
 
   it("pre-arms on hover and stops re-claiming once the host denies it", () => {
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -349,12 +429,13 @@ describe("BrowserPeekTile", () => {
   });
 
   it("shows no control chrome for a hover pre-arm and lights it on the click", () => {
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -391,12 +472,13 @@ describe("BrowserPeekTile", () => {
   });
 
   it("ignores an armed ack that arrives after an explicit Release", () => {
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -437,12 +519,13 @@ describe("BrowserPeekTile", () => {
   });
 
   it("renders an alert overlay and responds with its generation", () => {
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -477,12 +560,13 @@ describe("BrowserPeekTile", () => {
   });
 
   it("renders confirm and prompt overlays with dismiss and prompt responses", () => {
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -542,12 +626,13 @@ describe("BrowserPeekTile", () => {
   });
 
   it("drops stale dialog generations before presenting or responding", () => {
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -595,12 +680,13 @@ describe("BrowserPeekTile", () => {
   });
 
   it("clears only the matching text-free dialog settlement", () => {
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -642,12 +728,13 @@ describe("BrowserPeekTile", () => {
   });
 
   it("resets control state on reconnect, re-arms with a fresh epoch, and accepts a low dialog generation", () => {
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -754,12 +841,13 @@ describe("BrowserPeekTile", () => {
   });
 
   it("sends one insertText frame for a local CJK composition and shows its indicator", () => {
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -795,12 +883,13 @@ describe("BrowserPeekTile", () => {
   });
 
   it("does not keep a screencast subscription while the tile is hidden", () => {
-    const { rerender } = render(
+    const { rerender } = renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -812,6 +901,7 @@ describe("BrowserPeekTile", () => {
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
 
@@ -822,12 +912,13 @@ describe("BrowserPeekTile", () => {
   it("coalesces tile viewport changes with a trailing 200ms debounce", async () => {
     vi.useFakeTimers();
     try {
-      render(
+      renderPeekTile(
         <BrowserPeekTile
           viewTabId="view-tab-1"
           paneId="pane-1"
           epicId="epic-1"
           node={PEEK_NODE}
+          completeMeans="ended"
         />,
       );
       const stream = liveStream();
@@ -875,12 +966,13 @@ describe("BrowserPeekTile", () => {
       // is handed. Nothing resizes afterwards, so without a restatement at
       // `open` the host serves the whole round on its last-tile-close defaults.
       hookState.streamClient = new FakeStreamClient(false);
-      render(
+      renderPeekTile(
         <BrowserPeekTile
           viewTabId="view-tab-1"
           paneId="pane-1"
           epicId="epic-1"
           node={PEEK_NODE}
+          completeMeans="ended"
         />,
       );
       const stream = liveStream();
@@ -935,12 +1027,13 @@ describe("BrowserPeekTile rttProbe handling", () => {
   });
 
   it("answers an rttProbe with exactly one rttProbeAck carrying the same probeId", () => {
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -963,12 +1056,13 @@ describe("BrowserPeekTile rttProbe handling", () => {
   });
 
   it("does not disturb other frame handling on the same subscription", () => {
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();

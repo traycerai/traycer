@@ -980,8 +980,8 @@ export const providerLoginCapabilitySchema = z.object({
   codePaste: z.object({}).nullable().catch(null),
   /**
    * Non-null when this provider must be signed in from a real terminal rather
-   * than the headless `providers.startLogin` child - the host opens an
-   * epic-scoped PTY over `providers.startTerminalLogin` and delivers the
+   * than the headless `providers.startLogin` child - the host opens a
+   * host-owned PTY over `providers.startTerminalLogin` and delivers the
    * provider's login command into it, and the user reads the device code and
    * URL the CLI prints. Copilot is the case: its `copilot login` prints a
    * device code that a headless child discards while the browser opens the
@@ -2850,20 +2850,25 @@ export type ProvidersTouchLoginResponse = z.infer<
 >;
 
 /**
- * Start (or restart) a host-owned, epic-scoped terminal running this
- * provider's login command, for providers whose capability declares
- * `terminalLogin`. The host - not the client - creates the PTY: only the host
- * can build the provider's spawn env (binary path, profile overrides,
- * `COPILOT_AUTO_UPDATE=false`) and pick the cwd, and a plain `terminal.create`
- * would get bare filtered `process.env` in a surface that has no cwd of its
- * own. The client's job is to render the session the host names back.
+ * Start (or restart) a host-owned terminal running this provider's login
+ * command, for providers whose capability declares `terminalLogin`. The host -
+ * not the client - creates the PTY: only the host can build the provider's
+ * spawn env (binary path, profile overrides, `COPILOT_AUTO_UPDATE=false`) and
+ * pick the cwd, and a plain `terminal.create` would get bare filtered
+ * `process.env` in a surface that has no cwd of its own. The client's job is
+ * to render the session the host names back.
  *
- * `epicId` scopes the session so it lands in the epic's Terminals surface and
- * the initiating view can open it as a tile - the same scope `terminal.create`
- * uses. `cols`/`rows` are the size the PTY is opened at, applied while the
- * shell's output is still buffered so its first redraw is not torn; they are
- * an INITIAL size, not a promise about the user's viewport - the tile resizes
- * on mount, and today's client sends a fixed 80x24. A host must not treat them
+ * This is the FROZEN `@1.0` request: `epicId` scopes the session to an epic's
+ * Terminals surface, the only surface that existed when the method shipped.
+ * `@2.0` below replaces it with a `TerminalScope`, exactly as
+ * `terminal.create@2.0` did, so the landing page's independent terminal panel
+ * can host a sign-in too. Never edit this shape in place; the registry's
+ * v1.0 line binds it.
+ *
+ * `cols`/`rows` are the size the PTY is opened at, applied while the shell's
+ * output is still buffered so its first redraw is not torn; they are an
+ * INITIAL size, not a promise about the user's viewport - the tile resizes on
+ * mount, and today's client sends a fixed 80x24. A host must not treat them
  * as the real geometry (no sizing heuristics, no resize-suppression window).
  *
  * No `profileId`: terminal login is Copilot-only today and Copilot has no
@@ -2888,6 +2893,39 @@ export const providersStartTerminalLoginRequestSchema = z.object({
 });
 export type ProvidersStartTerminalLoginRequest = z.infer<
   typeof providersStartTerminalLoginRequestSchema
+>;
+
+/**
+ * Canonical `@2.0` request. `scope` replaces `epicId`: `{ kind: "epic" }`
+ * lands the sign-in terminal in that epic's Terminals surface exactly as
+ * `@1.0` did, and `{ kind: "independent" }` lands it in the landing page's
+ * terminal panel - the surface a provider that is signed out BEFORE any epic
+ * exists can actually reach. A field rename is not additive, so this rides a
+ * new major (the `terminalScopeSchema` comment records why); the registry's
+ * v1.0→v2.0 upgrade folds an old client's `epicId` into an epic scope, and
+ * the downgrade refuses an independent scope against an old host (that
+ * refusal IS the feature gate - the old host has no surface to put it in).
+ *
+ * Everything the `@1.0` doc says about `cols`/`rows`, the absent `profileId`
+ * and the absent `desiredSessionId` holds unchanged here.
+ *
+ * The epic arm keeps `@1.0`'s non-empty floor on `epicId` rather than
+ * borrowing `terminalScopeSchema`'s bare string: an empty id decodes fine and
+ * then names no surface, leaving the host holding a live sign-in PTY nothing
+ * can list. Same inferred type as `TerminalScope`, so the host passes it
+ * through unchanged.
+ */
+export const providersStartTerminalLoginRequestSchemaV20 = z.object({
+  providerId: providerIdSchema,
+  scope: z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("epic"), epicId: z.string().min(1) }),
+    z.object({ kind: z.literal("independent") }),
+  ]),
+  cols: z.number().int().positive(),
+  rows: z.number().int().positive(),
+});
+export type ProvidersStartTerminalLoginRequestV20 = z.infer<
+  typeof providersStartTerminalLoginRequestSchemaV20
 >;
 
 /**
@@ -3221,6 +3259,106 @@ export const providersSetPackPolicyResponseSchema = z.object({
 });
 export type ProvidersSetPackPolicyResponse = z.infer<
   typeof providersSetPackPolicyResponseSchema
+>;
+
+// ── On-demand pack discovery refresh ───────────────────────────────────────
+//
+// Another BRAND-NEW method name at `@1.0`, riding the same
+// optional-capability channel as the version-manager mutations above and for
+// the same reason: a host that predates it must refuse the call per-call with
+// upgrade guidance rather than fail the handshake.
+//
+// It is not one of those mutations. Nothing here writes the store - it runs
+// the discovery poll this host otherwise only runs on its own jittered
+// ticker, so a user who knows a version was just published does not have to
+// wait out the period to see it.
+
+/**
+ * Run the pack-discovery poll for one pack now.
+ *
+ * Keyed by `packId`, never by provider (D5): the head this polls belongs to
+ * the PACK, and one pack serves several providers, so a per-provider request
+ * would resolve to the same pack from several ids and poll one head once per
+ * provider.
+ */
+export const providersRefreshPackDiscoveryRequestSchema = z.object({
+  // A managed pack id. An unknown one is a caller BUG, not a typed refusal
+  // below - the host throws, exactly as the per-pack mutations do.
+  packId: z.string().min(1),
+});
+export type ProvidersRefreshPackDiscoveryRequest = z.infer<
+  typeof providersRefreshPackDiscoveryRequestSchema
+>;
+
+/**
+ * What the poll did to this host's knowledge of the pack.
+ *
+ * `moved` means THIS HOST'S target knowledge changed - a new head revision,
+ * generation or floor, the first population of a never-derived pack, or a
+ * sibling host's pin/install move. It does NOT mean a newer version exists;
+ * read `providers.list`'s `updateAvailable` for that. `unchanged` covers a
+ * 304, an identical revision, and a pack this host has never seen that the
+ * registry has not published yet.
+ *
+ * `unreachable` and `unusable` are both failures and are NOT interchangeable.
+ * `unreachable` is the transport class - timeout, 403, 5xx, an unopenable
+ * keyring - and leaves existing knowledge in place, so the honest copy is
+ * "couldn't reach the registry, try again". `unusable` means the registry
+ * answered and the answer could not be trusted (stale head, schema error, no
+ * generation this host supports); a pack that WAS known has its update
+ * knowledge cleared until a later check succeeds. Collapsing the two into one
+ * "check failed" would offer a retry for an answer that will not change and
+ * would hide the cleared knowledge behind a transient-sounding message.
+ */
+export const providerPackRefreshOutcomeSchema = z.enum([
+  "moved",
+  "unchanged",
+  "unreachable",
+  "unusable",
+]);
+export type ProviderPackRefreshOutcome = z.infer<
+  typeof providerPackRefreshOutcomeSchema
+>;
+
+/**
+ * Same `{ ok: true, … } | { ok: false, code, detail }` shape the per-pack
+ * mutations use, so the panel's refusal handling stays uniform across the
+ * popover's controls.
+ */
+export const providersRefreshPackDiscoveryResultSchema = z.union([
+  z.object({ ok: z.literal(true), outcome: providerPackRefreshOutcomeSchema }),
+  z.object({
+    ok: z.literal(false),
+    // Two members, both typed rather than thrown because the panel has a
+    // specific sentence to put ON THE ROW for each - a thrown error only ever
+    // reaches a generic toast.
+    //
+    // `discovery-unavailable` means this host has no discovery machinery to
+    // run at all right now (an abandoned or failed boot chain, or a call
+    // landing in the window before the ticker is constructed): update checks
+    // are off on this host, not broken for this pack. `pack-disabled` means
+    // the provider is turned off, and the scheduled poll deliberately never
+    // includes a disabled pack - the popover stays reachable for one because
+    // version staging has no enablement refcount - so enabling it is the
+    // user's next step.
+    //
+    // An unknown `packId` is NOT a member: it is a caller bug and throws.
+    // `detail` stays operator-facing and is never primary copy, same rule as
+    // every other typed error in this file.
+    code: z.enum(["discovery-unavailable", "pack-disabled"]),
+    detail: z.string().nullable(),
+  }),
+]);
+export type ProvidersRefreshPackDiscoveryResult = z.infer<
+  typeof providersRefreshPackDiscoveryResultSchema
+>;
+
+/** Response envelope, shaped like every sibling's in this group. */
+export const providersRefreshPackDiscoveryResponseSchema = z.object({
+  result: providersRefreshPackDiscoveryResultSchema,
+});
+export type ProvidersRefreshPackDiscoveryResponse = z.infer<
+  typeof providersRefreshPackDiscoveryResponseSchema
 >;
 
 export function downgradeProviderAuthV20ToV10(

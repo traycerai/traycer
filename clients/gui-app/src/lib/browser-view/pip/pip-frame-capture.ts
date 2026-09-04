@@ -14,7 +14,7 @@ import { useHostStreamClientFor } from "@/hooks/host/use-host-stream-client-for"
 import {
   useElectronTabBindingOnHost,
   type ElectronTabBinding,
-} from "@/lib/browser-view/sessions/electron-tabs";
+} from "@/lib/browser-view/sessions/electron-tab-directory";
 import {
   openPipHeadlessStream,
   PIP_HEADLESS_MAX_HEIGHT,

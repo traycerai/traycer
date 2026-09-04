@@ -9,6 +9,7 @@ import {
   type ChatSessionStoreHandle,
 } from "@/stores/chats/chat-session-store";
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
+import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 
 /**
  * # The append republish interleave
@@ -211,6 +212,7 @@ function createHarness(): Harness {
     onAuthError: null,
     onProviderAuthError: () => {},
     streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
+    environment: CHAT_STORE_TEST_ENVIRONMENT,
     streamClientFactory: (_epicId, _chatId, nextCallbacks) => {
       callbacks = nextCallbacks;
       return {

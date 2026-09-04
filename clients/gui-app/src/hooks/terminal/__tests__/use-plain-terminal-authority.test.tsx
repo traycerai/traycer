@@ -201,6 +201,8 @@ class ControlledStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
     super({
       clientIdentity: TEST_CLIENT_IDENTITY,
       registry: hostStreamRpcRegistry,
+      // This endpoint resolves no host, so there is none to name.
+      hostId: null,
       endpoint: () => null,
       bearer: () => null,
       auth: null,
@@ -282,6 +284,8 @@ class LogicalOrderingStreamClient extends WsStreamClient<HostStreamRpcRegistry> 
     super({
       clientIdentity: TEST_CLIENT_IDENTITY,
       registry: hostStreamRpcRegistry,
+      // This endpoint resolves no host, so there is none to name.
+      hostId: null,
       endpoint: () => null,
       bearer: () => null,
       auth: null,
@@ -314,6 +318,7 @@ class LogicalOrderingStreamClient extends WsStreamClient<HostStreamRpcRegistry> 
       method: "terminal.plain.subscribeList",
       paramsProvider: () => ({ scope: SCOPE }),
       schemaVersion: { major: 2, minor: 1 },
+      requiredSchemaVersion: null,
       qos: 1,
       port: logicalStreamPort,
     });
@@ -984,6 +989,7 @@ describe("usePlainTerminalAuthority integration", () => {
         canMutate: true,
         closeTerminal: () => Promise.resolve(),
         importLegacyTerminal: importLegacy,
+        providerLoginProviderFor: () => null,
         queryClient: test.queryClient,
       }),
     );

@@ -73,7 +73,7 @@ const mocks = vi.hoisted(() => ({
   setEnvOverrideMutate: vi.fn(),
   setApiKeyMutate: vi.fn(),
   refreshProviders: vi.fn(() => Promise.resolve()),
-  openExternalLink: vi.fn(),
+  openLink: vi.fn(),
   reportableErrorToast: vi.fn(),
   openSettings: vi.fn(),
   hostKind: "local",
@@ -149,11 +149,8 @@ vi.mock("@/hooks/providers/use-providers-set-api-key-mutation", () => ({
 vi.mock("@/hooks/providers/use-tab-refresh-providers", () => ({
   useTabRefreshProviders: () => mocks.refreshProviders,
 }));
-vi.mock("@/hooks/runner/use-open-external-link-mutation", () => ({
-  useRunnerOpenExternalLink: () => ({ mutate: mocks.openExternalLink }),
-}));
-vi.mock("@/providers/use-runner-host", () => ({
-  useRunnerHost: () => ({ openExternalLink: mocks.openExternalLink }),
+vi.mock("@/lib/links/open-link", () => ({
+  useOpenLink: () => mocks.openLink,
 }));
 vi.mock("@/lib/reportable-error-toast", () => ({
   reportableErrorToast: mocks.reportableErrorToast,
@@ -253,6 +250,18 @@ const COPILOT_TERMINAL_CAP: ProviderLoginCapability = {
   terminalLogin: {},
 };
 
+// Reasonix is also a terminal-login provider (its own credential wizard, not
+// a device-code sign-in), but it has setup guidance
+// (`provider-setup-guidance.ts`) - the one live entry today - so
+// `TerminalLoginRow` must swap in the guidance's button label and hint
+// instead of the generic "Sign in from a terminal" copy.
+const REASONIX_CAP: ProviderLoginCapability = {
+  oauthArgs: ["setup"],
+  token: null,
+  codePaste: null,
+  terminalLogin: {},
+};
+
 // The unreachable case this used to model: an old host's payload cannot
 // decode with `terminalLogin` genuinely absent - the v6 -> v7 upgrade bridge
 // (`registry.ts`) fills it to `null` on that exact hop. What DOES leave
@@ -264,6 +273,12 @@ function copilotState(
   loginCapability: ProviderLoginCapability | null,
 ): ProviderCliState {
   return { ...claudeState(loginCapability), providerId: "copilot" };
+}
+
+function reasonixState(
+  loginCapability: ProviderLoginCapability | null,
+): ProviderCliState {
+  return { ...claudeState(loginCapability), providerId: "reasonix" };
 }
 
 function claudeState(
@@ -406,7 +421,7 @@ describe("<ProviderReauthBanner />", () => {
     mocks.setEnvOverrideMutate.mockClear();
     mocks.setApiKeyMutate.mockClear();
     mocks.refreshProviders.mockClear();
-    mocks.openExternalLink.mockClear();
+    mocks.openLink.mockClear();
     mocks.reportableErrorToast.mockClear();
     mocks.hostKind = "local";
     useProvidersFocusStore.getState().clearFocusHarnessId();
@@ -457,6 +472,38 @@ describe("<ProviderReauthBanner />", () => {
     expect(screen.queryByRole("button", { name: /Authenticate/ })).toBeNull();
   });
 
+  // Reasonix is a terminal-login provider with its own setup guidance
+  // (`provider-setup-guidance.ts`): the generic "Sign in from a terminal" /
+  // "prints a sign-in code" copy is wrong for its credential-paste wizard, so
+  // `TerminalLoginRow` swaps in the guidance's own label and hint instead.
+  it("offers 'Set up in terminal' with the API-key hint for a provider with setup guidance (reasonix)", () => {
+    render(
+      <ProviderReauthBanner
+        epicId="epic-1"
+        viewTabId="tab-1"
+        providerId="reasonix"
+        state={reasonixState(REASONIX_CAP)}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", { name: "Set up in terminal" }),
+    ).toBeDefined();
+    expect(
+      screen.queryByRole("button", { name: "Sign in from a terminal" }),
+    ).toBeNull();
+    expect(
+      screen.getByText(
+        "Reasonix asks for your provider API key in that terminal. Finish there, then use Refresh above.",
+      ),
+    ).toBeDefined();
+    expect(screen.queryByText(/sign-in code/)).toBeNull();
+  });
+
   // Row 2: a provider whose whole `loginCapability` is `null` (Cursor,
   // Traycer, or any CLI with no OAuth session to reconnect) makes the
   // helper's optional chain yield `undefined` for `terminalLogin` -
@@ -465,6 +512,36 @@ describe("<ProviderReauthBanner />", () => {
   // has real `oauthArgs`, so a null capability here also exercises the "no
   // reconnect method at all" branch rather than the headless button; assert
   // on the absence of the terminal button, which is Row 2's actual claim.
+  it("shows the pack's preparing state instead of the terminal button while the provider cannot spawn", () => {
+    render(
+      <ProviderReauthBanner
+        epicId="epic-1"
+        viewTabId="tab-1"
+        providerId="copilot"
+        state={{
+          ...copilotState(COPILOT_TERMINAL_CAP),
+          managedInstallState: { status: "downloading", percent: 30 },
+        }}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+
+    // A terminal login spawns the provider's CLI exactly as a turn does, so
+    // a pack with nothing to fall back to gates it the same way - the row
+    // stays (the wait is the thing to show), the button does not.
+    expect(
+      screen.queryByRole("button", { name: /Sign in from a terminal/ }),
+    ).toBeNull();
+    expect(screen.getByRole("status").textContent).toBe(
+      "Preparing Copilot… 30%",
+    );
+    // And not the CLI-only stub either: this is not a provider with no route.
+    expect(screen.queryByText(/Reconnect Copilot from its CLI/)).toBeNull();
+  });
+
   it("does not offer 'Sign in from a terminal' when loginCapability is null", () => {
     render(
       <ProviderReauthBanner
@@ -715,8 +792,10 @@ describe("<ProviderReauthBanner />", () => {
     expect(screen.getByText(/Approve sign-in in your browser/)).toBeDefined();
 
     fireEvent.click(screen.getByRole("button", { name: "Open browser again" }));
-    expect(mocks.openExternalLink).toHaveBeenCalledWith(
+    expect(mocks.openLink).toHaveBeenCalledWith(
       "http://localhost:56988/callback",
+      "auth",
+      null,
     );
 
     const input = screen.getByLabelText("Paste the code");

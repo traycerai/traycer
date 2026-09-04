@@ -119,7 +119,8 @@ export type TranscriptRowLocator = z.infer<typeof transcriptRowLocatorSchema>;
  *
  * Only the two sources that own blocks contribute. A `user` row's body is a
  * record rather than blocks; `stopped-turn`, `forked-chat-link`,
- * `notification-anchor` and `setup-card` rows are projected from events. None
+ * `notification-anchor`, `imported-chat-marker` and `setup-card` rows are
+ * projected from events. None
  * of them can be a jump target of either kind here.
  */
 function rowOrdinalByBlockId(

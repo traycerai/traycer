@@ -25,6 +25,7 @@ import {
   useNotificationsStore,
 } from "@/stores/notifications/notifications-store";
 import {
+  noteAgentActivityConnectionStatus,
   openAgentActivityStream,
   useAgentActivityStore,
 } from "@/stores/agent-activity-store";
@@ -496,7 +497,11 @@ export function NotificationsSessionProvider(
     activeEntityRef.current = null;
     useHostNotificationsStore.getState().setConnectionStatus("connecting");
     useCloudNotificationsStore.getState().setConnectionState("reconnecting");
-    useAgentActivityStore.setState({ connectionStatus: "reconnecting" });
+    // Through the store's own setter, not a bare `setState`: moving off
+    // `open` also drops the union's attestation, and a hand-written status
+    // write would leave the cap's busy gate vouching with a union the
+    // dropped connection attested.
+    noteAgentActivityConnectionStatus("reconnecting");
   }, []);
 
   // StrictMode mounts, cleans up, then re-mounts effects. Returning Zustand's
@@ -638,6 +643,7 @@ export function NotificationsSessionProvider(
         reconnect,
         servingStreamClient,
         onAuthError,
+        streamHostId,
       );
     }
     if (notificationFeedMode === "cloud") {

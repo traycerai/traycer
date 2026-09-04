@@ -72,9 +72,11 @@ import type {
   DisplayTopology,
   FileSaveInput,
   FileSaveResult,
+  HostKeyPinMismatch,
   InstalledFont,
   PendingCertificateError,
   ProcessMetricsSnapshot,
+  RendererJsHeapBreakdown,
   TrustedCertificateEntry,
   Vibrancy,
 } from "../ipc-contracts/platform-types";
@@ -90,6 +92,7 @@ export type {
   CertificateTrustScope,
   DisplaySnapshot,
   DisplayTopology,
+  HostKeyPinMismatch,
   PendingCertificateError,
   ProcessMetricsSnapshot,
   TrustedCertificateEntry,
@@ -135,6 +138,7 @@ import type {
   GlobalShortcutStatus,
 } from "../ipc-contracts/global-shortcuts-types";
 import type {
+  DesktopAuthSessionSetResult,
   DesktopAuthSessionSnapshot,
   DesktopRuntimePlatform,
   DesktopTopLevelMenuId,
@@ -209,6 +213,7 @@ export interface DesktopPreloadBridge {
   ): Promise<readonly string[]>;
   requestMicrophoneAccess(): Promise<"granted" | "denied">;
   openMicrophoneSettings(): Promise<void>;
+  openFullDiskAccessSettings(): Promise<void>;
   beginAuthAttempt(): void;
   onAuthCallback(handler: () => void): {
     dispose: () => void;
@@ -414,6 +419,7 @@ export interface DesktopPlatformBridge {
   diagnostics: {
     getMetrics(): Promise<ProcessMetricsSnapshot>;
     takeHeapSnapshot(): Promise<string | null>;
+    measureJsHeaps(): Promise<RendererJsHeapBreakdown | null>;
     traceStart(): Promise<boolean>;
     traceStop(): Promise<string | null>;
   };
@@ -457,6 +463,11 @@ export interface DesktopPlatformBridge {
     dismissPending(id: string): Promise<void>;
     showSystemDialog(certificate: unknown, message: string): Promise<boolean>;
     onPending(handler: (entry: PendingCertificateError) => void): {
+      dispose: () => void;
+    };
+  };
+  hostKeyPin: {
+    onMismatch(handler: (entry: HostKeyPinMismatch) => void): {
       dispose: () => void;
     };
   };
@@ -622,7 +633,9 @@ export interface DesktopWindowsBridge {
   };
   authSession: {
     get(): Promise<DesktopAuthSessionSnapshot>;
-    set(snapshot: DesktopAuthSessionSnapshot): Promise<void>;
+    set(
+      snapshot: DesktopAuthSessionSnapshot,
+    ): Promise<DesktopAuthSessionSetResult>;
     onChange(handler: (snapshot: DesktopAuthSessionSnapshot) => void): {
       dispose: () => void;
     };
@@ -914,6 +927,10 @@ export class DesktopRunnerHost implements IRunnerHost {
 
   openMicrophoneSettings(): Promise<void> {
     return this.bridge.openMicrophoneSettings();
+  }
+
+  openFullDiskAccessSettings(): Promise<void> {
+    return this.bridge.openFullDiskAccessSettings();
   }
 
   openExternalLink(url: string): Promise<void> {

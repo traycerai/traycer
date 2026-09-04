@@ -62,6 +62,7 @@ import {
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 import type { NestedFocusTarget } from "@/lib/epic-nested-focus-route";
+import type { AnalyticsSource } from "@/lib/analytics";
 
 const HOST_ID = "host-1";
 const EPIC_ID = "epic-1";
@@ -199,6 +200,8 @@ const scrollToPathCalls: Array<{
   readonly path: string;
   readonly options: { readonly offset: string };
 }> = [];
+const fileTreeContainer = document.createElement("div");
+let fileTreeContainerAvailable = true;
 const modelListeners = new Set<() => void>();
 // Captured from the real `useFileTree(options)` call the panel makes - the
 // mocked hook below stashes `options.onSelectionChange` here so a test can
@@ -354,6 +357,8 @@ const mockModel = {
   scrollToPath: (path: string, options: { readonly offset: string }) => {
     scrollToPathCalls.push({ path, options });
   },
+  getFileTreeContainer: () =>
+    fileTreeContainerAvailable ? fileTreeContainer : undefined,
 };
 
 vi.mock("@pierre/trees/react", () => ({
@@ -422,6 +427,8 @@ class MockWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
     super({
       clientIdentity: TEST_CLIENT_IDENTITY,
       registry: hostStreamRpcRegistry,
+      // This endpoint resolves no host, so there is none to name.
+      hostId: null,
       endpoint: () => null,
       bearer: () => null,
       auth: null,
@@ -605,6 +612,9 @@ describe("sidebar file tree source selection", () => {
     expandedAtLastReset.clear();
     selectedInModel.clear();
     scrollToPathCalls.length = 0;
+    fileTreeContainerAvailable = true;
+    delete fileTreeContainer.dataset.sidebarRevealHighlighted;
+    delete fileTreeContainer.dataset.sidebarRevealNonce;
     modelListeners.clear();
     capturedOnSelectionChange = null;
     installSearchHost({});
@@ -777,6 +787,7 @@ describe("sidebar file tree filter source", () => {
     expandedAtLastReset.clear();
     selectedInModel.clear();
     scrollToPathCalls.length = 0;
+    fileTreeContainerAvailable = true;
     modelListeners.clear();
     capturedOnSelectionChange = null;
     __resetWorkspaceFileListSubscriptionsForTesting();
@@ -1110,7 +1121,11 @@ describe("reveal in sidebar", () => {
   }
 
   let openPreviewSpy: Mock<
-    (tabId: string, node: EpicCanvasTileRef) => NestedFocusTarget | null
+    (
+      tabId: string,
+      node: EpicCanvasTileRef,
+      source: AnalyticsSource,
+    ) => NestedFocusTarget | null
   >;
 
   beforeEach(() => {
@@ -1138,13 +1153,15 @@ describe("reveal in sidebar", () => {
     __resetWorkspaceFileListSubscriptionsForTesting();
     useFileTreeStore.setState({ expandedPathsByScope: {} });
     useFileTreeRevealStore.setState({ requestsByViewTabId: {} }, true);
-    // The panel reads this action to open a row's preview on a genuine
-    // selection; mocked so the "still opens on a real click" case is
-    // observable without a real canvas/tab-strip mounted, and so the reveal
-    // tests can assert it was NOT called for a programmatic selection.
+    // The panel reads this action (via `openTile`, on the empty test canvas
+    // where the open-tile executor's plan has no pane to open into) to open a
+    // row's preview on a genuine selection; mocked so the "still opens on a
+    // real click" case is observable without a real canvas/tab-strip mounted,
+    // and so the reveal tests can assert it was NOT called for a
+    // programmatic selection.
     openPreviewSpy = vi.fn(() => null);
     useEpicCanvasStore.setState({
-      prepareOpenTilePreviewInTabFocusTarget: openPreviewSpy,
+      prepareOpenTilePreviewInTabFocusTargetFromSource: openPreviewSpy,
     });
   });
 
@@ -1165,6 +1182,7 @@ describe("reveal in sidebar", () => {
     const client = new MockWsStreamClient("unknown");
     renderPanel(client);
 
+    fileTreeContainerAvailable = false;
     act(() => {
       client.sessions[0].emitFrame({
         kind: "listing",
@@ -1234,12 +1252,33 @@ describe("reveal in sidebar", () => {
     await waitFor(() => {
       expect(selectedInModel.has("src/lib/a.ts")).toBe(true);
     });
+    expect(
+      useFileTreeRevealStore.getState().requestsByViewTabId[REVEAL_TAB_ID],
+    ).toBeDefined();
+
+    scrollToPathCalls.length = 0;
+    fileTreeContainerAvailable = true;
+    act(() => {
+      client.sessions[0].emitFrame({
+        kind: "listing",
+        directoryPath: "src/lib/",
+        entries: [
+          { path: "src/lib/a.ts", name: "a.ts", kind: "file", ignored: false },
+        ],
+        truncated: false,
+        hasBinaryPayload: false,
+      });
+    });
+
+    await waitFor(() => {
+      expect(
+        useFileTreeRevealStore.getState().requestsByViewTabId[REVEAL_TAB_ID],
+      ).toBeUndefined();
+    });
     expect(scrollToPathCalls).toEqual([
       { path: "src/lib/a.ts", options: { offset: "nearest" } },
     ]);
-    expect(
-      useFileTreeRevealStore.getState().requestsByViewTabId[REVEAL_TAB_ID],
-    ).toBeUndefined();
+    expect(fileTreeContainer.dataset.sidebarRevealHighlighted).toBe("true");
     expect(openPreviewSpy).not.toHaveBeenCalled();
   });
 
@@ -1356,6 +1395,7 @@ describe("reveal in sidebar", () => {
     expect(openPreviewSpy).toHaveBeenCalledWith(
       REVEAL_TAB_ID,
       expect.objectContaining({ filePath: "readme.md" }),
+      "direct_ui",
     );
   });
 
@@ -1496,10 +1536,18 @@ describe("file tree on a touch viewport", () => {
   }
 
   let openPermanentSpy: Mock<
-    (tabId: string, node: EpicCanvasTileRef) => NestedFocusTarget | null
+    (
+      tabId: string,
+      node: EpicCanvasTileRef,
+      source: AnalyticsSource,
+    ) => NestedFocusTarget | null
   >;
   let openPreviewSpy: Mock<
-    (tabId: string, node: EpicCanvasTileRef) => NestedFocusTarget | null
+    (
+      tabId: string,
+      node: EpicCanvasTileRef,
+      source: AnalyticsSource,
+    ) => NestedFocusTarget | null
   >;
 
   beforeEach(() => {
@@ -1533,8 +1581,8 @@ describe("file tree on a touch viewport", () => {
     openPermanentSpy = vi.fn(() => null);
     openPreviewSpy = vi.fn(() => null);
     useEpicCanvasStore.setState({
-      prepareOpenTileInTabFocusTarget: openPermanentSpy,
-      prepareOpenTilePreviewInTabFocusTarget: openPreviewSpy,
+      prepareOpenTileInTabFocusTargetFromSource: openPermanentSpy,
+      prepareOpenTilePreviewInTabFocusTargetFromSource: openPreviewSpy,
     });
     breakpointListeners.clear();
     installLiveMatchMedia();
@@ -1607,6 +1655,7 @@ describe("file tree on a touch viewport", () => {
     expect(openPreviewSpy).toHaveBeenCalledWith(
       TAB_ID,
       expect.objectContaining({ filePath: "readme.md" }),
+      "direct_ui",
     );
   });
 

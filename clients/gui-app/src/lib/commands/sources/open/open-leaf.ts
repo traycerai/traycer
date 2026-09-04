@@ -114,6 +114,7 @@ export function openerExistingLeaf(
         tabId: ctx.activeTabId,
         groupId: ctx.targetGroupId,
         ref,
+        dedupe: false,
         navigateNestedFocus: ctx.router.navigateNestedFocus,
       }),
   });

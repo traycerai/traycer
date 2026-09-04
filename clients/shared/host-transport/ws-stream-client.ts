@@ -10,6 +10,10 @@ import {
 import { selectConnectionManifestForPeer } from "@traycer/protocol/framework/capability-manifest";
 import { CLIENT_SERVED_STREAM_MAJORS } from "./served-stream-majors";
 import {
+  getMemoizedStreamMethodSupport,
+  recordNegotiatedStreamMethodSupport,
+} from "./stream-method-support-registry";
+import {
   extractBearerForOpenFrame,
   MissingBearerTokenForOpenFrameError,
   type HostEndpointProvider,
@@ -61,6 +65,7 @@ import type {
 } from "./i-stream-session";
 import type { TransportEvidenceReporter } from "@traycer-clients/shared/host-selection/transport-evidence";
 import type { IStreamClient } from "./i-stream-client";
+import { dialPriorityForMethod } from "./dial-priority";
 import type {
   IStreamWebSocketFactory,
   StreamWebSocketLike,
@@ -83,6 +88,17 @@ export interface WsStreamClientOptions<
   Registry extends VersionedStreamRpcRegistry,
 > {
   readonly registry: Registry;
+  /**
+   * The host this client talks to, or `null` for a client with no host
+   * identity (the CLI's, a test double's).
+   *
+   * Known at construction and NOT derived from the endpoint: an address can be
+   * reused by a different host across restarts, and the one thing this id is
+   * used for - seeding stream-method support from a previous handshake with the
+   * SAME host (`stream-method-support-registry.ts`) - is exactly where
+   * confusing two hosts would matter. `null` simply declines the seed.
+   */
+  readonly hostId: string | null;
   readonly endpoint: HostEndpointProvider;
   readonly bearer: BearerSourceProvider;
   /**
@@ -276,6 +292,13 @@ export class WsStreamClient<
   private readonly clientIdentity: ClientHandshakeIdentity;
   private readonly ownedSessions = new Set<StreamSession<Registry>>();
   private readonly methodSupport = new Map<string, StreamMethodSupport>();
+  /**
+   * Whether any handshake of this client's has settled. Latched on, never off:
+   * a reconnect CLEARS `methodSupport` but does not restore this client's
+   * innocence - the point of that clearing is to re-probe, and a client that
+   * fell back to the memo afterwards would re-probe nothing.
+   */
+  private hasCompletedHandshake = false;
   private readonly methodSchemaVersions = new Map<string, SchemaVersion>();
   private readonly methodSupportListeners = new Set<() => void>();
   private readonly closedListeners = new Set<() => void>();
@@ -377,7 +400,19 @@ export class WsStreamClient<
     method: Method,
     params: ParamsOf<Registry, Method>,
   ): IStreamSession {
-    return this.subscribeWithParamsProvider(method, () => params);
+    return this.subscribeWithParamsProviderInternal(method, () => params, null);
+  }
+
+  subscribeAtVersion<Method extends keyof Registry & string>(
+    method: Method,
+    schemaVersion: SchemaVersion,
+    params: ParamsOf<Registry, Method>,
+  ): IStreamSession {
+    return this.subscribeWithParamsProviderInternal(
+      method,
+      () => params,
+      schemaVersion,
+    );
   }
 
   /**
@@ -389,6 +424,20 @@ export class WsStreamClient<
   subscribeWithParamsProvider<Method extends keyof Registry & string>(
     method: Method,
     paramsProvider: () => ParamsOf<Registry, Method>,
+  ): IStreamSession {
+    return this.subscribeWithParamsProviderInternal(
+      method,
+      paramsProvider,
+      null,
+    );
+  }
+
+  private subscribeWithParamsProviderInternal<
+    Method extends keyof Registry & string,
+  >(
+    method: Method,
+    paramsProvider: () => ParamsOf<Registry, Method>,
+    requiredSchemaVersion: SchemaVersion | null,
   ): IStreamSession {
     if (this.closed) {
       // Defense-in-depth (tech-plan D4): a subscribe on an already-closed
@@ -413,6 +462,7 @@ export class WsStreamClient<
     const session = new StreamSession<Registry>({
       method,
       paramsProvider,
+      requiredSchemaVersion,
       registry: this.options.registry,
       endpoint: this.options.endpoint,
       bearer: this.options.bearer,
@@ -428,8 +478,13 @@ export class WsStreamClient<
       maxBackoffMs: this.options.maxBackoffMs,
       clientIdentity: this.clientIdentity,
       onDispose: () => removeSession(),
-      onManifest: (manifest, subscribedMethod, support) =>
-        this.applyHostManifest(manifest, subscribedMethod, support),
+      onManifest: (manifest, subscribedMethod, support, handshakeHostId) =>
+        this.applyHostManifest(
+          manifest,
+          subscribedMethod,
+          support,
+          handshakeHostId,
+        ),
       onTransportReconnect: (reconnectingMethod) =>
         this.resetMethodSupport(reconnectingMethod),
       onHostCredentialAck: (hostId, state) => {
@@ -554,7 +609,55 @@ export class WsStreamClient<
   getMethodSupport<Method extends keyof Registry & string>(
     method: Method,
   ): StreamMethodSupport {
-    return this.methodSupport.get(method) ?? "unknown";
+    const own = this.methodSupport.get(method);
+    if (own !== undefined) return own;
+    return this.seededMethodSupport(method);
+  }
+
+  /**
+   * What a PREVIOUS handshake with this same host computed for `method`, for a
+   * client that has not handshaken yet.
+   *
+   * The Epic's stream client is minted per session, so without this every Epic
+   * open re-derived a fact ~50 boot subscriptions had already established about
+   * this host, and paid for it with a serial probe: dial the status lane, wait
+   * for its first frame, only then open the records lane.
+   *
+   * Gated on `hasCompletedHandshake`, which is the whole of the safety
+   * argument. Once this client has contacted the host, its own map is the
+   * authority INCLUDING when that map is empty: `resetMethodSupport` clears it
+   * on reconnect precisely because "a reconnect may be a new host incarnation,
+   * so capability evidence must be re-probed", and `epic-adapter-selection.ts`
+   * HOLDS its installed arm through the resulting `unknown` window rather than
+   * re-deciding. Answering from the memo there would overturn both. So the seed
+   * speaks once, before first contact, and then never again for this client.
+   *
+   * POSITIVE EVIDENCE ONLY, and the two directions are not symmetric. A stale
+   * `supported` is self-correcting at a cost the registry header already
+   * budgets for: the subscribe is rejected and `onRequiredLaneUnsupported`
+   * falls back to legacy. A stale `unsupported` is what a host UPGRADED IN
+   * PLACE leaves behind - `hostId` survives an upgrade, so the entry outlives
+   * the fact - and `readEpicAdapterVerdict` treats an explicit `unsupported`
+   * as a DECISION (`legacy`) rather than as the `undecided` that runs the
+   * probe. So every newly minted client on the upgraded host installs and
+   * subscribes the legacy arm, and only that unnecessary handshake can replace
+   * the verdict, at the price of a replica replacement onto the lanes
+   * mid-session. That reinstates the speculative legacy open and the extra
+   * round trip this memo exists to remove, exactly after the auto-update that
+   * makes the lanes available.
+   *
+   * Withholding a negative degrades to `unknown`, which is the pre-memo
+   * behaviour and the probe path - correct by construction, and the whole win
+   * this lever was measured for is on the positive side anyway.
+   */
+  private seededMethodSupport(method: string): StreamMethodSupport {
+    if (this.hasCompletedHandshake) return "unknown";
+    if (this.options.hostId === null) return "unknown";
+    const memoized = getMemoizedStreamMethodSupport(
+      this.options.hostId,
+      method,
+    );
+    return memoized === "supported" ? "supported" : "unknown";
   }
 
   getMethodSchemaVersion<Method extends keyof Registry & string>(
@@ -959,7 +1062,12 @@ export class WsStreamClient<
     theirManifest: ConnectionManifest,
     subscribedMethod: string,
     subscribedMethodSupport: "supported" | "unsupported",
+    handshakeHostId: string | null,
   ): void {
+    // First contact. From here on this client answers only from its own
+    // evidence - see `seededMethodSupport`.
+    this.hasCompletedHandshake = true;
+
     const myManifest = selectConnectionManifestForPeer(
       this.options.registry,
       buildStreamManifest(this.options.registry, CLIENT_SERVED_STREAM_MAJORS),
@@ -970,6 +1078,13 @@ export class WsStreamClient<
       if (method === subscribedMethod) {
         changed =
           this.updateMethodSupport(method, subscribedMethodSupport) || changed;
+        if (handshakeHostId !== null) {
+          recordNegotiatedStreamMethodSupport(
+            handshakeHostId,
+            method,
+            subscribedMethodSupport,
+          );
+        }
         continue;
       }
       const compat = checkStreamMethodCompatibility(
@@ -979,11 +1094,14 @@ export class WsStreamClient<
         "client",
         method,
       );
+      const support: "supported" | "unsupported" = compat.ok
+        ? "supported"
+        : "unsupported";
       changed =
-        this.updateMethodSupportFromManifest(
-          method,
-          compat.ok ? "supported" : "unsupported",
-        ) || changed;
+        this.updateMethodSupportFromManifest(method, support) || changed;
+      if (handshakeHostId !== null) {
+        recordNegotiatedStreamMethodSupport(handshakeHostId, method, support);
+      }
     }
     if (changed) {
       this.notifyMethodSupportListeners();
@@ -1099,6 +1217,27 @@ function schemaVersionEqual(
   return a.major === b.major && a.minor === b.minor;
 }
 
+function incompatiblePinnedStreamDetails(
+  method: string,
+  requiredVersion: SchemaVersion,
+  hostVersion: SchemaVersion | undefined,
+): FatalErrorDetails {
+  return {
+    code: "INCOMPATIBLE",
+    reason: `Stream method '${method}' requires schema @${requiredVersion.major}.${requiredVersion.minor}`,
+    incompatibleMethods: [
+      {
+        method,
+        clientCanonical: requiredVersion,
+        hostCanonical: hostVersion ?? null,
+        blocking:
+          hostVersion === undefined ? "host-missing-method" : "no-bridge",
+      },
+    ],
+    upgradeGuidance: null,
+  };
+}
+
 type ExtractOpenRequest<MethodRegistry> =
   MethodRegistry extends Readonly<Record<number, infer Line>>
     ? Line extends {
@@ -1119,6 +1258,8 @@ type ExtractOpenRequest<MethodRegistry> =
 interface StreamSessionOptions<Registry extends VersionedStreamRpcRegistry> {
   readonly method: keyof Registry & string;
   readonly paramsProvider: () => unknown;
+  /** Exact client version to declare; rejects older peers before subscribe. */
+  readonly requiredSchemaVersion: SchemaVersion | null;
   readonly registry: Registry;
   readonly endpoint: HostEndpointProvider;
   readonly bearer: BearerSourceProvider;
@@ -1144,6 +1285,13 @@ interface StreamSessionOptions<Registry extends VersionedStreamRpcRegistry> {
     manifest: ConnectionManifest,
     subscribedMethod: keyof Registry & string,
     support: "supported" | "unsupported",
+    /**
+     * The host this handshake was with (`openFrameHostId`), or `null` when the
+     * open frame named none. Carried so the client can attribute the verdicts
+     * it computes to a HOST rather than to itself - see
+     * `stream-method-support-registry.ts`.
+     */
+    hostId: string | null,
   ) => void;
   readonly onTransportReconnect: (
     reconnectingMethod: keyof Registry & string,
@@ -1185,11 +1333,17 @@ interface StreamSessionOptions<Registry extends VersionedStreamRpcRegistry> {
  * come back. Kept well under `pongTimeoutMs - pingIntervalMs` so this
  * detects the stalls the drop cutoff deliberately tolerates.
  *
- * Known benign false positive: a backgrounded renderer throttles timers, so
- * pings go out late and the measured gap stretches without any host stall.
- * The resulting notify fires as the tab foregrounds and costs one refetch of
- * active host-scoped queries - freshness on return, not churn - so it is
- * accepted rather than special-cased with visibility heuristics.
+ * The gap alone is not enough, and this used to be the accepted "benign
+ * false positive": a renderer whose timers ran late (throttled, busy, or
+ * paused) sends its ping late, so the gap between two pongs stretches while
+ * the host answered every ping within milliseconds. Each such pong reported a
+ * host recovery, every stream client in the window reported it independently,
+ * and the resulting host-scope sweep re-issued every active host query. On a
+ * desktop with a dozen tabs that was a sweep a minute all day (2026-09-03
+ * field measurement: 489 sweeps in 10.5 h, none of them a real outage). The
+ * pong handler therefore also requires that the HOST took at least this long
+ * to answer the oldest unanswered ping - a stall is the host's delay, and a
+ * late ping is the client's own.
  */
 const PONG_GAP_RECOVERY_SLACK_MS = 5_000;
 
@@ -1315,6 +1469,15 @@ class StreamSession<
   private preProbePongBaselineAt: number | null = null;
   /** Monotonic count of pongs received; the wake probe's liveness signal. */
   private pongSeq = 0;
+  /**
+   * When the OLDEST ping still awaiting a pong was written, or `null` while
+   * every ping has been answered. The pong handler reads it to tell a host
+   * that answered late (recovery evidence) from a client that asked late (no
+   * evidence) - see {@link PONG_GAP_RECOVERY_SLACK_MS}. Oldest rather than
+   * latest, because a stalled host can leave two pings hanging and the first
+   * pong then answers the first of them.
+   */
+  private oldestUnansweredPingSentAt: number | null = null;
   private backoffTimer: TimerHandle | null = null;
   /**
    * Armed when the subscribe completes; fires after
@@ -1473,6 +1636,7 @@ class StreamSession<
       this.forceReconnect(reason);
       return;
     }
+    this.notePingSent(Date.now());
     // Rebase the heartbeat deadline onto the probe we just sent. After a sleep
     // longer than `pongTimeoutMs`, `lastPongAt` still holds a PRE-sleep
     // timestamp, so the already-armed interval's very next tick takes the
@@ -1677,7 +1841,14 @@ class StreamSession<
     }
 
     const dialUrl = toStreamDialUrl(selected.websocketUrl);
-    const socket = this.config.webSocketFactory.create(dialUrl);
+    const socket = this.config.webSocketFactory.create(
+      dialUrl,
+      // A session is bound to one subscription method for its whole life, so
+      // every redial it makes classifies the same way. See `dial-priority.ts`:
+      // the Epic's own lanes are `interactive`, the app-chrome subscriptions
+      // that flood boot are not.
+      dialPriorityForMethod(this.config.method),
+    );
     this.activeSocket = socket;
     this.openFrameToken = token;
     this.openFrameHostId = selected.hostId;
@@ -1836,16 +2007,26 @@ class StreamSession<
       // a round trip, and a sleep-length outage would emit no recovery at all.
       const answersWakeProbe = this.preProbePongBaselineAt !== null;
       const pongGapMs = now - (this.preProbePongBaselineAt ?? this.lastPongAt);
+      // How long the host sat on the oldest ping it had not yet answered.
+      // `null` when a pong arrives with nothing outstanding (a host-initiated
+      // extra pong, or a pong racing the handshake reset) - that carries no
+      // stall evidence either way.
+      const hostAnswerMs =
+        this.oldestUnansweredPingSentAt === null
+          ? null
+          : now - this.oldestUnansweredPingSentAt;
+      this.oldestUnansweredPingSentAt = null;
       this.preProbePongBaselineAt = null;
       this.lastPongAt = now;
       // Counted, not timestamped: a wake probe has to know whether a pong
       // ARRIVED, and two pongs inside the same millisecond are
       // indistinguishable by `lastPongAt` alone.
       this.pongSeq += 1;
-      if (
-        answersWakeProbe ||
-        pongGapMs >= this.config.pingIntervalMs + PONG_GAP_RECOVERY_SLACK_MS
-      ) {
+      const stallLengthGap =
+        pongGapMs >= this.config.pingIntervalMs + PONG_GAP_RECOVERY_SLACK_MS;
+      const hostAnsweredLate =
+        hostAnswerMs !== null && hostAnswerMs >= PONG_GAP_RECOVERY_SLACK_MS;
+      if (answersWakeProbe || (stallLengthGap && hostAnsweredLate)) {
         // Two distinct recovery edges share this emission. A probe-answering
         // pong is one unconditionally: probes are sent only on a device-wake /
         // network-online signal, an epoch in which host-scoped queries may
@@ -1855,8 +2036,16 @@ class StreamSession<
         // disabled) never recovered. A big gap WITHOUT a probe is the other:
         // the host answered after leaving at least one ping hanging (an
         // event-loop stall), again with no socket drop, so the reconnect
-        // path's recovery emission never fires for either.
+        // path's recovery emission never fires for either. The gap arm needs
+        // BOTH halves: a stall-length gap whose ping the host answered at
+        // once was the client's late ping, not a host outage (see
+        // `PONG_GAP_RECOVERY_SLACK_MS`), and a sweep on it refetches queries
+        // nothing stranded.
         this.config.onAvailabilityRecovered();
+      } else if (stallLengthGap) {
+        console.debug(
+          `[stream] pong gap of ${pongGapMs}ms was the client's own late ping (host answered in ${hostAnswerMs ?? -1}ms) - no recovery`,
+        );
       }
       return;
     }
@@ -1925,18 +2114,34 @@ class StreamSession<
     const hostCredentialState = ackParse.data.hostCredentialState;
 
     const theirManifest = ackParse.data.manifest;
-    const myManifest = selectConnectionManifestForPeer(
+    const selectedManifest = selectConnectionManifestForPeer(
       this.config.registry,
       buildStreamManifest(this.config.registry, CLIENT_SERVED_STREAM_MAJORS),
       theirManifest,
     );
-    const compat = checkStreamMethodCompatibility(
-      this.config.registry,
-      myManifest,
-      theirManifest,
-      "client",
-      this.config.method,
-    );
+    const requiredVersion = this.config.requiredSchemaVersion;
+    const theirVersion = theirManifest[this.config.method];
+    const pinnedVersionSupported =
+      requiredVersion === null ||
+      (theirVersion !== undefined &&
+        theirVersion.major === requiredVersion.major &&
+        theirVersion.minor >= requiredVersion.minor);
+    const compat = pinnedVersionSupported
+      ? checkStreamMethodCompatibility(
+          this.config.registry,
+          selectedManifest,
+          theirManifest,
+          "client",
+          this.config.method,
+        )
+      : {
+          ok: false as const,
+          details: incompatiblePinnedStreamDetails(
+            this.config.method,
+            requiredVersion,
+            theirVersion,
+          ),
+        };
 
     const socket = this.activeSocket;
     if (socket === null) {
@@ -1956,7 +2161,12 @@ class StreamSession<
     this.reportHostCredentialState(hostCredentialState);
 
     if (!compat.ok) {
-      this.config.onManifest(theirManifest, this.config.method, "unsupported");
+      this.config.onManifest(
+        theirManifest,
+        this.config.method,
+        "unsupported",
+        this.openFrameHostId,
+      );
       const terminalFrame: ClientStreamFatalErrorFrame = {
         kind: "fatalError",
         details: compat.details,
@@ -1977,7 +2187,7 @@ class StreamSession<
     const prepared = prepareStreamSubscribeRequest(
       this.config.registry,
       this.config.method,
-      myManifest[this.config.method],
+      selectedManifest[this.config.method],
       theirManifest[this.config.method],
       this.config.paramsProvider(),
     );
@@ -1992,7 +2202,12 @@ class StreamSession<
       return;
     }
     this.negotiatedSchemaVersion = prepared.onWireVersion;
-    this.config.onManifest(theirManifest, this.config.method, "supported");
+    this.config.onManifest(
+      theirManifest,
+      this.config.method,
+      "supported",
+      this.openFrameHostId,
+    );
     // Read BEFORE `transitionTo("open")` overwrites it: a session that was
     // "reconnecting" (dropped socket, or failed dial attempts) has just proved
     // the host is reachable again. The initial clean connect ("connecting" →
@@ -2017,8 +2232,10 @@ class StreamSession<
     this.lastPongAt = Date.now();
     // A fresh handshake supersedes any wake-probe baseline: this path emits
     // its own recovery edge below, and a stale baseline would double-count
-    // the outage on the first post-handshake pong.
+    // the outage on the first post-handshake pong. Same for a ping the OLD
+    // socket never answered - the new socket owes nothing for it.
     this.preProbePongBaselineAt = null;
+    this.oldestUnansweredPingSentAt = null;
     this.startHeartbeat();
     this.armHealthyDwell();
     this.transitionTo("open", null);
@@ -2522,8 +2739,17 @@ class StreamSession<
       );
       if (!sent) {
         this.onSendFailure(activeSocket);
+        return;
       }
+      this.notePingSent(now);
     }, this.config.pingIntervalMs);
+  }
+
+  /** Records a ping on the wire; only the oldest unanswered one is kept. */
+  private notePingSent(at: number): void {
+    if (this.oldestUnansweredPingSentAt === null) {
+      this.oldestUnansweredPingSentAt = at;
+    }
   }
 
   private clearHeartbeat(): void {

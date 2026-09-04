@@ -38,6 +38,8 @@ import type { ChatRecordRemovalReason } from "@traycer/protocol/host/epic/chat-r
 import type { WorktreeBindingOwnerKind } from "@traycer/protocol/host/worktree-schemas";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
+import type { CommandRecord } from "@traycer-clients/shared/replica-runtime";
+import type { EpicWriteCommandIntent } from "@/stores/epics/open-epic/runtime/epic-write-command";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
 import { displayTitle } from "@/lib/display-title";
@@ -45,8 +47,12 @@ import { managedCommandTitle } from "@/lib/managed-commands/managed-command-copy
 import { useManagedCommandOnHost } from "@/stores/managed-commands/managed-commands-for-chat";
 import {
   deriveEpicSyncPillState,
+  deriveEpicWriteCommandAlert,
+  summarizeEpicWriteCommands,
   type EpicHostDirtyState,
   type EpicSyncPillState,
+  type EpicWriteCommandAlert,
+  type EpicWriteCommandSummary,
 } from "@/lib/epic-sync-pill-state";
 import {
   agentActivityTiers,
@@ -150,9 +156,21 @@ export function useEpicConnectionStatus(): StreamConnectionStatus {
 }
 
 /**
- * Host dirtiness is known only after this subscription cycle's atomic @1.1
- * snapshot. A clean-looking map before then (or under a negotiated @1.0 host)
- * is unknown rather than evidence that the cloud has acknowledged everything.
+ * Input (i) of the sync pill on its own - the RAW GUI↔host transport, not the
+ * display blend above. The pill's cloud-link grace reads it to tell a
+ * cloud-only drop (host reachable, edits durable on the host) apart from a
+ * host-link drop (edits exist only in this window), which derive the same
+ * `reconnecting` verdict and must not get the same grace.
+ */
+export function useEpicHostTransportStatus(): StreamConnectionStatus {
+  return useEpicStore((s) => s.hostTransportStatus);
+}
+
+/**
+ * Input (iii) of the sync pill: the control lane's aggregate dirty bit, known
+ * only after this open cycle's atomic dirty snapshot. A clean-looking map
+ * before then (or on a legacy connection that cannot produce one) is unknown
+ * rather than evidence that the cloud has acknowledged everything.
  */
 const selectHostDirtyState = createSelector(
   (s: OpenEpicState) => s.hasDirtySnapshotForOpenCycle,
@@ -172,10 +190,26 @@ const selectHostDirtyState = createSelector(
 );
 
 /**
- * The sync pill's single source of truth. Weighs all four legs of the
- * durability chain rather than the lossy blended `connectionStatus` the pill
- * used to read on its own - see `@/lib/epic-sync-pill-state` for the ordering
- * contract and why each leg has to be visible separately.
+ * Inputs (iv) and (v) of the sync pill, counted per outcome off the projected
+ * command list. Memoized at module scope so the two hooks below share one
+ * count per publication rather than walking the list twice.
+ */
+const selectWriteCommandSummary = createSelector(
+  (s: OpenEpicState) => s.writeCommands,
+  (writeCommands): EpicWriteCommandSummary =>
+    summarizeEpicWriteCommands(writeCommands),
+);
+
+/**
+ * The pill's link/durability claim, over the five inputs of wire-lane
+ * invariant 8 rather than the lossy blended `connectionStatus` the pill used
+ * to read on its own - see `@/lib/epic-sync-pill-state` for the ordering
+ * contract and why each input has to stay visible separately.
+ *
+ * Input (v) reaches the pill through {@link useEpicWriteCommandAlert}, NOT
+ * through this verdict: it is a different class, and the one thing it may
+ * never do is disappear behind this one. It is passed in here only to gate the
+ * green claim.
  *
  * Returns a plain string union, so an unchanged verdict is `Object.is`-equal
  * and never re-renders the pill.
@@ -187,9 +221,37 @@ export function useEpicSyncPillState(): EpicSyncPillState {
       cloudSyncStatus: s.cloudSyncStatus,
       hasFreshCloudSyncStatus: s.hasFreshCloudSyncStatus,
       hostDirtyState: selectHostDirtyState(s),
-      hasUnsyncedLocalChanges: s.isDirty,
+      hasUnsyncedDocClassChanges: s.isDirty,
+      writeCommands: selectWriteCommandSummary(s),
       hasConnectedOnce: s.hasConnectedOnce,
     }),
+  );
+}
+
+/**
+ * The outstanding write commands themselves, for the surface that ACTS on them.
+ *
+ * The pill reads the same rows folded into counts; this is the list behind it.
+ * Identity is the runtime's, so an unchanged queue re-renders nobody.
+ */
+export function useEpicWriteCommands(): readonly CommandRecord<EpicWriteCommandIntent>[] {
+  return useEpicStore((s) => s.writeCommands);
+}
+
+/**
+ * Input (v) of the sync pill - a refused or superseded write - plus the
+ * ambiguous arm of input (iv), as their own verdict.
+ *
+ * Separate from {@link useEpicSyncPillState} because they are a separate
+ * class, and the pill weighs the two side by side: a rejected write is
+ * reported even while the link is down, and it can never be absorbed into a
+ * green claim about the link.
+ *
+ * Returns a string union or `null`, so an unchanged verdict re-renders nobody.
+ */
+export function useEpicWriteCommandAlert(): EpicWriteCommandAlert | null {
+  return useEpicStore((s) =>
+    deriveEpicWriteCommandAlert(selectWriteCommandSummary(s)),
   );
 }
 
@@ -1069,6 +1131,44 @@ export function useEpicArtifactBodyAvailability(
 }
 
 /**
+ * Whether the body plane has said ANYTHING about `artifactId` yet.
+ *
+ * ## Why this is not the same question as `useEpicArtifactBodyAvailability`
+ *
+ * `EpicArtifactRoomAvailability` has no "not asked yet" member, so every layer
+ * that reads it collapses an ABSENT key into `"unavailable"` - the runtime
+ * (`epic-rooms-replica.ts`), the store helper (`store.ts`), and the hook above.
+ * That collapse is deliberate and correct for its callers: an editor may bind a
+ * live fragment only on `"ready"`, and every other value means "not now",
+ * whatever the reason.
+ *
+ * It is wrong for one caller: the thing that chooses the WORDS. "This document
+ * isn't available right now. It couldn't be opened on its host." is a claim
+ * about a host that refused, and for the first 100-1400 ms of every cold tile
+ * - measured - it was being shown about a subscribe that had not been answered
+ * yet. So this hook asks the question the collapse erases: is there an entry at
+ * all? `Object.hasOwn` rather than a `!== undefined` comparison because
+ * `noUncheckedIndexedAccess` is off here (see this module's header), and it
+ * genuinely is a key-presence test, not a value test - an entry's value is
+ * never `undefined`.
+ *
+ * Do NOT "simplify" this by giving the availability union a fourth member: the
+ * union is mirrored from two different wires (`epic.subscribe@1.0` room frames
+ * and `artifact.subscribe`'s ready/unavailable pair) and every member of it is
+ * a state the HOST states. "Nothing said yet" is the absence of a wire fact,
+ * which is why it lives in the shape of the map rather than in its values.
+ */
+export function useEpicArtifactBodySubscribeAnswered(
+  artifactId: string | null,
+): boolean {
+  const handle = useOpenEpicHandle();
+  return useStore(handle.store, (s) => {
+    if (artifactId === null) return false;
+    return Object.hasOwn(s.artifactRooms.stateByArtifactId, artifactId);
+  });
+}
+
+/**
  * Materializes `artifactId`'s artifact-room and holds it materialized for as
  * long as the calling component is mounted.
  *
@@ -1085,33 +1185,17 @@ export function useEpicArtifactBodyAvailability(
  */
 export function useEpicArtifactBodyLease(artifactId: string | null): void {
   const handle = useOpenEpicHandle();
-  const artifactRoomId = useStore(handle.store, (s) =>
-    artifactId === null ? null : s.getArtifactRoomId(artifactId),
+  const bodyDocKey = useStore(handle.store, (s) =>
+    artifactId === null ? null : s.getArtifactBodyDocKey(artifactId),
   );
   // Layout, not passive: this is what materializes the room, and a passive
   // effect runs after paint - the tile would show its skeleton for a frame
   // before the fragment resolved. A layout effect lands the lease, and the
   // resulting store update, before the browser paints.
   useLayoutEffect(() => {
-    if (artifactId === null || artifactRoomId === null) return;
+    if (artifactId === null || bodyDocKey === null) return;
     return handle.store.getState().acquireArtifactBodyLease(artifactId);
-  }, [handle, artifactId, artifactRoomId]);
-}
-
-// ─── Doc reference for editor binding ─────────────────────────────────────
-
-/**
- * Returns the live Y.Doc + Y.Awareness owned by the current Epic session.
- * Tile editors bind these to `@tiptap/extension-collaboration` and
- * `@tiptap/extension-collaboration-caret` directly.
- */
-export function useEpicDocBinding(): {
-  readonly doc: Y.Doc;
-  readonly awareness: OpenEpicStoreHandle["awareness"];
-} {
-  const handle = useOpenEpicHandle();
-  useStore(handle.store, (s) => s.bindingVersion);
-  return { doc: handle.doc, awareness: handle.awareness };
+  }, [handle, artifactId, bodyDocKey]);
 }
 
 // ─── Agent activity (per-user notification-room presence) ─────────────────
@@ -1217,7 +1301,7 @@ function liveAgentIdsSnapshot(
   const state = handle.store.getState();
   const key = [...state.chats.allIds, ...state.tuiAgents.allIds]
     .sort()
-    .join(" ");
+    .join("\x00");
   const cached = registeredLiveAgentIdsCache.get(handle);
   if (cached !== undefined && cached.key === key) return cached.ids;
   const ids = new Set<string>([
@@ -1285,20 +1369,50 @@ export function useEpicArtifactStatus(id: string): number | null {
   );
 }
 
+/**
+ * Ancestor ids of `nodeId`, nearest first, cycle-guarded. Empty for a root, a
+ * null id, or an id the tree does not hold.
+ *
+ * ## Subscribed to the ANSWER (epic-sync-overhaul finding 12, round 2)
+ *
+ * This read the whole `tree` slice and walked it in a `useMemo`, so it returned
+ * a fresh `Set` on every store tick that re-minted the slice - which a body
+ * write does, because it stamps `updatedAt` and `TreeNode` carries it. In the
+ * sidebar that identity fed `forcedExpandedIds` -> `expandedIds` ->
+ * `toggleExpanded` -> the `expansion` controller, and re-rendered every
+ * memoized row. The ancestor CHAIN had not changed; only its container had.
+ *
+ * `useShallow` is enough despite the return being a `Set`, and needs no bespoke
+ * equality - just the same wrapper the rest of this file uses. Both zustand
+ * copies present in this tree compare Set MEMBERS: v5's `shallow` routes any
+ * iterable carrying `.entries()` through `compareEntries` and a `Set` has one;
+ * v4's has a dedicated `instanceof Set` branch that does the same. The reason
+ * to say so here is not version dependence - it is that two copies exist
+ * (`zustand@4.5.7` and `@5.0.15`), so a claim about `shallow` has to be read
+ * off the package this workspace RESOLVES (`clients/gui-app/node_modules/
+ * zustand` -> 5.0.15) rather than whichever vendored copy a grep opens first.
+ *
+ * Callers consume the members, never the identity: three read an active or
+ * revealed node's ancestors to force-expand them, and the chat tree's reveal
+ * layout effect is driven by `revealRequest`'s NONCE, not by this set's
+ * identity, so stabilizing here cannot silence a reveal.
+ */
 export function useAncestorIds(nodeId: string | null): ReadonlySet<string> {
-  const index = useEpicTreeIndex();
-  return useMemo(() => {
-    if (nodeId === null) return EMPTY_TREE_ID_SET;
-    if (!Object.hasOwn(index.nodeById, nodeId)) return EMPTY_TREE_ID_SET;
-    const ancestors = new Set<string>();
-    let current: string | null = index.nodeById[nodeId].parentId;
-    while (current !== null && !ancestors.has(current)) {
-      ancestors.add(current);
-      if (!Object.hasOwn(index.nodeById, current)) break;
-      current = index.nodeById[current].parentId;
-    }
-    return ancestors.size === 0 ? EMPTY_TREE_ID_SET : ancestors;
-  }, [index, nodeId]);
+  return useEpicStore(
+    useShallow((state: OpenEpicState): ReadonlySet<string> => {
+      const nodeById = state.tree.nodeById;
+      if (nodeId === null) return EMPTY_TREE_ID_SET;
+      if (!Object.hasOwn(nodeById, nodeId)) return EMPTY_TREE_ID_SET;
+      const ancestors = new Set<string>();
+      let current: string | null = nodeById[nodeId].parentId;
+      while (current !== null && !ancestors.has(current)) {
+        ancestors.add(current);
+        if (!Object.hasOwn(nodeById, current)) break;
+        current = nodeById[current].parentId;
+      }
+      return ancestors.size === 0 ? EMPTY_TREE_ID_SET : ancestors;
+    }),
+  );
 }
 
 export function useDescendantIds(nodeId: string): readonly string[] {

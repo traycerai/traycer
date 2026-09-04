@@ -11,13 +11,10 @@ import {
 import type { BrowserAnnotationSessionController } from "@/hooks/browser/use-browser-annotation-session";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
-const openExternalLink = vi.hoisted(() => ({
-  isPending: false,
-  mutate: vi.fn(),
-}));
+const openLink = vi.hoisted(() => vi.fn());
 
-vi.mock("@/hooks/runner/use-open-external-link-mutation", () => ({
-  useRunnerOpenExternalLink: () => openExternalLink,
+vi.mock("@/lib/links/open-link", () => ({
+  useOpenLink: () => openLink,
 }));
 
 vi.mock("@/providers/use-runner-host", () => ({
@@ -59,6 +56,8 @@ function makeController(
     profile: "primary",
     url: "https://example.com",
     addressValue: "https://example.com",
+    setAddressInput: () => undefined,
+    focusAddress: () => undefined,
     canGoBack: true,
     canGoForward: true,
     zoomPercent: 100,
@@ -133,7 +132,7 @@ function queryChrome(query: {
 describe("<BrowserTileToolbar /> capability gating", () => {
   afterEach(() => {
     cleanup();
-    openExternalLink.mutate.mockClear();
+    openLink.mockClear();
   });
 
   it("renders every chrome control when all capabilities are true", () => {
@@ -216,8 +215,10 @@ describe("<BrowserTileToolbar /> capability gating", () => {
       screen.getByRole("button", { name: "Open in default browser" }),
     );
 
-    expect(openExternalLink.mutate).toHaveBeenCalledExactlyOnceWith(
+    expect(openLink).toHaveBeenCalledExactlyOnceWith(
       "https://example.com",
+      "app",
+      null,
     );
   });
 

@@ -1,4 +1,5 @@
 import { use, useEffect } from "react";
+import * as Y from "yjs";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   afterEach,
@@ -14,6 +15,7 @@ import type {
   ListTasksResponse,
   TaskLight,
 } from "@traycer/protocol/host/epic/unary-schemas";
+import { EPIC_LANE_METHODS } from "@traycer-clients/shared/epic-lanes";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import {
@@ -39,6 +41,9 @@ const authServiceStub = vi.hoisted(() => ({
   revalidateCurrentContext: () => Promise.resolve({ kind: "valid" as const }),
 }));
 const navigateMock = vi.hoisted(() => vi.fn());
+const reprobeCallbacks = vi.hoisted((): { callbacks: Array<() => void> } => ({
+  callbacks: [],
+}));
 // Real (non-null) `useHostBinding()` for the R-1 owner-identity rotation test
 // below - every other test in this file relies on the default `null` (no
 // `HostClient` needed to drive `sessionKey`, which is `activeHostId` +
@@ -67,6 +72,16 @@ const sessionHostRows = vi.hoisted(
 interface StubSessionHostClient {
   readonly request: Mock;
   readonly getActiveHost: () => unknown;
+  /**
+   * The host this client addresses.
+   *
+   * Absent from this stub since T11 gave the store a memory book keyed by host
+   * (`store.ts` reads it at construction), which made every test in this file
+   * throw `getActiveHostId is not a function` before the store was built. The
+   * stub is already one object per host id, so the honest answer is the id it
+   * was resolved for.
+   */
+  readonly getActiveHostId: () => string;
   readonly getRequestContextUserId: () => string | null;
 }
 const sessionHostClients = vi.hoisted(
@@ -89,6 +104,7 @@ const resolveSessionHostClient = vi.hoisted(
       const created = {
         request: vi.fn(),
         getActiveHost: () => sessionHostRows.byHostId.get(hostId) ?? null,
+        getActiveHostId: () => hostId,
         getRequestContextUserId: () => sessionHostRows.userId,
       };
       sessionHostClients.byHostId.set(hostId, created);
@@ -96,22 +112,28 @@ const resolveSessionHostClient = vi.hoisted(
     },
 );
 
-// The provider now opens its own durable transport via this factory, but every
-// test installs an `__setEpicStreamClientFactoryForTests` override that
-// short-circuits before `openTransport` is ever called - so a stub factory that
-// is never invoked is all the provider needs to render in jsdom. The real hook
-// returns a referentially-STABLE opener; the stub mirrors that with a single
-// hoisted instance so the acquire effect's `openTransport` dep never churns.
-const transportState = vi.hoisted((): { opener: () => never } => ({
-  opener: () => {
-    throw new Error(
-      "openTransport must not be called when the factory is overridden",
-    );
-  },
-}));
-vi.mock("@/lib/host/use-durable-stream-transport", () => ({
-  useDurableStreamTransportFactory: () => transportState.opener,
-}));
+// The provider opens its own durable transport via this factory, and
+// UNCONDITIONALLY. This stub used to THROW - "openTransport must not be called
+// when the factory is overridden" - and the name of the thing it referred to is
+// the point: the `__setEpicStreamClientFactoryForTests` override made the
+// provider short-circuit before the opener ran, so every test in this file
+// passed WITHOUT one. That override is deleted (a stream factory built on MAIN
+// cannot cross `postMessage` to a runtime living in the worker), and with it the
+// only reason a throw here was safe.
+//
+// The fake supplies "no socket in tests" at the opener instead. It keeps the
+// property the old stub's comment named as load-bearing: the real hook returns a
+// referentially-STABLE opener, and this one is a single module-scoped instance
+// for the same reason - so the acquire effect's `openTransport` dep never churns.
+// Resetting it clears the record array in place rather than replacing it.
+vi.mock("@/lib/host/use-durable-stream-transport", async () => {
+  const { fakeDurableStreamTransports } =
+    await import("@/lib/host/test-support/fake-durable-stream-transport");
+  return {
+    useDurableStreamTransportFactory: () =>
+      fakeDurableStreamTransports().opener,
+  };
+});
 
 vi.mock("@/hooks/host/use-effective-host-id", () => ({
   useEffectiveHostId: () => hostState.id,
@@ -135,6 +157,59 @@ vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => navigateMock,
 }));
 
+vi.mock("@/lib/host/owned-durable-stream-client", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/lib/host/owned-durable-stream-client")
+    >();
+  return {
+    ...actual,
+    attachPlanRestrictedReprobe: (
+      wsStreamClient: unknown,
+      onReprobe: (() => void) | null,
+    ) => {
+      void wsStreamClient;
+      if (onReprobe !== null) reprobeCallbacks.callbacks.push(onReprobe);
+      return () => undefined;
+    },
+  };
+});
+
+/**
+ * A pass-through spy on `spawnEpicRuntimeWorker`, so a pin can reach the exact
+ * `laneUnary` closure the provider hands each worker it spawns. The real spawn
+ * still runs underneath - this only records the option object on the way
+ * through. Order matches spawn order: index 0 is the first handle this
+ * provider acquires, index 1 a re-point's candidate, and so on.
+ */
+const spawnedRuntimeOptions = vi.hoisted(
+  (): {
+    laneUnaries: Array<
+      (request: { readonly kind: "workspace-context" }) => Promise<unknown>
+    >;
+  } => ({
+    laneUnaries: [],
+  }),
+);
+vi.mock(
+  "@/stores/epics/open-epic/runtime/worker/spawn-epic-runtime-worker",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/stores/epics/open-epic/runtime/worker/spawn-epic-runtime-worker")
+      >();
+    return {
+      ...actual,
+      spawnEpicRuntimeWorker: (
+        options: Parameters<typeof actual.spawnEpicRuntimeWorker>[0],
+      ) => {
+        spawnedRuntimeOptions.laneUnaries.push(options.laneUnary);
+        return actual.spawnEpicRuntimeWorker(options);
+      },
+    };
+  },
+);
+
 import { EpicSessionProvider } from "@/providers/epic-session-provider";
 import {
   clearSessionCreatedEpics,
@@ -142,11 +217,196 @@ import {
 } from "@/lib/epics/session-created-epics";
 import {
   __getOpenEpicRegistryForTests,
-  __setEpicStreamClientFactoryForTests,
   EpicSessionPresentationContext,
   getEpicSessionHandleHostId,
   type EpicSessionPresentation,
 } from "@/lib/registries/epic-session-registry";
+import {
+  __setEpicRuntimeWorkerFactoryForTests,
+  getEpicRuntimeWorkerFactoryOverride,
+} from "@/lib/registries/epic-runtime-worker-factory-slot";
+import {
+  fakeDurableStreamTransports,
+  resetFakeDurableStreamTransports,
+} from "@/lib/host/test-support/fake-durable-stream-transport";
+import {
+  createInProcessEpicRuntimeWorker,
+  createProxiedInProcessEpicRuntimeWorker,
+} from "@/stores/epics/open-epic/test-support/in-process-epic-runtime-worker";
+import type { RuntimeWorkerLike } from "@/stores/epics/open-epic/runtime/worker/spawn-epic-runtime-worker";
+import {
+  RUNTIME_BRIDGE_PROTOCOL_VERSION,
+  type WorkerToMainEvent,
+} from "@traycer-clients/shared/replica-runtime/worker/bridge-protocol";
+import type { BridgeMessageEventLike } from "@traycer-clients/shared/replica-runtime/worker/bridge-transports";
+import type { EpicStreamClientFactory } from "@/stores/epics/open-epic/runtime/legacy-epic-stream-adapter";
+import { createEpicSessionFixture } from "./epic-session-fixture";
+import {
+  ArtifactAttachmentScopeContext,
+  type ArtifactAttachmentScopeValue,
+} from "@/lib/attachments/artifact-attachment-scope-context";
+import { useEpicImageFetcher } from "@/lib/attachments/use-attachment-blob-src";
+import { readHeldEpicAttachmentBytes } from "@/lib/epic-replica-reads";
+import type { ScopedImageBytesFetcher } from "@/lib/attachments/image-blob-cache";
+
+/**
+ * The jsdom setup file's coreless worker, captured before this suite can
+ * replace it. A `null` override would fall through to the production Worker
+ * constructor, which jsdom cannot run.
+ */
+const setupWorkerFactory = getEpicRuntimeWorkerFactoryOverride();
+
+/** The worker override present at the start of the current test. */
+let workerFactoryBeforeTest: (() => RuntimeWorkerLike) | null = null;
+
+/**
+ * Install this test's stream factory, one seam over.
+ *
+ * Every call site below used to read `installStreamFactory(fn)`
+ * and passed the SAME `fn` unchanged; only the seam moved, because a factory
+ * built on MAIN cannot cross `postMessage` to a runtime living in the worker.
+ * Keeping one helper rather than inlining the composition twenty-two times is
+ * what makes that a rename at each site instead of twenty-two chances to differ.
+ *
+ * A FRESH worker per spawn: one helper instance owns one bridge pair and one
+ * composition, so a shared instance would hand two sessions the same runtime -
+ * and this file re-points sessions across hosts, which acquires a second one.
+ * The deleted stream override was called once per session too, so this matches
+ * what these tests have always exercised.
+ */
+/**
+ * What {@link installWorkerWithFatalOnFirstSpawn} hands back.
+ *
+ * `spawnCount` is the pin's real observable: "Retry rebuilt" and "Retry
+ * re-presented the corpse" both end with a `ready` presentation, and only the
+ * number of workers actually started tells them apart.
+ */
+interface FatalWorkerRig {
+  /** Report a runtime fatal from the FIRST worker, as a live one would. */
+  fatal(): void;
+  spawnCount(): number;
+}
+
+/**
+ * A worker that answers the handshake and then dies ON COMMAND, followed by
+ * real in-process workers for every later spawn.
+ *
+ * The first worker is a fake rather than a real composition because a fatal has
+ * no product trigger - it is what a crashed thread produces - and the second
+ * onwards are real because the whole question is whether a REPLACEMENT gets
+ * built and reaches `ready`. A rig that faked both halves could not tell a
+ * rebuild from a re-presentation.
+ */
+function installWorkerWithFatalOnFirstSpawn(
+  factory: EpicStreamClientFactory,
+): FatalWorkerRig {
+  let spawns = 0;
+  let deliverFatal: (() => void) | null = null;
+  __setEpicRuntimeWorkerFactoryForTests(() => {
+    spawns += 1;
+    if (spawns > 1) {
+      return createInProcessEpicRuntimeWorker({
+        streamClientFactory: factory,
+        laneSelection: null,
+      }).createWorker();
+    }
+    const listeners = new Set<(event: BridgeMessageEventLike) => void>();
+    const deliver = (event: WorkerToMainEvent): void => {
+      for (const listener of [...listeners]) {
+        listener({ data: { frame: "event", event } });
+      }
+    };
+    let answeredHandshake = false;
+    deliverFatal = (): void => {
+      deliver({
+        kind: "fatal",
+        message: "the runtime worker died",
+        stack: null,
+      });
+    };
+    return {
+      postMessage: (): void => {
+        // The FIRST message only, which is the bootstrap. Answering every
+        // message would re-settle `ready` on a `shutdown` too, which is not
+        // something a worker does and not something this pin should rely on.
+        if (answeredHandshake) return;
+        answeredHandshake = true;
+        deliver({
+          kind: "ready",
+          protocolVersion: RUNTIME_BRIDGE_PROTOCOL_VERSION,
+        });
+      },
+      addEventListener: (
+        _type: "message",
+        listener: (event: BridgeMessageEventLike) => void,
+      ): void => {
+        listeners.add(listener);
+      },
+      removeEventListener: (
+        _type: "message",
+        listener: (event: BridgeMessageEventLike) => void,
+      ): void => {
+        listeners.delete(listener);
+      },
+      terminate: (): void => {},
+      // This rig's whole subject is a worker that ANSWERS and then dies, so
+      // the fault path - a worker whose module never ran at all - is not the
+      // failure under test here. Its own pin lives in
+      // `spawn-epic-runtime-worker.test.ts`.
+      onWorkerFault: (): void => {},
+    };
+  });
+  return {
+    fatal: (): void => {
+      if (deliverFatal === null) {
+        throw new Error("the first worker was never spawned");
+      }
+      deliverFatal();
+    },
+    spawnCount: () => spawns,
+  };
+}
+
+/**
+ * A worker factory that THROWS, which is what a runtime with no Worker or a
+ * Content-Security-Policy refusing the script URL produces - a synchronous
+ * failure of the environment rather than of the transport, raised before any
+ * bridge exists to report a `fatal` through.
+ */
+function installWorkerThatThrowsOnSpawn(): { spawnCount(): number } {
+  let spawns = 0;
+  __setEpicRuntimeWorkerFactoryForTests(() => {
+    spawns += 1;
+    throw new Error("Worker construction blocked by CSP");
+  });
+  return { spawnCount: () => spawns };
+}
+
+function installStreamFactory(factory: EpicStreamClientFactory): void {
+  __setEpicRuntimeWorkerFactoryForTests(() =>
+    createInProcessEpicRuntimeWorker({
+      streamClientFactory: factory,
+      laneSelection: null,
+    }).createWorker(),
+  );
+}
+
+function installManifestDerivedWorker(): void {
+  __setEpicRuntimeWorkerFactoryForTests(() =>
+    createProxiedInProcessEpicRuntimeWorker().createWorker(),
+  );
+}
+
+function ImageFetcherProbe(props: {
+  onFetcher: (fetcher: ScopedImageBytesFetcher) => void;
+}) {
+  const { onFetcher } = props;
+  const fetcher = useEpicImageFetcher();
+  useEffect(() => {
+    onFetcher(fetcher);
+  }, [fetcher, onFetcher]);
+  return null;
+}
 import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import { setDesktopEpicOwnershipBridge } from "@/lib/windows/desktop-epic-ownership";
@@ -335,7 +595,7 @@ function createDesktopWindowsBridgeForTests(
           token: null,
           profile: null,
         }),
-      set: () => Promise.resolve(),
+      set: () => Promise.resolve({ outcome: "accepted" as const }),
       onChange: (_handler) => ({ dispose: () => undefined }),
     },
   };
@@ -481,8 +741,46 @@ function installOwnerIdentityRows(): (
   };
 }
 
+/**
+ * Seed a LOCAL root edit without reaching for a `Y.Doc`.
+ *
+ * The handle a provider hands back no longer exposes one, and that is the
+ * relocation rather than an omission: the replica lives on the worker thread
+ * and a `Y.Doc` cannot cross a structured clone. `applyRootUpdate(update,
+ * true)` is the production member that puts local bytes into the root
+ * replica - the same one a session-to-session transfer uses - so these tests
+ * now seed through the surface production actually has.
+ */
+async function seedLocalRootEdit(
+  handle: { applyRootUpdate: (u: Uint8Array, l: boolean) => Promise<boolean> },
+  key: string,
+  value: string,
+): Promise<void> {
+  const donor = new Y.Doc();
+  donor.getMap("epic").set(key, value);
+  await handle.applyRootUpdate(Y.encodeStateAsUpdate(donor), true);
+  donor.destroy();
+}
+
+/** Read one root-map key back through `encodeRootState`, the read twin. */
+async function readRootEdit(
+  handle: { encodeRootState: () => Promise<Uint8Array> } | undefined,
+  key: string,
+): Promise<unknown> {
+  if (handle === undefined) return undefined;
+  const scratch = new Y.Doc();
+  Y.applyUpdate(scratch, await handle.encodeRootState());
+  const value: unknown = scratch.getMap("epic").get(key);
+  scratch.destroy();
+  return value;
+}
+
 describe("<EpicSessionProvider />", () => {
   beforeEach(() => {
+    // Capture unconditionally: even a test that installs no worker factory is
+    // followed by an `afterEach`, and restoring an uninitialised sentinel there
+    // would erase the jsdom setup file's coreless worker for the next test.
+    workerFactoryBeforeTest = getEpicRuntimeWorkerFactoryOverride();
     window.localStorage.clear();
     hostState.id = "host-a";
     hostState.attached = true;
@@ -494,27 +792,285 @@ describe("<EpicSessionProvider />", () => {
     navigateMock.mockClear();
     resetCanvasStore();
     __getOpenEpicRegistryForTests().disposeAll();
-    __setEpicStreamClientFactoryForTests(null);
+    resetFakeDurableStreamTransports();
     setDesktopEpicOwnershipBridge(null);
     clearSessionCreatedEpics();
     resetAuth("signed-in", "alice@example.com");
+    spawnedRuntimeOptions.laneUnaries.length = 0;
+    reprobeCallbacks.callbacks.length = 0;
   });
 
   afterEach(() => {
     cleanup();
     __getOpenEpicRegistryForTests().disposeAll();
-    __setEpicStreamClientFactoryForTests(null);
+    // RESTORED, not nulled - see `workerFactoryBeforeTest`.
+    __setEpicRuntimeWorkerFactoryForTests(workerFactoryBeforeTest);
     setDesktopEpicOwnershipBridge(null);
     resetCanvasStore();
     resetAuth("signed-out", null);
     hostBindingRef.value = null;
     resetHostConnectionRegistryForTest();
     clearSessionCreatedEpics();
+    reprobeCallbacks.callbacks.length = 0;
+  });
+
+  it("builds method support for both the legacy and lane fixture arms", () => {
+    const legacy = createEpicSessionFixture("legacy");
+    const lanes = createEpicSessionFixture("lanes");
+    try {
+      // Fixture-construction guard only: no production edit is expected to
+      // redden this assertion. Production manifest -> selection coverage lives
+      // in the public-open pin below, whose worker derives its own factories.
+      expect(legacy.arm).toBe("legacy");
+      expect(lanes.arm).toBe("lanes");
+      expect(
+        legacy.manifest.find((entry) => entry.method === "epic.subscribe")
+          ?.support,
+      ).toBe("supported");
+      for (const method of EPIC_LANE_METHODS) {
+        expect(legacy.support(method)).toBe("unsupported");
+      }
+
+      for (const method of EPIC_LANE_METHODS) {
+        expect(lanes.support(method)).toBe("supported");
+      }
+      expect(
+        lanes.manifest.filter((entry) => entry.support === "supported"),
+      ).toHaveLength(EPIC_LANE_METHODS.length + 1);
+    } finally {
+      lanes.dispose();
+      legacy.dispose();
+    }
+  });
+
+  it("preserves the setup worker after a fixture-only test installs nothing", () => {
+    // This deliberately follows the fixture-construction guard above. That
+    // test never installs a worker factory, but its `afterEach` still runs. The
+    // setup override must survive; `null` would select the production Worker
+    // constructor and make the next jsdom session crash.
+    expect(setupWorkerFactory).not.toBeNull();
+    expect(getEpicRuntimeWorkerFactoryOverride()).toBe(setupWorkerFactory);
+  });
+
+  it("opens a genuinely lane-backed session through the public provider", async () => {
+    const fixture = createEpicSessionFixture("lanes");
+    try {
+      installManifestDerivedWorker();
+      const seenHandles: OpenEpicStoreHandle[] = [];
+      const view = render(
+        <EpicSessionProvider epicId="fixture-epic" tabId="fixture-epic">
+          <HandleProbe onHandle={(handle) => seenHandles.push(handle)} />
+        </EpicSessionProvider>,
+      );
+      try {
+        await waitFor(() => {
+          expect(fixture.opens.state).toBe(1);
+          expect(fixture.opens.status).toBe(1);
+        });
+        expect(fixture.opens.legacy).toBe(0);
+        for (const method of EPIC_LANE_METHODS) {
+          expect(fixture.transportSupportReads).toContain(method);
+        }
+        fixture.openLaneStreams(0);
+        fixture.deliverLaneSnapshots(0);
+        await waitFor(() => {
+          const handle = seenHandles.at(-1);
+          expect(handle?.store.getState().installedArm).toBe("lanes");
+          expect(handle?.store.getState().snapshotLoaded).toBe(true);
+          expect(handle?.store.getState().hostTransportStatus).toBe("open");
+        });
+      } finally {
+        view.unmount();
+      }
+    } finally {
+      fixture.dispose();
+    }
+  });
+
+  it("rebuilds a clean lane session when its attached reprobe fires", async () => {
+    const fixture = createEpicSessionFixture("lanes");
+    try {
+      installManifestDerivedWorker();
+      const seenHandles: OpenEpicStoreHandle[] = [];
+      const view = render(
+        <EpicSessionProvider epicId="fixture-epic" tabId="fixture-epic">
+          <HandleProbe onHandle={(handle) => seenHandles.push(handle)} />
+        </EpicSessionProvider>,
+      );
+      try {
+        await waitFor(() => expect(fixture.opens.state).toBe(1));
+        fixture.openLaneStreams(0);
+        fixture.deliverLaneSnapshots(0);
+        await waitFor(() => {
+          expect(seenHandles.at(-1)?.store.getState().snapshotLoaded).toBe(
+            true,
+          );
+        });
+        const firstHandle = seenHandles.at(-1);
+        const fire = reprobeCallbacks.callbacks.at(0);
+        if (firstHandle === undefined || fire === undefined) {
+          throw new Error("expected a loaded lane handle and reprobe callback");
+        }
+        await act(async () => {
+          fire();
+          await Promise.resolve();
+        });
+        await waitFor(() => expect(fixture.opens.state).toBe(2));
+        expect(fixture.opens.legacy).toBe(0);
+        expect(fixture.stateStreams[0]?.closeCount()).toBe(1);
+        expect(fixture.statusStreams[0]?.closeCount()).toBe(1);
+        expect(seenHandles.at(-1)).not.toBe(firstHandle);
+        fixture.openLaneStreams(1);
+        fixture.deliverLaneSnapshots(1);
+        await waitFor(() => {
+          const replacement = seenHandles.at(-1);
+          expect(replacement).not.toBe(firstHandle);
+          expect(replacement?.store.getState().installedArm).toBe("lanes");
+          expect(replacement?.store.getState().snapshotLoaded).toBe(true);
+        });
+      } finally {
+        view.unmount();
+      }
+    } finally {
+      fixture.dispose();
+    }
+  });
+
+  it("reads lane attachments from the host unless bytes were pasted locally", async () => {
+    const fixture = createEpicSessionFixture("lanes");
+    const sourceHash = "c".repeat(64);
+    const sourceTitle = "A2 source root";
+    const sourceBytes = Uint8Array.from([1, 2, 3]);
+    const pastedBytes = Uint8Array.from([9, 8, 7, 6]);
+    fixture.sourceRoot.getMap("epic").set("title", sourceTitle);
+    fixture.sourceRoot
+      .getMap<Uint8Array>("attachments")
+      .set(sourceHash, sourceBytes);
+    expect(
+      fixture.sourceRoot.getMap<Uint8Array>("attachments").get(sourceHash),
+    ).toEqual(sourceBytes);
+    const requests: Array<{
+      readonly method: "epic.fetchArtifactAttachment";
+      readonly params: {
+        readonly epicId: string;
+        readonly artifactId: string;
+        readonly hash: string;
+      };
+      readonly signal: AbortSignal | undefined;
+    }> = [];
+    const requestWithSignal: NonNullable<
+      ArtifactAttachmentScopeValue["client"]
+    >["requestWithSignal"] = (method, params, signal) => {
+      requests.push({ method, params, signal });
+      return Promise.resolve({
+        ok: true,
+        bytesBase64: "AQIDBA==",
+        mediaType: "image/png",
+      });
+    };
+    const scope: ArtifactAttachmentScopeValue = {
+      epicId: "fixture-epic",
+      artifactId: "fixture-artifact",
+      hostId: "host-a",
+      hostVersion: "fixture-version",
+      client: { requestWithSignal },
+    };
+    try {
+      installManifestDerivedWorker();
+      const seenHandles: OpenEpicStoreHandle[] = [];
+      const seenFetchers: ScopedImageBytesFetcher[] = [];
+      const view = render(
+        <EpicSessionProvider epicId="fixture-epic" tabId="fixture-epic">
+          <HandleProbe onHandle={(handle) => seenHandles.push(handle)} />
+          <ArtifactAttachmentScopeContext.Provider value={scope}>
+            <ImageFetcherProbe
+              onFetcher={(fetcher) => seenFetchers.push(fetcher)}
+            />
+          </ArtifactAttachmentScopeContext.Provider>
+        </EpicSessionProvider>,
+      );
+      try {
+        await waitFor(() => expect(fixture.opens.state).toBe(1));
+        fixture.openLaneStreams(0);
+        fixture.deliverLaneSnapshots(0);
+        await waitFor(() => {
+          expect(seenHandles.at(-1)?.store.getState().installedArm).toBe(
+            "lanes",
+          );
+          expect(seenHandles.at(-1)?.store.getState().snapshotLoaded).toBe(
+            true,
+          );
+          // Positive boundary control: the projected title came from this
+          // fixture's source root, so the attachment absence below is not a
+          // fresh, unrelated replica that never consumed that source.
+          expect(seenHandles.at(-1)?.store.getState().epic.title).toBe(
+            sourceTitle,
+          );
+          expect(seenFetchers.length).toBeGreaterThan(0);
+        });
+        const handle = seenHandles.at(-1);
+        const fetcher = seenFetchers.at(-1);
+        if (handle === undefined || fetcher === undefined) {
+          throw new Error("expected a loaded lane handle and image fetcher");
+        }
+        // The SOURCE root has the bytes, but lane state does not seed that
+        // root map into the worker's local replica.
+        await expect(
+          readHeldEpicAttachmentBytes(handle, sourceHash),
+        ).resolves.toBe(null);
+
+        const donor = new Y.Doc();
+        try {
+          donor.getMap<Uint8Array>("attachments").set(sourceHash, pastedBytes);
+          await handle.applyRootUpdate(Y.encodeStateAsUpdate(donor), true);
+        } finally {
+          donor.destroy();
+        }
+        const heldPastedBytes = await readHeldEpicAttachmentBytes(
+          handle,
+          sourceHash,
+        );
+        if (heldPastedBytes === null) {
+          throw new Error("expected locally pasted attachment bytes");
+        }
+        // Bridge/Yjs reads can return an equivalent Uint8Array with a distinct
+        // realm/prototype; numeric arrays pin the bytes without brittle realm
+        // identity in Vitest's deep-equality matcher.
+        expect(Array.from(heldPastedBytes)).toEqual(Array.from(pastedBytes));
+
+        const resolved = await fetcher.fetch(
+          sourceHash,
+          new AbortController().signal,
+        );
+        // The fetcher's decoded bytes can cross the same realm boundary.
+        expect(Array.from(resolved.bytes)).toEqual([1, 2, 3, 4]);
+        expect(resolved.mediaType).toBe("image/png");
+        expect(
+          requests.map((request) => ({
+            method: request.method,
+            params: request.params,
+          })),
+        ).toEqual([
+          {
+            method: "epic.fetchArtifactAttachment",
+            params: {
+              epicId: "fixture-epic",
+              artifactId: "fixture-artifact",
+              hash: sourceHash,
+            },
+          },
+        ]);
+      } finally {
+        view.unmount();
+      }
+    } finally {
+      fixture.dispose();
+    }
   });
 
   it("shares one resolved host client with every session consumer", async () => {
     const seenClients: unknown[] = [];
-    __setEpicStreamClientFactoryForTests(() => ({
+    installStreamFactory(() => ({
       applyUpdate: () => undefined,
       awareness: () => undefined,
       applyArtifactRoomUpdate: () => undefined,
@@ -553,7 +1109,7 @@ describe("<EpicSessionProvider />", () => {
   it("reacquires a fresh handle when the signed-in identity changes", async () => {
     const streams: ControlledStream[] = [];
     const seenHandles: OpenEpicStoreHandle[] = [];
-    __setEpicStreamClientFactoryForTests((_epicId, _callbacks) => {
+    installStreamFactory((_epicId, _callbacks) => {
       const stream: ControlledStream = { closeCount: 0 };
       streams.push(stream);
       return {
@@ -624,7 +1180,7 @@ describe("<EpicSessionProvider />", () => {
     };
     const streams: ControlledStream[] = [];
     const seenHandles: OpenEpicStoreHandle[] = [];
-    __setEpicStreamClientFactoryForTests((_epicId, _callbacks) => {
+    installStreamFactory((_epicId, _callbacks) => {
       const stream: ControlledStream = { closeCount: 0 };
       streams.push(stream);
       return {
@@ -698,7 +1254,7 @@ describe("<EpicSessionProvider />", () => {
     });
     window.localStorage.setItem(legacyKey, persistedBlob);
 
-    __setEpicStreamClientFactoryForTests(() => ({
+    installStreamFactory(() => ({
       applyUpdate: () => undefined,
       awareness: () => undefined,
       applyArtifactRoomUpdate: () => undefined,
@@ -767,7 +1323,7 @@ describe("<EpicSessionProvider />", () => {
     window.localStorage.setItem(legacyKey, legacyBlob);
     window.localStorage.setItem(canonicalKey, canonicalBlob);
 
-    __setEpicStreamClientFactoryForTests(() => ({
+    installStreamFactory(() => ({
       applyUpdate: () => undefined,
       awareness: () => undefined,
       applyArtifactRoomUpdate: () => undefined,
@@ -814,7 +1370,7 @@ describe("<EpicSessionProvider />", () => {
   it("keeps the old handle mounted, then CRDT-merges it after an equal-room re-point", async () => {
     const streams: ControlledEpicStream[] = [];
     const seenHandles: OpenEpicStoreHandle[] = [];
-    __setEpicStreamClientFactoryForTests((_epicId, callbacks) => {
+    installStreamFactory((_epicId, callbacks) => {
       const stream: ControlledEpicStream = { closeCount: 0, callbacks };
       streams.push(stream);
       return {
@@ -847,9 +1403,9 @@ describe("<EpicSessionProvider />", () => {
     if (firstHandle === undefined) {
       throw new Error("expected initial handle");
     }
-    act(() => {
+    await act(async () => {
       deliverSnapshot(streams[0], "room-a");
-      firstHandle.doc.getMap("epic").set("local-repoint-edit", "pending");
+      await seedLocalRootEdit(firstHandle, "local-repoint-edit", "pending");
     });
 
     act(() => {
@@ -884,15 +1440,127 @@ describe("<EpicSessionProvider />", () => {
     expect(streams).toHaveLength(2);
     expect(streams[0].closeCount).toBe(1);
     expect(__getOpenEpicRegistryForTests().size()).toBe(1);
-    expect(
-      seenHandles.at(-1)?.doc.getMap("epic").get("local-repoint-edit"),
-    ).toBe("pending");
+    expect(await readRootEdit(seenHandles.at(-1), "local-repoint-edit")).toBe(
+      "pending",
+    );
+  });
+
+  it("addresses a re-point candidate's lane unary to the host it was CONSTRUCTED against, not the still-mounted session's host", async () => {
+    const fixture = createEpicSessionFixture("lanes");
+    try {
+      installManifestDerivedWorker();
+      const seenHandles: OpenEpicStoreHandle[] = [];
+      const view = render(
+        <EpicSessionProvider epicId="fixture-epic" tabId="fixture-epic">
+          <HandleProbe
+            onHandle={(handle) => {
+              seenHandles.push(handle);
+            }}
+          />
+        </EpicSessionProvider>,
+      );
+      try {
+        await waitFor(() => expect(fixture.opens.state).toBe(1));
+        fixture.openLaneStreams(0);
+        fixture.deliverLaneSnapshots(0);
+        await waitFor(() => {
+          expect(seenHandles.at(-1)?.store.getState().installedArm).toBe(
+            "lanes",
+          );
+          expect(seenHandles.at(-1)?.store.getState().snapshotLoaded).toBe(
+            true,
+          );
+        });
+
+        const hostAClient = sessionHostClients.byHostId.get("host-a");
+        if (hostAClient === undefined) {
+          throw new Error("expected a resolved host-a client");
+        }
+        hostAClient.request.mockResolvedValue({ context: null });
+        resolveSessionHostClient("host-b");
+        const hostBClient = sessionHostClients.byHostId.get("host-b");
+        if (hostBClient === undefined) {
+          throw new Error("expected a resolved host-b client");
+        }
+        hostBClient.request.mockResolvedValue({ context: null });
+
+        act(() => {
+          hostState.id = "host-b";
+          view.rerender(
+            <EpicSessionProvider epicId="fixture-epic" tabId="fixture-epic">
+              <HandleProbe
+                onHandle={(handle) => {
+                  seenHandles.push(handle);
+                }}
+              />
+            </EpicSessionProvider>,
+          );
+        });
+
+        await waitFor(() => expect(fixture.opens.state).toBe(2));
+        // The candidate must still be ESTABLISHING - its snapshot is
+        // deliberately never delivered, because that is the window the
+        // defect lives in: once the replacement commits, the bug is
+        // unobservable.
+        expect(fixture.stateStreams[1]?.closeCount()).toBe(0);
+        expect(fixture.opens.legacy).toBe(0);
+        expect(__getOpenEpicRegistryForTests().size()).toBe(1);
+        if (spawnedRuntimeOptions.laneUnaries.length !== 2) {
+          throw new Error(
+            `expected exactly 2 spawned workers (the mounted handle and the re-point candidate), got ${spawnedRuntimeOptions.laneUnaries.length}`,
+          );
+        }
+
+        // Lane installation performs its own workspace-context refresh. Clear
+        // those legitimate initialization calls so the assertions below
+        // describe only the two captured unaries invoked by this test.
+        hostAClient.request.mockClear();
+        hostBClient.request.mockClear();
+
+        // THE REDDENING ONE - the candidate's unary must go to B.
+        await spawnedRuntimeOptions.laneUnaries[1]({
+          kind: "workspace-context",
+        });
+        expect(hostBClient.request).toHaveBeenCalledWith(
+          "epic.getWorkspaceContext",
+          { epicId: "fixture-epic" },
+        );
+        // ...and not to A - today it goes to A instead, since `getCommandRequester`
+        // resolves from `session?.hostId ?? targetHostId`, and `session` is still
+        // A while the candidate is establishing.
+        expect(hostAClient.request).not.toHaveBeenCalledWith(
+          "epic.getWorkspaceContext",
+          { epicId: "fixture-epic" },
+        );
+
+        // CONTROL - must be green both before and after the fix. The naive fix
+        // ("bind every handle to `targetHostId`") would make the still-mounted A
+        // handle's own unary address B too, which this catches.
+        hostAClient.request.mockClear();
+        hostBClient.request.mockClear();
+        await spawnedRuntimeOptions.laneUnaries[0]({
+          kind: "workspace-context",
+        });
+        expect(hostAClient.request).toHaveBeenCalledWith(
+          "epic.getWorkspaceContext",
+          { epicId: "fixture-epic" },
+        );
+        expect(hostBClient.request).not.toHaveBeenCalledWith(
+          "epic.getWorkspaceContext",
+          { epicId: "fixture-epic" },
+        );
+      } finally {
+        view.unmount();
+      }
+    } finally {
+      fixture.dispose();
+    }
   });
 
   it("uses a plain swap when the replacement reports a different room", async () => {
     const streams: ControlledEpicStream[] = [];
     const seenHandles: OpenEpicStoreHandle[] = [];
-    __setEpicStreamClientFactoryForTests((_epicId, callbacks) => {
+    installStreamFactory((_epicId, callbacks) => {
       const stream: ControlledEpicStream = { closeCount: 0, callbacks };
       streams.push(stream);
       return {
@@ -914,9 +1582,9 @@ describe("<EpicSessionProvider />", () => {
 
     await waitFor(() => expect(seenHandles).toHaveLength(1));
     const firstHandle = seenHandles[0];
-    act(() => {
+    await act(async () => {
       deliverSnapshot(streams[0], "room-a");
-      firstHandle.doc.getMap("epic").set("local-repoint-edit", "pending");
+      await seedLocalRootEdit(firstHandle, "local-repoint-edit", "pending");
       hostState.id = "host-b";
       view.rerender(
         <EpicSessionProvider
@@ -933,8 +1601,18 @@ describe("<EpicSessionProvider />", () => {
       deliverSnapshot(streams[1], "room-b");
     });
     await waitFor(() => expect(seenHandles.at(-1)).not.toBe(firstHandle));
+    // The flag's VALUE, observed through the retention it decides. A
+    // different room means no transfer, so the outgoing dirty handle is the
+    // only copy of its edits and MUST be retained; a flag stuck at `true`
+    // would report those edits as already in the replacement and retire the
+    // only thing holding them.
+    //
+    // This assertion exists because ablating the flag to a hard-coded `true`
+    // left all 374 provider tests green: the transfer itself was covered four
+    // times over, its DERIVATION not once.
+    expect(__getOpenEpicRegistryForTests().getUnsyncedEdits()).toHaveLength(1);
     expect(
-      seenHandles.at(-1)?.doc.getMap("epic").get("local-repoint-edit"),
+      await readRootEdit(seenHandles.at(-1), "local-repoint-edit"),
     ).toBeUndefined();
   });
 
@@ -950,7 +1628,7 @@ describe("<EpicSessionProvider />", () => {
     const handlesB: OpenEpicStoreHandle[] = [];
     const presentationsA: Array<EpicSessionPresentation | null> = [];
     const presentationsB: Array<EpicSessionPresentation | null> = [];
-    __setEpicStreamClientFactoryForTests((_epicId, callbacks) => {
+    installStreamFactory((_epicId, callbacks) => {
       const stream: ControlledEpicStream = { closeCount: 0, callbacks };
       streams.push(stream);
       return {
@@ -1021,12 +1699,53 @@ describe("<EpicSessionProvider />", () => {
     expect(__getOpenEpicRegistryForTests().size()).toBe(1);
   });
 
+  /**
+   * A worker that cannot be CONSTRUCTED must present `failed`, not crash the
+   * Epic.
+   *
+   * `createHandle` builds the worker synchronously inside
+   * `registry.acquireMounted`, so a runtime with no `Worker` - or a CSP that
+   * refuses the script URL - throws there. That throw used to escape the effect
+   * body, and an effect that throws goes to the component error boundary, which
+   * replaces the Epic wholesale and takes the Retry control down with it. Retry
+   * is the only affordance that could recover a session whose worker never
+   * started, so the boundary removed the recovery for the one failure that
+   * needed it most.
+   *
+   * The rollback already ran `closeSessionTransport()` before rethrowing, which
+   * is why this reads as a clean failure rather than a leak - the missing half
+   * was purely the PRESENTATION.
+   */
+  it("presents failed - not an error boundary - when the runtime worker cannot be constructed", async () => {
+    const presentations: Array<EpicSessionPresentation | null> = [];
+    const rig = installWorkerThatThrowsOnSpawn();
+
+    // No error boundary is installed here deliberately: under the bug the
+    // throw propagates out of `render` and this call itself rejects, so the
+    // pin fails at the render rather than on an assertion about the fallback.
+    render(
+      <EpicSessionProvider epicId="epic-session-test" tabId="epic-session-test">
+        <PresentationProbe
+          onPresentation={(presentation) => presentations.push(presentation)}
+        />
+      </EpicSessionProvider>,
+    );
+    await act(() => Promise.resolve());
+
+    expect(rig.spawnCount()).toBeGreaterThan(0);
+    const last = presentations.at(-1);
+    expect(last?.kind).toBe("failed");
+    // The session itself is not handed out - a handle was never built - so
+    // consumers gated on it stay gated rather than reading a corpse.
+    expect(presentations.some((p) => p?.kind === "ready")).toBe(false);
+  });
+
   it("bounds a re-point that never snapshots and returns to the original host", async () => {
     vi.useFakeTimers();
     try {
       const streams: ControlledEpicStream[] = [];
       const presentations: Array<EpicSessionPresentation | null> = [];
-      __setEpicStreamClientFactoryForTests((_epicId, callbacks) => {
+      installStreamFactory((_epicId, callbacks) => {
         const stream: ControlledEpicStream = { closeCount: 0, callbacks };
         streams.push(stream);
         return {
@@ -1105,7 +1824,7 @@ describe("<EpicSessionProvider />", () => {
       const streams: ControlledEpicStream[] = [];
       const seenHandles: OpenEpicStoreHandle[] = [];
       const presentations: Array<EpicSessionPresentation | null> = [];
-      __setEpicStreamClientFactoryForTests((_epicId, callbacks) => {
+      installStreamFactory((_epicId, callbacks) => {
         const stream: ControlledEpicStream = { closeCount: 0, callbacks };
         streams.push(stream);
         return {
@@ -1188,7 +1907,7 @@ describe("<EpicSessionProvider />", () => {
 
   it("absorbs a churning effect dependency instead of re-presenting", async () => {
     const presentations: Array<EpicSessionPresentation | null> = [];
-    __setEpicStreamClientFactoryForTests(() => ({
+    installStreamFactory(() => ({
       applyUpdate: () => undefined,
       awareness: () => undefined,
       applyArtifactRoomUpdate: () => undefined,
@@ -1222,7 +1941,10 @@ describe("<EpicSessionProvider />", () => {
     // churns the dependency again, which writes again - an infinite render
     // loop, not a wasted render. `epic-surface-isolation` hung on exactly this.
     act(() => {
-      transportState.opener = () => {
+      // Still a THROW, and still correct after the deletion: the pin is that
+      // the provider does NOT re-acquire, so the churned opener must never be
+      // reached. What changed is only where the mutable slot lives.
+      fakeDurableStreamTransports().opener = () => {
         throw new Error("openTransport must not be called after the churn");
       };
       view.rerender(tree());
@@ -1322,7 +2044,7 @@ describe("<EpicSessionProvider />", () => {
   it("(R-1) reacquires a fresh handle on a same-host remote public-key rotation, isolated from every other field", async () => {
     const streams: ControlledStream[] = [];
     const seenHandles: OpenEpicStoreHandle[] = [];
-    __setEpicStreamClientFactoryForTests((_epicId, _callbacks) => {
+    installStreamFactory((_epicId, _callbacks) => {
       const stream: ControlledStream = { closeCount: 0 };
       streams.push(stream);
       return {
@@ -1385,7 +2107,7 @@ describe("<EpicSessionProvider />", () => {
   it("defers acquisition without crashing while the active host is null, then acquires when it binds", async () => {
     const streams: ControlledStream[] = [];
     const seenHandles: OpenEpicStoreHandle[] = [];
-    __setEpicStreamClientFactoryForTests((_epicId, _callbacks) => {
+    installStreamFactory((_epicId, _callbacks) => {
       const stream: ControlledStream = { closeCount: 0 };
       streams.push(stream);
       return {
@@ -1464,14 +2186,28 @@ describe("<EpicSessionProvider />", () => {
       hasMore: false,
     });
     const seenHandles: OpenEpicStoreHandle[] = [];
-    __setEpicStreamClientFactoryForTests((_epicId, _callbacks) => ({
-      applyUpdate: () => undefined,
-      awareness: () => undefined,
-      applyArtifactRoomUpdate: () => undefined,
-      artifactRoomAwareness: () => undefined,
-      retryMigration: () => undefined,
-      close: () => undefined,
-    }));
+    // The stream is CAPTURED, where it used to be discarded. The assertion
+    // below begins an epic-title write command, and
+    // `beginEpicTitleMutationWithId` refuses one outright unless
+    // `session.writeGateRole()` is writable - a role that arrives only with a
+    // snapshot. A session that never received one has `permissionRole: null`,
+    // so the mutation returned `null`, stamped no overlay, and the title this
+    // test reads through the cache stayed "". That gate is not new; what was
+    // new is the caller. This test used to drive `setEpicTitle`, which had no
+    // permission gate, and the write-command conversion swapped it for a gated
+    // one without giving the session a role to pass the gate with.
+    const streams: ControlledEpicStream[] = [];
+    installStreamFactory((_epicId, callbacks) => {
+      streams.push({ callbacks, closeCount: 0 });
+      return {
+        applyUpdate: () => undefined,
+        awareness: () => undefined,
+        applyArtifactRoomUpdate: () => undefined,
+        artifactRoomAwareness: () => undefined,
+        retryMigration: () => undefined,
+        close: () => undefined,
+      };
+    });
 
     render(
       <QueryClientProvider client={queryClient}>
@@ -1493,8 +2229,21 @@ describe("<EpicSessionProvider />", () => {
     });
     expect(seenHandles[0].userId).toBe(sessionUserId);
 
+    // The role, before the write. `snapshotMeta` carries `"editor"`, which is
+    // what makes the gate above passable. Synchronous `act`: `deliverSnapshot`
+    // is a plain callback invocation, and an `async` wrapper with nothing to
+    // await is what `require-await` rejects.
     act(() => {
-      seenHandles[0].store.getState().setEpicTitle("Generated history title");
+      deliverSnapshot(streams[0], "room-history");
+    });
+
+    await act(async () => {
+      // `setEpicTitle` is gone: the epic title is a WRITE COMMAND now, and its
+      // optimistic half is the overlay stamp the projector folds - the same
+      // observable this assertion reads.
+      await seenHandles[0].store
+        .getState()
+        .beginEpicTitleMutation("Generated history title");
     });
 
     await waitFor(() => {
@@ -1518,14 +2267,24 @@ describe("<EpicSessionProvider />", () => {
       LIST_CLOUD_TASKS_REQUEST,
     );
     const seenHandles: OpenEpicStoreHandle[] = [];
-    __setEpicStreamClientFactoryForTests((_epicId, _callbacks) => ({
-      applyUpdate: () => undefined,
-      awareness: () => undefined,
-      applyArtifactRoomUpdate: () => undefined,
-      artifactRoomAwareness: () => undefined,
-      retryMigration: () => undefined,
-      close: () => undefined,
-    }));
+    // Same translation as the test above, and for the same reason: the epic
+    // title is a WRITE COMMAND on this branch, and
+    // `beginEpicTitleMutationWithId` refuses one unless
+    // `session.writeGateRole()` is writable - a role that arrives only with a
+    // snapshot. So the stream is captured rather than discarded, and a
+    // snapshot is delivered before the write.
+    const streams: ControlledEpicStream[] = [];
+    installStreamFactory((_epicId, callbacks) => {
+      streams.push({ callbacks, closeCount: 0 });
+      return {
+        applyUpdate: () => undefined,
+        awareness: () => undefined,
+        applyArtifactRoomUpdate: () => undefined,
+        artifactRoomAwareness: () => undefined,
+        retryMigration: () => undefined,
+        close: () => undefined,
+      };
+    });
 
     render(
       <QueryClientProvider client={queryClient}>
@@ -1550,7 +2309,15 @@ describe("<EpicSessionProvider />", () => {
     ).toBeUndefined();
 
     act(() => {
-      seenHandles[0].store.getState().setEpicTitle("Generated history title");
+      deliverSnapshot(streams[0], "room-history");
+    });
+
+    await act(async () => {
+      // `setEpicTitle` is gone; the overlay stamp `beginEpicTitleMutation`
+      // leaves is the same observable the cache patch below reads.
+      await seenHandles[0].store
+        .getState()
+        .beginEpicTitleMutation("Generated history title");
     });
 
     act(() => {
@@ -1585,7 +2352,7 @@ describe("<EpicSessionProvider />", () => {
     setDesktopEpicOwnershipBridge(
       createDesktopWindowsBridgeForTests(calls, () => claim),
     );
-    __setEpicStreamClientFactoryForTests((_epicId, _callbacks) => {
+    installStreamFactory((_epicId, _callbacks) => {
       const stream: ControlledStream = { closeCount: 0 };
       streams.push(stream);
       return {
@@ -1656,7 +2423,7 @@ describe("<EpicSessionProvider />", () => {
     setDesktopEpicOwnershipBridge(
       createDesktopWindowsBridgeForTests(calls, { ok: true }),
     );
-    __setEpicStreamClientFactoryForTests((_epicId, _callbacks) => ({
+    installStreamFactory((_epicId, _callbacks) => ({
       applyUpdate: () => undefined,
       awareness: () => undefined,
       applyArtifactRoomUpdate: () => undefined,
@@ -1744,7 +2511,7 @@ describe("<EpicSessionProvider />", () => {
 
   describe("a completed re-point keeps the document it merged (B5)", () => {
     function installControlledFactory(streams: ControlledEpicStream[]): void {
-      __setEpicStreamClientFactoryForTests((_epicId, callbacks) => {
+      installStreamFactory((_epicId, callbacks) => {
         const stream: ControlledEpicStream = { closeCount: 0, callbacks };
         streams.push(stream);
         return {
@@ -1795,9 +2562,9 @@ describe("<EpicSessionProvider />", () => {
       const view = render(providerBody((handle) => seenHandles.push(handle)));
       await waitFor(() => expect(seenHandles).toHaveLength(1));
       const firstHandle = seenHandles[0];
-      act(() => {
+      await act(async () => {
         deliverSnapshot(streams[0], "room-a");
-        firstHandle.doc.getMap("epic").set("local-repoint-edit", "pending");
+        await seedLocalRootEdit(firstHandle, "local-repoint-edit", "pending");
       });
 
       act(() => {
@@ -1818,9 +2585,9 @@ describe("<EpicSessionProvider />", () => {
       // commit pairs host-b's handle with host-a's key, the next render reads
       // host-b's key, and the mismatch takes the hard-rebuild arm - disposing
       // the handle that is holding the merge.
-      expect(
-        seenHandles.at(-1)?.doc.getMap("epic").get("local-repoint-edit"),
-      ).toBe("pending");
+      expect(await readRootEdit(seenHandles.at(-1), "local-repoint-edit")).toBe(
+        "pending",
+      );
       expect(streams).toHaveLength(2);
       expect(__getOpenEpicRegistryForTests().size()).toBe(1);
     });
@@ -1843,9 +2610,9 @@ describe("<EpicSessionProvider />", () => {
       const view = render(providerBody((handle) => seenHandles.push(handle)));
       await waitFor(() => expect(seenHandles).toHaveLength(1));
       const firstHandle = seenHandles[0];
-      act(() => {
+      await act(async () => {
         deliverSnapshot(streams[0], "room-a");
-        firstHandle.doc.getMap("epic").set("local-repoint-edit", "pending");
+        await seedLocalRootEdit(firstHandle, "local-repoint-edit", "pending");
       });
 
       act(() => {
@@ -1859,9 +2626,9 @@ describe("<EpicSessionProvider />", () => {
       await waitFor(() => expect(seenHandles.at(-1)).not.toBe(firstHandle));
       await act(() => Promise.resolve());
 
-      expect(
-        seenHandles.at(-1)?.doc.getMap("epic").get("local-repoint-edit"),
-      ).toBe("pending");
+      expect(await readRootEdit(seenHandles.at(-1), "local-repoint-edit")).toBe(
+        "pending",
+      );
       expect(streams).toHaveLength(2);
       expect(__getOpenEpicRegistryForTests().size()).toBe(1);
     });
@@ -1883,9 +2650,9 @@ describe("<EpicSessionProvider />", () => {
       const view = render(providerBody((handle) => seenHandles.push(handle)));
       await waitFor(() => expect(seenHandles).toHaveLength(1));
       const firstHandle = seenHandles[0];
-      act(() => {
+      await act(async () => {
         deliverSnapshot(streams[0], "room-a");
-        firstHandle.doc.getMap("epic").set("local-repoint-edit", "pending");
+        await seedLocalRootEdit(firstHandle, "local-repoint-edit", "pending");
       });
 
       act(() => {
@@ -1904,9 +2671,9 @@ describe("<EpicSessionProvider />", () => {
       await waitFor(() => expect(seenHandles.at(-1)).not.toBe(firstHandle));
       await act(() => Promise.resolve());
 
-      expect(
-        seenHandles.at(-1)?.doc.getMap("epic").get("local-repoint-edit"),
-      ).toBe("pending");
+      expect(await readRootEdit(seenHandles.at(-1), "local-repoint-edit")).toBe(
+        "pending",
+      );
       expect(streams).toHaveLength(2);
     });
 
@@ -1930,9 +2697,9 @@ describe("<EpicSessionProvider />", () => {
       const view = render(providerBody((handle) => seenHandles.push(handle)));
       await waitFor(() => expect(seenHandles).toHaveLength(1));
       const firstHandle = seenHandles[0];
-      act(() => {
+      await act(async () => {
         deliverSnapshot(streams[0], "room-a");
-        firstHandle.doc.getMap("epic").set("local-repoint-edit", "pending");
+        await seedLocalRootEdit(firstHandle, "local-repoint-edit", "pending");
       });
 
       act(() => {
@@ -1954,9 +2721,9 @@ describe("<EpicSessionProvider />", () => {
       await act(() => Promise.resolve());
 
       expect(seenHandles.at(-1)).toBe(mergedHandle);
-      expect(
-        seenHandles.at(-1)?.doc.getMap("epic").get("local-repoint-edit"),
-      ).toBe("pending");
+      expect(await readRootEdit(seenHandles.at(-1), "local-repoint-edit")).toBe(
+        "pending",
+      );
       expect(streams).toHaveLength(2);
       expect(__getOpenEpicRegistryForTests().size()).toBe(1);
 
@@ -1978,7 +2745,7 @@ describe("<EpicSessionProvider />", () => {
 
   describe("warm-handle adoption after a provider remount (F1)", () => {
     function installControlledFactory(streams: ControlledEpicStream[]): void {
-      __setEpicStreamClientFactoryForTests((_epicId, callbacks) => {
+      installStreamFactory((_epicId, callbacks) => {
         const stream: ControlledEpicStream = { closeCount: 0, callbacks };
         streams.push(stream);
         return {
@@ -2020,9 +2787,9 @@ describe("<EpicSessionProvider />", () => {
       );
       await waitFor(() => expect(firstMountHandles).toHaveLength(1));
       const warmHandle = firstMountHandles[0];
-      act(() => {
+      await act(async () => {
         deliverSnapshot(streams[0], "room-a");
-        warmHandle.doc.getMap("epic").set("local-repoint-edit", "pending");
+        await seedLocalRootEdit(warmHandle, "local-repoint-edit", "pending");
       });
 
       // Tab closes; the MRU registry keeps the session warm (mounted refs
@@ -2171,7 +2938,7 @@ describe("<EpicSessionProvider />", () => {
     // `beforeEach`) is deliberately a DIFFERENT host than the marker records,
     // so a pass here can only mean the marker's host won.
     markEpicCreatedThisSession(EPIC_ID, "host-create");
-    __setEpicStreamClientFactoryForTests(() => ({
+    installStreamFactory(() => ({
       applyUpdate: () => undefined,
       awareness: () => undefined,
       applyArtifactRoomUpdate: () => undefined,
@@ -2213,7 +2980,7 @@ describe("<EpicSessionProvider />", () => {
     // the seed in the first place.
     markEpicCreatedThisSession(EPIC_ID, "host-create");
     const streams: ControlledEpicStream[] = [];
-    __setEpicStreamClientFactoryForTests((_epicId, callbacks) => {
+    installStreamFactory((_epicId, callbacks) => {
       const stream: ControlledEpicStream = { closeCount: 0, callbacks };
       streams.push(stream);
       return {
@@ -2274,7 +3041,7 @@ describe("<EpicSessionProvider />", () => {
     hostState.id = null;
     markEpicCreatedThisSession(EPIC_ID, "host-create");
     const streams: ControlledEpicStream[] = [];
-    __setEpicStreamClientFactoryForTests((_epicId, callbacks) => {
+    installStreamFactory((_epicId, callbacks) => {
       const stream: ControlledEpicStream = { closeCount: 0, callbacks };
       streams.push(stream);
       return {
@@ -2343,7 +3110,7 @@ describe("<EpicSessionProvider />", () => {
       const EPIC_ID = "epic-create-host-retry-test";
       markEpicCreatedThisSession(EPIC_ID, "host-create");
       const streams: ControlledEpicStream[] = [];
-      __setEpicStreamClientFactoryForTests((_epicId, callbacks) => {
+      installStreamFactory((_epicId, callbacks) => {
         const stream: ControlledEpicStream = { closeCount: 0, callbacks };
         streams.push(stream);
         return {
@@ -2425,5 +3192,210 @@ describe("<EpicSessionProvider />", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("retires the handle a worker fatal killed, so Retry rebuilds instead of re-presenting the corpse", async () => {
+    // A fatal only moved the PRESENTATION to `failed`. The handle stayed
+    // registered and undisposed, so Retry - which bumps `retryGeneration` and
+    // re-runs the acquire effect - reached `current.hostId === targetHostId`
+    // and presented that same dead handle as `ready`. The recovery affordance
+    // could not recover from the one failure it is shown for.
+    const EPIC_ID = "epic-worker-fatal-retry";
+    const streams: ControlledEpicStream[] = [];
+    const rig = installWorkerWithFatalOnFirstSpawn((_epicId, callbacks) => {
+      const stream: ControlledEpicStream = { closeCount: 0, callbacks };
+      streams.push(stream);
+      return {
+        applyUpdate: () => undefined,
+        awareness: () => undefined,
+        applyArtifactRoomUpdate: () => undefined,
+        artifactRoomAwareness: () => undefined,
+        retryMigration: () => undefined,
+        close: () => {
+          stream.closeCount += 1;
+        },
+      };
+    });
+
+    const seenHandles: OpenEpicStoreHandle[] = [];
+    const presentations: Array<EpicSessionPresentation | null> = [];
+    render(
+      <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
+        <HandleProbe onHandle={(handle) => seenHandles.push(handle)} />
+        <PresentationProbe
+          onPresentation={(presentation) => presentations.push(presentation)}
+        />
+      </EpicSessionProvider>,
+    );
+    await act(() => Promise.resolve());
+
+    expect(rig.spawnCount()).toBe(1);
+    expect(seenHandles).toHaveLength(1);
+    expect(presentations.at(-1)?.kind).toBe("ready");
+    const dead = seenHandles[0];
+
+    act(() => {
+      rig.fatal();
+    });
+    expect(presentations.at(-1)?.kind).toBe("failed");
+    // PREMISE, positively: the fatal really did leave the corpse mounted.
+    // Without this the assertions below could pass because the handle was
+    // never registered in the first place.
+    expect(__getOpenEpicRegistryForTests().peek(EPIC_ID)).toBe(dead);
+
+    act(() => {
+      presentations.at(-1)?.retry();
+    });
+    await act(() => Promise.resolve());
+
+    // A SECOND worker was actually started. This is the assertion that
+    // separates the two outcomes: both end at `ready`, and only the spawn
+    // count says whether anything was rebuilt.
+    expect(rig.spawnCount()).toBe(2);
+    expect(seenHandles.at(-1)).not.toBe(dead);
+    expect(__getOpenEpicRegistryForTests().peek(EPIC_ID)).not.toBe(dead);
+    expect(presentations.at(-1)?.kind).toBe("ready");
+  });
+
+  it("hands a FRESH surface a new handle during the corpse window, before any Retry", async () => {
+    // The path finding 8's first fix could not reach. `retireDeadMounted` was
+    // called from the acquire effect, gated on the surface ALREADY holding the
+    // dead handle - so a second tab opening this epic between the fatal and any
+    // Retry has no `current`, skips that gate entirely, and adopts the corpse
+    // from `acquireMounted`. Same bug shape, one path over.
+    //
+    // A fix on one path to a state has to enumerate EVERY path to it, and
+    // `acquireMounted` is the seam every path goes through: it has exactly one
+    // production caller, and it is the line that hands out the handle.
+    const EPIC_ID = "epic-corpse-window";
+    const streams: ControlledEpicStream[] = [];
+    const rig = installWorkerWithFatalOnFirstSpawn((_epicId, callbacks) => {
+      const stream: ControlledEpicStream = { closeCount: 0, callbacks };
+      streams.push(stream);
+      return {
+        applyUpdate: () => undefined,
+        awareness: () => undefined,
+        applyArtifactRoomUpdate: () => undefined,
+        artifactRoomAwareness: () => undefined,
+        retryMigration: () => undefined,
+        close: () => {
+          stream.closeCount += 1;
+        },
+      };
+    });
+
+    const firstSurface: OpenEpicStoreHandle[] = [];
+    const presentations: Array<EpicSessionPresentation | null> = [];
+    render(
+      <EpicSessionProvider epicId={EPIC_ID} tabId={`${EPIC_ID}-tab-1`}>
+        <HandleProbe onHandle={(handle) => firstSurface.push(handle)} />
+        <PresentationProbe
+          onPresentation={(presentation) => presentations.push(presentation)}
+        />
+      </EpicSessionProvider>,
+    );
+    await act(() => Promise.resolve());
+    expect(firstSurface).toHaveLength(1);
+    const dead = firstSurface[0];
+
+    act(() => {
+      rig.fatal();
+    });
+    expect(presentations.at(-1)?.kind).toBe("failed");
+    // PREMISE: we are INSIDE the corpse window - nobody has retried, and the
+    // registry still holds the dead handle. Without this the assertion below
+    // could pass because the window had already closed on its own.
+    expect(__getOpenEpicRegistryForTests().peek(EPIC_ID)).toBe(dead);
+
+    // A SECOND surface on the same epic - a duplicated tab, or the same epic
+    // opened in another window. It has no prior handle of its own, which is
+    // exactly what makes it take the acquire path rather than any re-point arm.
+    const secondSurface: OpenEpicStoreHandle[] = [];
+    render(
+      <EpicSessionProvider epicId={EPIC_ID} tabId={`${EPIC_ID}-tab-2`}>
+        <HandleProbe onHandle={(handle) => secondSurface.push(handle)} />
+      </EpicSessionProvider>,
+    );
+    await act(() => Promise.resolve());
+
+    expect(rig.spawnCount()).toBe(2);
+    expect(secondSurface).toHaveLength(1);
+    expect(secondSurface[0]).not.toBe(dead);
+    expect(__getOpenEpicRegistryForTests().peek(EPIC_ID)).not.toBe(dead);
+  });
+
+  it("disposes the replacement candidate when the provider unmounts mid-transfer", async () => {
+    // `commitReplacement` sets `settled = true` before dispatching the
+    // transfer, which permanently disarms `disposePending` and the deadline -
+    // so from that assignment the transfer tail OWNS the candidate on every
+    // exit. Its cancellation exit returned bare, leaving a fully built
+    // session - worker, stream transport, socket, accounting registrations -
+    // alive with nothing holding a reference that could ever end it.
+    const EPIC_ID = "epic-cancelled-transfer";
+    const streams: ControlledEpicStream[] = [];
+    const seenHandles: OpenEpicStoreHandle[] = [];
+    installStreamFactory((_epicId, callbacks) => {
+      const stream: ControlledEpicStream = { closeCount: 0, callbacks };
+      streams.push(stream);
+      return {
+        applyUpdate: () => undefined,
+        awareness: () => undefined,
+        applyArtifactRoomUpdate: () => undefined,
+        artifactRoomAwareness: () => undefined,
+        retryMigration: () => undefined,
+        close: () => {
+          stream.closeCount += 1;
+        },
+      };
+    });
+
+    const view = render(
+      <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
+        <HandleProbe onHandle={(handle) => seenHandles.push(handle)} />
+      </EpicSessionProvider>,
+    );
+    await waitFor(() => {
+      expect(seenHandles).toHaveLength(1);
+    });
+    const firstHandle = seenHandles.at(-1);
+    if (firstHandle === undefined) throw new Error("expected initial handle");
+    await act(async () => {
+      deliverSnapshot(streams[0], "room-a");
+      // A local edit and an EQUAL room, so the swap takes the MERGE path -
+      // the only one with an awaited `encodeRootState` / `applyRootUpdate` for
+      // an unmount to land inside.
+      await seedLocalRootEdit(
+        firstHandle,
+        "cancelled-transfer-edit",
+        "pending",
+      );
+    });
+
+    act(() => {
+      hostState.id = "host-b";
+      view.rerender(
+        <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
+          <HandleProbe onHandle={(handle) => seenHandles.push(handle)} />
+        </EpicSessionProvider>,
+      );
+    });
+    await waitFor(() => {
+      expect(streams).toHaveLength(2);
+    });
+    expect(streams[1].closeCount).toBe(0);
+
+    // The snapshot commits the replacement (settled) and dispatches the
+    // transfer; the unmount lands while that transfer is still awaiting, in
+    // the SAME act so nothing drains in between.
+    await act(async () => {
+      deliverSnapshot(streams[1], "room-a");
+      view.unmount();
+      await Promise.resolve();
+    });
+    await act(() => Promise.resolve());
+
+    // The candidate's own transport. Under the unfixed tree this stays 0 for
+    // the life of the tab.
+    expect(streams[1].closeCount).toBe(1);
   });
 });

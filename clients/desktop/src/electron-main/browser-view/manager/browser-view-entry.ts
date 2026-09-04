@@ -51,10 +51,17 @@ export interface BrowserViewEntry {
   readonly listeners: BrowserViewListenerMap;
   parentWindowId: string | null;
   desiredVisible: boolean;
+  /**
+   * Last rect the renderer measured for this tile, in RENDERER CSS PIXELS -
+   * the space `getBoundingClientRect` reports and page zoom scales. The native
+   * rect is always re-derived from it (`BrowserViewGeometry.applyBounds`), so
+   * a zoom change needs no new measurement.
+   */
   bounds: BrowserViewBounds | null;
   /**
-   * BT-101: last effective rect actually handed to `view.setBounds`. Identical
-   * follow-up updates coalesce to a no-op so a streamed drag burst does not
+   * BT-101: last effective rect, in window DIPs, actually handed to
+   * `view.setBounds`. Identical follow-up
+   * updates coalesce to a no-op so a streamed drag burst does not
    * relayout the guest per frame for unchanged geometry. Invalidated when
    * anything else moves the view directly (PiP offscreen parking).
    */
@@ -80,6 +87,17 @@ export interface BrowserViewEntry {
   overlayAwaitingPaintAck: boolean;
   /** Set once the parked posture is actually applied (post-ack). */
   overlayParked: boolean;
+  /**
+   * Ticket 04 exit-edge handshake: non-null while a release is waiting for
+   * the un-parked view's first composited frame before telling the renderer
+   * to drop its stand-in (invariant 4, the restore-side counterpart of
+   * `overlayAwaitingPaintAck`). Identifies the in-flight wait so a late
+   * resolution that lost the race to a newer release (or to `forgetEntry`)
+   * can tell it is stale and skip notifying. `rekeyEntry` needs no handling:
+   * this lives on the entry object itself, so it carries across a rebind for
+   * free, and the eventual notification reads the entry's *current* tile key.
+   */
+  overlayRestoreToken: symbol | null;
   /** Visibility last computed by the geometry pass; null before the first. */
   visible: boolean | null;
   /** Last `visible` value logged, so forensics logging fires only on change. */

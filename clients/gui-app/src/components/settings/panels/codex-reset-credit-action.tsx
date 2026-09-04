@@ -68,6 +68,7 @@ export function CodexResetCreditAction({
         Use reset
       </Button>
       <ConfirmDestructiveDialog
+        blockedReason={null}
         open={open}
         onOpenChange={(nextOpen) => {
           setOpen(nextOpen);

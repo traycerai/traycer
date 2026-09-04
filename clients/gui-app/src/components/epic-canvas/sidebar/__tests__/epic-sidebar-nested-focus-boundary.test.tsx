@@ -11,9 +11,13 @@
  * underlying prepare/close logic ran with the right arguments.
  *
  * Root-create and single-delete still route through a `prepare*FocusTarget`
- * store action per item, so the canvas store mock deliberately omits raw
- * `openTileInTab`: a regression back to calling it directly throws instead
- * of silently passing.
+ * store action per item - root-create through the tile-open seam
+ * (`openTile` -> `resolveTileOpen` -> `executeTileOpen` ->
+ * `prepareOpenTileInTabFocusTargetFromSource`, since the freshly-created
+ * tile lands on a canvas with no pane to anchor into yet), single-delete
+ * through `prepareCloseCanvasTabFocusTarget` - so the canvas store mock
+ * deliberately omits raw `openTileInTab`: a regression back to calling it
+ * directly throws instead of silently passing.
  *
  * Bulk delete batches every close into ONE boundary call instead of one per
  * item - closing each tab through its own `prepareCloseCanvasTabFocusTarget`
@@ -72,8 +76,12 @@ interface OpenArtifactLookupEntry {
 
 interface TestState {
   readonly navigateNested: Mock;
-  readonly prepareOpenTileInTabFocusTarget: Mock;
+  readonly prepareOpenTileInTabFocusTargetFromSource: Mock;
+  readonly prepareOpenTilePreviewInTabFocusTargetFromSource: Mock;
+  readonly prepareOpenTileInBackgroundTabFocusTargetFromSource: Mock;
+  readonly prepareOpenTileInPaneFocusTargetFromSource: Mock;
   readonly prepareCloseCanvasTabFocusTarget: Mock;
+  readonly trackOpenedCanvasTile: Mock;
   readonly createArtifactMutate: Mock;
   readonly deleteArtifactMutate: Mock;
   readonly deleteArtifactMutateAsync: Mock;
@@ -107,14 +115,21 @@ const testState = vi.hoisted<TestState>(() => ({
       prepare: () => NestedFocusTarget | null,
     ) => prepare(),
   ),
-  prepareOpenTileInTabFocusTarget: vi.fn((): NestedFocusTarget => ({
+  // The freshly-created root has no canvas yet (`canvasByTabId[TAB_ID]` is
+  // unseeded), so `resolveTileOpen` lands on the empty-canvas plan and the
+  // executor dispatches this one specifically - see the file header.
+  prepareOpenTileInTabFocusTargetFromSource: vi.fn((): NestedFocusTarget => ({
     paneId: "pane-new",
     tileInstanceId: "instance-new",
   })),
+  prepareOpenTilePreviewInTabFocusTargetFromSource: vi.fn(),
+  prepareOpenTileInBackgroundTabFocusTargetFromSource: vi.fn(),
+  prepareOpenTileInPaneFocusTargetFromSource: vi.fn(),
   prepareCloseCanvasTabFocusTarget: vi.fn((): NestedFocusTarget => ({
     paneId: "fallback-pane",
     tileInstanceId: "fallback-instance",
   })),
+  trackOpenedCanvasTile: vi.fn(),
   createArtifactMutate: vi.fn(),
   deleteArtifactMutate: vi.fn(),
   deleteArtifactMutateAsync: vi.fn(),
@@ -405,11 +420,20 @@ vi.mock("@/hooks/epic/use-epic-tui-agent-mutations", () => ({
 }));
 
 vi.mock("@/providers/use-open-epic-handle", () => ({
+  // The chat write-routing gate reads the session through the
+  // NON-throwing accessor. `null` here is the honest double: this suite
+  // mounts no epic store, and no session means no epic write path to gate.
+  useMaybeOpenEpicHandle: () => null,
   useOpenEpicHandle: () => ({
     epicId: "epic-1",
     store: {
       getState: () => ({
         deleteArtifact: testState.localDeleteArtifact,
+        // The unread marker computes its variant from BOTH stores, reading
+        // the tree non-reactively through this handle so a body-write stamp
+        // cannot re-render the row. That makes `tree` part of the state this
+        // double has to carry.
+        tree: testState.tree,
         renameArtifact: vi.fn(),
         chats: { byId: {} },
         tuiAgents: { byId: {} },
@@ -435,6 +459,7 @@ vi.mock("@/providers/use-open-epic-handle", () => ({
 // header), backed by the real `closeTab` reducer against `canvasByTabId` so
 // `getCurrentNestedFocusTarget` in production code computes a real result.
 vi.mock("@/stores/epics/canvas/store", () => ({
+  trackOpenedCanvasTile: testState.trackOpenedCanvasTile,
   findOpenArtifactInTab: (tabId: string, nodeId: string) => {
     const mapped = testState.openArtifactByKey.get(`${tabId}:${nodeId}`);
     if (mapped !== undefined) return mapped;
@@ -468,16 +493,30 @@ vi.mock("@/stores/epics/canvas/store", () => ({
         pendingRootCreatesByEpic: {},
         preAckRootCreatesByEpic: {},
         promotePreviewInTab: vi.fn(),
-        prepareOpenTileInTabFocusTarget:
-          testState.prepareOpenTileInTabFocusTarget,
         prepareCloseCanvasTabFocusTarget:
           testState.prepareCloseCanvasTabFocusTarget,
         renameArtifactInTab: vi.fn(),
         unmarkArtifactSelfDeleted: testState.unmarkArtifactSelfDeleted,
       }),
     {
+      // `openTileWithNavigation` (the tile-open seam) reads this imperative
+      // form: `canvasByTabId` for the resolver, `tabsById[tabId].epicId` to
+      // decide whether to wrap the prepare in `navigateNested`, and the
+      // `prepare*FromSource` actions the executor dispatches into. Only the
+      // `*FromSource` boundary functions are exposed here - never a raw
+      // `openTileInTab` mutation - so a regression back to mutating the
+      // canvas directly throws instead of silently passing (see file header).
       getState: () => ({
         canvasByTabId: testState.canvasByTabId,
+        tabsById: { [TAB_ID]: { epicId: EPIC_ID } },
+        prepareOpenTileInTabFocusTargetFromSource:
+          testState.prepareOpenTileInTabFocusTargetFromSource,
+        prepareOpenTilePreviewInTabFocusTargetFromSource:
+          testState.prepareOpenTilePreviewInTabFocusTargetFromSource,
+        prepareOpenTileInBackgroundTabFocusTargetFromSource:
+          testState.prepareOpenTileInBackgroundTabFocusTargetFromSource,
+        prepareOpenTileInPaneFocusTargetFromSource:
+          testState.prepareOpenTileInPaneFocusTargetFromSource,
       }),
     },
   ),
@@ -563,6 +602,13 @@ vi.mock("@/hooks/use-epic-store", () => ({
   useEpicStore: (selector: (state: unknown) => unknown) =>
     selector({
       snapshotLoaded: true,
+      // The tree index, because the row-level tree reads subscribe HERE now
+      // rather than through `useEpicTreeIndex`. A row that used to take the
+      // whole slice re-rendered on every record change; it now selects its own
+      // answer out of the store, so this fake has to carry what production
+      // reads. Same object the `epic-selectors` fake hands back, so the two
+      // mocks cannot disagree about the shape of the tree.
+      tree: testState.tree,
       artifacts: {
         allIds: testState.records
           .filter((record) => record.type !== "chat")
@@ -614,20 +660,35 @@ vi.mock("@/stores/epics/artifact-read-state-store", () => ({
   useArtifactReadStateStore: useArtifactReadStateStoreMock,
 }));
 
-vi.mock("@/stores/settings/settings-store", () => ({
-  useSettingsStore: (selector: (state: unknown) => unknown) =>
-    selector({
-      artifactIconColorMode: "none",
-      artifactIconColors: {
-        chat: undefined,
-        review: undefined,
-        spec: undefined,
-        story: undefined,
-        ticket: undefined,
-        "terminal-agent": undefined,
-      },
-    }),
-}));
+// `importOriginal` rather than a fixed replacement: `resolveTileOpen` (the
+// tile-open seam's placement resolver) imports the real, pure
+// `tilePlacementForCategory` / `DEFAULT_TILE_PLACEMENT_SETTINGS` straight from
+// this module, and `openTileWithNavigation` reads
+// `useSettingsStore.getState().tilePlacement` imperatively - a fixed factory
+// that dropped either would leave the resolver calling `undefined(...)`.
+vi.mock("@/stores/settings/settings-store", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/stores/settings/settings-store")>();
+  const state = {
+    artifactIconColorMode: "none",
+    artifactIconColors: {
+      chat: undefined,
+      review: undefined,
+      spec: undefined,
+      story: undefined,
+      ticket: undefined,
+      "terminal-agent": undefined,
+    },
+    tilePlacement: actual.DEFAULT_TILE_PLACEMENT_SETTINGS,
+  };
+  return {
+    ...actual,
+    useSettingsStore: Object.assign(
+      (selector: (settingsState: typeof state) => unknown) => selector(state),
+      { getState: () => state },
+    ),
+  };
+});
 
 import { EpicLeftPanelHost } from "@/components/epic-canvas/sidebar/epic-sidebar";
 
@@ -657,7 +718,7 @@ describe("sidebar navigation boundary (back/forward regression fixes)", () => {
     testState.createdArtifactId = "new-spec-1";
   });
 
-  it("routes root-create-then-open through navigateNested + prepareOpenTileInTabFocusTarget", () => {
+  it("routes root-create-then-open through navigateNested + prepareOpenTileInTabFocusTargetFromSource", () => {
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
 
     fireEvent.click(screen.getByTestId("epic-sidebar-add-artifact-root-spec"));
@@ -666,20 +727,31 @@ describe("sidebar navigation boundary (back/forward regression fixes)", () => {
       expect.objectContaining({ epicId: EPIC_ID, parentId: null }),
     );
     // The boundary must be the thing that opens the freshly-created tile -
-    // asserting only on `prepareOpenTileInTabFocusTarget` would also pass a
-    // raw `openTileInTab(...)` call reached via some other path, so both the
-    // boundary call and the prepare call underneath it are checked.
+    // asserting only on `prepareOpenTileInTabFocusTargetFromSource` would
+    // also pass a raw `openTileInTab(...)` call reached via some other path,
+    // so both the boundary call and the prepare call underneath it are
+    // checked.
     expect(testState.navigateNested).toHaveBeenCalledWith(
       EPIC_ID,
       TAB_ID,
       expect.any(Function),
     );
-    expect(testState.prepareOpenTileInTabFocusTarget).toHaveBeenCalledWith(
+    // `TAB_ID` has no seeded canvas (`canvasByTabId[TAB_ID]` is unset), so
+    // `openTileWithNavigation` resolves against the empty canvas
+    // `createEmptyCanvas()` falls back to. `resolveTileOpen`'s
+    // `anchorPaneId` is `null` for a root-less canvas, so the plan is
+    // `open-in-pane` with `paneId: null` and the executor dispatches
+    // `prepareOpenTileInTabFocusTargetFromSource` (the empty-canvas opener),
+    // not the pane-targeted variant.
+    expect(
+      testState.prepareOpenTileInTabFocusTargetFromSource,
+    ).toHaveBeenCalledWith(
       TAB_ID,
       expect.objectContaining({
         id: testState.createdArtifactId,
         type: "spec",
       }),
+      "direct_ui",
     );
   });
 

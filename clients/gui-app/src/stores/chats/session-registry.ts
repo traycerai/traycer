@@ -1,24 +1,16 @@
 import {
+  createSessionRegistry,
+  sessionKeyOf,
+  sessionKeyPartsOf,
+  type SessionKey,
+  type SessionRegistry,
+} from "@traycer-clients/shared/replica-runtime";
+import { createRendererRuntimeEnvironment } from "@/stores/epics/open-epic/runtime/runtime-environment";
+import { DESKTOP_RETENTION_PROFILE } from "@/stores/replica-memory/retention-profile";
+import {
   isChatRunInProgress,
   type ChatSessionStoreHandle,
 } from "@/stores/chats/chat-session-store";
-
-interface RegistryEntry {
-  readonly key: string;
-  readonly scopeKey: string;
-  /** Part of this entry's identity (see the class doc), kept readable. */
-  readonly hostId: string;
-  readonly handle: ChatSessionStoreHandle;
-  leases: number;
-  lastUsedAt: number;
-  idleStartedAt: number | null;
-  /**
-   * Pending idle-eviction timer, set only while the entry is lease-free.
-   * Browser `setTimeout` returns `number`; cleared (and nulled) the moment
-   * the entry is re-leased, touched, or torn down.
-   */
-  idleTimer: number | null;
-}
 
 /**
  * How long a chat session is kept warm after its last tile unmounts. A chat
@@ -38,7 +30,8 @@ export const MAX_ACTIVE_CHAT_IDLE_DEFER_MS = 60 * 60 * 1_000;
  * sessions with active chat work are never evicted by the cap, but they still
  * contribute to overflow and can crowd out older inactive warm sessions.
  */
-export const DEFAULT_MAX_WARM_CHAT_SESSIONS = 6;
+export const DEFAULT_MAX_WARM_CHAT_SESSIONS =
+  DESKTOP_RETENTION_PROFILE.maxWarmChatSessions;
 
 /**
  * Everything `acquire` needs to name ONE session: its identity - (epic, chat,
@@ -54,13 +47,25 @@ export interface ChatSessionTarget {
 
 export interface ChatSessionRegistryOptions {
   readonly idleTtlMs: number;
-  readonly maxWarmSessions: number;
+  /**
+   * The warm-pool cap. A function is resolved on every cap walk, which is
+   * how the production singleton follows the shell's retention profile
+   * without having to be constructed after the shell selected it.
+   */
+  readonly maxWarmSessions: number | (() => number);
 }
 
 /**
  * Small per-renderer registry for live `chat.subscribe` sessions. It mirrors
  * the open-Epic registry shape, but chat tiles are lease-counted because the
  * same chat can be rendered by more than one surface in a window.
+ *
+ * The warm-pool MECHANISM - the lease count, the idle clock, the cap, the one
+ * teardown path - is the shared {@link createSessionRegistry}, which the
+ * terminal twin and the open-epic registry also run on. What is left here is
+ * this plane's identity (below), its policy VALUES, and its own answer to what
+ * "busy" means. Nothing about any of those changed when the three
+ * implementations became one.
  *
  * ## Session identity is (epic, chat, HOST)
  *
@@ -96,18 +101,48 @@ export interface ChatSessionRegistryOptions {
  * overflow count while selecting inactive eviction candidates.
  */
 export class ChatSessionRegistry {
-  private readonly entries = new Map<string, RegistryEntry>();
-  private readonly listeners = new Set<() => void>();
-  private readonly idleTtlMs: number;
-  private readonly maxWarmSessions: number;
+  private readonly sessions: SessionRegistry<ChatSessionStoreHandle>;
 
   constructor(options: ChatSessionRegistryOptions) {
-    this.idleTtlMs = options.idleTtlMs;
-    this.maxWarmSessions = options.maxWarmSessions;
+    this.sessions = createSessionRegistry<ChatSessionStoreHandle>({
+      environment: createRendererRuntimeEnvironment(),
+      policy: {
+        idleTtlMs: options.idleTtlMs,
+        // A getter, read on every cap walk - see `maxWarmSessions`.
+        get maxWarm(): number {
+          return typeof options.maxWarmSessions === "function"
+            ? options.maxWarmSessions()
+            : options.maxWarmSessions;
+        },
+        // The cap bounds the WARM pool: "Leased sessions are outside the warm
+        // pool."
+        warmCapScope: "demand-free",
+        // "Lease-free sessions with active chat work are never evicted by the
+        // cap, but they still contribute to overflow and can crowd out older
+        // inactive warm sessions."
+        busyCountsTowardWarmCap: true,
+        maxActiveDeferMs: MAX_ACTIVE_CHAT_IDLE_DEFER_MS,
+        // A release stamps `lastUsedAt`, which is what the overflow sort reads.
+        refreshOrderOnRelease: true,
+        // Every chat session is worth keeping warm; this plane has no
+        // unreattachable state.
+        retainWhenIdle: () => true,
+        hasActiveWork: hasActiveChatWork,
+        // Nothing a chat session holds is lost by disposing it: the transcript
+        // is the host's, and a re-open re-subscribes.
+        isEvictable: () => true,
+        onBeforeDispose: () => "dispose",
+        dispose: (handle) => {
+          handle.dispose();
+        },
+        onParked: () => {},
+        onRevived: () => {},
+      },
+    });
   }
 
   size(): number {
-    return this.entries.size;
+    return this.sessions.size();
   }
 
   get(
@@ -116,11 +151,14 @@ export class ChatSessionRegistry {
     hostId: string,
     scopeKey: string,
   ): ChatSessionStoreHandle | null {
-    const entry = this.entries.get(chatSessionKey(epicId, chatId, hostId));
-    if (entry === undefined) return null;
-    if (entry.scopeKey !== scopeKey) return null;
-    this.touch(entry);
-    return entry.handle;
+    const key = chatSessionKey(epicId, chatId, hostId);
+    // Read the scope BEFORE touching: a mismatch here is not the rebuild
+    // `acquire` performs, it is "this caller is asking about a session that no
+    // longer exists on its terms", and a touch would extend the life of an
+    // entry the caller is not going to use.
+    const entry = this.sessions.peekEntry(key);
+    if (entry === null || entry.scopeKey !== scopeKey) return null;
+    return this.sessions.get(key);
   }
 
   peek(
@@ -128,14 +166,12 @@ export class ChatSessionRegistry {
     chatId: string,
     hostId: string,
   ): ChatSessionStoreHandle | null {
-    return (
-      this.entries.get(chatSessionKey(epicId, chatId, hostId))?.handle ?? null
-    );
+    return this.sessions.peek(chatSessionKey(epicId, chatId, hostId));
   }
 
   /** Live session handles, for aggregate reads (e.g. agent-activity). */
   listHandles(): ChatSessionStoreHandle[] {
-    return Array.from(this.entries.values(), (entry) => entry.handle);
+    return Array.from(this.sessions.list());
   }
 
   /**
@@ -146,9 +182,10 @@ export class ChatSessionRegistry {
    */
   listHandlesForHost(epicId: string, hostId: string): ChatSessionStoreHandle[] {
     const handles: ChatSessionStoreHandle[] = [];
-    for (const entry of this.entries.values()) {
-      if (entry.hostId !== hostId || entry.handle.epicId !== epicId) continue;
-      handles.push(entry.handle);
+    for (const entry of this.sessions.entries()) {
+      if (chatSessionKeyHostId(entry.key) !== hostId) continue;
+      if (entry.session.epicId !== epicId) continue;
+      handles.push(entry.session);
     }
     return handles;
   }
@@ -156,24 +193,21 @@ export class ChatSessionRegistry {
   /**
    * Live session keys bound to one host, across every epic. Overview's
    * `host.status` refresh uses this so a membership change on host B does
-   * not void host A's settled busy. Reads `entry.hostId` (the acquire-time
-   * identity), not the WeakMap the React hook stamps.
+   * not void host A's settled busy. Reads the acquire-time identity out of
+   * the key, not the WeakMap the React hook stamps.
    */
   membershipIdsForHost(hostId: string): string[] {
     const ids: string[] = [];
-    for (const entry of this.entries.values()) {
-      if (entry.hostId !== hostId) continue;
-      ids.push(entry.key);
+    for (const key of this.sessions.keys()) {
+      if (chatSessionKeyHostId(key) !== hostId) continue;
+      ids.push(key);
     }
     ids.sort();
     return ids;
   }
 
   subscribe(listener: () => void): () => void {
-    this.listeners.add(listener);
-    return () => {
-      this.listeners.delete(listener);
-    };
+    return this.sessions.subscribe(listener);
   }
 
   acquire(
@@ -181,48 +215,15 @@ export class ChatSessionRegistry {
     factory: (epicId: string, chatId: string) => ChatSessionStoreHandle,
   ): ChatSessionStoreHandle {
     const { epicId, chatId, hostId, scopeKey } = target;
-    const key = chatSessionKey(epicId, chatId, hostId);
-    const existing = this.entries.get(key);
-    if (existing !== undefined) {
-      if (existing.scopeKey !== scopeKey) {
-        // Same (epic, chat, host), but the session was opened against an older
-        // user/transport/owner-identity scope. Close it before creating the
-        // replacement so callers never get a store backed by a stale
-        // ChatStreamClient. A DIFFERENT host never reaches this branch - it
-        // has its own key - so this can no longer dispose another tile's live
-        // session out from under it.
-        this.disposeEntry(existing);
-      } else {
-        // Revives an idle (lease-free) session in place - the websocket and
-        // loaded snapshot carry over, so the caller sees no reconnect. Holding
-        // a lease cancels any pending idle eviction.
-        existing.leases += 1;
-        existing.lastUsedAt = now();
-        existing.idleStartedAt = null;
-        this.clearIdleTimer(existing);
-        return existing.handle;
-      }
-    }
-    const handle = factory(epicId, chatId);
-    this.entries.set(key, {
-      key,
+    return this.sessions.acquire(
+      chatSessionKey(epicId, chatId, hostId),
       scopeKey,
-      hostId,
-      handle,
-      leases: 1,
-      lastUsedAt: now(),
-      idleStartedAt: null,
-      idleTimer: null,
-    });
-    this.notify();
-    return handle;
+      () => factory(epicId, chatId),
+    );
   }
 
   release(epicId: string, chatId: string, hostId: string): void {
-    const key = chatSessionKey(epicId, chatId, hostId);
-    const entry = this.entries.get(key);
-    if (entry === undefined) return;
-    this.releaseEntry(entry);
+    this.sessions.release(chatSessionKey(epicId, chatId, hostId), "warm");
   }
 
   releaseHandle(
@@ -231,146 +232,47 @@ export class ChatSessionRegistry {
     hostId: string,
     handle: ChatSessionStoreHandle,
   ): void {
-    const entry = this.entries.get(chatSessionKey(epicId, chatId, hostId));
-    if (entry === undefined || entry.handle !== handle) return;
-    this.releaseEntry(entry);
-  }
-
-  private releaseEntry(entry: RegistryEntry): void {
-    // Refcount underflow guard: a stray double-release must not drive `leases`
-    // negative, which a later `acquire` would revive only to 0 - leaving an
-    // in-use session tracked as idle and eligible for eviction.
-    if (entry.leases <= 0) return;
-    entry.leases -= 1;
-    if (entry.leases > 0) return;
-    // Last lease gone: keep the session warm and start the idle clock. It is
-    // disposed if nothing re-opens it before `idleTtlMs` elapses.
-    const releasedAt = now();
-    entry.lastUsedAt = releasedAt;
-    entry.idleStartedAt = releasedAt;
-    this.scheduleIdleEviction(entry);
-    this.evictWarmOverflow();
+    this.sessions.releaseHandle(
+      chatSessionKey(epicId, chatId, hostId),
+      handle,
+      "warm",
+    );
   }
 
   forceRelease(epicId: string, chatId: string, hostId: string): void {
-    const entry = this.entries.get(chatSessionKey(epicId, chatId, hostId));
-    if (entry === undefined) return;
-    this.disposeEntry(entry);
-    this.notify();
+    this.sessions.forceRelease(chatSessionKey(epicId, chatId, hostId));
   }
 
   disposeAll(): void {
-    if (this.entries.size === 0) return;
-    for (const entry of this.entries.values()) {
-      this.clearIdleTimer(entry);
-      entry.handle.dispose();
-    }
-    this.entries.clear();
-    this.notify();
-  }
-
-  /**
-   * Marks an entry as just-accessed: refreshes recency and, if it is idle,
-   * restarts its eviction window. `peek` deliberately does not touch, so a
-   * passive reader (e.g. the sidebar progress icon) cannot keep a session
-   * alive forever.
-   */
-  private touch(entry: RegistryEntry): void {
-    const touchedAt = now();
-    entry.lastUsedAt = touchedAt;
-    if (entry.leases === 0) entry.idleStartedAt = touchedAt;
-    if (entry.leases === 0) this.scheduleIdleEviction(entry);
-  }
-
-  private scheduleIdleEviction(entry: RegistryEntry): void {
-    this.clearIdleTimer(entry);
-    entry.idleTimer = window.setTimeout(() => {
-      this.evictIfIdle(entry.key);
-    }, this.idleTtlMs);
-  }
-
-  /** Single teardown path for one entry; callers own the `notify()`. */
-  private disposeEntry(entry: RegistryEntry): void {
-    this.clearIdleTimer(entry);
-    this.entries.delete(entry.key);
-    entry.handle.dispose();
-  }
-
-  /**
-   * Enforces the warm cap after a release transitions an entry to lease-free.
-   * Only inactive lease-free entries are candidates; the oldest-released go
-   * first. Active lease-free sessions stay retained so passive tab/header
-   * progress readers still have the `runStatus` snapshot after a tile unmounts.
-   */
-  private evictWarmOverflow(): void {
-    // Total size bounds the idle count, so an under-cap registry skips the
-    // filter/sort entirely - the common case on every release.
-    if (this.entries.size <= this.maxWarmSessions) return;
-    const idle = Array.from(this.entries.values()).filter(
-      (entry) => entry.leases === 0,
-    );
-    const overflow = idle.length - this.maxWarmSessions;
-    if (overflow <= 0) return;
-    const candidates = idle.filter((entry) => !hasActiveChatWork(entry.handle));
-    candidates.sort((a, b) => a.lastUsedAt - b.lastUsedAt);
-    const evicted = candidates.slice(0, overflow);
-    for (const entry of evicted) {
-      this.disposeEntry(entry);
-    }
-    if (evicted.length === 0) return;
-    this.notify();
-  }
-
-  private evictIfIdle(key: string): void {
-    const entry = this.entries.get(key);
-    if (entry === undefined) return;
-    if (entry.leases > 0) return;
-    const checkedAt = now();
-    if (checkedAt - entry.lastUsedAt < this.idleTtlMs) return;
-    if (hasActiveChatWork(entry.handle)) {
-      const idleStartedAt = entry.idleStartedAt ?? entry.lastUsedAt;
-      if (checkedAt - idleStartedAt < MAX_ACTIVE_CHAT_IDLE_DEFER_MS) {
-        entry.lastUsedAt = checkedAt;
-        this.scheduleIdleEviction(entry);
-        return;
-      }
-    }
-    this.disposeEntry(entry);
-    this.notify();
-  }
-
-  private clearIdleTimer(entry: RegistryEntry): void {
-    if (entry.idleTimer === null) return;
-    window.clearTimeout(entry.idleTimer);
-    entry.idleTimer = null;
-  }
-
-  private notify(): void {
-    for (const listener of Array.from(this.listeners)) {
-      listener();
-    }
+    this.sessions.disposeAll();
   }
 }
-
-function now(): number {
-  return Date.now();
-}
-/**
- * NUL-joined rather than colon-joined so no component can forge another
- * key: epic, chat and host ids are opaque strings, and a printable
- * separator would let one of them contain the separator and collide two
- * distinct triples onto a single entry.
- */
-const CHAT_SESSION_KEY_SEPARATOR = "\u0000";
 
 function chatSessionKey(
   epicId: string,
   chatId: string,
   hostId: string,
-): string {
-  return [epicId, chatId, hostId].join(CHAT_SESSION_KEY_SEPARATOR);
+): SessionKey {
+  return sessionKeyOf([epicId, chatId, hostId]);
 }
 
+/**
+ * The host a key was built for.
+ *
+ * Reading the identity back out of the key rather than mirroring it on the
+ * entry, so there is one record of which host a session belongs to and it
+ * cannot disagree with the key the session is filed under.
+ *
+ * Decoded with the ENCODER's own reader. This used to keep a private copy of
+ * the separator and `split` on it - a duplication that survives only until the
+ * encoding changes. When `sessionKeyOf` moved to a length-prefixed form (a NUL
+ * is no more excluded from an id than a `:` is), a local split would have gone
+ * on parsing a shape nobody writes, and answered a confidently wrong host id
+ * rather than failing to compile.
+ */
+function chatSessionKeyHostId(key: SessionKey): string {
+  return sessionKeyPartsOf(key)[2] ?? "";
+}
 function hasActiveChatWork(handle: ChatSessionStoreHandle): boolean {
   const state = handle.store.getState();
   // A chat parked on a human gate (interview / command approval / file-edit

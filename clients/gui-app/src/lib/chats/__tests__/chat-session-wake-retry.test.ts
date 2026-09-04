@@ -16,6 +16,7 @@ import {
   subscribeChatSessionWakeRetry,
   WAKE_RETRY_EPISODE_MS,
 } from "@/lib/chats/chat-session-wake-retry";
+import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 
 const EPIC_ID = "epic-wake";
 const CHAT_ID = "chat-wake";
@@ -34,6 +35,7 @@ function createHarness(chatId: string): Harness {
   let failNext = false;
   let lastCallbacks: ChatStreamCallbacks | null = null;
   const handle = createChatSessionStore({
+    environment: CHAT_STORE_TEST_ENVIRONMENT,
     hostId: "host-a",
     epicId: EPIC_ID,
     chatId,
