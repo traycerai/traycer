@@ -201,21 +201,19 @@ describe("<FileTreeRowContextMenu />", () => {
 
     fireEvent.contextMenu(screen.getByTestId("row-file"));
 
-    const openRowIds = Array.from(
-      screen
-        .getByTestId("epic-file-tree-row-menu")
-        .querySelectorAll("[data-testid^='epic-file-tree-row-open-']"),
-    ).map((node) => node.getAttribute("data-testid"));
-    expect(openRowIds).toEqual([
-      "epic-file-tree-row-open-vscode",
-      "epic-file-tree-row-open-cursor",
-      "epic-file-tree-row-open-windsurf",
-      "epic-file-tree-row-open-zed",
-      "epic-file-tree-row-open-finder",
-    ]);
+    // The whole menu in order: Finder closes the open group, and the two Copy
+    // rows stay below it.
     expect(
-      screen.getByTestId("epic-file-tree-row-open-finder").textContent,
-    ).toBe("Finder");
+      screen.getAllByRole("menuitem").map((item) => item.textContent),
+    ).toEqual([
+      "VS Code",
+      "Cursor",
+      "Windsurf",
+      "Zed",
+      "Finder",
+      "Copy Path",
+      "Copy Relative Path",
+    ]);
   });
 
   it("labels Finder identically for a directory row", () => {
@@ -225,9 +223,7 @@ describe("<FileTreeRowContextMenu />", () => {
 
     fireEvent.contextMenu(screen.getByTestId("row-dir-trailing"));
 
-    expect(
-      screen.getByTestId("epic-file-tree-row-open-finder").textContent,
-    ).toBe("Finder");
+    screen.getByRole("menuitem", { name: "Finder" });
   });
 
   // One select per render: a second launch inside the same menu instance is
@@ -236,7 +232,7 @@ describe("<FileTreeRowContextMenu />", () => {
     renderTree("host-1");
 
     fireEvent.contextMenu(screen.getByTestId("row-file"));
-    fireEvent.click(screen.getByTestId("epic-file-tree-row-open-finder"));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Finder" }));
 
     expect(menuState.mutate).toHaveBeenLastCalledWith({
       editorId: "finder",
@@ -248,7 +244,7 @@ describe("<FileTreeRowContextMenu />", () => {
     renderTree("host-1");
 
     fireEvent.contextMenu(screen.getByTestId("row-dir-trailing"));
-    fireEvent.click(screen.getByTestId("epic-file-tree-row-open-finder"));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Finder" }));
 
     expect(menuState.mutate).toHaveBeenLastCalledWith({
       editorId: "finder",
@@ -260,14 +256,14 @@ describe("<FileTreeRowContextMenu />", () => {
     renderTree("host-1");
 
     fireEvent.contextMenu(screen.getByTestId("row-dir-trailing"));
-    fireEvent.click(screen.getByTestId("epic-file-tree-row-copy-path"));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Copy Path" }));
 
     expect(copyCalls).toEqual(["/repo/src/lib"]);
     expect(toast.success).toHaveBeenLastCalledWith("Copied path");
 
     fireEvent.contextMenu(screen.getByTestId("row-dir-trailing"));
     fireEvent.click(
-      screen.getByTestId("epic-file-tree-row-copy-relative-path"),
+      screen.getByRole("menuitem", { name: "Copy Relative Path" }),
     );
 
     expect(copyCalls).toEqual(["/repo/src/lib", "src/lib"]);
@@ -280,7 +276,7 @@ describe("<FileTreeRowContextMenu />", () => {
     const wasNotPrevented = fireEvent.contextMenu(screen.getByTestId("tree"));
 
     expect(wasNotPrevented).toBe(false);
-    expect(screen.queryByTestId("epic-file-tree-row-menu")).toBeNull();
+    expect(screen.queryByRole("menu")).toBeNull();
   });
 
   it("hides the Finder item when the gate is closed, keeping both Copy items", () => {
@@ -289,9 +285,9 @@ describe("<FileTreeRowContextMenu />", () => {
 
     fireEvent.contextMenu(screen.getByTestId("row-file"));
 
-    expect(screen.queryByTestId("epic-file-tree-row-open-finder")).toBeNull();
-    screen.getByTestId("epic-file-tree-row-copy-path");
-    screen.getByTestId("epic-file-tree-row-copy-relative-path");
+    expect(screen.queryByRole("menuitem", { name: "Finder" })).toBeNull();
+    screen.getByRole("menuitem", { name: "Copy Path" });
+    screen.getByRole("menuitem", { name: "Copy Relative Path" });
   });
 
   it("renders no editor items when the host entry is not local, while both Copy items still render", () => {
@@ -300,10 +296,10 @@ describe("<FileTreeRowContextMenu />", () => {
 
     fireEvent.contextMenu(screen.getByTestId("row-file"));
 
-    expect(screen.queryByTestId("epic-file-tree-row-open-vscode")).toBeNull();
-    expect(screen.queryByTestId("epic-file-tree-row-open-cursor")).toBeNull();
-    screen.getByTestId("epic-file-tree-row-copy-path");
-    screen.getByTestId("epic-file-tree-row-copy-relative-path");
+    expect(screen.queryByRole("menuitem", { name: "VS Code" })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: "Cursor" })).toBeNull();
+    screen.getByRole("menuitem", { name: "Copy Path" });
+    screen.getByRole("menuitem", { name: "Copy Relative Path" });
   });
 
   // Radix arms a 700ms long-press timer on a touch/pen pointerdown and opens
@@ -331,9 +327,7 @@ describe("<FileTreeRowContextMenu />", () => {
 
       // `toContain`, not `toBe`: the spinner glyph shares the item's
       // textContent. A label swapped to "Opening…" still fails this.
-      expect(
-        screen.getByTestId("epic-file-tree-row-open-finder").textContent,
-      ).toContain("Finder");
+      screen.getByRole("menuitem", { name: "Finder" });
     });
 
     it("labels a directory row correctly through the same path", () => {
@@ -346,9 +340,7 @@ describe("<FileTreeRowContextMenu />", () => {
         vi.advanceTimersByTime(700);
       });
 
-      expect(
-        screen.getByTestId("epic-file-tree-row-open-finder").textContent,
-      ).toBe("Finder");
+      screen.getByRole("menuitem", { name: "Finder" });
     });
 
     it("opens nothing when the long-press hits no row", () => {
@@ -362,7 +354,7 @@ describe("<FileTreeRowContextMenu />", () => {
       });
 
       expect(notPrevented).toBe(false);
-      expect(screen.queryByTestId("epic-file-tree-row-menu")).toBeNull();
+      expect(screen.queryByRole("menu")).toBeNull();
     });
 
     it("ignores a mouse pointerdown, leaving that path to contextMenu", () => {
@@ -375,7 +367,7 @@ describe("<FileTreeRowContextMenu />", () => {
         vi.advanceTimersByTime(700);
       });
 
-      expect(screen.queryByTestId("epic-file-tree-row-menu")).toBeNull();
+      expect(screen.queryByRole("menu")).toBeNull();
     });
   });
 
@@ -391,22 +383,22 @@ describe("<FileTreeRowContextMenu />", () => {
 
       expect(
         screen
-          .getByTestId("epic-file-tree-row-open-vscode")
+          .getByRole("menuitem", { name: "VS Code" })
           .getAttribute("data-disabled"),
       ).not.toBeNull();
       expect(
         screen
-          .getByTestId("epic-file-tree-row-open-finder")
+          .getByRole("menuitem", { name: "Finder" })
           .getAttribute("data-disabled"),
       ).not.toBeNull();
       expect(
         screen
-          .getByTestId("epic-file-tree-row-copy-path")
+          .getByRole("menuitem", { name: "Copy Path" })
           .getAttribute("data-disabled"),
       ).toBeNull();
       expect(
         screen
-          .getByTestId("epic-file-tree-row-copy-relative-path")
+          .getByRole("menuitem", { name: "Copy Relative Path" })
           .getAttribute("data-disabled"),
       ).toBeNull();
     });
@@ -422,14 +414,10 @@ describe("<FileTreeRowContextMenu />", () => {
       // the only channel that moves.
       screen.getByTestId("epic-file-tree-row-open-vscode-spinner");
       screen.getByTestId("epic-file-tree-row-open-finder-spinner");
-      expect(
-        screen.getByTestId("epic-file-tree-row-open-vscode").textContent,
-      ).toContain("VS Code");
+      screen.getByRole("menuitem", { name: "VS Code" });
       // `toContain`, not `toBe`: the spinner glyph shares the item's
       // textContent. A label swapped to "Opening…" still fails this.
-      expect(
-        screen.getByTestId("epic-file-tree-row-open-finder").textContent,
-      ).toContain("Finder");
+      screen.getByRole("menuitem", { name: "Finder" });
 
       // The Copy items neither disable nor spin - they touch no host.
       expect(
@@ -455,7 +443,7 @@ describe("<FileTreeRowContextMenu />", () => {
       renderTree("host-1");
 
       fireEvent.contextMenu(screen.getByTestId("row-file"));
-      fireEvent.click(screen.getByTestId("epic-file-tree-row-open-finder"));
+      fireEvent.click(screen.getByRole("menuitem", { name: "Finder" }));
 
       expect(menuState.mutate).not.toHaveBeenCalled();
     });
@@ -467,11 +455,11 @@ describe("<FileTreeRowContextMenu />", () => {
       renderTree("host-1");
 
       fireEvent.contextMenu(screen.getByTestId("row-file"));
-      fireEvent.click(screen.getByTestId("epic-file-tree-row-open-finder"));
+      fireEvent.click(screen.getByRole("menuitem", { name: "Finder" }));
       expect(menuState.mutate).toHaveBeenCalledTimes(1);
 
       fireEvent.contextMenu(screen.getByTestId("row-file"));
-      fireEvent.click(screen.getByTestId("epic-file-tree-row-open-finder"));
+      fireEvent.click(screen.getByRole("menuitem", { name: "Finder" }));
 
       expect(menuState.mutate).toHaveBeenCalledTimes(1);
     });
@@ -492,6 +480,6 @@ describe("<FileTreeRowContextMenu />", () => {
 
     fireEvent.contextMenu(screen.getByTestId("row-file"));
 
-    screen.getByTestId("epic-file-tree-row-menu");
+    screen.getByRole("menu");
   });
 });

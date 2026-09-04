@@ -271,11 +271,11 @@ describe("<OpenInEditorButton />", () => {
     );
 
     fireEvent.pointerDown(
-      screen.getByTestId("workspace-open-in-editor-chevron"),
+      screen.getByRole("button", { name: "Choose editor" }),
       { button: 0 },
     );
 
-    fireEvent.click(screen.getByTestId("workspace-open-in-editor-finder"));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Finder" }));
 
     expect(editorState.mutate).toHaveBeenCalledWith({
       editorId: "finder",
@@ -355,13 +355,13 @@ describe("<OpenInEditorButton />", () => {
     );
 
     fireEvent.pointerDown(
-      screen.getByTestId("workspace-open-in-editor-chevron"),
+      screen.getByRole("button", { name: "Choose editor" }),
       { button: 0 },
     );
 
-    expect(screen.queryByTestId("workspace-open-in-editor-finder")).toBeNull();
-    screen.getByTestId("workspace-open-in-editor-vscode");
-    screen.getByTestId("workspace-open-in-editor-copy-path");
+    expect(screen.queryByRole("menuitem", { name: "Finder" })).toBeNull();
+    screen.getByRole("menuitem", { name: "VS Code" });
+    screen.getByRole("menuitem", { name: "Copy path" });
   });
 
   it("lists Finder last in the editor group, after every editor", () => {
@@ -374,21 +374,15 @@ describe("<OpenInEditorButton />", () => {
     );
 
     fireEvent.pointerDown(
-      screen.getByTestId("workspace-open-in-editor-chevron"),
+      screen.getByRole("button", { name: "Choose editor" }),
       { button: 0 },
     );
 
-    const rowIds = Array.from(
-      screen
-        .getByTestId("workspace-open-in-editor-menu")
-        .querySelectorAll("[data-testid^='workspace-open-in-editor-']"),
-    )
-      .map((node) => node.getAttribute("data-testid"))
-      .filter((id) => id !== "workspace-open-in-editor-copy-path");
-    expect(rowIds.at(-1)).toBe("workspace-open-in-editor-finder");
+    // The whole menu in order: Finder closes the open group, and Copy path
+    // stays below it.
     expect(
-      screen.getByTestId("workspace-open-in-editor-finder").textContent,
-    ).toBe("Finder");
+      screen.getAllByRole("menuitem").map((item) => item.textContent),
+    ).toEqual(["VS Code", "Cursor", "Windsurf", "Zed", "Finder", "Copy path"]);
   });
 
   it("records Finder as the default when it is picked, like any editor row", () => {
@@ -401,10 +395,10 @@ describe("<OpenInEditorButton />", () => {
     );
 
     fireEvent.pointerDown(
-      screen.getByTestId("workspace-open-in-editor-chevron"),
+      screen.getByRole("button", { name: "Choose editor" }),
       { button: 0 },
     );
-    fireEvent.click(screen.getByTestId("workspace-open-in-editor-finder"));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Finder" }));
 
     expect(useSettingsStore.getState().defaultEditor).toBe("finder");
   });
@@ -419,7 +413,9 @@ describe("<OpenInEditorButton />", () => {
       />,
     );
 
-    fireEvent.click(screen.getByTestId("workspace-open-in-editor-primary"));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open workspace in editor" }),
+    );
 
     expect(editorState.mutate).toHaveBeenCalledWith({
       editorId: "finder",
@@ -439,7 +435,9 @@ describe("<OpenInEditorButton />", () => {
       />,
     );
 
-    fireEvent.click(screen.getByTestId("workspace-open-in-editor-primary"));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open workspace in editor" }),
+    );
 
     expect(editorState.mutate).toHaveBeenCalledWith({
       editorId: "vscode",
@@ -526,7 +524,9 @@ describe("<OpenInEditorButton />", () => {
       />,
     );
 
-    fireEvent.click(screen.getByTestId("workspace-open-in-editor-primary"));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open workspace in editor" }),
+    );
 
     expect(editorState.mutate).toHaveBeenCalledWith({
       editorId: "vscode",
