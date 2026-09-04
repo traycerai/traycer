@@ -27,6 +27,16 @@ export function LandingBrowserTile(props: {
   readonly tab: LandingBrowserTabRef;
   readonly active: boolean;
   readonly panelOpen: boolean;
+  /**
+   * Whether the panel is watching this tab's device - the panel's bound on how
+   * many devices one window streams at once, decided in
+   * `landingBrowserWatchedHostIds` and passed down rather than re-derived. It
+   * has to reach here because this tile's provider acquires the same
+   * refcounted coordinator the panel's fleet does: a tile that ignored the
+   * bound would mount every tab host's stream on its own and the bound would
+   * hold nothing back.
+   */
+  readonly watched: boolean;
   readonly onRequestClose: () => void;
   /** Opens a tab in THIS tab's session, beside it in the panel. */
   readonly onOpenLinkInNewTile: (
@@ -43,6 +53,7 @@ export function LandingBrowserTile(props: {
         tab={props.tab}
         active={props.active}
         panelOpen={props.panelOpen}
+        watched={props.watched}
         onRequestClose={props.onRequestClose}
         onOpenLinkInNewTile={props.onOpenLinkInNewTile}
         onRequestNewTab={props.onRequestNewTab}
@@ -56,6 +67,7 @@ function LandingBrowserTileSessions(props: {
   readonly tab: LandingBrowserTabRef;
   readonly active: boolean;
   readonly panelOpen: boolean;
+  readonly watched: boolean;
   readonly onRequestClose: () => void;
   readonly onOpenLinkInNewTile: (
     url: string,
@@ -79,8 +91,14 @@ function LandingBrowserTileSessions(props: {
       //
       // Deliberately NOT narrowed to `props.active`: the strip renders a row
       // for every tab, and those rows read their title and dormancy from this
-      // inventory.
-      hostId={props.panelOpen && paneVisible ? props.tab.hostId : null}
+      // inventory - for as many devices as the panel's bound allows. Past it,
+      // `watched` is false and the row says `· not watched` instead of
+      // claiming a state no stream is backing.
+      hostId={
+        props.panelOpen && paneVisible && props.watched
+          ? props.tab.hostId
+          : null
+      }
       hostClient={hostClient}
       scope={INDEPENDENT_BROWSER_SCOPE}
     >

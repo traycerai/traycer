@@ -34,7 +34,10 @@ import type {
   LandingPanelTabRef,
 } from "@/stores/home/landing-panel-store";
 import type { PlainTerminalViewModel } from "@/lib/terminals/plain-terminal-authority";
-import type { LandingBrowserViewModel } from "./landing-browser-presentation";
+import {
+  LANDING_BROWSER_UNWATCHED_TOOLTIP,
+  type LandingBrowserViewModel,
+} from "./landing-browser-presentation";
 import { landingStripRows } from "./landing-strip-rows";
 
 export interface LandingTerminalTabStripProps {
@@ -272,6 +275,12 @@ interface LandingPanelRowModel {
   readonly processName: string | null;
   readonly isDormant: boolean;
   readonly isRuntimeUnknown: boolean;
+  /**
+   * The panel is not watching this row's device, so neither flag above is a
+   * fact it can report. Terminals never carry it - the panel mounts an
+   * authority for every terminal tab host.
+   */
+  readonly isUnwatched: boolean;
 }
 
 function landingPanelRowFor(args: {
@@ -288,15 +297,26 @@ function landingBrowserRowFor(
   storedName: string,
   browser: LandingBrowserViewModel | null,
 ): LandingPanelRowModel {
+  // The three states are mutually exclusive HERE as well as in the view model,
+  // so no later reader of this row can render two suffixes at once: an
+  // unwatched device is one this window holds no stream for, and "dormant" and
+  // "status unavailable" are both claims only a watched stream could support.
+  const isUnwatched = browser?.isUnwatched === true;
   return {
     displayName: browser?.displayTitle ?? storedName,
-    detail: browser?.address ?? null,
+    // The address is a live reading, so an unwatched row has none. The tooltip
+    // takes its place and says why, rather than leaving the row mute.
+    detail: isUnwatched
+      ? LANDING_BROWSER_UNWATCHED_TOOLTIP
+      : (browser?.address ?? null),
     processName: null,
-    isDormant: browser?.isDormant ?? false,
+    isDormant: !isUnwatched && browser?.isDormant === true,
     // No view model at all means the panel has not resolved this device's
     // inventory, which is the same thing the flag says when it has not
     // spoken yet.
-    isRuntimeUnknown: browser === null || browser.isRuntimeUnknown,
+    isRuntimeUnknown:
+      !isUnwatched && (browser === null || browser.isRuntimeUnknown),
+    isUnwatched,
   };
 }
 
@@ -315,6 +335,7 @@ function landingTerminalRowFor(
         : null,
     isDormant: terminal?.isDormant === true,
     isRuntimeUnknown: terminal?.isRuntimeUnknown === true,
+    isUnwatched: false,
   };
 }
 
@@ -489,6 +510,14 @@ function LandingPanelTabLabel(props: {
           data-testid={`landing-terminal-unavailable-${props.instanceId}`}
         >
           · status unavailable
+        </span>
+      ) : null}
+      {props.row.isUnwatched ? (
+        <span
+          className="text-ui-xs text-muted-foreground"
+          data-testid={`landing-terminal-unwatched-${props.instanceId}`}
+        >
+          · not watched
         </span>
       ) : null}
     </>

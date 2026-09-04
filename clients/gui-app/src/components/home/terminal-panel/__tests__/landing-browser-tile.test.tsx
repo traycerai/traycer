@@ -69,6 +69,7 @@ function tileElement(
       tab={TAB}
       active
       panelOpen
+      watched
       onRequestClose={() => undefined}
       onOpenLinkInNewTile={() => undefined}
       onRequestNewTab={() => undefined}
@@ -93,20 +94,24 @@ describe("<LandingBrowserTile />", () => {
   // panel or a backgrounded Start Page shows nothing, so it must not be the
   // reason a visible tile's device is the one refused.
   //
-  // Two terms, not the three the `visible` prop takes: `active` is left out on
-  // purpose, because the strip renders a row for EVERY tab and those rows read
-  // their title and dormancy from this inventory.
+  // Three terms, not the four the `visible` prop takes: `active` is left out
+  // on purpose, because the strip renders a row for EVERY tab and those rows
+  // read their title and dormancy from this inventory. `watched` is the
+  // panel's bound (`landingBrowserWatchedHostIds`) - a tile whose device fell
+  // out of it must not hold the stream even with the panel open and the pane
+  // visible, or the bound holds nothing back.
   it.each([
-    [true, true, "host-1"],
-    [true, false, null],
-    [false, true, null],
-    [false, false, null],
-  ])(
-    "holds a stream with panelOpen=%s paneVisible=%s: %s",
-    (panelOpen, paneVisible, expected) => {
+    [true, true, true, "host-1"],
+    [true, true, false, null],
+    [true, false, true, null],
+    [false, true, true, null],
+    [false, false, true, null],
+  ] as const)(
+    "holds a stream with panelOpen=%s paneVisible=%s watched=%s: %s",
+    (panelOpen, paneVisible, watched, expected) => {
       render(
         <PaneVisibilityContext.Provider value={paneVisible}>
-          {tileElement({ panelOpen, active: false })}
+          {tileElement({ panelOpen, active: false, watched })}
         </PaneVisibilityContext.Provider>,
       );
 
