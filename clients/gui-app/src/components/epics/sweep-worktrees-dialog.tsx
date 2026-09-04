@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useNavigate } from "@tanstack/react-router";
 import { AlertTriangle, Paintbrush } from "lucide-react";
 import { toast } from "sonner";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -44,6 +45,9 @@ import {
   type SweepWorktreesResult,
 } from "@/hooks/epic/use-epic-sweep-worktrees-mutation";
 import { useRefreshSpinner } from "@/hooks/use-refresh-spinner";
+import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
+import { useWorktreeAutoCleanupPolicy } from "@/hooks/worktree/use-worktree-auto-cleanup";
+import { openWorktreeAutoCleanupSettings } from "@/lib/worktree/open-auto-cleanup-settings";
 import { useWorktreeTaskTitles } from "@/components/settings/panels/use-worktree-task-titles";
 import { useBareKeyClaimer } from "@/lib/keybindings/use-bare-key-claimer";
 import { isEditableEventTarget } from "@/lib/keybindings/editable-target";
@@ -360,6 +364,7 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
       },
     });
   };
+  const navigate = useNavigate();
   const handlePrimary = (hostName: string | null): void => {
     startSweepPrimary({
       sessionKey: selectionKey,
@@ -434,6 +439,16 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
         bulkSelectedCount={bulkSelectedCount}
         allBulkSelected={allBulkSelected}
         selectedCount={checkedRows.length}
+        hostClient={props.hostClient}
+        // The offer stands beside a concrete, visibly safe example - never on
+        // a census that proved nothing. `defaultChecked` is the proven-safe
+        // row set, read from the rows rather than from the live selection, so
+        // unchecking one does not retract a statement about the POLICY.
+        hasProvenSafeRow={rows.some((row) => row.defaultChecked)}
+        onSetUpAutoCleanup={() => {
+          onOpenChange(false);
+          openWorktreeAutoCleanupSettings(navigate, hostId);
+        }}
         checkedAt={checkedAt}
         refreshing={refresh.refreshing}
         canRefresh={canRefresh}
@@ -877,6 +892,11 @@ function SweepWorktreesChoose(props: {
   readonly bulkSelectedCount: number;
   readonly allBulkSelected: boolean;
   readonly selectedCount: number;
+  /** The latched host's client, for the automatic-cleanup policy read. */
+  readonly hostClient: HostClient<HostRpcRegistry> | null;
+  /** The proof settled with at least one row proven safe to delete. */
+  readonly hasProvenSafeRow: boolean;
+  readonly onSetUpAutoCleanup: () => void;
   readonly checkedAt: number | null;
   readonly refreshing: boolean;
   readonly canRefresh: boolean;
@@ -967,6 +987,16 @@ function SweepWorktreesChoose(props: {
             canRefresh={props.canRefresh}
             onRefresh={props.onRefresh}
           />
+          {/* Passive education, so it sits below the census and its refresh
+              footer and OUTSIDE the destructive action row - it must never
+              read as part of what Remove is about to do. */}
+          {props.proofReady && !props.isPending && props.hasProvenSafeRow ? (
+            <SweepAutoCleanupDiscovery
+              hostId={props.hostId}
+              hostClient={props.hostClient}
+              onSetUpAutoCleanup={props.onSetUpAutoCleanup}
+            />
+          ) : null}
         </section>
       </TooltipProvider>
       <div className="grid min-w-0 shrink-0 grid-cols-2 gap-2 border-t border-border/60 bg-foreground/3 px-5 py-3 sm:flex sm:justify-end">
@@ -995,6 +1025,74 @@ function SweepWorktreesChoose(props: {
         </Button>
       </div>
     </>
+  );
+}
+
+/**
+ * One quiet line offering the policy that would have removed these rows
+ * unattended - shown only to someone who is looking at proven-safe worktrees
+ * on a host that CAN run automatic cleanup and currently does not.
+ *
+ * The capability question is asked HERE, before any host read is mounted, for
+ * the same reason `WorktreeAutoCleanupSection` asks it above its own gate: a
+ * host that negotiated the method away has no policy to read, and a dialog
+ * whose whole job is a destructive confirmation must not acquire a query it
+ * would then have to wait on. Nothing here can delay or block the sweep - a
+ * policy read that is loading, failed, or unsupported renders nothing at all.
+ */
+function SweepAutoCleanupDiscovery(props: {
+  readonly hostId: string | null;
+  readonly hostClient: HostClient<HostRpcRegistry> | null;
+  readonly onSetUpAutoCleanup: () => void;
+}): ReactNode {
+  const supported = useHostMethodSupport(
+    props.hostId,
+    "worktree.getAutoCleanupPolicy",
+  );
+  // `null` is "no handshake yet", and it stays hidden exactly like `false`:
+  // hiding an affordance under an unknown strands nothing, and the line is
+  // education rather than a control anyone is waiting for.
+  if (supported !== true || props.hostClient === null) return null;
+  return (
+    <SweepAutoCleanupDiscoveryLine
+      client={props.hostClient}
+      onSetUpAutoCleanup={props.onSetUpAutoCleanup}
+    />
+  );
+}
+
+/**
+ * The line itself, mounted only once the capability is proven present.
+ *
+ * The copy describes the POLICY, never these rows: manual Sweep's green rows
+ * are examples of what stays proven safe, not a promise that automatic cleanup
+ * is about to take them (it applies its own inactivity threshold and re-proves
+ * at execution time). Enabling the policy is what retires the line - there is
+ * no dismissal and nothing persisted, because policy state is already the
+ * honest frequency cap.
+ */
+function SweepAutoCleanupDiscoveryLine(props: {
+  readonly client: HostClient<HostRpcRegistry>;
+  readonly onSetUpAutoCleanup: () => void;
+}): ReactNode {
+  const policy = useWorktreeAutoCleanupPolicy(props.client, true).data ?? null;
+  if (policy === null || policy.enabled) return null;
+  return (
+    <p
+      className="mt-2 text-ui-xs text-muted-foreground wrap-anywhere"
+      data-testid="sweep-worktrees-auto-cleanup-discovery"
+    >
+      Proven-safe worktrees can be removed automatically.{" "}
+      <Button
+        type="button"
+        variant="link"
+        size="xs"
+        className="h-auto p-0 align-baseline"
+        onClick={props.onSetUpAutoCleanup}
+      >
+        Set up automatic cleanup
+      </Button>
+    </p>
   );
 }
 

@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useId, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type ReactNode,
+  type RefObject,
+} from "react";
 import { ChevronRight, History, Info } from "lucide-react";
 import type { WorktreeAutoCleanupPolicyState } from "@traycer/protocol/host/worktree-auto-cleanup-schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -41,6 +49,7 @@ import {
   useRelativeTimestamp,
   useSampledNow,
 } from "@/lib/relative-time";
+import { useWorktreeCleanupViewStore } from "@/stores/settings/worktree-cleanup-view-store";
 
 /**
  * Settings ▸ Worktrees ▸ Automatic cleanup — the per-HOST opt-in.
@@ -242,6 +251,34 @@ function AutoCleanupControls(props: {
 }
 
 /**
+ * Consumes the one-shot "show me this card" request another surface left in
+ * `worktree-cleanup-view-store` (the Sweep dialog's discovery line).
+ *
+ * Lives BELOW the section's gate, so the request survives a host that is still
+ * handshaking: nothing consumes it until a real card is mounted to scroll to.
+ * Cleared the moment it is acted on, so a later visit to Settings does not
+ * re-scroll to a card nobody asked about this time.
+ */
+function useAutoCleanupFocusRequest(
+  containerRef: RefObject<HTMLDivElement | null>,
+): void {
+  const requested = useWorktreeCleanupViewStore(
+    (state) => state.autoCleanupFocusRequested,
+  );
+  useEffect(() => {
+    if (!requested) return;
+    const node = containerRef.current;
+    if (node === null) return;
+    node.scrollIntoView({ block: "center" });
+    // The card is scrolled to AND given the caret, so a keyboard arrival lands
+    // on the control the link promised rather than at the top of the panel.
+    // `preventScroll` because the line above already placed it.
+    node.focus({ preventScroll: true });
+    useWorktreeCleanupViewStore.getState().clearAutoCleanupFocus();
+  }, [containerRef, requested]);
+}
+
+/**
  * Line one: what the policy currently does, the disclosure, and the switch.
  *
  * The disclosure trigger is its OWN button rather than the whole row, because
@@ -258,10 +295,21 @@ function AutoCleanupSummaryRow(props: {
 }): ReactNode {
   const { policy, density, busy, expanded, onSetEnabled } = props;
   const enabled = policy !== null && policy.enabled;
+  // The row owns its own node rather than taking one down from the card: a ref
+  // threaded through props is read during THIS component's render, which is
+  // exactly what `react-hooks/refs` forbids.
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  useAutoCleanupFocusRequest(containerRef);
   return (
     <div
+      // Programmatically focusable only: a deep link from another surface hands
+      // this row the caret, but it never joins the tab order in front of the
+      // switch it introduces.
+      ref={containerRef}
+      tabIndex={-1}
+      data-testid="worktree-auto-cleanup-summary-row"
       className={cn(
-        "flex flex-wrap items-center",
+        "flex flex-wrap items-center outline-none",
         SUMMARY_PADDING[density],
         SETTINGS_ROW_STACK.container,
       )}

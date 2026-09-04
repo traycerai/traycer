@@ -47,6 +47,7 @@ import {
   hostScopeFixture,
   hostScopeOptionFixture,
 } from "@/components/settings/host-scope/host-scope-fixture";
+import { useWorktreeCleanupViewStore } from "@/stores/settings/worktree-cleanup-view-store";
 
 /**
  * The toggle renders immediately but stays DISABLED until the policy read
@@ -163,6 +164,11 @@ function renderSection(
 beforeEach(() => {
   state.reachability = { status: "reachable", hostLabel: "Host A" };
   state.supported = true;
+  useWorktreeCleanupViewStore.setState({
+    view: "settings",
+    focusedRunId: null,
+    autoCleanupFocusRequested: false,
+  });
 });
 
 afterEach(() => {
@@ -327,6 +333,42 @@ describe("WorktreeAutoCleanupSection", () => {
     expect(
       screen.queryByRole("textbox", { name: "Custom inactivity days" }),
     ).toBeNull();
+  });
+
+  it("brings itself into view for a deep link, then drops the request", async () => {
+    // The Sweep dialog's discovery line leaves this one-shot flag behind. The
+    // card is what the link promised, so it scrolls into view AND takes the
+    // caret - and clears the flag, or a later visit to Settings would re-scroll
+    // to a card nobody asked about that time.
+    const scrolled: Array<HTMLElement> = [];
+    const proto = Element.prototype as unknown as {
+      scrollIntoView: () => void;
+    };
+    const original = proto.scrollIntoView;
+    proto.scrollIntoView = function scrollIntoViewSpy(this: HTMLElement) {
+      scrolled.push(this);
+    };
+    useWorktreeCleanupViewStore.getState().requestAutoCleanupFocus();
+
+    try {
+      renderSection(
+        clientWithPolicy({
+          get: () => policyFixture({}),
+          set: (r) => policyFixture(r),
+        }),
+      );
+
+      const row = screen.getByTestId("worktree-auto-cleanup-summary-row");
+      await waitFor(() => {
+        expect(scrolled).toContain(row);
+      });
+      expect(document.activeElement).toBe(row);
+      expect(
+        useWorktreeCleanupViewStore.getState().autoCleanupFocusRequested,
+      ).toBe(false);
+    } finally {
+      proto.scrollIntoView = original;
+    }
   });
 
   it("says the host is too old rather than offering a client-side fallback", () => {

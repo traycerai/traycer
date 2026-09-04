@@ -24,6 +24,17 @@ interface WorktreeCleanupViewState {
   readonly view: WorktreeCleanupView;
   /** The run to scroll to and expand once history mounts. */
   readonly focusedRunId: string | null;
+  /**
+   * A ONE-SHOT request to bring the Automatic cleanup card itself into view,
+   * left by a surface elsewhere that sent the user here to set cleanup up
+   * (the Sweep dialog's discovery line).
+   *
+   * A boolean rather than an id, because the card is a singleton within the
+   * inventory view — there is nothing to name. Like `focusedRunId` it is a
+   * HINT: the card may be absent (an offline or too-old host), and nothing
+   * about the destination depends on it being consumed.
+   */
+  readonly autoCleanupFocusRequested: boolean;
   readonly openHistory: (focusedRunId: string | null) => void;
   readonly closeHistory: () => void;
   /**
@@ -31,16 +42,29 @@ interface WorktreeCleanupViewState {
    * later does not silently re-expand a run the user already closed.
    */
   readonly clearFocusedRun: () => void;
+  readonly requestAutoCleanupFocus: () => void;
+  /** Same one-shot discipline as `clearFocusedRun`, for the same reason. */
+  readonly clearAutoCleanupFocus: () => void;
 }
 
 export const useWorktreeCleanupViewStore = create<WorktreeCleanupViewState>(
   (set) => ({
     view: "settings",
     focusedRunId: null,
+    autoCleanupFocusRequested: false,
+    // History is the OTHER sub-view, so a card-focus request that has not been
+    // consumed yet is stale the moment the panel leaves the inventory - it
+    // would otherwise fire on whatever return to the card came next.
     openHistory: (focusedRunId) =>
-      set({ view: "cleanupHistory", focusedRunId }),
+      set({
+        view: "cleanupHistory",
+        focusedRunId,
+        autoCleanupFocusRequested: false,
+      }),
     closeHistory: () => set({ view: "settings", focusedRunId: null }),
     clearFocusedRun: () => set({ focusedRunId: null }),
+    requestAutoCleanupFocus: () => set({ autoCleanupFocusRequested: true }),
+    clearAutoCleanupFocus: () => set({ autoCleanupFocusRequested: false }),
   }),
 );
 

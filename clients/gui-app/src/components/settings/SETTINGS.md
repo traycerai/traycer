@@ -2129,6 +2129,27 @@ aria-live="polite"` carrying the equivalent text for
       validated against the host's own `bounds` (`autoCleanupDaysError`), never
       a constant here — a host that moves its bounds needs no client release,
       and the control can never offer a value the host is about to refuse.
+    - **Arriving from a Sweep.** The per-Task **Sweep worktrees** dialog
+      (`components/epics/sweep-worktrees-dialog.tsx`) shows one muted line in
+      its Choose state — "Proven-safe worktrees can be removed automatically."
+      plus a link-styled **Set up automatic cleanup** button — only while the
+      census settled with at least one `defaultChecked` row AND that dialog's
+      latched host both advertises `worktree.getAutoCleanupPolicy` and reads
+      back `enabled: false`. A loading, failed, unsupported or enabled policy
+      renders nothing, and the capability is checked BEFORE the read is
+      mounted, so nothing about the sweep ever waits on it. Enabling the policy
+      is the whole frequency cap: no dismissal, nothing persisted. The link
+      goes through `lib/worktree/open-auto-cleanup-settings.ts`, which reuses
+      the notification router's three seams in the same order —
+      `carryViewedHostIntoSettingsScope` (the policy is per host),
+      `selectWorktreeCleanupView("settings", null)` (the inventory, never
+      history), and then `ensureSettingsTab` — plus a third hint of its own,
+      `requestAutoCleanupFocus`. That flag is one-shot exactly like
+      `focusedRunId`: `AutoCleanupControls` consumes it in an effect
+      (`scrollIntoView` + `focus()` on the summary row, which carries
+      `tabIndex={-1}` so it is programmatically focusable without joining the
+      tab order) and clears it, and `openHistory` drops it because a card-focus
+      request is stale the moment the panel leaves the inventory.
     - **Paused** states render the reason in plain English
       (`AUTO_CLEANUP_PAUSED_COPY`, a `Record` over the closed wire enum so a new
       arm fails to compile rather than rendering as silence) and offer NO repair
