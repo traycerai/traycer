@@ -550,11 +550,15 @@ describe("notification display", () => {
   });
 });
 
-function hostEntry(id: string, chatId: string | null): HostNotificationEntry {
+function hostEntry(
+  id: string,
+  chatId: string | null,
+  readAt: number | null,
+): HostNotificationEntry {
   return {
     id,
     updatedAt: 10,
-    readAt: null,
+    readAt,
     kind: "agent.stopped",
     sourceRef: id,
     severity: "done",
@@ -586,12 +590,13 @@ function cloudRow(
   id: string,
   chatId: string,
   originHostId: string,
+  readAt: number | null,
 ): HostNotificationsCloudFeedRow {
   return {
     entryId: id,
     originHostId,
     coalesceKey: id,
-    entry: hostEntry(id, chatId),
+    entry: hostEntry(id, chatId, readAt),
     presentation: { epicTitle: null, chatTitle: null },
   };
 }
@@ -654,7 +659,7 @@ describe("host channel emission focus gate", () => {
     const target = displayTarget();
 
     displayHostChannelEmission(
-      [hostEntry("n-1", "chat-1"), hostEntry("n-2", null)],
+      [hostEntry("n-1", "chat-1", null), hostEntry("n-2", null, null)],
       target,
       "stream-host-1",
     );
@@ -669,7 +674,7 @@ describe("host channel emission focus gate", () => {
     const target = displayTarget();
 
     displayHostChannelEmission(
-      [hostEntry("n-1", "chat-1"), hostEntry("n-2", "chat-2")],
+      [hostEntry("n-1", "chat-1", null), hostEntry("n-2", "chat-2", null)],
       target,
       "stream-host-1",
     );
@@ -703,7 +708,7 @@ describe("host channel emission focus gate", () => {
     const target = displayTarget();
 
     displayHostChannelEmission(
-      [hostEntry("host-b-chat", "chat-1")],
+      [hostEntry("host-b-chat", "chat-1", null)],
       target,
       "stream-host-2",
     );
@@ -717,12 +722,67 @@ describe("host channel emission focus gate", () => {
     const target = displayTarget();
 
     displayCloudSnapshotArrivals(
-      [cloudRow("cloud-host-b-chat", "chat-1", "stream-host-2")],
+      [cloudRow("cloud-host-b-chat", "chat-1", "stream-host-2", null)],
       target,
     );
 
     expect(target.showNotification).toHaveBeenCalledOnce();
     expect(target.playChime).toHaveBeenCalledOnce();
+  });
+
+  it("skips a cloud arrival that was already read at birth", () => {
+    // No tile is focused here, so the focus gate is disarmed and only the
+    // read gate can suppress this row. The origin host marked it read when it
+    // wrote it (fresh presence there, or a recovery row), and the local plane
+    // never emits one - without this gate every other device toasts it.
+    const target = displayTarget();
+
+    displayCloudSnapshotArrivals(
+      [cloudRow("cloud-read-row", "chat-1", "stream-host-2", 20)],
+      target,
+    );
+
+    expect(target.showNotification).not.toHaveBeenCalled();
+    expect(target.playChime).not.toHaveBeenCalled();
+    expect(toastCalls).toHaveLength(0);
+  });
+
+  it("displays only the unread arrivals of a mixed snapshot diff", () => {
+    const target = displayTarget();
+
+    displayCloudSnapshotArrivals(
+      [
+        cloudRow("cloud-read-row", "chat-1", "stream-host-2", 20),
+        cloudRow("cloud-unread-row", "chat-2", "stream-host-2", null),
+      ],
+      target,
+    );
+
+    expect(target.showNotification).toHaveBeenCalledOnce();
+    expect(target.showNotification.mock.calls[0][0]).toMatchObject({
+      payload: {
+        kind: "notificationActivation",
+        feed: { source: "cloud", id: "cloud-unread-row" },
+        originHostId: "stream-host-2",
+        route: { kind: "chat", epicId: "epic-1", chatId: "chat-2" },
+      },
+    });
+    expect(toastCalls).toHaveLength(1);
+  });
+
+  it("still skips an unread cloud arrival for the focused entity", () => {
+    // The read gate is additive: focus suppression on this window's own
+    // entity keeps working for rows the origin host left unread.
+    focusChatTile("chat-1");
+    const target = displayTarget();
+
+    displayCloudSnapshotArrivals(
+      [cloudRow("cloud-focused-row", "chat-1", "stream-host-1", null)],
+      target,
+    );
+
+    expect(target.showNotification).not.toHaveBeenCalled();
+    expect(toastCalls).toHaveLength(0);
   });
 
   it("keys an emission identically whether or not this window filtered it", () => {
@@ -731,7 +791,10 @@ describe("host channel emission focus gate", () => {
     // the SAME emission; if their keys differed, neither the main-process nor
     // the renderer-local set would dedupe, and the focused window would show
     // its filtered toast plus the relayed full batch - two chimes.
-    const entries = [hostEntry("n-1", "chat-1"), hostEntry("n-2", "chat-2")];
+    const entries = [
+      hostEntry("n-1", "chat-1", null),
+      hostEntry("n-2", "chat-2", null),
+    ];
 
     focusChatTile("chat-1");
     const focused = displayTarget();
@@ -763,7 +826,7 @@ describe("host channel emission focus gate", () => {
     const target = displayTarget();
 
     displayHostChannelEmission(
-      [hostEntry("n-1", "chat-1")],
+      [hostEntry("n-1", "chat-1", null)],
       target,
       "stream-host-1",
     );
