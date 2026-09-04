@@ -9,11 +9,11 @@ import type { HostRpcRegistry } from "@/lib/host";
 import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
 import { providersMutationKeys } from "@/lib/query-keys";
 
-type StartTerminalLoginMutationResult = UseMutationResult<
+export type StartTerminalLoginMutationResult<Captured> = UseMutationResult<
   ResponseOfMethod<HostRpcRegistry, "providers.startTerminalLogin">,
   HostRpcError,
   RequestOfMethod<HostRpcRegistry, "providers.startTerminalLogin">,
-  { readonly hostId: string | null }
+  { readonly hostId: string | null; readonly captured: Captured }
 >;
 
 /**
@@ -38,18 +38,36 @@ type StartTerminalLoginMutationResult = UseMutationResult<
  * leave a live sign-in terminal the user can only reach by hunting through the
  * Terminals sidebar.
  */
-export function useProvidersStartTerminalLoginForClient(
+export function useProvidersStartTerminalLoginForClient<Captured>(
   client: HostClient<HostRpcRegistry> | null,
   onSuccess: (
     data: ResponseOfMethod<HostRpcRegistry, "providers.startTerminalLogin">,
     variables: RequestOfMethod<HostRpcRegistry, "providers.startTerminalLogin">,
+    /** The host the request was SENT on, captured in `onMutate`. */
+    hostId: string | null,
+    /** Whatever `captureContext` read at send time. */
+    captured: Captured,
   ) => void,
-): StartTerminalLoginMutationResult {
+  /**
+   * Per-press state for `onSuccess`, read once per request in press order.
+   * The landing surface needs the start page a press was bound to; the epic
+   * surface has nothing per press and passes `undefined`.
+   */
+  captureContext:
+    | ((
+        variables: RequestOfMethod<
+          HostRpcRegistry,
+          "providers.startTerminalLogin"
+        >,
+      ) => Captured)
+    | undefined,
+): StartTerminalLoginMutationResult<Captured> {
   return useHostScopedMutationForClient(client, {
     method: "providers.startTerminalLogin",
     mutationKey: providersMutationKeys.startTerminalLogin(),
     errorMessage: "Couldn't open a sign-in terminal.",
     invalidateMethods: ["terminal.list"],
     onSuccess,
+    captureContext,
   });
 }

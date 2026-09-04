@@ -512,6 +512,36 @@ describe("<ProviderReauthBanner />", () => {
   // has real `oauthArgs`, so a null capability here also exercises the "no
   // reconnect method at all" branch rather than the headless button; assert
   // on the absence of the terminal button, which is Row 2's actual claim.
+  it("shows the pack's preparing state instead of the terminal button while the provider cannot spawn", () => {
+    render(
+      <ProviderReauthBanner
+        epicId="epic-1"
+        viewTabId="tab-1"
+        providerId="copilot"
+        state={{
+          ...copilotState(COPILOT_TERMINAL_CAP),
+          managedInstallState: { status: "downloading", percent: 30 },
+        }}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+
+    // A terminal login spawns the provider's CLI exactly as a turn does, so
+    // a pack with nothing to fall back to gates it the same way - the row
+    // stays (the wait is the thing to show), the button does not.
+    expect(
+      screen.queryByRole("button", { name: /Sign in from a terminal/ }),
+    ).toBeNull();
+    expect(screen.getByRole("status").textContent).toBe(
+      "Preparing Copilot… 30%",
+    );
+    // And not the CLI-only stub either: this is not a provider with no route.
+    expect(screen.queryByText(/Reconnect Copilot from its CLI/)).toBeNull();
+  });
+
   it("does not offer 'Sign in from a terminal' when loginCapability is null", () => {
     render(
       <ProviderReauthBanner

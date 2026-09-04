@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  downgradeRequestAcrossMajors,
   downgradeResponseAcrossMajors,
+  upgradeRequestToVersion,
   upgradeResponseToVersion,
 } from "@traycer/protocol/framework/index";
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
@@ -31,8 +33,13 @@ import {
   providersListResponseSchemaV60,
   providersSetEnabledResponseSchema,
   providersStartTerminalLoginRequestSchema,
+  providersStartTerminalLoginRequestSchemaV20,
   providersStartTerminalLoginResponseSchema,
 } from "@traycer/protocol/host/provider-schemas";
+import {
+  providersStartTerminalLoginDowngradeV20ToV10,
+  providersStartTerminalLoginUpgradeV10ToV20,
+} from "@traycer/protocol/host/registry";
 
 /**
  * Provider pack registry protocol coverage: the managed-install
@@ -986,5 +993,151 @@ describe("providers.startTerminalLogin is an additive optional method", () => {
         replacedSessionId: null,
       }).replacedSessionId,
     ).toBeNull();
+  });
+});
+
+describe("providers.startTerminalLogin gained a scope-based v2.0", () => {
+  it("the frozen v1.0 request still rejects an empty epicId and does not accept scope", () => {
+    expect(
+      providersStartTerminalLoginRequestSchema.safeParse({
+        providerId: "copilot",
+        epicId: "",
+        cols: 120,
+        rows: 40,
+      }).success,
+    ).toBe(false);
+    // scope is not part of the frozen v1.0 shape - a v2.0-shaped payload with
+    // no epicId fails the v1.0 parse.
+    expect(
+      providersStartTerminalLoginRequestSchema.safeParse({
+        providerId: "copilot",
+        scope: { kind: "epic", epicId: "epic-1" },
+        cols: 120,
+        rows: 40,
+      }).success,
+    ).toBe(false);
+  });
+
+  it("the v2.0 request accepts both scope kinds and rejects a bare epicId", () => {
+    expect(
+      providersStartTerminalLoginRequestSchemaV20.safeParse({
+        providerId: "copilot",
+        scope: { kind: "epic", epicId: "epic-1" },
+        cols: 120,
+        rows: 40,
+      }).success,
+    ).toBe(true);
+    expect(
+      providersStartTerminalLoginRequestSchemaV20.safeParse({
+        providerId: "copilot",
+        scope: { kind: "independent" },
+        cols: 120,
+        rows: 40,
+      }).success,
+    ).toBe(true);
+    expect(
+      providersStartTerminalLoginRequestSchemaV20.safeParse({
+        providerId: "copilot",
+        epicId: "epic-1",
+        cols: 120,
+        rows: 40,
+      }).success,
+    ).toBe(false);
+  });
+
+  it("the v1.0 -> v2.0 upgrade folds epicId into an epic scope and leaves the response untouched", () => {
+    const upgraded = providersStartTerminalLoginUpgradeV10ToV20.upgradeRequest({
+      providerId: "copilot",
+      epicId: "epic-1",
+      cols: 120,
+      rows: 40,
+    });
+    expect(upgraded).toEqual({
+      providerId: "copilot",
+      scope: { kind: "epic", epicId: "epic-1" },
+      cols: 120,
+      rows: 40,
+    });
+    const response = {
+      sessionId: "sess-2",
+      replacedSessionId: "sess-1",
+    };
+    expect(
+      providersStartTerminalLoginUpgradeV10ToV20.upgradeResponse(response),
+    ).toEqual(response);
+  });
+
+  it("the v2.0 -> v1.0 downgrade folds an epic scope back to epicId and refuses an independent scope", () => {
+    const downgraded =
+      providersStartTerminalLoginDowngradeV20ToV10.downgradeRequest({
+        providerId: "copilot",
+        scope: { kind: "epic", epicId: "epic-1" },
+        cols: 120,
+        rows: 40,
+      });
+    expect(downgraded).toEqual({
+      ok: true,
+      value: {
+        providerId: "copilot",
+        epicId: "epic-1",
+        cols: 120,
+        rows: 40,
+      },
+    });
+
+    const refused =
+      providersStartTerminalLoginDowngradeV20ToV10.downgradeRequest({
+        providerId: "copilot",
+        scope: { kind: "independent" },
+        cols: 120,
+        rows: 40,
+      });
+    expect(refused.ok).toBe(false);
+    if (refused.ok) return;
+    expect(refused.error.code).toBe("DOWNGRADE_UNSUPPORTED");
+  });
+
+  it("round-trips through the traversal helpers used by a real handshake", () => {
+    const registry = hostRpcRegistry["providers.startTerminalLogin"];
+    const upgraded = upgradeRequestToVersion(
+      registry,
+      { major: 1, minor: 0 },
+      { major: 2, minor: 0 },
+      { providerId: "copilot", epicId: "epic-1", cols: 120, rows: 40 },
+    );
+    expect(upgraded).toEqual({
+      providerId: "copilot",
+      scope: { kind: "epic", epicId: "epic-1" },
+      cols: 120,
+      rows: 40,
+    });
+
+    const downgraded = downgradeRequestAcrossMajors(registry, 2, 1, {
+      providerId: "copilot",
+      scope: { kind: "epic", epicId: "epic-1" },
+      cols: 120,
+      rows: 40,
+    });
+    expect(downgraded).toEqual({
+      ok: true,
+      value: {
+        providerId: "copilot",
+        epicId: "epic-1",
+        cols: 120,
+        rows: 40,
+      },
+    });
+  });
+
+  it("the registry lists major 2 with latestMinor 0 and a downgrade path keyed 1", () => {
+    const entry = hostRpcRegistry["providers.startTerminalLogin"];
+    expect(entry[2].latestMinor).toBe(0);
+    expect(entry[2].versions[0].upgradeFromPreviousVersion).toBe(
+      providersStartTerminalLoginUpgradeV10ToV20,
+    );
+    expect(entry[2].downgradePathsFromLatest[1]).toBe(
+      providersStartTerminalLoginDowngradeV20ToV10,
+    );
+    expect(entry.degrade).toEqual({ kind: "unsupported" });
   });
 });
