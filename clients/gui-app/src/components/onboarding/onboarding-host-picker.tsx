@@ -1,6 +1,5 @@
-import type { ReactNode } from "react";
+import { useMemo, type ReactNode } from "react";
 import { HostSwitcher } from "@/components/settings/host-scope/host-switcher";
-import { NO_HOST_OPTION_REFUSALS } from "@/components/settings/host-scope/host-option-model";
 import { HostScopeConnecting } from "@/components/settings/host-scope/host-scope-gate";
 import {
   onboardingHostReadiness,
@@ -27,6 +26,18 @@ export function OnboardingHostPickerBar(props: {
   readonly className: string;
 }): ReactNode {
   const { scope } = props.picker;
+  // Every host the tour cannot reach, with the word its row would carry if
+  // the status column were silent. The row's own status word ("offline",
+  // "stopped") speaks first when it has one; this only makes the row inert.
+  const refusalByHostId = useMemo(
+    (): ReadonlyMap<string, string> =>
+      new Map(
+        scope.hosts
+          .filter((host) => !host.connectable)
+          .map((host) => [host.hostId, "unreachable"]),
+      ),
+    [scope.hosts],
+  );
   // The host rows are served by a NON-polling observer; the Settings sidebar
   // is normally what opts a window into the liveness poll. During the tour
   // this bar is the only host-list surface on screen, so it carries the same
@@ -64,7 +75,15 @@ export function OnboardingHostPickerBar(props: {
             selected={scope.host}
             activeHostId={scope.activeHostId}
             onSelect={props.picker.onSelectHost}
-            refusalByHostId={NO_HOST_OPTION_REFUSALS}
+            // The tour WRITES to the picked host - it imports sessions onto
+            // it and stores the guide on it - so a host with no route is
+            // refused here rather than offered as a click that lands on a
+            // dead stage. A refusal rather than the `pin` intent, which
+            // would gate the same rows: `pin` also drops the ACTIVE tag and
+            // the "currently viewing" mark, and the tour has exactly the
+            // distinction those carry - following this window's host, or
+            // looking at another one - the same way the usage popover does.
+            refusalByHostId={refusalByHostId}
             inertExceptHostId={null}
             // No trailing "Manage hosts" row: the tour renders outside the
             // app shell, so the Settings overlay that row would open has no
@@ -72,13 +91,7 @@ export function OnboardingHostPickerBar(props: {
             // Settings' job; the tour only picks among the ones that exist.
             action={null}
             surface="panel-header"
-            // `pin`, not `view`: the tour WRITES to the picked host - it imports
-            // sessions onto it and stores the guide on it - so, like every
-            // picker that acts on a host, a row with no route is inert rather
-            // than a click that lands on a dead stage. `view` is for surfaces
-            // that only watch (the usage popover, Settings), where an offline
-            // host is still worth opening to read what the registry knows.
-            intent="pin"
+            intent="view"
             disabled={false}
             isLoading={scope.isLoading}
             listsFailed={scope.listsFailed}
