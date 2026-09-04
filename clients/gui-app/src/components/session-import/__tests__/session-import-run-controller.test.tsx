@@ -10,6 +10,8 @@ import {
   type Mock,
 } from "vitest";
 import type { SessionImportSelection } from "@traycer/protocol/host/session-import/candidate";
+import type { PermissionMode } from "@traycer/protocol/persistence/epic/schemas";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 import type {
   SessionImportRunCallbacks,
   SessionImportRunClientOptions,
@@ -27,6 +29,7 @@ import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
  */
 interface RunClientInstance {
   readonly selections: ReadonlyArray<SessionImportSelection>;
+  readonly permissionMode: PermissionMode;
   readonly callbacks: SessionImportRunCallbacks;
   readonly close: Mock<() => void>;
 }
@@ -44,6 +47,7 @@ vi.mock(
       constructor(options: SessionImportRunClientOptions) {
         runClientHarness.instances.push({
           selections: options.selections,
+          permissionMode: options.permissionMode,
           callbacks: options.callbacks,
           close: this.closeMock,
         });
@@ -289,6 +293,28 @@ describe("<SessionImportRunController />", () => {
     expect(runClientHarness.instances).toHaveLength(2);
     expect(requireInstance(1).selections).toEqual([SELECTION]);
     expect(currentRun().status).toBe("starting");
+  });
+
+  it("subscribes with this install's default permission mode, read when the run starts", () => {
+    render(<SessionImportRunController />);
+    const handle = getSessionImportStartHandle();
+    if (handle === null) {
+      throw new Error("Expected a session import start handle.");
+    }
+    // Changed AFTER mount: the mode is read at subscribe time, so an imported
+    // chat starts under whatever a new chat would get right now.
+    act(() => {
+      useSettingsStore.setState({ defaultPermission: "auto_accept_edits" });
+    });
+    const request: SessionImportRunRequest = {
+      selections: [SELECTION],
+      titles: new Map([["claude:s1", "My session"]]),
+    };
+    act(() => {
+      handle.start(request, startTarget());
+    });
+
+    expect(requireInstance(1).permissionMode).toBe("auto_accept_edits");
   });
 
   it("probes a new host straight away and keeps the previous host's run", () => {

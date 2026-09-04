@@ -17,6 +17,7 @@ import {
   useSessionImportRunStore,
 } from "@/stores/session-import/session-import-run-store";
 import { useImportedUnseenStore } from "@/stores/session-import/imported-unseen-store";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 import {
   getSessionImportStartHandle,
   setSessionImportStartHandle,
@@ -148,6 +149,10 @@ export function SessionImportRunController(): null {
       const client = new SessionImportRunClient({
         wsStreamClient: input.target.binding.wsStreamClient,
         selections: input.selections,
+        // Read at subscribe time, not rendered into: an imported chat starts
+        // under the permission mode a NEW chat would get right now, which is
+        // this install's default setting. The host has no default of its own.
+        permissionMode: useSettingsStore.getState().defaultPermission,
         callbacks: input.callbacks,
       });
       runsRef.current.set(input.target.hostId, {
