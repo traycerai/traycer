@@ -11,6 +11,7 @@ import type {
 import { __getChatSessionRegistryForTests } from "@/lib/registries/chat-session-registry";
 import { createChatSessionStore } from "@/stores/chats/chat-session-store";
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
+import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 
 /**
  * A live chat session whose only faked boundary is its socket, registered so
@@ -81,6 +82,7 @@ export function installManagedCommandChatSession(args: {
     },
     (storeEpicId, storeChatId) =>
       createChatSessionStore({
+        environment: CHAT_STORE_TEST_ENVIRONMENT,
         hostId,
         epicId: storeEpicId,
         chatId: storeChatId,

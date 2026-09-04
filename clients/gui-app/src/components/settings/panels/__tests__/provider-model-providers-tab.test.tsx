@@ -40,7 +40,7 @@ const hostMocks = vi.hoisted(() => ({
   authIsPending: false,
   awaitMutate: vi.fn(),
   cancelMutate: vi.fn(),
-  openExternalLink: vi.fn(),
+  openLink: vi.fn(),
 }));
 
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({
@@ -101,8 +101,8 @@ vi.mock(
   }),
 );
 
-vi.mock("@/hooks/runner/use-open-external-link-mutation", () => ({
-  useRunnerOpenExternalLink: () => ({ mutate: hostMocks.openExternalLink }),
+vi.mock("@/lib/links/open-link", () => ({
+  useOpenLink: () => hostMocks.openLink,
 }));
 
 const FULL_CAPS: ProviderModelProvidersCapabilities = {
@@ -149,7 +149,7 @@ beforeEach(() => {
   hostMocks.authMutate.mockReset();
   hostMocks.awaitMutate.mockReset();
   hostMocks.cancelMutate.mockReset();
-  hostMocks.openExternalLink.mockReset();
+  hostMocks.openLink.mockReset();
   useModelProviderPendingAuthStore.setState({ entries: {} });
 });
 

@@ -1,5 +1,4 @@
 import type { WorktreeBusyHolder } from "@traycer/protocol/framework/worktree-busy-holders";
-import { HOLDERS_REVISION_DIGEST_PATTERN } from "@traycer/protocol/host/worktree-schemas";
 import { teardownHolderRowKey } from "@/lib/worktree/owner-teardown-snapshot";
 
 export const UNNAMED_AGENT_FALLBACK = "This agent";
@@ -13,18 +12,6 @@ export function holderIdOf(holder: WorktreeBusyHolder): string | undefined {
   return id !== undefined && id.length > 0 ? id : undefined;
 }
 
-/**
- * Echo-able digest. Empty, missing, or malformed values cannot form
- * consent — Sweep then uses today's `stopOwners` path and the unknown
- * consequence line.
- */
-export function sanitizeHoldersRevision(
-  value: string | undefined,
-): string | undefined {
-  if (value === undefined) return undefined;
-  return HOLDERS_REVISION_DIGEST_PATTERN.test(value) ? value : undefined;
-}
-
 export function ownerNameKey(holder: WorktreeBusyHolder): string {
   return `${holder.ownerRef.ownerKind}:${holder.ownerRef.ownerId}`;
 }
@@ -33,12 +20,6 @@ export function actorGroupKey(holder: WorktreeBusyHolder): string {
   const id = holderIdOf(holder);
   if (id !== undefined) return id;
   return teardownHolderRowKey(holder);
-}
-
-export function canSubmitExpectedHoldersRevision(
-  revision: string | undefined,
-): boolean {
-  return sanitizeHoldersRevision(revision) !== undefined;
 }
 
 export interface FormattedTeardownActor {
@@ -63,21 +44,6 @@ export function formatUncheckedInUseKnown(processCount: number): string {
 
 export function formatUncheckedInUseUnknown(): string {
   return "This host reports background work here, but cannot identify it · Check to review";
-}
-
-export function formatStopHeading(input: {
-  readonly knownActors: number;
-  readonly unknownRows: number;
-}): string {
-  if (input.unknownRows > 0 && input.knownActors === 0) {
-    return "Unidentified background work will be stopped";
-  }
-  if (input.unknownRows > 0) {
-    const unit = input.knownActors === 1 ? "process" : "processes";
-    return `${String(input.knownActors)} ${unit} will be stopped, and unidentified background work`;
-  }
-  const unit = input.knownActors === 1 ? "process" : "processes";
-  return `${String(input.knownActors)} ${unit} will be stopped`;
 }
 
 export function formatTeardownActors(

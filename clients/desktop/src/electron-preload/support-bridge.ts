@@ -87,6 +87,7 @@ export interface SupportBridgeSurface {
   ): Promise<readonly string[]>;
   requestMicrophoneAccess(): Promise<"granted" | "denied">;
   openMicrophoneSettings(): Promise<void>;
+  openFullDiskAccessSettings(): Promise<void>;
   notifications: {
     readonly systemSettings: { open(): Promise<void> } | null;
     show(
@@ -157,6 +158,8 @@ export function buildSupportBridge(
 
     openMicrophoneSettings: () =>
       ipcRenderer.invoke(RunnerHostInvoke.openMicrophoneSettings),
+    openFullDiskAccessSettings: () =>
+      ipcRenderer.invoke(RunnerHostInvoke.openFullDiskAccessSettings),
 
     notifications: {
       systemSettings:

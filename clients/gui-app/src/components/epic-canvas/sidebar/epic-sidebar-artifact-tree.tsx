@@ -29,6 +29,11 @@ import { useOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import { requestArtifactEditorFocus } from "@/lib/artifacts/pending-editor-focus";
 import { openProjectedSidebarNodeInTabWhenAvailable } from "@/components/epic-canvas/sidebar/open-projected-sidebar-node";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
+import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
+import {
+  modifiersFromMouseEvent,
+  tileIntent,
+} from "@/lib/canvas/tile-open/intent";
 import { useEpicExportArtifacts } from "@/hooks/epic/use-epic-export-artifacts-mutation";
 import { cn } from "@/lib/utils";
 import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
@@ -68,6 +73,12 @@ import {
   useIsActiveEpicArtifact,
 } from "@/stores/epics/canvas/store";
 import {
+  clearSidebarNodeRevealRequest,
+  useSidebarNodeRevealRequest,
+  useVisibleSidebarNodeRevealRequest,
+} from "@/stores/epics/sidebar-node-reveal-store";
+import { usePanelHeaderSearchStore } from "@/stores/epics/panel-header-search-store";
+import {
   isOpenableEpicNodeKind,
   type EpicNodeRef,
   type OpenableEpicNodeKind,
@@ -86,8 +97,6 @@ import {
   useEpicConnectionStatus,
   useEpicPermissionRole,
   useEpicTreeIndex,
-  useEpicTreeNode,
-  useRootIds,
 } from "@/lib/epic-selectors";
 import { isEditableRole } from "@/lib/epic-permissions";
 import { useSettingsStore } from "@/stores/settings/settings-store";
@@ -106,6 +115,7 @@ import {
   startTransition,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -117,11 +127,13 @@ import {
   EMPTY_PENDING_LIST,
   EMPTY_PRE_ACK_LIST,
   INDENT_PX,
+  SIDEBAR_REVEAL_HIGHLIGHT_CLASS,
   STATUS_DOT_CLASSES,
   STATUS_LABELS,
   computeArtifactNodeAddChildPending,
   computeArtifactNodeStatusDot,
   nodePadRightClass,
+  revealSidebarNode,
   rowAddControlRevealClass,
 } from "./epic-sidebar-tree-shared";
 import { TreeGroupGuide } from "./epic-sidebar-tree-guide";
@@ -144,7 +156,9 @@ import {
   FILTERED_EMPTY_TITLE,
   useArtifactFilterMatchIds,
 } from "./epic-sidebar-panel-filters";
+import { useShallow } from "zustand/react/shallow";
 import { useEpicStore } from "@/hooks/use-epic-store";
+import type { OpenEpicState } from "@/stores/epics/open-epic/store";
 import {
   getSidebarNodeDragId,
   getPaneScopedDndId,
@@ -154,7 +168,11 @@ import {
 import { useDragSourceDisabled } from "@/components/epic-canvas/dnd/use-drag-source-disabled";
 import { SidebarReparentRowDropWrapper } from "@/components/epic-canvas/sidebar/sidebar-reparent-row-drop-wrapper";
 import { SidebarPanelEmptyState } from "@/components/epic-canvas/sidebar/sidebar-panel-empty-state";
-import type { ArtifactsSlice, TreeSlice } from "@/stores/epics/open-epic/types";
+import type {
+  ArtifactsSlice,
+  EpicTreeNodeType,
+  TreeSlice,
+} from "@/stores/epics/open-epic/types";
 import {
   SidebarContextMenuItems,
   SidebarDropdownMenuItems,
@@ -201,29 +219,44 @@ interface ArtifactDescendantEntry {
 function usePanelRootIds(
   comparator: NodeComparator | null,
 ): ReadonlyArray<string> {
-  const yDocRootIds = useRootIds();
   // Filter roots by the TREE node's type, not the projected artifact records.
   // `useEpicArtifactRecords()` rebuilds a fresh record array (and fresh record
   // objects) on every store tick, so during chat streaming the active chat's
   // record changes identity each token and `liveRecords` churns - which used to
   // recompute this memo, churn `rootIds` -> `expandedIds` -> the `expansion`
-  // controller, and re-render every memoized `ArtifactNode`. The tree index
-  // (`s.tree`) does NOT change on chat tokens, and its `nodeById[id].type` is
-  // the same value space this `treeFilter` already uses for CHILD nodes
-  // (`usePanelChildIds`), so the result is identical but identity-stable while
-  // streaming.
-  const tree = useEpicTreeIndex();
-  return useMemo(() => {
-    const treeFilter = ARTIFACTS_TREE_FILTER;
-    const roots = yDocRootIds.filter(
-      (rootId) =>
-        Object.hasOwn(tree.nodeById, rootId) &&
-        treeFilter(tree.nodeById[rootId].type),
-    );
-    // `yDocRootIds` is in projector (default) order; re-sort only for a
-    // non-default mode (`comparator !== null`).
-    return sortNodeIds(roots, tree.nodeById, comparator);
-  }, [tree, yDocRootIds, comparator]);
+  // controller, and re-render every memoized `ArtifactNode`. Its `nodeById[id]
+  // .type` is the same value space this `treeFilter` already uses for CHILD
+  // nodes (`usePanelChildIds`), so the result is identical.
+  //
+  // ## Subscribed to the ANSWER (epic-sync-overhaul finding 12, round 2)
+  //
+  // That earlier fix read `useEpicTreeIndex()` and derived in a `useMemo`, on
+  // the stated premise that "the tree index does NOT change on chat tokens".
+  // True for chat tokens - and false for body writes, which move `updatedAt`,
+  // which `TreeNode` carries. So the memo recomputed on every body write, and
+  // `.filter()` ALWAYS allocates, which walked the chain the comment above
+  // describes all the way to re-rendering every memoized row. The guard rail
+  // was correct; it was keyed on something that had started to move.
+  //
+  // Comparing the ANSWER shallowly closes it at the source: the root id list is
+  // what actually has to change before anything downstream should move, and it
+  // does not move when one row's `updatedAt` is stamped. `useRootIds()`'s own
+  // subscription is already identity-stable (`stabilizeTree` preserves
+  // `rootIds` when the id set is unchanged, `epic-projector.ts:1449-1451`); the
+  // allocation this removes was this hook's own filter.
+  return useEpicStore(
+    useShallow((state: OpenEpicState): ReadonlyArray<string> => {
+      const nodeById = state.tree.nodeById;
+      const treeFilter = ARTIFACTS_TREE_FILTER;
+      const roots = state.tree.rootIds.filter(
+        (rootId) =>
+          Object.hasOwn(nodeById, rootId) && treeFilter(nodeById[rootId].type),
+      );
+      // `rootIds` arrive in projector (default) order; re-sort only for a
+      // non-default mode (`comparator !== null`).
+      return sortNodeIds(roots, nodeById, comparator);
+    }),
+  );
 }
 
 /**
@@ -303,52 +336,139 @@ function collectDescendantArtifactEntries(
  * This mirrors the per-entity `useIsActive...` pattern instead of threading a
  * tab-wide map through the recursive node tree.
  */
+/** The read-state fields the variant is computed from. */
+interface ArtifactReadStateFacts {
+  readonly seedAtByEpic: Readonly<Record<string, number>>;
+  readonly lastSeenByArtifact: Readonly<
+    Record<string, Readonly<Record<string, number>>>
+  >;
+}
+
+/**
+ * The marker's answer, as a pure function of both stores. Shared by the two
+ * subscriptions below so they cannot drift into computing different rules.
+ */
+function computeArtifactUnreadMarkerVariant(args: {
+  readonly epicId: string;
+  readonly nodeId: string;
+  readonly isArtifactKind: boolean;
+  readonly expanded: boolean;
+  readonly visibleIds: ReadonlySet<string> | null;
+  readonly tree: TreeSlice;
+  readonly readState: ArtifactReadStateFacts;
+}): ArtifactUnreadMarkerVariant | null {
+  const { epicId, nodeId, isArtifactKind, expanded, tree, readState } = args;
+  if (!isArtifactKind) return null;
+  // Read `updatedAt` HERE rather than taking it as an argument. Taking it meant
+  // the caller had to subscribe to the whole node to supply it, so every body
+  // write re-rendered the row to recompute a variant that almost never flips.
+  const selfUpdatedAt = Object.hasOwn(tree.nodeById, nodeId)
+    ? tree.nodeById[nodeId].updatedAt
+    : 0;
+  if (
+    isArtifactUnread({
+      epicId,
+      artifactId: nodeId,
+      updatedAt: selfUpdatedAt,
+      seedAtByEpic: readState.seedAtByEpic,
+      lastSeenByArtifact: readState.lastSeenByArtifact,
+    })
+  ) {
+    return "self";
+  }
+  if (expanded) return null;
+  for (const entry of collectDescendantArtifactEntries(
+    nodeId,
+    tree,
+    args.visibleIds,
+  )) {
+    if (
+      isArtifactUnread({
+        epicId,
+        artifactId: entry.id,
+        updatedAt: entry.updatedAt,
+        seedAtByEpic: readState.seedAtByEpic,
+        lastSeenByArtifact: readState.lastSeenByArtifact,
+      })
+    ) {
+      return "descendant";
+    }
+  }
+  return null;
+}
+
+/**
+ * The parts of a row's tree node that the row RENDERS. Deliberately not the
+ * whole `TreeNode`: that carries `updatedAt`, which the host stamps on every
+ * body write, so `useEpicTreeNode` handed the row a new object ~4/s and
+ * re-rendered it (and its whole unmemoized chrome subtree) for a field it does
+ * not display. The unread marker still tracks `updatedAt` - it reads it itself,
+ * and returns a variant rather than the timestamp.
+ */
+interface ArtifactRowNodeFacts {
+  readonly type: EpicTreeNodeType;
+  readonly title: string;
+}
+
+function useArtifactRowNode(nodeId: string): ArtifactRowNodeFacts | null {
+  return useEpicStore(
+    useShallow((state: OpenEpicState): ArtifactRowNodeFacts | null => {
+      if (!Object.hasOwn(state.tree.nodeById, nodeId)) return null;
+      const node = state.tree.nodeById[nodeId];
+      return { type: node.type, title: node.title };
+    }),
+  );
+}
+
 function useArtifactUnreadMarkerVariant(args: {
   readonly epicId: string;
   readonly nodeId: string;
   readonly isArtifactKind: boolean;
   readonly expanded: boolean;
-  readonly selfUpdatedAt: number;
-  readonly tree: TreeSlice;
 }): ArtifactUnreadMarkerVariant | null {
-  const { epicId, nodeId, isArtifactKind, expanded, selfUpdatedAt, tree } =
-    args;
+  const { epicId, nodeId, isArtifactKind, expanded } = args;
   const visibleIds = useSidebarVisibleIds();
-  const descendantEntries = useMemo(
-    () =>
-      !isArtifactKind || expanded
-        ? EMPTY_DESCENDANT_ENTRIES
-        : collectDescendantArtifactEntries(nodeId, tree, visibleIds),
-    [isArtifactKind, expanded, nodeId, tree, visibleIds],
+  const epicStoreHandle = useOpenEpicHandle();
+  // ## Two subscriptions, one answer
+  //
+  // The variant is a function of BOTH stores - the tree (an artifact's
+  // `updatedAt`) and the read state (when it was last seen) - so subscribing to
+  // one and reading the other non-reactively would go stale on changes to the
+  // other. Subscribing to a raw input from either (the node, or `updatedAt`)
+  // would re-render the row on every body write, which is the whole defect.
+  //
+  // So both stores are subscribed, and BOTH selectors return the ANSWER: each
+  // reads its own store reactively and the other via `getState()` at selection
+  // time, which is current because the selector re-runs on its own store's
+  // change and on every render. Zustand bails a subscriber whose selector
+  // output is unchanged, so the row re-renders only when the variant actually
+  // flips - not on the ~4/s stamps that leave it alone.
+  //
+  // The two values are equal by construction (same pure function, same two
+  // stores); `??` simply consumes both.
+  const byTree = useEpicStore((state: OpenEpicState) =>
+    computeArtifactUnreadMarkerVariant({
+      epicId,
+      nodeId,
+      isArtifactKind,
+      expanded,
+      visibleIds,
+      tree: state.tree,
+      readState: useArtifactReadStateStore.getState(),
+    }),
   );
-  return useArtifactReadStateStore((state) => {
-    if (!isArtifactKind) return null;
-    if (
-      isArtifactUnread({
-        epicId,
-        artifactId: nodeId,
-        updatedAt: selfUpdatedAt,
-        seedAtByEpic: state.seedAtByEpic,
-        lastSeenByArtifact: state.lastSeenByArtifact,
-      })
-    ) {
-      return "self";
-    }
-    for (const entry of descendantEntries) {
-      if (
-        isArtifactUnread({
-          epicId,
-          artifactId: entry.id,
-          updatedAt: entry.updatedAt,
-          seedAtByEpic: state.seedAtByEpic,
-          lastSeenByArtifact: state.lastSeenByArtifact,
-        })
-      ) {
-        return "descendant";
-      }
-    }
-    return null;
-  });
+  const byReadState = useArtifactReadStateStore((state) =>
+    computeArtifactUnreadMarkerVariant({
+      epicId,
+      nodeId,
+      isArtifactKind,
+      expanded,
+      visibleIds,
+      tree: epicStoreHandle.store.getState().tree,
+      readState: state,
+    }),
+  );
+  return byTree ?? byReadState;
 }
 
 function artifactsForReadSeed(
@@ -411,18 +531,38 @@ export function ArtifactReadLifecycleBridge(props: {
 export function ArtifactTreePanelBody(props: ArtifactTreePanelBodyProps) {
   const { epicId, tabId } = props;
   const panelId: RootCreatePanelId = "artifacts";
+  const treeRegionRef = useRef<HTMLDivElement>(null);
   const sort = useArtifactSort(epicId);
   const comparator = useMemo<NodeComparator | null>(
     () => (isDefaultSort(sort) ? null : makeNodeComparator(sort)),
     [sort],
   );
   const allRootIds = usePanelRootIds(comparator);
-  const visibleIds = useArtifactVisibleIds(epicId);
+  const filteredVisibleIds = useArtifactVisibleIds(epicId);
+  const tree = useEpicTreeIndex();
+  const revealRequest = useSidebarNodeRevealRequest(tabId);
+  const visibleRevealRequest = useVisibleSidebarNodeRevealRequest(tabId);
+  const ancestorIdsOfReveal = useAncestorIds(revealRequest?.nodeId ?? null);
+  const visibleIds = useMemo(() => {
+    if (
+      visibleRevealRequest === null ||
+      filteredVisibleIds === null ||
+      !Object.hasOwn(tree.nodeById, visibleRevealRequest.nodeId)
+    ) {
+      return filteredVisibleIds;
+    }
+    return new Set([
+      ...filteredVisibleIds,
+      ...collectWithAncestors([visibleRevealRequest.nodeId], tree.nodeById),
+    ]);
+  }, [filteredVisibleIds, tree, visibleRevealRequest]);
   const rootIds = useMemo(
     () => applyVisibleFilter(allRootIds, visibleIds),
     [allRootIds, visibleIds],
   );
-  const tree = useEpicTreeIndex();
+  // No whole-slice read left in this component: with the three derivations
+  // below subscribed to their own answers, the panel itself no longer
+  // re-renders on a record change either.
   const activeArtifactId = useActiveEpicArtifactId(tabId);
   const permissionRole = useEpicPermissionRole();
   const connectionStatus = useEpicConnectionStatus();
@@ -447,8 +587,12 @@ export function ArtifactTreePanelBody(props: ArtifactTreePanelBodyProps) {
 
   const ancestorIdsOfActive = useAncestorIds(activeArtifactId);
   const forcedExpandedIds = useMemo(
-    () => mergeForcedExpanded(ancestorIdsOfActive, visibleIds),
-    [ancestorIdsOfActive, visibleIds],
+    () =>
+      mergeForcedExpanded(
+        mergeForcedExpanded(ancestorIdsOfActive, ancestorIdsOfReveal),
+        visibleIds,
+      ),
+    [ancestorIdsOfActive, ancestorIdsOfReveal, visibleIds],
   );
   const expandedIds = useEpicSidebarEffectiveExpanded(
     tabId,
@@ -457,6 +601,7 @@ export function ArtifactTreePanelBody(props: ArtifactTreePanelBodyProps) {
     forcedExpandedIds,
   );
   const expandAction = useEpicSidebarExpansionStore((s) => s.expand);
+  const closeSearch = usePanelHeaderSearchStore((s) => s.closeSearch);
   const collapseAction = useEpicSidebarExpansionStore((s) => s.collapse);
   const toggleExpanded = useCallback(
     (id: string) => {
@@ -472,23 +617,58 @@ export function ArtifactTreePanelBody(props: ArtifactTreePanelBodyProps) {
     [tabId, panelId, expandAction],
   );
 
+  useLayoutEffect(() => {
+    if (revealRequest === null || treeRegionRef.current === null) return;
+    closeSearch(tabId, panelId);
+    for (const ancestorId of ancestorIdsOfReveal) {
+      expandAction(tabId, panelId, ancestorId);
+    }
+    if (
+      !revealSidebarNode(
+        treeRegionRef.current,
+        revealRequest.nodeId,
+        revealRequest.nonce,
+      )
+    ) {
+      return;
+    }
+    clearSidebarNodeRevealRequest(tabId, revealRequest.nonce);
+  }, [
+    ancestorIdsOfReveal,
+    closeSearch,
+    expandAction,
+    expandedIds,
+    panelId,
+    revealRequest,
+    tabId,
+    tree,
+  ]);
+
   const expansion = useMemo<ExpansionController>(
     () => ({ expandedIds, toggleExpanded, ensureExpanded }),
     [expandedIds, toggleExpanded, ensureExpanded],
   );
   const bulkSelection = useMaybeSidebarBulkSelection();
-  const selectableIds = useMemo(
-    () =>
+  // Hygiene, not part of the memo-churn chain: `tree` is a direct input, so
+  // this recomputed on every record change and handed the effect below a fresh
+  // array each time. That never reached a row - `setSelectableSidebarIds`
+  // equality-guards with `sameStringArray` and returns the same state object,
+  // so the write was already a no-op - but the effect still fired ~4/s for
+  // nothing. Comparing the answer stops that at the source. The walk itself
+  // still runs per notification; `useShallow` bails the subscriber, not the
+  // recompute.
+  const selectableIds = useEpicStore(
+    useShallow((state: OpenEpicState): readonly string[] =>
       collectVisibleSidebarTreeIds({
         rootIds,
         expandedIds,
-        tree,
+        tree: state.tree,
         treeFilter: ARTIFACTS_TREE_FILTER,
         emitFilter: ARTIFACTS_TREE_FILTER,
         visibleIds,
         comparator,
       }),
-    [rootIds, expandedIds, tree, visibleIds, comparator],
+    ),
   );
   const setSelectableIds = bulkSelection?.setSelectableIds ?? null;
   useEffect(() => {
@@ -580,7 +760,10 @@ export function ArtifactTreePanelBody(props: ArtifactTreePanelBodyProps) {
       <SidebarFilterVisibilityContext.Provider value={visibleIds}>
         <ArtifactPanelSearchShell epicId={epicId} tabId={tabId}>
           <SidebarGroup className="min-h-0 flex-1 px-2 py-1">
-            <SidebarGroupContent className="flex min-h-0 flex-1 flex-col">
+            <SidebarGroupContent
+              ref={treeRegionRef}
+              className="flex min-h-0 flex-1 flex-col"
+            >
               {panelContent}
             </SidebarGroupContent>
           </SidebarGroup>
@@ -647,19 +830,13 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
     onToggleSelection,
   } = props;
   const { expandedIds, toggleExpanded, ensureExpanded } = expansion;
-  const node = useEpicTreeNode(nodeId);
+  const node = useArtifactRowNode(nodeId);
   const childIds = useFilteredPanelChildIds(nodeId, treeFilter);
   const navigateNested = useEpicNestedFocusNavigation();
-  const prepareOpenTileInTabFocusTarget = useEpicCanvasStore(
-    (s) => s.prepareOpenTileInTabFocusTargetFromSource,
-  );
+  const { openTile } = useEpicTileNavigation();
   const prepareCloseCanvasTabFocusTarget = useEpicCanvasStore(
     (s) => s.prepareCloseCanvasTabFocusTarget,
   );
-  const prepareOpenTilePreviewInTabFocusTarget = useEpicCanvasStore(
-    (s) => s.prepareOpenTilePreviewInTabFocusTargetFromSource,
-  );
-  const promotePreviewInTab = useEpicCanvasStore((s) => s.promotePreviewInTab);
   const markArtifactSelfDeleted = useEpicCanvasStore(
     (s) => s.markArtifactSelfDeleted,
   );
@@ -669,8 +846,8 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
   const epicHandle = useOpenEpicHandle();
 
   const createArtifact = useEpicCreateArtifact();
-  const deleteArtifact = useEpicDeleteArtifact();
-  const renameArtifact = useEpicRenameArtifact(true);
+  const deleteArtifact = useEpicDeleteArtifact(nodeId);
+  const renameArtifact = useEpicRenameArtifact(nodeId, true);
   const renameArtifactInTab = useEpicCanvasStore((s) => s.renameArtifactInTab);
 
   const [pendingChildName, setPendingChildName] = useState<string | null>(null);
@@ -678,9 +855,27 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
   // Read only what this node needs from the tree projection, NOT the full
   // `useEpicArtifactRecords()` array: that array gets a new identity whenever
   // ANY record changes (e.g. the active chat streaming a token), which used to
-  // re-render every memoized node. The tree index is stable while streaming and
-  // `status` is a per-id scalar.
-  const tree = useEpicTreeIndex();
+  // re-render every memoized node. `status` is a per-id scalar.
+  //
+  // This used to read the whole `tree` slice, on the premise - stated here in
+  // as many words - that "the tree index is stable while streaming". True of
+  // chat tokens, which never touch an artifact node. It was falsified silently
+  // by body writes: the host stamps the artifact's `updatedAt` per write batch
+  // and `TreeNode` carries that field, so the slice re-minted ~4 times a second
+  // and every row re-rendered with it. The optimization outlived its premise.
+  //
+  // `memo` on this component is not a defence and never was - it blocks a
+  // re-render pushed down by a parent, not one this component's own
+  // subscription triggers. So the reads below subscribe to their ANSWERS.
+  //
+  // `useShallow` is required, not decorative: a deriving selector returns a
+  // fresh object each call, so without it `useSyncExternalStore` sees a change
+  // on every notification and loops. See `epic-sidebar-filter.ts`.
+  const cascadeCounts = useEpicStore(
+    useShallow((state: OpenEpicState) =>
+      computeDescendantCountsFromTree(state.tree, nodeId),
+    ),
+  );
   const statusValue = useEpicArtifactStatus(nodeId);
 
   useEffect(() => {
@@ -717,8 +912,6 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
     nodeId,
     isArtifactKind,
     expanded,
-    selfUpdatedAt: node?.updatedAt ?? 0,
-    tree,
   });
 
   const Icon = EPIC_NODE_ICONS[artifactType];
@@ -736,6 +929,21 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
   const renameInputRef = useRef<HTMLInputElement>(null);
 
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
+  // Mount the delete dialog on FIRST open and keep it mounted thereafter,
+  // rather than rendering it for every row unconditionally.
+  //
+  // Radix already keeps the dialog CONTENT unmounted while closed, but
+  // `ConfirmDestructiveDialog` itself still ran on every row render - forty
+  // rows' worth, during bursts nobody clicked, and ~105ms of self time in the
+  // burst profile. The latch is what makes gating safe: unmounting the moment
+  // `open` goes false would tear the dialog out from under Radix's exit
+  // transition. Rows never asked to delete anything - all of them, during a
+  // burst or a cold open - never pay for it.
+  const [deleteDialogEverOpened, setDeleteDialogEverOpened] = useState(false);
+  const changeConfirmDeleteOpen = useCallback((open: boolean) => {
+    if (open) setDeleteDialogEverOpened(true);
+    setConfirmDeleteOpen(open);
+  }, []);
   const deletePending = deleteArtifact.isPending;
 
   // The Epic SESSION's host, not the app-wide pointer: this tree projects the
@@ -755,17 +963,10 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
       pendingProjectedOpenCancelRef.current =
         openProjectedSidebarNodeInTabWhenAvailable({
           epicHandle,
-          tabId,
           nodeId: projectedNodeId,
           fallbackHostId: activeHostId,
-          openTileInTab: (targetTabId, nodeRef) => {
-            navigateNested(epicId, targetTabId, () =>
-              prepareOpenTileInTabFocusTarget(
-                targetTabId,
-                nodeRef,
-                "direct_ui",
-              ),
-            );
+          openNode: (nodeRef) => {
+            openTile(tileIntent(nodeRef, { tabId }, "explicit", "direct_ui"));
           },
           onBeforeOpen,
           onOpened: () => {
@@ -783,14 +984,7 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
           onCleanup: null,
         });
     },
-    [
-      activeHostId,
-      epicHandle,
-      epicId,
-      navigateNested,
-      prepareOpenTileInTabFocusTarget,
-      tabId,
-    ],
+    [activeHostId, epicHandle, openTile, tabId],
   );
 
   const clearPendingChildCreate = useCallback(() => {
@@ -801,73 +995,45 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
     });
   }, []);
 
-  const selectArtifactNode = useCallback(() => {
-    if (isRenaming) return;
-    if (openableType === null) return;
-    navigateNested(epicId, tabId, () =>
-      prepareOpenTilePreviewInTabFocusTarget(
-        tabId,
-        {
+  const openRowTile = useCallback(
+    (
+      event: React.MouseEvent<HTMLButtonElement>,
+      gesture: "single" | "double",
+    ) => {
+      if (isRenaming) return;
+      if (openableType === null) return;
+      openTile({
+        node: {
           id: nodeId,
           instanceId: uuidv4(),
           type: openableType,
           name: nodeName,
           hostId: activeHostId,
         },
-        "direct_ui",
-      ),
-    );
-  }, [
-    activeHostId,
-    epicId,
-    isRenaming,
-    navigateNested,
-    nodeName,
-    nodeId,
-    openableType,
-    prepareOpenTilePreviewInTabFocusTarget,
-    tabId,
-  ]);
-
-  const handleDoubleClick = useCallback(() => {
-    if (isRenaming) return;
-    if (openableType === null) return;
-    const found = findOpenArtifactInTab(tabId, nodeId);
-    if (found !== null) {
-      navigateNested(epicId, tabId, () => {
-        promotePreviewInTab(tabId, found.paneId);
-        return {
-          paneId: found.paneId,
-          tileInstanceId: found.instanceId,
-        };
+        target: { tabId },
+        gesture,
+        modifiers: modifiersFromMouseEvent(event),
+        placement: null,
+        dedupe: true,
+        source: "direct_ui",
       });
-    } else {
-      navigateNested(epicId, tabId, () =>
-        prepareOpenTileInTabFocusTarget(
-          tabId,
-          {
-            id: nodeId,
-            instanceId: uuidv4(),
-            type: openableType,
-            name: nodeName,
-            hostId: activeHostId,
-          },
-          "direct_ui",
-        ),
-      );
-    }
-  }, [
-    activeHostId,
-    epicId,
-    isRenaming,
-    navigateNested,
-    nodeId,
-    nodeName,
-    openableType,
-    prepareOpenTileInTabFocusTarget,
-    promotePreviewInTab,
-    tabId,
-  ]);
+    },
+    [activeHostId, isRenaming, nodeId, nodeName, openTile, openableType, tabId],
+  );
+
+  const selectArtifactNode = useCallback(
+    (event: React.MouseEvent<HTMLButtonElement>) => {
+      openRowTile(event, "single");
+    },
+    [openRowTile],
+  );
+
+  const handleDoubleClick = useCallback(
+    (event: React.MouseEvent<HTMLButtonElement>) => {
+      openRowTile(event, "double");
+    },
+    [openRowTile],
+  );
 
   const handleToggle = useCallback(
     (event: React.MouseEvent<HTMLSpanElement>) => {
@@ -951,40 +1117,14 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
     // mode. Deliberately NOT re-opening the editor on failure — that would
     // steal focus seconds later, wherever the user had moved on to.
     setIsRenaming(false);
-    // The optimistic overlay, in place of the `renameArtifact` doc write this
-    // used to do — rationale and the promise-carried retire contract live in
-    // `use-rename-canvas-tab.ts`, which this mirrors.
-    const requestId = epicHandle.store
-      .getState()
-      .beginRenameMutation(nodeId, trimmed);
-    const retire = (outcome: "landed" | "failed"): void => {
-      if (requestId === null) return;
-      epicHandle.store.getState().retirePendingMutation(requestId, outcome);
-    };
+    // The command queue owns the optimistic overlay and its terminal record.
     void renameArtifact
       .mutateAsync({ epicId, artifactId: nodeId, title: trimmed })
       .then(
-        () => {
-          retire("landed");
-          // The tab snapshot only on settlement - it is a persisted fallback
-          // with no rollback path, so a speculative write would preserve a
-          // rejected title across restarts - and only while this is still
-          // the LATEST stamped rename for the node: settles are unordered,
-          // and an older ack landing last must not overwrite the newer
-          // snapshot. See `use-rename-canvas-tab.ts`.
-          if (
-            requestId === null ||
-            epicHandle.store.getState().isLatestRenameStamp(nodeId, requestId)
-          ) {
-            renameArtifactInTab(tabId, nodeId, trimmed);
-          }
-        },
-        () => {
-          retire("failed");
-        },
+        () => renameArtifactInTab(tabId, nodeId, trimmed),
+        () => {},
       );
   }, [
-    epicHandle,
     epicId,
     nodeName,
     nodeId,
@@ -1009,14 +1149,13 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
 
   const performDelete = () => {
     if (!canMutate) return;
-    setConfirmDeleteOpen(true);
+    changeConfirmDeleteOpen(true);
   };
 
   const confirmDelete = () => {
-    epicHandle.store.getState().deleteArtifact(nodeId);
     markArtifactSelfDeleted(nodeId);
     const handleDeleteSuccess = () => {
-      setConfirmDeleteOpen(false);
+      changeConfirmDeleteOpen(false);
       const found = findOpenArtifactInTab(tabId, nodeId);
       if (found !== null) {
         navigateNested(epicId, tabId, () =>
@@ -1041,9 +1180,10 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
   if (!treeFilter(node.type)) return null;
 
   // Cascade counts feed only the delete-confirm dialog, computed from the
-  // canonical tree structure (stable while streaming) rather than the churning
-  // record list.
-  const cascadeCounts = computeDescendantCountsFromTree(tree, nodeId);
+  // canonical tree structure rather than the churning record list. Subscribed
+  // at the top of this component rather than derived here, because a hook
+  // cannot live below the two early returns above - see the note at the
+  // subscription for why it stopped reading the whole slice.
   const cascadeSummary = formatCascadeSummary(cascadeCounts);
 
   const showStatusDot = computeArtifactNodeStatusDot(artifactType, statusValue);
@@ -1059,7 +1199,7 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
       onToggleSelection(nodeId);
       return;
     }
-    selectArtifactNode();
+    selectArtifactNode(event);
   };
   const rowDoubleClick = selectionMode ? noopRowAction : handleDoubleClick;
 
@@ -1104,7 +1244,8 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
       onPerformDelete={performDelete}
       pendingChildName={pendingChildName}
       confirmDeleteOpen={confirmDeleteOpen}
-      onConfirmDeleteOpenChange={setConfirmDeleteOpen}
+      renderDeleteDialog={confirmDeleteOpen || deleteDialogEverOpened}
+      onConfirmDeleteOpenChange={changeConfirmDeleteOpen}
       cascadeSummary={cascadeSummary}
       deletePending={deletePending}
       onConfirmDelete={confirmDelete}
@@ -1145,7 +1286,7 @@ interface ArtifactNodeShellProps {
   readonly onRenameKeyDown: (event: KeyboardEvent<HTMLInputElement>) => void;
   readonly onToggle: (event: React.MouseEvent<HTMLSpanElement>) => void;
   readonly onClick: (event: React.MouseEvent<HTMLButtonElement>) => void;
-  readonly onDoubleClick: () => void;
+  readonly onDoubleClick: (event: React.MouseEvent<HTMLButtonElement>) => void;
   readonly statusValue: number | null;
   readonly showStatusDot: boolean;
   readonly unreadMarkerVariant: ArtifactUnreadMarkerVariant | null;
@@ -1155,6 +1296,8 @@ interface ArtifactNodeShellProps {
   readonly onPerformDelete: () => void;
   readonly pendingChildName: string | null;
   readonly confirmDeleteOpen: boolean;
+  /** First-open latch: see the note beside `deleteDialogEverOpened`. */
+  readonly renderDeleteDialog: boolean;
   readonly onConfirmDeleteOpenChange: (open: boolean) => void;
   readonly cascadeSummary: string | null;
   readonly deletePending: boolean;
@@ -1206,6 +1349,7 @@ function ArtifactNodeShell(props: ArtifactNodeShellProps) {
     onPerformDelete,
     pendingChildName,
     confirmDeleteOpen,
+    renderDeleteDialog,
     onConfirmDeleteOpenChange,
     cascadeSummary,
     deletePending,
@@ -1324,16 +1468,19 @@ function ArtifactNodeShell(props: ArtifactNodeShellProps) {
         selectedIds={selectedIds}
         onToggleSelection={onToggleSelection}
       />
-      <ConfirmDestructiveDialog
-        open={confirmDeleteOpen}
-        onOpenChange={onConfirmDeleteOpenChange}
-        title={`Delete ${artifactType} "${nodeName}"?`}
-        description="This action cannot be undone."
-        cascadeSummary={cascadeSummary}
-        actionLabel="Delete"
-        isPending={deletePending}
-        onConfirm={onConfirmDelete}
-      />
+      {renderDeleteDialog ? (
+        <ConfirmDestructiveDialog
+          blockedReason={null}
+          open={confirmDeleteOpen}
+          onOpenChange={onConfirmDeleteOpenChange}
+          title={`Delete ${artifactType} "${nodeName}"?`}
+          description="This action cannot be undone."
+          cascadeSummary={cascadeSummary}
+          actionLabel="Delete"
+          isPending={deletePending}
+          onConfirm={onConfirmDelete}
+        />
+      ) : null}
     </li>
   );
 }
@@ -1471,7 +1618,11 @@ function ArtifactRenameRow(props: ArtifactRenameRowProps) {
   } = props;
   return (
     <div
-      className="flex h-7 min-w-0 flex-1 items-center gap-1.5 rounded-md px-2"
+      data-sidebar-node-id={nodeId}
+      className={cn(
+        "flex h-7 min-w-0 flex-1 items-center gap-1.5 rounded-md px-2",
+        SIDEBAR_REVEAL_HIGHLIGHT_CLASS,
+      )}
       style={{
         paddingLeft: `${depth * INDENT_PX + BASE_PAD_LEFT}px`,
       }}
@@ -1517,7 +1668,7 @@ interface ArtifactRowButtonProps {
   readonly expanded: boolean;
   readonly onToggle: (event: React.MouseEvent<HTMLSpanElement>) => void;
   readonly onClick: (event: React.MouseEvent<HTMLButtonElement>) => void;
-  readonly onDoubleClick: () => void;
+  readonly onDoubleClick: (event: React.MouseEvent<HTMLButtonElement>) => void;
   readonly Icon: LucideIcon;
   readonly artifactIconColorMode: "byType" | "none";
   readonly iconStyle: { color: string | undefined } | undefined;
@@ -1610,6 +1761,7 @@ function ArtifactRowButton(props: ArtifactRowButtonProps) {
     isActive
       ? "bg-accent text-accent-foreground"
       : "text-foreground/75 hover:bg-accent/70 hover:text-accent-foreground",
+    SIDEBAR_REVEAL_HIGHLIGHT_CLASS,
   );
   const selectionInputId = `epic-sidebar-select-input-${nodeId}`;
 
@@ -1619,6 +1771,7 @@ function ArtifactRowButton(props: ArtifactRowButtonProps) {
         htmlFor={selectionInputId}
         ref={dragRef}
         data-testid={`epic-sidebar-item-${nodeId}`}
+        data-sidebar-node-id={nodeId}
         data-artifact-type={artifactType}
         className={rowClassName}
         style={{
@@ -1665,6 +1818,7 @@ function ArtifactRowButton(props: ArtifactRowButtonProps) {
       {...listeners}
       type="button"
       data-testid={`epic-sidebar-item-${nodeId}`}
+      data-sidebar-node-id={nodeId}
       data-artifact-type={artifactType}
       className={rowClassName}
       style={{
@@ -1877,83 +2031,102 @@ function useArtifactRowMenuEntries(
   props: ArtifactRowMenuEntriesProps,
 ): ReadonlyArray<SidebarRowMenuEntry> {
   const exportArtifacts = useEpicExportArtifacts();
-  const exportOne = (format: "markdown" | "pdf"): void => {
-    exportArtifacts.mutate({
-      artifacts: [{ id: props.nodeId, title: props.nodeName }],
-      format,
-      archive: false,
-      archiveTitle: null,
-    });
-  };
-  const exportIcon = exportArtifacts.isPending ? (
-    <AgentSpinningDots
-      className={undefined}
-      testId={undefined}
-      variant={undefined}
-    />
-  ) : (
-    <FileDown className="size-3.5" />
-  );
-  return [
-    {
-      kind: "item",
-      id: "export-markdown",
-      label: "Export as Markdown",
-      icon: exportIcon,
-      disabled: exportArtifacts.isPending,
-      disabledTooltip: null,
-      variant: "default",
-      testIds: {
-        dropdown: `epic-sidebar-export-markdown-${props.nodeId}`,
-        context: `epic-sidebar-context-export-markdown-${props.nodeId}`,
+  const { canMutate, nodeId, nodeName, onPerformDelete, onStartRename } = props;
+  const exportPending = exportArtifacts.isPending;
+  const exportMutate = exportArtifacts.mutate;
+  // Built once per input change rather than on every row render. This runs for
+  // every row and allocates six entry objects plus their icons and closures;
+  // it was ~74ms of self time in a burst profile back when a stamp re-rendered
+  // all forty rows. Nothing downstream is memoized, so a stable array skips no
+  // render on its own - this is purely the allocation, and it is why this
+  // lands as hygiene rather than as part of the churn fix.
+  return useMemo(() => {
+    const exportOne = (format: "markdown" | "pdf"): void => {
+      exportMutate({
+        artifacts: [{ id: nodeId, title: nodeName }],
+        format,
+        archive: false,
+        archiveTitle: null,
+      });
+    };
+    const exportIcon = exportPending ? (
+      <AgentSpinningDots
+        className={undefined}
+        testId={undefined}
+        variant={undefined}
+      />
+    ) : (
+      <FileDown className="size-3.5" />
+    );
+    return [
+      {
+        kind: "item",
+        id: "export-markdown",
+        label: "Export as Markdown",
+        icon: exportIcon,
+        disabled: exportPending,
+        disabledTooltip: null,
+        variant: "default",
+        testIds: {
+          dropdown: `epic-sidebar-export-markdown-${nodeId}`,
+          context: `epic-sidebar-context-export-markdown-${nodeId}`,
+        },
+        onSelect: () => exportOne("markdown"),
       },
-      onSelect: () => exportOne("markdown"),
-    },
-    {
-      kind: "item",
-      id: "export-pdf",
-      label: "Export as PDF",
-      icon: exportIcon,
-      disabled: exportArtifacts.isPending,
-      disabledTooltip: null,
-      variant: "default",
-      testIds: {
-        dropdown: `epic-sidebar-export-pdf-${props.nodeId}`,
-        context: `epic-sidebar-context-export-pdf-${props.nodeId}`,
+      {
+        kind: "item",
+        id: "export-pdf",
+        label: "Export as PDF",
+        icon: exportIcon,
+        disabled: exportPending,
+        disabledTooltip: null,
+        variant: "default",
+        testIds: {
+          dropdown: `epic-sidebar-export-pdf-${nodeId}`,
+          context: `epic-sidebar-context-export-pdf-${nodeId}`,
+        },
+        onSelect: () => exportOne("pdf"),
       },
-      onSelect: () => exportOne("pdf"),
-    },
-    { kind: "separator", id: "after-export" },
-    {
-      kind: "item",
-      id: "rename",
-      label: "Rename",
-      icon: <Pencil className="size-3.5" />,
-      disabled: !props.canMutate,
-      disabledTooltip: null,
-      variant: "default",
-      testIds: {
-        dropdown: `epic-sidebar-rename-${props.nodeId}`,
-        context: `epic-sidebar-context-rename-${props.nodeId}`,
+      { kind: "separator", id: "after-export" },
+      {
+        kind: "item",
+        id: "rename",
+        label: "Rename",
+        icon: <Pencil className="size-3.5" />,
+        disabled: !canMutate,
+        disabledTooltip: null,
+        variant: "default",
+        testIds: {
+          dropdown: `epic-sidebar-rename-${nodeId}`,
+          context: `epic-sidebar-context-rename-${nodeId}`,
+        },
+        onSelect: onStartRename,
       },
-      onSelect: props.onStartRename,
-    },
-    { kind: "separator", id: "before-delete" },
-    {
-      kind: "item",
-      id: "delete",
-      label: "Delete",
-      icon: <Trash2 className="size-3.5" />,
-      disabled: !props.canMutate,
-      disabledTooltip: null,
-      variant: "destructive",
-      testIds: {
-        dropdown: `epic-sidebar-delete-${props.nodeId}`,
-        context: `epic-sidebar-context-delete-${props.nodeId}`,
+      { kind: "separator", id: "before-delete" },
+      {
+        kind: "item",
+        id: "delete",
+        label: "Delete",
+        icon: <Trash2 className="size-3.5" />,
+        disabled: !canMutate,
+        disabledTooltip: null,
+        variant: "destructive",
+        testIds: {
+          dropdown: `epic-sidebar-delete-${nodeId}`,
+          context: `epic-sidebar-context-delete-${nodeId}`,
+        },
+        onSelect: onPerformDelete,
       },
-      onSelect: props.onPerformDelete,
-    },
-  ];
+    ];
+  }, [
+    canMutate,
+    exportMutate,
+    exportPending,
+    nodeId,
+    nodeName,
+    onPerformDelete,
+    onStartRename,
+  ]);
 }
 
 function ArtifactMoreMenu(props: {

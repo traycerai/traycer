@@ -1563,8 +1563,6 @@ function interviewSegment(
     kind: "interview",
     status: "completed",
     toolName: "question",
-    title: "Question",
-    description: null,
     questions: [
       {
         questionId: null,

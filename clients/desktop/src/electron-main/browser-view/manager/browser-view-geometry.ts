@@ -3,6 +3,7 @@ import type {
   BrowserViewViewportPresetId,
 } from "@traycer-clients/shared/platform/browser-view";
 import { log } from "../../app/logger";
+import { cssBoundsToWindowDips } from "../../windows/css-pixel-scale";
 import { createBoundsStreamStats } from "./bounds-stream-stats";
 import type { BrowserViewEntry } from "./browser-view-entry";
 import { browserViewSurfaceKey as entryKeyId } from "./browser-view-entry-registry";
@@ -37,6 +38,8 @@ const VIEWPORT_PRESETS: Readonly<
 
 interface BrowserViewGeometryOptions {
   readonly getWindow: (windowId: string) => BrowserViewWindow | null;
+  /** Current page-zoom factor of the app windows (see `window-zoom.ts`). */
+  readonly getZoomFactor: () => number;
   /** Flush window for the aggregate `bounds_stream` perf log. */
   readonly boundsStreamLogIntervalMs: number;
 }
@@ -45,9 +48,16 @@ interface BrowserViewGeometryOptions {
  * Owns everything that decides where a native tile sits and whether it is
  * composited: effective bounds, the visibility predicate, and the BT-202
  * rolling frame feed that follows visibility.
+ *
+ * Coordinate contract: `entry.bounds` is what the renderer measured, in CSS
+ * pixels. This class is the ONE place that turns those into the window DIPs
+ * `view.setBounds` speaks, and it re-derives that rect on every apply - so a
+ * zoom change only has to re-run an apply, never re-negotiate geometry with
+ * the renderer.
  */
 export class BrowserViewGeometry {
   private readonly getWindow: (windowId: string) => BrowserViewWindow | null;
+  private readonly getZoomFactor: () => number;
   private readonly boundsStreamLogIntervalMs: number;
   private readonly boundsStreamStats = createBoundsStreamStats();
   private boundsStreamLogTimer: NodeJS.Timeout | null = null;
@@ -71,7 +81,13 @@ export class BrowserViewGeometry {
 
   constructor(options: BrowserViewGeometryOptions) {
     this.getWindow = options.getWindow;
+    this.getZoomFactor = options.getZoomFactor;
     this.boundsStreamLogIntervalMs = options.boundsStreamLogIntervalMs;
+  }
+
+  /** The page zoom every CSS rect is converted with (see `applyBounds`). */
+  zoomFactor(): number {
+    return this.getZoomFactor();
   }
 
   cachedFrame(keyId: string): EncodedTileFrame | null {
@@ -84,6 +100,16 @@ export class BrowserViewGeometry {
 
   detachFrames(keyId: string): void {
     this.tileFrames.detach(keyId);
+  }
+
+  /**
+   * Ticket 04 exit-edge handshake: resolves on this tile's next composited
+   * frame, read off the same BT-201 frame feed occlusion already reads
+   * (`cachedFrame`) rather than a second subscription. Null when no
+   * subscription is attached for the key.
+   */
+  awaitNextFrame(keyId: string): Promise<void> | null {
+    return this.tileFrames.awaitNextFrame(keyId);
   }
 
   dispose(): void {
@@ -99,9 +125,17 @@ export class BrowserViewGeometry {
     // may keep streaming rects while a menu is open, and applying them would
     // yank the offscreen-parked view back over the popover. The stored
     // rect is applied by the release path.
-    if (entry.overlayOwnerIds.length > 0) return;
-    if (entry.bounds === null) return;
-    const bounds = effectiveViewportBounds(entry.bounds, entry.viewportPreset);
+    //
+    // Ticket 04: the same swallow covers the restore handshake's two-step
+    // window too - `overlayOwnerIds` is already empty by the time release
+    // un-parks the view (that un-park IS the call this guard lets through),
+    // but a stand-in is still mounted in the renderer until the deferred
+    // restore event lands. A streamed rect landing in that gap must not
+    // reset `lastAppliedBounds` out from under the release path.
+    if (entry.overlayOwnerIds.length > 0 || entry.overlayRestoreToken !== null)
+      return;
+    const bounds = applicableWindowBounds(entry, this.getZoomFactor());
+    if (bounds === null) return;
     if (bounds.width <= 0 || bounds.height <= 0) {
       this.boundsStreamStats.recordRejected();
       this.armBoundsStreamLogFlush();
@@ -121,8 +155,24 @@ export class BrowserViewGeometry {
         : boundsMaxComponentDelta(entry.lastAppliedBounds, bounds);
     entry.view.setBounds(bounds);
     entry.lastAppliedBounds = bounds;
+    this.logZoomedApply(entry, bounds);
     this.boundsStreamStats.recordApplied(maxDeltaPx);
     this.armBoundsStreamLogFlush();
+  }
+
+  /** Both sides of the conversion, only when zoom actually moved the rect. */
+  private logZoomedApply(
+    entry: BrowserViewEntry,
+    applied: BrowserViewBounds,
+  ): void {
+    const zoomFactor = this.getZoomFactor();
+    if (zoomFactor === 1 || entry.surface === null) return;
+    log.debug("[browser-view] bounds applied", {
+      keyId: entryKeyId(entry.surface),
+      zoomFactor,
+      cssBounds: entry.bounds,
+      appliedBounds: applied,
+    });
   }
 
   /**
@@ -132,13 +182,8 @@ export class BrowserViewGeometry {
    * entry has no usable rect to mirror offscreen.
    */
   parkOffscreen(entry: BrowserViewEntry): boolean {
-    const bounds = entry.bounds;
-    if (bounds === null || bounds.width <= 0 || bounds.height <= 0) {
-      entry.view.setVisible(false);
-      return false;
-    }
-    const effective = effectiveViewportBounds(bounds, entry.viewportPreset);
-    if (effective.width <= 0 || effective.height <= 0) {
+    const effective = applicableWindowBounds(entry, this.getZoomFactor());
+    if (effective === null || effective.width <= 0 || effective.height <= 0) {
       entry.view.setVisible(false);
       return false;
     }
@@ -177,7 +222,7 @@ export class BrowserViewGeometry {
       return;
     }
     const window = this.getWindow(surface.windowId);
-    const liveness = entryLiveness(entry, window);
+    const liveness = entryLiveness(entry, window, this.getZoomFactor());
     const hasUsableBounds = liveness.hasUsableBounds;
     const visible =
       liveness.wanted &&
@@ -196,6 +241,7 @@ export class BrowserViewGeometry {
       log.info("[browser-view] visibility changed", {
         keyId: entryKeyId(surface),
         visible,
+        zoomFactor: this.getZoomFactor(),
         desiredVisible: entry.desiredVisible,
         overlayOwnerCount: entry.overlayOwnerIds.length,
         rendererResetPending: entry.rendererResetPending,
@@ -264,6 +310,7 @@ export class BrowserViewGeometry {
       log.info("[browser-view] bounds stream", {
         kind: "bounds_stream",
         ...payload,
+        zoomFactor: this.getZoomFactor(),
       });
       this.logFrameCacheStats();
     };
@@ -312,19 +359,43 @@ export interface BrowserViewEntryLiveness {
   readonly windowOnScreen: boolean;
 }
 
+/**
+ * The window-DIP rect an entry's stored CSS rect maps to under `zoomFactor`.
+ * Null only when the renderer has never reported a rect for this tile.
+ */
+export function applicableWindowBounds(
+  entry: BrowserViewEntry,
+  zoomFactor: number,
+): BrowserViewBounds | null {
+  if (entry.bounds === null) return null;
+  // Preset viewports are guest-side sizes (a 390-wide phone viewport stays
+  // 390 whatever the app is zoomed to), so they clamp the DIP rect, not the
+  // CSS one.
+  return effectiveViewportBounds(
+    cssBoundsToWindowDips(entry.bounds, zoomFactor),
+    entry.viewportPreset,
+  );
+}
+
 export function entryLiveness(
   entry: BrowserViewEntry,
   window: BrowserViewWindow | null,
+  zoomFactor: number,
 ): BrowserViewEntryLiveness {
   const windowAlive = window !== null && !window.isDestroyed();
+  // Usability is decided on the rect that would actually be applied, not on
+  // the CSS one: a sub-pixel sliver is a positive CSS width that rounds to a
+  // 0-DIP rect `applyBounds` rejects, which would otherwise leave the guest
+  // composited at its last full-size rect.
+  const windowBounds = applicableWindowBounds(entry, zoomFactor);
   return {
     wanted: entry.desiredVisible,
     unoccluded: entry.overlayOwnerIds.length === 0,
     rendererReady: !entry.rendererResetPending,
     hasUsableBounds:
-      entry.bounds !== null &&
-      entry.bounds.width > 0 &&
-      entry.bounds.height > 0,
+      windowBounds !== null &&
+      windowBounds.width > 0 &&
+      windowBounds.height > 0,
     loaded: entry.status !== "loading",
     notDead: entry.status !== "dead",
     guestAlive: !entry.view.webContents.isDestroyed(),
@@ -353,23 +424,15 @@ const CAPTURABLE_REQUIREMENTS: readonly (readonly [
 export function assertEntryCapturable(
   entry: BrowserViewEntry,
   window: BrowserViewWindow | null,
+  zoomFactor: number,
 ): void {
-  const liveness = entryLiveness(entry, window);
+  const liveness = entryLiveness(entry, window, zoomFactor);
   for (const [field, reason] of CAPTURABLE_REQUIREMENTS) {
     if (liveness[field]) continue;
     throw new Error(
       `Browser screenshot unavailable: ${reason} (${field} is false)`,
     );
   }
-}
-
-export function normalizeBounds(bounds: BrowserViewBounds): BrowserViewBounds {
-  return {
-    x: Math.round(bounds.x),
-    y: Math.round(bounds.y),
-    width: Math.max(0, Math.round(bounds.width)),
-    height: Math.max(0, Math.round(bounds.height)),
-  };
 }
 
 export function effectiveViewportBounds(

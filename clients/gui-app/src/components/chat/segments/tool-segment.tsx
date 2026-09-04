@@ -54,6 +54,7 @@ import { ImageGenerationCard } from "./image-generation-card";
 import { ManagedCommandRestartSegment } from "./managed-command-restart-segment";
 import { ManagedCommandStartSegment } from "./managed-command-start-segment";
 import { isTraycerBrowserReplToolName } from "@traycer/protocol/host/agent/gui/browser-tools";
+import { tileIntent } from "@/lib/canvas/tile-open/intent";
 
 interface ToolSegmentProps {
   id: string;
@@ -688,19 +689,26 @@ function A2ASendToolSegment(
   const receiverNode = useEpicAgentReference(send.receiverAgentId);
   const activeHostId = useTabHostId();
   const epicId = useOpenEpicId();
-  const tileNavigation = useEpicTileNavigation();
+  const { openTile } = useEpicTileNavigation();
   const requestJump = useChatTranscriptJumpStore((s) => s.requestJump);
   const receiverName = receiverDisplayName(receiverNode, send.receiverAgentId);
   const openTarget = receiverOpenTarget(receiverNode, activeHostId);
   const openReceiverTab = () => {
     if (openTarget === null || receiverNode === null) return;
-    tileNavigation.openTileInEpic(epicId, {
-      id: receiverNode.id,
-      instanceId: uuidv4(),
-      type: openTarget.type,
-      name: receiverName,
-      hostId: openTarget.hostId,
-    });
+    openTile(
+      tileIntent(
+        {
+          id: receiverNode.id,
+          instanceId: uuidv4(),
+          type: openTarget.type,
+          name: receiverName,
+          hostId: openTarget.hostId,
+        },
+        { epicId },
+        "explicit",
+        "direct_ui",
+      ),
+    );
     // Same mechanism the communication graph uses for its receiver-side
     // anchor: park a jump for the receiver's tile, which picks it up whether
     // it is already mounted or is being opened by the call above. The receipt

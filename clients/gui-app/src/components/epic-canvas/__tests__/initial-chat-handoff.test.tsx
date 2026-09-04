@@ -10,10 +10,13 @@ import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import { EpicSessionProvider } from "@/providers/epic-session-provider";
 import { EpicSessionGate } from "@/providers/epic-session-gate";
+import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
 import {
-  __getOpenEpicRegistryForTests,
-  __setEpicStreamClientFactoryForTests,
-} from "@/lib/registries/epic-session-registry";
+  __setEpicRuntimeWorkerFactoryForTests,
+  getEpicRuntimeWorkerFactoryOverride,
+} from "@/lib/registries/epic-runtime-worker-factory-slot";
+import { createInProcessEpicRuntimeWorker } from "@/stores/epics/open-epic/test-support/in-process-epic-runtime-worker";
+import type { RuntimeWorkerLike } from "@/stores/epics/open-epic/runtime/worker/spawn-epic-runtime-worker";
 import { useInitialChatHandoff } from "@/components/epic-canvas/hooks/use-initial-chat-handoff";
 import { paneTabRefs } from "@/stores/epics/canvas/actions";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
@@ -101,17 +104,20 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => null,
 }));
 
-// `EpicSessionProvider` opens its own durable transport via this factory, but
-// the coordinator under test installs an `__setEpicStreamClientFactoryForTests`
-// override that short-circuits before `openTransport` runs - so a stable stub
-// opener that is never invoked lets the provider mount without the full host
-// runtime.
-const openTransportStub = vi.hoisted(() => () => {
-  throw new Error("openTransport must not be called in this test");
+// `EpicSessionProvider` opens its own durable transport via this factory, and
+// UNCONDITIONALLY now: the stream-factory override that used to short-circuit
+// before `openTransport` ran is gone, so a stub that threw here - which was
+// this file's shape, safe only because it was never reached - would now fail
+// every test. The fake supplies "no socket in tests" at the opener instead.
+// What this suite drives the session's stream with is the WORKER factory.
+vi.mock("@/lib/host/use-durable-stream-transport", async () => {
+  const { fakeDurableStreamTransports } =
+    await import("@/lib/host/test-support/fake-durable-stream-transport");
+  return {
+    useDurableStreamTransportFactory: () =>
+      fakeDurableStreamTransports().opener,
+  };
 });
-vi.mock("@/lib/host/use-durable-stream-transport", () => ({
-  useDurableStreamTransportFactory: () => openTransportStub,
-}));
 
 vi.mock("@/lib/host/stream-runtime-context", () => ({
   useWsStreamClient: () => null,
@@ -193,7 +199,7 @@ function registerPendingHandoffCreatedAt(createdAt: number): void {
     content: HANDOFF_CONTENT,
     settings: HANDOFF_SETTINGS,
     worktreeIntent: null,
-    placement: { kind: "active-tile" },
+    placement: null,
     messageId: "msg-test",
     clientActionId: "cai-test",
     createdAt,
@@ -251,6 +257,8 @@ function canvasChatTabs() {
 
 describe("initial chat handoff route coordinator", () => {
   let callbacks: EpicStreamCallbacks | null = null;
+  /** The jsdom setup file's coreless worker, put back in `afterEach`. */
+  let previousWorkerFactory: (() => RuntimeWorkerLike) | null = null;
 
   beforeEach(() => {
     window.localStorage.clear();
@@ -273,24 +281,38 @@ describe("initial chat handoff route coordinator", () => {
       },
       contextMetadata: { userId: USER_ID, username: "Owner" },
     });
-    __setEpicStreamClientFactoryForTests((_epicId, nextCallbacks) => {
-      testState.events.push("epic.subscribe");
-      callbacks = nextCallbacks;
-      return {
-        applyUpdate: () => undefined,
-        awareness: () => undefined,
-        applyArtifactRoomUpdate: () => undefined,
-        artifactRoomAwareness: () => undefined,
-        retryMigration: () => undefined,
-        close: () => undefined,
-      };
-    });
+    previousWorkerFactory = getEpicRuntimeWorkerFactoryOverride();
+    // A FRESH helper per spawn, supplied at the WORKER seam: a stream factory
+    // built on MAIN cannot cross `postMessage` to a runtime living in the
+    // worker, so it goes to the worker's own composition. The factory body is
+    // unchanged, and it still records `epic.subscribe` on the same
+    // `testState.events` timeline the handoff assertions read.
+    __setEpicRuntimeWorkerFactoryForTests(() =>
+      createInProcessEpicRuntimeWorker({
+        streamClientFactory: (_epicId, nextCallbacks) => {
+          testState.events.push("epic.subscribe");
+          callbacks = nextCallbacks;
+          return {
+            applyUpdate: () => undefined,
+            awareness: () => undefined,
+            applyArtifactRoomUpdate: () => undefined,
+            artifactRoomAwareness: () => undefined,
+            retryMigration: () => undefined,
+            close: () => undefined,
+          };
+        },
+        laneSelection: null,
+      }).createWorker(),
+    );
   });
 
   afterEach(() => {
     cleanup();
     vi.useRealTimers();
-    __setEpicStreamClientFactoryForTests(null);
+    // RESTORED to the jsdom setup file's coreless worker, never nulled: `null`
+    // means "use the production constructor", which is `new Worker(new
+    // URL(...))` - the one form jsdom cannot execute.
+    __setEpicRuntimeWorkerFactoryForTests(previousWorkerFactory);
     __getOpenEpicRegistryForTests().disposeAll();
     useInitialChatHandoffStore.getState().resetForTests();
     useAuthStore.setState({
@@ -490,7 +512,7 @@ describe("initial chat handoff route coordinator", () => {
       content: HANDOFF_CONTENT,
       settings: HANDOFF_SETTINGS,
       worktreeIntent: null,
-      placement: { kind: "active-tile" },
+      placement: null,
       messageId: "msg-test",
       clientActionId: "cai-test",
       createdAt: Date.now(),
@@ -617,7 +639,7 @@ describe("initial chat handoff route coordinator", () => {
         content: HANDOFF_CONTENT,
         settings: HANDOFF_SETTINGS,
         worktreeIntent: null,
-        placement: { kind: "active-tile" },
+        placement: null,
         messageId: "msg-replacement",
         clientActionId: "cai-replacement",
         createdAt: Date.now(),

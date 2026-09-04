@@ -43,10 +43,14 @@ import {
 import { isMobileApp } from "@/lib/mobile-app";
 import { cn } from "@/lib/utils";
 import { appLogger } from "@/lib/logger";
+import {
+  getNativeKeyboardState,
+  runWhenNativeKeyboardSettled,
+} from "@/lib/native-keyboard";
 import { getNegotiatedHostMethodVersion } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { useTerminalTheme } from "@/lib/terminal-theme";
 import { scheduleAtlasClear } from "@/lib/terminal-theme-scheduler";
-import { useBrowserLinkRouterForRunnerHost } from "@/lib/browser-view/link-routing/browser-link-router";
+import { useOpenLink } from "@/lib/links/open-link";
 import type { TerminalDataWriter } from "@/stores/terminals/terminal-session-store";
 import { useFindInPageStore } from "@/stores/find-in-page/find-in-page-store";
 import { registerActiveTerminalFindController } from "@/stores/find-in-page/terminal-find-store";
@@ -258,7 +262,7 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
   const { fontFamily, fontSize: effectiveFontSize } =
     useEffectiveTerminalFont();
   const runnerHost = useRunnerHost();
-  const routeBrowserLink = useBrowserLinkRouterForRunnerHost(runnerHost);
+  const openLink = useOpenLink();
   // Unfocused panes unregister global find ownership. Both split halves stay
   // mounted and visible, so app-level find is scoped to the FOCUSED terminal -
   // visibility alone would leave two panes claiming it.
@@ -348,14 +352,14 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
   const onUserInputRef = useRef(props.onUserInput);
   const onContainerResizeRef = useRef(props.onContainerResize);
   const onWriterReadyRef = useRef(props.onWriterReady);
-  const routeBrowserLinkRef = useRef(routeBrowserLink);
+  const openLinkRef = useRef(openLink);
   const onTerminalReadyRef = useRef(props.onTerminalReady);
   const keepAliveRef = useRef(props.keepAlive);
   useEffect(() => {
     onUserInputRef.current = props.onUserInput;
     onContainerResizeRef.current = props.onContainerResize;
     onWriterReadyRef.current = props.onWriterReady;
-    routeBrowserLinkRef.current = routeBrowserLink;
+    openLinkRef.current = openLink;
     onTerminalReadyRef.current = props.onTerminalReady;
     findTargetIdRef.current = activeFindTargetId;
     keepAliveRef.current = props.keepAlive;
@@ -366,7 +370,7 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
     props.onTerminalReady,
     props.keepAlive,
     activeFindTargetId,
-    routeBrowserLink,
+    openLink,
   ]);
 
   // Acquire the persistent xterm engine for this session and attach its
@@ -399,8 +403,8 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
     entry.live.onUserInput = (data) => onUserInputRef.current(data);
     entry.live.onContainerResize = (cols, rows) =>
       onContainerResizeRef.current(cols, rows);
-    entry.live.openExternalLink = (uri, event) => {
-      routeBrowserLinkRef.current("terminal", uri, event);
+    entry.live.openLink = (uri, event) => {
+      void openLinkRef.current(uri, "terminal", event);
     };
     const getFindTargetId = () => findTargetIdRef.current;
     const onSearchResults = (result: ISearchResultChangeEvent): void => {
@@ -701,7 +705,7 @@ function createXtermEntry(
   const live: XtermHostLiveCallbacks = {
     onUserInput: () => {},
     onContainerResize: () => {},
-    openExternalLink: () => {},
+    openLink: () => {},
     getFindTargetId: getEmptyFindTargetId,
     onSearchResults: ignoreSearchResults,
   };
@@ -730,11 +734,11 @@ function createXtermEntry(
   term.unicode.activeVersion = "11";
   const fitAddon = new FitAddon();
   term.loadAddon(fitAddon);
-  // Route every clicked link to the host's external-browser path. Left at its
+  // Route every clicked link through the app's one link seam. Left at its
   // defaults xterm wraps `window.open(uri)` in a confirm dialog, but
   // `window.open` to an external URL is a no-op in the Electron renderer - so
-  // the dialog's OK did nothing. `openExternalLink` hands the URL to the OS
-  // browser (e.g. the Codex OAuth sign-in link).
+  // the dialog's OK did nothing. `openLink` opens it in a browser tile or the
+  // OS browser per the user's setting (e.g. the Codex OAuth sign-in link).
   //
   // Two independent link paths both need this. `WebLinksAddon` matches
   // plain-text URLs via regex; `linkHandler` covers OSC 8 escape-sequence
@@ -743,7 +747,7 @@ function createXtermEntry(
   // OscLinkProvider's dead default confirm dialog even after WebLinksAddon was
   // wired up.
   const openClickedLink = (event: MouseEvent, uri: string): void => {
-    live.openExternalLink(uri, event);
+    live.openLink(uri, event);
   };
   term.loadAddon(
     new WebLinksAddon((event, uri) => openClickedLink(event, uri)),
@@ -997,7 +1001,7 @@ function createXtermEntry(
   // min(cols/rows) is pinned tiny) is `reconcileWithHost`'s job, not this one's
   // - except for a reconcile that was deferred because the box was unmeasurable
   // at the time, which this path completes on the next good measurement.
-  const fitToContainer = (): void => {
+  const fitToContainerNow = (): void => {
     const dims = proposeContainerDims();
     if (dims === null) return;
     if (pendingHostGrid !== null) {
@@ -1067,6 +1071,26 @@ function createXtermEntry(
     reportDims(dims.cols, dims.rows);
   };
 
+  // While the mobile soft keyboard is animating (native-resize mode shrinks
+  // this container as part of the show/hide transition), hold the fit until
+  // the transition settles so the PTY re-grids once, at the final size,
+  // instead of repainting at intermediate sizes. Gated here, at the single
+  // choke point, because every fit source funnels through this wrapper -
+  // the ResizeObserver AND `term.onRender`, which fires on every committed
+  // render and would otherwise re-grid mid-transition whenever the PTY is
+  // streaming output. Re-arming cancels the previous pending fit, so a burst
+  // of calls during the transition coalesces into one settled fit. Outside
+  // the installed app the keyboard state never transitions and this runs
+  // synchronously.
+  let keyboardSettleCancel: (() => void) | null = null;
+  const fitToContainer = (): void => {
+    keyboardSettleCancel?.();
+    keyboardSettleCancel = runWhenNativeKeyboardSettled(() => {
+      keyboardSettleCancel = null;
+      fitToContainerNow();
+    });
+  };
+
   // Recovery: when the host's authoritative grid disagrees with what this
   // healthy container would naturally propose, re-report our natural size. This
   // unsticks a session whose shared grid was latched to a stale/tiny value by a
@@ -1077,6 +1101,15 @@ function createXtermEntry(
   // host grid only changes once per resize, so a dropped reconcile never
   // re-fires and the session latches at the stale size.
   const reconcileWithHost = (hostCols: number, hostRows: number): void => {
+    // Mid-keyboard-transition the container is animating through intermediate
+    // heights, so measuring now would report a grid that is wrong by the time
+    // the glide ends. Defer through the same pending slot as an unmeasurable
+    // box: a transition implies ResizeObserver activity, whose settled fit
+    // completes the pending reconcile.
+    if (getNativeKeyboardState().transitioning) {
+      pendingHostGrid = { cols: hostCols, rows: hostRows };
+      return;
+    }
     const dims = proposeContainerDims();
     if (dims === null) {
       pendingHostGrid = { cols: hostCols, rows: hostRows };
@@ -1115,6 +1148,10 @@ function createXtermEntry(
     if (resizeDebounce !== null) {
       clearTimeout(resizeDebounce);
       resizeDebounce = null;
+    }
+    if (keyboardSettleCancel !== null) {
+      keyboardSettleCancel();
+      keyboardSettleCancel = null;
     }
     dataDisposable.dispose();
     searchResultsDisposable.dispose();

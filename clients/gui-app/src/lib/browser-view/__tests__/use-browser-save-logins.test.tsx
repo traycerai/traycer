@@ -1,13 +1,23 @@
 import type { ReactNode } from "react";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { afterEach, describe, expect, it } from "vitest";
-import { useBrowserSaveLogins } from "@/lib/browser-view/use-browser-save-logins";
+import {
+  focusManager,
+  QueryClient,
+  QueryClientProvider,
+} from "@tanstack/react-query";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  useBrowserSaveLogins,
+  useBrowserSaveLoginsEnabled,
+} from "@/lib/browser-view/use-browser-save-logins";
 import type { BrowserViewBridge } from "@traycer-clients/shared/platform/browser-view";
 import { FakeBrowserViewBridge } from "@/lib/browser-view/__tests__/fake-browser-view-bridge";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  focusManager.setFocused(undefined);
+});
 
 function Probe(props: { readonly bridge: BrowserViewBridge }) {
   const saveLogins = useBrowserSaveLogins(props.bridge);
@@ -19,6 +29,11 @@ function Probe(props: { readonly bridge: BrowserViewBridge }) {
       </button>
     </div>
   );
+}
+
+function ReadOnlyProbe(props: { readonly bridge: BrowserViewBridge }) {
+  const enabled = useBrowserSaveLoginsEnabled(props.bridge);
+  return <span data-testid="enabled">{String(enabled)}</span>;
 }
 
 /**
@@ -90,6 +105,41 @@ describe("useBrowserSaveLogins", () => {
     // refetch the failure triggers is what puts the toggle back.
     await waitFor(() => {
       expect(screen.getByTestId("enabled").textContent).toBe("true");
+    });
+  });
+
+  it("refetches on window focus even though the app's default client turns that off", async () => {
+    // Mirrors the app's own QueryClient (`lib/query-client.ts`), which sets
+    // `refetchOnWindowFocus: false` globally - so a fetch on refocus here can
+    // only be this query's own per-query override taking effect.
+    const client = new QueryClient({
+      defaultOptions: { queries: { refetchOnWindowFocus: false } },
+    });
+    const bridge = new FakeBrowserViewBridge({ saveLogins: true });
+    const getSaveLoginsSpy = vi.spyOn(bridge, "getSaveLogins");
+
+    render(
+      <QueryClientProvider client={client}>
+        <ReadOnlyProbe bridge={bridge} />
+      </QueryClientProvider>,
+    );
+    await waitFor(() => {
+      expect(screen.getByTestId("enabled").textContent).toBe("true");
+    });
+    expect(getSaveLoginsSpy).toHaveBeenCalledTimes(1);
+
+    // Leaving the window and coming back - TanStack's focus manager listens
+    // to `visibilitychange` on `document` in a real browser; driving it
+    // through `focusManager` directly is the same signal without depending on
+    // jsdom's `document.visibilityState`.
+    await act(async () => {
+      focusManager.setFocused(false);
+      focusManager.setFocused(true);
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(getSaveLoginsSpy).toHaveBeenCalledTimes(2);
     });
   });
 

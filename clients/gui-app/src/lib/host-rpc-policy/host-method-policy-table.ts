@@ -12,6 +12,7 @@ import type {
   ProviderManagedVersions,
 } from "@traycer/protocol/host/provider-schemas";
 import { chatPublicationDefinitiveReason } from "@/lib/chats/chat-publication-definitive";
+import { PROVIDER_PACK_DISCOVERY_CHECK_TIMEOUT_MS } from "@/lib/host-rpc-policy/provider-pack-discovery-check-timeout";
 import { RATE_LIMIT_USAGE_RESPONSE_TIMEOUT_MS } from "@/lib/rate-limits/rate-limit-timing";
 
 const SECOND_MS = 1_000;
@@ -580,6 +581,17 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // A toggle: two quick presses are on-then-off, and the second must not
+  // coalesce into the first or the human ends up with the opposite of what
+  // the switch shows. `fifo` keeps two IDENTICAL presses distinct; it cannot
+  // order an on against an off, because the value is part of the params and
+  // so of the queue key - those are two queues. The per-command ordering
+  // lives one layer up, in `useManagedCommandConfigure`'s mutation scope.
+  "managedCommand.configure": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Deliver takes `fifo` for a reason the other three do not have, and NOT the
   // one about distinct params. The coordinator keys queues by
   // [hostId, userId, method, params], so two Delivers naming different subsets
@@ -939,6 +951,18 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   // Updating the epic title persists user intent.
   "epic.updateTitle": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  // Re-running an interrupted major migration. `fifo`, not `latest`, because it
+  // is an ACTION with host-side effects and not a read: `latest` would let a
+  // second press supersede an in-flight retry, dropping a user-initiated
+  // recovery attempt. Never polled - the modal's Retry button is the only
+  // caller. Replaces the client frame the monolith carried; no GUI caller
+  // exists yet (the read cutover wires it), and this entry is here because the
+  // table must exactly match the registry.
+  "epic.retryMigration": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Granting access changes the epic's collaborator set.
   "epic.grantAccess": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   // Updating roles changes collaborator permissions.
@@ -985,9 +1009,36 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
-  "epic.listCommentThreads": { ...LATEST_SCHEDULING, poll: null },
+  // A FIXED cadence the caller gates, not an always-on one. Comment threads
+  // normally arrive pushed on the records lane, and while that lane is up this
+  // poll must stay quiet - the lane is fresher by construction and a cadence
+  // beside it would be pure waste. But the lane's rows are RETAINED when it
+  // drops, and `resolveArtifactCommentThreads` only hands precedence back once
+  // the poll has answered SINCE that drop - so with no cadence at all, a
+  // permanently dead lane on a focused window froze the surface on retained
+  // rows indefinitely, hiding remote additions, deletions and status changes.
+  // `useEpicCommentThreadsForClient` therefore passes `poll` = "the lane is
+  // down" (`commentThreadsShouldPoll`).
+  //
+  // A condition policy would be the wrong shape: `classify` reads the
+  // RESPONSE, and the lane's liveness is not in it.
+  //
+  // 15s matches that hook's `staleTime`, deliberately - inside the stale
+  // window a read is served from cache anyway, so a tighter interval would
+  // spend requests to learn nothing.
+  "epic.listCommentThreads": {
+    ...LATEST_SCHEDULING,
+    poll: { kind: "fixed", intervalMs: 15 * SECOND_MS },
+  },
   "epic.resolveArtifactByPath": { ...LATEST_SCHEDULING, poll: null },
   "epic.searchArtifacts": { ...LATEST_SCHEDULING, poll: null },
+  // The workspace context the decomposed lanes fetch at tab open. A read, so
+  // `latest`; `poll: null` because it is refetched on EVENTS - a reconnect, or
+  // a control-lane migration/permission signal - never on a cadence. No GUI
+  // caller exists yet (the read cutover wires it); this entry is here because
+  // the table must exactly match the registry, and the method landed there with
+  // the protocol lane contracts.
+  "epic.getWorkspaceContext": { ...LATEST_SCHEDULING, poll: null },
   // The cloud-chat READ surface. All five are reads, so `latest` - and the two
   // properties that follow from the coordinator keying on PARAMS are exactly
   // what this fan-out wants: a read of part A never supersedes a concurrent
@@ -1501,6 +1552,25 @@ export const HOST_METHOD_POLL_TABLE = {
   "providers.setPackPolicy": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // The on-demand "Check for updates" in the same popover. `fifo` for a
+  // different reason than the four above - it writes no durable state - but the
+  // same consequence: each press is answered with its own outcome, so two rapid
+  // taps must not coalesce into one answer. `poll: null` because this method IS
+  // the poll; a cadence here would be a second discovery ticker living in the
+  // client.
+  //
+  // `joinResponseTimeoutMs` here is a PERMISSION, not a budget. It buys nothing
+  // on its own: the host client rejects a `requestWithResponseTimeout` whose
+  // value is not exactly this number, and the extended budget only ever applies
+  // because `useProvidersRefreshPackDiscovery` passes the same constant through
+  // `useHostMutationWithResponseTimeout`. Under a plain `useHostMutation` the
+  // call would run on the transport default and this line would be inert - the
+  // gap `providers.refreshProfileStatus` above still has.
+  "providers.refreshPackDiscovery": {
+    mode: "fifo",
+    joinResponseTimeoutMs: PROVIDER_PACK_DISCOVERY_CHECK_TIMEOUT_MS,
     poll: null,
   },
   "worktree.listBindingsForEpic": { ...LATEST_SCHEDULING, poll: null },

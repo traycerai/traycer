@@ -1,9 +1,11 @@
 import { use, useEffect } from "react";
 import {
   clearBrowserViewSnapshot,
-  collectBrowserOverlaySurfaces,
+  listBrowserOverlayElements,
+  listBrowserOverlaySurfaces,
   listBrowserOverlayTiles,
   markBrowserViewSnapshotStale,
+  resolveBrowserOverlayMotionTargets,
   resolveBrowserOverlayOcclusionTargets,
   setBrowserViewSnapshot,
   subscribeBrowserOverlayLayout,
@@ -105,25 +107,52 @@ function BrowserOverlayCoordinator(props: {
     };
 
     const runScan = (): void => {
-      const targets = resolveBrowserOverlayOcclusionTargets(
-        collectBrowserOverlaySurfaces(document.body),
-        listBrowserOverlayTiles(),
-      );
+      const tiles = listBrowserOverlayTiles();
+      // Invariant 8: motion is a second freeze input to this same state
+      // machine, not a parallel one - a moving tile's synthetic owner runs
+      // through the exact per-owner occlude/release/ack path below, so it
+      // gets the capturePage stand-in, paint-ack and exit handshake for
+      // free. It never touches `resolveBrowserOverlayOcclusionTargets`
+      // (there is no overlay rect to intersect for a motion owner).
+      const targets = [
+        ...resolveBrowserOverlayOcclusionTargets(
+          listBrowserOverlaySurfaces(),
+          tiles,
+        ),
+        ...resolveBrowserOverlayMotionTargets(tiles),
+      ];
       const nextTargetsByOverlayId = new Map(
         targets.map((target) => [target.overlayId, target]),
       );
 
-      activeSignaturesByOverlayId.forEach((_signature, overlayId) => {
-        if (!nextTargetsByOverlayId.has(overlayId)) releaseOverlay(overlayId);
-      });
-
+      // Occlude before release: main-process release is synchronous while
+      // occlude is async, so releasing first can un-park a tile that another
+      // overlay in this same scan still covers for the duration of that
+      // overlay's occludeForOverlay round trip. A tile must stay parked
+      // across an ownership handoff between overlays, never revealed in
+      // between - so occlusion for the still-active overlays goes out before
+      // any release for the ones that dropped out.
       targets.forEach((target) => {
         if (
           activeSignaturesByOverlayId.get(target.overlayId) === target.signature
         ) {
           return;
         }
+        // Latched up front so the in-flight call is not repeated by the next
+        // scan, and dropped again whenever the occlusion did not take: a
+        // rejected call, or one that matched no tile in main (a scan racing
+        // tile teardown or rebind). Keeping the signature there would make
+        // that miss permanent - the tile would stay live under the overlay
+        // until the overlay closed.
         activeSignaturesByOverlayId.set(target.overlayId, target.signature);
+        const forgetSignature = (): void => {
+          if (
+            activeSignaturesByOverlayId.get(target.overlayId) ===
+            target.signature
+          ) {
+            activeSignaturesByOverlayId.delete(target.overlayId);
+          }
+        };
         void browserView
           .occludeForOverlay({
             overlayId: target.overlayId,
@@ -131,35 +160,78 @@ function BrowserOverlayCoordinator(props: {
           })
           .then((result) => {
             if (disposed) return;
+            // A PARTIAL match is a miss too: the tiles that did match are
+            // occluded and keep their frames, but the ones that did not stay
+            // live under the overlay. Dropping the signature is what lets the
+            // next layout notification (tile registration, rebind) retry them
+            // - keeping it latched would compute the same signature and
+            // return early until the overlay closed.
+            if (result.matchedCount < target.tiles.length) forgetSignature();
+            // Before the zero-match return, not after it: an occlusion that
+            // parked NOTHING can still have RESTORED something. Main runs its
+            // own diff-release on every `occlude()` call, so a tile this
+            // overlay used to cover and no longer targets comes back in
+            // `restoredTiles` even when every tile in the new set missed.
+            // Returning first would strand that tile under a stale stand-in.
+            applyRestoredTiles(result.restoredTiles);
+            if (result.matchedCount === 0) return;
             result.snapshots.forEach((snapshot) => {
               setBrowserViewSnapshot(snapshot);
             });
-            applyRestoredTiles(result.restoredTiles);
+            void ackWhenPainted(target.overlayId);
           })
-          .then(() => ackWhenPainted(target.overlayId))
-          .catch(ignoreError);
+          .catch((error: unknown) => {
+            forgetSignature();
+            ignoreError(error);
+          });
+      });
+
+      activeSignaturesByOverlayId.forEach((_signature, overlayId) => {
+        if (!nextTargetsByOverlayId.has(overlayId)) releaseOverlay(overlayId);
       });
     };
 
-    const unsubscribeLayout = subscribeBrowserOverlayLayout(scheduleScan);
     const invalidationSubscription = browserView.onSnapshotInvalidated(
       markBrowserViewSnapshotStale,
     );
-    const mutationObserver = new MutationObserver(scheduleScan);
-    mutationObserver.observe(document.body, {
-      subtree: true,
-      childList: true,
-      attributes: true,
-      attributeFilter: [
-        "aria-hidden",
-        "class",
-        "data-browser-overlay",
-        "data-browser-overlay-ignore",
-        "data-state",
-        "hidden",
-        "style",
-      ],
+    // Invariant 4 (ticket 04): a tile that WAS parked cannot answer
+    // `restoredTiles` synchronously - its stand-in stays mounted until this
+    // fires, on the un-parked view's first composited frame.
+    const restoreSubscription = browserView.onOverlayTileRestored((tile) => {
+      applyRestoredTiles([tile]);
     });
+    // Registration reports mount/unmount; it cannot report the predicate's
+    // own inputs (`class`, `data-state`, `hidden`, `style`) moving on an
+    // already-registered element without a React render (a Radix fade-out,
+    // a `hidden` toggle). So the observer stays, re-targeted to exactly the
+    // currently-registered elements on every layout change instead of the
+    // whole `document.body` subtree the old scan needed to find overlays at
+    // all.
+    const mutationObserver = new MutationObserver(scheduleScan);
+    const observeRegisteredElements = (): void => {
+      mutationObserver.disconnect();
+      listBrowserOverlayElements().forEach((element) => {
+        mutationObserver.observe(element, {
+          attributes: true,
+          attributeFilter: ["class", "data-state", "hidden", "style"],
+          // Descendant growth (e.g. sonner's inner `<ol>` mounting once a
+          // toast exists) must trigger a rescan too - a handful of
+          // registered elements, not `document.body`, so subtree is cheap
+          // here.
+          childList: true,
+          subtree: true,
+        });
+      });
+    };
+    // The layout channel also fires on every tile rect move (a drag), which
+    // re-observes a handful of already-registered elements each time - cheap
+    // (disconnect/observe do no DOM work of their own), so no separate
+    // registration-only channel is worth the extra plumbing.
+    const unsubscribeLayout = subscribeBrowserOverlayLayout(() => {
+      observeRegisteredElements();
+      scheduleScan();
+    });
+    observeRegisteredElements();
     window.addEventListener("resize", scheduleScan, { passive: true });
     window.addEventListener("scroll", scheduleScan, true);
     scheduleScan();
@@ -169,6 +241,7 @@ function BrowserOverlayCoordinator(props: {
       if (frameId !== null) window.cancelAnimationFrame(frameId);
       unsubscribeLayout();
       invalidationSubscription.dispose();
+      restoreSubscription.dispose();
       mutationObserver.disconnect();
       window.removeEventListener("resize", scheduleScan);
       window.removeEventListener("scroll", scheduleScan, true);

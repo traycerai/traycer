@@ -56,7 +56,6 @@ export function DesktopDialogHost(): ReactNode {
           if (!open) close();
         }}
         support={support}
-        openExternalLink={(url) => runnerHost.openExternalLink(url)}
       />
       <LogsChooserDialog
         open={activeDialog === "logs"}
@@ -104,6 +103,7 @@ export function DesktopDialogHost(): ReactNode {
       {activeDialog === "update-unsynced-confirm" &&
       appUpdates.bridge !== null ? (
         <ConfirmDestructiveDialog
+          blockedReason={null}
           open
           onOpenChange={(open) => {
             if (!open) close();

@@ -13,8 +13,7 @@ import type {
   BrowserViewDebugSnapshot,
   BrowserViewDebugSnapshotData,
   BrowserViewDetachSurface,
-  BrowserViewElectronTabCdpDispatch,
-  BrowserViewEnsureTab,
+  BrowserViewNativeTabStatusChange,
   BrowserViewStatus,
   BrowserViewElectronTabControl,
   BrowserViewNativeTabCapability,
@@ -25,6 +24,10 @@ import type {
 import type { PipCaptureIpcPayload } from "../../ipc-contracts/pip-capture-types";
 import { registrableDomainForUrl } from "@traycer/protocol/host/browser/registrable-domain";
 import { describeLogError, log } from "../app/logger";
+import {
+  isAllowedGuestNavigationUrl,
+  traceRefusedGuestNavigation,
+} from "./browser-guest-navigation";
 import type {
   BrowserSessionCertificateErrorChange,
   BrowserSessionDownloadChange,
@@ -32,6 +35,8 @@ import type {
   BrowserSessionProfileRequest,
 } from "./browser-session";
 import type {
+  BrowserViewElectronTabCdpDispatch,
+  BrowserViewEnsureTab,
   BrowserViewDevToolsWindow,
   BrowserViewNavigationHistory,
   BrowserViewPopupWebContents,
@@ -66,7 +71,6 @@ import { BrowserViewFind } from "./manager/browser-view-find";
 import {
   assertEntryCapturable,
   BrowserViewGeometry,
-  normalizeBounds,
 } from "./manager/browser-view-geometry";
 import { BrowserViewOverlay } from "./manager/browser-view-overlay";
 import { BrowserViewPipCapture } from "./manager/browser-view-pip-capture";
@@ -91,7 +95,6 @@ interface BrowserViewManagerOptions {
   ) => ManagedBrowserView;
   readonly getWindow: (windowId: string) => BrowserViewWindow | null;
   readonly createPopupWindowOptions: (
-    windowId: string,
     request: BrowserSessionProfileRequest,
   ) => BrowserWindowConstructorOptions;
   readonly createDevToolsWindow: (
@@ -107,12 +110,28 @@ interface BrowserViewManagerOptions {
     listener: (change: BrowserSessionCertificateErrorChange) => void,
   ) => () => void;
   readonly onWindowChange: (listener: () => void) => () => void;
+  /**
+   * Page zoom of the app windows. Tile rects arrive in renderer CSS pixels,
+   * so every native rect is derived from the stored CSS rect times this.
+   */
+  readonly getZoomFactor: () => number;
+  /** Fires after the app windows have been re-zoomed. */
+  readonly onZoomChange: (listener: () => void) => () => void;
   readonly notifyHostWindowRendererReset: (windowId: string) => void;
   readonly send: BrowserViewSend;
+  /**
+   * Applies the host's storage seed for one guest. Takes the whole ensure-tab
+   * input rather than just the state, because the write is validated against
+   * the tab's OWN origin and attributed to the host that asked for it.
+   *
+   * Answers the part of the seed the JAR does not hold - the localStorage the
+   * caller may install as a document script - narrowed to what survived that
+   * validation, or `null` when nothing may be seeded at all.
+   */
   readonly seedStorageState: (
-    storageState: BrowserStorageState | null,
+    input: BrowserViewEnsureTab,
     webContents: ManagedBrowserView["webContents"],
-  ) => Promise<void>;
+  ) => Promise<BrowserStorageState | null>;
   readonly observePrimaryProfileOrigin: (
     url: string,
     webContents: ManagedBrowserView["webContents"],
@@ -149,9 +168,13 @@ export class BrowserViewManager {
     request: BrowserSessionProfileRequest,
   ) => void;
   private readonly offWindowChange: () => void;
+  private readonly offZoomChange: () => void;
   private readonly offDownloadChange: () => void;
   private readonly offCertificateError: () => void;
   private readonly entries = new BrowserViewEntryRegistry<BrowserViewEntry>();
+  private readonly nativeTabStatusListeners = new Set<
+    (change: BrowserViewNativeTabStatusChange) => void
+  >();
   private readonly geometry: BrowserViewGeometry;
   private readonly popups: BrowserViewPopups;
   private readonly debugSessions: BrowserViewDebugSessions;
@@ -174,6 +197,7 @@ export class BrowserViewManager {
     this.releaseSessionStorage = options.releaseSessionStorage;
     this.geometry = new BrowserViewGeometry({
       getWindow: options.getWindow,
+      getZoomFactor: options.getZoomFactor,
       boundsStreamLogIntervalMs: options.boundsStreamLogIntervalMs,
     });
     this.debugSessions = new BrowserViewDebugSessions({
@@ -198,6 +222,7 @@ export class BrowserViewManager {
     this.chords = new BrowserViewChords({
       getWindow: options.getWindow,
       hostPlatform: options.hostPlatform,
+      send: options.send,
     });
     this.windows = new BrowserViewWindowAttachment({
       entries: this.entries,
@@ -205,6 +230,9 @@ export class BrowserViewManager {
       geometry: this.geometry,
       annotations: this.annotations,
       notifyHostWindowRendererReset: options.notifyHostWindowRendererReset,
+      emitStatus: (entry) => {
+        this.emitStatus(entry);
+      },
       closeEntry: (entry) => {
         void this.closeEntry(entry);
       },
@@ -237,6 +265,14 @@ export class BrowserViewManager {
       emitStatus: (entry) => {
         this.emitStatus(entry);
       },
+      emitFocus: (entry) => {
+        if (entry.surface === null) return;
+        this.send(
+          entry.surface.windowId,
+          RunnerHostEvent.browserViewTileFocused,
+          toTileKey(entry.surface),
+        );
+      },
       closeEntry: (entry) => {
         void this.closeEntry(entry);
       },
@@ -256,6 +292,16 @@ export class BrowserViewManager {
     });
     this.offWindowChange = options.onWindowChange(() => {
       this.windows.reconcileVisibility(this.pip);
+    });
+    // Zoom rescales the renderer's CSS pixel, so every stored tile rect now
+    // maps to a different native rect. Re-deriving here is authoritative:
+    // the renderer's own resize-driven re-send is asynchronous and may
+    // arrive before or after this, and either order lands on the same rect.
+    this.offZoomChange = options.onZoomChange(() => {
+      for (const entry of Array.from(this.entries.surfaceValues())) {
+        this.geometry.applyBounds(entry);
+        this.geometry.applyVisibility(entry);
+      }
     });
     this.offDownloadChange = options.onDownloadChange((change) => {
       this.handleDownloadChange(change);
@@ -394,8 +440,17 @@ export class BrowserViewManager {
 
   updateBounds(windowId: string, input: BrowserViewBoundsUpdate): void {
     const entry = this.entries.getTile(windowId, input);
-    if (entry === undefined) return;
-    entry.bounds = normalizeBounds(input.bounds);
+    if (entry === undefined) {
+      // A renderer that measures before its surface is (re)bound loses its
+      // only send - the rAF loop dedupes the identical rect forever after.
+      log.debug("[browser-view] bounds update for an unbound surface", {
+        surfaceKeyId: entryKeyId({ ...input, windowId }),
+      });
+      return;
+    }
+    // Stored exactly as the renderer measured it (CSS pixels); rounding and
+    // the CSS -> DIP conversion belong to the apply seam in geometry.
+    entry.bounds = input.bounds;
     this.geometry.applyBounds(entry);
     this.geometry.applyVisibility(entry);
   }
@@ -445,7 +500,11 @@ export class BrowserViewManager {
       throw new Error("Browser view tile is not available for capture");
     }
     const surface = requireSurface(entry);
-    assertEntryCapturable(entry, this.getWindow(surface.windowId));
+    assertEntryCapturable(
+      entry,
+      this.getWindow(surface.windowId),
+      this.geometry.zoomFactor(),
+    );
     const bytes = Buffer.from(
       (await entry.view.webContents.capturePage()).toPNG(),
     );
@@ -512,6 +571,26 @@ export class BrowserViewManager {
         },
       };
     }
+    // The fourth navigation door, and the quietest: `cdpNavigate` reaches
+    // `Page.navigate` directly, so it bypasses both `navigate()` and
+    // `will-navigate`. The same predicate answers it - a curated command is
+    // still a navigation, and a guest's scheme policy does not depend on who
+    // asked.
+    if (
+      input.command.kind === "cdpNavigate" &&
+      !isAllowedGuestNavigationUrl(input.command.url)
+    ) {
+      traceRefusedGuestNavigation(input.command.url, "cdp-navigate");
+      return {
+        kind: input.command.kind,
+        ok: false,
+        error: {
+          kind: "cdp_error",
+          message: "Browser tabs can only open http, https or about:blank.",
+          code: null,
+        },
+      };
+    }
     const debugSession = this.debugSessions.ensure(entry);
     await debugSession.enableAfterCommit().catch(() => undefined);
     return debugSession.dispatch(input.target, input.command);
@@ -519,6 +598,7 @@ export class BrowserViewManager {
 
   dispose(): void {
     this.offWindowChange();
+    this.offZoomChange();
     this.offDownloadChange();
     this.offCertificateError();
     this.geometry.dispose();
@@ -636,9 +716,27 @@ export class BrowserViewManager {
     entry.lastAppliedBounds = null;
     entry.rendererResetPending = false;
     this.windows.detachResetListenerIfUnused(surface.windowId);
+    // LAST, once every field the reading depends on has moved: `viewed` is
+    // read off the entry now (H10), so a detach that emitted nothing would
+    // leave the host believing a tile is still showing this guest. `attachSurface`
+    // emits for the same reason on the way in.
+    this.emitStatus(entry);
   }
 
+  /**
+   * The one funnel for every navigation this process asks a guest to perform -
+   * the renderer's `navigate` control action and the initial navigation the
+   * host's accepted tab starts with - so the scheme gate sits here rather than
+   * at either caller.
+   *
+   * It refuses BEFORE any entry state moves: a blocked target must not leave
+   * the tile reporting `loading` for a page that will never commit.
+   */
   private async navigate(entry: BrowserViewEntry, url: string): Promise<void> {
+    if (!isAllowedGuestNavigationUrl(url)) {
+      traceRefusedGuestNavigation(url, "navigate");
+      throw new Error("Browser tabs can only open http, https or about:blank.");
+    }
     this.annotations.end(entry, "navigation");
     entry.requestedUrl = url;
     entry.status = "loading";
@@ -855,21 +953,40 @@ export class BrowserViewManager {
     if (webContents === null) return;
     const readings = readNavigationReadings(webContents);
     if (readings === null) return;
+    const change: BrowserViewNativeTabStatusChange = {
+      ...entry.identity.key,
+      registrationId: entry.identity.registrationId,
+      url: entry.currentUrl,
+      title: entry.currentTitle === "" ? null : entry.currentTitle,
+      status: entry.status,
+      reason: entry.statusReason,
+      canGoBack: readings.canGoBack,
+      canGoForward: readings.canGoForward,
+      zoomPercent: readings.zoomPercent,
+      viewed: entry.surface !== null && entry.desiredVisible,
+    };
     this.send(
       entry.identity.lifecycleWindowId,
       RunnerHostEvent.browserViewNativeTabStatusChange,
-      {
-        ...entry.identity.key,
-        registrationId: entry.identity.registrationId,
-        url: entry.currentUrl,
-        title: entry.currentTitle === "" ? null : entry.currentTitle,
-        status: entry.status,
-        reason: entry.statusReason,
-        canGoBack: readings.canGoBack,
-        canGoForward: readings.canGoForward,
-        zoomPercent: readings.zoomPercent,
-      },
+      change,
     );
+    // The same reading, to the process that owns the host stream. It becomes
+    // `electronTabState` there (H10); the renderer's copy above is tile chrome.
+    for (const listener of this.nativeTabStatusListeners) listener(change);
+  }
+
+  /**
+   * Main-side subscription to the same status readings the renderer gets.
+   * Returns its own disposer, so a stream that closes stops hearing without
+   * touching another stream's subscription.
+   */
+  onNativeTabStatusChange(
+    listener: (change: BrowserViewNativeTabStatusChange) => void,
+  ): () => void {
+    this.nativeTabStatusListeners.add(listener);
+    return () => {
+      this.nativeTabStatusListeners.delete(listener);
+    };
   }
 
   private readLiveWebContents(
