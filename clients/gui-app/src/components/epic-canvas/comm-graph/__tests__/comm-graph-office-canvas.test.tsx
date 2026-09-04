@@ -501,11 +501,8 @@ describe("CommGraphOfficeCanvas", () => {
  * rest of the file keeps the shared no-op.
  */
 class ControllableResizeObserver implements ResizeObserver {
-  readonly callback: ResizeObserverCallback;
-
   constructor(callback: ResizeObserverCallback) {
-    this.callback = callback;
-    latestControllableResizeObserver = this;
+    latestResizeCallback = callback;
   }
 
   observe(): void {}
@@ -513,14 +510,21 @@ class ControllableResizeObserver implements ResizeObserver {
   disconnect(): void {}
 }
 
-let latestControllableResizeObserver: ControllableResizeObserver | null = null;
+let latestResizeCallback: ResizeObserverCallback | null = null;
+
+/** Handed to the callback as its observer argument; neither renderer reads it. */
+const INERT_RESIZE_OBSERVER: ResizeObserver = {
+  observe(): void {},
+  unobserve(): void {},
+  disconnect(): void {},
+};
 
 function fireResizeObserverCallback(): void {
-  const observer = latestControllableResizeObserver;
-  if (observer === null) throw new Error("ResizeObserver was not created");
+  const callback = latestResizeCallback;
+  if (callback === null) throw new Error("ResizeObserver was not created");
   // `applyCanvasSize` reads `container.getBoundingClientRect()` itself and
   // ignores the entry it is handed, so an empty list is enough to invoke it.
-  observer.callback([], observer);
+  callback([], INERT_RESIZE_OBSERVER);
 }
 
 /**
@@ -576,7 +580,7 @@ describe("resizing the tile container", () => {
 
   beforeEach(() => {
     originalResizeObserver = globalThis.ResizeObserver;
-    latestControllableResizeObserver = null;
+    latestResizeCallback = null;
     Object.defineProperty(globalThis, "ResizeObserver", {
       configurable: true,
       writable: true,

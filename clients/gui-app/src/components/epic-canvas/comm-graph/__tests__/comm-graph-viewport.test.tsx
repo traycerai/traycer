@@ -411,11 +411,8 @@ describe("CommGraphCanvas viewport", () => {
  * rest of the file keeps the shared no-op.
  */
 class ControllableResizeObserver implements ResizeObserver {
-  readonly callback: ResizeObserverCallback;
-
   constructor(callback: ResizeObserverCallback) {
-    this.callback = callback;
-    latestControllableResizeObserver = this;
+    latestResizeCallback = callback;
   }
 
   observe(): void {}
@@ -423,7 +420,14 @@ class ControllableResizeObserver implements ResizeObserver {
   disconnect(): void {}
 }
 
-let latestControllableResizeObserver: ControllableResizeObserver | null = null;
+let latestResizeCallback: ResizeObserverCallback | null = null;
+
+/** Handed to the callback as its observer argument; neither renderer reads it. */
+const INERT_RESIZE_OBSERVER: ResizeObserver = {
+  observe(): void {},
+  unobserve(): void {},
+  disconnect(): void {},
+};
 
 /** A `ResizeObserverEntry` carrying only the fields the effect reads. */
 function resizeEntry(width: number, height: number): ResizeObserverEntry {
@@ -438,9 +442,9 @@ function resizeEntry(width: number, height: number): ResizeObserverEntry {
 }
 
 function fireResize(width: number, height: number): void {
-  const observer = latestControllableResizeObserver;
-  if (observer === null) throw new Error("ResizeObserver was not created");
-  observer.callback([resizeEntry(width, height)], observer);
+  const callback = latestResizeCallback;
+  if (callback === null) throw new Error("ResizeObserver was not created");
+  callback([resizeEntry(width, height)], INERT_RESIZE_OBSERVER);
 }
 
 describe("CommGraphCanvas viewport resize", () => {
@@ -448,7 +452,7 @@ describe("CommGraphCanvas viewport resize", () => {
 
   beforeEach(() => {
     originalResizeObserver = globalThis.ResizeObserver;
-    latestControllableResizeObserver = null;
+    latestResizeCallback = null;
     Object.defineProperty(globalThis, "ResizeObserver", {
       configurable: true,
       writable: true,
