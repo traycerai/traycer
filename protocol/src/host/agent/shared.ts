@@ -1039,6 +1039,58 @@ export type GetAgentTranscriptResponse = z.infer<
 >;
 
 /**
+ * `agent.getNativeSessionBinding@1.0` - read the provider-native session id
+ * currently bound to one local agent without exposing provider-account or
+ * transcript data.
+ *
+ * The request carries the calling agent explicitly so the host can apply the
+ * same epic, sender, and account authorization used by the rest of the
+ * agent-to-agent surface. `agentId` is an exact Traycer agent id, not a prefix.
+ * The host MUST refuse a caller-owned target bound to another host with
+ * `E_AGENT_NOT_LOCAL`; absent and foreign-account targets both remain
+ * `E_AGENT_NOT_FOUND` so this read cannot become an account-existence oracle.
+ */
+export const getAgentNativeSessionBindingRequestSchema = z.object({
+  epicId: z.string().min(1),
+  senderAgentId: z.string().min(1),
+  agentId: z.string().min(1),
+});
+export type GetAgentNativeSessionBindingRequest = z.infer<
+  typeof getAgentNativeSessionBindingRequestSchema
+>;
+
+/**
+ * A deliberately narrow projection, rather than a persisted chat/TUI record:
+ * account email/UUID, profile label, config or credential paths, environment
+ * overrides, auth state, tokens, workspaces, model settings, and transcript
+ * content must never cross this boundary.
+ *
+ * `harnessId` is intentionally an open non-empty string. It remains the host's
+ * canonical harness id, but consumers only need it as an opaque join key and a
+ * new harness must not force a new RPC major solely to widen an enum.
+ *
+ * `harnessSessionId` normalizes a GUI active-chain `sessionId` and a TUI
+ * record's `harnessSessionId`. `null` means the host has not observed a native
+ * session for the returned configured harness/profile yet. When non-null,
+ * `harnessId` and `profileSelection` describe the session that minted that
+ * exact id, not possibly-newer agent settings. A GUI resolver therefore emits
+ * its active chain only while that chain agrees with the current settings;
+ * otherwise it returns those settings with a null session id. This is the
+ * current binding, not an immutable one-to-one lifetime mapping: GUI agents
+ * can acquire a new native session after a harness/profile change.
+ */
+export const getAgentNativeSessionBindingResponseSchema = z.object({
+  agentId: z.string().min(1),
+  surface: z.enum(["gui", "tui"]),
+  harnessId: z.string().min(1),
+  profileSelection: concreteProfileSelectionSchema,
+  harnessSessionId: z.string().min(1).nullable(),
+});
+export type GetAgentNativeSessionBindingResponse = z.infer<
+  typeof getAgentNativeSessionBindingResponseSchema
+>;
+
+/**
  * `agent.stop@1.0` - halt a running agent and, optionally, the subtree it
  * delegated to. Addresses a single agent by id like the rest of this
  * family; the fan-out is the resolver's job, not the caller's:

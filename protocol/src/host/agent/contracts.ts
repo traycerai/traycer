@@ -20,6 +20,8 @@ import {
   agentSelectionGuideGlobalSetResponseSchema,
   getAgentTranscriptRequestSchema,
   getAgentTranscriptResponseSchema,
+  getAgentNativeSessionBindingRequestSchema,
+  getAgentNativeSessionBindingResponseSchema,
   listHarnessModelsRequestSchemaV10,
   listHarnessModelsRequestSchemaV20,
   listHarnessModelsResponseSchema,
@@ -55,9 +57,10 @@ import {
 // `agent.sendMessage` is the fire-and-forget hand-off path (no streaming -
 // any reply travels back as a separate `agent.sendMessage`);
 // `agent.getTranscript` flattens an agent's conversation into XML-tagged
-// text; and `agent.stop` halts an agent (and optionally its delegated
-// subtree). Schema docs in `agent/shared.ts` are the authority on the field
-// semantics.
+// text; `agent.getNativeSessionBinding` projects the current local
+// provider-session join; and `agent.stop` halts an agent (and optionally its
+// delegated subtree). Schema docs in `agent/shared.ts` are the authority on
+// the field semantics.
 
 export const agentCreateV10 = defineRpcContract({
   method: "agent.create",
@@ -1019,6 +1022,18 @@ export const agentGetTranscriptV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: getAgentTranscriptRequestSchema,
   responseSchema: getAgentTranscriptResponseSchema,
+});
+
+/**
+ * Brand-new v1.0 read method. It stays outside the released method-name floor,
+ * so an old host omits the capability and the caller receives per-call host
+ * upgrade guidance instead of a fatal handshake mismatch.
+ */
+export const agentGetNativeSessionBindingV10 = defineRpcContract({
+  method: "agent.getNativeSessionBinding",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: getAgentNativeSessionBindingRequestSchema,
+  responseSchema: getAgentNativeSessionBindingResponseSchema,
 });
 
 export const agentStopV10 = defineRpcContract({

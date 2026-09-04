@@ -20,6 +20,7 @@ import {
   agentCreateUpgradeV10ToV20,
   agentCreateUpgradeV20ToV30,
   agentGetTranscriptV10,
+  agentGetNativeSessionBindingV10,
   agentListHarnessModelsDowngradeV2ToV1,
   agentListHarnessModelsV10,
   agentListHarnessModelsV20,
@@ -5569,6 +5570,22 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       },
       downgradePathsFromLatest: {},
     },
+  },
+  // Public, local-only join from a Traycer agent id to the provider-native
+  // session currently backing it. New optional method: old hosts simply omit
+  // it and callers receive E_HOST_UNSUPPORTED for this call only.
+  "agent.getNativeSessionBinding": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentGetNativeSessionBindingV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
   },
   // Agent role claims. Non-floor, so each declares its missing-peer behavior:
   // an old host simply does not advertise them and the caller gets

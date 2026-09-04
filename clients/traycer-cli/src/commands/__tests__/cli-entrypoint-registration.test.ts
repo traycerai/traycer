@@ -1266,6 +1266,7 @@ describe("traycer CLI entrypoint registration", () => {
       const help = agent.helpInformation();
       expect(help).toContain("list [options]");
       expect(help).toContain("transcript [options]");
+      expect(help).toContain("binding [options]");
       expect(help).not.toContain("create [options]");
       expect(help).not.toContain("selection-guide [options]");
       expect(help).not.toContain("list-harnesses [options]");

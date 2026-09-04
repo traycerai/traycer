@@ -25,6 +25,7 @@ import { buildCliMarkSourceCommand } from "./commands/cli-mark-source";
 import { buildCliReAnchorCommand } from "./commands/cli-re-anchor";
 import { buildCliUpgradeCommand } from "./commands/cli-upgrade";
 import { buildAgentArchiveCommand } from "./commands/agent-archive";
+import { buildAgentBindingCommand } from "./commands/agent-binding";
 import { buildAgentConfigureCommand } from "./commands/agent-configure";
 import { buildAgentCreateCommand } from "./commands/agent-create";
 import { buildAgentForkCommand } from "./commands/agent-fork";
@@ -2866,6 +2867,24 @@ function registerAgentCommands(
         expectReply: opts.expectReply === true,
         responseId:
           typeof opts.responseId === "string" ? opts.responseId : null,
+      }),
+  );
+
+  withRunner(
+    agent
+      .command("binding")
+      .description(
+        "Print the current provider-native session binding for one local agent",
+      )
+      .requiredOption(
+        "--agent-id <id>",
+        "Full agent id whose native session binding to read",
+      ),
+    (opts) =>
+      buildAgentBindingCommand({
+        epicId: null,
+        senderAgentId: null,
+        agentId: typeof opts.agentId === "string" ? opts.agentId : "",
       }),
   );
 
