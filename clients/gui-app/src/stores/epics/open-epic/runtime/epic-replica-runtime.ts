@@ -1016,10 +1016,16 @@ export function createEpicReplicaRuntime(
    * the caller owns the sockets, because a replacement closes BEFORE it
    * discards and opens AFTER, while a targeted authority reset does not close
    * at all.
+   *
+   * "Does not close at all" is why the control plane takes
+   * `beginAuthorityReplacementCycle` here and NOT `beginFreshCycle`: the
+   * sessions stay open, and an open `StreamSession` never re-reports `open`,
+   * so a leg reset to `connecting` on this path had nothing left to move it
+   * and the pill sat on "Still reconnecting…" over a healthy link.
    */
   function resetAllPlanes(cause: ReplicaResetCause): void {
     records.clearUnsyncedQueue();
-    control.beginFreshCycle();
+    control.beginAuthorityReplacementCycle();
     records.replaceReplica();
     records.resetCoverage();
     laneArm?.reset(cause);
@@ -1057,9 +1063,9 @@ export function createEpicReplicaRuntime(
    *    the records plane's other half - so dropping it would leave the arm
    *    holding the old rows and watermark while the runtime's records plane is
    *    empty. Half a reseed is worse than none.
-   *  - `control.beginFreshCycle()` and `rooms.reset(cause)` GO. They are the
-   *    control snapshot and the bodies, and both are exactly what the state
-   *    lane's contract says a `resumeTooOld` keeps.
+   *  - `control.beginAuthorityReplacementCycle()` and `rooms.reset(cause)`
+   *    GO. They are the control snapshot and the bodies, and both are exactly
+   *    what the state lane's contract says a `resumeTooOld` keeps.
    */
   function resetStateRecordsOnly(cause: ReplicaResetCause): void {
     delivery.batch(() => {
