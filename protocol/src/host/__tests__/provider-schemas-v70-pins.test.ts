@@ -212,18 +212,19 @@ describe("the v7-era schemas are distinct objects from the canonical live ones",
   // fails here until someone states, in this file, which side the new id
   // belongs on.
   it("every live provider id is either in the v7.0 set or a stated post-v7.0 id", () => {
-    // THE STATED DECISION, which is what this test is for. `reasonix` is the
-    // first id added since the v1.2.0 tags shipped `providers.list@7.0`, and it
-    // belongs on the LIVE side only: a major-7 caller cannot represent it, so
-    // `providersListDowngradeV8ToV7` filters its row out and that caller simply
-    // does not see the provider. Dropping is the right answer here - the
-    // alternative, letting the id ride a released line, is the omp/huggingface
-    // incident - but it has to be a decision recorded here, not a diff nobody
-    // read.
+    // THE STATED DECISION, which is what this test is for. `reasonix` was the
+    // first id added after the v1.2.0 tags shipped `providers.list@7.0`, and
+    // `antigravity` is the second; each belongs on the LIVE side only: a
+    // major-7 caller cannot represent them, so
+    // `providersListDowngradeV8ToV7` filters their rows out and that caller
+    // simply does not see the provider. Dropping is the right answer here -
+    // the alternative, letting an id ride a released line, is the
+    // omp/huggingface incident - but it has to be a decision recorded here,
+    // not a diff nobody read.
     //
     // Add the next id to this list at the same time you add it to
     // `providerIdSchema`, and only after deciding it cannot ride major 7.
-    const POST_V70_PROVIDER_IDS = ["reasonix"] as const;
+    const POST_V70_PROVIDER_IDS = ["reasonix", "antigravity"] as const;
     expect([...providerIdSchema.options].sort()).toEqual(
       [...providerIdSchemaV70.options, ...POST_V70_PROVIDER_IDS].sort(),
     );

@@ -1,5 +1,6 @@
 import {
   AmpIcon,
+  AntigravityIcon,
   ClaudeAIIcon,
   CodexIcon,
   CopilotIcon,
@@ -35,6 +36,7 @@ export const PROVIDER_ICON_CONFIG: Record<ProviderId, HarnessIconConfig> = {
   traycer: { Icon: TraycerIcon, className: "text-foreground" },
   openrouter: { Icon: OpenRouterIcon, className: "text-foreground" },
   huggingface: { Icon: HuggingFaceIcon, className: "text-foreground" },
+  antigravity: { Icon: AntigravityIcon, className: "text-foreground" },
   cursor: { Icon: CursorIcon, className: "text-foreground" },
   grok: { Icon: GrokIcon, className: "text-foreground" },
   qwen: { Icon: QwenIcon, className: "text-foreground" },

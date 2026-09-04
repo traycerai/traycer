@@ -87,6 +87,7 @@ const PROVIDER_SHARES_SKILLS_AND_PLUGINS: Record<
   traycer: false,
   openrouter: false,
   huggingface: false,
+  antigravity: false,
   grok: false,
   qwen: false,
   kiro: false,

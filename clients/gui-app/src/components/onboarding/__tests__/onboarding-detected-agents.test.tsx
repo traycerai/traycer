@@ -273,6 +273,7 @@ describe("OnboardingDetectedAgents", () => {
       "Traycer Inference",
       "OpenRouter",
       "Hugging Face",
+      "Antigravity",
       "Droid",
       "Cursor",
       "Copilot",

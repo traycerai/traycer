@@ -878,8 +878,8 @@ export const agentListDowngradeV8ToV7 = defineDowngradePath<
   from: { major: 8, minor: 0 },
   to: { major: 7, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
-  // Drop Reasonix agents so an already-shipped v7.0 client's strict decode
-  // never sees one.
+  // Drop Reasonix/Antigravity agents so an already-shipped v7.0 client's strict
+  // decode never sees one.
   downgradeResponse: (response) => ({
     ok: true,
     value: listAgentsResponseSchemaV70.parse({
@@ -898,8 +898,8 @@ export const agentListDowngradeV8ToV6 = defineDowngradePath<
   from: { major: 8, minor: 0 },
   to: { major: 6, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
-  // Drop Hugging Face/Reasonix agents so an already-shipped v6.0 client's
-  // strict decode never sees one.
+  // Drop Hugging Face/Reasonix/Antigravity agents so an already-shipped v6.0
+  // client's strict decode never sees one.
   downgradeResponse: (response) => ({
     ok: true,
     value: listAgentsResponseSchemaV60.parse({
@@ -918,8 +918,8 @@ export const agentListDowngradeV8ToV5 = defineDowngradePath<
   from: { major: 8, minor: 0 },
   to: { major: 5, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
-  // Drop omp/Hugging Face/Reasonix agents so an already-shipped v5.0 client's
-  // strict decode never sees one.
+  // Drop omp/Hugging Face/Reasonix/Antigravity agents so an already-shipped
+  // v5.0 client's strict decode never sees one.
   downgradeResponse: (response) => ({
     ok: true,
     value: listAgentsResponseSchemaV50.parse({
@@ -938,8 +938,8 @@ export const agentListDowngradeV8ToV4 = defineDowngradePath<
   from: { major: 8, minor: 0 },
   to: { major: 4, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
-  // Drop Hermes/omp/Hugging Face/Reasonix agents so an already-shipped v4.0
-  // client's strict decode never sees one.
+  // Drop Hermes/omp/Hugging Face/Reasonix/Antigravity agents so an
+  // already-shipped v4.0 client's strict decode never sees one.
   downgradeResponse: (response) => ({
     ok: true,
     value: listAgentsResponseSchemaV40.parse({
@@ -958,7 +958,7 @@ export const agentListDowngradeV8ToV3 = defineDowngradePath<
   from: { major: 8, minor: 0 },
   to: { major: 3, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
-  // Drop Devin/Pi/Hermes/omp/Hugging Face/Reasonix agents so an
+  // Drop Devin/Pi/Hermes/omp/Hugging Face/Reasonix/Antigravity agents so an
   // already-shipped v3.0 client's strict decode never sees one.
   downgradeResponse: (response) => ({
     ok: true,

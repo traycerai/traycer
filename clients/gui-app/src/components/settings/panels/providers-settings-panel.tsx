@@ -216,6 +216,8 @@ const PROVIDER_DESCRIPTIONS: Record<ProviderId, string> = {
     "OpenRouter - OpenAI-compatible gateway authenticated with your OpenRouter API key.",
   huggingface:
     "Hugging Face - OpenAI-compatible router authenticated with your Hugging Face token.",
+  antigravity:
+    "Antigravity agent - Google's coding CLI via Google account login.",
   grok: "Grok agent - xAI's coding CLI via your SuperGrok / X subscription.",
   qwen: "Qwen Code CLI agent.",
   kiro: "Kiro agent - Kiro's coding CLI via login or KIRO_API_KEY.",
