@@ -11,6 +11,7 @@ import {
   providerPackPreparingLabel,
   type ProviderPackPreparing,
 } from "@/components/providers/provider-pack-readiness";
+import type { ProviderTerminalLoginScopeSupport } from "@/hooks/providers/use-provider-terminal-login-scope-support";
 
 /**
  * What the picker says and does for a provider whose sign-in has to happen in
@@ -60,6 +61,13 @@ export interface ProviderSetupGuidance {
    */
   readonly noSurfaceStep: string;
   /**
+   * The first step on a start page whose host can open the terminal only
+   * from an Epic (it negotiated the pre-scope `providers.startTerminalLogin`
+   * major), naming that route. Distinct from `noSurfaceStep`, which also
+   * names the start page - the one surface this host cannot open it from.
+   */
+  readonly epicOnlyStep: string;
+  /**
    * The command a self-installed CLI runs to do the same thing; rendered as
    * code, always beside the caveat that it targets whatever binary and home
    * that shell resolves. `null` when the renderer has nothing truthful to
@@ -85,6 +93,8 @@ const PROVIDER_SETUP_GUIDANCE: {
     ],
     noSurfaceStep:
       "Choose “Set up in terminal” from a chat's model picker or the start page's. It opens Reasonix's setup wizard on the host that composer runs on.",
+    epicOnlyStep:
+      "Open a chat and choose “Set up in terminal” from its model picker. This host's version can open Reasonix's setup wizard from a chat, but not from the start page.",
     manualCommand: "reasonix setup",
     terminalActionLabel: "Set up in terminal",
     terminalHint:
@@ -117,6 +127,7 @@ export function defaultTerminalSignInGuidance(
     ],
     noSurfaceStep:
       "Choose “Sign in from a terminal” from a chat's model picker or the start page's. It opens the sign-in on the host that composer runs on.",
+    epicOnlyStep: `Open a chat and choose “Sign in from a terminal” from its model picker. This host's version can open the ${name} sign-in from a chat, but not from the start page.`,
     manualCommand: null,
     terminalActionLabel: "Sign in from a terminal",
     terminalHint: `${name} prints a sign-in code that only exists in the terminal. Complete the sign-in there, then use Refresh above.`,
@@ -201,8 +212,21 @@ export type ProviderSetupActionPlacement =
   | "here"
   /** A button, but on another surface (a fork dialog's picker). */
   | "other-surface"
-  /** No button anywhere on this host - the manual command is the route. */
+  /**
+   * No button this copy can vouch for: the host declares no terminal
+   * sign-in, or there is no host to ask / its manifest is not recorded yet.
+   * The manual command is the route; no claim is made about the machine.
+   */
   | "unsupported-host"
+  /**
+   * A button on this host, but only in an Epic: the host negotiated the
+   * pre-scope `providers.startTerminalLogin` major, which cannot carry the
+   * scope the start page needs. The steps lead with that route - the
+   * post-action steps alone would tell the user to finish in a terminal
+   * nothing here can open, and the generic guidance has no manual command to
+   * fall back on.
+   */
+  | "unsupported-scope"
   /**
    * A button here in principle, but the provider's pack cannot spawn yet. The
    * preparing label stands where the button would; the steps read as they do
@@ -215,23 +239,28 @@ export type ProviderSetupActionPlacement =
  * so the auth line and the model list cannot classify the same state
  * differently - the reason they were wrong about old hosts in the first place.
  *
- * `scopeSupported` is the third because the first two cannot see it: the
+ * `scopeSupport` is the third because the first two cannot see it: the
  * provider row says this provider HAS a terminal sign-in, and the surface says
  * where a button would go, but neither knows whether this host's negotiated
  * `providers.startTerminalLogin` can carry the scope that surface needs. On the
  * release just before the scope bump it cannot, and only for the landing
  * surface - so the same provider on the same host is `here` in an Epic and
- * `unsupported-host` on the start page. See
+ * `unsupported-scope` on the start page. See
  * `useProviderTerminalLoginScopeSupported`.
  */
 export function providerSetupActionPlacement(
   setup: ProviderTerminalSetup,
   hasSurface: boolean,
-  scopeSupported: boolean,
+  scopeSupport: ProviderTerminalLoginScopeSupport,
 ): ProviderSetupActionPlacement {
   // Permanent reasons first: a pack that will finish downloading does not
   // change a host that can never carry this scope.
-  if (!setup.canStartTerminal || !scopeSupported) return "unsupported-host";
+  if (!setup.canStartTerminal) return "unsupported-host";
+  // `unsupported-scope` leads the steps with "this host's version can open
+  // the sign-in from a chat" - a claim only a RECORDED pre-scope manifest
+  // proves. An unknown manifest, or no host at all, gets the claim-free copy.
+  if (scopeSupport === "unknown") return "unsupported-host";
+  if (scopeSupport === "unsupported") return "unsupported-scope";
   if (setup.packPreparing !== null) return "preparing";
   return hasSurface ? "here" : "other-surface";
 }
@@ -249,6 +278,9 @@ export function providerSetupSteps(
 ): ReadonlyArray<string> {
   if (placement === "other-surface") {
     return [guidance.noSurfaceStep, ...guidance.stepsAfterAction];
+  }
+  if (placement === "unsupported-scope") {
+    return [guidance.epicOnlyStep, ...guidance.stepsAfterAction];
   }
   return guidance.stepsAfterAction;
 }
