@@ -56,37 +56,172 @@ describe("useProviderLoginTerminalsStore", () => {
     expect(providerLoginTerminalProviderId(HOST_B, "session-1")).toBeNull();
   });
 
-  it("a storage event for this store's persist key rehydrates the store, making another window's record visible", async () => {
-    // The write another window's own `record()` would have produced,
-    // landing straight in storage without ever touching THIS window's
-    // in-memory copy - the same shape `feature-announcements-store`'s
-    // equivalent test uses for the identical `storage`-listener pattern.
-    window.localStorage.setItem(
-      PERSIST_KEY,
-      JSON.stringify({
-        state: {
-          providerBySessionKey: {
-            [`${HOST_A}:session-other-window`]: "reasonix",
-          },
-          recentKeys: [`${HOST_A}:session-other-window`],
-        },
-        version: 1,
-      }),
-    );
+  /** The payload a browser puts on `newValue` for a peer window's write. */
+  function persistedPayload(
+    providerBySessionKey: Readonly<Record<string, string>>,
+  ): string {
+    return JSON.stringify({
+      state: {
+        providerBySessionKey,
+        recentKeys: Object.keys(providerBySessionKey),
+      },
+      version: CURRENT_PERSIST_VERSION,
+    });
+  }
+
+  it("a storage event for this store's persist key makes another window's record visible", () => {
+    const newValue = persistedPayload({
+      [`${HOST_A}:session-other-window`]: "reasonix",
+    });
+    // The write another window's own `record()` would have produced, landing
+    // straight in storage without ever touching THIS window's in-memory copy.
+    window.localStorage.setItem(PERSIST_KEY, newValue);
     // This window's in-memory copy has not seen it yet - only the raw
     // localStorage write above knows about it so far.
     expect(
       providerLoginTerminalProviderId(HOST_A, "session-other-window"),
     ).toBeNull();
 
-    window.dispatchEvent(new StorageEvent("storage", { key: PERSIST_KEY }));
-    // The listener's rehydrate() is asynchronous.
-    await Promise.resolve();
-    await Promise.resolve();
+    // A real `storage` event carries the written value; the listener reads it
+    // rather than re-reading storage, so the fixture has to carry it too.
+    window.dispatchEvent(
+      new StorageEvent("storage", { key: PERSIST_KEY, newValue }),
+    );
 
     expect(
       providerLoginTerminalProviderId(HOST_A, "session-other-window"),
     ).toBe("reasonix");
+  });
+
+  it("a storage event MERGES rather than replacing, so this window's own record survives a peer's overwriting write", () => {
+    recordProviderLoginTerminal({
+      hostId: HOST_A,
+      sessionId: "session-this-window",
+      providerId: "reasonix",
+    });
+
+    // The peer read storage before this window wrote, so ITS write does not
+    // mention this window's session at all. Rehydrating from it would adopt
+    // that loss; the union keeps both. An unclassified live session is one a
+    // tile recreates as a bare shell, so the loss is not cosmetic.
+    window.dispatchEvent(
+      new StorageEvent("storage", {
+        key: PERSIST_KEY,
+        newValue: persistedPayload({
+          [`${HOST_B}:session-peer-window`]: "copilot",
+        }),
+      }),
+    );
+
+    expect(providerLoginTerminalProviderId(HOST_A, "session-this-window")).toBe(
+      "reasonix",
+    );
+    expect(providerLoginTerminalProviderId(HOST_B, "session-peer-window")).toBe(
+      "copilot",
+    );
+  });
+
+  it("a storage event for an unrelated key is ignored", () => {
+    recordProviderLoginTerminal({
+      hostId: HOST_A,
+      sessionId: "session-1",
+      providerId: "reasonix",
+    });
+
+    window.dispatchEvent(
+      new StorageEvent("storage", {
+        key: "traycer-gui-app:some-other-store",
+        newValue: persistedPayload({}),
+      }),
+    );
+
+    expect(providerLoginTerminalProviderId(HOST_A, "session-1")).toBe(
+      "reasonix",
+    );
+  });
+
+  it("a malformed peer payload is dropped without throwing, leaving this window's records intact", () => {
+    recordProviderLoginTerminal({
+      hostId: HOST_A,
+      sessionId: "session-1",
+      providerId: "reasonix",
+    });
+
+    expect(() =>
+      window.dispatchEvent(
+        new StorageEvent("storage", {
+          key: PERSIST_KEY,
+          newValue: JSON.stringify({ state: { providerBySessionKey: null } }),
+        }),
+      ),
+    ).not.toThrow();
+
+    // A merged-in `providerBySessionKey: null` would make the read below throw
+    // at the very moment it is asked whether a live session is a sign-in.
+    expect(providerLoginTerminalProviderId(HOST_A, "session-1")).toBe(
+      "reasonix",
+    );
+  });
+
+  describe("hydration validates the persisted payload", () => {
+    it("a persisted providerBySessionKey of null does not replace the map", async () => {
+      // Zustand's DEFAULT merge is `{...current, ...persisted}`, so this would
+      // land verbatim and the read below would throw on `null[key]` - at the
+      // very moment it is asked whether a live session is a sign-in. Version
+      // gating does not cover it: the malformed value carries the current
+      // version.
+      window.localStorage.setItem(
+        PERSIST_KEY,
+        JSON.stringify({
+          state: { providerBySessionKey: null, recentKeys: null },
+          version: CURRENT_PERSIST_VERSION,
+        }),
+      );
+
+      await useProviderLoginTerminalsStore.persist.rehydrate();
+
+      expect(() =>
+        providerLoginTerminalProviderId(HOST_A, "session-1"),
+      ).not.toThrow();
+      expect(providerLoginTerminalProviderId(HOST_A, "session-1")).toBeNull();
+      expect(useProviderLoginTerminalsStore.getState().recentKeys).toEqual([]);
+      // The store is still usable afterwards - the guard degraded the payload,
+      // it did not leave the store in a shape `record()` cannot write to.
+      recordProviderLoginTerminal({
+        hostId: HOST_A,
+        sessionId: "session-after",
+        providerId: "reasonix",
+      });
+      expect(providerLoginTerminalProviderId(HOST_A, "session-after")).toBe(
+        "reasonix",
+      );
+    });
+
+    it("a persisted payload keeps its valid entries and drops only the invalid ones", async () => {
+      window.localStorage.setItem(
+        PERSIST_KEY,
+        JSON.stringify({
+          state: {
+            providerBySessionKey: {
+              [`${HOST_A}:session-good`]: "reasonix",
+              [`${HOST_A}:session-bad`]: { nested: true },
+            },
+            recentKeys: [`${HOST_A}:session-good`, 7],
+          },
+          version: CURRENT_PERSIST_VERSION,
+        }),
+      );
+
+      await useProviderLoginTerminalsStore.persist.rehydrate();
+
+      expect(providerLoginTerminalProviderId(HOST_A, "session-good")).toBe(
+        "reasonix",
+      );
+      expect(providerLoginTerminalProviderId(HOST_A, "session-bad")).toBeNull();
+      expect(useProviderLoginTerminalsStore.getState().recentKeys).toEqual([
+        `${HOST_A}:session-good`,
+      ]);
+    });
   });
 
   describe("record() merges against what is on disk before writing", () => {

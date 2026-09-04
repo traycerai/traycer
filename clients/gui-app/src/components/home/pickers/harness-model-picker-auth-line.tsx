@@ -19,6 +19,7 @@ import {
 import { isProviderSignedOutCatalogError } from "@/lib/providers/provider-signed-out-catalog-error";
 import type { ProviderTerminalLoginSurface } from "@/lib/providers/provider-terminal-login-surface";
 import { ProviderSetupTerminalAction } from "@/components/home/pickers/provider-setup-terminal-action";
+import { useProviderTerminalLoginScopeSupported } from "@/hooks/providers/use-provider-terminal-login-scope-support";
 
 /**
  * The ambient account line for the browsed provider - rendered in the slot the
@@ -202,7 +203,12 @@ function SetupGuidanceRow(props: {
 }): ReactNode {
   const { setup, terminalLoginSurface } = props;
   const { guidance } = setup;
-  const surface = setup.canStartTerminal ? terminalLoginSurface : null;
+  const scopeSupported = useProviderTerminalLoginScopeSupported(
+    terminalLoginSurface,
+    props.runTargetHostId,
+  );
+  const surface =
+    setup.canStartTerminal && scopeSupported ? terminalLoginSurface : null;
   return (
     <div
       role="note"
@@ -221,7 +227,11 @@ function SetupGuidanceRow(props: {
       <ol className="list-decimal space-y-0.5 pl-4">
         {providerSetupSteps(
           guidance,
-          providerSetupActionPlacement(setup, terminalLoginSurface !== null),
+          providerSetupActionPlacement(
+            setup,
+            terminalLoginSurface !== null,
+            scopeSupported,
+          ),
         ).map((step) => (
           <li key={step}>{step}</li>
         ))}

@@ -8,6 +8,7 @@ import { v4 as uuidv4 } from "uuid";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { subscribeHostRowChanged } from "@traycer-clients/shared/host-client/host-connection-registry";
 import { toHostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import type { HostRpcRegistry } from "@/lib/host";
 import type {
   ClosePlainTerminalRequest,
@@ -295,6 +296,8 @@ export function useLandingTerminalReconciliation(
               }),
             importLegacyTerminal: (request) =>
               plainAuthority.mutations.importLegacy.mutateAsync(request),
+            providerLoginProviderFor: (sessionId) =>
+              providerLoginTerminalProviderId(activeHostId, sessionId),
             queryClient,
           }).then(
             (settled) => settled,
@@ -485,6 +488,12 @@ export async function reconcileCapableLandingTerminals(args: {
   readonly importLegacyTerminal: (
     request: ImportLegacyPlainTerminalRequest,
   ) => Promise<ImportLegacyPlainTerminalResponse>;
+  /**
+   * The provider a session was opened to sign in to, already bound to
+   * `activeHostId`. Injected for the same reason the legacy arm injects it:
+   * `terminal.list` and the plain projection both carry the origin nowhere.
+   */
+  readonly providerLoginProviderFor: (sessionId: string) => ProviderId | null;
   readonly queryClient: QueryClient;
 }): Promise<CapableLandingTerminalReconciliationOutcome> {
   const { activeHostId, queryClient } = args;
@@ -563,6 +572,11 @@ export async function reconcileCapableLandingTerminals(args: {
   // not legacy evidence, and `importLegacy` under its id would hand the plain
   // registry a session it never spawned. Its tab stays unacknowledged for
   // life and attaches through the legacy reattach path instead.
+  //
+  // The REGISTRY decides that, not the ref alone. A tab adopted while the host
+  // still read `legacy` carries no marker, and after the capability switch it
+  // is unacknowledged and unprojected - which is precisely the shape this
+  // filter treats as legacy evidence.
   const legacyTabs = useLandingTerminalStore
     .getState()
     .tabs.filter(
@@ -570,7 +584,8 @@ export async function reconcileCapableLandingTerminals(args: {
         tab.hostId === activeHostId &&
         tab.hostAuthorityAcknowledged !== true &&
         tab.pendingCreate !== true &&
-        !isProviderLoginLandingTab(tab),
+        !isProviderLoginLandingTab(tab) &&
+        args.providerLoginProviderFor(tab.sessionId) === null,
     );
   await Promise.all(
     legacyTabs.map(async (legacyTab) => {
@@ -663,6 +678,7 @@ export async function reconcileCapableLandingTerminals(args: {
     terminals: plainTerminalCollectionValues(collection),
     excludedTerminalKeys,
     mintInstanceId: () => `landing-terminal-${uuidv4()}`,
+    providerLoginProviderFor: args.providerLoginProviderFor,
   });
   current.applyReconciliation(
     args.landingPageId,

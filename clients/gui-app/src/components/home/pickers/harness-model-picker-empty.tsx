@@ -7,6 +7,7 @@ import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store"
 import { guiHarnessIdToProviderId } from "@/lib/provider-ordering";
 import { ProviderSetupManualCommand } from "@/components/home/pickers/harness-model-picker-auth-line";
 import { ProviderSetupTerminalAction } from "@/components/home/pickers/provider-setup-terminal-action";
+import { useProviderTerminalLoginScopeSupported } from "@/hooks/providers/use-provider-terminal-login-scope-support";
 import {
   providerSetupActionPlacement,
   providerSetupSteps,
@@ -279,6 +280,10 @@ function ProviderSetupCta(props: {
 }): ReactNode {
   const { setup, terminalLoginSurface } = props;
   const { guidance } = setup;
+  const scopeSupported = useProviderTerminalLoginScopeSupported(
+    terminalLoginSurface,
+    props.runTargetHostId,
+  );
   return (
     <div className="flex flex-col items-center gap-2 px-4 py-6 text-center">
       <span className="flex size-9 items-center justify-center rounded-full bg-primary/10 text-primary">
@@ -294,7 +299,11 @@ function ProviderSetupCta(props: {
         <ProviderSetupTerminalAction
           providerId={props.providerId}
           guidance={guidance}
-          surface={setup.canStartTerminal ? terminalLoginSurface : null}
+          surface={
+            setup.canStartTerminal && scopeSupported
+              ? terminalLoginSurface
+              : null
+          }
           runTargetHostId={props.runTargetHostId}
           onBeforeStart={props.onClosePicker}
         />
@@ -302,7 +311,11 @@ function ProviderSetupCta(props: {
       <ol className="max-w-[min(90vw,18rem)] list-decimal space-y-0.5 pl-4 text-left text-ui-xs text-muted-foreground">
         {providerSetupSteps(
           guidance,
-          providerSetupActionPlacement(setup, terminalLoginSurface !== null),
+          providerSetupActionPlacement(
+            setup,
+            terminalLoginSurface !== null,
+            scopeSupported,
+          ),
         ).map((step) => (
           <li key={step}>{step}</li>
         ))}

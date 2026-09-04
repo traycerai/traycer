@@ -88,12 +88,18 @@ export function openLandingSignInTerminal(args: {
   // (an epic tab), and that retained id lives in the host's React state, which
   // nothing outside it can read. Every id it can return is in this set, so
   // opening all of them covers the hosted one without guessing which it is.
-  for (const pageId of new Set([
-    landingPageId,
-    ...landingPaneAnchorDraftIds(),
-  ])) {
+  const anchoredPageIds = landingPaneAnchorDraftIds();
+  for (const pageId of new Set([landingPageId, ...anchoredPageIds])) {
     store.setPanelOpen(pageId, true);
   }
+  // No pane mounted at all, so none of the ids above names a surface the user
+  // can see this on right now - and `landingPageId` may not even name a live
+  // start page: a draft bound at press time can be submitted or discarded
+  // while the host is still answering, which is a window a picker press opens
+  // by construction. The page-less open covers whichever start page mounts
+  // next, so the terminal carrying the sign-in code is never left behind a
+  // panel with no way to ask for it.
+  if (anchoredPageIds.length === 0) store.openPanelForPagesWithoutLayout();
   const activeInstanceId = useLandingTerminalStore.getState().activeInstanceId;
   if (activeInstanceId !== null) focusTerminalInstance(activeInstanceId);
 }

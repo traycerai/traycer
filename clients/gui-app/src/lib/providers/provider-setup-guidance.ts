@@ -171,15 +171,25 @@ export type ProviderSetupActionPlacement =
   | "unsupported-host";
 
 /**
- * Where this surface's action is, from the two facts that decide it. Shared so
- * the auth line and the model list cannot classify the same state differently -
- * the reason they were wrong about old hosts in the first place.
+ * Where this surface's action is, from the three facts that decide it. Shared
+ * so the auth line and the model list cannot classify the same state
+ * differently - the reason they were wrong about old hosts in the first place.
+ *
+ * `scopeSupported` is the third because the first two cannot see it: the
+ * provider row says this provider HAS a terminal sign-in, and the surface says
+ * where a button would go, but neither knows whether this host's negotiated
+ * `providers.startTerminalLogin` can carry the scope that surface needs. On the
+ * release just before the scope bump it cannot, and only for the landing
+ * surface - so the same provider on the same host is `here` in an Epic and
+ * `unsupported-host` on the start page. See
+ * `useProviderTerminalLoginScopeSupported`.
  */
 export function providerSetupActionPlacement(
   setup: ProviderTerminalSetup,
   hasSurface: boolean,
+  scopeSupported: boolean,
 ): ProviderSetupActionPlacement {
-  if (!setup.canStartTerminal) return "unsupported-host";
+  if (!setup.canStartTerminal || !scopeSupported) return "unsupported-host";
   return hasSurface ? "here" : "other-surface";
 }
 

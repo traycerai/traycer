@@ -143,8 +143,12 @@ describe("providerSetupActionPlacement", () => {
     expect(setup).not.toBeNull();
     if (setup === null) return;
     expect(setup.canStartTerminal).toBe(false);
-    expect(providerSetupActionPlacement(setup, true)).toBe("unsupported-host");
-    expect(providerSetupActionPlacement(setup, false)).toBe("unsupported-host");
+    expect(providerSetupActionPlacement(setup, true, true)).toBe(
+      "unsupported-host",
+    );
+    expect(providerSetupActionPlacement(setup, false, true)).toBe(
+      "unsupported-host",
+    );
   });
 
   it("returns 'here' when canStartTerminal is true and this surface has the action", () => {
@@ -154,7 +158,22 @@ describe("providerSetupActionPlacement", () => {
     );
     expect(setup).not.toBeNull();
     if (setup === null) return;
-    expect(providerSetupActionPlacement(setup, true)).toBe("here");
+    expect(providerSetupActionPlacement(setup, true, true)).toBe("here");
+  });
+
+  it("returns 'unsupported-host' when the host cannot carry this surface's scope, even with a surface and the capability", () => {
+    const setup = resolveProviderTerminalSetup(
+      "reasonix",
+      capabilityWithTerminalLogin(["setup"]),
+    );
+    expect(setup).not.toBeNull();
+    if (setup === null) return;
+    // The provider row says yes and the surface exists; only the host's
+    // negotiated `providers.startTerminalLogin` major says no. Reporting
+    // 'here' would lead the steps with a button that can only ever fail.
+    expect(providerSetupActionPlacement(setup, true, false)).toBe(
+      "unsupported-host",
+    );
   });
 
   it("returns 'other-surface' when canStartTerminal is true but this surface has no action", () => {
@@ -164,6 +183,8 @@ describe("providerSetupActionPlacement", () => {
     );
     expect(setup).not.toBeNull();
     if (setup === null) return;
-    expect(providerSetupActionPlacement(setup, false)).toBe("other-surface");
+    expect(providerSetupActionPlacement(setup, false, true)).toBe(
+      "other-surface",
+    );
   });
 });

@@ -47,10 +47,18 @@ interface UseHostScopedMutationArgs<
    * surface - belongs here, not in a `mutate(vars, { onSuccess })` at the call
    * site.
    */
+  /**
+   * `hostId` is the one captured in `onMutate` - the host this request was
+   * SENT on, which is not necessarily the one the client addresses by the time
+   * it answers (a surface whose target host moved mid-flight re-points the
+   * client underneath). A caller that files the response against a host must
+   * use this one, per the host-swap rule in gui-app AGENTS.md.
+   */
   readonly onSuccess?:
     | ((
         data: ResponseOfMethod<HostRpcRegistry, Method>,
         variables: RequestOfMethod<HostRpcRegistry, Method>,
+        hostId: string | null,
       ) => void)
     | undefined;
   /**
@@ -102,7 +110,7 @@ export function useHostScopedMutationForClient<
         trackScopedMutationSuccess(args.mutationKey, variables);
         // Before the host-id gate: this work is the caller's, and a null host
         // id is a reason to skip invalidation, not to skip the caller.
-        args.onSuccess?.(data, variables);
+        args.onSuccess?.(data, variables, ctx.hostId);
         if (ctx.hostId === null) return;
         for (const method of args.invalidateMethods) {
           void queryClient.invalidateQueries({

@@ -70,39 +70,77 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * What the OTHER windows have written, read straight from storage.
+ * A persisted payload, validated entry by entry.
  *
- * Everything is validated rather than trusted: this parses a value another
- * process wrote, and a single bad entry must degrade to "no shared records"
- * instead of throwing inside a `set`. Session ids are uuids, so a stale entry
- * can never be re-matched - dropping an unparseable one costs nothing.
+ * Nothing here is trusted: this reads a value another process wrote, so a
+ * malformed one must degrade to "no records" rather than reach the store. The
+ * shape matters as much as the values - a persisted `providerBySessionKey:
+ * null` merged in verbatim would make `providerLoginTerminalProviderId` index
+ * `null` and THROW at the very moment it is asked whether a live session is a
+ * sign-in. Session ids are uuids, so a dropped entry can never be re-matched
+ * and costs nothing.
  */
-function readSharedRecords(): SharedProviderLoginRecords {
-  if (typeof window === "undefined") return NO_SHARED_RECORDS;
-  let parsed: unknown;
-  try {
-    const raw = window.localStorage.getItem(
-      PROVIDER_LOGIN_TERMINALS_PERSIST_KEY,
-    );
-    if (raw === null) return NO_SHARED_RECORDS;
-    parsed = JSON.parse(raw);
-  } catch {
-    return NO_SHARED_RECORDS;
-  }
-  if (!isRecord(parsed) || !isRecord(parsed.state)) return NO_SHARED_RECORDS;
-  const rawProviders = parsed.state.providerBySessionKey;
-  const rawRecent = parsed.state.recentKeys;
+function sanitizeRecords(state: unknown): SharedProviderLoginRecords {
+  if (!isRecord(state)) return NO_SHARED_RECORDS;
   const providerBySessionKey: Record<string, ProviderId> = {};
-  if (isRecord(rawProviders)) {
-    for (const [entry, value] of Object.entries(rawProviders)) {
+  if (isRecord(state.providerBySessionKey)) {
+    for (const [entry, value] of Object.entries(state.providerBySessionKey)) {
       const providerId = providerIdSchema.safeParse(value);
       if (providerId.success) providerBySessionKey[entry] = providerId.data;
     }
   }
-  const recentKeys = Array.isArray(rawRecent)
-    ? rawRecent.filter((entry): entry is string => typeof entry === "string")
+  const recentKeys = Array.isArray(state.recentKeys)
+    ? state.recentKeys.filter(
+        (entry): entry is string => typeof entry === "string",
+      )
     : [];
   return { providerBySessionKey, recentKeys };
+}
+
+/** The union of two record sets, `preferred` winning a conflicting key. */
+function mergeRecords(
+  preferred: SharedProviderLoginRecords,
+  other: SharedProviderLoginRecords,
+): SharedProviderLoginRecords {
+  const recentKeys = [
+    ...preferred.recentKeys,
+    ...other.recentKeys.filter(
+      (entry) => !preferred.recentKeys.includes(entry),
+    ),
+  ].slice(0, MAX_TRACKED_SESSIONS);
+  const kept = new Set(recentKeys);
+  const providerBySessionKey: Record<string, ProviderId> = {};
+  for (const [entry, value] of [
+    ...Object.entries(other.providerBySessionKey),
+    ...Object.entries(preferred.providerBySessionKey),
+  ]) {
+    if (value !== undefined && kept.has(entry)) {
+      providerBySessionKey[entry] = value;
+    }
+  }
+  return { providerBySessionKey, recentKeys };
+}
+
+function parsePersistedPayload(raw: string | null): SharedProviderLoginRecords {
+  if (raw === null) return NO_SHARED_RECORDS;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return isRecord(parsed) ? sanitizeRecords(parsed.state) : NO_SHARED_RECORDS;
+  } catch {
+    return NO_SHARED_RECORDS;
+  }
+}
+
+/** What the OTHER windows have written, read straight from storage. */
+function readSharedRecords(): SharedProviderLoginRecords {
+  if (typeof window === "undefined") return NO_SHARED_RECORDS;
+  try {
+    return parsePersistedPayload(
+      window.localStorage.getItem(PROVIDER_LOGIN_TERMINALS_PERSIST_KEY),
+    );
+  } catch {
+    return NO_SHARED_RECORDS;
+  }
 }
 
 export const useProviderLoginTerminalsStore =
@@ -150,7 +188,18 @@ export const useProviderLoginTerminalsStore =
             return { providerBySessionKey, recentKeys };
           }),
       }),
-      basePersistOptions(PROVIDER_LOGIN_TERMINALS_PERSIST_KEY),
+      {
+        ...basePersistOptions(PROVIDER_LOGIN_TERMINALS_PERSIST_KEY),
+        // The default merge is a shallow spread, so a persisted
+        // `providerBySessionKey: null` would REPLACE the map and the next read
+        // would throw on `null[key]`. Version-gating does not cover it - a
+        // malformed value can carry the current version - so the merge itself
+        // validates.
+        merge: (persisted, current) => ({
+          ...current,
+          ...sanitizeRecords(persisted),
+        }),
+      },
     ),
   );
 
@@ -168,12 +217,20 @@ export const useProviderLoginTerminalsStore =
 // that never saw the write at all.
 if (typeof window !== "undefined") {
   window.addEventListener("storage", (event) => {
-    if (
-      event.key === null ||
-      event.key === PROVIDER_LOGIN_TERMINALS_PERSIST_KEY
-    ) {
+    if (event.key === null) {
       void useProviderLoginTerminalsStore.persist.rehydrate();
+      return;
     }
+    if (event.key !== PROVIDER_LOGIN_TERMINALS_PERSIST_KEY) return;
+    // MERGED from the event's own payload, not re-read from storage. Two
+    // windows can each read before either writes, so the value on disk may
+    // already have dropped one of the two records - rehydrating from it would
+    // adopt that loss, while the event still carries what the peer wrote. The
+    // union keeps every origin this window has ever been told about, which is
+    // what the classifier actually reads.
+    useProviderLoginTerminalsStore.setState((state) =>
+      mergeRecords(state, parsePersistedPayload(event.newValue)),
+    );
   });
 }
 

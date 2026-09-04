@@ -1,6 +1,6 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import type {
   ProviderAuthStatus,
@@ -10,6 +10,10 @@ import type {
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import { providerSignedOutMessage } from "@traycer/protocol/host/provider-display";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  recordNegotiatedHostManifest,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type { GuiHarnessCatalogEntry } from "@/hooks/harnesses/use-gui-harness-catalog";
 import { PickerProviderAuthLine } from "../harness-model-picker-auth-line";
 
@@ -41,6 +45,13 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
     getActiveHostId: () => HOST_ID,
     request: mocks.startTerminalLoginRequest,
   }),
+}));
+
+// The picker passes `runTargetHostId={null}` (follow the app-wide default),
+// which the scope gate resolves through this hook - so it has to name the same
+// host the negotiated manifest below is recorded for.
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => HOST_ID,
 }));
 
 function baseProviderState(providerId: ProviderId): ProviderCliState {
@@ -152,9 +163,19 @@ function catalogErrorFor(
 }
 
 describe("<PickerProviderAuthLine />", () => {
+  beforeEach(() => {
+    resetNegotiatedManifests();
+    // A modern host: `providers.startTerminalLogin@2` is the first major that
+    // carries a scope, and the landing action sends the independent one.
+    recordNegotiatedHostManifest(HOST_ID, {
+      "providers.startTerminalLogin": { major: 2, minor: 0 },
+    });
+  });
+
   afterEach(() => {
     cleanup();
     mocks.startTerminalLoginRequest.mockClear();
+    resetNegotiatedManifests();
   });
 
   it("renders nothing when both state and harness are null (no provider identity to resolve)", () => {
@@ -318,6 +339,42 @@ describe("<PickerProviderAuthLine />", () => {
         "Choose “Set up in terminal” from a chat's model picker or the start page's. It opens Reasonix's setup wizard on the host that composer runs on.",
       ),
     ).toBeNull();
+  });
+
+  it("hides the landing action on a host that negotiated the pre-scope major, and says so in the steps", () => {
+    resetNegotiatedManifests();
+    recordNegotiatedHostManifest(HOST_ID, {
+      "providers.startTerminalLogin": { major: 1, minor: 0 },
+    });
+
+    renderAuthLine(
+      <PickerProviderAuthLine
+        state={withTerminalLoginCapability(baseProviderState("reasonix"))}
+        harness={null}
+        terminalLoginSurface={{
+          kind: "landing",
+          resolveLandingPageId: () => "draft-1",
+        }}
+        runTargetHostId={null}
+        onClosePicker={() => undefined}
+      />,
+    );
+
+    // Identical props to the test above; only the host's negotiated major
+    // differs. `@1.0` cannot carry the independent scope, so the request is
+    // refused as `DOWNGRADE_UNSUPPORTED` - the button could only ever fail.
+    expect(
+      screen.queryByRole("button", { name: /Set up in terminal/ }),
+    ).toBeNull();
+    // And not the "it's on another surface" copy either: there is no surface
+    // on this host that draws it, so the steps must lead with the manual
+    // route rather than pointing at a button nobody can find.
+    expect(
+      screen.queryByText(
+        "Choose \u201CSet up in terminal\u201D from a chat's model picker or the start page's. It opens Reasonix's setup wizard on the host that composer runs on.",
+      ),
+    ).toBeNull();
+    expect(screen.getByRole("note", { name: "Setup required" })).toBeDefined();
   });
 
   it("renders the bare 'Not authenticated' label for a signed-out provider without guidance", () => {

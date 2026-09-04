@@ -5,6 +5,7 @@ import type {
   ImportLegacyPlainTerminalResponse,
 } from "@traycer/protocol/host/terminal/plain-schemas";
 import { useLandingTerminalStore } from "@/stores/home/landing-terminal-store";
+import { providerLoginTerminalProviderId } from "@/stores/providers/provider-login-terminals";
 import type { LandingTerminalAuthorityEntry } from "./landing-terminal-authority-fleet";
 import { reconcileCapableLandingTerminals } from "./use-landing-terminal-reconciliation";
 
@@ -102,6 +103,8 @@ function LandingTerminalBoundHostReconciliation(props: {
         entry.mutations.close.mutateAsync({ ...request, hostId }),
       importLegacyTerminal: (request) =>
         entry.mutations.importLegacy.mutateAsync(request),
+      providerLoginProviderFor: (sessionId) =>
+        providerLoginTerminalProviderId(hostId, sessionId),
       queryClient,
     }).then(
       (outcome) => {

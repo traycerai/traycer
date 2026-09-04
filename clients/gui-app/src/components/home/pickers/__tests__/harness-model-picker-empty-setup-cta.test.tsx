@@ -18,6 +18,15 @@ import { ModelRowsState } from "../harness-model-picker-empty";
 
 const mocks = vi.hoisted(() => ({
   start: vi.fn(),
+  // The host's negotiated `providers.startTerminalLogin` major, which decides
+  // whether the LANDING action can be sent at all. `true` here is the modern
+  // host; the gate's own rules live in
+  // `use-provider-terminal-login-scope-support.test.tsx`.
+  scopeSupported: { current: true },
+}));
+
+vi.mock("@/hooks/providers/use-provider-terminal-login-scope-support", () => ({
+  useProviderTerminalLoginScopeSupported: () => mocks.scopeSupported.current,
 }));
 
 vi.mock("@/hooks/providers/use-landing-provider-terminal-login", () => ({
@@ -114,6 +123,7 @@ describe("<ModelRowsState /> provider setup CTA (reasonix)", () => {
       reportIssueDraftId: 0,
     });
     mocks.start.mockClear();
+    mocks.scopeSupported.current = true;
   });
 
   it("renders the setup CTA for a reasonix entry with the signed-out modelsError: steps + manual command, no button, no report-issue action", () => {
@@ -444,6 +454,43 @@ describe("<ModelRowsState /> provider setup CTA (reasonix)", () => {
     fireEvent.click(button);
     expect(onClosePicker).toHaveBeenCalledTimes(1);
     expect(mocks.start).toHaveBeenCalledTimes(1);
+  });
+
+  it("hides the copilot CTA on a host that cannot carry the landing scope, leaving no always-failing button", () => {
+    mocks.scopeSupported.current = false;
+    const provider = harnessEntry({
+      id: "copilot",
+      label: "Copilot",
+      modelsError: catalogErrorFor(providerSignedOutMessage("copilot")),
+    });
+    render(
+      ModelRowsState({
+        catalogLoading: false,
+        catalogError: false,
+        hostUnavailableLabel: null,
+        hasQuery: false,
+        activeProvider: provider,
+        activeProviderState: terminalLoginCapableState("copilot", ["login"]),
+        rowsCount: 0,
+        onOpenProviderSettings: () => undefined,
+        terminalLoginSurface: {
+          kind: "landing",
+          resolveLandingPageId: () => "draft-1",
+        },
+        runTargetHostId: null,
+        onClosePicker: vi.fn(),
+      }),
+    );
+
+    // Identical props to the CTA test above; only the host's negotiated
+    // `providers.startTerminalLogin` major differs. Copilot is the sharpest
+    // case: on the generic guidance its `manualCommand` is null, so a button
+    // that always fails would be the user's ONLY affordance.
+    expect(
+      screen.queryByRole("button", { name: /Sign in from a terminal/ }),
+    ).toBeNull();
+    // The guidance itself stays - it is what is left to act on.
+    expect(screen.getByText(/Set up Copilot/)).toBeDefined();
   });
 
   it("renders the plain host reason row, not the setup CTA, for copilot with capability absent (no guidance override to fall back on)", () => {

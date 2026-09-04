@@ -43,6 +43,8 @@ export function useProvidersStartTerminalLoginForClient(
   onSuccess: (
     data: ResponseOfMethod<HostRpcRegistry, "providers.startTerminalLogin">,
     variables: RequestOfMethod<HostRpcRegistry, "providers.startTerminalLogin">,
+    /** The host the request was SENT on, captured in `onMutate`. */
+    hostId: string | null,
   ) => void,
 ): StartTerminalLoginMutationResult {
   return useHostScopedMutationForClient(client, {

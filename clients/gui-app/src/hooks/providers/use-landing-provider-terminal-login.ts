@@ -64,26 +64,33 @@ export function useLandingProviderStartTerminalLogin(args: {
   const pendingLandingPageIdRef = useRef<string | null>(null);
 
   const onSuccess = useCallback(
-    (result: {
-      readonly sessionId: string;
-      readonly replacedSessionId: string | null;
-    }): void => {
-      // The client that answered names the host the PTY lives on - read from
-      // it rather than from `hostId`, which is `null` while following the
-      // app-wide default.
-      const resolvedHostId = client?.getActiveHostId() ?? null;
+    (
+      result: {
+        readonly sessionId: string;
+        readonly replacedSessionId: string | null;
+      },
+      _variables: unknown,
+      // The host this request was SENT on, captured in `onMutate`. NOT the
+      // client's current host: the landing composer's target host can move
+      // while the call is in flight, which re-points `client` underneath and
+      // would file the new session against the wrong machine - or discard it
+      // when that client is now null - leaving a live sign-in terminal that no
+      // tab points at. `hostId` (the hook argument) is no good either: it is
+      // `null` while following the app-wide default.
+      requestHostId: string | null,
+    ): void => {
       const landingPageId = pendingLandingPageIdRef.current;
-      if (resolvedHostId === null || landingPageId === null) return;
+      if (requestHostId === null || landingPageId === null) return;
       openLandingSignInTerminal({
         landingPageId,
-        hostId: resolvedHostId,
+        hostId: requestHostId,
         providerId,
         sessionId: result.sessionId,
         replacedSessionId: result.replacedSessionId,
         launchedFromSessionId,
       });
     },
-    [client, launchedFromSessionId, providerId],
+    [launchedFromSessionId, providerId],
   );
 
   const startTerminalLogin = useProvidersStartTerminalLoginForClient(

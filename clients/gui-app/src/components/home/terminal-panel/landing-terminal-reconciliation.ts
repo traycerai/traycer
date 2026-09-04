@@ -41,6 +41,29 @@ export interface LandingTerminalReconciliationInput {
   readonly providerLoginProviderFor: (sessionId: string) => ProviderId | null;
 }
 
+/**
+ * `tab` with its sign-in provenance applied, or `tab` unchanged.
+ *
+ * Only ever ADDS the marker: a tab that already carries it keeps its recorded
+ * provider (the registry is bounded and evicts, so a later miss must not
+ * un-classify a tab that was classified when the record was still there).
+ */
+function classifyLandingTab(
+  tab: LandingTerminalTabRef,
+  input: Pick<LandingTerminalReconciliationInput, "providerLoginProviderFor">,
+): LandingTerminalTabRef {
+  if (isProviderLoginLandingTab(tab)) return tab;
+  const originProviderId = input.providerLoginProviderFor(tab.sessionId);
+  if (originProviderId === null) return tab;
+  return {
+    ...tab,
+    name: `${PROVIDER_DISPLAY_NAMES[originProviderId]} sign-in`,
+    titleSource: "manual",
+    origin: "provider-login",
+    originProviderId,
+  };
+}
+
 export interface LandingTerminalReconciliationResult {
   readonly tabs: ReadonlyArray<LandingTerminalTabRef>;
   readonly activeInstanceId: string | null;
@@ -56,6 +79,17 @@ export interface HostAuthoritativeLandingTerminalReconciliationInput {
   readonly terminals: readonly PlainTerminalProjection[];
   readonly excludedTerminalKeys: ReadonlySet<string>;
   readonly mintInstanceId: () => string;
+  /**
+   * Same injected registry read as the legacy pass, for the same reason - a
+   * plain snapshot carries no origin either.
+   *
+   * A manager-owned sign-in session is never PROJECTED here, so this pass has
+   * nothing to adopt from it. What it does have is a tab: one adopted without
+   * the marker while the host still read `legacy`, which after the switch is
+   * unacknowledged, unprojected, and therefore both `importLegacy` bait and a
+   * `terminal.plain.create` bare shell. Only the registry can tell it apart.
+   */
+  readonly providerLoginProviderFor: (sessionId: string) => ProviderId | null;
 }
 
 export function resolveLandingTerminalTitleCwd(input: {
@@ -120,16 +154,22 @@ export function reconcileLandingTerminalTabs(
       return [tab];
     }
     matchedSessionIds.add(session.sessionId);
+    // Provenance can arrive AFTER the tab. Another window can list a running
+    // sign-in session before this one has been told what it is, and that pass
+    // adopts an ordinary tab; from then on the session is MATCHED, so without
+    // this the adoption branch below never reconsiders it and the tab stays
+    // legacy-importable - and recreatable as a bare shell - for life.
+    const classified = classifyLandingTab(tab, input);
     // A sign-in tab outlives its session's exit: its tile shows the ended
     // state with a restart, the way the epic sign-in tile does. Dropping it
     // here would retract the only surface that can restart the sign-in.
-    if (session.status === "exited" && !isProviderLoginLandingTab(tab)) {
-      exitedInstanceIds.push(tab.instanceId);
+    if (session.status === "exited" && !isProviderLoginLandingTab(classified)) {
+      exitedInstanceIds.push(classified.instanceId);
       return [];
     }
-    if (tab.titleSource === "manual") return [tab];
-    const name = defaultLandingTerminalTitle(session, tab.cwd);
-    return [name === tab.name ? tab : { ...tab, name }];
+    if (classified.titleSource === "manual") return [classified];
+    const name = defaultLandingTerminalTitle(session, classified.cwd);
+    return [name === classified.name ? classified : { ...classified, name }];
   });
 
   const adoptedTabs = sessions.flatMap((session) => {
@@ -201,13 +241,14 @@ export function reconcileHostAuthoritativeLandingTerminalTabs(
   const matchedTerminalIds = new Set<string>();
   const removedInstanceIds: string[] = [];
 
-  const tabs = input.tabs.flatMap((tab) => {
-    if (tab.hostId !== input.hostId) return [tab];
-    const terminalKey = terminalSessionKey(tab.hostId, tab.sessionId);
+  const tabs = input.tabs.flatMap((rawTab) => {
+    if (rawTab.hostId !== input.hostId) return [rawTab];
+    const terminalKey = terminalSessionKey(rawTab.hostId, rawTab.sessionId);
     if (input.excludedTerminalKeys.has(terminalKey)) {
-      removedInstanceIds.push(tab.instanceId);
+      removedInstanceIds.push(rawTab.instanceId);
       return [];
     }
+    const tab = classifyLandingTab(rawTab, input);
     const projection = projectionById.get(tab.sessionId);
     if (projection === undefined) {
       if (tab.hostAuthorityAcknowledged === true) {

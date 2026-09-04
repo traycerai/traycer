@@ -172,6 +172,7 @@ describe("capable landing-terminal reconciliation", () => {
       canMutate: true,
       closeTerminal: () => Promise.resolve(),
       importLegacyTerminal: importLegacy,
+      providerLoginProviderFor: () => null,
       queryClient,
     });
 
@@ -191,6 +192,104 @@ describe("capable landing-terminal reconciliation", () => {
     expect(landingTerminalLayoutFor(state, LANDING_PAGE_ID)).toMatchObject({
       panelWidthFraction: 0.51,
     });
+  });
+
+  it("never imports a tab the sign-in registry claims, even though its ref lost the marker", async () => {
+    // The shape this arm cannot otherwise tell from legacy evidence: adopted
+    // while the host still read `legacy` (so no marker), and after the
+    // capability switch unacknowledged AND unprojected. `importLegacy` under
+    // its id would hand the plain registry a session the host's provider-login
+    // manager owns and it never spawned; the ref left unmarked then routes its
+    // tile to the durable bootstrap, which `terminal.plain.create`s a bare
+    // shell with none of the provider's spawn env.
+    const unmarked = tab({
+      instanceId: "local-instance",
+      terminalId: "signin-terminal",
+      name: "legacy · New Terminal",
+    });
+    useLandingTerminalStore.getState().addTab(unmarked);
+    queryClient.setQueryData(
+      hostQueryKeys.plainTerminals(HOST_ID, SCOPE),
+      freshCollection([]),
+    );
+    const importLegacy = vi.fn(() => {
+      throw new Error("importLegacy must never run for a sign-in session");
+    });
+
+    const outcome = await reconcileCapableLandingTerminals({
+      activeHostId: HOST_ID,
+      landingPageId: LANDING_PAGE_ID,
+      capability: CAPABILITY,
+      canMutate: true,
+      closeTerminal: () => Promise.resolve(),
+      importLegacyTerminal: importLegacy,
+      providerLoginProviderFor: (sessionId) =>
+        sessionId === "signin-terminal" ? "reasonix" : null,
+      queryClient,
+    });
+
+    expect(outcome).toBe("reconciled");
+    expect(importLegacy).not.toHaveBeenCalled();
+    // Reclassified in the store too, so every downstream reader - the tile's
+    // adopt-only branch, the panel's kill-instead-of-close path - agrees.
+    expect(useLandingTerminalStore.getState().tabs).toEqual([
+      {
+        ...unmarked,
+        name: "Reasonix sign-in",
+        titleSource: "manual",
+        origin: "provider-login",
+        originProviderId: "reasonix",
+      },
+    ]);
+  });
+
+  it("still imports an unacknowledged tab the sign-in registry does not claim", async () => {
+    // The control for the test above: identical tab and identical snapshot,
+    // only the registry's answer differs.
+    const legacy = tab({
+      instanceId: "local-instance",
+      terminalId: "signin-terminal",
+      name: "legacy · New Terminal",
+    });
+    useLandingTerminalStore.getState().addTab(legacy);
+    queryClient.setQueryData(
+      hostQueryKeys.plainTerminals(HOST_ID, SCOPE),
+      freshCollection([]),
+    );
+    const imported = terminal({
+      terminalId: "signin-terminal",
+      manualTitle: "Imported",
+      revision: 3,
+      runtime: "dormant",
+    });
+    const importLegacy = vi.fn(() => {
+      queryClient.setQueryData(
+        hostQueryKeys.plainTerminals(HOST_ID, SCOPE),
+        freshCollection([imported]),
+      );
+      return Promise.resolve({
+        status: "existing" as const,
+        terminal: imported,
+      });
+    });
+
+    await reconcileCapableLandingTerminals({
+      activeHostId: HOST_ID,
+      landingPageId: LANDING_PAGE_ID,
+      capability: CAPABILITY,
+      canMutate: true,
+      closeTerminal: () => Promise.resolve(),
+      importLegacyTerminal: importLegacy,
+      providerLoginProviderFor: () => null,
+      queryClient,
+    });
+
+    expect(importLegacy).toHaveBeenCalledTimes(1);
+    expect(useLandingTerminalStore.getState().tabs[0]).toMatchObject({
+      instanceId: "local-instance",
+      hostAuthorityAcknowledged: true,
+    });
+    expect(useLandingTerminalStore.getState().tabs[0]?.origin).toBeUndefined();
   });
 
   it("preserves unacknowledged evidence when import fails", async () => {
@@ -213,6 +312,7 @@ describe("capable landing-terminal reconciliation", () => {
         canMutate: true,
         closeTerminal: () => Promise.resolve(),
         importLegacyTerminal: () => Promise.reject(new Error("offline")),
+        providerLoginProviderFor: () => null,
         queryClient,
       }),
     ).rejects.toThrow("offline");
@@ -259,6 +359,7 @@ describe("capable landing-terminal reconciliation", () => {
       closeTerminal,
       importLegacyTerminal: () =>
         Promise.reject(new Error("unexpected import")),
+      providerLoginProviderFor: () => null,
       queryClient,
     });
 
@@ -320,6 +421,7 @@ describe("capable landing-terminal reconciliation", () => {
       closeTerminal,
       importLegacyTerminal: () =>
         Promise.reject(new Error("unexpected import")),
+      providerLoginProviderFor: () => null,
       queryClient,
     });
 
@@ -434,6 +536,7 @@ describe("capable landing-terminal reconciliation", () => {
       canMutate: true,
       closeTerminal: () => Promise.resolve(),
       importLegacyTerminal: importLegacy,
+      providerLoginProviderFor: () => null,
       queryClient,
     });
 
@@ -461,6 +564,7 @@ describe("capable landing-terminal reconciliation", () => {
         closeTerminal: () => Promise.resolve(),
         importLegacyTerminal: () =>
           Promise.reject(new Error("unexpected import")),
+        providerLoginProviderFor: () => null,
         queryClient,
       }),
     ).resolves.toBe("snapshot-not-fresh");
@@ -504,6 +608,7 @@ describe("capable landing-terminal reconciliation", () => {
         closeTerminal,
         importLegacyTerminal: () =>
           Promise.reject(new Error("unexpected import")),
+        providerLoginProviderFor: () => null,
         queryClient,
       }),
     ).resolves.toBe("snapshot-not-fresh");
@@ -540,6 +645,7 @@ describe("capable landing-terminal reconciliation", () => {
         canMutate: true,
         closeTerminal: () => Promise.resolve(),
         importLegacyTerminal: importLegacy,
+        providerLoginProviderFor: () => null,
         queryClient,
       }),
     ).resolves.toBe("snapshot-not-fresh");
@@ -592,6 +698,7 @@ describe("capable landing-terminal reconciliation", () => {
       canMutate: true,
       closeTerminal,
       importLegacyTerminal: importLegacy,
+      providerLoginProviderFor: () => null,
       queryClient,
     });
     await waitFor(() => expect(closeTerminal).toHaveBeenCalledTimes(1));
@@ -653,6 +760,7 @@ describe("capable landing-terminal reconciliation", () => {
       canMutate: true,
       closeTerminal: () => Promise.resolve(),
       importLegacyTerminal: importLegacy,
+      providerLoginProviderFor: () => null,
       queryClient,
     });
 
@@ -740,6 +848,7 @@ describe("capable landing-terminal reconciliation", () => {
       canMutate: true,
       closeTerminal: () => Promise.resolve(),
       importLegacyTerminal: importLegacy,
+      providerLoginProviderFor: () => null,
       queryClient,
     });
 
@@ -770,6 +879,7 @@ describe("capable landing-terminal reconciliation", () => {
         closeTerminal: () => Promise.resolve(),
         importLegacyTerminal: () =>
           Promise.reject(new Error("unexpected import")),
+        providerLoginProviderFor: () => null,
         queryClient,
       }),
     ).resolves.toBe("reconciled");
