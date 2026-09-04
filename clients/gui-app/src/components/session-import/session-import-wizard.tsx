@@ -38,12 +38,17 @@ import {
 import { SessionImportProgress } from "@/components/session-import/session-import-progress";
 import type { SessionImportScanHandle } from "@/components/session-import/use-session-import-scan";
 import { startSessionImportRun } from "@/components/session-import/session-import-run-handle";
+import { useStreamRuntimeBinding } from "@/lib/host/stream-runtime-context";
 import {
   sessionImportTone,
   type SessionImportTone,
   type SessionImportSurface,
 } from "@/components/session-import/session-import-tone";
-import { useSessionImportRunStore } from "@/stores/session-import/session-import-run-store";
+import {
+  sessionImportRunFor,
+  useSessionImportRun,
+  useSessionImportRunStore,
+} from "@/stores/session-import/session-import-run-store";
 
 export interface SessionImportSecondaryAction {
   readonly label: string;
@@ -73,17 +78,27 @@ export function SessionImportWizard(props: {
 }) {
   const { surface, scan, onImportStarted, secondaryAction } = props;
   const tone = sessionImportTone(surface);
-  const runStatus = useSessionImportRunStore((state) => state.status);
-  const runIdle = runStatus === "idle";
+  // The run this wizard shows and starts is the one on the host it renders
+  // under - transport and host name off the same binding, which is also what
+  // the submission is aimed at.
+  const streamBinding = useStreamRuntimeBinding();
+  const hostId = streamBinding?.hostId ?? null;
+  const runIdle = useSessionImportRun(hostId).status === "idle";
 
   // Opening the wizard retires a FINISHED run's summary, so a second visit
-  // scans afresh instead of re-reading last time's result. Mount-only on
-  // purpose: a run that finishes while this is open still shows its summary,
-  // because that summary is what the user is waiting for.
+  // scans afresh instead of re-reading last time's result. It does not re-run
+  // while this wizard is open on one host: a run that finishes here still
+  // shows its summary, because that summary is what the user is waiting for.
+  // A host change is a fresh opening onto a different machine, so the same
+  // retirement applies to it.
   useEffect(() => {
-    const run = useSessionImportRunStore.getState();
-    if (run.status === "complete" || run.status === "error") run.reset();
-  }, []);
+    if (hostId === null) return;
+    const store = useSessionImportRunStore.getState();
+    const run = sessionImportRunFor(store, hostId);
+    if (run.status === "complete" || run.status === "error") {
+      store.reset(hostId);
+    }
+  }, [hostId]);
 
   const { state, dispatch } = scan;
   const view = useMemo(() => buildSessionImportView(state), [state]);
@@ -106,14 +121,14 @@ export function SessionImportWizard(props: {
       session_count: submission.selections.length,
       group_count: submittedGroupCount(state.groups, submission.selections),
     });
-    startSessionImportRun(submission);
+    startSessionImportRun(submission, streamBinding);
     onImportStarted();
   };
 
   if (!runIdle) {
     return (
       <div className="flex min-h-0 w-full flex-1 flex-col">
-        <SessionImportProgress tone={tone} />
+        <SessionImportProgress tone={tone} hostId={hostId} />
         {secondaryAction !== null ? (
           <div className="flex shrink-0 justify-end px-4 py-3">
             <Button

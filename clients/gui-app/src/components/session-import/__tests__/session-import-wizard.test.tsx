@@ -30,6 +30,7 @@ import type {
 } from "@traycer-clients/shared/host-transport/session-import-scan-client";
 import type { SessionImportRunRequest } from "@/components/session-import/session-import-run-handle";
 import type { SessionImportSurface } from "@/components/session-import/session-import-tone";
+import type { StreamRuntimeBinding } from "@/lib/host/stream-runtime-context";
 import {
   SESSION_IMPORT_DEFAULT_SCAN_WINDOW,
   sessionImportGroupKey,
@@ -56,7 +57,12 @@ const scanClient = vi.hoisted((): ScanClientHarness => ({
 }));
 
 const startSessionImportRunMock = vi.hoisted(() =>
-  vi.fn<(request: SessionImportRunRequest) => void>(),
+  vi.fn<
+    (
+      request: SessionImportRunRequest,
+      binding: StreamRuntimeBinding | null,
+    ) => void
+  >(),
 );
 const analyticsTrackMock = vi.hoisted(() => vi.fn());
 
@@ -101,6 +107,11 @@ const streamBinding = vi.hoisted((): StreamBindingHarness => ({
 vi.mock("@/lib/host/stream-runtime-context", () => ({
   useWsStreamClient: () => streamBinding.client,
   useStreamHostId: () => streamBinding.hostId,
+  useStreamRuntimeBinding: () => ({
+    wsStreamClient: streamBinding.client,
+    hostId: streamBinding.hostId,
+    retain: null,
+  }),
 }));
 
 vi.mock("@/components/session-import/session-import-run-handle", () => ({
@@ -117,7 +128,10 @@ import {
   type SessionImportSecondaryAction,
 } from "@/components/session-import/session-import-wizard";
 import { useSessionImportScan } from "@/components/session-import/use-session-import-scan";
-import { useSessionImportRunStore } from "@/stores/session-import/session-import-run-store";
+import {
+  sessionImportRunFor,
+  useSessionImportRunStore,
+} from "@/stores/session-import/session-import-run-store";
 
 /**
  * Stands in for the two real callers (`SessionImportDialog`,
@@ -132,7 +146,10 @@ function TestWizard(props: {
   readonly onImportStarted: () => void;
   readonly secondaryAction: SessionImportSecondaryAction | null;
 }) {
-  const runIdle = useSessionImportRunStore((state) => state.status === "idle");
+  const runIdle = useSessionImportRunStore(
+    (state) =>
+      sessionImportRunFor(state, streamBinding.hostId).status === "idle",
+  );
   const scan = useSessionImportScan(runIdle);
   return <SessionImportWizard {...props} scan={scan} />;
 }
@@ -316,12 +333,12 @@ beforeEach(() => {
   scanClient.close.mockClear();
   startSessionImportRunMock.mockClear();
   analyticsTrackMock.mockClear();
-  useSessionImportRunStore.getState().reset();
+  useSessionImportRunStore.setState({ runs: new Map() });
 });
 
 afterEach(() => {
   cleanup();
-  useSessionImportRunStore.getState().reset();
+  useSessionImportRunStore.setState({ runs: new Map() });
 });
 
 describe("<SessionImportWizard />", () => {

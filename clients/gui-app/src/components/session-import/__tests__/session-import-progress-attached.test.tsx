@@ -13,6 +13,8 @@ import {
   useSessionImportRunStore,
 } from "@/stores/session-import/session-import-run-store";
 
+const HOST = "host-a";
+
 /**
  * The two things the progress view has to get right about WHOSE run it is
  * showing and WHERE the tasks will appear - both invisible to the wizard
@@ -22,7 +24,7 @@ import {
  */
 describe("SessionImportProgress", () => {
   beforeEach(() => {
-    useSessionImportRunStore.getState().reset();
+    useSessionImportRunStore.setState({ runs: new Map() });
   });
 
   afterEach(() => {
@@ -30,12 +32,17 @@ describe("SessionImportProgress", () => {
   });
 
   it("says an import is already running on this machine while attached, with no 'you can close this' copy", () => {
-    useSessionImportRunStore.getState().markStarting(new Map());
+    useSessionImportRunStore.getState().markStarting(HOST, new Map());
     useSessionImportRunStore
       .getState()
-      .applyStarted({ runId: "run-1", total: 4, attached: true });
+      .applyStarted(HOST, { runId: "run-1", total: 4, attached: true });
 
-    render(<SessionImportProgress tone={sessionImportTone("dialog")} />);
+    render(
+      <SessionImportProgress
+        tone={sessionImportTone("dialog")}
+        hostId={HOST}
+      />,
+    );
 
     // Queried by role: the running view is a live region, so what a screen
     // reader is told and what the dialog shows are the same assertion.
@@ -50,12 +57,17 @@ describe("SessionImportProgress", () => {
   });
 
   it("shows no attached notice, and still no 'you can close this' copy, for a run this window started", () => {
-    useSessionImportRunStore.getState().markStarting(new Map());
+    useSessionImportRunStore.getState().markStarting(HOST, new Map());
     useSessionImportRunStore
       .getState()
-      .applyStarted({ runId: "run-1", total: 4, attached: false });
+      .applyStarted(HOST, { runId: "run-1", total: 4, attached: false });
 
-    render(<SessionImportProgress tone={sessionImportTone("dialog")} />);
+    render(
+      <SessionImportProgress
+        tone={sessionImportTone("dialog")}
+        hostId={HOST}
+      />,
+    );
 
     const progress = screen.getByRole("status");
     expect(screen.queryByTestId("session-import-progress-attached")).toBeNull();
@@ -66,13 +78,18 @@ describe("SessionImportProgress", () => {
   });
 
   it("shows the lost-connection copy, distinct from the running and complete views", () => {
-    useSessionImportRunStore.getState().markStarting(new Map());
+    useSessionImportRunStore.getState().markStarting(HOST, new Map());
     useSessionImportRunStore
       .getState()
-      .applyStarted({ runId: "run-1", total: 4, attached: false });
-    useSessionImportRunStore.getState().applyError();
+      .applyStarted(HOST, { runId: "run-1", total: 4, attached: false });
+    useSessionImportRunStore.getState().applyError(HOST);
 
-    render(<SessionImportProgress tone={sessionImportTone("dialog")} />);
+    render(
+      <SessionImportProgress
+        tone={sessionImportTone("dialog")}
+        hostId={HOST}
+      />,
+    );
 
     expect(
       screen.getByText(
@@ -85,10 +102,15 @@ describe("SessionImportProgress", () => {
   });
 
   it("says the import did not start when the host closed the stream before its started frame", () => {
-    useSessionImportRunStore.getState().markStarting(new Map());
-    useSessionImportRunStore.getState().applyError();
+    useSessionImportRunStore.getState().markStarting(HOST, new Map());
+    useSessionImportRunStore.getState().applyError(HOST);
 
-    render(<SessionImportProgress tone={sessionImportTone("dialog")} />);
+    render(
+      <SessionImportProgress
+        tone={sessionImportTone("dialog")}
+        hostId={HOST}
+      />,
+    );
 
     expect(screen.getByText("The import did not start.")).toBeTruthy();
     expect(
@@ -97,16 +119,21 @@ describe("SessionImportProgress", () => {
   });
 
   it("points the tour at the end of onboarding and the dialog at the task list", () => {
-    useSessionImportRunStore.getState().markStarting(new Map());
+    useSessionImportRunStore.getState().markStarting(HOST, new Map());
     useSessionImportRunStore
       .getState()
-      .applyStarted({ runId: "run-1", total: 1, attached: false });
-    useSessionImportRunStore.getState().applyComplete({
+      .applyStarted(HOST, { runId: "run-1", total: 1, attached: false });
+    useSessionImportRunStore.getState().applyComplete(HOST, {
       runId: "run-1",
       counts: { imported: 1, skippedAlreadyImported: 0, failed: 0 },
     });
 
-    render(<SessionImportProgress tone={sessionImportTone("onboarding")} />);
+    render(
+      <SessionImportProgress
+        tone={sessionImportTone("onboarding")}
+        hostId={HOST}
+      />,
+    );
     expect(
       screen.getByText(
         "They'll be in your task list when you finish the tour.",
@@ -114,23 +141,33 @@ describe("SessionImportProgress", () => {
     ).toBeTruthy();
 
     cleanup();
-    render(<SessionImportProgress tone={sessionImportTone("dialog")} />);
+    render(
+      <SessionImportProgress
+        tone={sessionImportTone("dialog")}
+        hostId={HOST}
+      />,
+    );
     expect(
       screen.getByText("Your tasks are in the list on the left."),
     ).toBeTruthy();
   });
 
   it("says nothing was imported and omits the destination line when nothing landed", () => {
-    useSessionImportRunStore.getState().markStarting(new Map());
+    useSessionImportRunStore.getState().markStarting(HOST, new Map());
     useSessionImportRunStore
       .getState()
-      .applyStarted({ runId: "run-1", total: 1, attached: false });
-    useSessionImportRunStore.getState().applyComplete({
+      .applyStarted(HOST, { runId: "run-1", total: 1, attached: false });
+    useSessionImportRunStore.getState().applyComplete(HOST, {
       runId: "run-1",
       counts: { imported: 0, skippedAlreadyImported: 0, failed: 0 },
     });
 
-    render(<SessionImportProgress tone={sessionImportTone("dialog")} />);
+    render(
+      <SessionImportProgress
+        tone={sessionImportTone("dialog")}
+        hostId={HOST}
+      />,
+    );
 
     expect(screen.getByText("Nothing was imported")).toBeTruthy();
     expect(
@@ -139,22 +176,28 @@ describe("SessionImportProgress", () => {
   });
 
   it("reports how many were already in Traycer", () => {
-    useSessionImportRunStore.getState().markStarting(new Map());
+    useSessionImportRunStore.getState().markStarting(HOST, new Map());
     useSessionImportRunStore
       .getState()
-      .applyStarted({ runId: "run-1", total: 1, attached: false });
-    useSessionImportRunStore.getState().applyComplete({
+      .applyStarted(HOST, { runId: "run-1", total: 1, attached: false });
+    useSessionImportRunStore.getState().applyComplete(HOST, {
       runId: "run-1",
       counts: { imported: 0, skippedAlreadyImported: 3, failed: 0 },
     });
 
-    render(<SessionImportProgress tone={sessionImportTone("dialog")} />);
+    render(
+      <SessionImportProgress
+        tone={sessionImportTone("dialog")}
+        hostId={HOST}
+      />,
+    );
 
     expect(screen.getByText("3 already in Traycer")).toBeTruthy();
   });
 
   it("groups a complete run's failures by reason and keeps sessions hidden until the toggle is clicked", () => {
     useSessionImportRunStore.getState().markStarting(
+      HOST,
       new Map([
         ["claude:s1", "Broken session one"],
         ["claude:s2", "Broken session two"],
@@ -163,8 +206,9 @@ describe("SessionImportProgress", () => {
     );
     useSessionImportRunStore
       .getState()
-      .applyStarted({ runId: "run-1", total: 3, attached: false });
+      .applyStarted(HOST, { runId: "run-1", total: 3, attached: false });
     useSessionImportRunStore.getState().applyProgress(
+      HOST,
       progressEntryFrom({
         runId: "run-1",
         harness: "claude",
@@ -177,6 +221,7 @@ describe("SessionImportProgress", () => {
       }),
     );
     useSessionImportRunStore.getState().applyProgress(
+      HOST,
       progressEntryFrom({
         runId: "run-1",
         harness: "claude",
@@ -189,6 +234,7 @@ describe("SessionImportProgress", () => {
       }),
     );
     useSessionImportRunStore.getState().applyProgress(
+      HOST,
       progressEntryFrom({
         runId: "run-1",
         harness: "codex",
@@ -196,12 +242,17 @@ describe("SessionImportProgress", () => {
         outcome: { kind: "failed", reason: "source_empty", detail: "" },
       }),
     );
-    useSessionImportRunStore.getState().applyComplete({
+    useSessionImportRunStore.getState().applyComplete(HOST, {
       runId: "run-1",
       counts: { imported: 0, skippedAlreadyImported: 0, failed: 3 },
     });
 
-    render(<SessionImportProgress tone={sessionImportTone("dialog")} />);
+    render(
+      <SessionImportProgress
+        tone={sessionImportTone("dialog")}
+        hostId={HOST}
+      />,
+    );
 
     // One line, one toggle; the reasons are sections behind it.
     expect(screen.getByTestId("session-import-not-imported").textContent).toBe(

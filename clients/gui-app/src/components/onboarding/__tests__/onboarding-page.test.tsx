@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render as renderUi,
@@ -19,6 +20,20 @@ import {
   type OnboardingActId,
 } from "@/components/onboarding/onboarding-acts";
 import type { OnboardingAgentGuideState } from "@/components/onboarding/onboarding-agent-guide-pane";
+import {
+  hostScopeFixture,
+  hostScopeOptionFixture,
+} from "@/components/settings/host-scope/host-scope-fixture";
+import type {
+  HostScope,
+  HostScopeSelection,
+} from "@/components/settings/host-scope/use-host-scope";
+import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
+import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
+import {
+  useStreamHostId,
+  type StreamRuntimeBinding,
+} from "@/lib/host/stream-runtime-context";
 import { RunnerHostContext } from "@/providers/runner-host-context";
 
 type GuideQueryState = {
@@ -47,7 +62,89 @@ vi.mock("@/components/onboarding/onboarding-theme-picker", () => ({
 }));
 
 vi.mock("@/components/session-import/session-import-wizard", () => ({
-  SessionImportWizard: () => <div data-testid="session-import-wizard-stub" />,
+  // Prints the host of the stream binding the tour re-provided above it, which
+  // is the whole point of the picker: the wizard's scan, and the run it starts,
+  // must move to whichever machine the title bar names.
+  SessionImportWizard: () => (
+    <div
+      data-testid="session-import-wizard-stub"
+      data-stream-host={useStreamHostId() ?? ""}
+    />
+  ),
+}));
+
+// The scan subscribes over the stream transport the moment one exists, and
+// this suite provides a stub client with no server behind it. The tour only
+// hands the handle on to the (stubbed) wizard.
+vi.mock("@/components/session-import/use-session-import-scan", () => ({
+  useSessionImportScan: () => ({
+    state: { kind: "scan-stub" },
+    dispatch: () => undefined,
+  }),
+}));
+
+/**
+ * The tour re-provides the picked host's runtimes, so the six hooks a
+ * `HostScope` composes (both host lists, the runner host, the plan gate) would
+ * all have to stand up for a suite about act navigation. Mocked at the scope
+ * boundary, exactly as the Settings panels' and the usage popover's suites do.
+ */
+const hostsMock = vi.hoisted(() => ({ ids: ["host-a"] as readonly string[] }));
+
+vi.mock(
+  "@/components/settings/host-scope/use-host-scope",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/components/settings/host-scope/use-host-scope")
+    >()),
+    useHostScopeFor: (selection: HostScopeSelection) => tourScope(selection),
+  }),
+);
+
+// The unary half needs no client here: every host RPC the tour makes is
+// mocked above, so what matters is only that the tour keeps rendering.
+vi.mock("@/components/settings/host-scope/use-scoped-host-binding", () => ({
+  useScopedHostBinding: () => null,
+}));
+
+// The stream half is this suite's subject, so it answers the way the real hook
+// does: a binding of its own for an explicit pick, `null` while following.
+//
+// `streamStallMock` reproduces the window that makes the tour's agreement
+// check necessary. The real hook holds its binding in STATE and replaces it in
+// an effect, so for at least the commit after a pick it still answers for the
+// host being left - or `null` - while the scope has already moved.
+const streamStallMock = vi.hoisted(() => ({ hostId: null as string | null }));
+
+vi.mock("@/components/settings/host-scope/use-scoped-stream-binding", () => ({
+  useScopedStreamBinding: (scope: HostScope) =>
+    scope.isViewingActive ||
+    scope.hostId === null ||
+    scope.hostId === streamStallMock.hostId
+      ? null
+      : streamBindingFor(scope.hostId),
+}));
+
+// The picker's two collaborators outside this suite's subject: the registry
+// liveness poll (a query with no client behind it) and the Settings jump (a
+// router this harness has no route tree for).
+vi.mock("@/hooks/auth/use-registered-hosts-query", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/auth/use-registered-hosts-query")
+  >()),
+  useRegisteredHostsPollLiveness: () => undefined,
+}));
+
+vi.mock("@/stores/tabs/use-system-tab-modal", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/stores/tabs/use-system-tab-modal")
+  >()),
+  useSystemTabModalActions: () => ({
+    openSettings: () => undefined,
+    openHistory: () => undefined,
+    close: () => undefined,
+    setSection: () => undefined,
+  }),
 }));
 
 /**
@@ -56,8 +153,22 @@ vi.mock("@/components/session-import/session-import-wizard", () => ({
  */
 const sessionImportAvailableMock = vi.hoisted(() => ({ value: true }));
 
+// The per-CLIENT form is the session-import stage's own gate, so it answers
+// per host: each fake transport carries its host in `instanceId`, which is what
+// lets this say "host B is too old" without the stage being told a host id it
+// could have read from anywhere.
+const scanUnsupportedMock = vi.hoisted(() => ({
+  hostId: null as string | null,
+}));
+
 vi.mock("@/hooks/session-import/use-session-import-available", () => ({
   useSessionImportAvailable: () => sessionImportAvailableMock.value,
+  useSessionImportAvailableFor: (
+    client: IHostStreamClient<HostStreamRpcRegistry> | null,
+  ) =>
+    client === null ||
+    scanUnsupportedMock.hostId === null ||
+    client.instanceId !== streamClientInstanceId(scanUnsupportedMock.hostId),
 }));
 
 // The wizard is stubbed above, so nothing in this file can click its own
@@ -137,14 +248,93 @@ vi.mock(
   }),
 );
 
+// `isPending` is DRIVEN, not pinned false: the page reads it as
+// `agentGuideSaving`, and `saveAgentGuideDraft` reports failure while it is
+// true. A suite that pins it false cannot reach the mid-save arm at all.
+const guideSavingMock = vi.hoisted(() => ({ pending: false }));
+
 vi.mock("@/hooks/agent/use-agent-selection-guide-set-global-mutation", () => ({
   useAgentSelectionGuideSetGlobalMutation: () => ({
     isError: false,
-    isPending: false,
+    isPending: guideSavingMock.pending,
     mutateAsync: setGlobalGuideMock,
     reset: resetSetGlobalGuideMock,
   }),
 }));
+
+/**
+ * The scope the tour sees, over the selection the PAGE owns - so a pick made
+ * through the picker really does re-point the tour, rather than the fixture
+ * deciding the answer in advance.
+ */
+function tourScope(selection: HostScopeSelection): HostScope {
+  const hosts = hostsMock.ids.map((hostId) =>
+    hostScopeOptionFixture({ hostId, name: hostId }),
+  );
+  const picked =
+    selection.scopedHostId === null
+      ? (hosts[0] ?? null)
+      : (hosts.find((host) => host.hostId === selection.scopedHostId) ?? null);
+  return hostScopeFixture({
+    hosts,
+    host: picked,
+    hostId: picked?.hostId ?? null,
+    hostLabel: picked?.name ?? "No host",
+    activeHostId: hosts[0]?.hostId ?? null,
+    activeHost: hosts[0] ?? null,
+    isViewingActive: selection.scopedHostId === null,
+    status: selection.scopedHostId === null ? "following" : "ready",
+    setHostId: selection.setScopedHostId,
+  });
+}
+
+/**
+ * One binding per host, kept rather than rebuilt: a fresh object each render
+ * would hand the whole subtree a new stream client on every commit.
+ */
+const streamBindings = new Map<string, StreamRuntimeBinding>();
+
+function streamBindingFor(hostId: string): StreamRuntimeBinding {
+  const existing = streamBindings.get(hostId);
+  if (existing !== undefined) return existing;
+  const created: StreamRuntimeBinding = {
+    wsStreamClient: fakeWsStreamClient(hostId),
+    hostId,
+    retain: null,
+  };
+  streamBindings.set(hostId, created);
+  return created;
+}
+
+function streamClientInstanceId(hostId: string): string {
+  return `fake-ws-stream-client:${hostId}`;
+}
+
+/** Honest enough for `useWsStreamClient`, which only asks whether it is open. */
+function fakeWsStreamClient(
+  hostId: string,
+): IHostStreamClient<HostStreamRpcRegistry> {
+  return {
+    subscribe: () => {
+      throw new Error("not exercised by this suite");
+    },
+    subscribeWithParamsProvider: () => {
+      throw new Error("not exercised by this suite");
+    },
+    close: () => undefined,
+    isClosed: () => false,
+    isReady: () => true,
+    notifyBearerRotated: () => undefined,
+    reconnectAll: () => undefined,
+    getMethodSupport: () => "unknown",
+    subscribeMethodSupport: () => () => undefined,
+    getMethodSchemaVersion: () => null,
+    subscribeAvailabilityRecovered: () => () => undefined,
+    getClosedReason: () => null,
+    instanceId: streamClientInstanceId(hostId),
+    onClosed: () => () => undefined,
+  };
+}
 
 const navigateMock = vi.fn();
 const historyBackMock = vi.fn();
@@ -225,6 +415,10 @@ describe("OnboardingPage", () => {
     useFeatureAnnouncementsStore.setState({ consumed: {} });
     window.localStorage.clear();
     sessionImportAvailableMock.value = true;
+    hostsMock.ids = ["host-a"];
+    streamStallMock.hostId = null;
+    guideSavingMock.pending = false;
+    scanUnsupportedMock.hostId = null;
     startSessionImportRunMock.mockClear();
     navigateMock.mockReset();
     historyBackMock.mockReset();
@@ -982,5 +1176,177 @@ describe("OnboardingPage", () => {
     await advanceToAct("command-theme");
 
     expect(currentActId()).toBe("command-theme");
+  });
+
+  function streamHostOfWizard(): string | null {
+    return screen
+      .getByTestId("session-import-wizard-stub")
+      .getAttribute("data-stream-host");
+  }
+
+  it("re-points the import stage's stream at a newly picked host", async () => {
+    hostsMock.ids = ["host-a", "host-b"];
+    renderPage({ replay: false });
+    await advanceToAct("session-import");
+
+    // Following the host the tour opened on: no transport of its own, which is
+    // exactly what the tour read before there was a picker.
+    expect(streamHostOfWizard()).toBe("");
+
+    fireEvent.click(screen.getByTestId("settings-host-switcher"));
+    fireEvent.click(screen.getByTestId("settings-host-switcher-option-host-b"));
+
+    await waitFor(() => {
+      expect(streamHostOfWizard()).toBe("host-b");
+    });
+  });
+
+  it("saves the guide draft to the host being left before the pick commits", async () => {
+    hostsMock.ids = ["host-a", "host-b"];
+    // Held open so the ORDER is observable rather than inferred from a promise
+    // that resolves in the same tick as the click.
+    const save = { release: (): void => undefined };
+    setGlobalGuideMock.mockImplementationOnce(
+      (variables: { readonly content: string }) =>
+        new Promise((resolve) => {
+          save.release = () =>
+            resolve({
+              content: variables.content,
+              generatedDefaultContent: "claude guide",
+            });
+        }),
+    );
+    renderPage({ replay: false });
+
+    await advanceToAct("agent-guide");
+    fireEvent.change(screen.getByTestId("mock-agent-guide-input"), {
+      target: { value: "notes for host a" },
+    });
+    await advanceToAct("session-import");
+
+    fireEvent.click(screen.getByTestId("settings-host-switcher"));
+    fireEvent.click(screen.getByTestId("settings-host-switcher-option-host-b"));
+
+    expect(setGlobalGuideMock).toHaveBeenCalledWith({
+      content: "notes for host a",
+    });
+    // The write is still in flight, so the tour is still on the host it is
+    // writing to - a pick that committed here would land host A's draft on
+    // host B.
+    expect(streamHostOfWizard()).toBe("");
+
+    act(() => save.release());
+    await waitFor(() => {
+      expect(streamHostOfWizard()).toBe("host-b");
+    });
+  });
+
+  it("withholds the wizard while the stream still names the host being left", async () => {
+    // The scope resolves a pick synchronously; the transport does not. Between
+    // the two, the wizard on screen would scan - and import from - host A under
+    // a title bar reading host B.
+    hostsMock.ids = ["host-a", "host-b"];
+    streamStallMock.hostId = "host-b";
+    const view = renderPage({ replay: false });
+    await advanceToAct("session-import");
+
+    fireEvent.click(screen.getByTestId("settings-host-switcher"));
+    fireEvent.click(screen.getByTestId("settings-host-switcher-option-host-b"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("host-scope-connecting")).not.toBeNull();
+    });
+    expect(screen.queryByTestId("session-import-wizard-stub")).toBeNull();
+
+    // And it is a WAIT, not a dead end: the wizard returns on the host it
+    // names the moment the transport catches up.
+    streamStallMock.hostId = null;
+    view.rerender(
+      <LazyMotion features={domAnimation}>
+        <OnboardingPage replay={false} />
+      </LazyMotion>,
+    );
+    await waitFor(() => {
+      expect(streamHostOfWizard()).toBe("host-b");
+    });
+  });
+
+  it("honours the latest pick when a second one lands mid-save", async () => {
+    hostsMock.ids = ["host-a", "host-b", "host-c"];
+    const save = { release: (): void => undefined };
+    setGlobalGuideMock.mockImplementationOnce(
+      (variables: { readonly content: string }) =>
+        new Promise((resolve) => {
+          guideSavingMock.pending = true;
+          save.release = () => {
+            guideSavingMock.pending = false;
+            resolve({
+              content: variables.content,
+              generatedDefaultContent: "claude guide",
+            });
+          };
+        }),
+    );
+    const view = renderPage({ replay: false });
+
+    await advanceToAct("agent-guide");
+    fireEvent.change(screen.getByTestId("mock-agent-guide-input"), {
+      target: { value: "notes for host a" },
+    });
+    await advanceToAct("session-import");
+
+    fireEvent.click(screen.getByTestId("settings-host-switcher"));
+    fireEvent.click(screen.getByTestId("settings-host-switcher-option-host-b"));
+
+    // The page must SEE the write in flight, which is the state that used to
+    // make `saveAgentGuideDraft` report failure and the next pick vanish.
+    view.rerender(
+      <LazyMotion features={domAnimation}>
+        <OnboardingPage replay={false} />
+      </LazyMotion>,
+    );
+
+    // Second thoughts, while the first pick's write is still open.
+    fireEvent.click(screen.getByTestId("settings-host-switcher"));
+    fireEvent.click(screen.getByTestId("settings-host-switcher-option-host-c"));
+
+    // One write of one draft, not two: the second pick replaced the
+    // destination rather than starting another save of the same content.
+    expect(setGlobalGuideMock).toHaveBeenCalledTimes(1);
+
+    act(() => save.release());
+    await waitFor(() => {
+      expect(streamHostOfWizard()).toBe("host-c");
+    });
+  });
+
+  it("refuses the wizard on a picked host too old to scan sessions", async () => {
+    // The act EXISTS because the ambient host can scan; the picked one is a
+    // different machine and may predate the feature entirely.
+    hostsMock.ids = ["host-a", "host-b"];
+    scanUnsupportedMock.hostId = "host-b";
+    renderPage({ replay: false });
+    await advanceToAct("session-import");
+    expect(screen.getByTestId("session-import-wizard-stub")).not.toBeNull();
+
+    fireEvent.click(screen.getByTestId("settings-host-switcher"));
+    fireEvent.click(screen.getByTestId("settings-host-switcher-option-host-b"));
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("onboarding-host-unavailable").textContent,
+      ).toContain("host-b can't import sessions");
+    });
+    expect(screen.queryByTestId("session-import-wizard-stub")).toBeNull();
+  });
+
+  it("reads as plain text, not a picker, on a single-host account", async () => {
+    renderPage({ replay: false });
+    await advanceToAct("session-import");
+
+    expect(screen.getByTestId("onboarding-host-name").textContent).toBe(
+      "host-a",
+    );
+    expect(screen.queryByTestId("settings-host-switcher")).toBeNull();
   });
 });

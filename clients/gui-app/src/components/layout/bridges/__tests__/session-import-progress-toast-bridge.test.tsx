@@ -20,11 +20,17 @@ vi.mock("sonner", () => ({
   }),
 }));
 
+const HOST = "host-a";
+
 function startRun(input: { readonly total: number }): void {
   act(() => {
     const store = useSessionImportRunStore.getState();
-    store.markStarting(new Map());
-    store.applyStarted({ runId: "run-1", total: input.total, attached: false });
+    store.markStarting(HOST, new Map());
+    store.applyStarted(HOST, {
+      runId: "run-1",
+      total: input.total,
+      attached: false,
+    });
   });
 }
 
@@ -33,13 +39,13 @@ beforeEach(() => {
   progressSuccessToastMock.mockClear();
   toastMessageMock.mockClear();
   toastDismissMock.mockClear();
-  useSessionImportRunStore.getState().reset();
+  useSessionImportRunStore.setState({ runs: new Map() });
   useOnboardingTourOpenStore.getState().setOpen(false);
 });
 
 afterEach(() => {
   cleanup();
-  useSessionImportRunStore.getState().reset();
+  useSessionImportRunStore.setState({ runs: new Map() });
   useOnboardingTourOpenStore.getState().setOpen(false);
 });
 
@@ -54,7 +60,7 @@ describe("<SessionImportProgressToastBridge />", () => {
     );
 
     act(() => {
-      useSessionImportRunStore.getState().applyComplete({
+      useSessionImportRunStore.getState().applyComplete(HOST, {
         runId: "run-1",
         counts: { imported: 2, skippedAlreadyImported: 0, failed: 1 },
       });
@@ -70,7 +76,7 @@ describe("<SessionImportProgressToastBridge />", () => {
     render(<SessionImportProgressToastBridge />);
 
     act(() => {
-      useSessionImportRunStore.getState().markStarting(new Map());
+      useSessionImportRunStore.getState().markStarting(HOST, new Map());
     });
     expect(progressToastMock).toHaveBeenCalledWith(
       "Starting import…",
@@ -101,7 +107,7 @@ describe("<SessionImportProgressToastBridge />", () => {
 
     startRun({ total: 1 });
     act(() => {
-      useSessionImportRunStore.getState().applyComplete({
+      useSessionImportRunStore.getState().applyComplete(HOST, {
         runId: "run-1",
         counts: { imported: 0, skippedAlreadyImported: 1, failed: 0 },
       });
@@ -120,7 +126,7 @@ describe("<SessionImportProgressToastBridge />", () => {
     expect(progressToastMock).toHaveBeenCalled();
 
     act(() => {
-      useSessionImportRunStore.getState().applyError();
+      useSessionImportRunStore.getState().applyError(HOST);
     });
     expect(toastDismissMock).toHaveBeenCalledTimes(1);
     expect(progressSuccessToastMock).not.toHaveBeenCalled();

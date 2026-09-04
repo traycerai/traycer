@@ -14,6 +14,8 @@ import type {
   SessionImportRunCallbacks,
   SessionImportRunClientOptions,
 } from "@traycer-clients/shared/host-transport/session-import-run-client";
+import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
+import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 
 /**
  * Captures every `SessionImportRunClient` the controller constructs, in
@@ -78,8 +80,13 @@ import { SessionImportRunController } from "@/components/session-import/session-
 import {
   getSessionImportStartHandle,
   type SessionImportRunRequest,
+  type SessionImportRunTarget,
 } from "@/components/session-import/session-import-run-handle";
-import { useSessionImportRunStore } from "@/stores/session-import/session-import-run-store";
+import {
+  sessionImportRunFor,
+  useSessionImportRunStore,
+  type SessionImportRunState,
+} from "@/stores/session-import/session-import-run-store";
 
 const SELECTION: SessionImportSelection = {
   harness: "claude",
@@ -94,17 +101,69 @@ function requireInstance(index: number): RunClientInstance {
   return instance;
 }
 
+/**
+ * A stub satisfying `IHostStreamClient` honestly rather than casting - never
+ * exercised by this suite, since `SessionImportRunClient` is itself mocked
+ * above and never calls through to it.
+ */
+function fakeWsStreamClient(): IHostStreamClient<HostStreamRpcRegistry> {
+  return {
+    subscribe: () => {
+      throw new Error("not exercised by this test");
+    },
+    subscribeWithParamsProvider: () => {
+      throw new Error("not exercised by this test");
+    },
+    close: () => undefined,
+    isClosed: () => false,
+    isReady: () => true,
+    notifyBearerRotated: () => undefined,
+    reconnectAll: () => undefined,
+    getMethodSupport: () => "unknown",
+    subscribeMethodSupport: () => () => undefined,
+    getMethodSchemaVersion: () => null,
+    subscribeAvailabilityRecovered: () => () => undefined,
+    getClosedReason: () => null,
+    onClosed: () => () => undefined,
+    instanceId: "fake-ws-stream-client",
+  };
+}
+
+/** The target every `start()` call in this suite hands the current binding under. */
+function startTarget(): SessionImportRunTarget {
+  const hostId = streamBinding.hostId;
+  if (hostId === null) {
+    throw new Error("Expected a bound host id in this test.");
+  }
+  return {
+    binding: { wsStreamClient: fakeWsStreamClient(), hostId, retain: null },
+    hostId,
+  };
+}
+
+function runFor(hostId: string): SessionImportRunState {
+  return sessionImportRunFor(useSessionImportRunStore.getState(), hostId);
+}
+
+/** The store slice for the host the suite is currently bound to. */
+function currentRun(): SessionImportRunState {
+  return sessionImportRunFor(
+    useSessionImportRunStore.getState(),
+    streamBinding.hostId,
+  );
+}
+
 beforeEach(() => {
   streamBinding.client = { stream: "test" };
   streamBinding.hostId = "host-a";
   runClientHarness.instances = [];
   invalidateQueriesMock.mockClear();
-  useSessionImportRunStore.getState().reset();
+  useSessionImportRunStore.setState({ runs: new Map() });
 });
 
 afterEach(() => {
   cleanup();
-  useSessionImportRunStore.getState().reset();
+  useSessionImportRunStore.setState({ runs: new Map() });
 });
 
 describe("<SessionImportRunController />", () => {
@@ -124,7 +183,7 @@ describe("<SessionImportRunController />", () => {
     });
 
     expect(probe.close).toHaveBeenCalledTimes(1);
-    expect(useSessionImportRunStore.getState().status).toBe("idle");
+    expect(currentRun().status).toBe("idle");
   });
 
   it("attaches to a run already in flight and folds its progress and completion into the store", () => {
@@ -140,7 +199,7 @@ describe("<SessionImportRunController />", () => {
     });
 
     expect(probe.close).not.toHaveBeenCalled();
-    const afterStarted = useSessionImportRunStore.getState();
+    const afterStarted = currentRun();
     expect(afterStarted.status).toBe("running");
     expect(afterStarted.attached).toBe(true);
     expect(afterStarted.runId).toBe("run-1");
@@ -157,7 +216,7 @@ describe("<SessionImportRunController />", () => {
       });
     });
 
-    expect(useSessionImportRunStore.getState().outcomes.size).toBe(1);
+    expect(currentRun().outcomes.size).toBe(1);
 
     act(() => {
       probe.callbacks.onComplete({
@@ -166,7 +225,7 @@ describe("<SessionImportRunController />", () => {
       });
     });
 
-    const afterComplete = useSessionImportRunStore.getState();
+    const afterComplete = currentRun();
     expect(afterComplete.status).toBe("complete");
     expect(afterComplete.finalCounts).toEqual({
       imported: 1,
@@ -199,7 +258,7 @@ describe("<SessionImportRunController />", () => {
       titles: new Map([["claude:s1", "My session"]]),
     };
     act(() => {
-      handle.start(request);
+      handle.start(request, startTarget());
     });
 
     // One run at a time is the contract - a second subscribe here would
@@ -220,7 +279,7 @@ describe("<SessionImportRunController />", () => {
       titles: new Map([["claude:s1", "My session"]]),
     };
     act(() => {
-      handle.start(request);
+      handle.start(request, startTarget());
     });
 
     // The probe was only asking; the click must not be dropped for it. If a
@@ -229,14 +288,14 @@ describe("<SessionImportRunController />", () => {
     expect(probe.close).toHaveBeenCalledTimes(1);
     expect(runClientHarness.instances).toHaveLength(2);
     expect(requireInstance(1).selections).toEqual([SELECTION]);
-    expect(useSessionImportRunStore.getState().status).toBe("starting");
+    expect(currentRun().status).toBe("starting");
   });
 
-  it("probes the new host once a run retained across a host swap closes", () => {
+  it("probes a new host straight away and keeps the previous host's run", () => {
     const view = render(<SessionImportRunController />);
-    const firstProbe = requireInstance(0);
+    const hostAProbe = requireInstance(0);
     act(() => {
-      firstProbe.callbacks.onStarted({
+      hostAProbe.callbacks.onStarted({
         attached: true,
         runId: "run-1",
         total: 2,
@@ -244,34 +303,39 @@ describe("<SessionImportRunController />", () => {
     });
 
     // The app is pointed at another host while host-a's run is still going.
-    // That run keeps the client slot, so the new host is not asked yet.
+    // Runs are per host, so host-a's does not hold the question back: host-b
+    // has never been asked, and a run in flight there is a fact this window
+    // has no other way to learn.
     streamBinding.client = { stream: "test-b" };
     streamBinding.hostId = "host-b";
     view.rerender(<SessionImportRunController />);
-    expect(runClientHarness.instances).toHaveLength(1);
 
-    act(() => {
-      firstProbe.callbacks.onComplete({
-        runId: "run-1",
-        counts: { imported: 2, skippedAlreadyImported: 0, failed: 0 },
-      });
-    });
-
-    // Host-a's run closing is what frees the slot, and the new binding has
-    // never been asked - so it is asked now, finished summary or not.
     expect(runClientHarness.instances).toHaveLength(2);
-    const secondProbe = requireInstance(1);
-    expect(secondProbe.selections).toEqual([]);
+    const hostBProbe = requireInstance(1);
+    expect(hostBProbe.selections).toEqual([]);
     act(() => {
-      secondProbe.callbacks.onStarted({
+      hostBProbe.callbacks.onStarted({
         attached: true,
         runId: "run-2",
         total: 3,
       });
     });
-    const state = useSessionImportRunStore.getState();
-    expect(state.runId).toBe("run-2");
-    expect(state.status).toBe("running");
+    act(() => {
+      hostAProbe.callbacks.onComplete({
+        runId: "run-1",
+        counts: { imported: 2, skippedAlreadyImported: 0, failed: 0 },
+      });
+    });
+
+    // Each machine's frames land in its own slice: host-a's summary does not
+    // replace the run host-b is still reporting.
+    const hostA = runFor("host-a");
+    expect(hostA.status).toBe("complete");
+    expect(hostA.runId).toBe("run-1");
+    const hostB = runFor("host-b");
+    expect(hostB.status).toBe("running");
+    expect(hostB.runId).toBe("run-2");
+    expect(hostB.total).toBe(3);
   });
 
   it("does not ask the same binding again after its own run finishes", () => {
@@ -285,10 +349,13 @@ describe("<SessionImportRunController />", () => {
       throw new Error("Expected a session import start handle.");
     }
     act(() => {
-      handle.start({
-        selections: [SELECTION],
-        titles: new Map([["claude:s1", "My session"]]),
-      });
+      handle.start(
+        {
+          selections: [SELECTION],
+          titles: new Map([["claude:s1", "My session"]]),
+        },
+        startTarget(),
+      );
     });
     const run = requireInstance(1);
     act(() => {

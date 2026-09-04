@@ -213,7 +213,10 @@ export function HostStreamProvider(props: HostStreamProviderProps): ReactNode {
     // `target` — so publishing the render-time name would ship
     // `{ client for B, hostId: A }` until a later render corrected it. The name
     // has to come from the same read as the thing it names.
-    setValue({ wsStreamClient, hostId: target.hostId });
+    // `retain: null` - this client is not reference-counted by its readers.
+    // It is rebuilt only on an identity change, and the effect below owns the
+    // one close there is, so there is no lease for a consumer to hold.
+    setValue({ wsStreamClient, hostId: target.hostId, retain: null });
 
     return () => {
       teardownInProgressRef.current = true;

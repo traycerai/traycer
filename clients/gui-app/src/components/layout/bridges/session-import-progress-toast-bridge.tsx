@@ -8,6 +8,7 @@ import {
 } from "@/lib/toast/progress-toast";
 import { useOnboardingTourOpenStore } from "@/stores/onboarding/onboarding-tour-open-store";
 import {
+  latestSessionImportRun,
   sessionImportDoneCount,
   useSessionImportRunStore,
 } from "@/stores/session-import/session-import-run-store";
@@ -24,6 +25,12 @@ const SESSION_IMPORT_PROGRESS_TOAST_ID = "session-import-progress";
  * copy already promises the import runs in the background, and the toast
  * greeting the user as they land in the real app is that promise kept.
  *
+ * ONE toast, even when two machines are importing: it speaks for the most
+ * recently started run (`latestSessionImportRun`). A column of toasts, one per
+ * host, would be a lot of chrome for a case that is already rare, and the copy
+ * says what happened rather than where - the Settings row and the wizard are
+ * where a per-host answer lives.
+ *
  * A run whose stream is lost ("error") just retires the toast quietly: no
  * other feature announces a dropped stream, and the Settings row still shows
  * the run's state to anyone who looks.
@@ -31,14 +38,18 @@ const SESSION_IMPORT_PROGRESS_TOAST_ID = "session-import-progress";
 export function SessionImportProgressToastBridge(): null {
   const tourOpen = useOnboardingTourOpenStore((state) => state.open);
   const run = useSessionImportRunStore(
-    useShallow((state) => ({
-      status: state.status,
-      runId: state.runId,
-      done: sessionImportDoneCount(state),
-      total: state.total,
-      lastTitle: state.lastTitle,
-      finalCounts: state.finalCounts,
-    })),
+    useShallow((state) => {
+      const latest = latestSessionImportRun(state.runs);
+      const slice = latest === null ? null : latest.run;
+      return {
+        status: slice?.status ?? "idle",
+        runId: slice?.runId ?? null,
+        done: slice === null ? 0 : sessionImportDoneCount(slice),
+        total: slice?.total ?? 0,
+        lastTitle: slice?.lastTitle ?? null,
+        finalCounts: slice?.finalCounts ?? null,
+      };
+    }),
   );
   // The run whose progress toast the user closed by hand: stay quiet for the
   // rest of that run, but let the next one toast again.
