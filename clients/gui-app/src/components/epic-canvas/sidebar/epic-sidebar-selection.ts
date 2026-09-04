@@ -9,8 +9,8 @@ import {
   type ReactNode,
 } from "react";
 import {
-  useEpicArchivedNodeIds,
-  useEpicTreeIndex,
+  useMaybeEpicArchivedNodeIds,
+  useMaybeEpicTreeIndex,
   type EpicTreeIndex,
 } from "@/lib/epic-selectors";
 import {
@@ -364,14 +364,18 @@ function collectArchivedOnlyHiddenIds(
  * `null` (no handshake yet) keeps hiding, because revealing on unknown would
  * flash archived rows on every cold start and hide them again a moment later.
  * Only a positive `false` reveals.
+ *
+ * Provider-optional for the reason given on {@link useSidebarChatOrder}, its
+ * only caller outside the panel: with no session there are no archived rows and
+ * nothing to hide, so the hidden set is empty.
  */
 export function useSidebarArchiveHiddenIds(
   epicId: string,
 ): ReadonlySet<string> {
   const archiveVisibility = useChatArchiveVisibility(epicId);
   const archiveSupport = useChatArchiveSupportState();
-  const archivedIds = useEpicArchivedNodeIds();
-  const tree = useEpicTreeIndex();
+  const archivedIds = useMaybeEpicArchivedNodeIds();
+  const tree = useMaybeEpicTreeIndex();
   return useMemo(() => {
     if (
       archiveVisibility === CHAT_ARCHIVE_VISIBILITY.All ||
@@ -507,9 +511,16 @@ export function collectVisibleSidebarTreeIds(args: {
  * Terminal agents are walked through but never emitted: they have no composer,
  * so an agent is not somewhere a message can be sent - while the chats nested
  * UNDER one are, and are exactly what a chat-rooted walk would have missed.
+ *
+ * Reads the tree through the PROVIDER-OPTIONAL selectors, so this resolves to
+ * an empty order outside an open-epic session instead of throwing. The picker
+ * is not a canvas-only surface: a browser tile on the Start Page renders the
+ * same annotation route, and a Start Page browser tab belongs to no epic, so
+ * "no session" is an expected state here rather than a missing provider. An
+ * empty order is the right answer for it - there is no composer to send to.
  */
 export function useSidebarChatOrder(epicId: string): readonly string[] {
-  const tree = useEpicTreeIndex();
+  const tree = useMaybeEpicTreeIndex();
   const sort = useChatSort(epicId);
   const archiveHiddenIds = useSidebarArchiveHiddenIds(epicId);
   return useMemo(() => {

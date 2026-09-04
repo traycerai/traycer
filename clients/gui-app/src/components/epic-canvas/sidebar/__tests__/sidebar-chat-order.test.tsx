@@ -191,6 +191,21 @@ function ChatOrderProbe() {
   );
 }
 
+/**
+ * The two picker hooks alone, with nothing else that needs a session, so this
+ * can render outside every provider.
+ */
+function ProviderlessOrderProbe() {
+  const chatOrder = useSidebarChatOrder(EPIC_ID);
+  const archiveHiddenIds = useSidebarArchiveHiddenIds(EPIC_ID);
+  return (
+    <>
+      <output data-testid="providerless-order">{chatOrder.join(",")}</output>
+      <output data-testid="providerless-hidden">{archiveHiddenIds.size}</output>
+    </>
+  );
+}
+
 afterEach(() => {
   cleanup();
 });
@@ -226,5 +241,19 @@ describe("useSidebarChatOrder", () => {
       view.unmount();
       handle.dispose();
     }
+  });
+
+  /**
+   * The picker is not canvas-only: a browser tile on the Start Page resolves
+   * the same annotation route at the app shell, and a Start Page browser tab
+   * belongs to no epic, so there is no `<EpicSessionProvider>` above it. This
+   * used to throw out of the tree read and take the whole window down.
+   */
+  it("resolves to an empty order with no epic session", () => {
+    expect(() => {
+      render(<ProviderlessOrderProbe />);
+    }).not.toThrow();
+    expect(screen.getByTestId("providerless-order").textContent).toBe("");
+    expect(screen.getByTestId("providerless-hidden").textContent).toBe("0");
   });
 });
