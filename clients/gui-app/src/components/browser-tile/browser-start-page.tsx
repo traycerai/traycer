@@ -126,6 +126,7 @@ export function BrowserStartPage(props: BrowserStartPageProps) {
             role="status"
           >
             {startPageStatus(
+              props.scope,
               localServersReachable,
               query.isPending,
               query.isError,
@@ -137,7 +138,15 @@ export function BrowserStartPage(props: BrowserStartPageProps) {
   );
 }
 
+/**
+ * The empty state has to name the right place to go start a server, and that
+ * differs by scope: the canvas start page lists what this epic's terminals own,
+ * while the Start Page panel renders the same surface under
+ * `{ kind: "independent" }` and lists what the DEVICE's own terminals own. A
+ * single "in this epic" line was wrong on the panel, where there is no epic.
+ */
 function startPageStatus(
+  scope: HostResourceScope,
   localServersReachable: boolean,
   pending: boolean,
   failed: boolean,
@@ -147,5 +156,8 @@ function startPageStatus(
   }
   if (pending) return "Looking for local servers…";
   if (failed) return "Unable to find local servers. Enter a URL above.";
+  if (scope.kind === "independent") {
+    return "No local servers detected. Start one in a terminal here or enter a URL above.";
+  }
   return "No local servers detected. Start one in this epic or enter a URL above.";
 }

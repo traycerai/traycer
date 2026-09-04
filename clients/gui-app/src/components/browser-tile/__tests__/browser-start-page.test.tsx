@@ -100,3 +100,50 @@ describe("<BrowserStartPage /> visibility gate", () => {
     expect(await screen.findByText("vite")).toBeTruthy();
   });
 });
+
+/**
+ * The empty state names where to go start a server, and the two scopes are
+ * different places. The same surface fills the canvas tile (an epic's servers)
+ * and the Start Page panel (that DEVICE's servers), where there is no epic to
+ * point at.
+ */
+describe("<BrowserStartPage /> empty state names the right scope", () => {
+  function emptyStartPage(scope: HostResourceScope): ReactNode {
+    return (
+      <BrowserStartPage
+        scope={scope}
+        hostId="host-a"
+        browserRunsOnHost
+        visible
+        onNavigate={() => undefined}
+      />
+    );
+  }
+
+  beforeEach(() => {
+    mocks.requestWithSignal.mockImplementation(() =>
+      Promise.resolve({ servers: [] }),
+    );
+  });
+
+  it("points at the device, not an epic, on an independent Start Page", async () => {
+    render(<Wrapper>{emptyStartPage({ kind: "independent" })}</Wrapper>);
+    await waitFor(() => {
+      expect(screen.getByRole("status").textContent).toContain(
+        "Start one in a terminal here",
+      );
+    });
+    expect(screen.getByRole("status").textContent).not.toContain("this epic");
+  });
+
+  it("still points at the epic on the canvas start page", async () => {
+    render(
+      <Wrapper>{emptyStartPage({ kind: "epic", epicId: "epic-1" })}</Wrapper>,
+    );
+    await waitFor(() => {
+      expect(screen.getByRole("status").textContent).toContain(
+        "Start one in this epic",
+      );
+    });
+  });
+});
