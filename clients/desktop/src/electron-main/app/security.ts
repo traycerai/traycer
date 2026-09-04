@@ -12,6 +12,53 @@ const ALLOWED_EXTERNAL_SCHEMES: ReadonlySet<string> = new Set([
   "mailto:",
 ]);
 
+/**
+ * Schemes safe to hand STRAIGHT to the OS with no extra confirmation - the OS
+ * handler (mail client, dialer) is itself the gate and these carry no local-app
+ * launch risk. The one source of truth for the guest hand-off policy, consumed
+ * by `browser-guest-navigation.ts`; it lives here so the launch primitives
+ * below can self-guard against the dangerous set rather than trusting a caller.
+ */
+export const SAFE_EXTERNAL_SCHEMES: ReadonlySet<string> = new Set([
+  "mailto:",
+  "tel:",
+  "sms:",
+  "facetime:",
+  "facetime-audio:",
+]);
+
+/**
+ * Schemes that must NEVER be handed to `shell.openExternal` - the ones that
+ * turn an OS hand-off into a local-code or credential-exfiltration primitive.
+ * `file:` is here (and also stays blocked as a guest navigation), so an http(s)
+ * page cannot reach it by any door. `about:` is dangerous for every value but
+ * `about:blank`, which callers handle before this set is consulted.
+ */
+export const DANGEROUS_EXTERNAL_SCHEMES: ReadonlySet<string> = new Set([
+  "javascript:",
+  "data:",
+  "blob:",
+  "file:",
+  "filesystem:",
+  "chrome:",
+  "chrome-extension:",
+  "devtools:",
+  "vbscript:",
+  "ws:",
+  "wss:",
+]);
+
+/**
+ * The scheme is never allowed near `shell.openExternal`: it is in the dangerous
+ * denylist, or it is an `about:` other than `about:blank`. Both launch
+ * primitives self-guard on this so a future or mistaken caller cannot turn the
+ * OS hand-off into a local-code door - defense in depth behind the caller's own
+ * allow/deny classification.
+ */
+function isRefusedGuestLaunchScheme(scheme: string): boolean {
+  return DANGEROUS_EXTERNAL_SCHEMES.has(scheme) || scheme === "about:";
+}
+
 const ALLOWED_NAVIGATION_ORIGINS: ReadonlySet<string> = new Set([
   // Dev renderer Vite host. Production renderer is served from `file://` so
   // its origin is `null` and never matches - same-document navigations
@@ -86,6 +133,12 @@ export async function launchExternalFromGuest(url: string): Promise<boolean> {
     log.warn("[security] guest external open rejected: unparseable");
     return false;
   }
+  // Self-guard: never hand a dangerous scheme to the OS even if a caller's
+  // classification let it through. The scheme (never the url) is logged.
+  if (isRefusedGuestLaunchScheme(scheme)) {
+    log.warn("[security] guest external open rejected: scheme", { scheme });
+    return false;
+  }
   try {
     await shell.openExternal(url);
     return true;
@@ -108,6 +161,14 @@ export async function launchExternalFromGuest(url: string): Promise<boolean> {
 const confirmedGuestExternalSchemes = new Set<string>();
 
 /**
+ * Confirm dialogs in flight, keyed by scheme. A page firing two `zoommtg:`
+ * navigations in the same tick would otherwise open two identical dialogs (the
+ * "remembered" set is only written after approval); a concurrent second call
+ * for the same scheme joins the first dialog's result instead.
+ */
+const pendingGuestExternalConfirms = new Map<string, Promise<boolean>>();
+
+/**
  * The "middle path" hand-off for an ARBITRARY app scheme a guest tries to open
  * (not the always-safe `mailto:`/`tel:` set, not the dangerous denylist - those
  * are decided by the caller). Prompts the user with a native dialog the first
@@ -126,22 +187,43 @@ export async function confirmAndLaunchExternalScheme(
     log.warn("[security] guest external confirm rejected: unparseable");
     return false;
   }
-  if (!confirmedGuestExternalSchemes.has(scheme)) {
-    const approved = await confirmDestructiveInMain({
-      title: "Open in another app?",
-      message: `This page wants to open “${scheme.replace(
-        /:$/,
-        "",
-      )}” in another app.`,
-      detail: "Open it only if you trust this page.",
-      confirmLabel: "Open",
-    });
-    if (!approved) {
-      log.info("[security] guest external open declined", { scheme });
-      return false;
-    }
-    confirmedGuestExternalSchemes.add(scheme);
+  // Self-guard: the confirm path must not become a door to a dangerous scheme
+  // either, regardless of how it was reached.
+  if (isRefusedGuestLaunchScheme(scheme)) {
+    log.warn("[security] guest external confirm rejected: scheme", { scheme });
+    return false;
   }
+  if (confirmedGuestExternalSchemes.has(scheme)) {
+    return launchExternalFromGuest(url);
+  }
+  // Join an in-flight confirm for the same scheme rather than stacking a second
+  // identical dialog; each caller still launches its OWN url once approved.
+  const inFlight = pendingGuestExternalConfirms.get(scheme);
+  if (inFlight !== undefined) {
+    const approved = await inFlight;
+    return approved ? launchExternalFromGuest(url) : false;
+  }
+  const confirmPromise = confirmDestructiveInMain({
+    title: "Open in another app?",
+    message: `This page wants to open “${scheme.replace(
+      /:$/,
+      "",
+    )}” in another app.`,
+    detail: "Open it only if you trust this page.",
+    confirmLabel: "Open",
+  });
+  pendingGuestExternalConfirms.set(scheme, confirmPromise);
+  let approved: boolean;
+  try {
+    approved = await confirmPromise;
+  } finally {
+    pendingGuestExternalConfirms.delete(scheme);
+  }
+  if (!approved) {
+    log.info("[security] guest external open declined", { scheme });
+    return false;
+  }
+  confirmedGuestExternalSchemes.add(scheme);
   return launchExternalFromGuest(url);
 }
 
@@ -151,6 +233,7 @@ export async function confirmAndLaunchExternalScheme(
  */
 export function resetConfirmedGuestExternalSchemesForTest(): void {
   confirmedGuestExternalSchemes.clear();
+  pendingGuestExternalConfirms.clear();
 }
 
 /**

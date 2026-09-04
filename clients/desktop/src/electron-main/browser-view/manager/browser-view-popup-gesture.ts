@@ -28,6 +28,12 @@ interface GesturePopupWebContents {
 export interface BrowserViewPopupGesture {
   /** Single-use: one observed click cannot be replayed into a second popup. */
   consume(): boolean;
+  /**
+   * Non-consuming check for a recent gesture. Used by the external-scheme
+   * hand-off, where a real click authorizes the safe fast-path launch but must
+   * NOT steal the click a concurrent popup open still needs to consume.
+   */
+  peek(): boolean;
   dispose(): void;
 }
 
@@ -64,6 +70,10 @@ export function trackBrowserViewPopupGesture(
         now() - observedAt <= BROWSER_VIEW_POPUP_GESTURE_WINDOW_MS
       );
     },
+    peek: (): boolean =>
+      attached &&
+      lastGestureAt !== null &&
+      now() - lastGestureAt <= BROWSER_VIEW_POPUP_GESTURE_WINDOW_MS,
     dispose: (): void => {
       lastGestureAt = null;
       if (!attached) return;

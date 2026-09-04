@@ -346,6 +346,7 @@ export function registerBrowserViewIpc(
       toBrowserViewWindow(
         bridge.windowRegistry.getRecordById(windowId)?.window,
       ),
+    localHostId: () => bridge.options.host.getSnapshot()?.hostId ?? null,
     createPopupWindowOptions: () => createBrowserPopupWindowOptions(),
     createPopupWindow: (input) => createBrowserPopupWindow(input),
     createDevToolsWindow: (windowId) =>

@@ -51,6 +51,20 @@ describe("launchExternalFromGuest", () => {
     electronState.openExternalResult = false;
     expect(await launchExternalFromGuest("tel:+1")).toBe(false);
   });
+
+  it.each([
+    "file:///etc/passwd",
+    "javascript:alert(1)",
+    "data:text/html,x",
+    "about:settings",
+    "chrome://settings",
+  ])(
+    "self-guards a dangerous scheme (%s) - never openExternal",
+    async (url) => {
+      expect(await launchExternalFromGuest(url)).toBe(false);
+      expect(electronState.openExternalCalls).toEqual([]);
+    },
+  );
 });
 
 describe("confirmAndLaunchExternalScheme (arbitrary app deep link)", () => {
@@ -89,6 +103,28 @@ describe("confirmAndLaunchExternalScheme (arbitrary app deep link)", () => {
     electronState.messageBoxResponse = 0;
     expect(await confirmAndLaunchExternalScheme("msteams://chat")).toBe(false);
     expect(electronState.messageBoxCalls).toBe(1);
+    expect(electronState.openExternalCalls).toEqual([]);
+  });
+
+  it("dedupes concurrent same-scheme confirms into ONE dialog", async () => {
+    // Both fired before either settles: the second joins the first's dialog.
+    const [a, b] = await Promise.all([
+      confirmAndLaunchExternalScheme("zoommtg://a"),
+      confirmAndLaunchExternalScheme("zoommtg://b"),
+    ]);
+    expect([a, b]).toEqual([true, true]);
+    expect(electronState.messageBoxCalls).toBe(1);
+    expect(electronState.openExternalCalls).toEqual([
+      "zoommtg://a",
+      "zoommtg://b",
+    ]);
+  });
+
+  it("self-guards a dangerous scheme - no dialog, no open", async () => {
+    expect(await confirmAndLaunchExternalScheme("file:///etc/passwd")).toBe(
+      false,
+    );
+    expect(electronState.messageBoxCalls).toBe(0);
     expect(electronState.openExternalCalls).toEqual([]);
   });
 });

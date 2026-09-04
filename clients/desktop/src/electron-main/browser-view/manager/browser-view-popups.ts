@@ -124,6 +124,16 @@ export class BrowserViewPopups {
     });
   }
 
+  /**
+   * Whether a real user gesture landed on this guest recently, without
+   * consuming it (unlike the native-popup gate). The external-scheme hand-off
+   * uses it to let a clicked `mailto:`/`tel:` open straight through while an
+   * on-load or scripted one falls to the confirm dialog.
+   */
+  hadRecentGuestGesture(opener: PopupGestureOpener): boolean {
+    return this.gestures.get(opener)?.peek() ?? false;
+  }
+
   handleWindowOpen(
     opener: BrowserViewPopupOpener,
     details: BrowserViewWindowOpenDetails,
@@ -141,7 +151,13 @@ export class BrowserViewPopups {
       // Chromium must never open a non-web scheme, but a real external one
       // (mailto:, an app deep link) is handed to the OS rather than dropped;
       // handleExternalGuestScheme traces the refusal for a dangerous scheme.
-      handleExternalGuestScheme(target, "window-open");
+      // window.open needs a gesture, so the safe-scheme fast-path is gated on
+      // the opener actually having had a recent click.
+      handleExternalGuestScheme(
+        target,
+        "window-open",
+        this.hadRecentGuestGesture(gestureOpener),
+      );
       return { action: "deny" };
     }
     // Electron exposes featureless scripted window.open the same as _blank
@@ -222,8 +238,10 @@ export class BrowserViewPopups {
   ): void {
     if (this.policyInstalledOn.has(webContents)) return;
     this.policyInstalledOn.add(webContents);
-    installGuestNavigationGuard(webContents);
     this.installGuestGesture(webContents);
+    installGuestNavigationGuard(webContents, () =>
+      this.hadRecentGuestGesture(webContents),
+    );
     // The popup's OWN opener context: its surface is the opener's (a popup
     // belongs to the tile that spawned the chain), but its `currentUrl` tracks
     // where the popup itself has navigated so a nested `window.open` resolves

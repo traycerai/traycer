@@ -5,6 +5,29 @@ const securityMock = vi.hoisted(() => ({
   confirmAndLaunchExternalScheme: vi.fn((_url: string) =>
     Promise.resolve(true),
   ),
+  // Mirrors the real sets in `app/security.ts`. Duplicated here because the
+  // real module imports `electron`, which cannot load in this node env, so the
+  // whole module is stubbed rather than partially mocked via importOriginal.
+  SAFE_EXTERNAL_SCHEMES: new Set([
+    "mailto:",
+    "tel:",
+    "sms:",
+    "facetime:",
+    "facetime-audio:",
+  ]),
+  DANGEROUS_EXTERNAL_SCHEMES: new Set([
+    "javascript:",
+    "data:",
+    "blob:",
+    "file:",
+    "filesystem:",
+    "chrome:",
+    "chrome-extension:",
+    "devtools:",
+    "vbscript:",
+    "ws:",
+    "wss:",
+  ]),
 }));
 
 vi.mock("../../app/security", () => securityMock);
@@ -66,9 +89,9 @@ describe("handleExternalGuestScheme", () => {
   });
 
   it.each(["mailto:a@b.example", "tel:+1", "sms:+1", "facetime:a@b.example"])(
-    "hands a safe scheme (%s) straight to the OS, no confirm",
+    "hands a gesture-backed safe scheme (%s) straight to the OS, no confirm",
     (url) => {
-      expect(handleExternalGuestScheme(url, "will-navigate")).toBe(true);
+      expect(handleExternalGuestScheme(url, "will-navigate", true)).toBe(true);
       expect(securityMock.launchExternalFromGuest).toHaveBeenCalledWith(url);
       expect(
         securityMock.confirmAndLaunchExternalScheme,
@@ -76,10 +99,21 @@ describe("handleExternalGuestScheme", () => {
     },
   );
 
-  it.each(["zoommtg://join", "slack://open", "msteams://chat"])(
-    "confirms before opening an arbitrary app deep link (%s)",
+  it.each(["mailto:a@b.example", "tel:+1", "sms:+1"])(
+    "confirms a gesture-less safe scheme (%s) instead of silently launching",
     (url) => {
-      expect(handleExternalGuestScheme(url, "window-open")).toBe(true);
+      expect(handleExternalGuestScheme(url, "will-redirect", false)).toBe(true);
+      expect(securityMock.confirmAndLaunchExternalScheme).toHaveBeenCalledWith(
+        url,
+      );
+      expect(securityMock.launchExternalFromGuest).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["zoommtg://join", "slack://open", "msteams://chat"])(
+    "confirms before opening an arbitrary app deep link (%s), gesture or not",
+    (url) => {
+      expect(handleExternalGuestScheme(url, "window-open", true)).toBe(true);
       expect(securityMock.confirmAndLaunchExternalScheme).toHaveBeenCalledWith(
         url,
       );
@@ -101,7 +135,7 @@ describe("handleExternalGuestScheme", () => {
     "ws://x/socket",
     "wss://x/socket",
   ])("refuses a dangerous scheme (%s) - never openExternal", (url) => {
-    expect(handleExternalGuestScheme(url, "will-navigate")).toBe(false);
+    expect(handleExternalGuestScheme(url, "will-navigate", true)).toBe(false);
     expect(securityMock.launchExternalFromGuest).not.toHaveBeenCalled();
     expect(securityMock.confirmAndLaunchExternalScheme).not.toHaveBeenCalled();
   });
@@ -109,7 +143,7 @@ describe("handleExternalGuestScheme", () => {
   it.each(["http://x.example/", "https://x.example/", "about:blank"])(
     "leaves web schemes (%s) to the caller's own policy",
     (url) => {
-      expect(handleExternalGuestScheme(url, "will-navigate")).toBe(false);
+      expect(handleExternalGuestScheme(url, "will-navigate", true)).toBe(false);
       expect(securityMock.launchExternalFromGuest).not.toHaveBeenCalled();
       expect(
         securityMock.confirmAndLaunchExternalScheme,
@@ -124,8 +158,8 @@ describe("guestNavigationGuards external routing", () => {
     securityMock.confirmAndLaunchExternalScheme.mockClear();
   });
 
-  it("routes a page-driven will-navigate to a real external scheme", () => {
-    const guards = guestNavigationGuards();
+  it("routes a gesture-backed will-navigate straight to the OS", () => {
+    const guards = guestNavigationGuards(() => true);
     let prevented = 0;
     guards["will-navigate"](
       { url: "mailto:a@b.example", preventDefault: () => (prevented += 1) },
@@ -137,8 +171,22 @@ describe("guestNavigationGuards external routing", () => {
     );
   });
 
+  it("confirms a gesture-less will-redirect to a safe scheme", () => {
+    const guards = guestNavigationGuards(() => false);
+    let prevented = 0;
+    guards["will-redirect"](
+      { url: "mailto:a@b.example", preventDefault: () => (prevented += 1) },
+      "mailto:a@b.example",
+    );
+    expect(prevented).toBe(1);
+    expect(securityMock.confirmAndLaunchExternalScheme).toHaveBeenCalledWith(
+      "mailto:a@b.example",
+    );
+    expect(securityMock.launchExternalFromGuest).not.toHaveBeenCalled();
+  });
+
   it("does NOT route a hidden subframe (will-frame-navigate) externally", () => {
-    const guards = guestNavigationGuards();
+    const guards = guestNavigationGuards(() => true);
     let prevented = 0;
     guards["will-frame-navigate"]({
       url: "mailto:a@b.example",

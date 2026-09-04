@@ -105,7 +105,9 @@ export class BrowserViewEntryFactory {
         // review, root cause C). `navigate` in the manager covers what this
         // process asks for; these cover what the page asks for on its own -
         // a link, a scripted `location =`, a server redirect, a subframe.
-        ...guestNavigationGuards(),
+        ...guestNavigationGuards(() =>
+          this.popups.hadRecentGuestGesture(webContents),
+        ),
         "did-start-navigation": (
           _event: Event,
           _url: string,

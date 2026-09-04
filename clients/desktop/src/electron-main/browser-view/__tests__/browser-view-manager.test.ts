@@ -54,6 +54,28 @@ vi.mock("../../app/security", () => ({
   safelyOpenExternal: safelyOpenExternalMock,
   launchExternalFromGuest: launchExternalFromGuestMock,
   confirmAndLaunchExternalScheme: confirmAndLaunchExternalSchemeMock,
+  // The real module imports electron (cannot load here), so the whole module
+  // is stubbed; these mirror the real scheme sets in `app/security.ts`.
+  SAFE_EXTERNAL_SCHEMES: new Set([
+    "mailto:",
+    "tel:",
+    "sms:",
+    "facetime:",
+    "facetime-audio:",
+  ]),
+  DANGEROUS_EXTERNAL_SCHEMES: new Set([
+    "javascript:",
+    "data:",
+    "blob:",
+    "file:",
+    "filesystem:",
+    "chrome:",
+    "chrome-extension:",
+    "devtools:",
+    "vbscript:",
+    "ws:",
+    "wss:",
+  ]),
 }));
 
 type BrowserViewManagerOptions = ConstructorParameters<
@@ -619,6 +641,8 @@ interface Harness {
 type HarnessOptions = {
   readonly hostPlatform?: "darwin" | "other";
   readonly requireLoadedTargetForPageCommands?: boolean;
+  /** This desktop's local host id; tabs default to owner "host-1" (co-located). */
+  readonly localHostId?: string | null;
 };
 
 /**
@@ -765,6 +789,10 @@ function createHarnessWithOptions(
     attachRendererGuest,
     releaseRendererGuest,
     getWindow: (windowId) => windows.get(windowId) ?? null,
+    localHostId: () =>
+      harnessOptions?.localHostId === undefined
+        ? "host-1"
+        : harnessOptions.localHostId,
     onWindowChange: (listener) => {
       windowListeners.add(listener);
       return () => {
@@ -1370,6 +1398,44 @@ describe("BrowserViewManager native tab lifecycle", () => {
     });
 
     expect(view.loadUrls).toContain("file:///tmp/modal.html");
+  });
+
+  it("refuses file:// for a tab owned by a NON-co-located host, but still allows http", async () => {
+    // This desktop is "local-desktop"; the tab is owned by "host-1" (remote).
+    const harness = createHarnessWithOptions({ localHostId: "local-desktop" });
+    const nativeKey = {
+      hostId: "host-1",
+      sessionId: "session-1",
+      tabId: "tab-1",
+    } as const;
+    const ready = await harness.manager.ensureTab("window-1", {
+      ...nativeKey,
+      requestedUrl: "https://example.com/",
+      profile: "primary",
+      seedStorageState: null,
+      connectionId: null,
+    });
+    await harness.manager.acceptTab(ready);
+    const view = harness.guests[0];
+    if (view === undefined) throw new Error("expected native guest");
+    const loadedBefore = [...view.loadUrls];
+
+    await expect(
+      harness.manager.controlElectronTab("window-1", {
+        ...nativeKey,
+        registrationId: ready.registrationId,
+        action: { kind: "navigate", url: "file:///etc/passwd" },
+      }),
+    ).rejects.toThrow("http, https or about:blank");
+    expect(view.loadUrls).toEqual(loadedBefore);
+
+    // http stays reachable for a remote-owned tab; only file:// is gated.
+    await harness.manager.controlElectronTab("window-1", {
+      ...nativeKey,
+      registrationId: ready.registrationId,
+      action: { kind: "navigate", url: "https://example.com/next" },
+    });
+    expect(view.loadUrls).toContain("https://example.com/next");
   });
 
   it.each([

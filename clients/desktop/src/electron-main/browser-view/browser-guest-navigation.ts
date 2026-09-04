@@ -2,7 +2,9 @@ import { URL } from "node:url";
 import { log } from "../app/logger";
 import {
   confirmAndLaunchExternalScheme,
+  DANGEROUS_EXTERNAL_SCHEMES,
   launchExternalFromGuest,
+  SAFE_EXTERNAL_SCHEMES,
 } from "../app/security";
 import type { BrowserViewListenerMap } from "./manager/browser-view-entry";
 
@@ -92,43 +94,6 @@ function navigationScheme(url: string): string {
 }
 
 /**
- * Schemes safe to hand STRAIGHT to the OS with no extra confirmation - the OS
- * handler (mail client, dialer) is itself the gate and these carry no local-app
- * launch risk. Everything not here and not dangerous is an arbitrary app deep
- * link that gets a native confirm first.
- */
-const SAFE_EXTERNAL_SCHEMES: ReadonlySet<string> = new Set([
-  "mailto:",
-  "tel:",
-  "sms:",
-  "facetime:",
-  "facetime-audio:",
-]);
-
-/**
- * Schemes that must NEVER be handed to `shell.openExternal`. Unlike the guest
- * scheme allow-list (which is a policy about what a browser TAB may load), this
- * is a hard deny of the schemes that turn an OS hand-off into a local-code or
- * credential-exfiltration primitive. `file:` is here AND stays blocked by
- * {@link isAllowedGuestNavigationUrl}, so an http(s) page still cannot reach it
- * by any door. `about:` is dangerous for every value except exactly
- * `about:blank`, which is handled before this set is consulted.
- */
-const DANGEROUS_EXTERNAL_SCHEMES: ReadonlySet<string> = new Set([
-  "javascript:",
-  "data:",
-  "blob:",
-  "file:",
-  "filesystem:",
-  "chrome:",
-  "chrome-extension:",
-  "devtools:",
-  "vbscript:",
-  "ws:",
-  "wss:",
-]);
-
-/**
  * The navigation sources whose refusal is Chrome-like: hand the non-web scheme
  * to the OS instead of a silent no-op. A hidden subframe (`will-frame-navigate`)
  * is excluded on purpose - a page must not be able to silently launch an app
@@ -162,6 +127,7 @@ const EXTERNAL_ROUTABLE_SOURCES: ReadonlySet<BrowserGuestNavigationSource> =
 export function handleExternalGuestScheme(
   url: string,
   source: BrowserGuestNavigationSource,
+  hasGesture: boolean,
 ): boolean {
   if (url === "about:blank") return false;
   let scheme: string;
@@ -180,7 +146,12 @@ export function handleExternalGuestScheme(
     source,
     scheme,
   });
-  if (SAFE_EXTERNAL_SCHEMES.has(scheme)) {
+  // The safe set skips the confirm ONLY behind a real user gesture, mirroring
+  // Chrome's user-activation gate on external-protocol launches. A scripted or
+  // on-load `mailto:`/`tel:` (a `will-redirect`, or a `will-navigate` with no
+  // recent input) has no gesture and falls through to the confirm dialog
+  // instead of silently spawning the mail client / dialer.
+  if (hasGesture && SAFE_EXTERNAL_SCHEMES.has(scheme)) {
     void launchExternalFromGuest(url);
     return true;
   }
@@ -206,7 +177,9 @@ function isExternalRoutableSource(
  * its listeners on the entry so teardown can remove them, while a popup has no
  * entry - {@link installGuestNavigationGuard} is the popup's half.
  */
-export function guestNavigationGuards(): BrowserViewListenerMap {
+export function guestNavigationGuards(
+  hasGesture: () => boolean,
+): BrowserViewListenerMap {
   return {
     // The event object carries its own `url` and the positional one is
     // DEPRECATED in Electron 42 (`electron.d.ts`: `details`, then a
@@ -215,26 +188,36 @@ export function guestNavigationGuards(): BrowserViewListenerMap {
     // silently receives `undefined` when the deprecated argument is finally
     // dropped is a guard that stops naming what it is refusing.
     "will-navigate": (event: BrowserGuestNavigationEvent, url: string) => {
-      refuseUnlessAllowed(event, event.url ?? url, "will-navigate");
+      refuseUnlessAllowed(event, event.url ?? url, "will-navigate", hasGesture);
     },
     "will-redirect": (event: BrowserGuestNavigationEvent, url: string) => {
-      refuseUnlessAllowed(event, event.url ?? url, "will-redirect");
+      refuseUnlessAllowed(event, event.url ?? url, "will-redirect", hasGesture);
     },
     // Electron hands this one a single details object carrying its own url,
     // not the `(event, url)` pair the other two use.
     "will-frame-navigate": (
       details: BrowserGuestNavigationEvent & { readonly url: string },
     ) => {
-      refuseUnlessAllowed(details, details.url, "will-frame-navigate");
+      refuseUnlessAllowed(
+        details,
+        details.url,
+        "will-frame-navigate",
+        hasGesture,
+      );
     },
   };
 }
 
 /** {@link guestNavigationGuards} on a webContents that keeps no listener map. */
-export function installGuestNavigationGuard(webContents: {
-  on: NodeJS.EventEmitter["on"];
-}): void {
-  for (const [event, listener] of Object.entries(guestNavigationGuards())) {
+export function installGuestNavigationGuard(
+  webContents: {
+    on: NodeJS.EventEmitter["on"];
+  },
+  hasGesture: () => boolean,
+): void {
+  for (const [event, listener] of Object.entries(
+    guestNavigationGuards(hasGesture),
+  )) {
     webContents.on(event, listener);
   }
 }
@@ -249,13 +232,14 @@ function refuseUnlessAllowed(
   event: BrowserGuestNavigationEvent,
   url: string,
   source: BrowserGuestNavigationSource,
+  hasGesture: () => boolean,
 ): void {
   if (isAllowedGuestNavigationUrl(url)) return;
   // Chromium must not load the target either way; a page-driven source (but not
   // a hidden subframe) additionally hands a real external scheme to the OS.
   event.preventDefault();
   if (isExternalRoutableSource(source)) {
-    handleExternalGuestScheme(url, source);
+    handleExternalGuestScheme(url, source, hasGesture());
     return;
   }
   traceRefusedGuestNavigation(url, source);

@@ -39,6 +39,18 @@ describe("trackBrowserViewPopupGesture", () => {
     expect(gesture.consume()).toBe(false);
   });
 
+  it("peek reports a recent gesture without consuming it", () => {
+    let now = 1_000;
+    const opener = new FakeOpener();
+    const gesture = trackBrowserViewPopupGesture(opener, () => now);
+    opener.gesture("mouseDown");
+    // Repeatable, unlike consume(); still bounded by the window.
+    expect(gesture.peek()).toBe(true);
+    expect(gesture.peek()).toBe(true);
+    now += BROWSER_VIEW_POPUP_GESTURE_WINDOW_MS + 1;
+    expect(gesture.peek()).toBe(false);
+  });
+
   it("ignores non-activating input types", () => {
     const now = 1_000;
     const opener = new FakeOpener();

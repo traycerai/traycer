@@ -109,6 +109,13 @@ interface BrowserViewManagerOptions {
     listener: (change: BrowserSessionCertificateErrorChange) => void,
   ) => () => void;
   readonly onWindowChange: (listener: () => void) => () => void;
+  /**
+   * This desktop's local host id, read at navigate time. `file:` is only
+   * honored for a tab whose owning host IS this desktop (co-located); a remote
+   * host's tab is held to the narrower http/https/about:blank set, so a
+   * non-co-located host can never make this machine read a local file.
+   */
+  readonly localHostId: () => string | null;
   readonly notifyHostWindowRendererReset: (windowId: string) => void;
   readonly send: BrowserViewSend;
   /**
@@ -160,6 +167,7 @@ export class BrowserViewManager {
   private readonly releaseSessionStorage: (
     request: BrowserSessionProfileRequest,
   ) => void;
+  private readonly localHostId: () => string | null;
   private readonly offWindowChange: () => void;
   private readonly offDownloadChange: () => void;
   private readonly offCertificateError: () => void;
@@ -185,6 +193,7 @@ export class BrowserViewManager {
     this.send = options.send;
     this.releaseRendererGuest = options.releaseRendererGuest;
     this.releaseSessionStorage = options.releaseSessionStorage;
+    this.localHostId = options.localHostId;
     this.debugSessions = new BrowserViewDebugSessions({
       onDetached: (entry, webContentsId, reason) => {
         this.handleDebugSessionDetached(entry, webContentsId, reason);
@@ -663,18 +672,33 @@ export class BrowserViewManager {
    * The one funnel for every navigation this process asks a guest to perform -
    * the renderer's `navigate` control action and the initial navigation the
    * host's accepted tab starts with - so the scheme gate sits here rather than
-   * at either caller. Both callers are host-initiated, so this uses the wider
+   * at either caller. Both callers are host-initiated, so a CO-LOCATED tab (one
+   * whose owning host is this desktop) uses the wider
    * {@link isAllowedHostInitiatedNavigationUrl} that also permits `file:`; a
    * page-driven navigation to `file:` still hits the narrower guest guards.
+   *
+   * A tab owned by a REMOTE host is held to {@link isAllowedGuestNavigationUrl}
+   * (http/https/about:blank, no `file:`): remote hosts are headless-only by
+   * protocol, but nothing else stops a remote `createElectronTab`/`navigate`
+   * frame from asking THIS machine to read a local file, so the funnel enforces
+   * it rather than trusting the convention.
    *
    * It refuses BEFORE any entry state moves: a blocked target must not leave
    * the tile reporting `loading` for a page that will never commit.
    */
   private async navigate(entry: BrowserViewEntry, url: string): Promise<void> {
-    if (!isAllowedHostInitiatedNavigationUrl(url)) {
+    const localHostId = this.localHostId();
+    const coLocated =
+      localHostId !== null && entry.identity.key.hostId === localHostId;
+    const allowed = coLocated
+      ? isAllowedHostInitiatedNavigationUrl(url)
+      : isAllowedGuestNavigationUrl(url);
+    if (!allowed) {
       traceRefusedGuestNavigation(url, "navigate");
       throw new Error(
-        "Browser tabs can only open file, http, https or about:blank.",
+        coLocated
+          ? "Browser tabs can only open file, http, https or about:blank."
+          : "Browser tabs can only open http, https or about:blank.",
       );
     }
     this.annotations.end(entry, "navigation");
