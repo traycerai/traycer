@@ -919,13 +919,13 @@ class MobileTokenStore implements ITokenStore {
   }): Promise<TokenRotateResult> {
     const stored = await this.get();
     if (stored === null) {
-      return { outcome: "deleted", pair: null };
+      return { outcome: "deleted", pair: null, rejection: null };
     }
     if (stored.user.id !== expected.userId) {
-      return { outcome: "user-mismatch", pair: stored };
+      return { outcome: "user-mismatch", pair: stored, rejection: null };
     }
     if (stored.token !== expected.token) {
-      return { outcome: "superseded", pair: stored };
+      return { outcome: "superseded", pair: stored, rejection: null };
     }
     const refreshed = await refreshOnceAbortable({
       authnBaseUrl: this.authnBaseUrl,
@@ -935,7 +935,7 @@ class MobileTokenStore implements ITokenStore {
       signal: null,
     });
     if (refreshed.kind === "network-error") {
-      return { outcome: "refresh-network", pair: null };
+      return { outcome: "refresh-network", pair: null, rejection: null };
     }
     if (refreshed.kind === "rejected") {
       // Carried through rather than collapsed. `refreshOnceAbortable` already
@@ -951,6 +951,7 @@ class MobileTokenStore implements ITokenStore {
             ? "refresh-rejected-account"
             : "refresh-rejected-credential",
         pair: null,
+        rejection: refreshed.rejection,
       };
     }
     const next: StoredCredentials = {
@@ -960,7 +961,7 @@ class MobileTokenStore implements ITokenStore {
       savedAt: new Date().toISOString(),
     };
     await this.write(next);
-    return { outcome: "applied", pair: next };
+    return { outcome: "applied", pair: next, rejection: null };
   }
 
   async delete(): Promise<void> {
