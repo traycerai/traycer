@@ -71,12 +71,15 @@ import { registerTerminalKeyInput } from "@/lib/terminals/terminal-key-input-reg
 import {
   acquireXtermHost,
   adoptWarmSessionInstance,
+  createXtermRendererController,
   hasPeerXtermHostForSession,
   releaseXtermHost,
   type XtermHostControls,
   type XtermHostEntry,
   type XtermHostLiveCallbacks,
+  type XtermRendererController,
 } from "@/components/epic-canvas/renderers/xterm-host-registry";
+import { useTileBodyVisible } from "@/components/epic-canvas/hooks/use-tile-body-visible";
 import {
   createTerminalTileFindAdapter,
   runTerminalXtermSearch,
@@ -230,7 +233,12 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
   const mountRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
   const searchAddonRef = useRef<SearchAddon | null>(null);
-  const canvasRef = useRef<CanvasAddon | null>(null);
+  const rendererRef = useRef<XtermRendererController | null>(null);
+  // Whether THIS host currently holds a presented mount on the shared engine.
+  // One boolean per host is exactly right (a host presents at most once at a
+  // time); it is the guard that keeps the acquire-effect cleanup and the
+  // presentation effect's cleanup from both dropping the same count.
+  const presentedRef = useRef(false);
   const controlsRef = useRef<XtermHostControls | null>(null);
   const findTargetIdRef = useRef(props.findTargetId);
   const terminalSearchResultSourceRef =
@@ -422,7 +430,7 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
     termRef.current = entry.term;
     searchAddonRef.current = entry.searchAddon;
     tileFindAdapterRef.current.setSearchAddon(entry.searchAddon);
-    canvasRef.current = entry.canvasAddon;
+    rendererRef.current = entry.rendererController;
     controlsRef.current = entry.controls;
 
     mount.appendChild(entry.containerEl);
@@ -448,14 +456,50 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
       if (entry.live.onSearchResults === onSearchResults) {
         entry.live.onSearchResults = ignoreSearchResults;
       }
-      canvasRef.current = null;
+      rendererRef.current = null;
       controlsRef.current = null;
       // Keep the engine cached for a still-live session; dispose it otherwise.
       // Never dispose synchronously on a layout change - that is the
       // blank-on-split bug this registry exists to prevent.
-      releaseXtermHost(instanceId, keepAliveRef.current);
+      //
+      // Hand the registry this host's presented state in the same call, so the
+      // engine's renderer count is settled by the same code that settles its
+      // mount count. React destroys cleanups in declaration order, so this one
+      // runs BEFORE the presentation effect's cleanup below; clearing the flag
+      // as we pass it is what stops that later cleanup dropping the count a
+      // second time.
+      const wasPresented = presentedRef.current;
+      presentedRef.current = false;
+      releaseXtermHost(instanceId, keepAliveRef.current, wasPresented);
     };
   }, []);
+
+  // Presentation gate: accelerated canvases exist only while this tile body is
+  // actually on screen. `useTileBodyVisible()` is the composed predicate -
+  // pane shown AND this tab selected - so a tab deselected inside a still
+  // visible pane counts as unpresented, which `usePaneVisible()` alone would
+  // miss. Outside the hosted surface (the measure probe, PiP, mobile, tests
+  // with no provider) both contexts default to `true`, so those placements
+  // present exactly as they do today.
+  //
+  // A LAYOUT effect, and declared after the acquire effect above, so the
+  // engine's container is attached and its controller published before
+  // `present()` reloads the addon and repaints - the restore lands ahead of
+  // the next paint rather than a frame late. A host born hidden never runs the
+  // body at all, so it never allocates.
+  const tileBodyVisible = useTileBodyVisible();
+  useLayoutEffect(() => {
+    if (!tileBodyVisible) return;
+    const renderer = rendererRef.current;
+    if (renderer === null) return;
+    renderer.present();
+    presentedRef.current = true;
+    return () => {
+      if (!presentedRef.current) return;
+      presentedRef.current = false;
+      renderer.unpresent();
+    };
+  }, [tileBodyVisible]);
 
   useTerminalFindRegistration(
     activeFindTargetId,
@@ -467,7 +511,7 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
   useTerminalAppearanceSync({
     termRef,
     controlsRef,
-    canvasRef,
+    rendererRef,
     theme,
     fontSize: effectiveFontSize,
     fontFamily,
@@ -477,7 +521,7 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
   useVisibleTerminalRepair({
     termRef,
     controlsRef,
-    canvasRef,
+    rendererRef,
     theme,
   });
   const paneFocused = usePaneFocused();
@@ -759,6 +803,9 @@ function createXtermEntry(
   term.loadAddon(searchAddon);
   term.loadAddon(new ClipboardAddon());
 
+  term.open(containerEl);
+  markTerminalLoad(sessionId, "xterm-open");
+
   // Use the CANVAS renderer, not WebGL. WebGL gives one GPU context per
   // terminal, and browsers cap live contexts (~16); opening many terminals
   // exhausts the pool, evicts the oldest context, and triggers a loss/rebind
@@ -767,18 +814,32 @@ function createXtermEntry(
   // any number of terminals coexist with no context loss - and it needs no
   // `onContextLoss` recovery. Its throughput is a hair below WebGL only for
   // pathological full-screen scroll storms, which is not the TUI workload here.
-  let canvas: CanvasAddon | null = null;
-  try {
-    canvas = new CanvasAddon();
-    term.loadAddon(canvas);
-  } catch {
-    // Canvas unavailable (headless / blocked); xterm falls back to its DOM
-    // renderer automatically.
-    canvas = null;
-  }
-
-  term.open(containerEl);
-  markTerminalLoad(sessionId, "xterm-open");
+  //
+  // The addon is NOT created here: its four full-size backing surfaces are the
+  // GPU cost a kept-alive engine used to pay while off screen. The renderer
+  // controller creates it on the first `present()` and drops it once the engine
+  // has been unpresented for the grace, so an engine built behind a hidden pane
+  // (or a keep-alive body behind another tab) never allocates one at all.
+  // Loading after `term.open` is deliberate and required: `CanvasAddon.activate`
+  // installs the renderer immediately on an opened terminal, where before open
+  // it merely parks itself on `onWillOpen`.
+  const rendererController = createXtermRendererController({
+    loadCanvasAddon: () => {
+      try {
+        const addon = new CanvasAddon();
+        term.loadAddon(addon);
+        return addon;
+      } catch {
+        // Canvas unavailable (headless / blocked); xterm falls back to its DOM
+        // renderer automatically and the controller latches that, so a later
+        // presentation never retries the construction.
+        return null;
+      }
+    },
+    refreshAllRows: () => {
+      term.refresh(0, term.rows - 1);
+    },
+  });
 
   term.attachCustomKeyEventHandler((event) =>
     handleTerminalCustomKeyEvent(term, event),
@@ -1155,9 +1216,9 @@ function createXtermEntry(
     }
     dataDisposable.dispose();
     searchResultsDisposable.dispose();
-    if (canvas !== null) {
-      canvas.dispose();
-    }
+    // Cancels a pending unpresented-canvas disposal as well as dropping a live
+    // addon, so a grace timer can never fire into a torn-down engine.
+    rendererController.dispose();
     // xterm's Viewport schedules an initial `setTimeout(syncScrollArea)`. A
     // fast open→close (or StrictMode mount/cleanup/mount) can dispose before
     // that timer fires; disposing immediately clears xterm's renderer and the
@@ -1177,7 +1238,7 @@ function createXtermEntry(
     term,
     fitAddon,
     searchAddon,
-    canvasAddon: canvas,
+    rendererController,
     writerProxy,
     live,
     controls: { fitToContainer, reconcileWithHost },
@@ -1368,7 +1429,7 @@ function useHostGridReconcile(
 interface TerminalAppearanceSyncInput {
   readonly termRef: RefObject<Terminal | null>;
   readonly controlsRef: RefObject<XtermHostControls | null>;
-  readonly canvasRef: RefObject<CanvasAddon | null>;
+  readonly rendererRef: RefObject<XtermRendererController | null>;
   readonly theme: ITerminalOptions["theme"];
   readonly fontSize: number;
   readonly fontFamily: string;
@@ -1380,7 +1441,7 @@ function useTerminalAppearanceSync(input: TerminalAppearanceSyncInput): void {
   const {
     termRef,
     controlsRef,
-    canvasRef,
+    rendererRef,
     theme,
     fontSize,
     fontFamily,
@@ -1397,8 +1458,11 @@ function useTerminalAppearanceSync(input: TerminalAppearanceSyncInput): void {
     const term = termRef.current;
     if (term === null) return;
     term.options.theme = theme;
-    scheduleAtlasClear(term, canvasRef.current);
-  }, [termRef, theme, canvasRef]);
+    // Read the LIVE addon, never a cached reference: presentation disposes and
+    // reloads it, so the clear must reach whichever addon the renderer
+    // controller holds right now (and skips harmlessly when there is none).
+    scheduleAtlasClear(term, rendererRef.current?.currentCanvas() ?? null);
+  }, [termRef, theme, rendererRef]);
 
   // Live font sync: `fontSize`/`fontFamily` are the effective terminal
   // values - a Settings → Terminal override when set, else the Settings →
@@ -1409,14 +1473,14 @@ function useTerminalAppearanceSync(input: TerminalAppearanceSyncInput): void {
     if (term === null) return;
     term.options.fontSize = fontSize;
     term.options.fontFamily = fontFamily;
-    scheduleAtlasClear(term, canvasRef.current);
+    scheduleAtlasClear(term, rendererRef.current?.currentCanvas() ?? null);
     // A font/size change changes the cell box, so the grid must refit. Route it
     // through the engine's guarded path (not a raw `fitAddon.fit()`) so the new
     // size is reported to the host and kept in the engine's dedupe state. If the
     // renderer hasn't re-measured cells yet this proposes nothing; the onRender
     // propose loop refits on the next frame.
     controlsRef.current?.fitToContainer();
-  }, [fontSize, controlsRef, fontFamily, termRef, canvasRef]);
+  }, [fontSize, controlsRef, fontFamily, termRef, rendererRef]);
 
   // Live cursor sync: shape and blink are pure renderer options - they don't
   // touch cell geometry, so unlike the font effect this neither refits the grid
@@ -1433,10 +1497,10 @@ function useTerminalAppearanceSync(input: TerminalAppearanceSyncInput): void {
 function useVisibleTerminalRepair(input: {
   readonly termRef: RefObject<Terminal | null>;
   readonly controlsRef: RefObject<XtermHostControls | null>;
-  readonly canvasRef: RefObject<CanvasAddon | null>;
+  readonly rendererRef: RefObject<XtermRendererController | null>;
   readonly theme: ITerminalOptions["theme"];
 }): void {
-  const { termRef, controlsRef, canvasRef, theme } = input;
+  const { termRef, controlsRef, rendererRef, theme } = input;
   // Repaint when this pane becomes visible again. A tab switch never unmounts
   // the tile (the pane is hidden via `visibility:hidden` / `display:none` and
   // kept mounted so xterm scrollback survives), so the Traycer Host reattach pulse
@@ -1476,13 +1540,16 @@ function useVisibleTerminalRepair(input: {
       controls.fitToContainer();
     }
     term.options.theme = theme;
-    clearTerminalAtlasSafely(canvasRef.current);
+    clearTerminalAtlasSafely(rendererRef.current?.currentCanvas() ?? null);
     term.refresh(0, term.rows - 1);
-  }, [controlsRef, termRef, canvasRef, theme]);
+  }, [controlsRef, termRef, rendererRef, theme]);
   useVisiblePaneEffect(refitVisiblePane);
 }
 
 function clearTerminalAtlasSafely(canvas: CanvasAddon | null): void {
+  // `null` is the ordinary unpresented state (the renderer controller holds no
+  // addon) as well as the canvas-unavailable fallback - nothing to clear, and
+  // the next `present()` loads an addon with a fresh atlas anyway.
   if (canvas === null) return;
   try {
     canvas.clearTextureAtlas();
