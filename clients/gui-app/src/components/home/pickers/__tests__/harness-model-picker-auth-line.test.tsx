@@ -377,6 +377,35 @@ describe("<PickerProviderAuthLine />", () => {
     expect(screen.getByRole("note", { name: "Setup required" })).toBeDefined();
   });
 
+  it("shows the pack's preparing state instead of the button while the provider cannot spawn", () => {
+    renderAuthLine(
+      <PickerProviderAuthLine
+        state={{
+          ...withTerminalLoginCapability(baseProviderState("reasonix")),
+          // Downloading with nothing to fall back to: the host's only answer
+          // to `providers.startTerminalLogin` would be its `preparing` error.
+          managedInstallState: { status: "downloading", percent: 30 },
+        }}
+        harness={null}
+        terminalLoginSurface={{
+          kind: "landing",
+          resolveLandingPageId: () => "draft-1",
+        }}
+        runTargetHostId={null}
+        onClosePicker={() => undefined}
+      />,
+    );
+
+    expect(
+      screen.queryByRole("button", { name: /Set up in terminal/ }),
+    ).toBeNull();
+    expect(screen.getByRole("status").textContent).toBe(
+      "Preparing Reasonix… 30%",
+    );
+    // Not the manual-route copy either: this is a wait, not an old host.
+    expect(screen.queryByText(/from a chat's model picker/)).toBeNull();
+  });
+
   it("renders the bare 'Not authenticated' label for a signed-out provider without guidance", () => {
     renderAuthLine(
       <PickerProviderAuthLine

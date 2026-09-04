@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
-import type { ProviderLoginCapability } from "@traycer/protocol/host/provider-schemas";
+import type {
+  ProviderCliState,
+  ProviderLoginCapability,
+} from "@traycer/protocol/host/provider-schemas";
 import {
   providerSetupActionPlacement,
   providerSetupGuidance,
+  providerSetupPreparingLabel,
   providerSetupSteps,
   resolveProviderTerminalSetup,
 } from "@/lib/providers/provider-setup-guidance";
@@ -16,6 +20,48 @@ function capabilityWithTerminalLogin(
     codePaste: null,
     terminalLogin: {},
   };
+}
+
+/** A `providers.list` row: the capability plus, optionally, a pack state. */
+function providerState(
+  loginCapability: ProviderLoginCapability | null,
+  managedInstallState: ProviderCliState["managedInstallState"],
+): ProviderCliState {
+  return {
+    providerId: "reasonix",
+    enabled: true,
+    disabledBy: null,
+    selected: { kind: "bundled" },
+    candidates: [],
+    auth: {
+      status: "unauthenticated",
+      badgeText: null,
+      label: null,
+      detail: null,
+    },
+    authPending: false,
+    checkedAt: null,
+    apiKey: { supported: false, configured: false, source: null },
+    terminalAgentArgs: "",
+    envOverrides: [],
+    loginCapability,
+    availabilityPending: false,
+    nativeCapabilities: {
+      supportedTabs: ["general", "env", "usage"],
+      mcp: null,
+      plugins: null,
+      skills: null,
+      modelProviders: null,
+    },
+    managedInstallState,
+    versionVisibility: null,
+    advisory: null,
+    profiles: [],
+  };
+}
+
+function stateWith(loginCapability: ProviderLoginCapability): ProviderCliState {
+  return providerState(loginCapability, null);
 }
 
 describe("providerSetupGuidance", () => {
@@ -78,14 +124,14 @@ describe("providerSetupSteps", () => {
 });
 
 describe("resolveProviderTerminalSetup", () => {
-  it("returns null for a provider with no declared capability and no guidance override (undefined loginCapability, copilot)", () => {
-    expect(resolveProviderTerminalSetup("copilot", undefined)).toBeNull();
+  it("returns null for a provider with no declared capability and no guidance override (null row, copilot)", () => {
+    expect(resolveProviderTerminalSetup("copilot", null)).toBeNull();
   });
 
   it("returns the default generic copy for a provider with the capability but no guidance override (copilot)", () => {
     const setup = resolveProviderTerminalSetup(
       "copilot",
-      capabilityWithTerminalLogin(["login"]),
+      stateWith(capabilityWithTerminalLogin(["login"])),
     );
     expect(setup).not.toBeNull();
     expect(setup?.canStartTerminal).toBe(true);
@@ -99,7 +145,7 @@ describe("resolveProviderTerminalSetup", () => {
   it("returns the reasonix override, with canStartTerminal: true, for reasonix with the capability", () => {
     const setup = resolveProviderTerminalSetup(
       "reasonix",
-      capabilityWithTerminalLogin(["setup"]),
+      stateWith(capabilityWithTerminalLogin(["setup"])),
     );
     expect(setup).not.toBeNull();
     expect(setup?.canStartTerminal).toBe(true);
@@ -110,7 +156,7 @@ describe("resolveProviderTerminalSetup", () => {
   it("preserves reasonix's guidance with canStartTerminal: false when the capability is absent (oauthArgs empty) - the fix for old hosts losing Reasonix's manual instructions", () => {
     const setup = resolveProviderTerminalSetup(
       "reasonix",
-      capabilityWithTerminalLogin([]),
+      stateWith(capabilityWithTerminalLogin([])),
     );
     expect(setup).not.toBeNull();
     expect(setup?.canStartTerminal).toBe(false);
@@ -120,8 +166,8 @@ describe("resolveProviderTerminalSetup", () => {
     );
   });
 
-  it("preserves reasonix's guidance with canStartTerminal: false when loginCapability itself is undefined (row not yet resolved)", () => {
-    const setup = resolveProviderTerminalSetup("reasonix", undefined);
+  it("preserves reasonix's guidance with canStartTerminal: false when the row itself is null (not yet resolved)", () => {
+    const setup = resolveProviderTerminalSetup("reasonix", null);
     expect(setup).not.toBeNull();
     expect(setup?.canStartTerminal).toBe(false);
     expect(setup?.guidance.manualCommand).toBe("reasonix setup");
@@ -129,7 +175,10 @@ describe("resolveProviderTerminalSetup", () => {
 
   it("returns null for copilot when the capability is absent (oauthArgs empty) - no copy-table override to fall back on", () => {
     expect(
-      resolveProviderTerminalSetup("copilot", capabilityWithTerminalLogin([])),
+      resolveProviderTerminalSetup(
+        "copilot",
+        stateWith(capabilityWithTerminalLogin([])),
+      ),
     ).toBeNull();
   });
 });
@@ -138,7 +187,7 @@ describe("providerSetupActionPlacement", () => {
   it("returns 'unsupported-host' whenever canStartTerminal is false, regardless of hasSurface", () => {
     const setup = resolveProviderTerminalSetup(
       "reasonix",
-      capabilityWithTerminalLogin([]),
+      stateWith(capabilityWithTerminalLogin([])),
     );
     expect(setup).not.toBeNull();
     if (setup === null) return;
@@ -154,7 +203,7 @@ describe("providerSetupActionPlacement", () => {
   it("returns 'here' when canStartTerminal is true and this surface has the action", () => {
     const setup = resolveProviderTerminalSetup(
       "reasonix",
-      capabilityWithTerminalLogin(["setup"]),
+      stateWith(capabilityWithTerminalLogin(["setup"])),
     );
     expect(setup).not.toBeNull();
     if (setup === null) return;
@@ -164,7 +213,7 @@ describe("providerSetupActionPlacement", () => {
   it("returns 'unsupported-host' when the host cannot carry this surface's scope, even with a surface and the capability", () => {
     const setup = resolveProviderTerminalSetup(
       "reasonix",
-      capabilityWithTerminalLogin(["setup"]),
+      stateWith(capabilityWithTerminalLogin(["setup"])),
     );
     expect(setup).not.toBeNull();
     if (setup === null) return;
@@ -176,10 +225,73 @@ describe("providerSetupActionPlacement", () => {
     );
   });
 
+  it("returns 'preparing' when the capability and surface are there but the pack cannot spawn yet", () => {
+    const setup = resolveProviderTerminalSetup(
+      "reasonix",
+      providerState(capabilityWithTerminalLogin(["setup"]), {
+        status: "downloading",
+        percent: 30,
+      }),
+    );
+    expect(setup).not.toBeNull();
+    if (setup === null) return;
+    expect(setup.canStartTerminal).toBe(true);
+    expect(setup.packPreparing).not.toBeNull();
+    expect(providerSetupActionPlacement(setup, true, true)).toBe("preparing");
+    // A transient wait never becomes "the button is on another surface".
+    expect(providerSetupActionPlacement(setup, false, true)).toBe("preparing");
+    // The wait reads as the same sentence every other gated surface shows.
+    expect(providerSetupPreparingLabel(setup, "reasonix")).toBe(
+      "Preparing Reasonix… 30%",
+    );
+    // Steps read as for `here`: that is what they will be once the pack lands.
+    expect(providerSetupSteps(setup.guidance, "preparing")).toEqual(
+      setup.guidance.stepsAfterAction,
+    );
+  });
+
+  it("a downloading pack does NOT gate when a runnable fallback candidate exists", () => {
+    const setup = resolveProviderTerminalSetup("reasonix", {
+      ...providerState(capabilityWithTerminalLogin(["setup"]), {
+        status: "downloading",
+        percent: 30,
+      }),
+      candidates: [
+        {
+          kind: "path",
+          path: "/usr/local/bin/reasonix",
+          version: "1.35.0",
+          available: true,
+          versionPending: false,
+        },
+      ],
+    });
+    expect(setup).not.toBeNull();
+    if (setup === null) return;
+    expect(setup.packPreparing).toBeNull();
+    expect(providerSetupPreparingLabel(setup, "reasonix")).toBeNull();
+    expect(providerSetupActionPlacement(setup, true, true)).toBe("here");
+  });
+
+  it("permanent reasons outrank the transient one: an unsupported scope on a preparing pack is 'unsupported-host'", () => {
+    const setup = resolveProviderTerminalSetup(
+      "reasonix",
+      providerState(capabilityWithTerminalLogin(["setup"]), {
+        status: "downloading",
+        percent: 30,
+      }),
+    );
+    expect(setup).not.toBeNull();
+    if (setup === null) return;
+    expect(providerSetupActionPlacement(setup, true, false)).toBe(
+      "unsupported-host",
+    );
+  });
+
   it("returns 'other-surface' when canStartTerminal is true but this surface has no action", () => {
     const setup = resolveProviderTerminalSetup(
       "reasonix",
-      capabilityWithTerminalLogin(["setup"]),
+      stateWith(capabilityWithTerminalLogin(["setup"])),
     );
     expect(setup).not.toBeNull();
     if (setup === null) return;

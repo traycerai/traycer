@@ -42,6 +42,24 @@ interface ProviderLoginTerminalsState {
   >;
   /** Most-recent-first, the eviction order for the bound above. */
   readonly recentKeys: ReadonlyArray<string>;
+  /**
+   * Bumped on every change to the records, by whichever path made it - this
+   * window's own `record()` or a peer window's `storage` event.
+   *
+   * The reconciliation passes that CLASSIFY tabs read this store imperatively
+   * (`providerLoginTerminalProviderId` is a plain function, called from inside
+   * an effect keyed on host state), so nothing else would re-run them when
+   * provenance arrives. Without a wake, a session another window listed and
+   * adopted before its record arrived stays an ordinary tab - importable,
+   * recreatable as a bare shell - until some unrelated host event happens to
+   * re-run the pass. Every reconciliation key folds this in.
+   *
+   * Global rather than per host, deliberately: records change when a sign-in
+   * STARTS, which is rare, and a per-host counter would have to attribute a
+   * merged peer payload key by key. Not persisted - it is a fact about this
+   * window's memory, not about the records.
+   */
+  readonly revision: number;
   readonly record: (args: {
     readonly hostId: string;
     readonly sessionId: string;
@@ -82,18 +100,28 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  */
 function sanitizeRecords(state: unknown): SharedProviderLoginRecords {
   if (!isRecord(state)) return NO_SHARED_RECORDS;
+  // Bounded and de-duplicated HERE, not only on the write path: this is what
+  // hydration merges in, and a current-version payload can carry any number of
+  // valid entries. The bound is the store's invariant, so every entry point
+  // holds it.
+  const recentKeys = Array.isArray(state.recentKeys)
+    ? [
+        ...new Set(
+          state.recentKeys.filter(
+            (entry): entry is string => typeof entry === "string",
+          ),
+        ),
+      ].slice(0, MAX_TRACKED_SESSIONS)
+    : [];
+  const kept = new Set(recentKeys);
   const providerBySessionKey: Record<string, ProviderId> = {};
   if (isRecord(state.providerBySessionKey)) {
     for (const [entry, value] of Object.entries(state.providerBySessionKey)) {
+      if (!kept.has(entry)) continue;
       const providerId = providerIdSchema.safeParse(value);
       if (providerId.success) providerBySessionKey[entry] = providerId.data;
     }
   }
-  const recentKeys = Array.isArray(state.recentKeys)
-    ? state.recentKeys.filter(
-        (entry): entry is string => typeof entry === "string",
-      )
-    : [];
   return { providerBySessionKey, recentKeys };
 }
 
@@ -149,6 +177,7 @@ export const useProviderLoginTerminalsStore =
       (set) => ({
         providerBySessionKey: {},
         recentKeys: [],
+        revision: 0,
         record: ({ hostId, sessionId, providerId }) =>
           set((state) => {
             // Merged against what is ON DISK, not just this window's memory.
@@ -185,11 +214,19 @@ export const useProviderLoginTerminalsStore =
                 providerBySessionKey[entry] = value;
               }
             }
-            return { providerBySessionKey, recentKeys };
+            return {
+              providerBySessionKey,
+              recentKeys,
+              revision: state.revision + 1,
+            };
           }),
       }),
       {
         ...basePersistOptions(PROVIDER_LOGIN_TERMINALS_PERSIST_KEY),
+        partialize: (state): SharedProviderLoginRecords => ({
+          providerBySessionKey: state.providerBySessionKey,
+          recentKeys: state.recentKeys,
+        }),
         // The default merge is a shallow spread, so a persisted
         // `providerBySessionKey: null` would REPLACE the map and the next read
         // would throw on `null[key]`. Version-gating does not cover it - a
@@ -198,6 +235,7 @@ export const useProviderLoginTerminalsStore =
         merge: (persisted, current) => ({
           ...current,
           ...sanitizeRecords(persisted),
+          revision: current.revision + 1,
         }),
       },
     ),
@@ -208,19 +246,23 @@ export const useProviderLoginTerminalsStore =
 // a second window lists the same host's independent sessions and would adopt
 // the sign-in session as an ordinary terminal, which is exactly the bare-shell
 // failure above. The `storage` event fires only in OTHER same-origin windows,
-// never the one that wrote, so this cannot loop with `record`. `event.key ===
-// null` covers an explicit `localStorage.clear()`. Same pattern as
-// `feature-announcements-store`.
+// never the one that wrote, so this cannot loop with `record`.
+//
+// A peer's `localStorage.clear()` (`event.key === null`) is deliberately NOT
+// followed, which is where this departs from `feature-announcements-store`. A
+// session that was opened as a sign-in did not stop being one because storage
+// was wiped, and the two failure directions are not symmetric: a record kept
+// past its usefulness costs nothing (keys are host + uuid, bounded at 32, and
+// can never re-match), while a record dropped for a LIVE session is the
+// bare-shell recreation this store exists to prevent. The next `record()` in
+// this window writes the in-memory set back out, so the peer's wipe does not
+// even win the disk for long.
 //
 // This closes the window-to-window gap, not the general one: the durable answer
 // is still an origin field on `terminal.list`, which would also cover a client
 // that never saw the write at all.
 if (typeof window !== "undefined") {
   window.addEventListener("storage", (event) => {
-    if (event.key === null) {
-      void useProviderLoginTerminalsStore.persist.rehydrate();
-      return;
-    }
     if (event.key !== PROVIDER_LOGIN_TERMINALS_PERSIST_KEY) return;
     // MERGED from the event's own payload, not re-read from storage. Two
     // windows can each read before either writes, so the value on disk may
@@ -228,9 +270,13 @@ if (typeof window !== "undefined") {
     // adopt that loss, while the event still carries what the peer wrote. The
     // union keeps every origin this window has ever been told about, which is
     // what the classifier actually reads.
-    useProviderLoginTerminalsStore.setState((state) =>
-      mergeRecords(state, parsePersistedPayload(event.newValue)),
-    );
+    //
+    // A `removeItem` arrives with `newValue: null` and merges as "nothing
+    // new", for the same reason a `clear()` is ignored above.
+    useProviderLoginTerminalsStore.setState((state) => ({
+      ...mergeRecords(state, parsePersistedPayload(event.newValue)),
+      revision: state.revision + 1,
+    }));
   });
 }
 

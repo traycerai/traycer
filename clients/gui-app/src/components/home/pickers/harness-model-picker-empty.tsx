@@ -10,6 +10,7 @@ import { ProviderSetupTerminalAction } from "@/components/home/pickers/provider-
 import { useProviderTerminalLoginScopeSupported } from "@/hooks/providers/use-provider-terminal-login-scope-support";
 import {
   providerSetupActionPlacement,
+  providerSetupPreparingLabel,
   providerSetupSteps,
   resolveProviderTerminalSetup,
   type ProviderTerminalSetup,
@@ -252,10 +253,7 @@ function providerSetupCta(
 } | null {
   const providerId = guiHarnessIdToProviderId(provider.id);
   if (providerId === null) return null;
-  const setup = resolveProviderTerminalSetup(
-    providerId,
-    state?.loginCapability,
-  );
+  const setup = resolveProviderTerminalSetup(providerId, state);
   if (setup === null) return null;
   return isProviderSignedOutCatalogError(providerId, provider.modelsError)
     ? { providerId, setup }
@@ -284,6 +282,14 @@ function ProviderSetupCta(props: {
     terminalLoginSurface,
     props.runTargetHostId,
   );
+  // Same single decision as the auth line: the surface is handed over only
+  // where the placement draws a button, so button and steps cannot disagree.
+  const placement = providerSetupActionPlacement(
+    setup,
+    terminalLoginSurface !== null,
+    scopeSupported,
+  );
+  const preparingLabel = providerSetupPreparingLabel(setup, props.providerId);
   return (
     <div className="flex flex-col items-center gap-2 px-4 py-6 text-center">
       <span className="flex size-9 items-center justify-center rounded-full bg-primary/10 text-primary">
@@ -295,28 +301,25 @@ function ProviderSetupCta(props: {
       <p className="max-w-[min(90vw,18rem)] text-balance text-ui-xs text-muted-foreground">
         {guidance.summary}
       </p>
+      {placement === "preparing" && preparingLabel !== null ? (
+        <p
+          role="status"
+          className="max-w-[min(90vw,18rem)] text-ui-xs text-muted-foreground"
+        >
+          {preparingLabel}
+        </p>
+      ) : null}
       <div className="max-w-[min(90vw,18rem)]">
         <ProviderSetupTerminalAction
           providerId={props.providerId}
           guidance={guidance}
-          surface={
-            setup.canStartTerminal && scopeSupported
-              ? terminalLoginSurface
-              : null
-          }
+          surface={placement === "here" ? terminalLoginSurface : null}
           runTargetHostId={props.runTargetHostId}
           onBeforeStart={props.onClosePicker}
         />
       </div>
       <ol className="max-w-[min(90vw,18rem)] list-decimal space-y-0.5 pl-4 text-left text-ui-xs text-muted-foreground">
-        {providerSetupSteps(
-          guidance,
-          providerSetupActionPlacement(
-            setup,
-            terminalLoginSurface !== null,
-            scopeSupported,
-          ),
-        ).map((step) => (
+        {providerSetupSteps(guidance, placement).map((step) => (
           <li key={step}>{step}</li>
         ))}
       </ol>

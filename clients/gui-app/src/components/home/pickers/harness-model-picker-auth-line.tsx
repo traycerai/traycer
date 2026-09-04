@@ -12,6 +12,7 @@ import {
 } from "@/lib/providers/provider-ambient-auth";
 import {
   providerSetupActionPlacement,
+  providerSetupPreparingLabel,
   providerSetupSteps,
   resolveProviderTerminalSetup,
   type ProviderTerminalSetup,
@@ -125,10 +126,7 @@ function pickerAuthLineVerdict(
   if (catalogSignedOut || isSignedOut(state, harness)) {
     // Whether a terminal sign-in applies is the host's call, read from the
     // `providers.list` row; a row that has not resolved reads as "not yet".
-    const setup = resolveProviderTerminalSetup(
-      providerId,
-      state?.loginCapability,
-    );
+    const setup = resolveProviderTerminalSetup(providerId, state);
     // Compact when the model list is showing the setup CTA for the same
     // verdict, so the popover never says it twice.
     if (setup === null || catalogSignedOut) return { kind: "signed-out" };
@@ -207,8 +205,16 @@ function SetupGuidanceRow(props: {
     terminalLoginSurface,
     props.runTargetHostId,
   );
-  const surface =
-    setup.canStartTerminal && scopeSupported ? terminalLoginSurface : null;
+  // ONE placement decides both the button and the steps, so they cannot
+  // disagree about whether there is a button - the defect this seam exists to
+  // prevent. The surface is handed over only where the placement draws it.
+  const placement = providerSetupActionPlacement(
+    setup,
+    terminalLoginSurface !== null,
+    scopeSupported,
+  );
+  const surface = placement === "here" ? terminalLoginSurface : null;
+  const preparingLabel = providerSetupPreparingLabel(setup, props.providerId);
   return (
     <div
       role="note"
@@ -224,15 +230,11 @@ function SetupGuidanceRow(props: {
         runTargetHostId={props.runTargetHostId}
         onBeforeStart={props.onClosePicker}
       />
+      {placement === "preparing" && preparingLabel !== null ? (
+        <span role="status">{preparingLabel}</span>
+      ) : null}
       <ol className="list-decimal space-y-0.5 pl-4">
-        {providerSetupSteps(
-          guidance,
-          providerSetupActionPlacement(
-            setup,
-            terminalLoginSurface !== null,
-            scopeSupported,
-          ),
-        ).map((step) => (
+        {providerSetupSteps(guidance, placement).map((step) => (
           <li key={step}>{step}</li>
         ))}
       </ol>

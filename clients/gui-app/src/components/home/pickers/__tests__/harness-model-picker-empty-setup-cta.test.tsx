@@ -493,6 +493,45 @@ describe("<ModelRowsState /> provider setup CTA (reasonix)", () => {
     expect(screen.getByText(/Set up Copilot/)).toBeDefined();
   });
 
+  it("shows the pack's preparing state instead of the copilot CTA while the provider cannot spawn", () => {
+    const provider = harnessEntry({
+      id: "copilot",
+      label: "Copilot",
+      modelsError: catalogErrorFor(providerSignedOutMessage("copilot")),
+    });
+    render(
+      ModelRowsState({
+        catalogLoading: false,
+        catalogError: false,
+        hostUnavailableLabel: null,
+        hasQuery: false,
+        activeProvider: provider,
+        activeProviderState: {
+          ...terminalLoginCapableState("copilot", ["login"]),
+          managedInstallState: { status: "downloading", percent: 55 },
+        },
+        rowsCount: 0,
+        onOpenProviderSettings: () => undefined,
+        terminalLoginSurface: {
+          kind: "landing",
+          resolveLandingPageId: () => "draft-1",
+        },
+        runTargetHostId: null,
+        onClosePicker: vi.fn(),
+      }),
+    );
+
+    // The button would close the picker and send a request whose only answer
+    // is the host's `preparing` error; the wait is what to show instead.
+    expect(
+      screen.queryByRole("button", { name: /Sign in from a terminal/ }),
+    ).toBeNull();
+    expect(screen.getByRole("status").textContent).toBe(
+      "Preparing Copilot… 55%",
+    );
+    expect(mocks.start).not.toHaveBeenCalled();
+  });
+
   it("renders the plain host reason row, not the setup CTA, for copilot with capability absent (no guidance override to fall back on)", () => {
     const provider = harnessEntry({
       id: "copilot",

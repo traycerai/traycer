@@ -3,7 +3,14 @@ import {
   type ProviderCliState,
   type ProviderId,
 } from "@traycer/protocol/host/provider-schemas";
-import { providerSupportsTerminalLogin } from "@/components/providers/provider-signin-availability";
+import {
+  providerSupportsTerminalLogin,
+  providerTerminalLoginPackBlock,
+} from "@/components/providers/provider-signin-availability";
+import {
+  providerPackPreparingLabel,
+  type ProviderPackPreparing,
+} from "@/components/providers/provider-pack-readiness";
 
 /**
  * What the picker says and does for a provider whose sign-in has to happen in
@@ -130,32 +137,59 @@ export function defaultTerminalSignInGuidance(
  * dropped them and left a signed-out Reasonix at the generic error state with
  * no way forward.
  *
- * `loginCapability` comes from `providers.list`; while that has not resolved
- * (`undefined`/`null` state) the capability answer is "not yet", never "no" -
- * it re-resolves when the state lands.
+ * `state` is the `providers.list` row; while that has not resolved (`null`)
+ * the capability answer is "not yet", never "no" - it re-resolves when the row
+ * lands. It takes the whole row rather than `loginCapability` alone because a
+ * second fact on the same row gates the SAME button: whether the provider's
+ * managed pack would let the host spawn its CLI at all (`packPreparing`).
  */
 export interface ProviderTerminalSetup {
   readonly guidance: ProviderSetupGuidance;
   /** Whether the connected host can open the sign-in terminal itself. */
   readonly canStartTerminal: boolean;
+  /**
+   * The pack state blocking that terminal RIGHT NOW, or `null`. Transient
+   * where `canStartTerminal` is permanent: the host advertises the capability,
+   * and will honour it once the download lands - so this is not folded into
+   * `canStartTerminal`, whose `false` means "there is no button on this host
+   * at all" and leads the copy with the manual route.
+   */
+  readonly packPreparing: ProviderPackPreparing | null;
 }
 
 export function resolveProviderTerminalSetup(
   providerId: ProviderId,
-  loginCapability: ProviderCliState["loginCapability"] | undefined,
+  state: ProviderCliState | null,
 ): ProviderTerminalSetup | null {
   const override = providerSetupGuidance(providerId);
-  if (!providerSupportsTerminalLogin(loginCapability)) {
+  if (!providerSupportsTerminalLogin(state?.loginCapability)) {
     // No host-run terminal, so only a provider with its own manual route has
     // anything left to offer; the generic sign-in copy is all button.
     return override === null
       ? null
-      : { guidance: override, canStartTerminal: false };
+      : { guidance: override, canStartTerminal: false, packPreparing: null };
   }
   return {
     guidance: override ?? defaultTerminalSignInGuidance(providerId),
     canStartTerminal: true,
+    packPreparing: providerTerminalLoginPackBlock(state),
   };
+}
+
+/**
+ * What to render where the button would be while `packPreparing` blocks it -
+ * the same "Preparing X… 43%" / "X setup failed - …" sentence every other
+ * gated surface shows, so the picker cannot phrase the wait a fourth way.
+ */
+export function providerSetupPreparingLabel(
+  setup: ProviderTerminalSetup,
+  providerId: ProviderId,
+): string | null {
+  if (setup.packPreparing === null) return null;
+  return providerPackPreparingLabel(
+    setup.packPreparing,
+    PROVIDER_DISPLAY_NAMES[providerId],
+  );
 }
 
 /**
@@ -168,7 +202,13 @@ export type ProviderSetupActionPlacement =
   /** A button, but on another surface (a fork dialog's picker). */
   | "other-surface"
   /** No button anywhere on this host - the manual command is the route. */
-  | "unsupported-host";
+  | "unsupported-host"
+  /**
+   * A button here in principle, but the provider's pack cannot spawn yet. The
+   * preparing label stands where the button would; the steps read as they do
+   * for `here`, because that is what they will be once it lands.
+   */
+  | "preparing";
 
 /**
  * Where this surface's action is, from the three facts that decide it. Shared
@@ -189,7 +229,10 @@ export function providerSetupActionPlacement(
   hasSurface: boolean,
   scopeSupported: boolean,
 ): ProviderSetupActionPlacement {
+  // Permanent reasons first: a pack that will finish downloading does not
+  // change a host that can never carry this scope.
   if (!setup.canStartTerminal || !scopeSupported) return "unsupported-host";
+  if (setup.packPreparing !== null) return "preparing";
   return hasSurface ? "here" : "other-surface";
 }
 

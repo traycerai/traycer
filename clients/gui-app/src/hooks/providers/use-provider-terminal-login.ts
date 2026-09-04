@@ -30,9 +30,10 @@ const SIGN_IN_TERMINAL_CWD = "~";
  * `status` or `reset` without a second hook. `start` is what every consumer
  * actually presses - it fills in the fixed request this gesture always sends.
  */
-export type ProviderTerminalLoginStarter = StartTerminalLoginMutationResult & {
-  readonly start: () => void;
-};
+export type ProviderTerminalLoginStarter =
+  StartTerminalLoginMutationResult<undefined> & {
+    readonly start: () => void;
+  };
 
 /**
  * Runs the whole terminal sign-in gesture for an EPIC surface: ask the host
@@ -153,9 +154,10 @@ export function useProviderTerminalLogin(args: {
     ],
   );
 
-  const startTerminalLogin = useProvidersStartTerminalLoginForClient(
+  const startTerminalLogin = useProvidersStartTerminalLoginForClient<undefined>(
     tabClient,
     onSuccess,
+    undefined,
   );
 
   const start = useCallback((): void => {

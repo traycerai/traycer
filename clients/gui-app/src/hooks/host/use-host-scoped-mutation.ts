@@ -20,12 +20,15 @@ import {
   type AnalyticsProviderOperation,
 } from "@/lib/analytics";
 
-interface HostScopedMutationContext {
+interface HostScopedMutationContext<Captured> {
   readonly hostId: string | null;
+  /** Whatever `captureContext` read at send time; `undefined` without one. */
+  readonly captured: Captured;
 }
 
 interface UseHostScopedMutationArgs<
   Method extends keyof HostRpcRegistry & string,
+  Captured,
 > {
   readonly method: Method;
   readonly mutationKey: ReadonlyArray<unknown>;
@@ -59,7 +62,24 @@ interface UseHostScopedMutationArgs<
         data: ResponseOfMethod<HostRpcRegistry, Method>,
         variables: RequestOfMethod<HostRpcRegistry, Method>,
         hostId: string | null,
+        captured: Captured,
       ) => void)
+    | undefined;
+  /**
+   * Per-request state to hand `onSuccess` alongside the host id. Runs inside
+   * `onMutate` - before the request is dispatched, once per `mutate()`, in
+   * the order the `mutate()`s were called - and its answer travels with THAT
+   * mutation to its own `onSuccess`. A caller that stashes per-press state in
+   * a ref and reads it back in `onSuccess` gets the LAST press's value
+   * instead: the mutation-level callback closes over the ref, not over the
+   * call, and nothing serializes two `mutate()`s on one observer.
+   *
+   * `onMutate` is not synchronous with `mutate()` (TanStack awaits the
+   * cache-level hook first), so a caller pairing state to a press must hand
+   * it over in press ORDER - a queue - not by reading "the current" value.
+   */
+  readonly captureContext?:
+    | ((variables: RequestOfMethod<HostRpcRegistry, Method>) => Captured)
     | undefined;
   /**
    * Codes the caller handles inline (a confirm dialog). The default toast is
@@ -75,13 +95,14 @@ interface UseHostScopedMutationArgs<
  */
 export function useHostScopedMutation<
   Method extends keyof HostRpcRegistry & string,
+  Captured = undefined,
 >(
-  args: UseHostScopedMutationArgs<Method>,
+  args: UseHostScopedMutationArgs<Method, Captured>,
 ): UseMutationResult<
   ResponseOfMethod<HostRpcRegistry, Method>,
   HostRpcError,
   RequestOfMethod<HostRpcRegistry, Method>,
-  HostScopedMutationContext
+  HostScopedMutationContext<Captured>
 > {
   const client = useHostClient();
   return useHostScopedMutationForClient(client, args);
@@ -89,28 +110,41 @@ export function useHostScopedMutation<
 
 export function useHostScopedMutationForClient<
   Method extends keyof HostRpcRegistry & string,
+  Captured = undefined,
 >(
   client: HostClient<HostRpcRegistry> | null,
-  args: UseHostScopedMutationArgs<Method>,
+  args: UseHostScopedMutationArgs<Method, Captured>,
 ): UseMutationResult<
   ResponseOfMethod<HostRpcRegistry, Method>,
   HostRpcError,
   RequestOfMethod<HostRpcRegistry, Method>,
-  HostScopedMutationContext
+  HostScopedMutationContext<Captured>
 > {
   const queryClient = useQueryClient();
-  return useHostMutation<HostRpcRegistry, Method, HostScopedMutationContext>({
+  return useHostMutation<
+    HostRpcRegistry,
+    Method,
+    HostScopedMutationContext<Captured>
+  >({
     client,
     method: args.method,
     mapVariables: (variables) => variables,
     options: {
       mutationKey: args.mutationKey,
-      onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
+      onMutate: (variables) => ({
+        hostId: client?.getActiveHostId() ?? null,
+        // `undefined` is what `Captured` IS when no capture was asked for;
+        // the cast only names that fact for the compiler.
+        captured:
+          args.captureContext === undefined
+            ? (undefined as Captured)
+            : args.captureContext(variables),
+      }),
       onSuccess: (data, variables, ctx) => {
         trackScopedMutationSuccess(args.mutationKey, variables);
         // Before the host-id gate: this work is the caller's, and a null host
         // id is a reason to skip invalidation, not to skip the caller.
-        args.onSuccess?.(data, variables, ctx.hostId);
+        args.onSuccess?.(data, variables, ctx.hostId, ctx.captured);
         if (ctx.hostId === null) return;
         for (const method of args.invalidateMethods) {
           void queryClient.invalidateQueries({

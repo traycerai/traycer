@@ -25,7 +25,10 @@ import {
 } from "@/lib/terminals/plain-terminal-authority";
 import { consumeRetainedPlainTerminalTombstone } from "@/lib/terminals/plain-terminal-presentation-invalidation";
 import { requestLandingTerminalClose } from "@/lib/terminals/landing-terminal-close-coordinator";
-import { providerLoginTerminalProviderId } from "@/stores/providers/provider-login-terminals";
+import {
+  providerLoginTerminalProviderId,
+  useProviderLoginTerminalsStore,
+} from "@/stores/providers/provider-login-terminals";
 import {
   LANDING_TERMINAL_SOURCE_STORE_VERSION,
   absentListingProvesDeath,
@@ -173,6 +176,14 @@ export function useLandingTerminalReconciliation(
   const queryClient = useQueryClient();
   const [connectionEpoch, setConnectionEpoch] = useState(0);
   const reconciliationRef = useRef<string | null>(null);
+  // The THIRD wake. Sign-in provenance is read imperatively inside the pass
+  // (`providerLoginProviderFor`), so a record arriving after the pass ran - a
+  // peer window's `storage` event - would otherwise never re-run the matched-
+  // tab classification, and the tab it should have marked stays importable
+  // and recreatable until some unrelated host event happens along.
+  const provenanceRevision = useProviderLoginTerminalsStore(
+    (state) => state.revision,
+  );
 
   // TWO WAKES, because two different things can make this panel's list stale
   // and only one of them is an event about the client.
@@ -223,6 +234,7 @@ export function useLandingTerminalReconciliation(
       plainAuthority.authority.capability.status,
       plainAuthority.authority.collection?.projectionSequence ?? -1,
       plainAuthority.authority.canMutate ? "mutable" : "read-only",
+      provenanceRevision,
     ].join("\u0000");
     if (reconciliationRef.current === reconciliationKey) return;
     reconciliationRef.current = reconciliationKey;
@@ -394,6 +406,7 @@ export function useLandingTerminalReconciliation(
     panelOpen,
     plainAuthority,
     primaryWorkspacePath,
+    provenanceRevision,
     queryClient,
   ]);
 }

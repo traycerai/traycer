@@ -15,7 +15,7 @@ import { openLandingSignInTerminal } from "@/lib/terminals/landing-sign-in-termi
  * would mint a draft for merely showing the button.
  */
 export type LandingProviderTerminalLoginStarter =
-  StartTerminalLoginMutationResult & {
+  StartTerminalLoginMutationResult<string | null> & {
     readonly start: (landingPageId: string) => void;
   };
 
@@ -37,10 +37,15 @@ export type LandingProviderTerminalLoginStarter =
  * the same reason the epic hook's does: the picker closes on click, so the
  * button that started this is gone before the host answers, and a live
  * sign-in PTY with no tab in front of it is exactly the failure to avoid.
- * That is also why the target page is held in a ref rather than closed over:
- * the id is only known once the press has bound the page, and the mutation's
- * own `onSuccess` cannot read a per-`mutate` variable. One press is in flight
- * at a time - the picker closes on the first - so the ref names this gesture.
+ * The target page reaches that callback through the mutation's own
+ * `captureContext`: the id is only known once the press has bound the page,
+ * and the mutation-level `onSuccess` cannot read a per-`mutate` variable.
+ * `start` QUEUES the page and the capture dequeues it - one per request, in
+ * press order - rather than reading "the current" page from a ref: two
+ * presses on one instance before the first answer (a double click ahead of
+ * the pending re-render) would otherwise open the first session on the
+ * second page, and `onMutate` is not synchronous with `mutate()`, so even the
+ * capture cannot trust a single slot.
  *
  * Against an old host that only speaks `providers.startTerminalLogin@1.0`
  * the client's downgrade path refuses the independent scope as
@@ -61,7 +66,9 @@ export function useLandingProviderStartTerminalLogin(args: {
 }): LandingProviderTerminalLoginStarter {
   const { providerId, hostId, launchedFromSessionId } = args;
   const client = useHostClientForHostId(hostId);
-  const pendingLandingPageIdRef = useRef<string | null>(null);
+  // Press order. `start` pushes, the capture below shifts; TanStack runs each
+  // mutation's `onMutate` in the order the `mutate()`s were called.
+  const queuedLandingPageIdsRef = useRef<string[]>([]);
 
   const onSuccess = useCallback(
     (
@@ -78,8 +85,9 @@ export function useLandingProviderStartTerminalLogin(args: {
       // tab points at. `hostId` (the hook argument) is no good either: it is
       // `null` while following the app-wide default.
       requestHostId: string | null,
+      // The page THIS press bound, dequeued for this request.
+      landingPageId: string | null,
     ): void => {
-      const landingPageId = pendingLandingPageIdRef.current;
       if (requestHostId === null || landingPageId === null) return;
       openLandingSignInTerminal({
         landingPageId,
@@ -96,11 +104,14 @@ export function useLandingProviderStartTerminalLogin(args: {
   const startTerminalLogin = useProvidersStartTerminalLoginForClient(
     client,
     onSuccess,
+    // One dequeue per request. `null` only if `mutate` was reached without
+    // `start`, which nothing does; the open then skips rather than guessing.
+    (): string | null => queuedLandingPageIdsRef.current.shift() ?? null,
   );
 
   const start = useCallback(
     (landingPageId: string): void => {
-      pendingLandingPageIdRef.current = landingPageId;
+      queuedLandingPageIdsRef.current.push(landingPageId);
       startTerminalLogin.mutate({
         providerId,
         scope: { kind: "independent" },

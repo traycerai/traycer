@@ -332,6 +332,82 @@ describe("useLandingProviderStartTerminalLogin", () => {
     ).toBe(true);
   });
 
+  it("with no anchors, also re-opens a start page that had already recorded a CLOSED layout", async () => {
+    // The next page to mount is not necessarily new: `landingTerminalLayoutFor`
+    // gives a page's own layout precedence over the fallback, so a page that
+    // once closed its panel would hide the terminal behind that very layout.
+    useLandingTerminalStore.getState().setPanelOpen("draft-existing", false);
+    mocks.startTerminalLoginRequest.mockResolvedValue({
+      sessionId: "term-new",
+      replacedSessionId: null,
+    });
+    const { wrapper } = makeWrapper();
+    const { result } = renderStarter(wrapper, null);
+
+    act(() => {
+      result.current.start("draft-discarded");
+    });
+    await waitFor(() => expect(result.current.isPending).toBe(false));
+
+    const state = useLandingTerminalStore.getState();
+    expect(landingTerminalLayoutFor(state, "draft-existing").panelOpen).toBe(
+      true,
+    );
+  });
+
+  it("opens each of two in-flight presses on ITS OWN page, not both on the last one", async () => {
+    const pending: Array<
+      (value: { sessionId: string; replacedSessionId: null }) => void
+    > = [];
+    mocks.startTerminalLoginRequest.mockImplementation(
+      () =>
+        new Promise<{ sessionId: string; replacedSessionId: null }>(
+          (resolve) => {
+            pending.push(resolve);
+          },
+        ),
+    );
+    const { wrapper } = makeWrapper();
+    const { result } = renderStarter(wrapper, null);
+
+    // Two presses on one instance before the first answers - a double click
+    // ahead of the `isPending` re-render. `onSuccess` is mutation-level and
+    // closes over the hook, so a page read back from a ref there would name
+    // the SECOND press for both.
+    act(() => {
+      result.current.start("draft-first");
+      result.current.start("draft-second");
+    });
+    // The request is dispatched after the (awaited) `onMutate`, so it lands a
+    // microtask later than the press.
+    await waitFor(() => expect(pending).toHaveLength(2));
+
+    await act(async () => {
+      pending[0]?.({ sessionId: "term-first", replacedSessionId: null });
+      await Promise.resolve();
+    });
+    // Only the first page has a keyed layout so far - the first session did
+    // not open on "draft-second".
+    expect(
+      Object.keys(useLandingTerminalStore.getState().layoutsByLandingPageId),
+    ).toEqual(["draft-first"]);
+
+    await act(async () => {
+      pending[1]?.({ sessionId: "term-second", replacedSessionId: null });
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(result.current.isPending).toBe(false));
+    const state = useLandingTerminalStore.getState();
+    expect(Object.keys(state.layoutsByLandingPageId).sort()).toEqual([
+      "draft-first",
+      "draft-second",
+    ]);
+    expect(state.tabs.map((tab) => tab.sessionId).sort()).toEqual([
+      "term-first",
+      "term-second",
+    ]);
+  });
+
   it("with a live anchor, leaves an unrelated future start page closed", async () => {
     const anchor = document.createElement("div");
     useLandingPaneAnchorStore.getState().setAnchor(LANDING_PAGE_ID, anchor);

@@ -143,22 +143,25 @@ export interface LandingTerminalStoreState {
   readonly pendingKills: ReadonlyArray<LandingTerminalPendingKill>;
   readonly setPanelOpen: (landingPageId: string, open: boolean) => void;
   /**
-   * Opens the panel for every start page that has NOT recorded a layout of its
-   * own - the page-less form of {@link setPanelOpen}, for a caller with a tab
-   * to show and no live page to show it on.
+   * Opens the panel on EVERY start page - each page that has recorded a layout
+   * of its own, and through the fallback every page that has not. The
+   * page-less form of {@link setPanelOpen}, for a caller with a tab to show and
+   * no live page to show it on.
    *
    * The one caller is the sign-in open: a start page can be discarded while
    * `providers.startTerminalLogin` is in flight, and if no other pane is
-   * mounted there is no id left to key an open by. Writing the fallback means
-   * whichever start page mounts NEXT shows the panel, which is where the tab
-   * (tabs are shared across pages) already is.
+   * mounted there is no id left to key an open by. Whichever start page mounts
+   * NEXT then shows the panel, which is where the tab (tabs are shared across
+   * pages) already is. Both halves are needed: `landingTerminalLayoutFor`
+   * gives a page's own layout precedence over the fallback, so a page that
+   * once closed its panel would ignore a fallback-only write and hide the
+   * terminal behind the very layout it recorded.
    *
-   * Bounded by the same rule that retires the fallback generally:
-   * `collapseLayoutsForEmptyTerminalSet` closes it once the last tab is gone,
-   * and any page the user actually toggles records its own layout, which
-   * displaces this. It cannot outlive the terminal it was written for.
+   * Bounded by the same rule that retires layouts generally:
+   * `collapseLayoutsForEmptyTerminalSet` closes every one of them once the
+   * last tab is gone, so this cannot outlive the terminal it was written for.
    */
-  readonly openPanelForPagesWithoutLayout: () => void;
+  readonly openPanelForEveryPage: () => void;
   readonly setPanelWidthFraction: (
     landingPageId: string,
     fraction: number,
@@ -319,13 +322,29 @@ export const useLandingTerminalStore = create<LandingTerminalStoreState>()(
             panelOpen,
           }),
         ),
-      openPanelForPagesWithoutLayout: () =>
-        set((state) => ({
-          fallbackLayout: {
-            ...(state.fallbackLayout ?? DEFAULT_LANDING_TERMINAL_LAYOUT),
-            panelOpen: true,
-          },
-        })),
+      openPanelForEveryPage: () =>
+        set((state) => {
+          const layoutsByLandingPageId: Partial<
+            Record<string, LandingTerminalLayout>
+          > = {};
+          for (const [landingPageId, layout] of Object.entries(
+            state.layoutsByLandingPageId,
+          )) {
+            if (layout !== undefined) {
+              layoutsByLandingPageId[landingPageId] = {
+                ...layout,
+                panelOpen: true,
+              };
+            }
+          }
+          return {
+            layoutsByLandingPageId,
+            fallbackLayout: {
+              ...(state.fallbackLayout ?? DEFAULT_LANDING_TERMINAL_LAYOUT),
+              panelOpen: true,
+            },
+          };
+        }),
       setPanelWidthFraction: (landingPageId, panelWidthFraction) =>
         set((state) =>
           updateLandingTerminalLayout(state, landingPageId, {

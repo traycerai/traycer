@@ -15,6 +15,7 @@ function resetProviderLoginTerminalsStore(): void {
   useProviderLoginTerminalsStore.setState({
     providerBySessionKey: {},
     recentKeys: [],
+    revision: 0,
   });
 }
 
@@ -121,6 +122,64 @@ describe("useProviderLoginTerminalsStore", () => {
     );
   });
 
+  it("bumps `revision` on every change, whichever path made it - so a reconciliation keyed on it re-runs", () => {
+    expect(useProviderLoginTerminalsStore.getState().revision).toBe(0);
+
+    recordProviderLoginTerminal({
+      hostId: HOST_A,
+      sessionId: "session-1",
+      providerId: "reasonix",
+    });
+    expect(useProviderLoginTerminalsStore.getState().revision).toBe(1);
+
+    // A peer window's write. The classifier is read imperatively inside the
+    // reconciliation effects, so this is the only signal that would re-run
+    // them; without it the tab the peer's record should mark stays plain.
+    window.dispatchEvent(
+      new StorageEvent("storage", {
+        key: PERSIST_KEY,
+        newValue: persistedPayload({
+          [`${HOST_B}:session-peer`]: "copilot",
+        }),
+      }),
+    );
+    expect(useProviderLoginTerminalsStore.getState().revision).toBe(2);
+  });
+
+  it("does not persist `revision`, and hydration does not reset it", async () => {
+    recordProviderLoginTerminal({
+      hostId: HOST_A,
+      sessionId: "session-1",
+      providerId: "reasonix",
+    });
+    const persisted = JSON.parse(
+      window.localStorage.getItem(PERSIST_KEY) ?? "{}",
+    ) as { state: Record<string, unknown> };
+    expect(persisted.state).not.toHaveProperty("revision");
+
+    const before = useProviderLoginTerminalsStore.getState().revision;
+    await useProviderLoginTerminalsStore.persist.rehydrate();
+    // Hydration is a change too - the records may differ from memory.
+    expect(useProviderLoginTerminalsStore.getState().revision).toBe(before + 1);
+  });
+
+  it("keeps this window's records through a peer's localStorage.clear()", () => {
+    recordProviderLoginTerminal({
+      hostId: HOST_A,
+      sessionId: "session-live",
+      providerId: "reasonix",
+    });
+
+    // A `clear()` in another window arrives as a null key. The session did not
+    // stop being a sign-in because storage was wiped, and dropping the record
+    // for a LIVE session is the bare-shell recreation this store prevents.
+    window.dispatchEvent(new StorageEvent("storage", { key: null }));
+
+    expect(providerLoginTerminalProviderId(HOST_A, "session-live")).toBe(
+      "reasonix",
+    );
+  });
+
   it("a storage event for an unrelated key is ignored", () => {
     recordProviderLoginTerminal({
       hostId: HOST_A,
@@ -195,6 +254,38 @@ describe("useProviderLoginTerminalsStore", () => {
       expect(providerLoginTerminalProviderId(HOST_A, "session-after")).toBe(
         "reasonix",
       );
+    });
+
+    it("bounds an oversized persisted payload to MAX_TRACKED_SESSIONS (32) and de-duplicates its keys", async () => {
+      const providerBySessionKey: Record<string, string> = {};
+      const recentKeys: string[] = [];
+      for (let i = 0; i < 40; i++) {
+        providerBySessionKey[`${HOST_A}:session-${i}`] = "reasonix";
+        recentKeys.push(`${HOST_A}:session-${i}`);
+      }
+      window.localStorage.setItem(
+        PERSIST_KEY,
+        JSON.stringify({
+          state: {
+            providerBySessionKey,
+            // A duplicate must not count twice against the bound, nor let a
+            // key survive in the map without an eviction-order entry.
+            recentKeys: [`${HOST_A}:session-0`, ...recentKeys],
+          },
+          version: CURRENT_PERSIST_VERSION,
+        }),
+      );
+
+      await useProviderLoginTerminalsStore.persist.rehydrate();
+
+      const state = useProviderLoginTerminalsStore.getState();
+      expect(state.recentKeys).toHaveLength(32);
+      expect(new Set(state.recentKeys).size).toBe(32);
+      expect(Object.keys(state.providerBySessionKey)).toHaveLength(32);
+      expect(providerLoginTerminalProviderId(HOST_A, "session-31")).toBe(
+        "reasonix",
+      );
+      expect(providerLoginTerminalProviderId(HOST_A, "session-32")).toBeNull();
     });
 
     it("a persisted payload keeps its valid entries and drops only the invalid ones", async () => {

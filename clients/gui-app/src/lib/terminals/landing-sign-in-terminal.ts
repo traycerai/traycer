@@ -97,9 +97,10 @@ export function openLandingSignInTerminal(args: {
   // start page: a draft bound at press time can be submitted or discarded
   // while the host is still answering, which is a window a picker press opens
   // by construction. The page-less open covers whichever start page mounts
-  // next, so the terminal carrying the sign-in code is never left behind a
-  // panel with no way to ask for it.
-  if (anchoredPageIds.length === 0) store.openPanelForPagesWithoutLayout();
+  // next - one that already recorded a closed layout included - so the
+  // terminal carrying the sign-in code is never left behind a panel with no
+  // way to ask for it.
+  if (anchoredPageIds.length === 0) store.openPanelForEveryPage();
   const activeInstanceId = useLandingTerminalStore.getState().activeInstanceId;
   if (activeInstanceId !== null) focusTerminalInstance(activeInstanceId);
 }
