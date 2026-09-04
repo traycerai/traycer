@@ -73,7 +73,6 @@ import {
   notificationEntityFromHostEntry,
   notificationEntityFromPayload,
   notificationEntityMatchesPresence,
-  notificationPayloadBelongsToEntity,
   type NotificationNavigate,
 } from "@/lib/notifications";
 import { useAppLocalNotificationsStore } from "@/stores/notifications/app-local-notifications-store";

@@ -2817,7 +2817,7 @@ describe("<NotificationsSessionProvider />", () => {
         originHostId: mockLocalHostEntry.hostId,
         updatedAt: 2,
         readAt: null,
-        kind: "worktree.delete.error",
+        kind: "host.error",
         sourceRef: "epic-a",
         payload: { kind: "epic", epicId: "epic-a" },
         message: "Task worktree deletion failed",
