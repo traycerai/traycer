@@ -872,6 +872,14 @@ vi.mock("@/lib/epic-selectors", () => ({
     };
   },
   useEpicArchivedNodeIds: () => testState.archivedIds,
+  // The sidebar's archive-hidden and chat-order hooks read the tree and the
+  // archived ids through the PROVIDER-OPTIONAL selectors, so the picker can
+  // also resolve on the Start Page where there is no epic session. A
+  // whole-module mock has to answer those forms too, with the same test state
+  // as their strict twins below - a fake that disagreed would make the panel
+  // and the picker read different trees.
+  useMaybeEpicArchivedNodeIds: () => testState.archivedIds,
+  useMaybeEpicTreeIndex: () => testState.tree,
   useEpicArtifactRecords: () => testState.records,
   // Dedup input for the cloud-chat section. Empty: this suite is about the
   // LOCAL tree, and the section hides itself when the cloud list has nothing

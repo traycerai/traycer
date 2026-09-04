@@ -146,7 +146,7 @@ describe("BrowserSessionsStreamClient", () => {
     const kinds: string[] = [];
     const stream = new BrowserSessionsStreamClient({
       wsStreamClient: client,
-      epicId: "epic-1",
+      scope: { kind: "epic", epicId: "epic-1" },
       callbacks: {
         onServerFrame: (frame) => {
           kinds.push(frame.kind);
@@ -184,7 +184,7 @@ describe("BrowserSessionsStreamClient", () => {
     const client = makeClient(factory);
     const stream = new BrowserSessionsStreamClient({
       wsStreamClient: client,
-      epicId: "epic-1",
+      scope: { kind: "epic", epicId: "epic-1" },
       callbacks: {
         onServerFrame: () => undefined,
         onConnectionStatus: () => undefined,
@@ -212,7 +212,7 @@ describe("BrowserScreencastStreamClient", () => {
     }[] = [];
     const stream = new BrowserScreencastStreamClient({
       wsStreamClient: client,
-      epicId: "epic-1",
+      scope: { kind: "epic", epicId: "epic-1" },
       sessionId: "browser-session-1",
       tabId: "browser-tab-1",
       maxWidth: 1280,
@@ -278,7 +278,7 @@ describe("BrowserScreencastStreamClient", () => {
     const received: BrowserScreencastServerFrame[] = [];
     const stream = new BrowserScreencastStreamClient({
       wsStreamClient: client,
-      epicId: "epic-1",
+      scope: { kind: "epic", epicId: "epic-1" },
       sessionId: "browser-session-1",
       tabId: "browser-tab-1",
       maxWidth: 1280,

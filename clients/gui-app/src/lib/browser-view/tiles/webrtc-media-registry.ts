@@ -19,7 +19,7 @@ import { compositeKey } from "./browser-view-keys";
  * session + tab and refcounted like `visible-tile-registry`.
  *
  * It exists because the React tree tears the tile down far more often than the
- * media should die: `browser-session-tile.tsx` keys the peek tile on
+ * media should die: `browser-tab-tile.tsx` keys the peek tile on
  * `session.runtime.revision`, so every revision bump is a full unmount +
  * remount, and `use-screencast-session`'s subscription effect re-runs on every
  * visibility toggle and client-identity change. A peer connection owned by the

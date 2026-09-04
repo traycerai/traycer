@@ -72,6 +72,13 @@ export interface BrowserViewEntry {
 
 export interface BrowserViewNativeIdentity {
   readonly key: BrowserViewNativeTabKey;
+  /**
+   * The incarnation every host-side capability quotes. Fixed for the entry's
+   * life: a cross-window move REPLACES the entry (see
+   * `BrowserViewProvisioning.replaceNativeGuestForWindow`), so the new window's
+   * guest carries a freshly minted id and every call still quoting the old one
+   * finds no entry (`findExactNativeEntry` and `releaseTab`'s own check).
+   */
   readonly registrationId: string;
   /** Current renderer connection that owns this guest's lifecycle stream. */
   lifecycleWindowId: string;

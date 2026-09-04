@@ -56,6 +56,8 @@ vi.mock(
       retry: () => undefined,
       openTab: () => Promise.reject(new Error("not used")),
       closeTab: () => Promise.reject(new Error("not used")),
+      attachTab: () => Promise.reject(new Error("not used")),
+      moveTab: () => Promise.reject(new Error("not used")),
     };
     return {
       BrowserSessionsProvider: (props: { readonly children: ReactNode }) => (
