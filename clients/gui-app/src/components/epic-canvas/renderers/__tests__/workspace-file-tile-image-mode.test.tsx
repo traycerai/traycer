@@ -68,6 +68,14 @@ const state = vi.hoisted(() => ({
   },
 }));
 
+// These tiles resolve the user's default open target, which asks whether the
+// tile's host is the LOCAL one before it may offer Finder. That read wants the
+// host runtime, which this suite does not mount; `null` is the honest answer
+// here and simply leaves Finder unoffered.
+vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+  useHostDirectoryEntry: () => null,
+}));
+
 vi.mock("@/hooks/assets/use-file-asset", () => ({
   useFileAsset: (request: FileAssetRequest) => {
     state.assetRequests.push(request);
