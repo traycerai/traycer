@@ -429,14 +429,28 @@ export async function runLinkPhoneFlow(
     claim.claimant.address ?? "address unknown",
     claim.claimant.location ?? "location unknown",
   ].join(" · ");
+  const device = claimantDeviceLabel(claim.claimant.userAgent);
+  // With a match code the question IS the code: the phone in the user's hand
+  // shows the same two digits, and agreement between the two screens proves
+  // the prompt belongs to that phone — which the self-reported description
+  // cannot, since the claimant chooses it. Without one (an older server, or
+  // a phone that predates the code and so was minted none) the description
+  // is the prompt, exactly as before.
+  const matchCode = claim.claimant.matchCode ?? null;
   ctx.output.humanRequired(
-    `A phone scanned the code.\n` +
-      `  ${detail}\n` +
-      `Details are approximate. Only approve if you scanned this code yourself.`,
+    matchCode === null
+      ? `A phone scanned the code.\n` +
+          `  ${detail}\n` +
+          `Details are approximate. Only approve if you scanned this code yourself.`
+      : `A phone scanned the code and is showing the number ${matchCode}.\n` +
+          `  ${device} · ${detail}\n` +
+          `Only approve if the phone in your hand shows ${matchCode} and you scanned this code yourself.`,
   );
 
   const approve = await askApproval(
-    `Approve sign-in from ${claimantDeviceLabel(claim.claimant.userAgent)} · ${claim.claimant.address ?? "address unknown"}? [y/N] `,
+    matchCode === null
+      ? `Approve sign-in from ${device} · ${claim.claimant.address ?? "address unknown"}? [y/N] `
+      : `Does your phone show ${matchCode}? Approve sign-in from ${device}? [y/N] `,
   );
 
   const responded = await respondLinkLoginViaHttp(

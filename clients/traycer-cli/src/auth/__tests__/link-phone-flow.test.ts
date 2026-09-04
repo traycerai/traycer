@@ -36,7 +36,11 @@ vi.mock("../validate", () => ({ validateStoredCredentials: vi.fn() }));
 // The approval prompt. `answer.current` is what the human "types"; `null` is
 // Ctrl-D — the stream closes and the question is never answered at all, which
 // the double has to be able to express or the deny-on-close path is untestable.
-const answer = vi.hoisted(() => ({ current: "" as string | null }));
+const answer = vi.hoisted(() => ({
+  current: "" as string | null,
+  /** The question the human was last asked, verbatim. */
+  lastPrompt: "",
+}));
 vi.mock("node:readline", () => ({
   createInterface: () => {
     const closeHandlers: (() => void)[] = [];
@@ -51,7 +55,8 @@ vi.mock("node:readline", () => ({
           closeHandlers.push(handler);
         }
       },
-      question: (_prompt: string, callback: (value: string) => void) => {
+      question: (prompt: string, callback: (value: string) => void) => {
+        answer.lastPrompt = prompt;
         const typed = answer.current;
         if (typed === null) {
           // Real readline fires `close` and never invokes the callback.
@@ -133,6 +138,15 @@ const CLAIMED = {
   },
 };
 
+/** The same claim from a server that minted a match code for this phone. */
+const CLAIMED_WITH_CODE = {
+  kind: "ok" as const,
+  response: {
+    status: "claimed" as const,
+    claimant: { ...CLAIMED.response.claimant, matchCode: "47" },
+  },
+};
+
 const UNCLAIMED = {
   kind: "ok" as const,
   response: { status: "unclaimed" as const, claimant: null },
@@ -144,6 +158,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.useFakeTimers();
   answer.current = "";
+  answer.lastPrompt = "";
   originalIsTty = process.stdin.isTTY;
   Object.defineProperty(process.stdin, "isTTY", {
     configurable: true,
@@ -280,6 +295,38 @@ describe("runLinkPhoneFlow", () => {
     expect(output).toContain("203.0.113.7");
     expect(output).toContain("Bengaluru, IN");
     expect(output).toContain("Only approve if you scanned this code yourself");
+    // No code minted (an older server, or a phone that cannot show one):
+    // the description IS the prompt, exactly as before.
+    expect(answer.lastPrompt).toContain("Approve sign-in from an iPhone");
+    expect(answer.lastPrompt).not.toContain("Does your phone show");
+  });
+
+  it("asks about the match code when the claim carries one, with the device as context", async () => {
+    // The phone in the user's hand shows the same two digits; agreement
+    // between the two screens is what the self-reported description cannot
+    // prove. The description stays, demoted to context, and the decision
+    // itself is unchanged - the code is never sent back.
+    statusMock.mockResolvedValue(CLAIMED_WITH_CODE);
+    answer.current = "y";
+    const ctx = interactiveCtx();
+
+    const result = await runWithPolls(ctx, 1);
+
+    const output = printed(ctx);
+    expect(output).toContain("showing the number 47");
+    expect(output).toContain("an iPhone");
+    expect(output).toContain("Only approve if the phone in your hand shows 47");
+    expect(answer.lastPrompt).toContain("Does your phone show 47?");
+    expect(answer.lastPrompt).toContain("an iPhone");
+    expect(respondMock).toHaveBeenCalledWith(
+      expect.any(String),
+      "bearer-1",
+      "ABCDE-FGHJK",
+      true,
+    );
+    expect(result.status === "fulfilled" ? result.value : null).toMatchObject({
+      decision: "approved",
+    });
   });
 
   it("exits with a supersession message when the printed code is gone", async () => {

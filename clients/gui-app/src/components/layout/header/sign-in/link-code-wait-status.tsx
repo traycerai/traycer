@@ -86,10 +86,21 @@ export function LinkCodeWaitStatus() {
         </p>
       ) : null}
       <p className="text-center text-ui-sm opacity-80">
-        {matchCode !== null
-          ? "Approve it on your computer if the code matches."
-          : "Waiting for approval on your computer…"}
+        Waiting for approval on your computer…
       </p>
+      {matchCode !== null ? (
+        // Conditional on purpose: an approver that predates the code (an
+        // older desktop, or the CLI before it learned to print one) asks
+        // nothing about it, and telling the user to approve "only if the
+        // code matches" would leave them refusing a prompt that never shows
+        // one. The standing line above is the instruction; this is the hint.
+        <p
+          className="text-center text-ui-xs text-muted-foreground"
+          data-testid="link-code-signin-match-code-hint"
+        >
+          If your computer asks, it should show this code.
+        </p>
+      ) : null}
       {progress !== null ? (
         <p
           className="text-center text-ui-xs text-muted-foreground tabular-nums"

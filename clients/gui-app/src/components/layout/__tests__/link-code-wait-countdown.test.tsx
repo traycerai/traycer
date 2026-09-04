@@ -83,9 +83,13 @@ describe("link-login approval countdown", () => {
       "Your code: 47",
     );
     expect(screen.getByRole("status").textContent).toContain("47");
-    expect(
-      screen.getByTestId("link-code-signin-waiting").textContent,
-    ).toContain("Approve it on your computer if the code matches.");
+    // The standing instruction does not depend on the approver showing a
+    // code: an older desktop or CLI asks nothing about it, and "approve only
+    // if it matches" would have the user refuse a prompt that has no code.
+    const waiting = screen.getByTestId("link-code-signin-waiting").textContent;
+    expect(waiting).toContain("Waiting for approval on your computer…");
+    expect(waiting).toContain("If your computer asks, it should show this code.");
+    expect(waiting).not.toContain("only if");
 
     progressHolder.current = {
       nextPollAtMs: START_MS + 3_000,
@@ -106,6 +110,7 @@ describe("link-login approval countdown", () => {
     };
     render(<LinkCodeWaitStatus />);
     expect(screen.queryByTestId("link-code-signin-match-code")).toBeNull();
+    expect(screen.queryByTestId("link-code-signin-match-code-hint")).toBeNull();
     expect(
       screen.getByTestId("link-code-signin-waiting").textContent,
     ).toContain("Waiting for approval on your computer…");

@@ -673,7 +673,7 @@ describe("LinkPhonePanel", () => {
     // The decision is unchanged by the code: Approve still sends only the
     // code being decided — the match code is never an input.
     act(() => {
-      screen.getByTestId("link-phone-approve").click();
+      screen.getByRole("button", { name: "Approve" }).click();
     });
     expect(respond.mutate).toHaveBeenCalledWith(
       { code: "ABCDE-FGHJK", approve: true },
