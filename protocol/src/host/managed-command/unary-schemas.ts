@@ -230,9 +230,10 @@ export type ManagedCommandDeleteResponse = z.infer<
  * One shell whose last batch of output a committed Stop fence captured and is
  * holding back. The hold is DURABLE and survives host restarts, which is the
  * whole reason this needs a surface: a shell that is still running releases its
- * own hold the moment it prints again, but one whose FINAL batch the Stop
- * caught will never produce later output, so nothing re-dirties it and only an
- * explicit Deliver can ever clear it.
+ * own hold the moment it prints again, and the chat's next wake (any message
+ * or resume that launches a turn) releases every hold it owns - but a chat
+ * that stays idle over a shell whose FINAL batch the Stop caught has nothing
+ * coming to clear it, and only an explicit Deliver can.
  *
  * Deliberately narrow. `description` rides along so a surface can name the row
  * without joining, but everything else a viewer needs - status, monitoring, the
