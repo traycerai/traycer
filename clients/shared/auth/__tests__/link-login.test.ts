@@ -292,6 +292,37 @@ describe("match code on the wire", () => {
     if (withoutCode.kind !== "ok") throw new Error("unreachable");
     expect(withoutCode.response.claimant?.matchCode).toBeUndefined();
   });
+
+  it("status keeps an explicit null as its own property — the phone presented no code", async () => {
+    // The strict parser must let the server's explicit null THROUGH, as an
+    // own property distinct from absence: null is what the approver renders
+    // as the loud "no code shown" warning, and a schema that only tolerated
+    // absence would turn it into a parse failure — the warning could never
+    // appear, and the downgrade it exists to expose would read as a network
+    // error instead.
+    installFetch({
+      status: "claimed",
+      claimant: {
+        address: null,
+        userAgent: "iPhone",
+        location: null,
+        claimedAt: 1_760_000_000_000,
+        matchCode: null,
+      },
+    });
+    const declined = await linkLoginStatusViaHttp(
+      AUTHN_BASE_URL,
+      "bearer",
+      NORMALIZED,
+      null,
+    );
+    expect(declined.kind).toBe("ok");
+    if (declined.kind !== "ok") throw new Error("unreachable");
+    const claimant = declined.response.claimant;
+    expect(claimant).not.toBeNull();
+    expect(Object.hasOwn(claimant ?? {}, "matchCode")).toBe(true);
+    expect(claimant?.matchCode).toBeNull();
+  });
 });
 
 /**
