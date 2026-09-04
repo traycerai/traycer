@@ -58,17 +58,23 @@ describe("resolveCreateProfileGate", () => {
   // A launch-the-CLI provider (Qwen, Droid, OMP, OpenCode) declares
   // `terminalLogin` with `oauthArgs: null`. The terminal reason must still
   // win: the generic one names browser sign-in, which these providers do not
-  // do either.
-  it("uses the terminal reason for a terminal-login provider with no oauthArgs", () => {
-    const gate = resolveCreateProfileGate(true, {
-      oauthArgs: null,
-      token: null,
-      codePaste: null,
-      terminalLogin: {},
-    });
-    expect(gate.disabled).toBe(true);
-    expect(gate.reason).toBe(
-      "This provider is signed in from a terminal, not the browser.",
-    );
-  });
+  // do either. `[]` is covered beside `null` because those are the two
+  // spellings of "no headless command", and the gate that used to fall
+  // through to the generic reason treated them alike - so a regression that
+  // restored it would have to redden both.
+  it.each([{ oauthArgs: null }, { oauthArgs: [] }])(
+    "uses the terminal reason for a terminal-login provider with no oauthArgs (%o)",
+    ({ oauthArgs }) => {
+      const gate = resolveCreateProfileGate(true, {
+        oauthArgs,
+        token: null,
+        codePaste: null,
+        terminalLogin: {},
+      });
+      expect(gate.disabled).toBe(true);
+      expect(gate.reason).toBe(
+        "This provider is signed in from a terminal, not the browser.",
+      );
+    },
+  );
 });

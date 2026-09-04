@@ -567,34 +567,40 @@ describe("<ProviderReauthBanner />", () => {
   // (never the headless one) - the same answer `providerSupportsTerminalLogin`
   // and `resolveCreateProfileGate` give, so this surface cannot fall through
   // to the CLI stub for a provider Traycer can open the CLI for.
-  it("offers the terminal button, not the headless one, when terminalLogin is present and oauthArgs is null", () => {
-    render(
-      <ProviderReauthBanner
-        epicId="epic-1"
-        viewTabId="tab-1"
-        providerId="qwen"
-        state={{
-          ...copilotState({
-            oauthArgs: null,
-            token: null,
-            codePaste: null,
-            terminalLogin: {},
-          }),
-          providerId: "qwen",
-        }}
-        reason="provider_unauthenticated"
-        profileId={null}
-        profileLabel={null}
-        onContinueOnAmbient={null}
-      />,
-    );
+  // Both spellings of "no headless command" are covered: this suite's previous
+  // `[]` case asserted the OPPOSITE (neither button), so leaving it out would
+  // drop that boundary from the suite entirely.
+  it.each([{ oauthArgs: null }, { oauthArgs: [] }])(
+    "offers the terminal button, not the headless one, when terminalLogin is present and there is no oauthArgs (%o)",
+    ({ oauthArgs }) => {
+      render(
+        <ProviderReauthBanner
+          epicId="epic-1"
+          viewTabId="tab-1"
+          providerId="qwen"
+          state={{
+            ...copilotState({
+              oauthArgs,
+              token: null,
+              codePaste: null,
+              terminalLogin: {},
+            }),
+            providerId: "qwen",
+          }}
+          reason="provider_unauthenticated"
+          profileId={null}
+          profileLabel={null}
+          onContinueOnAmbient={null}
+        />,
+      );
 
-    expect(screen.queryByRole("button", { name: /Authenticate/ })).toBeNull();
-    expect(
-      screen.queryByRole("button", { name: /Sign in from a terminal/ }),
-    ).not.toBeNull();
-    expect(screen.queryByText(/from its CLI to continue/)).toBeNull();
-  });
+      expect(screen.queryByRole("button", { name: /Authenticate/ })).toBeNull();
+      expect(
+        screen.queryByRole("button", { name: /Sign in from a terminal/ }),
+      ).not.toBeNull();
+      expect(screen.queryByText(/from its CLI to continue/)).toBeNull();
+    },
+  );
 
   // Row 3: unlike browser OAuth (a localhost loopback that only a local host
   // can serve), a device-code terminal login needs no loopback, so it must be

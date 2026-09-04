@@ -216,25 +216,30 @@ describe("resolveProviderTerminalSetup", () => {
   // the terminal action on that capability alone, with the generic guidance
   // re-worded to name the step inside the CLI - and, like copilot, nothing at
   // all on a host that declares no capability.
-  it("gives a launch-the-CLI provider (qwen, oauthArgs null) the terminal action with copy naming the in-CLI step", () => {
-    const setup = resolveProviderTerminalSetup(
-      "qwen",
-      stateWith(capabilityWithTerminalLogin(null)),
-    );
-    expect(setup).not.toBeNull();
-    expect(setup?.canStartTerminal).toBe(true);
-    expect(setup?.guidance.terminalActionLabel).toBe("Sign in from a terminal");
-    expect(setup?.guidance.manualCommand).toBeNull();
-    expect(setup?.guidance.summary).toBe(
-      "Qwen Code signs in from inside its own terminal UI.",
-    );
-    expect(setup?.guidance.stepsAfterAction).toEqual([
-      "Type /auth in that terminal, choose a sign-in method and finish in the browser.",
-      "Refresh this list.",
-    ]);
-    expect(setup?.guidance.terminalHint).toContain("Type /auth");
-    expect(setup?.guidance.summary).not.toContain("sign-in code");
-  });
+  it.each([{ oauthArgs: null }, { oauthArgs: [] }])(
+    "gives a launch-the-CLI provider (qwen, no oauthArgs %o) the terminal action with copy naming the in-CLI step",
+    ({ oauthArgs }) => {
+      const setup = resolveProviderTerminalSetup(
+        "qwen",
+        stateWith(capabilityWithTerminalLogin(oauthArgs)),
+      );
+      expect(setup).not.toBeNull();
+      expect(setup?.canStartTerminal).toBe(true);
+      expect(setup?.guidance.terminalActionLabel).toBe(
+        "Sign in from a terminal",
+      );
+      expect(setup?.guidance.manualCommand).toBeNull();
+      expect(setup?.guidance.summary).toBe(
+        "Qwen Code signs in from inside its own terminal UI.",
+      );
+      expect(setup?.guidance.stepsAfterAction).toEqual([
+        "Type /auth in that terminal, choose a sign-in method and finish in the browser.",
+        "Refresh this list.",
+      ]);
+      expect(setup?.guidance.terminalHint).toContain("Type /auth");
+      expect(setup?.guidance.summary).not.toContain("sign-in code");
+    },
+  );
 
   it("names the in-CLI step for each launch-the-CLI provider and keeps the generic labels", () => {
     for (const [providerId, step] of [

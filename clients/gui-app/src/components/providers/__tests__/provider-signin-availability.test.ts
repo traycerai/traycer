@@ -140,22 +140,25 @@ describe("providerSignInUnavailableHint", () => {
   // `terminalLogin` with `oauthArgs: null` - there is no headless command.
   // The terminal branch must win over the "no browser sign-in, use its own
   // CLI" one: Traycer opens that CLI for the user.
-  it("points at the terminal sign-in flow for a terminal-login provider with no oauthArgs", () => {
-    const hint = providerSignInUnavailableHint(
-      providerState({
-        providerId: "qwen",
-        loginCapability: {
-          oauthArgs: null,
-          token: null,
-          codePaste: null,
-          terminalLogin: {},
-        },
-      }),
-      true,
-    );
-    expect(hint).toContain("Qwen Code is signed in from a terminal");
-    expect(hint).not.toContain("its own CLI");
-  });
+  it.each([{ oauthArgs: null }, { oauthArgs: [] }])(
+    "points at the terminal sign-in flow for a terminal-login provider with no oauthArgs (%o)",
+    ({ oauthArgs }) => {
+      const hint = providerSignInUnavailableHint(
+        providerState({
+          providerId: "qwen",
+          loginCapability: {
+            oauthArgs,
+            token: null,
+            codePaste: null,
+            terminalLogin: {},
+          },
+        }),
+        true,
+      );
+      expect(hint).toContain("Qwen Code is signed in from a terminal");
+      expect(hint).not.toContain("its own CLI");
+    },
+  );
 });
 
 const TERMINAL_LOGIN_CAP: ProviderCliState["loginCapability"] = {
