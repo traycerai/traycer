@@ -474,7 +474,9 @@ function adoptListedSignInSessions(args: {
     args.landingPageId,
     [...current.tabs.filter((tab) => !retired.has(tab.instanceId)), ...adopted],
     current.activeInstanceId,
-    false,
+    // Retirement is a removal: a pass that retires the last tab must collapse
+    // the panel, or the settlement's empty-panel path spawns a plain shell.
+    retired.size > 0,
   );
 }
 

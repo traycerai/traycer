@@ -172,8 +172,7 @@ export function reconcileLandingTerminalTabs(
     return [name === classified.name ? classified : { ...classified, name }];
   });
 
-  // Sign-ins first, through the one adoption rule both arms share (it also
-  // takes an exited session, which an ordinary adoption never does), then
+  // Sign-ins first, through the one adoption rule both arms share, then
   // ordinary running sessions the registry does not claim.
   const signInTabs = adoptListedProviderLoginSessions({
     ...input,
@@ -210,6 +209,7 @@ export function reconcileLandingTerminalTabs(
     ...tabs.filter((tab) => !retired.has(tab.instanceId)),
     ...adoptedTabs,
   ];
+  const retiredAny = retired.size > 0;
   const activeInstanceId = resolveActiveInstanceId(
     input.activeInstanceId,
     nextTabs,
@@ -223,6 +223,7 @@ export function reconcileLandingTerminalTabs(
     collapseWhenEmpty:
       nextTabs.length === 0 &&
       (exitedInstanceIds.length > 0 ||
+        retiredAny ||
         survivingTabs.length !== input.tabs.length),
   };
 }
@@ -255,19 +256,23 @@ function providerLoginLandingTab(input: {
 
 /**
  * What the registry-claimed sessions the host lists say about each provider:
- * which are running, and which exited one is newest. Computed over EVERY
- * listed claimed session, tombstoned ones included - a tombstone means "raise
- * no tab for this session", not "this session did not happen". The newest
- * retry the user just closed still outranks the older retries beside it in
- * the exit-grace listing; dropping it from the summary would promote one of
- * them into a fresh "Start again" tab the moment the close landed.
+ * which of them are RUNNING. Computed over every listed claimed session,
+ * tombstoned ones included - a tombstone means "raise no tab for this
+ * session", not "this session did not happen", and a running successor the
+ * user just closed still supersedes its predecessor until the kill lands.
+ *
+ * Exited sessions carry no weight here, deliberately. The host lists an
+ * exited sign-in through a grace window and evicts it on `terminal.kill`, so
+ * the set of exited sessions is a moving, partial record of retries: which
+ * of them is "the one to show" changes with every close, and every rule
+ * built on it (newest wins, tombstoned newest still wins, ...) left a case
+ * where a close resurrected an older retry. An ended sign-in tab exists for
+ * the window that HAD the tab - it keeps it through the exit (matched arm) -
+ * and any other window starts a sign-in from the picker, so nothing is lost
+ * by never adopting one.
  */
 interface ProviderLoginListing {
   readonly runningSessionIds: ReadonlySet<string>;
-  readonly newestExited: Pick<
-    CanonicalTerminalSessionInfo,
-    "sessionId" | "createdAt"
-  > | null;
 }
 
 function listedProviderLoginSessions(
@@ -284,57 +289,41 @@ function summarizeProviderLoginListing(
   sessions: LandingTerminalReconciliationInput["sessions"],
   providerLoginProviderFor: (sessionId: string) => ProviderId | null,
 ): ReadonlyMap<ProviderId, ProviderLoginListing> {
-  const summary = new Map<
-    ProviderId,
-    {
-      runningSessionIds: Set<string>;
-      newestExited: ProviderLoginListing["newestExited"];
-    }
-  >();
+  const summary = new Map<ProviderId, { runningSessionIds: Set<string> }>();
   for (const session of sessions) {
+    if (session.status !== "running") continue;
     const providerId = providerLoginProviderFor(session.sessionId);
     if (providerId === null) continue;
     const entry = summary.get(providerId) ?? {
       runningSessionIds: new Set<string>(),
-      newestExited: null,
     };
-    if (session.status === "running") {
-      entry.runningSessionIds.add(session.sessionId);
-    } else if (
-      entry.newestExited === null ||
-      session.createdAt > entry.newestExited.createdAt
-    ) {
-      entry.newestExited = session;
-    }
+    entry.runningSessionIds.add(session.sessionId);
     summary.set(providerId, entry);
   }
   return summary;
 }
 
 /**
- * Whether a sign-in session (or the tab standing for it) is one this window
- * should show for its provider: every running one, else the newest exited
- * one. Rapid retries can leave several exited sign-ins for one provider in
- * the grace listing; only the newest is the one a "Start again" should stand
- * for, the rest are the predecessors those retries killed. An absent session
- * (aged out of the grace window, or gone with a host restart) is outranked by
- * anything listed - it is by construction older.
+ * Whether the tab standing for a sign-in session is one this window should
+ * keep showing for its provider: yes while its session runs, and yes while
+ * nothing for that provider runs (an ended tab is the "Start again" surface);
+ * no once the provider has a running session that is not this one - a
+ * restart killed this predecessor.
  */
 function providerLoginSessionIsCurrent(
   listing: ProviderLoginListing | undefined,
   sessionId: string,
 ): boolean {
   if (listing === undefined) return true;
-  if (listing.runningSessionIds.has(sessionId)) return true;
-  if (listing.runningSessionIds.size > 0) return false;
-  return listing.newestExited === null
-    ? true
-    : listing.newestExited.sessionId === sessionId;
+  return (
+    listing.runningSessionIds.has(sessionId) ||
+    listing.runningSessionIds.size === 0
+  );
 }
 
 /**
- * The sign-in sessions the host lists that this window should hold a tab for
- * and does not, as sign-in tabs. Shared by both arms.
+ * The RUNNING sign-in sessions the host lists that this window has no tab
+ * for, as sign-in tabs. Shared by both arms.
  *
  * The capable arm reconciles against the plain-terminal projection, and a
  * host-created sign-in session is never in it: the host made it for
@@ -348,14 +337,9 @@ function providerLoginSessionIsCurrent(
  * projection, which is the capable host's authority over ordinary terminals.
  * A tombstoned session (closed here, kill still in flight) is never adopted:
  * that would resurrect a tab the user just closed. It still counts in the
- * per-provider listing above, so closing the newest retry does not promote an
- * older one.
- *
- * An EXITED sign-in is adopted too, unlike an ordinary session. A sign-in tab
- * keeps its ended state on purpose - that is the "Start again" surface - and
- * a short-lived sign-in can end before this window learns what it was, while
- * the host still lists it through its exit grace window; adopting running
- * sessions only would leave this window without that surface for good.
+ * per-provider listing above while it runs, so its predecessor stays retired
+ * until the kill lands. Exited sessions are not adopted at all - see
+ * `ProviderLoginListing` for why.
  */
 export function adoptListedProviderLoginSessions(
   input: Pick<
@@ -380,6 +364,7 @@ export function adoptListedProviderLoginSessions(
   );
   return listed.flatMap((session) => {
     if (
+      session.status !== "running" ||
       tabbedSessionIds.has(session.sessionId) ||
       input.excludedSessionKeys.has(
         terminalSessionKey(input.activeHostId, session.sessionId),
@@ -407,9 +392,11 @@ export function adoptListedProviderLoginSessions(
 
 /**
  * The sign-in tabs the host's listing has SUPERSEDED: this host's tabs whose
- * session is no longer the one to show for its provider (a running sign-in
- * exists, or a newer exited one does). Returned as instance ids for the
- * caller to drop in the same pass that adopts, in both arms.
+ * session is not running while another sign-in for the same provider is.
+ * Returned as instance ids for the caller to drop in the same pass that
+ * adopts, in both arms - and to count as removals, so a pass that retires
+ * the last tab collapses the panel instead of leaving an empty one open for
+ * the auto-spawn to fill with a plain shell the user never asked for.
  *
  * A restart kills its predecessor, and only the window that pressed it
  * retires that tab (`openLandingSignInTerminal`). Every other window that

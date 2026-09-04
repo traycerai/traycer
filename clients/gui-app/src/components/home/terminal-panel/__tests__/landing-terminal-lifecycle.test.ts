@@ -517,7 +517,7 @@ describe("landing terminal lifecycle", () => {
     expect(result.adoptedTabs[0]?.name).not.toBe("project · New Terminal");
   });
 
-  it("adopts an unmatched EXITED session as a sign-in tab when the registry claims it, but never as an ordinary tab", () => {
+  it("adopts no unmatched EXITED session, registry-claimed or not", () => {
     const result = reconcileLandingTerminalTabs({
       tabs: [],
       activeInstanceId: null,
@@ -527,18 +527,11 @@ describe("landing terminal lifecycle", () => {
         session({ sessionId: "plain-session", status: "exited" }),
       ],
       excludedSessionKeys: new Set(),
-      mintInstanceId: () => "adopted-ended-instance",
+      mintInstanceId: () => "never",
       providerLoginProviderFor: (sessionId) =>
         sessionId === "signin-session" ? "reasonix" : null,
     });
-
-    // The same rule the matched arm applies (a sign-in tab survives its
-    // session's exit): the registry-claimed session becomes the ended-state
-    // tab with its restart, the plain one stays dead and unadopted.
-    expect(result.adoptedTabs.map((tab) => tab.sessionId)).toEqual([
-      "signin-session",
-    ]);
-    expect(result.adoptedTabs[0]?.origin).toBe("provider-login");
+    expect(result.adoptedTabs).toEqual([]);
   });
 
   it("adopts the same unmatched running session as an ordinary tab when providerLoginProviderFor returns null", () => {
@@ -1044,22 +1037,21 @@ describe("adoptListedProviderLoginSessions", () => {
     expect(tombstoned).toEqual([]);
   });
 
-  it("adopts an EXITED registry-claimed session - the ended-state tab is the 'Start again' surface", () => {
-    // A short-lived sign-in can end before this window learns what it was;
-    // the host still lists it through its exit grace window. Running-only
-    // adoption would leave this window without the restart surface for good.
+  it("never adopts an EXITED session, even a registry-claimed one - an ended tab belongs to the window that had it", () => {
+    // The host lists an exited sign-in through a grace window and evicts it
+    // on `terminal.kill`, so which exited retry is "the one" changes with
+    // every close; every rule built on that resurrected some retry. The
+    // window that opened the sign-in keeps its ended tab through the exit
+    // (the matched arm); any other window starts fresh from the picker.
     const adopted = adoptListedProviderLoginSessions({
       tabs: [],
       activeHostId: HOST_A,
       sessions: [session({ sessionId: "signin-session", status: "exited" })],
       excludedSessionKeys: new Set(),
-      mintInstanceId: () => "adopted-ended-instance",
+      mintInstanceId: () => "never",
       providerLoginProviderFor,
     });
-    expect(adopted.map((entry) => entry.instanceId)).toEqual([
-      "adopted-ended-instance",
-    ]);
-    expect(adopted[0]?.origin).toBe("provider-login");
+    expect(adopted).toEqual([]);
   });
 
   it("does not adopt an exited sign-in whose provider has a RUNNING sign-in on the host - the predecessor a restart killed", () => {
@@ -1079,45 +1071,6 @@ describe("adoptListedProviderLoginSessions", () => {
     // must not raise it beside the live successor.
     expect(adopted.map((entry) => entry.sessionId)).toEqual([
       "signin-session-2",
-    ]);
-  });
-
-  it("adopts only the NEWEST exited sign-in per provider when none is running - rapid retries leave several in the grace listing", () => {
-    const adopted = adoptListedProviderLoginSessions({
-      tabs: [],
-      activeHostId: HOST_A,
-      sessions: [
-        {
-          ...session({ sessionId: "signin-old", status: "exited" }),
-          createdAt: 1,
-        },
-        {
-          ...session({ sessionId: "signin-newest", status: "exited" }),
-          createdAt: 3,
-        },
-        {
-          ...session({ sessionId: "signin-mid", status: "exited" }),
-          createdAt: 2,
-        },
-        // Another provider's exited sign-in is its own newest.
-        {
-          ...session({ sessionId: "copilot-old", status: "exited" }),
-          createdAt: 1,
-        },
-      ],
-      excludedSessionKeys: new Set(),
-      mintInstanceId: () => "adopted",
-      providerLoginProviderFor: (sessionId) => {
-        if (sessionId.startsWith("signin-")) return "reasonix";
-        if (sessionId.startsWith("copilot-")) return "copilot";
-        return null;
-      },
-    });
-    // One "Start again" surface per provider, never a stale duplicate whose
-    // restart would retire only itself.
-    expect(adopted.map((entry) => entry.sessionId).sort()).toEqual([
-      "copilot-old",
-      "signin-newest",
     ]);
   });
 
@@ -1219,17 +1172,12 @@ describe("retiredProviderLoginPredecessors", () => {
     expect(retired).toEqual(["old-signin"]);
   });
 
-  it("retires an older exited tab when a newer exited sign-in is listed, and keeps the tab that IS the newest", () => {
+  it("keeps every ended tab while nothing for its provider runs - a newer EXITED sign-in supersedes nothing", () => {
     const retired = retiredProviderLoginPredecessors({
       tabs: [
         signInTab({
           instanceId: "older",
           sessionId: "signin-older",
-          providerId: "reasonix",
-        }),
-        signInTab({
-          instanceId: "newest",
-          sessionId: "signin-newest",
           providerId: "reasonix",
         }),
       ],
@@ -1246,7 +1194,7 @@ describe("retiredProviderLoginPredecessors", () => {
       ],
       providerLoginProviderFor,
     });
-    expect(retired).toEqual(["older"]);
+    expect(retired).toEqual([]);
   });
 
   it("never retires a tab whose own session is still running, nor one whose provider has nothing newer listed", () => {
@@ -1301,45 +1249,38 @@ describe("retiredProviderLoginPredecessors", () => {
     expect(result.activeInstanceId).toBe("new-signin");
   });
 
-  it("a tombstoned newest retry still outranks the older exited retries: closing it promotes none of them", () => {
-    // The user closed the newest exited sign-in here; its kill is in flight
-    // and the host still lists it. The older retries beside it in the grace
-    // listing must not become fresh "Start again" tabs.
+  it("a tombstoned RUNNING successor still retires its predecessor, and retiring the last tab collapses the panel", () => {
+    // The user closed the running successor here; its kill is in flight and
+    // the host still lists it running. The exited predecessor stays retired
+    // (it is not coming back), nothing is adopted (the successor is
+    // tombstoned), and the pass ends with no tabs - which must collapse the
+    // panel, or the settlement's empty-panel path spawns a plain shell right
+    // after the user closed the sign-in.
     const sessions = [
-      {
-        ...session({ sessionId: "signin-older", status: "exited" }),
-        createdAt: 1,
-      },
-      {
-        ...session({ sessionId: "signin-newest", status: "exited" }),
-        createdAt: 2,
-      },
+      session({ sessionId: "signin-old", status: "exited" }),
+      session({ sessionId: "signin-new", status: "running" }),
     ];
     const excludedSessionKeys = new Set([
-      terminalSessionKey(HOST_A, "signin-newest"),
+      terminalSessionKey(HOST_A, "signin-new"),
     ]);
-    expect(
-      adoptListedProviderLoginSessions({
-        tabs: [],
-        activeHostId: HOST_A,
-        sessions,
-        excludedSessionKeys,
-        mintInstanceId: () => "never",
-        providerLoginProviderFor,
-      }),
-    ).toEqual([]);
-    // Same through the legacy arm, which filters tombstoned sessions out of
-    // its own matching but must not hide them from this rule.
     const result = reconcileLandingTerminalTabs({
-      tabs: [],
-      activeInstanceId: null,
+      tabs: [
+        signInTab({
+          instanceId: "old-signin",
+          sessionId: "signin-old",
+          providerId: "reasonix",
+        }),
+      ],
+      activeInstanceId: "old-signin",
       activeHostId: HOST_A,
       sessions,
       excludedSessionKeys,
       mintInstanceId: () => "never",
       providerLoginProviderFor,
     });
+    expect(result.tabs).toEqual([]);
     expect(result.adoptedTabs).toEqual([]);
+    expect(result.collapseWhenEmpty).toBe(true);
   });
 });
 
