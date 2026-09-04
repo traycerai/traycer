@@ -9,6 +9,10 @@ import {
   landingTerminalTabs,
   useLandingPanelStore,
 } from "@/stores/home/landing-panel-store";
+import {
+  providerLoginTerminalProviderId,
+  useProviderLoginTerminalsStore,
+} from "@/stores/providers/provider-login-terminals";
 import type { LandingTerminalAuthorityEntry } from "./landing-terminal-authority-fleet";
 import { reconcileCapableLandingTerminals } from "./use-landing-terminal-reconciliation";
 
@@ -47,6 +51,12 @@ function LandingTerminalBoundHostReconciliation(props: {
   const queryClient = useQueryClient();
   const tabs = useLandingPanelStore((state) => state.tabs);
   const pendingKills = useLandingPanelStore((state) => state.pendingKills);
+  // Same wake as the selected host's pass: provenance is read imperatively
+  // inside `reconcileCapableLandingTerminals`, so a record that lands after
+  // the pass has to re-key it.
+  const provenanceRevision = useProviderLoginTerminalsStore(
+    (state) => state.revision,
+  );
   const reconciliationRef = useRef<string | null>(null);
 
   // Terminals only, on both fingerprints. This reconciliation drives the plain
@@ -91,6 +101,7 @@ function LandingTerminalBoundHostReconciliation(props: {
       authority.collection.projectionSequence,
       hostTabsFingerprint,
       pendingKillsFingerprint,
+      provenanceRevision,
     ].join("\u0000");
     if (reconciliationRef.current === reconciliationKey) return;
     reconciliationRef.current = reconciliationKey;
@@ -109,6 +120,8 @@ function LandingTerminalBoundHostReconciliation(props: {
         entry.mutations.close.mutateAsync({ ...request, hostId }),
       importLegacyTerminal: (request) =>
         entry.mutations.importLegacy.mutateAsync(request),
+      providerLoginProviderFor: (sessionId) =>
+        providerLoginTerminalProviderId(hostId, sessionId),
       queryClient,
     }).then(
       (outcome) => {
@@ -130,6 +143,7 @@ function LandingTerminalBoundHostReconciliation(props: {
     hostTabsFingerprint,
     landingPageId,
     pendingKillsFingerprint,
+    provenanceRevision,
     queryClient,
   ]);
 

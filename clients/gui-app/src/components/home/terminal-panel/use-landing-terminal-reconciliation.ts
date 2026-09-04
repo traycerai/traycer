@@ -8,6 +8,7 @@ import { v4 as uuidv4 } from "uuid";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { subscribeHostRowChanged } from "@traycer-clients/shared/host-client/host-connection-registry";
 import { toHostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import type { HostRpcRegistry } from "@/lib/host";
 import type {
   ClosePlainTerminalRequest,
@@ -25,8 +26,13 @@ import {
 import { consumeRetainedPlainTerminalTombstone } from "@/lib/terminals/plain-terminal-presentation-invalidation";
 import { requestLandingTerminalClose } from "@/lib/terminals/landing-terminal-close-coordinator";
 import {
+  providerLoginTerminalProviderId,
+  useProviderLoginTerminalsStore,
+} from "@/stores/providers/provider-login-terminals";
+import {
   LANDING_TERMINAL_SOURCE_STORE_VERSION,
   absentListingProvesDeath,
+  isProviderLoginLandingTab,
   landingTabRefKey,
   landingTerminalPendingKills,
   landingTerminalTabs,
@@ -170,6 +176,14 @@ export function useLandingTerminalReconciliation(
   const queryClient = useQueryClient();
   const [connectionEpoch, setConnectionEpoch] = useState(0);
   const reconciliationRef = useRef<string | null>(null);
+  // The THIRD wake. Sign-in provenance is read imperatively inside the pass
+  // (`providerLoginProviderFor`), so a record arriving after the pass ran - a
+  // peer window's `storage` event - would otherwise never re-run the matched-
+  // tab classification, and the tab it should have marked stays importable
+  // and recreatable until some unrelated host event happens along.
+  const provenanceRevision = useProviderLoginTerminalsStore(
+    (state) => state.revision,
+  );
 
   // TWO WAKES, because two different things can make this panel's list stale
   // and only one of them is an event about the client.
@@ -220,6 +234,7 @@ export function useLandingTerminalReconciliation(
       plainAuthority.authority.capability.status,
       plainAuthority.authority.collection?.projectionSequence ?? -1,
       plainAuthority.authority.canMutate ? "mutable" : "read-only",
+      provenanceRevision,
     ].join("\u0000");
     if (reconciliationRef.current === reconciliationKey) return;
     reconciliationRef.current = reconciliationKey;
@@ -292,6 +307,8 @@ export function useLandingTerminalReconciliation(
               }),
             importLegacyTerminal: (request) =>
               plainAuthority.mutations.importLegacy.mutateAsync(request),
+            providerLoginProviderFor: (sessionId) =>
+              providerLoginTerminalProviderId(activeHostId, sessionId),
             queryClient,
           }).then(
             (settled) => settled,
@@ -350,6 +367,8 @@ export function useLandingTerminalReconciliation(
         sessions: freshSessions,
         excludedSessionKeys,
         mintInstanceId: () => `landing-terminal-${uuidv4()}`,
+        providerLoginProviderFor: (sessionId) =>
+          providerLoginTerminalProviderId(activeHostId, sessionId),
       });
       current.applyReconciliationSlice(
         activeHostId,
@@ -384,6 +403,7 @@ export function useLandingTerminalReconciliation(
     panelOpen,
     plainAuthority,
     primaryWorkspacePath,
+    provenanceRevision,
     queryClient,
   ]);
 }
@@ -475,6 +495,12 @@ export async function reconcileCapableLandingTerminals(args: {
   readonly importLegacyTerminal: (
     request: ImportLegacyPlainTerminalRequest,
   ) => Promise<ImportLegacyPlainTerminalResponse>;
+  /**
+   * The provider a session was opened to sign in to, already bound to
+   * `activeHostId`. Injected for the same reason the legacy arm injects it:
+   * `terminal.list` and the plain projection both carry the origin nowhere.
+   */
+  readonly providerLoginProviderFor: (sessionId: string) => ProviderId | null;
   readonly queryClient: QueryClient;
 }): Promise<CapableLandingTerminalReconciliationOutcome> {
   const { activeHostId, queryClient } = args;
@@ -547,13 +573,24 @@ export async function reconcileCapableLandingTerminals(args: {
     return "snapshot-not-fresh";
   }
 
+  // A host-created sign-in session is manager-owned and import-exempt: it is
+  // not legacy evidence, and `importLegacy` under its id would hand the plain
+  // registry a session it never spawned. Its tab stays unacknowledged for
+  // life and attaches through the legacy reattach path instead.
+  //
+  // The REGISTRY decides that, not the ref alone. A tab adopted while the host
+  // still read `legacy` carries no marker, and after the capability switch it
+  // is unacknowledged and unprojected - which is precisely the shape this
+  // filter treats as legacy evidence.
   const legacyTabs = landingTerminalTabs(
     useLandingPanelStore.getState().tabs,
   ).filter(
     (tab) =>
       tab.hostId === activeHostId &&
       tab.hostAuthorityAcknowledged !== true &&
-      tab.pendingCreate !== true,
+      tab.pendingCreate !== true &&
+      !isProviderLoginLandingTab(tab) &&
+      args.providerLoginProviderFor(tab.sessionId) === null,
   );
   await Promise.all(
     legacyTabs.map(async (legacyTab) => {
@@ -647,6 +684,7 @@ export async function reconcileCapableLandingTerminals(args: {
     terminals: plainTerminalCollectionValues(collection),
     excludedTerminalKeys,
     mintInstanceId: () => `landing-terminal-${uuidv4()}`,
+    providerLoginProviderFor: args.providerLoginProviderFor,
   });
   current.applyReconciliationSlice(
     activeHostId,

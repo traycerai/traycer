@@ -7,6 +7,7 @@ import { useTerminalListFor } from "@/hooks/terminal/use-terminal-list-for-query
 import { useHomeWorkspaceSource } from "@/components/home/host-workspace-selector/use-home-workspace-source";
 import type { WorktreeStagingKey } from "@/stores/worktree/worktree-intent-staging-store";
 import {
+  UNBOUND_LANDING_PAGE_ID,
   landingPanelLayoutFor,
   useLandingPanelStore,
 } from "@/stores/home/landing-panel-store";
@@ -63,7 +64,7 @@ export function LandingTerminalGestureProvider(props: {
     useState<LandingTerminalTarget | null>(null);
   const gestureGenerationRef = useRef(0);
   const capturedLandingPageId =
-    pendingGesture?.draftId ?? "unbound-landing-page";
+    pendingGesture?.draftId ?? UNBOUND_LANDING_PAGE_ID;
   const capturedPanelOpen = useLandingPanelStore((state) =>
     pendingGesture === null
       ? false

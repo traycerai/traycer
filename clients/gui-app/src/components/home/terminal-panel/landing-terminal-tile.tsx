@@ -38,21 +38,16 @@ import {
 } from "@/hooks/agent/use-host-reachability";
 import { useBoundedHostLoad } from "@/hooks/host/use-bounded-host-load";
 import { TileHostLoadState } from "@/components/epic-canvas/renderers/tile-host-load-state";
-import { focusActiveComposer } from "@/lib/composer/composer-focus-registry";
 import {
-  clearPendingTerminalFocus,
-  focusTerminalInstance,
-  terminalFocusOwnsInstance,
-} from "@/lib/terminals/terminal-focus-registry";
-import {
-  activeLandingTerminalInstanceId,
-  landingPanelLayoutFor,
+  isProviderLoginLandingTab,
   useLandingPanelStore,
   type LandingTerminalTabRef,
 } from "@/stores/home/landing-panel-store";
 import { resolveLandingTerminalSyncedTitle } from "./landing-terminal-reconciliation";
 import type { LandingTerminalAuthorityEntry } from "./landing-terminal-authority-fleet";
 import { useLandingTerminalDurableLifecycle } from "./landing-terminal-durable-bootstrap";
+import { LandingSignInTerminalTile } from "./landing-sign-in-terminal-tile";
+import { useRemoveExitedLandingTab } from "./use-remove-exited-landing-tab";
 import {
   getPlainTerminal,
   selectPlainTerminalViewModel,
@@ -102,6 +97,13 @@ export function LandingTerminalTile(
 }
 
 function LandingTerminalTileBody(props: LandingTerminalTileProps): ReactNode {
+  // Before the capability switch, whatever the host's authority says: the
+  // session is the host's (manager-owned, provider spawn env), so neither
+  // bootstrap below may run - the durable one would `terminal.plain.create`
+  // a bare shell under its id, the legacy one would `terminal.create` one.
+  if (isProviderLoginLandingTab(props.tab)) {
+    return <LandingSignInTerminalTile key={props.tab.sessionId} {...props} />;
+  }
   const capability = props.authorityEntry?.authority.capability.status;
   if (capability === "legacy") {
     return (
@@ -123,32 +125,7 @@ function LandingTerminalTileBody(props: LandingTerminalTileProps): ReactNode {
 export function LandingTerminalLegacyBootstrap(
   props: LandingTerminalTileProps,
 ): ReactNode {
-  const removeExitedTab = useLandingPanelStore(
-    (state) => state.removeExitedTab,
-  );
-  const handleExitedTab = useCallback(
-    (instanceId: string): void => {
-      const ownsFocus = terminalFocusOwnsInstance(instanceId);
-      const wasActive =
-        useLandingPanelStore.getState().activeInstanceId === instanceId;
-      removeExitedTab(props.landingPageId, instanceId);
-      if (!wasActive || !ownsFocus) return;
-      const state = useLandingPanelStore.getState();
-      // The promoted neighbour need not be a terminal: the strip is mixed, and
-      // a browser tab or the chooser can be what the exit promotes.
-      const nextTerminal = activeLandingTerminalInstanceId(state);
-      if (
-        landingPanelLayoutFor(state, props.landingPageId).panelOpen &&
-        nextTerminal !== null
-      ) {
-        focusTerminalInstance(nextTerminal);
-        return;
-      }
-      clearPendingTerminalFocus(instanceId);
-      focusActiveComposer();
-    },
-    [props.landingPageId, removeExitedTab],
-  );
+  const handleExitedTab = useRemoveExitedLandingTab(props.landingPageId);
   const rekeyTab = useLandingPanelStore((state) => state.rekeyTab);
   // Derivation, not a coarse read. This gate replaces the tile with an explicit
   // "is offline" state, which is a claim about a machine — so it asks the one
@@ -481,7 +458,7 @@ function LandingTerminalDurableState(props: {
  */
 const FAST_EXIT_NOTICE_WINDOW_MS = 5_000;
 
-function LandingTerminalTileLive(props: {
+export function LandingTerminalTileLive(props: {
   readonly handle: TerminalSessionStoreHandle;
   readonly tab: LandingTerminalTabRef;
   readonly onExited: (instanceId: string) => void;
@@ -678,7 +655,7 @@ function LandingTerminalWaiting(): ReactNode {
  * reachable, so the live path runs and the dial either succeeds or fails on its
  * own evidence.
  */
-function TerminalDeadState(props: {
+export function TerminalDeadState(props: {
   readonly hostLabel: string;
   readonly unavailability: HostUnavailability | null;
 }): ReactNode {
