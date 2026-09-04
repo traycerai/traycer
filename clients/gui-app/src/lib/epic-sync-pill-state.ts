@@ -398,21 +398,14 @@ function cloudUpState(inputs: EpicSyncPillInputs): EpicSyncPillState {
   // at `syncedClaimIsHonest` applies here identically - a calm claim needs a
   // POSITIVE statement behind it, and `unknown` is not one.
   if (inputs.localProtection === "unknown") return "connected";
-  // An OMITTED key splits the same two ways `syncedClaimIsHonest` splits it,
-  // and for the same reason: the probe-by-presence identifies a peer that
-  // SENT the key, the handshake identifies one that COULD have. A negotiated
+  // An OMITTED key claims nothing, whichever peer omitted it. A negotiated
   // `@1.6` peer that omitted it is stating UNKNOWN per the schema's own
-  // absence rule, and `storedLocally` is every bit as positive a claim as
-  // `synced` - it tells the reader the bytes are on this disk.
-  //
-  // The negotiated check is what makes the rule uniform rather than what makes
-  // it reachable: only a `@1.6` peer can send the `local` / `promoting`
-  // durability this arm requires, so a pre-`@1.6` frame never arrives here at
-  // all. Stated the same way as its sibling so neither can be read as
-  // licensing an absence.
-  if (inputs.localProtection === undefined && inputs.durabilityLegsNegotiated) {
-    return "connected";
-  }
+  // absence rule. A `@1.4` / `@1.5` peer - which CAN send the `local` /
+  // `promoting` durability this arm requires, and did - has no protection
+  // leg to send at all, so its silence is not even a statement. Either way
+  // `storedLocally` is every bit as positive a claim as `synced` - it tells
+  // the reader the bytes are on this disk - and only `armed` licenses it.
+  if (inputs.localProtection === undefined) return "connected";
   return "storedLocally";
 }
 
@@ -475,10 +468,17 @@ function syncedClaimIsHonest(inputs: EpicSyncPillInputs): boolean {
     inputs.localProtection === undefined &&
     !inputs.durabilityLegsNegotiated
   ) {
-    // A genuinely pre-`@1.6` peer keeps its legacy rendering. A negotiated
-    // `@1.6` peer omitting the optional key falls through: absence is the
-    // wire contract's UNKNOWN and cannot license the calm claim.
-    return true;
+    // A genuinely pre-`@1.6` peer keeps its legacy rendering - for the frame
+    // it could always send. A `@1.4` / `@1.5` peer cannot express the
+    // protection leg, but it CAN state `durability` (`local`, `promoting`,
+    // `paused`, `offline`), and a stated value is the peer saying the epic
+    // is not sitting durable in the cloud; through `@1.5` the enum has no
+    // `cloud` member, so the cloud answer from such a peer is the ABSENT
+    // key. Legacy calm is therefore licensed by absence alone, exactly as
+    // it was before the leg existed - never over a stated value.
+    // A negotiated `@1.6` peer omitting the optional key falls through:
+    // absence is the wire contract's UNKNOWN and cannot license the claim.
+    return inputs.durability === undefined;
   }
   return inputs.durability === "cloud";
 }

@@ -215,10 +215,17 @@ export interface IpcDesktopAuthSession {
   get(): VerifiedDesktopAuthSessionSnapshot;
   set(snapshot: DesktopAuthSessionSnapshot): void;
   /**
-   * Adopts a session whose bearer main verified itself. Only the auth IPC,
-   * which runs the verification, calls it.
+   * Begins a deferred (verified) set; the generation it returns fences that
+   * set's commit against any set begun after it. See
+   * `DesktopAuthSession.beginSet`.
    */
-  setVerified(snapshot: DesktopAuthSessionSnapshot): void;
+  beginSet(): number;
+  /**
+   * Adopts a session whose bearer main verified itself. Only the auth IPC,
+   * which runs the verification, calls it, with the generation it took from
+   * `beginSet` before verifying.
+   */
+  setVerified(snapshot: DesktopAuthSessionSnapshot, generation: number): void;
   /**
    * Drops the verification alone, and only while `rejectedToken` is still the
    * bearer held; see `DesktopAuthSession.revokeVerification`.

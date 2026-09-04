@@ -85,6 +85,17 @@ interface CloudEpicTasksPagesStoreState {
     epicId: string,
     localHome: boolean,
   ) => void;
+  /**
+   * `setTaskLocalHome` over every identity the user holds, whichever host
+   * served it. Where an epic is durable is a property of the EPIC, and the
+   * History list can be served by a host other than the one the open epic's
+   * session lives on.
+   */
+  readonly setTaskLocalHomeForUser: (
+    userId: string,
+    epicId: string,
+    localHome: boolean,
+  ) => void;
 }
 
 export const useCloudEpicTasksPagesStore =
@@ -185,34 +196,30 @@ export const useCloudEpicTasksPagesStore =
       });
     },
     setTaskLocalHome: (identityPrefix, epicId, localHome) => {
-      set((state) => {
-        // The home-marker twin of `setTaskPinned`, added because promotion
-        // completing patched only the TanStack first page: a row loaded
-        // through "Show more" lives here, kept `home: "local"`, and its
-        // cloud-only actions (pin) stayed disabled until a reset or refresh.
-        // Same identity-preserving, generation-neutral contract as the pin
-        // patch.
-        const entries = Object.entries(state.pagesByIdentity).map(
-          ([identity, pages]): [string, readonly ListTasksResponse[]] => {
-            if (!identity.startsWith(identityPrefix)) {
-              return [identity, pages];
-            }
-            const nextPages = pages.map((page) =>
-              setEpicLocalHomeInCloudTasksResponse(page, epicId, localHome),
-            );
-            const identityChanged = nextPages.some(
-              (page, index) => page !== pages[index],
-            );
-            return [identity, identityChanged ? nextPages : pages];
-          },
-        );
-        const scopeChanged = entries.some(
-          ([identity, pages]) => pages !== state.pagesByIdentity[identity],
-        );
-        return scopeChanged
-          ? { pagesByIdentity: Object.fromEntries(entries) }
-          : state;
-      });
+      // The home-marker twin of `setTaskPinned`, added because promotion
+      // completing patched only the TanStack first page: a row loaded
+      // through "Show more" lives here, kept `home: "local"`, and its
+      // cloud-only actions (pin) stayed disabled until a reset or refresh.
+      // Same identity-preserving, generation-neutral contract as the pin
+      // patch.
+      set((state) =>
+        patchLocalHomeAcrossIdentities(
+          state,
+          (identity) => identity.startsWith(identityPrefix),
+          epicId,
+          localHome,
+        ),
+      );
+    },
+    setTaskLocalHomeForUser: (userId, epicId, localHome) => {
+      set((state) =>
+        patchLocalHomeAcrossIdentities(
+          state,
+          (identity) => userIdFromIdentity(identity) === userId,
+          epicId,
+          localHome,
+        ),
+      );
     },
   }));
 
@@ -446,6 +453,39 @@ function deletedEpicIdsScopeIdentity(
   return JSON.stringify([hostId, userId]);
 }
 
+/**
+ * The identity-preserving local-home patch over every retained page of every
+ * identity `matches` selects. Returns the same state object when nothing
+ * changed, so a no-op patch is not a store notification.
+ */
+function patchLocalHomeAcrossIdentities(
+  state: CloudEpicTasksPagesStoreState,
+  matches: (identity: string) => boolean,
+  epicId: string,
+  localHome: boolean,
+):
+  | CloudEpicTasksPagesStoreState
+  | Pick<CloudEpicTasksPagesStoreState, "pagesByIdentity"> {
+  const entries = Object.entries(state.pagesByIdentity).map(
+    ([identity, pages]): [string, readonly ListTasksResponse[]] => {
+      if (!matches(identity)) return [identity, pages];
+      const nextPages = pages.map((page) =>
+        setEpicLocalHomeInCloudTasksResponse(page, epicId, localHome),
+      );
+      const identityChanged = nextPages.some(
+        (page, index) => page !== pages[index],
+      );
+      return [identity, identityChanged ? nextPages : pages];
+    },
+  );
+  const scopeChanged = entries.some(
+    ([identity, pages]) => pages !== state.pagesByIdentity[identity],
+  );
+  return scopeChanged
+    ? { pagesByIdentity: Object.fromEntries(entries) }
+    : state;
+}
+
 function userIdFromIdentity(identity: string): string {
   const firstSeparator = identity.indexOf("|");
   const secondSeparator = identity.indexOf("|", firstSeparator + 1);
@@ -496,4 +536,21 @@ export function setCloudEpicTasksPageLocalHome(
       epicId,
       localHome,
     );
+}
+
+/**
+ * The home patch for every host's retained tails the user holds. The open
+ * epic's session reports the fact, and it lives on ONE host, while the
+ * History list showing the row may be served by another - the app-wide
+ * (effective) host, in a tab pinned elsewhere. Scoping the patch to the
+ * session's host left the other host's rows `home: "local"`.
+ */
+export function setCloudEpicTasksPageLocalHomeForUser(
+  userId: string,
+  epicId: string,
+  localHome: boolean,
+): void {
+  useCloudEpicTasksPagesStore
+    .getState()
+    .setTaskLocalHomeForUser(userId, epicId, localHome);
 }

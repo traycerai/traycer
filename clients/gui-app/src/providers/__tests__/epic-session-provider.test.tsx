@@ -418,6 +418,7 @@ import {
   LIST_CLOUD_TASKS_REQUEST,
   cloudEpicTasksQueryKey,
 } from "@/lib/cloud-epic-tasks-query";
+import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 import type {
   DesktopOwnershipClaimResult,
   DesktopPerWindowStatePatch,
@@ -2186,21 +2187,42 @@ describe("<EpicSessionProvider />", () => {
       cloudTasksUserId,
       LIST_CLOUD_TASKS_REQUEST,
     );
-    queryClient.setQueryData<ListTasksResponse>(queryKey, {
-      tasks: [
-        {
-          ...makeHistoryTask(
-            "epic-session-test",
-            "Local epic",
-            cloudTasksUserId,
-          ),
-          home: "local",
-        },
-      ],
-      hasMore: false,
-    });
+    // A second host's History cache and pin batch: the session below lives
+    // on the tab's host, but History and the tab strip's `getTaskContexts`
+    // batch key under the app-wide EFFECTIVE host, which can be another one.
+    // The fact is the epic's, so the patch and the invalidation must reach
+    // every host's caches for the user.
+    const otherHostQueryKey = cloudEpicTasksQueryKey(
+      "host-b",
+      cloudTasksUserId,
+      LIST_CLOUD_TASKS_REQUEST,
+    );
+    const otherHostContextsKey = [
+      ...hostQueryKeys.methodScope("host-b", "epic.getTaskContexts"),
+      { taskIds: ["epic-session-test"] },
+      cloudTasksUserId,
+    ];
+    for (const key of [queryKey, otherHostQueryKey]) {
+      queryClient.setQueryData<ListTasksResponse>(key, {
+        tasks: [
+          {
+            ...makeHistoryTask(
+              "epic-session-test",
+              "Local epic",
+              cloudTasksUserId,
+            ),
+            home: "local",
+          },
+        ],
+        hasMore: false,
+      });
+    }
+    queryClient.setQueryData(otherHostContextsKey, { tasks: {} });
     const cachedHome = (): "local" | "cloud" | undefined =>
       queryClient.getQueryData<ListTasksResponse>(queryKey)?.tasks[0]?.home;
+    const otherHostCachedHome = (): "local" | "cloud" | undefined =>
+      queryClient.getQueryData<ListTasksResponse>(otherHostQueryKey)?.tasks[0]
+        ?.home;
     const seenHandles: OpenEpicStoreHandle[] = [];
     installStreamFactory(() => ({
       applyUpdate: () => undefined,
@@ -2240,13 +2262,22 @@ describe("<EpicSessionProvider />", () => {
       });
     });
     expect(cachedHome()).toBe("local");
+    expect(otherHostCachedHome()).toBe("local");
+    expect(queryClient.getQueryState(otherHostContextsKey)?.isInvalidated).toBe(
+      false,
+    );
 
     // A `@1.4`/`@1.5` peer's omission is the cloud answer: the key is
-    // dropped, which is the shape a normal cloud-backed row carries.
+    // dropped, which is the shape a normal cloud-backed row carries - on
+    // EVERY host's cache, and the other host's pin batch is invalidated.
     act(() => {
       store.setState({ durabilityLegsNegotiated: false });
     });
     expect(cachedHome()).toBeUndefined();
+    expect(otherHostCachedHome()).toBeUndefined();
+    expect(queryClient.getQueryState(otherHostContextsKey)?.isInvalidated).toBe(
+      true,
+    );
   });
 
   it("patches cached history titles when a generated epic title lands", async () => {

@@ -50,7 +50,7 @@ import {
   setEpicLocalHomeInCloudTaskCaches,
   updateEpicTitleInCloudTaskCaches,
 } from "@/lib/cloud-epic-tasks-query/cache";
-import { setCloudEpicTasksPageLocalHome } from "@/stores/epics/cloud-epic-tasks-pages-store";
+import { setCloudEpicTasksPageLocalHomeForUser } from "@/stores/epics/cloud-epic-tasks-pages-store";
 import { hostQueryKeys } from "@/lib/query-keys";
 import {
   claimDesktopEpicOwnership,
@@ -1630,6 +1630,11 @@ export function EpicSessionProvider(
 }
 
 interface EpicSessionCacheSyncArgs {
+  /**
+   * The session's host, and `null` before a session exists - the liveness
+   * gate for these syncs, NOT the scope of their cache writes, which reach
+   * every host's caches for the user (see `useEpicHomeCacheSync`).
+   */
   readonly activeHostId: string | null;
   readonly epicId: string;
   readonly handle: OpenEpicStoreHandle | null;
@@ -1645,7 +1650,10 @@ function useCloudTaskTitleCacheSync(args: EpicSessionCacheSyncArgs): void {
     if (queryClient === undefined) return;
     if (userId === null) return;
 
-    const scope = { hostId: activeHostId, userId };
+    // Any host's caches for this user (`hostId: null`), for the reason given
+    // at `useEpicHomeCacheSync`: the title is the epic's, and the History
+    // list showing it can be served by a host other than the session's.
+    const scope = { hostId: null, userId };
     let lastObservedTitle: string | null = null;
     const currentTitle = (): string | null =>
       normalizeGeneratedTitle(handle.store.getState().epic.title);
@@ -1748,9 +1756,18 @@ function useEpicHomeCacheSync(args: EpicSessionCacheSyncArgs): void {
       const localHome = status === "local" || status === "promoting";
       if (localHome === lastSyncedLocalHome) return;
       lastSyncedLocalHome = localHome;
+      // EVERY host's caches for this user, not the session host's. Where an
+      // epic is durable is a property of the epic, and the surfaces holding
+      // the marker are app-wide: History and the tab strip's pin batch
+      // (`useEpicTaskPinnedStates`, on `useHostClient()`) key under the
+      // EFFECTIVE host, which need not be the host this Epic's session lives
+      // on. Scoped to the session host, a promotion on host B left host A's
+      // `home: "local"` rows and its infinite-stale `getTaskContexts` batch
+      // untouched, so the tab's Pin action stayed unresolved for the life of
+      // the cache.
       setEpicLocalHomeInCloudTaskCaches(
         queryClient,
-        { hostId: activeHostId, userId },
+        { hostId: null, userId },
         epicId,
         localHome,
       );
@@ -1758,12 +1775,13 @@ function useEpicHomeCacheSync(args: EpicSessionCacheSyncArgs): void {
       // they do for the pin patch - a promoted row loaded through pagination
       // kept `home: "local"` (and its cloud-only actions disabled) until a
       // reset or refresh without this half.
-      setCloudEpicTasksPageLocalHome(activeHostId, userId, epicId, localHome);
+      setCloudEpicTasksPageLocalHomeForUser(userId, epicId, localHome);
       void queryClient.invalidateQueries({
-        queryKey: hostQueryKeys.methodScope(
-          activeHostId,
-          "epic.getTaskContexts",
-        ),
+        predicate: (query) =>
+          hostQueryKeys.matchesMethodOnAnyHost(
+            query.queryKey,
+            "epic.getTaskContexts",
+          ),
       });
     };
 

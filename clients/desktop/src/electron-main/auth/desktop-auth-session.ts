@@ -43,17 +43,45 @@ export class DesktopAuthSession {
    * completed as `verified`.
    */
   private readonly revokedBearers: string[] = [];
+  /**
+   * The newest set anyone has BEGUN, verified or not. A verified set awaits
+   * JWKS before it can store, and IPC across renderers is unordered, so a
+   * set begun earlier can complete later - after a sibling window's fresh
+   * sign-in was verified and stored, or after a sign-out. Committing it then
+   * replaced the newer session with the older one: a stale signed-in snapshot
+   * fanned out to every window, and the jar plane's principal moved to an
+   * account nobody is signed in to any more. Each set therefore commits only
+   * while it is still the newest begun.
+   */
+  private setGeneration = 0;
 
   get(): VerifiedDesktopAuthSessionSnapshot {
     return this.snapshotValue;
   }
 
   /**
+   * Marks the start of a set whose commit is deferred (a verified set
+   * awaiting JWKS). The returned generation is handed back to `setVerified`,
+   * which drops the commit if any set - verified or shape-only - began after
+   * it. Taken BEFORE the verification, not after: the fence is about which
+   * intent is newest, and the intent is formed when the renderer sends it.
+   */
+  beginSet(): number {
+    this.setGeneration += 1;
+    return this.setGeneration;
+  }
+
+  /**
    * Adopts a session main has NOT authenticated. Nothing that speaks for the
    * account may rest on one - it is the shape-only trust the jar plane was
    * found resting on - so the stored snapshot says so.
+   *
+   * Synchronous, so it is its own newest intent: it begins and commits in one
+   * step, and a verified set still in flight from before it is superseded
+   * (a sign-out must not be undone by the sign-in it followed).
    */
   set(snapshot: DesktopAuthSessionSnapshot): void {
+    this.beginSet();
     this.store(snapshot, false);
   }
 
@@ -61,8 +89,14 @@ export class DesktopAuthSession {
    * Adopts a session whose bearer main verified itself
    * (`auth/bearer-verifier.ts`): the signature, the issuer and audience, the
    * expiry, and the subject against `profile.userId`.
+   *
+   * `generation` is what `beginSet` returned when this set began. A set that
+   * is no longer the newest begun is dropped whole - not installed
+   * unverified, which would still replace the newer session's status and
+   * profile with the older one's.
    */
-  setVerified(snapshot: DesktopAuthSessionSnapshot): void {
+  setVerified(snapshot: DesktopAuthSessionSnapshot, generation: number): void {
+    if (generation !== this.setGeneration) return;
     // A bearer revoked while its verification was in flight (see
     // `revokedBearers`) lands as the session it is, minus the verification
     // the renderer has already withdrawn for it.

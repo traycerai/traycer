@@ -14,6 +14,7 @@ import {
   resetLastViewedCloudEpicTasksPagesForScope,
   setCloudEpicTasksPagePinned,
   setCloudEpicTasksPageLocalHome,
+  setCloudEpicTasksPageLocalHomeForUser,
 } from "@/stores/epics/cloud-epic-tasks-pages-store";
 import { cloudEpicTasksQueryKey } from "@/lib/cloud-epic-tasks-query";
 
@@ -333,6 +334,35 @@ describe("useCloudEpicTasksPagesStore", () => {
 
     setCloudEpicTasksPageLocalHome("host-a", "user-a", "epic-1", true);
     expect(pagesFor(scopedIdentity)?.[0]?.tasks[0]).toMatchObject({
+      home: "local",
+    });
+  });
+
+  it("patches one epic's home marker across every host's tails for the user, and no other user's", () => {
+    // The open epic's session lives on one host; the History list showing
+    // the row can be served by another (the app-wide effective host). The
+    // fact is the epic's, so the user-scoped patch reaches both - and stops
+    // at the user boundary, where the same epic id names another account's
+    // view.
+    const state = useCloudEpicTasksPagesStore.getState();
+    const localRow = { ...epicTask("epic-1", false), home: "local" as const };
+    for (const identity of [
+      "host-a|user-a|recent",
+      "host-b|user-a|recent",
+      "host-a|user-b|recent",
+    ]) {
+      state.appendPage(identity, 0, { tasks: [localRow], hasMore: false });
+    }
+
+    setCloudEpicTasksPageLocalHomeForUser("user-a", "epic-1", false);
+
+    expect(pagesFor("host-a|user-a|recent")?.[0]?.tasks[0]).not.toHaveProperty(
+      "home",
+    );
+    expect(pagesFor("host-b|user-a|recent")?.[0]?.tasks[0]).not.toHaveProperty(
+      "home",
+    );
+    expect(pagesFor("host-a|user-b|recent")?.[0]?.tasks[0]).toMatchObject({
       home: "local",
     });
   });

@@ -693,6 +693,27 @@ describe("deriveEpicSyncPillState", () => {
       expect(deriveEpicSyncPillState(HEALTHY_INPUTS)).toBe("synced");
     });
 
+    it("does not claim synced when a pre-@1.6 peer STATES a non-cloud durability", () => {
+      // A `@1.4` / `@1.5` peer has no protection leg but does send
+      // `durability`, and through `@1.5` its cloud answer is the ABSENT key.
+      // The legacy calm was licensed by the missing protection leg alone, so
+      // a clean, connected local room rendered "All changes synced" beside
+      // the durability badge's "Stored locally". A stated value blocks the
+      // claim; and with no protection leg to say `armed`, the pill claims
+      // nothing rather than "saved on this device".
+      for (const durability of [
+        "local",
+        "promoting",
+        "paused",
+        "offline",
+      ] as const) {
+        expect(
+          deriveEpicSyncPillState({ ...HEALTHY_INPUTS, durability }),
+          durability,
+        ).toBe("connected");
+      }
+    });
+
     it("does not claim synced for a local-homed epic", () => {
       expect(
         deriveEpicSyncPillState({
