@@ -18,4 +18,7 @@ export {
   parseGitHubReleaseDownloadUrl,
 } from "./release-asset";
 export type { GitHubReleaseDownloadRef } from "./release-asset";
-export { stripGitHubReleaseCredentialsFromEnv } from "./host-env";
+export {
+  type GitHubReleaseCredentialScope,
+  stripGitHubReleaseCredentialsFromEnv,
+} from "./host-env";

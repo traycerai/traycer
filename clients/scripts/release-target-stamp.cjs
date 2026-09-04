@@ -9,6 +9,14 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const KNOWN_TARGETS = ["production", "staging"];
+// The desktop `releaseChannel` each target must stamp. Mirrors the
+// `desktop.releaseChannel` values in the build repo's `release-targets.json`;
+// see the check in `readClientTargetStamp` for why this one is pinned to an
+// exact value rather than merely required to be a string.
+const REQUIRED_RELEASE_CHANNEL = {
+  production: "stable",
+  staging: "staging",
+};
 // Scalar keys must be non-empty strings; structured keys are checked by shape
 // below. Keeping the two sets apart is what makes a `null` scalar fail here
 // instead of being packaged as `appId: null` or `schemes: [null]`.
@@ -156,6 +164,20 @@ function readClientTargetStamp(inputPath, expectedTarget, component) {
     "client target stamp.cloud",
   );
   if (component === "desktop") {
+    // `releaseChannel` is the one stamped value the updater compares against a
+    // LITERAL rather than merely carrying: `effectiveChannelMode()` returns
+    // `explicit-prerelease` for exactly `"staging"` and falls through to the
+    // stable path for anything else. So a staging descriptor that said
+    // `"stable"` - or `"Staging"`, or a typo - would pass every other check
+    // here, bake verbatim, and produce a build that authenticates against a
+    // private repository while looking for stable releases in it. Being a
+    // non-empty string is not enough for a value with that consequence.
+    const requiredReleaseChannel = REQUIRED_RELEASE_CHANNEL[stamp.target];
+    if (stamp.releaseChannel !== requiredReleaseChannel) {
+      throw new ClientTargetStampError(
+        `client target stamp releaseChannel ${JSON.stringify(stamp.releaseChannel)} is not the ${JSON.stringify(stamp.target)} channel ${JSON.stringify(requiredReleaseChannel)}`,
+      );
+    }
     requireStringArray(
       stamp.updaterChannelFiles,
       "client target stamp.updaterChannelFiles",

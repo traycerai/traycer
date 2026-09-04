@@ -669,6 +669,7 @@ describe("buildDesktopReleaseFeed", () => {
       release,
       "",
       null,
+      false,
     );
 
     expect(feed).toEqual({
@@ -684,6 +685,7 @@ describe("buildDesktopReleaseFeed", () => {
       release,
       "secret-token",
       "deb",
+      true,
     );
 
     expect(feed).toEqual({
@@ -699,6 +701,10 @@ describe("buildDesktopReleaseFeed", () => {
       // format can install; the asset URLs it swaps in are opaque, so
       // electron-updater's own extension filter sees nothing to match on.
       linuxPackageType: "deb",
+      // Carried so `resolveFiles` can filter by macOS architecture before the
+      // extension filter runs; the asset URLs it swaps in have no filename for
+      // `MacUpdater.filterFilesForArch` to read `arm64` out of.
+      isArm64Mac: true,
     });
   });
 });
@@ -748,6 +754,7 @@ describe("ExactReleaseAssetProvider", () => {
   function buildProviderWithType(
     assets: readonly DesktopReleaseAsset[],
     linuxPackageType: TestLinuxPackageType,
+    isArm64Mac: boolean,
   ): {
     readonly executor: FakeHttpExecutor;
     readonly provider: ExactReleaseAssetProvider;
@@ -762,6 +769,7 @@ describe("ExactReleaseAssetProvider", () => {
         owner: "traycerai",
         repo: "private-traycer",
         linuxPackageType,
+        isArm64Mac,
       },
       undefined,
       buildRuntimeOptions(executor),
@@ -773,7 +781,7 @@ describe("ExactReleaseAssetProvider", () => {
     readonly executor: FakeHttpExecutor;
     readonly provider: ExactReleaseAssetProvider;
   } {
-    return buildProviderWithType(assets, null);
+    return buildProviderWithType(assets, null, false);
   }
 
   it("resolves the platform manifest asset with authenticated, non-following headers", async () => {
@@ -863,6 +871,7 @@ describe("ExactReleaseAssetProvider", () => {
         url: `https://api.github.com/repos/traycerai/private-traycer/releases/assets/linux-${index}`,
       })),
       linuxPackageType,
+      false,
     ).provider;
   }
 
@@ -1008,6 +1017,111 @@ describe("ExactReleaseAssetProvider", () => {
           "1.6.0-rc.3",
         ),
       ).rejects.toThrow(/9999/);
+    });
+  });
+
+  // The important pin: `resolveFiles` is the sole place a macOS architecture
+  // filter can still see filenames once the URLs it swaps in are opaque
+  // `releases/assets/<id>` links. Before this filter, `findFile` (in
+  // electron-updater, downstream of `resolveFiles`) would look for `arm64` in
+  // the pathname of whatever `resolveFiles` returned, find it in neither
+  // opaque URL, and fall through to `files[0]` - so listing order alone
+  // decided which architecture an Intel or Apple Silicon Mac was handed. Both
+  // manifest orderings are exercised so a regression that drops the filter
+  // fails regardless of which ZIP GitHub happened to list first.
+  describe("resolveFiles macOS architecture filtering", () => {
+    const arm64ZipName = "Traycer-1.7.0-arm64-mac.zip";
+    const x64ZipName = "Traycer-1.7.0-mac.zip";
+    const arm64AssetUrl =
+      "https://api.github.com/repos/traycerai/private-traycer/releases/assets/arm64-zip";
+    const x64AssetUrl =
+      "https://api.github.com/repos/traycerai/private-traycer/releases/assets/x64-zip";
+
+    function bothArchAssets(): DesktopReleaseAsset[] {
+      return [
+        { name: arm64ZipName, url: arm64AssetUrl },
+        { name: x64ZipName, url: x64AssetUrl },
+      ];
+    }
+
+    function macArchUpdateInfo(fileNames: readonly string[]): UpdateInfo {
+      const first = fileNames[0];
+      if (first === undefined) throw new Error("test requires an update file");
+      return {
+        version: "1.7.0",
+        files: fileNames.map((url) => ({ url, sha512: "abcDEF123==" })),
+        path: first,
+        sha512: "abcDEF123==",
+        releaseDate: "2026-07-01T00:00:00.000Z",
+      };
+    }
+
+    it("resolves the arm64 asset on an arm64 Mac when the arm64 ZIP is listed first", () => {
+      const { provider } = buildProviderWithType(bothArchAssets(), null, true);
+
+      const files = provider.resolveFiles(
+        macArchUpdateInfo([arm64ZipName, x64ZipName]),
+      );
+
+      expect(files.map((file) => file.url.toString())).toEqual([arm64AssetUrl]);
+    });
+
+    it("resolves the x64 asset on an x64 Mac when the arm64 ZIP is listed first", () => {
+      const { provider } = buildProviderWithType(bothArchAssets(), null, false);
+
+      const files = provider.resolveFiles(
+        macArchUpdateInfo([arm64ZipName, x64ZipName]),
+      );
+
+      expect(files.map((file) => file.url.toString())).toEqual([x64AssetUrl]);
+    });
+
+    it("resolves the arm64 asset on an arm64 Mac when the x64 ZIP is listed first", () => {
+      const { provider } = buildProviderWithType(bothArchAssets(), null, true);
+
+      const files = provider.resolveFiles(
+        macArchUpdateInfo([x64ZipName, arm64ZipName]),
+      );
+
+      expect(files.map((file) => file.url.toString())).toEqual([arm64AssetUrl]);
+    });
+
+    it("resolves the x64 asset on an x64 Mac when the x64 ZIP is listed first", () => {
+      const { provider } = buildProviderWithType(bothArchAssets(), null, false);
+
+      const files = provider.resolveFiles(
+        macArchUpdateInfo([x64ZipName, arm64ZipName]),
+      );
+
+      expect(files.map((file) => file.url.toString())).toEqual([x64AssetUrl]);
+    });
+
+    it("throws on an x64 Mac when only an arm64 ZIP is published, even though it is the sole file", () => {
+      // This is the case the old `matching.length > 1` guard would have let
+      // through: a single file never triggers the extension-disambiguation
+      // throw, so an arm64-only release would have resolved on an Intel Mac
+      // without the architecture gate.
+      const { provider } = buildProviderWithType(
+        [{ name: arm64ZipName, url: arm64AssetUrl }],
+        null,
+        false,
+      );
+
+      expect(() =>
+        provider.resolveFiles(macArchUpdateInfo([arm64ZipName])),
+      ).toThrow(/architecture/);
+    });
+
+    it("still resolves a single x64-only manifest on an x64 Mac", () => {
+      const { provider } = buildProviderWithType(
+        [{ name: x64ZipName, url: x64AssetUrl }],
+        null,
+        false,
+      );
+
+      const files = provider.resolveFiles(macArchUpdateInfo([x64ZipName]));
+
+      expect(files.map((file) => file.url.toString())).toEqual([x64AssetUrl]);
     });
   });
 });

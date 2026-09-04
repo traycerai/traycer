@@ -36,7 +36,10 @@ import {
   type DesktopUpdateFeed,
 } from "./desktop-release-feed";
 import { isCanonicalReleaseCandidate } from "@traycer-clients/shared/host-version/release-line";
-import { isAuthenticationRequiredError } from "@traycer-clients/shared/github-release-auth";
+import {
+  AuthenticationRequiredError,
+  isAuthenticationRequiredError,
+} from "@traycer-clients/shared/github-release-auth";
 import {
   config,
   configuredDesktopReleaseRepo,
@@ -1778,6 +1781,12 @@ async function resolveDesktopReleaseFeed(
     // through to `files[0]` and handing `dpkg -i` an AppImage. This is the same
     // value discovery filters candidates with, resolved once at install time.
     linuxPackageType,
+    // Same reason, for the other filename-dependent selector: with no filename
+    // in the URL, `MacUpdater.filterFilesForArch` cannot tell the arm64 ZIP
+    // from the x64 one. Resolved exactly as discovery resolves it, so the
+    // provider and `releaseHasApplicableInstaller` cannot disagree about which
+    // build this Mac can run.
+    process.platform === "darwin" ? isArm64MacTarget() : false,
   );
 }
 
@@ -1902,6 +1911,23 @@ async function collectDesktopReleaseCandidates(
     const url = `https://api.github.com/repos/${coordinate.owner}/${coordinate.repo}/releases?per_page=100&page=${page}`;
     const response = await fetchStagingGitHubRelease(url, { headers, signal });
     if (!response.ok) {
+      // A 404 here is AMBIGUOUS, and the ambiguity is GitHub's: rather than
+      // 403, it masks "this credential cannot see this repository" as "this
+      // repository does not exist". A syntactically valid token without access
+      // to the private staging repo therefore lands on this line, and the
+      // generic Error it used to raise matched neither arm of
+      // `isStagingAuthFailure` (401/403 only) - so the rejected lease was kept
+      // and every later check in this process reused it, even after the user
+      // re-authenticated.
+      //
+      // Resolved the same way the shared release-asset path resolves it, and
+      // deliberately NOT by treating every 404 as an auth failure: a genuinely
+      // absent repository and an unpublished tag both 404 with a perfectly
+      // good token. The discriminator is the one request whose 404 cannot mean
+      // anything else.
+      if (response.status === 404 && token.length > 0) {
+        await assertStagingRepositoryVisible(coordinate, headers, signal);
+      }
       throw new Error(
         `GitHub release discovery failed with HTTP ${response.status}`,
       );
@@ -1921,6 +1947,29 @@ async function collectDesktopReleaseCandidates(
   throw new Error(
     `GitHub release discovery exceeded the ${MAX_DISCOVERY_PAGES}-page safety limit`,
   );
+}
+
+/**
+ * Turns a masked 404 from the release listing into an authentication verdict,
+ * or leaves it alone.
+ *
+ * The repository coordinate is baked at build time, so `GET /repos/<o>/<r>`
+ * returning 404 means the credential cannot see it - there is no other reading.
+ * A visible repository means the 404 belonged to the listing itself and the
+ * caller's original error stands, so nothing is thrown and no lease is
+ * discarded. Costs one extra request, on the 404 path only.
+ */
+async function assertStagingRepositoryVisible(
+  coordinate: GitHubRepoCoordinate,
+  headers: Record<string, string>,
+  signal: AbortSignal | undefined,
+): Promise<void> {
+  const probe = await fetchStagingGitHubRelease(
+    `https://api.github.com/repos/${encodeURIComponent(coordinate.owner)}/${encodeURIComponent(coordinate.repo)}`,
+    { headers, signal },
+  );
+  if (probe.status !== 404) return;
+  throw new AuthenticationRequiredError(AUTHENTICATION_REQUIRED_MESSAGE);
 }
 
 // Fetches a candidate's channel manifest bytes for validation. An HTTP error

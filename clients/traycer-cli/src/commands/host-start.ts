@@ -75,6 +75,7 @@ import {
   type ProbeSupervisorAttestation,
 } from "@traycer-clients/shared/host-lifecycle";
 import { stripGitHubReleaseCredentialsFromEnv } from "@traycer-clients/shared/github-release-auth";
+import { config } from "../config";
 import {
   applyEnvOverrides,
   listEnvOverrides,
@@ -1104,6 +1105,18 @@ export async function runHostStart(
           TERM_PROGRAM: "traycer",
         },
         process.platform,
+        // Widened for staging builds ONLY, and the asymmetry is deliberate.
+        // A staging build downloads its host from a private repository and
+        // will authenticate that with `gh auth token`, which sources GH_TOKEN
+        // / GITHUB_TOKEN - on that build they ARE the release credential, and
+        // this boundary exists so release credentials do not reach the host or
+        // the providers it spawns. A production build never takes that path
+        // (its release repo is public and the token is empty), so there the
+        // same two variables are just the user's own environment, and a host
+        // that quietly dropped them would break `gh` for every agent it runs.
+        config.environment === "staging"
+          ? "traycer-and-gh-cli-tokens"
+          : "traycer-token-only",
       );
       // Cap the host's V8 young generation at creation time on EVERY platform.
       // This is the single cross-platform host launch path, so applying it here

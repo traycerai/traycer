@@ -546,6 +546,10 @@ export interface ExactReleaseFeedConfig {
   // only the files that format can install. Null off Linux and on an AppImage
   // install, which `platformInstallerExtensions` already reads as "AppImage".
   readonly linuxPackageType: LinuxPackageType | null;
+  // The macOS architecture selector, for the same reason as `linuxPackageType`:
+  // `MacUpdater.filterFilesForArch` reads `arm64` out of a filename, and the
+  // asset URLs this provider resolves have no filename. Always false off macOS.
+  readonly isArm64Mac: boolean;
   // Needed to resolve the PREVIOUS release's assets when the differential
   // downloader asks for its blockmap; the pinned `assets` above describe the
   // new release alone. See `ExactReleaseAssetProvider.getBlockMapFiles`.
@@ -582,6 +586,7 @@ export function buildDesktopReleaseFeed(
   release: DesktopReleaseCandidate,
   token: string,
   linuxPackageType: LinuxPackageType | null,
+  isArm64Mac: boolean,
 ): DesktopUpdateFeed {
   if (token.length === 0) {
     return {
@@ -595,6 +600,7 @@ export function buildDesktopReleaseFeed(
     owner,
     repo,
     linuxPackageType,
+    isArm64Mac,
   );
 }
 
@@ -637,6 +643,7 @@ function privateExactReleaseFeed(
   owner: string,
   repo: string,
   linuxPackageType: LinuxPackageType | null,
+  isArm64Mac: boolean,
 ): ExactReleaseFeedConfig {
   return {
     provider: "custom",
@@ -646,6 +653,7 @@ function privateExactReleaseFeed(
     owner,
     repo,
     linuxPackageType,
+    isArm64Mac,
   };
 }
 
@@ -662,6 +670,7 @@ export class ExactReleaseAssetProvider extends Provider<UpdateInfo> {
   private readonly owner: string;
   private readonly repo: string;
   private readonly linuxPackageType: LinuxPackageType | null;
+  private readonly isArm64Mac: boolean;
 
   constructor(
     options: ExactReleaseFeedConfig,
@@ -674,6 +683,7 @@ export class ExactReleaseAssetProvider extends Provider<UpdateInfo> {
     this.owner = options.owner;
     this.repo = options.repo;
     this.linuxPackageType = options.linuxPackageType;
+    this.isArm64Mac = options.isArm64Mac;
   }
 
   // GitHub's asset API 302-redirects to a signed object-store URL; mirror
@@ -725,36 +735,65 @@ export class ExactReleaseAssetProvider extends Provider<UpdateInfo> {
    *     exclusion list excludes nothing, so it falls through to `files[0]`.
    *     `_DebUpdater` asking for `deb` therefore receives whatever is first in
    *     the channel manifest, and `dpkg -i` is handed an AppImage.
+   *   - `MacUpdater.filterFilesForArch`, which picks the ZIP for the running
+   *     Mac by looking for `arm64` in the pathname. It finds it in neither, so
+   *     both survive and `findFile` takes the first: an Intel Mac is offered
+   *     the arm64 build, or Apple Silicon is moved to x64.
    *
-   * That is not hypothetical: Linux publishes AppImage, deb and rpm into one
-   * `latest-linux*.yml`, and Windows publishes nsis and msi. So the filename
-   * semantics `findFile` can no longer see are applied HERE, while the names
-   * are still readable - `file.url` in the manifest carries the real filename;
-   * only the asset URL we swap in is opaque.
+   * None of that is hypothetical: `package.json` publishes AppImage, deb and
+   * rpm into one `latest-linux*.yml`, nsis and msi on Windows, and the arm64
+   * and x64 ZIPs together in `latest-mac.yml`. So the filename semantics these
+   * can no longer see are applied HERE, while the names are still readable -
+   * `file.url` in the manifest carries the real filename; only the asset URL we
+   * swap in is opaque.
    *
-   * Order is preserved, so when exactly one format matches this is what
-   * `findFile` would have chosen anyway. An empty match on a multi-file
-   * manifest throws rather than falling back to `files[0]`: falling back is
-   * precisely the bug. Discovery already refuses a release with no applicable
-   * installer (`releaseHasApplicableInstaller`), so this is the guard that
-   * makes that refusal load-bearing rather than advisory.
+   * The two macOS selectors run in `MacUpdater`'s own order, architecture
+   * before extension. Order within each is preserved, so where exactly one
+   * candidate survives this is what `findFile` would have chosen anyway.
+   *
+   * The two empty cases are NOT the same failure and do not get the same
+   * treatment. An architecture with no file is an applicability failure - an
+   * arm64-only release cannot run on an Intel Mac however few files it lists -
+   * so it always throws. An extension with no match is a disambiguation
+   * failure, so it throws only when there was something to disambiguate;
+   * a single remaining file resolves, as it did before. Either way the
+   * fallback is over the ARCHITECTURE-APPLICABLE files, never the raw list,
+   * or a one-file arm64 manifest would walk straight back into the bug.
+   * Discovery already refuses a release with no applicable installer
+   * (`releaseHasApplicableInstaller`, which applies this same arch filter), so
+   * this is what makes that refusal load-bearing rather than advisory.
    */
   resolveFiles(updateInfo: UpdateInfo): ResolvedUpdateFileInfo[] {
     const files = getFileList(updateInfo);
-    const extensions = platformInstallerExtensions(this.linuxPackageType);
     const named = files.map((file) => ({
       file,
       name: posix.basename(file.url).replace(/ /g, "-"),
     }));
-    const matching = named.filter((it) =>
+    let applicable = named;
+    if (process.platform === "darwin") {
+      const forThisMac = new Set(
+        filterMacFilesForArch(
+          named.map((it) => it.name),
+          this.isArm64Mac,
+        ),
+      );
+      applicable = named.filter((it) => forThisMac.has(it.name));
+      if (applicable.length === 0) {
+        throw new Error(
+          `No update file matches this Mac's architecture (${this.isArm64Mac ? "arm64" : "x64"}); the manifest lists ${named.map((it) => it.name).join(", ")}`,
+        );
+      }
+    }
+    const extensions = platformInstallerExtensions(this.linuxPackageType);
+    const matching = applicable.filter((it) =>
       extensions.some((extension) => it.name.toLowerCase().endsWith(extension)),
     );
-    if (matching.length === 0 && files.length > 1) {
+    if (matching.length === 0 && applicable.length > 1) {
       throw new Error(
         `No update file matches this installer format (${extensions.join(", ")}); the manifest lists ${named.map((it) => it.name).join(", ")}`,
       );
     }
-    const selected = matching.length > 0 ? matching : named;
+    const selected = matching.length > 0 ? matching : applicable;
     return selected.map(({ file, name }) => {
       const asset = this.assets.find((it) => it.name === name);
       if (asset === undefined) {

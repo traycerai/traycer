@@ -20,7 +20,14 @@ export async function readGitHubCliToken(
       ["auth", "token", "--hostname", "github.com"],
       {
         encoding: "utf8",
-        env: stripGitHubReleaseCredentialsFromEnv(env, process.platform),
+        // `traycer-token-only`: `gh auth token` reads GH_TOKEN / GITHUB_TOKEN
+        // as its own credential, so stripping them here would disable the very
+        // fallback this call exists to use.
+        env: stripGitHubReleaseCredentialsFromEnv(
+          env,
+          process.platform,
+          "traycer-token-only",
+        ),
         timeout: 8_000,
         maxBuffer: 64 * 1024,
         windowsHide: true,

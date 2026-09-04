@@ -2848,6 +2848,135 @@ describe("staging updater release authentication and channel", () => {
 
     expect(JSON.stringify(logger.warn.mock.calls)).not.toContain(token);
   });
+
+  // GitHub masks "credential cannot see this repository" as 404 rather than
+  // 403 on the release-listing endpoint. `isStagingAuthFailure` only matches
+  // 401/403, so before the repository-visibility probe this masked 404 raised
+  // a generic discovery error that never discarded the rejected lease - every
+  // later check in the process kept reusing it, even after the user
+  // re-authenticated.
+  it("treats a masked listing 404 as an authentication failure when the repository is also invisible, and discards the lease", async () => {
+    process.env.TRAYCER_STAGING_RELEASE_TOKEN = "first-token";
+    const { updater, logger } = await loadStagingUpdater();
+    const calls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: unknown) => {
+        calls.push(String(input));
+        return new Response("Not Found", { status: 404 });
+      }),
+    );
+    await updater.installAutoUpdater(true, makeDeps(true));
+    await updater.checkForUpdatesNow(false, "manual");
+
+    expect(updater.getAppUpdateSnapshot()).toMatchObject({
+      status: "unavailable",
+      errorMessage: "Updates are not available for this build.",
+    });
+    // Both the listing walk AND the repository-visibility probe ran.
+    expect(calls.filter((url) => url.includes("per_page"))).toHaveLength(1);
+    expect(
+      calls.filter((url) => url.endsWith("/repos/traycerai/traycer-internal")),
+    ).toHaveLength(1);
+    expect(JSON.stringify(logger.warn.mock.calls)).not.toContain("first-token");
+
+    // The lease was discarded: a later check picks up a fresh env token
+    // instead of replaying the rejected one.
+    process.env.TRAYCER_STAGING_RELEASE_TOKEN = "second-token";
+    const authorizations: Array<string | null> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: unknown, init: RequestInit | undefined) => {
+        authorizations.push(new Headers(init?.headers).get("authorization"));
+        const url = new URL(String(input));
+        if (url.searchParams.has("per_page")) {
+          return new Response(JSON.stringify([]), { status: 200 });
+        }
+        return new Response("Not Found", { status: 404 });
+      }),
+    );
+    await updater.checkForUpdatesNow(false, "manual");
+    expect(authorizations[0]).toBe("token second-token");
+  });
+
+  it("leaves the original discovery error and the lease alone when a masked listing 404 probes to a visible repository", async () => {
+    process.env.TRAYCER_STAGING_RELEASE_TOKEN = "first-token";
+    const { updater } = await loadStagingUpdater();
+    function fetchWithVisibleRepoProbe(): Mock {
+      return vi.fn(async (input: unknown, init: RequestInit | undefined) => {
+        const url = new URL(String(input));
+        if (url.searchParams.has("per_page")) {
+          return new Response("Not Found", { status: 404 });
+        }
+        if (url.pathname.endsWith("/repos/traycerai/traycer-internal")) {
+          return new Response(JSON.stringify({}), { status: 200 });
+        }
+        return new Response("Not Found", { status: 404 });
+      });
+    }
+    vi.stubGlobal("fetch", fetchWithVisibleRepoProbe());
+    await updater.installAutoUpdater(true, makeDeps(true));
+    await updater.checkForUpdatesNow(false, "manual");
+
+    // The repository IS visible, so the 404 belonged to the listing itself:
+    // the original generic discovery error stands rather than being
+    // reinterpreted as an authentication failure.
+    expect(updater.getAppUpdateSnapshot()).toMatchObject({
+      status: "error",
+      errorMessage:
+        "Traycer couldn't reach the update service right now. Please try again in a little while.",
+    });
+
+    // The lease was NOT discarded: changing the env token has no effect until
+    // something actually rejects the current lease, so the next check still
+    // authenticates with the original token.
+    process.env.TRAYCER_STAGING_RELEASE_TOKEN = "second-token";
+    const authorizations: Array<string | null> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: unknown, init: RequestInit | undefined) => {
+        authorizations.push(new Headers(init?.headers).get("authorization"));
+        const url = new URL(String(input));
+        if (url.searchParams.has("per_page")) {
+          return new Response("Not Found", { status: 404 });
+        }
+        if (url.pathname.endsWith("/repos/traycerai/traycer-internal")) {
+          return new Response(JSON.stringify({}), { status: 200 });
+        }
+        return new Response("Not Found", { status: 404 });
+      }),
+    );
+    await updater.checkForUpdatesNow(false, "manual");
+    expect(authorizations[0]).toBe("token first-token");
+  });
+});
+
+describe("masked 404 in release discovery: no probe without a token", () => {
+  it("does not probe repository visibility when no token is configured", async () => {
+    setPlatform("darwin");
+    const { updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
+    const calls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: unknown) => {
+        calls.push(String(input));
+        return new Response("Not Found", { status: 404 });
+      }),
+    );
+    await updater.installAutoUpdater(true, makeDeps(true));
+
+    const plan = await updater.resolveCompatRecovery({
+      minimumEpoch: 2,
+      hostAllowsRcRecovery: true,
+    });
+
+    expect(plan.route).toBe("manual");
+    // Only the listing was fetched - no token means the masked-404 discriminator
+    // never runs, since a good-faith absent/public repository 404s the same way
+    // with or without one.
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toContain("per_page");
+  });
 });
 
 interface LinuxGuidanceTestConfig {

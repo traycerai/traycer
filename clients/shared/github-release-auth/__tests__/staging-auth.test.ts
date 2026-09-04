@@ -113,7 +113,11 @@ describe("staging GitHub release credentials", () => {
 
   it("removes only the staging token without mutating the input", () => {
     const input = { PATH: "/bin", [STAGING_RELEASE_TOKEN_ENV]: "secret" };
-    const output = stripGitHubReleaseCredentialsFromEnv(input, "darwin");
+    const output = stripGitHubReleaseCredentialsFromEnv(
+      input,
+      "darwin",
+      "traycer-token-only",
+    );
     expect(output).toEqual({ PATH: "/bin" });
     expect(input[STAGING_RELEASE_TOKEN_ENV]).toBe("secret");
   });
@@ -124,7 +128,11 @@ describe("staging GitHub release credentials", () => {
       Traycer_Staging_Release_Token: "secret-lower",
       TRAYCER_STAGING_RELEASE_TOKEN: "secret-upper",
     };
-    const output = stripGitHubReleaseCredentialsFromEnv(input, "win32");
+    const output = stripGitHubReleaseCredentialsFromEnv(
+      input,
+      "win32",
+      "traycer-token-only",
+    );
     expect(output).toEqual({ PATH: "/bin" });
     expect(input.Traycer_Staging_Release_Token).toBe("secret-lower");
   });
@@ -134,9 +142,98 @@ describe("staging GitHub release credentials", () => {
       Traycer_Staging_Release_Token: "secret-lower",
       [STAGING_RELEASE_TOKEN_ENV]: "secret-exact",
     };
-    expect(stripGitHubReleaseCredentialsFromEnv(input, "darwin")).toEqual({
+    expect(
+      stripGitHubReleaseCredentialsFromEnv(
+        input,
+        "darwin",
+        "traycer-token-only",
+      ),
+    ).toEqual({
       Traycer_Staging_Release_Token: "secret-lower",
     });
+  });
+
+  it("traycer-and-gh-cli-tokens removes the Traycer token and both gh CLI tokens, leaving unrelated vars", () => {
+    const input = {
+      PATH: "/bin",
+      [STAGING_RELEASE_TOKEN_ENV]: "traycer-secret",
+      GH_TOKEN: "gh-secret",
+      GITHUB_TOKEN: "github-secret",
+    };
+    const output = stripGitHubReleaseCredentialsFromEnv(
+      input,
+      "darwin",
+      "traycer-and-gh-cli-tokens",
+    );
+    expect(output).toEqual({ PATH: "/bin" });
+    // The input is untouched - only the returned copy is stripped.
+    expect(input[STAGING_RELEASE_TOKEN_ENV]).toBe("traycer-secret");
+    expect(input.GH_TOKEN).toBe("gh-secret");
+    expect(input.GITHUB_TOKEN).toBe("github-secret");
+  });
+
+  it("traycer-token-only keeps GH_TOKEN and GITHUB_TOKEN so gh auth token still resolves", () => {
+    // This is the pin against "simplifying" the scope away: the resolver's own
+    // `gh auth token` subprocess call depends on these two surviving here.
+    const input = {
+      PATH: "/bin",
+      [STAGING_RELEASE_TOKEN_ENV]: "traycer-secret",
+      GH_TOKEN: "gh-secret",
+      GITHUB_TOKEN: "github-secret",
+    };
+    const output = stripGitHubReleaseCredentialsFromEnv(
+      input,
+      "darwin",
+      "traycer-token-only",
+    );
+    expect(output).toEqual({
+      PATH: "/bin",
+      GH_TOKEN: "gh-secret",
+      GITHUB_TOKEN: "github-secret",
+    });
+  });
+
+  it("removes every casing of all three names on win32 under traycer-and-gh-cli-tokens", () => {
+    const input = {
+      PATH: "/bin",
+      Traycer_Staging_Release_Token: "traycer-secret",
+      Gh_Token: "gh-secret",
+      github_token: "github-secret",
+    };
+    const output = stripGitHubReleaseCredentialsFromEnv(
+      input,
+      "win32",
+      "traycer-and-gh-cli-tokens",
+    );
+    expect(output).toEqual({ PATH: "/bin" });
+  });
+
+  it("does not remove a lower-case gh_token off Windows (names are case-sensitive there)", () => {
+    const input = { PATH: "/bin", gh_token: "gh-secret" };
+    const output = stripGitHubReleaseCredentialsFromEnv(
+      input,
+      "darwin",
+      "traycer-and-gh-cli-tokens",
+    );
+    expect(output).toEqual({ PATH: "/bin", gh_token: "gh-secret" });
+  });
+
+  it("returns the same object reference when nothing in it matches (identity fast path)", () => {
+    const input = { PATH: "/bin", HOME: "/home/user" };
+    expect(
+      stripGitHubReleaseCredentialsFromEnv(
+        input,
+        "darwin",
+        "traycer-and-gh-cli-tokens",
+      ),
+    ).toBe(input);
+    expect(
+      stripGitHubReleaseCredentialsFromEnv(
+        input,
+        "win32",
+        "traycer-token-only",
+      ),
+    ).toBe(input);
   });
 
   it("authorizes only the exact GitHub release origins and repository path", () => {

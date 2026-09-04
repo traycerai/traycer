@@ -355,6 +355,72 @@ describe("readClientTargetStamp", () => {
   });
 });
 
+function productionDesktopStamp(): Stamp {
+  const stamp = desktopStamp();
+  stamp.target = "production";
+  stamp.environment = "production";
+  stamp.releaseChannel = "stable";
+  return stamp;
+}
+
+describe("desktop releaseChannel enforcement", () => {
+  it("rejects a staging stamp that claims the stable channel", () => {
+    const stamp = desktopStamp();
+    stamp.releaseChannel = "stable";
+    expect(() =>
+      stampModule.readClientTargetStamp(
+        writeStamp(stamp),
+        "staging",
+        "desktop",
+      ),
+    ).toThrow(/releaseChannel/);
+  });
+
+  it("rejects a wrong-case releaseChannel value", () => {
+    const stamp = desktopStamp();
+    stamp.releaseChannel = "Staging";
+    expect(() =>
+      stampModule.readClientTargetStamp(
+        writeStamp(stamp),
+        "staging",
+        "desktop",
+      ),
+    ).toThrow(/releaseChannel/);
+  });
+
+  it("accepts the staging pair releaseChannel=staging", () => {
+    expect(
+      stampModule.readClientTargetStamp(
+        writeStamp(desktopStamp()),
+        "staging",
+        "desktop",
+      ),
+    ).toMatchObject({ target: "staging", releaseChannel: "staging" });
+  });
+
+  it("accepts the production pair releaseChannel=stable", () => {
+    expect(
+      stampModule.readClientTargetStamp(
+        writeStamp(productionDesktopStamp()),
+        "production",
+        "desktop",
+      ),
+    ).toMatchObject({ target: "production", releaseChannel: "stable" });
+  });
+
+  it("rejects a production stamp that claims the staging channel", () => {
+    const stamp = productionDesktopStamp();
+    stamp.releaseChannel = "staging";
+    expect(() =>
+      stampModule.readClientTargetStamp(
+        writeStamp(stamp),
+        "production",
+        "desktop",
+      ),
+    ).toThrow(/releaseChannel/);
+  });
+});
+
 describe("resolveReleaseRepoForTarget", () => {
   it("requires an explicit repository on staging and defaults production", () => {
     expect(
