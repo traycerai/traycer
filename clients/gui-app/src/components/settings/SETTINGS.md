@@ -2083,8 +2083,8 @@ aria-live="polite"` carrying the equivalent text for
       call sites in `host-workspace-selector.tsx` and the cached-default path
       in `use-landing-composer-actions.ts`; entirely client-local, no host
       RPC or protocol change.
-  - **Automatic cleanup** (`worktree-auto-cleanup-section.tsx`) — a compact
-    host-scoped card above the inventory, holding the opt-in that lets this
+  - **Automatic cleanup** (`worktree-auto-cleanup-section.tsx`) — a two-line
+    host-scoped summary above the inventory, holding the opt-in that lets this
     host delete proven-safe, long-idle worktrees unattended. **Default off**,
     per HOST identity (not per signed-in user), and backed entirely by the
     host: `worktree.getAutoCleanupPolicy` / `setAutoCleanupPolicy` through
@@ -2109,7 +2109,23 @@ aria-live="polite"` carrying the equivalent text for
       card explains inline that the setting moved somewhere else. The success
       response IS the fresh policy state, so it is written straight into the
       read query's slot and no second round trip is needed.
-    - **Threshold**: presets 7 / 14 / 30 / 60 / 90 days plus a free value
+    - **Collapsed is the resting shape.** The card's neighbour is the worktree
+      inventory, in a panel of fixed height, so every row this card spends
+      unconditionally is a worktree the list below cannot show — the expanded
+      form left about five rows visible. Line one is the policy in words
+      (`Automatic cleanup · On · after 30 days`, or `· Off` plus "Nothing is
+      deleted automatically."), a `Configure` disclosure trigger, and the
+      switch; line two, enabled only, is the schedule and the history button.
+      Those two lines never fold: they are what the card is CONSULTED for,
+      while the threshold and the fuller safety sentence are read while
+      deciding and then never again. The disclosure is a Radix `Collapsible`
+      whose trigger is its OWN button — a row-wide trigger would nest the
+      switch and the history button inside it — and its state is component-
+      local (`useState(false)`), never persisted: a remount, a host switch or
+      a re-entry into Settings starts collapsed, and toggling the policy off
+      closes it without the way back on re-opening it.
+    - **Threshold** (inside the disclosure, with the safety explanation):
+      presets 7 / 14 / 30 / 60 / 90 days plus a free value
       validated against the host's own `bounds` (`autoCleanupDaysError`), never
       a constant here — a host that moves its bounds needs no client release,
       and the control can never offer a value the host is about to refuse.
