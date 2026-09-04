@@ -451,6 +451,34 @@ describe("cliInstallRoot and hostInstallRoot must be home-relative", () => {
       ),
     ).toThrow(/must name a directory under the home directory/);
   });
+
+  it('rejects a backslash escape that survives split("/") as one segment', () => {
+    // `windowsLauncherPath` converts "/" to "\\", so a literal backslash in
+    // the value is already a separator on the Windows side even though
+    // split("/") sees it as part of one segment and the ".." check never
+    // fires.
+    const stamp = cliStamp();
+    stamp.cliInstallRoot = "~/..\\shared";
+    expect(() =>
+      stampModule.readClientTargetStamp(writeStamp(stamp), "staging", "cli"),
+    ).toThrow(/is not a plain name/);
+  });
+
+  it("rejects a quote that would close the NSIS !define string early", () => {
+    const stamp = cliStamp();
+    stamp.cliInstallRoot = '~/.traycer/cli" ; nsExec::Exec `evil`';
+    expect(() =>
+      stampModule.readClientTargetStamp(writeStamp(stamp), "staging", "cli"),
+    ).toThrow(/is not a plain name/);
+  });
+
+  it("still accepts a real multi-segment home-relative value", () => {
+    const stamp = cliStamp();
+    stamp.cliInstallRoot = "~/.traycer/cli/staging";
+    expect(
+      stampModule.readClientTargetStamp(writeStamp(stamp), "staging", "cli"),
+    ).toMatchObject({ cliInstallRoot: "~/.traycer/cli/staging" });
+  });
 });
 
 function productionDesktopStamp(): Stamp {

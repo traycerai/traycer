@@ -123,7 +123,27 @@ function requireScalarKeys(value, keys, where) {
  * `~/` and still resolves outside the home directory, which is the same escape
  * by a different spelling, and a bare `~/` names the home directory itself
  * rather than a root under it. A guard called "home-relative" has to mean it.
+ *
+ * SEGMENTS ARE ALLOWLISTED RATHER THAN SCREENED, because the two escapes this
+ * has to stop are not reachable by enumerating spellings of `..`:
+ *
+ *   - `windowsLauncherPath` converts `/` to `\`, so a BACKSLASH in the value is
+ *     already a separator on the Windows side. `~/..\shared` is a single
+ *     segment to `split("/")`, passes a `..` check, and lands as
+ *     `$PROFILE\..\shared\...` - outside the profile.
+ *   - the result is interpolated into `!define TRAYCER_HOST_LAUNCHER "<here>"`,
+ *     and NSIS has no escape for its own delimiter, so a `"` in the value ends
+ *     the string early and the remainder is parsed as installer script.
+ *
+ * A blocklist would have to anticipate both, plus whatever the next consumer
+ * treats as special. `[A-Za-z0-9._-]` covers every value the descriptor has
+ * ever carried (`.traycer`, `cli`, `host`, `staging`) and cannot express a
+ * separator, a quote, or a shell metacharacter at all. If a real path ever
+ * needs a wider charset, this fails loudly at build time with the offending
+ * segment named - which is the right place to have that argument.
  */
+const HOME_RELATIVE_SEGMENT = /^[A-Za-z0-9._-]+$/u;
+
 function requireHomeRelativePath(value, where) {
   requireString(value, where);
   if (!value.startsWith("~/")) {
@@ -140,6 +160,14 @@ function requireHomeRelativePath(value, where) {
   if (segments.includes("..")) {
     throw new ClientTargetStampError(
       `${where} must stay inside the home directory, got ${JSON.stringify(value)}`,
+    );
+  }
+  const offending = segments.find(
+    (segment) => !HOME_RELATIVE_SEGMENT.test(segment),
+  );
+  if (offending !== undefined) {
+    throw new ClientTargetStampError(
+      `${where} path segment ${JSON.stringify(offending)} is not a plain name; only [A-Za-z0-9._-] is allowed, so that a consumer converting "/" to "\\" or quoting the value cannot be made to leave the install root. Got ${JSON.stringify(value)}`,
     );
   }
 }
