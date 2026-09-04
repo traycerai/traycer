@@ -4,6 +4,7 @@ import type { Awareness } from "y-protocols/awareness";
 import { NO_CLOUD_SYNC_DURABILITY } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
+import { isLocalHomedEpicHandle } from "@/lib/epic-selectors";
 import {
   openStoreForTest,
   type OpenedStoreForTest,
@@ -679,6 +680,86 @@ describe("createOpenEpicStore", () => {
       durabilityStatus: "paused",
       durabilityPauseReason: null,
     });
+    opened.dispose();
+  });
+
+  it("clears the retained local-home statement when a @1.4/@1.5 peer's fresh frame omits the durability key", () => {
+    // Through @1.5 the enum has no `cloud` member: the absent key IS such a
+    // peer's cloud statement, and a promotion that completes under it ends in
+    // exactly that frame. RED before the fix: `promoting` stayed retained
+    // across it, so `isLocalHomedEpicHandle` - the dispatch-time comment and
+    // attachment gates, the local-home registry - kept answering local-homed
+    // for an epic the host now serves from the cloud.
+    const { factory, handle } = fakeFactory();
+    const opened = openStoreForTest({
+      epicId: "epic-a",
+      userId: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+    handle().callbacks.onConnectionStatus("open", null, true);
+    handle().callbacks.onCloudSyncStatus("connected", {
+      durability: "promoting",
+      pauseReason: undefined,
+      promotionState: "active",
+      localProtection: undefined,
+      freshness: undefined,
+      peerSpeaksDurabilityLegs: false,
+    });
+    expect(opened.store.getState().retainedDurabilityStatus).toBe("promoting");
+    expect(isLocalHomedEpicHandle(opened)).toBe(true);
+
+    handle().callbacks.onCloudSyncStatus("connected", NO_CLOUD_SYNC_DURABILITY);
+    expect(opened.store.getState()).toMatchObject({
+      durabilityStatus: null,
+      retainedDurabilityStatus: null,
+      retainedDurabilityPauseReason: null,
+      durabilityLegsNegotiated: false,
+      hasFreshCloudSyncStatus: true,
+    });
+    expect(isLocalHomedEpicHandle(opened)).toBe(false);
+
+    opened.dispose();
+  });
+
+  it("keeps the retained local-home statement when a @1.6 peer's frame omits the key: that absence is unknown", () => {
+    // The @1.6 peer can say `cloud` positively, so a frame that does not is
+    // the indeterminate state the widening exists to express - and the
+    // retained statement is exactly what the structural gates fall back on
+    // while it is indeterminate.
+    const { factory, handle } = fakeFactory();
+    const opened = openStoreForTest({
+      epicId: "epic-a",
+      userId: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+    handle().callbacks.onConnectionStatus("open", null, true);
+    handle().callbacks.onCloudSyncStatus("connected", {
+      durability: "promoting",
+      pauseReason: undefined,
+      promotionState: "active",
+      localProtection: undefined,
+      freshness: undefined,
+      peerSpeaksDurabilityLegs: true,
+    });
+    handle().callbacks.onCloudSyncStatus("connected", {
+      ...NO_CLOUD_SYNC_DURABILITY,
+      peerSpeaksDurabilityLegs: true,
+    });
+    expect(opened.store.getState()).toMatchObject({
+      durabilityStatus: null,
+      retainedDurabilityStatus: "promoting",
+      durabilityLegsNegotiated: true,
+    });
+    expect(isLocalHomedEpicHandle(opened)).toBe(true);
+
     opened.dispose();
   });
 

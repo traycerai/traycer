@@ -1411,18 +1411,12 @@ export class AuthService {
         // what differs is what the user is TOLD, and what an operator reading
         // the log can tell apart: their own sign-out from a fork-suspicious
         // reject. That is what `rejection.revocation` travelled here for.
-        const revocation =
-          rejection?.kind === "credential" ? rejection.revocation : null;
         appLogger.info("[auth] stored session refresh rejected", {
           trigger,
           scope: "credential",
-          revocation,
+          revocation: refreshRejectionRevocation(rejection),
         });
-        this.setLastError(
-          revocation === "user-epoch"
-            ? AUTH_ERROR_SIGNED_OUT_EVERYWHERE
-            : AUTH_ERROR_SESSION_EXPIRED,
-        );
+        this.setLastError(refreshRejectedCredentialError(rejection));
         this.applyUnverifiedSession(stored);
         this.sessionRecoveryTerminallyRejected = true;
         this.settleSessionRecovery("refresh-rejected-credential");
@@ -3113,11 +3107,24 @@ export class AuthService {
         // Same demotion, DIFFERENT copy. Both hold the plane, but one is an
         // expiry the user can clear by signing in again and the other is
         // terminal for this account - telling the second group to "sign in
-        // again" sends them round a loop with no exit.
+        // again" sends them round a loop with no exit. Within the credential
+        // arm the copy splits once more, exactly as the stored-session path
+        // splits it: a user-epoch revoke is the user's own "sign out
+        // everywhere" landing on this live session, and it is told so rather
+        // than "expired" - `rotated.rejection` carries the scope here for that
+        // purpose, and reading only the outcome string would drop it on the
+        // path a signed-in user actually takes.
+        if (rotated.outcome === "refresh-rejected-credential") {
+          appLogger.info("[auth] live session refresh rejected", {
+            trigger,
+            scope: "credential",
+            revocation: refreshRejectionRevocation(rotated.rejection),
+          });
+        }
         this.setLastError(
           rotated.outcome === "refresh-rejected-account"
             ? AUTH_ERROR_ACCOUNT_UNAVAILABLE
-            : AUTH_ERROR_SESSION_EXPIRED,
+            : refreshRejectedCredentialError(rotated.rejection),
         );
         if (!this.demoteLiveSessionOnTerminalVerdict(this.currentBearer)) {
           // No live identity to hold a plane FOR. Nothing to demote, so take
@@ -5109,6 +5116,33 @@ function rotatedLivePair(rotated: TokenRotateResult): StoredCredentials | null {
     return rotated.pair;
   }
   return null;
+}
+
+/**
+ * The revocation authn stamped on a CREDENTIAL-scoped refresh rejection, or
+ * `null` for a plain expiry, an account-scoped verdict, or a producer that
+ * did not read one. Shared by the stored-session and live-session rejection
+ * arms so both read the scope the same way.
+ */
+function refreshRejectionRevocation(
+  rejection: AuthRefreshRejection | null,
+): "user-epoch" | null {
+  return rejection?.kind === "credential" ? rejection.revocation : null;
+}
+
+/**
+ * The error copy for a CREDENTIAL-scoped refresh rejection. A user-epoch
+ * revoke is the user's own "sign out everywhere" - same hold, same recovery
+ * as an expiry, but told as what it was. Both the stored-session and the
+ * live-session rejection arms select through this so the copy cannot
+ * disagree between the two paths that land the identical verdict.
+ */
+function refreshRejectedCredentialError(
+  rejection: AuthRefreshRejection | null,
+): string {
+  return refreshRejectionRevocation(rejection) === "user-epoch"
+    ? AUTH_ERROR_SIGNED_OUT_EVERYWHERE
+    : AUTH_ERROR_SESSION_EXPIRED;
 }
 
 /**

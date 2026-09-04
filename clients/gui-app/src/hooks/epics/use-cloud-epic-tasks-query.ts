@@ -490,19 +490,28 @@ export function useCloudEpicTasksQuery(
     const wasAuthorized = wasCloudLegAuthorized.current;
     wasCloudLegAuthorized.current = authorizesCloudLeg;
     if (wasAuthorized || !authorizesCloudLeg) return;
-    if (hostId === null || userId === null) return;
+    if (userId === null) return;
     // Reopening to `pending` is the whole action: the revalidation effect above
     // takes `queryData` as a dependency, so it re-runs, and this time both its
     // pending check and its authorization check pass.
     //
-    // EVERY cached scope for this host/user, not just the one this hook is
-    // currently observing. An unverified user who visited several History
-    // filters left a settled `unavailable` page behind each one, and the
-    // settings that make this edge necessary at all - `staleTime: Infinity`
-    // with mount/focus/reconnect refetches disabled - apply to those pages
-    // just as much. Reopening only `effectiveRequest` would leave every other
-    // filter permanently cloud-less for the rest of the session, and revisiting
-    // one would serve its infinite-stale cache rather than ask again.
+    // EVERY cached scope for this user, on EVERY host - not just the one this
+    // hook is currently observing. An unverified user who visited several
+    // History filters left a settled `unavailable` page behind each one, and
+    // the settings that make this edge necessary at all - `staleTime:
+    // Infinity` with mount/focus/reconnect refetches disabled - apply to those
+    // pages just as much. Reopening only `effectiveRequest` would leave every
+    // other filter permanently cloud-less for the rest of the session, and
+    // revisiting one would serve its infinite-stale cache rather than ask
+    // again. The same holds across hosts: the verdict that was missing is the
+    // SESSION's, and the account's cloud tasks are the same list whichever
+    // host serves it, so a page left `unavailable` under host B while the
+    // session was unverified is just as stale once host A's History observes
+    // the promotion. Its own hook runs this edge only if it is mounted at the
+    // moment of promotion - a History tab bound to B that is opened later
+    // would otherwise serve B's infinite-stale `unavailable` page for the
+    // rest of the session. `hostId: null` is the matcher's any-host scope,
+    // the one the session provider's cache syncs use for the same reason.
     //
     // The scope match deliberately spans all requests: `cloudEpicTasksQueryKeyMatchesScope`
     // keys on host and user only. It also excludes the `lastKnown` placeholder
@@ -512,13 +521,13 @@ export function useCloudEpicTasksQuery(
       {
         predicate: (query) =>
           cloudEpicTasksQueryKeyMatchesScope(query.queryKey, {
-            hostId,
+            hostId: null,
             userId,
           }),
       },
       (current) => reopenLocalFirstCloudPage(current),
     );
-  }, [authorizesCloudLeg, hostId, queryClient, userId]);
+  }, [authorizesCloudLeg, queryClient, userId]);
 
   const tasks = useMemo<readonly ListTaskLightPre15[]>(() => {
     if (queryData === undefined) return EMPTY_TASKS;

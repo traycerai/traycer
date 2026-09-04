@@ -332,8 +332,10 @@ export function createEpicControlReplica(
    * the cycle's silence. See `useEpicCommentsHaveNoUsableRoom`.
    *
    * Only a positive statement writes it, so it never manufactures an answer
-   * the host has not given. Cleared by `beginFreshCycle`, which bootstraps the
-   * epic from scratch.
+   * the host has not given - and a `@1.4`/`@1.5` peer's fresh frame WITHOUT
+   * the key is one (its enum has no `cloud` member, so that is how such a
+   * peer says cloud), which clears it. Also cleared by `beginFreshCycle`,
+   * which bootstraps the epic from scratch.
    */
   let retainedDurabilityStatus: EpicDurabilityStatusV15 | null = null;
   let retainedDurabilityPauseReason: EpicDurabilityPauseReasonV15 | null = null;
@@ -622,6 +624,23 @@ export function createEpicControlReplica(
     if (durabilityStatus !== null) {
       retainedDurabilityStatus = durabilityStatus;
       retainedDurabilityPauseReason = durabilityPauseReason;
+    } else if (
+      durabilityStatusNegotiated &&
+      !durable.peerSpeaksDurabilityLegs
+    ) {
+      // Through `@1.5` the durability enum has no `cloud` member, so a frame
+      // from a `@1.4`/`@1.5` peer that omits the key IS its positive cloud
+      // statement - the reading `useEpicCommentRoomAvailability` and
+      // `useEpicHomeCacheSync` already make of the same frame. It has to
+      // reach the retained pair too: a promotion that completes under such a
+      // peer ends in exactly this frame, and a `local`/`promoting` retained
+      // across it would keep every gate that reads the retained statement
+      // (`isLocalHomedEpicHandle`, the dispatch-time comment and attachment
+      // gates, the local-home registry) answering "local-homed" for an epic
+      // the host now serves from the cloud. A `@1.6` peer's omission means
+      // UNKNOWN and leaves the retained pair standing, as before.
+      retainedDurabilityStatus = null;
+      retainedDurabilityPauseReason = null;
     }
     durabilityPromotionState = durable.promotionState ?? null;
     localProtection = durable.localProtection ?? null;

@@ -383,11 +383,15 @@ export function useEpicCommentRoomAvailability(): EpicCommentRoomAvailability {
   // statement rather than re-enabling comments while the new cycle settles.
   //
   // Reordering cannot regress the pre-`@1.4` population the legacy arm
-  // protects: `retainedDurabilityStatus` is written at exactly one site,
-  // gated on `durabilityStatus !== null`, so only a peer that has actually
-  // emitted a durability status can have one. A host that cannot speak the
-  // key never populates it, falls through, and still gets its released
-  // behaviour from the check below.
+  // protects: `retainedDurabilityStatus` is written only from a STATED
+  // durability status, so only a peer that has actually emitted one can have
+  // it. A host that cannot speak the key never populates it, falls through,
+  // and still gets its released behaviour from the check below. And the
+  // retained pair cannot outlive a `@1.4`/`@1.5` peer's cloud answer either:
+  // the replica clears it on such a peer's fresh frame without the key (the
+  // omission IS that peer's cloud statement, read the same way in the
+  // `hasFreshCloudSyncStatus` arm below), so a finished promotion does not
+  // keep the local-home exemption alive through the retained fallback.
   if (durabilityStatement.status !== null) {
     const unavailable = unavailableCommentRoomKind(
       durabilityStatement.status,

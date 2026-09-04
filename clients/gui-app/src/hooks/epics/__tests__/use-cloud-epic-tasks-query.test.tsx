@@ -521,6 +521,121 @@ describe("useCloudEpicTasksQuery", () => {
     expect(taskLightIds(result.current.tasks)).toEqual(["promoted-local"]);
   });
 
+  it("reopens the unavailable pages every host left for this user on promotion, and no other user's", async () => {
+    // The verdict that was missing is the SESSION's, and the account's cloud
+    // tasks are one list whichever host serves it. A History page host B
+    // settled to `unavailable` while the session was unverified has no hook
+    // mounted to observe the promotion, so the hook that IS mounted (bound to
+    // host A here) reopens it - otherwise a History tab bound to B, opened
+    // later, serves B's infinite-stale `unavailable` page for the rest of the
+    // session. The user boundary still holds: another account's page on the
+    // same host is not this session's to reopen.
+    const unavailablePage: ListTasksResponse = {
+      tasks: [],
+      hasMore: false,
+      completeness: {
+        cloudPage: "unavailable",
+        facets: "partial",
+        localRows: "present",
+        sort: "loaded-union",
+      },
+    };
+    const localPage: ListTasksResponse = {
+      tasks: [taskLight("promoted-local", "Served from this disk")],
+      hasMore: false,
+      completeness: {
+        cloudPage: "pending",
+        facets: "partial",
+        localRows: "present",
+        sort: "loaded-union",
+      },
+    };
+    const revalidatedPage: ListTasksResponse = {
+      ...localPage,
+      completeness: {
+        cloudPage: "settled",
+        facets: "server",
+        localRows: "present",
+        sort: "server",
+      },
+    };
+    mockHostClient.request.mockImplementation(
+      (_method: string, params: { readonly localFirstPhase?: string }) =>
+        params.localFirstPhase === "revalidate"
+          ? Promise.resolve(revalidatedPage)
+          : Promise.resolve(localPage),
+    );
+    useAuthStore.setState({
+      status: "unverified",
+      profile: {
+        userId: USER_ID,
+        userName: "Test User",
+        email: "test@example.com",
+      },
+      contextMetadata: { userId: USER_ID, username: "test-user" },
+      shareableTeams: [],
+      subscriptionStatus: null,
+    });
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    const otherHostKey = cloudEpicTasksQueryKey(
+      "host-other",
+      USER_ID,
+      LIST_CLOUD_TASKS_REQUEST,
+    );
+    const otherUserKey = cloudEpicTasksQueryKey(
+      "host-other",
+      "user-other",
+      LIST_CLOUD_TASKS_REQUEST,
+    );
+    queryClient.setQueryData(otherHostKey, unavailablePage);
+    queryClient.setQueryData(otherUserKey, unavailablePage);
+    const { result } = renderHook(
+      () => useCloudEpicTasksQuery(LIST_CLOUD_TASKS_REQUEST, { enabled: true }),
+      { wrapper: makeWrapper(queryClient) },
+    );
+    await waitFor(() => {
+      expect(result.current.query.data?.completeness?.cloudPage).toBe(
+        "unavailable",
+      );
+    });
+
+    act(() => {
+      useAuthStore.setState({
+        status: "signed-in",
+        profile: {
+          userId: USER_ID,
+          userName: "Test User",
+          email: "test@example.com",
+        },
+        contextMetadata: { userId: USER_ID, username: "test-user" },
+        shareableTeams: [],
+        subscriptionStatus: null,
+      });
+    });
+
+    await waitFor(() => {
+      expect(result.current.query.data?.completeness?.cloudPage).toBe(
+        "settled",
+      );
+    });
+    // Host B's page is reopened (nothing observes it here, so it rests at
+    // `pending` until a History bound to B mounts and revalidates it)...
+    expect(
+      queryClient.getQueryData<ListTasksResponse>(otherHostKey)?.completeness
+        ?.cloudPage,
+    ).toBe("pending");
+    // ... and the other account's page is untouched.
+    expect(
+      queryClient.getQueryData<ListTasksResponse>(otherUserKey)?.completeness
+        ?.cloudPage,
+    ).toBe("unavailable");
+  });
+
   it("starts a fresh bounded episode for History's raw refresh while the prior follow-up is unresolved", async () => {
     const firstLocalPage: ListTasksResponse = {
       tasks: [taskLight("first-local", "Before refresh")],

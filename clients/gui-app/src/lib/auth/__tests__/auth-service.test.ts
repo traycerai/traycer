@@ -3286,6 +3286,44 @@ describe("AuthService", () => {
       );
     });
 
+    it("reactive refresh-rejected says signed-out-everywhere, not expired, for the user's own epoch revoke", async () => {
+      // The LIVE twin of the stored-session case: a signed-in user whose next
+      // refresh lands on their own "sign out everywhere". Same hold as the
+      // expiry case above (unverified, file kept); the copy is the difference,
+      // and it travels on `rotated.rejection` - the outcome string alone
+      // cannot tell the two apart, which is how the live arm used to say
+      // "expired" for a revoke the stored arm already named.
+      const { service, host } = makeService();
+      await service.start();
+      await deviceSignIn(service, host, "dead-token");
+
+      restoreFetch();
+      restoreFetch = installFetch((input) => {
+        const url = typeof input === "string" ? input : String(input);
+        if (url === VALIDATION_URL) return status(401);
+        if (url === REFRESH_URL) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                error: "needs_reauth",
+                revocation_scope: "user_epoch",
+              }),
+              { status: 401, headers: { "content-type": "application/json" } },
+            ),
+          );
+        }
+        return status(500);
+      });
+
+      const outcome = await service.revalidateCurrentContext();
+      expect(outcome?.kind).toBe("rejected");
+      expect(useAuthStore.getState().status).toBe("unverified");
+      expect(service.getLastError()).toBe(AUTH_ERROR_SIGNED_OUT_EVERYWHERE);
+      expect(await host.tokenStore.get()).toEqual(
+        expectedStored("dead-token", "dead-token-refresh"),
+      );
+    });
+
     it("start() maps get() faults to store-unavailable (resolves, no runtime teardown)", async () => {
       const { service, host } = makeService();
       host.tokenStore.get = (): Promise<StoredCredentials | null> =>
