@@ -646,16 +646,24 @@ export function useHostStreamClientBindingFor(
   // the nonce bump alone would be paced by a streak of up to 30s that the
   // restored capability has already invalidated.
   //
-  // Unconditional, rather than gated on `client.isClosed()`. A binding whose
-  // client is healthy has an empty streak and rebuilds instantly, so the bump
-  // costs one re-acquire of an already-cached session; gating on the closed
-  // flag would instead miss the case this is for, where the demotion's rebuild
-  // is still sitting in its `setTimeout` and no client is published to ask.
+  // Not gated on `client.isClosed()`: a remote binding whose client is
+  // healthy has an empty streak and rebuilds instantly, so the bump costs one
+  // re-acquire of an already-cached session; gating on the closed flag would
+  // instead miss the case this is for, where the demotion's rebuild is still
+  // sitting in its `setTimeout` and no client is published to ask.
+  //
+  // REMOTE bindings only. Cloud authorization is consulted by the remote
+  // attach-grant path alone, so a local binding's backoff was never earned
+  // under the capability - and its healthy client would only be released by
+  // the effect cleanup, which for the sole holder closes the local
+  // `WsStreamClient` and reconnects every epic, chat and terminal stream on
+  // it, for a verdict the local plane never asked about.
   useCloudCapabilityRestored(
     useCallback(() => {
+      if (endpointKind !== "remote") return;
       rebuildBackoff.clearStreak();
       setRebuildNonce((nonce) => nonce + 1);
-    }, [rebuildBackoff]),
+    }, [endpointKind, rebuildBackoff]),
   );
 
   return binding?.client.isClosed() === true ? null : binding;

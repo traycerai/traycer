@@ -80,6 +80,7 @@ import { EpicsFilterPopover } from "@/components/epics/epics-filter-popover";
 import {
   EpicsListChatHostFilterUnsupported,
   EpicsListCloudPagePending,
+  EpicsListCloudPageUnavailable,
   EpicsListEmpty,
   EpicsListError,
   EpicsListFilteredEmpty,
@@ -1381,14 +1382,20 @@ function EpicsListBody(props: EpicsListBodyProps): ReactNode {
       // The notice renders HERE too, and this is the case it matters most for:
       // an empty History with no explanation is the strongest possible claim of
       // completeness, and it is the one a suppressed local projection or an
-      // unreachable cloud page produces.
+      // unreachable cloud page produces. With NO cloud page the body must not
+      // make that claim either: zero local rows is not evidence of an empty
+      // account.
       return (
         <>
           <HistoryCompletenessNotice
             completeness={completeness}
             cloudPagePending={cloudPagePending}
           />
-          <EpicsListEmpty />
+          {completeness?.cloudPage === "unavailable" ? (
+            <EpicsListCloudPageUnavailable />
+          ) : (
+            <EpicsListEmpty />
+          )}
         </>
       );
     }

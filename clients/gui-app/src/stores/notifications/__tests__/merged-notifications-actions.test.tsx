@@ -455,6 +455,57 @@ describe("useMergedNotificationsActions markAllAsRead composition", () => {
     }
   });
 
+  it("withholds whole-origin host writes in local mode once the verdict is withdrawn", async () => {
+    // A host below the partition floors: its feed is whole-origin, cloud-home
+    // replicas beside the local rows, and no `home` selector reaches it. A
+    // marker set on it by an `unverified` session becomes a cloud write
+    // deferred past the withheld verdict once the origin replicates.
+    bindHostClient();
+    notificationFeedMode.value = "local";
+    applyHostSnapshot(
+      [hostPrompt("prompt-a", 200, null), hostDone("done-unread", 100, null)],
+      { unreadCount: 2, attentionCount: 1 },
+    );
+    const { result } = renderHook(() => useMergedNotificationsActions(), {
+      wrapper: createWrapper(),
+    });
+
+    demoteToUnverified();
+    act(() => {
+      result.current.markAsRead("host:prompt-a");
+      result.current.markAllAsRead();
+      result.current.clearAll();
+    });
+
+    // Non-vacuity: the same three gestures dispatch once the verdict returns.
+    for (const method of [
+      "host.notifications.markRead",
+      "host.notifications.markAllRead",
+      "host.notifications.clearAll",
+    ]) {
+      expect(
+        hostRequestMock.mock.calls.some((call) => call[0] === method),
+      ).toBe(false);
+    }
+    signInForActions();
+    act(() => {
+      result.current.markAsRead("host:prompt-a");
+      result.current.markAllAsRead();
+      result.current.clearAll();
+    });
+    await waitFor(() => {
+      for (const method of [
+        "host.notifications.markRead",
+        "host.notifications.markAllRead",
+        "host.notifications.clearAll",
+      ]) {
+        expect(
+          hostRequestMock.mock.calls.some((call) => call[0] === method),
+        ).toBe(true);
+      }
+    });
+  });
+
   it("holds mark-all and pagination while a held cloud mode's host is re-negotiating, then dispatches", async () => {
     bindHostClient();
     notificationFeedMode.value = "cloud";

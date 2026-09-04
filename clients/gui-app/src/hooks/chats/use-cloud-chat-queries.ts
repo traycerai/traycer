@@ -134,6 +134,15 @@ export function useCloudChatList(
     client: args.client,
     method: "epic.listCloudChats",
     params,
+    // The verdict is re-read at DISPATCH, as the head, part and payload reads
+    // do: `enabled` below stops the next fetch, not the transient-retry
+    // episode already running when the session is demoted, and a same-user
+    // demotion retains the host credential the retries would ride.
+    preflight: () => {
+      if (!authorizesCloudCapability(useAuthStore.getState().status)) {
+        throw cloudChatReadRefusedWithoutVerdict("epic.listCloudChats");
+      }
+    },
     options: {
       enabled:
         args.enabled &&

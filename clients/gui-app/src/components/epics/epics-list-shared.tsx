@@ -186,6 +186,30 @@ export function EpicsListEmpty(): ReactNode {
   );
 }
 
+/**
+ * No local rows AND no cloud page. Not an empty account: the cloud leg failed
+ * or was withheld (an unverified session), so tasks that live only on other
+ * devices are simply not visible from here, and "No tasks yet" would be the
+ * one claim of completeness this page cannot make.
+ */
+export function EpicsListCloudPageUnavailable(): ReactNode {
+  return (
+    <div
+      className="flex flex-col items-center justify-center gap-2 py-16 text-center text-ui-sm text-muted-foreground"
+      data-testid="epics-list-cloud-page-unavailable"
+      role="status"
+    >
+      <p className="font-medium text-foreground">
+        Cloud tasks couldn&apos;t be loaded
+      </p>
+      <p>
+        This device holds no tasks of its own. Tasks from your other devices
+        will appear once the cloud can be reached.
+      </p>
+    </div>
+  );
+}
+
 export function EpicsListFilteredEmpty(): ReactNode {
   return (
     <div

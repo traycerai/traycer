@@ -701,6 +701,22 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
   });
 
   describe("completeness and pending cloud page", () => {
+    it("does not declare the account empty when the cloud page is unavailable", async () => {
+      testState.items = [];
+      testState.completeness = {
+        cloudPage: "unavailable",
+        facets: "partial",
+        localRows: "present",
+        sort: "loaded-union",
+      };
+      renderPanel("embedded", "/");
+
+      expect(
+        await screen.findByTestId("epics-list-cloud-page-unavailable"),
+      ).not.toBeNull();
+      expect(screen.queryByTestId("epics-list-empty")).toBeNull();
+    });
+
     it("explains when cloud tasks are unavailable instead of implying a complete local list", async () => {
       testState.items = [
         historyItem({ id: "history-local", epicId: "local", title: "Local" }),

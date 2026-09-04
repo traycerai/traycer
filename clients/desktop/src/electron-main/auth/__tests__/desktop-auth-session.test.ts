@@ -49,6 +49,37 @@ describe("DesktopAuthSession.revokeVerification", () => {
     expect(changes).toBe(0);
   });
 
+  it("retains a revoke for a bearer whose verification is still in flight, so its set lands unverified", () => {
+    // `authSessionSet` awaits JWKS before storing. The renderer publishes
+    // `bearer-2`, then receives the terminal verdict for it while main is
+    // still verifying: the revoke arrives FIRST, naming a bearer main does not
+    // hold yet. Dropping it as stale let the pending set complete as
+    // `verified` and re-enable the jar plane on a rejected credential.
+    const session = new DesktopAuthSession();
+    session.setVerified(SIGNED_IN);
+    let changes = 0;
+    session.on("change", () => {
+      changes += 1;
+    });
+
+    session.revokeVerification("bearer-2");
+    // The held session is untouched by a revoke it does not name.
+    expect(session.get()).toEqual({ ...SIGNED_IN, verified: true });
+    expect(changes).toBe(0);
+
+    session.setVerified({ ...SIGNED_IN, token: "bearer-2" });
+
+    expect(session.get()).toEqual({
+      ...SIGNED_IN,
+      token: "bearer-2",
+      verified: false,
+    });
+    expect(changes).toBe(1);
+    // Non-vacuity: a bearer nobody revoked still verifies.
+    session.setVerified({ ...SIGNED_IN, token: "bearer-3" });
+    expect(session.get().verified).toBe(true);
+  });
+
   it("is a no-op on a session main never verified", () => {
     const session = new DesktopAuthSession();
     session.set(SIGNED_IN);

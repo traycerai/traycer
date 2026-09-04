@@ -5,6 +5,7 @@ import type { ListTasksCompleteness } from "@traycer/protocol/host/epic/unary-sc
 import {
   EpicsListChatHostFilterUnsupported,
   EpicsListCloudPagePending,
+  EpicsListCloudPageUnavailable,
   EpicsListEmpty,
   EpicsListError,
   EpicsListFilteredEmpty,
@@ -283,13 +284,19 @@ function MobileHistoryListBody(props: MobileHistoryListBodyProps): ReactNode {
     );
   }
   if (props.items.length === 0 && !props.hasActiveFilters) {
+    // Same rule as the desktop panel: no cloud page means no claim of an
+    // empty account.
     return (
       <>
         <HistoryCompletenessNotice
           completeness={props.completeness}
           cloudPagePending={props.cloudPagePending}
         />
-        <EpicsListEmpty />
+        {props.completeness?.cloudPage === "unavailable" ? (
+          <EpicsListCloudPageUnavailable />
+        ) : (
+          <EpicsListEmpty />
+        )}
       </>
     );
   }

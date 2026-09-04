@@ -506,6 +506,24 @@ describe("<EpicsListPanel />", () => {
     });
   });
 
+  it("does not declare the account empty when the cloud page is unavailable", async () => {
+    testState.items = [];
+    testState.completeness = {
+      cloudPage: "unavailable",
+      facets: "partial",
+      localRows: "present",
+      sort: "loaded-union",
+    };
+    renderPanel("embedded", "/");
+
+    expect(
+      await screen.findByTestId("epics-list-cloud-page-unavailable"),
+    ).not.toBeNull();
+    // RED before the fix: "No tasks yet" rendered under the notice, a claim
+    // about an account whose tasks may all live on other devices.
+    expect(screen.queryByTestId("epics-list-empty")).toBeNull();
+  });
+
   it("shows the explicit cloud-pending state instead of an empty list", async () => {
     testState.items = [];
     testState.cloudPagePending = true;

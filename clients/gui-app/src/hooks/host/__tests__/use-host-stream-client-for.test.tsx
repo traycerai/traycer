@@ -51,6 +51,7 @@ vi.mock("@/providers/use-runner-host", () => ({
 }));
 
 import { useHostStreamClientFor } from "@/hooks/host/use-host-stream-client-for";
+import { useAuthStore } from "@/stores/auth/auth-store";
 
 // The SPINE `useHostClient` hands back in this suite - never bound to any one
 // host (redesign P4.2 deleted the active slot `.bind()` used to fill).
@@ -209,6 +210,39 @@ describe("useHostStreamClientFor", () => {
     await Promise.resolve();
     expect(closeSpy).toHaveBeenCalledTimes(2);
     expect(closeSpy.mock.contexts[1]).toBe(second);
+  });
+
+  it("keeps a healthy LOCAL client across a cloud-capability restoration", async () => {
+    // The restoration rebuild exists for remote bindings, whose attach grant
+    // consults the verdict. A local binding never asked; bumping it too
+    // released the sole holder's lease and closed the working local socket.
+    globalClientRef.value = buildGlobalClient(true);
+    const profile = { userId: "u1", userName: "U", email: "u@example.com" };
+    useAuthStore
+      .getState()
+      .setUnverifiedSession(profile, { userId: "u1", username: "U" });
+    try {
+      const { result } = renderHook(() =>
+        useHostStreamClientFor(mockLocalHostEntry, null),
+      );
+      const first = result.current;
+      expect(first).toBeInstanceOf(WsStreamClient);
+
+      act(() => {
+        useAuthStore
+          .getState()
+          .setSignedIn(profile, { userId: "u1", username: "U" }, []);
+      });
+
+      // RED before the fix: a new instance, the first one closed.
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(result.current).toBe(first);
+      expect(first?.isClosed()).toBe(false);
+    } finally {
+      useAuthStore.getState().setSignedOut();
+    }
   });
 
   it("replaces a client that closes while its host identity remains unchanged", async () => {

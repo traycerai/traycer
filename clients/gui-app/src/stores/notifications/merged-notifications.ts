@@ -725,6 +725,24 @@ function cloudAuthorizedNow(): boolean {
   return authorizesCloudCapability(useAuthStore.getState().status);
 }
 
+/**
+ * Whether a host-plane write may go out now.
+ *
+ * A PARTITIONED call carries `home: "local"` (cloud mode's `markRead` and
+ * `markAllRead`) and touches local-home rows only, which need no cloud
+ * verdict. A WHOLE-ORIGIN call - every host mutation in `local` mode, where
+ * the host is below the partition floors and its feed carries cloud-home
+ * replicas beside the local rows, and `clearAll@1.0` in either mode, which
+ * has no selector - reaches those replicas. A session whose verdict was
+ * withdrawn (`unverified`) is still admitted to the host lane, so without
+ * this gate a marker it set there became a cloud write deferred past the
+ * authorization that withheld it, once the origin replicated. Same rule as
+ * the Notifications-room lanes, same dispatch-time read.
+ */
+function hostOriginWriteAuthorized(partitioned: boolean): boolean {
+  return partitioned || cloudAuthorizedNow();
+}
+
 export function useMergedNotificationsActions(): MergedNotificationsActions {
   const feedMode = useNotificationFeedMode();
   // See `HeldNotificationFeedModeResult.settling`: partition-dependent unary
@@ -1189,6 +1207,9 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
           // unbound mutation whose only visible effect is an error toast on a
           // row that was never going to update.
           if (client === null || notificationHostId === null) return;
+          // Partitioned only in cloud mode (`home: "local"` above); in local
+          // mode this reaches the host's whole origin store.
+          if (!hostOriginWriteAuthorized(feedMode === "cloud")) return;
           markHostRead.mutate({
             feedId,
             sourceId: parsed.sourceId,
@@ -1296,7 +1317,14 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
         // `client !== null`. The local global/app-local mark-all above always
         // run. Marking read never resolves the underlying question or
         // permission request.
-        if (client !== null && notificationHostId !== null) {
+        //
+        // Whole-origin (no `home` selector reaches a host below the floors),
+        // so it takes the verdict gate too - see `hostOriginWriteAuthorized`.
+        if (
+          client !== null &&
+          notificationHostId !== null &&
+          hostOriginWriteAuthorized(false)
+        ) {
           markHostAllRead.mutate({ beforeUpdatedAt: Date.now() });
         }
       },
@@ -1366,7 +1394,18 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
         // here; dropping the host leg in mixed mode instead would leave the
         // local partition uncleared and break the same promise in the other
         // direction. Tracked on #889.
-        if (client !== null && notificationHostId !== null) {
+        //
+        // What IS gated is the verdict: a whole-origin clear from a session
+        // that no longer holds one would delete cloud-home replicas the
+        // cloud leg below deliberately refuses to touch
+        // (`hostOriginWriteAuthorized`). The renderer-local lanes above have
+        // already cleared, so the button's promise is kept for what this
+        // session may speak for.
+        if (
+          client !== null &&
+          notificationHostId !== null &&
+          hostOriginWriteAuthorized(false)
+        ) {
           clearHostAll.mutate({ beforeUpdatedAt: Date.now() });
         }
         if (feedMode !== "cloud" || cloudVersion === null) return;
