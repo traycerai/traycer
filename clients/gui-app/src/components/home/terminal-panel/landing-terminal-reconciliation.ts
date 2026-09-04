@@ -172,23 +172,20 @@ export function reconcileLandingTerminalTabs(
     return [name === classified.name ? classified : { ...classified, name }];
   });
 
-  const adoptedTabs = sessions.flatMap((session) => {
+  // Sign-ins first, through the one adoption rule both arms share (it also
+  // takes an exited session, which an ordinary adoption never does), then
+  // ordinary running sessions the registry does not claim.
+  const signInTabs = adoptListedProviderLoginSessions({
+    ...input,
+    tabs: survivingTabs,
+  });
+  const ordinaryTabs = sessions.flatMap((session) => {
     if (
       session.status !== "running" ||
-      matchedSessionIds.has(session.sessionId)
+      matchedSessionIds.has(session.sessionId) ||
+      input.providerLoginProviderFor(session.sessionId) !== null
     ) {
       return [];
-    }
-    const originProviderId = input.providerLoginProviderFor(session.sessionId);
-    if (originProviderId !== null) {
-      return [
-        providerLoginLandingTab({
-          instanceId: input.mintInstanceId(),
-          hostId: input.activeHostId,
-          session,
-          providerId: originProviderId,
-        }),
-      ];
     }
     const tab: LandingTerminalTabRef = {
       instanceId: input.mintInstanceId(),
@@ -200,6 +197,7 @@ export function reconcileLandingTerminalTabs(
     };
     return [tab];
   });
+  const adoptedTabs = [...signInTabs, ...ordinaryTabs];
   const nextTabs = [...tabs, ...adoptedTabs];
   const activeInstanceId = resolveActiveInstanceId(
     input.activeInstanceId,
@@ -261,6 +259,16 @@ function providerLoginLandingTab(input: {
  * A tombstoned session (closed here, kill still in flight) is excluded for the
  * same reason the legacy arm excludes it: adopting it back would resurrect a
  * tab the user just closed.
+ *
+ * An EXITED sign-in is adopted too, unlike an ordinary session. A sign-in tab
+ * keeps its ended state on purpose - that is the "Start again" surface - and
+ * a short-lived sign-in can end before this window learns what it was, while
+ * the host still lists it through its exit grace window; adopting running
+ * sessions only would leave this window without that surface for good. The
+ * one exited sign-in NOT adopted is one the same provider has a running
+ * successor for on this host: a restart kills its predecessor, and the
+ * window that pressed it retires that tab, so this window should not raise
+ * the dead one beside the live one.
  */
 export function adoptListedProviderLoginSessions(
   input: Pick<
@@ -278,20 +286,31 @@ export function adoptListedProviderLoginSessions(
       .filter((tab) => tab.hostId === input.activeHostId)
       .map((tab) => tab.sessionId),
   );
-  return input.sessions.flatMap((session) => {
-    if (
-      session.scope.kind !== "independent" ||
-      session.sessionKind !== "terminal" ||
-      session.status !== "running" ||
-      tabbedSessionIds.has(session.sessionId) ||
-      input.excludedSessionKeys.has(
+  const listed = input.sessions.filter(
+    (session) =>
+      session.scope.kind === "independent" &&
+      session.sessionKind === "terminal" &&
+      !input.excludedSessionKeys.has(
         terminalSessionKey(input.activeHostId, session.sessionId),
-      )
+      ),
+  );
+  const providersWithRunningSignIn = new Set(
+    listed.flatMap((session) => {
+      if (session.status !== "running") return [];
+      const providerId = input.providerLoginProviderFor(session.sessionId);
+      return providerId === null ? [] : [providerId];
+    }),
+  );
+  return listed.flatMap((session) => {
+    if (tabbedSessionIds.has(session.sessionId)) return [];
+    const providerId = input.providerLoginProviderFor(session.sessionId);
+    if (providerId === null) return [];
+    if (
+      session.status !== "running" &&
+      providersWithRunningSignIn.has(providerId)
     ) {
       return [];
     }
-    const providerId = input.providerLoginProviderFor(session.sessionId);
-    if (providerId === null) return [];
     return [
       providerLoginLandingTab({
         instanceId: input.mintInstanceId(),

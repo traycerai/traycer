@@ -1530,6 +1530,9 @@ describe("<LandingTerminalPanel />", () => {
     await waitFor(() => {
       expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
     });
+    // Through the rendered panel too: the adopted tab is reachable, not only
+    // stored.
+    await screen.findByRole("tab", { name: /Reasonix sign-in/ });
     const tab = useLandingTerminalStore.getState().tabs[0];
     expect(tab).toMatchObject({
       sessionId: "term-peer-sign-in",
@@ -1573,6 +1576,7 @@ describe("<LandingTerminalPanel />", () => {
     await waitFor(() => {
       expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
     });
+    await screen.findByRole("tab", { name: /Reasonix sign-in/ });
     expect(useLandingTerminalStore.getState().tabs[0]).toMatchObject({
       sessionId: "term-peer-sign-in",
       origin: "provider-login",

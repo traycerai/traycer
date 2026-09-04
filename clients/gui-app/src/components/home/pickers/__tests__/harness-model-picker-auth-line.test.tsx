@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
@@ -371,7 +371,7 @@ describe("<PickerProviderAuthLine />", () => {
     // terminal from a chat natively - rather than "finish in that terminal"
     // when nothing here opened one.
     const note = screen.getByRole("note", { name: "Setup required" });
-    const items = Array.from(note.querySelectorAll("ol li"));
+    const items = within(note).getAllByRole("listitem");
     expect(items.map((item) => item.textContent)).toEqual([
       "Open a chat and choose \u201CSet up in terminal\u201D from its model picker. This host's version can open Reasonix's setup wizard from a chat, but not from the start page.",
       "Paste your provider API key when asked (DeepSeek by default).",
@@ -409,7 +409,7 @@ describe("<PickerProviderAuthLine />", () => {
     // the setup wizard from a chat" is only true of a RECORDED pre-scope
     // manifest, and there is no host here to have recorded one. The
     // claim-free copy leads with the manual route.
-    const items = Array.from(note.querySelectorAll("ol li"));
+    const items = within(note).getAllByRole("listitem");
     expect(items.map((item) => item.textContent)).toEqual([
       "Paste your provider API key when asked (DeepSeek by default).",
       "Refresh this list.",

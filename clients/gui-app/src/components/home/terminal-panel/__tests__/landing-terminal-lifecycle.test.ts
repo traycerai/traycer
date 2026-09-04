@@ -516,6 +516,30 @@ describe("landing terminal lifecycle", () => {
     expect(result.adoptedTabs[0]?.name).not.toBe("project · New Terminal");
   });
 
+  it("adopts an unmatched EXITED session as a sign-in tab when the registry claims it, but never as an ordinary tab", () => {
+    const result = reconcileLandingTerminalTabs({
+      tabs: [],
+      activeInstanceId: null,
+      activeHostId: HOST_A,
+      sessions: [
+        session({ sessionId: "signin-session", status: "exited" }),
+        session({ sessionId: "plain-session", status: "exited" }),
+      ],
+      excludedSessionKeys: new Set(),
+      mintInstanceId: () => "adopted-ended-instance",
+      providerLoginProviderFor: (sessionId) =>
+        sessionId === "signin-session" ? "reasonix" : null,
+    });
+
+    // The same rule the matched arm applies (a sign-in tab survives its
+    // session's exit): the registry-claimed session becomes the ended-state
+    // tab with its restart, the plain one stays dead and unadopted.
+    expect(result.adoptedTabs.map((tab) => tab.sessionId)).toEqual([
+      "signin-session",
+    ]);
+    expect(result.adoptedTabs[0]?.origin).toBe("provider-login");
+  });
+
   it("adopts the same unmatched running session as an ordinary tab when providerLoginProviderFor returns null", () => {
     const result = reconcileLandingTerminalTabs({
       tabs: [],
@@ -1004,7 +1028,7 @@ describe("adoptListedProviderLoginSessions", () => {
     expect(adopted).toEqual([]);
   });
 
-  it("adopts nothing for a tombstoned session or one that is not running", () => {
+  it("adopts nothing for a tombstoned session", () => {
     const tombstoned = adoptListedProviderLoginSessions({
       tabs: [],
       activeHostId: HOST_A,
@@ -1017,16 +1041,44 @@ describe("adoptListedProviderLoginSessions", () => {
       providerLoginProviderFor,
     });
     expect(tombstoned).toEqual([]);
+  });
 
-    const exited = adoptListedProviderLoginSessions({
+  it("adopts an EXITED registry-claimed session - the ended-state tab is the 'Start again' surface", () => {
+    // A short-lived sign-in can end before this window learns what it was;
+    // the host still lists it through its exit grace window. Running-only
+    // adoption would leave this window without the restart surface for good.
+    const adopted = adoptListedProviderLoginSessions({
       tabs: [],
       activeHostId: HOST_A,
       sessions: [session({ sessionId: "signin-session", status: "exited" })],
       excludedSessionKeys: new Set(),
-      mintInstanceId: () => "never",
+      mintInstanceId: () => "adopted-ended-instance",
       providerLoginProviderFor,
     });
-    expect(exited).toEqual([]);
+    expect(adopted.map((entry) => entry.instanceId)).toEqual([
+      "adopted-ended-instance",
+    ]);
+    expect(adopted[0]?.origin).toBe("provider-login");
+  });
+
+  it("does not adopt an exited sign-in whose provider has a RUNNING sign-in on the host - the predecessor a restart killed", () => {
+    const adopted = adoptListedProviderLoginSessions({
+      tabs: [],
+      activeHostId: HOST_A,
+      sessions: [
+        session({ sessionId: "signin-session", status: "exited" }),
+        session({ sessionId: "signin-session-2", status: "running" }),
+      ],
+      excludedSessionKeys: new Set(),
+      mintInstanceId: () => "adopted-live-instance",
+      providerLoginProviderFor: (sessionId) =>
+        sessionId.startsWith("signin-session") ? "reasonix" : null,
+    });
+    // The window that pressed "Start again" retired the dead tab; this one
+    // must not raise it beside the live successor.
+    expect(adopted.map((entry) => entry.sessionId)).toEqual([
+      "signin-session-2",
+    ]);
   });
 
   it("does not let another host's tab for the same session id stand in", () => {
