@@ -22,6 +22,7 @@ import {
   type BrowserTilePlacement,
 } from "./browser-tile-placement";
 import { useBrowserSessionsContext } from "@/components/epic-canvas/renderers/browser-sessions-context";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import {
   useElectronTabBindingOnHost,
@@ -391,13 +392,20 @@ function BrowserTabRebindWait(props: {
  * to spell the control too.
  *
  * Pending is the note's own state rather than a prop, because the only thing
- * that ends it is this promise. A resolve deliberately leaves it pending: the
- * binding arrives through this window's ordinary `createElectronTab` path and
- * unmounts the whole branch, so clearing it here would flash the button back
- * for a frame. A rejection is the reader's answer - the host's reason, toasted
- * - and puts the button back. `role="status"` rather than `alert` throughout:
- * nothing is wrong, and the copy change is exactly the kind of live update a
- * status region is for.
+ * that ends it is this promise - and it is cleared on SETTLE, not only on
+ * rejection. A successful move normally unmounts this whole branch before its
+ * ack even arrives: the host publishes `sessionUpdated` with `boundWindowId`
+ * naming this window from `handleElectronTabProvisioned`, ahead of the frame
+ * router's ack, so there is no button left to flash back. What the `finally`
+ * is for is the other resolve - an `ok` ack whose binding does not land here,
+ * which the host's degrade-to-attach arm can produce - where clearing only on
+ * rejection would leave a disabled button forever.
+ *
+ * The pending state is `disabled` plus an inline spinner and NEVER a swapped
+ * label (`AGENTS.md`'s pending-UX rule): the copy above stays put and the
+ * button keeps saying what it does. A rejection is the reader's answer - the
+ * host's reason, toasted. `role="status"` rather than `alert`: nothing is
+ * wrong, this is a standing fact about where the tab is.
  */
 function BrowserTabOtherWindowNote(props: {
   readonly onShowHere: () => Promise<void>;
@@ -406,14 +414,17 @@ function BrowserTabOtherWindowNote(props: {
   const onShowHere = props.onShowHere;
   const showHere = useCallback(() => {
     setMoving(true);
-    void onShowHere().catch((error: unknown) => {
-      toast.error(
-        error instanceof Error
-          ? error.message
-          : "Couldn't show the browser tab here. Try again.",
-      );
-      setMoving(false);
-    });
+    void onShowHere()
+      .catch((error: unknown) => {
+        toast.error(
+          error instanceof Error
+            ? error.message
+            : "Couldn't show the browser tab here. Try again.",
+        );
+      })
+      .finally(() => {
+        setMoving(false);
+      });
   }, [onShowHere]);
 
   return (
@@ -423,15 +434,23 @@ function BrowserTabOtherWindowNote(props: {
         data-testid="browser-tab-other-window"
         className="text-ui-sm text-muted-foreground"
       >
-        {moving ? "Moving…" : "Open in your other window"}
+        Open in your other window
       </div>
       <Button
         type="button"
         variant="outline"
         size="sm"
         disabled={moving}
+        aria-live="polite"
         onClick={showHere}
       >
+        {moving ? (
+          <AgentSpinningDots
+            className="text-current"
+            testId="browser-tab-show-here-spinner"
+            variant={undefined}
+          />
+        ) : null}
         Show here
       </Button>
     </div>

@@ -1286,7 +1286,7 @@ describe("BrowserSessionTile lifecycle projection", () => {
     expect(harness.moveTab).toHaveBeenCalledWith("tab-1");
   });
 
-  it("reads Moving… with the button disabled while the move is unresolved", async () => {
+  it("disables the button and shows a spinner, with the copy unchanged, while the move is unresolved", async () => {
     let releaseMove: () => void = () => undefined;
     harness.moveTab.mockImplementation(
       () =>
@@ -1299,16 +1299,55 @@ describe("BrowserSessionTile lifecycle projection", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Show here" }));
 
-    const note = await screen.findByTestId("browser-tab-other-window");
-    expect(note.textContent).toBe("Moving…");
+    // The pending-UX rule: `disabled` plus an inline spinner, and NEVER a
+    // swapped label or swapped copy. The note still states where the tab is,
+    // because that has not stopped being true while the move is in flight.
+    const spinner = await screen.findByTestId("browser-tab-show-here-spinner");
+    expect(spinner).toBeTruthy();
+    expect(isDisabled(screen.getByRole("button", { name: "Show here" }))).toBe(
+      true,
+    );
+    expect(screen.getByTestId("browser-tab-other-window").textContent).toBe(
+      "Open in your other window",
+    );
+
+    releaseMove();
+  });
+
+  it("re-enables the button when a move resolves without a binding arriving", async () => {
+    let releaseMove: () => void = () => undefined;
+    harness.moveTab.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseMove = resolve;
+        }),
+    );
+    harness.items = [sessionBoundTo("window-b")];
+    renderTile();
+
+    fireEvent.click(screen.getByRole("button", { name: "Show here" }));
+    // Pinned disabled FIRST, and deliberately: the button is enabled at rest,
+    // so asserting the re-enable alone would pass against a `moving` that
+    // never became true at all.
+    await screen.findByTestId("browser-tab-show-here-spinner");
     expect(isDisabled(screen.getByRole("button", { name: "Show here" }))).toBe(
       true,
     );
 
-    // Leaves the promise unresolved deliberately: a resolve unmounts this
-    // branch through the ordinary createElectronTab path, not through this
-    // note - so nothing here asserts on it settling.
     releaseMove();
+
+    // A successful move normally unmounts this branch before its ack lands.
+    // This is the OTHER resolve: the host's degrade-to-attach arm answers
+    // `ok` without this window's binding arriving, so the branch stays
+    // mounted - and clearing `moving` only on rejection would strand the
+    // reader on a permanently disabled button.
+    await waitFor(() => {
+      expect(
+        isDisabled(screen.getByRole("button", { name: "Show here" })),
+      ).toBe(false);
+    });
+    expect(screen.queryByTestId("browser-tab-show-here-spinner")).toBeNull();
+    expect(toastHarness.error).not.toHaveBeenCalled();
   });
 
   it("toasts the rejection reason and restores the button on a refused move", async () => {
