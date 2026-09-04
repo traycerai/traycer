@@ -53,6 +53,24 @@ export type DiffTabToolbarViewPatch =
   | { readonly indicatorStyle: GitDiffIndicatorStyle }
   | { readonly collapsedFilePaths: ReadonlyArray<string> };
 
+/**
+ * The toolbar's open-this-file action. One object rather than four parallel
+ * props so "no action" is a single `null` - the label and pending state cannot
+ * outlive the handler, and a caller with no file to open cannot be asked for a
+ * label it would never render.
+ */
+export interface DiffTabToolbarOpenFile {
+  readonly onClick: () => void;
+  /**
+   * Names the resolved default target, because it is not always an editor - a
+   * Finder default reveals the file in Finder, and "Open in editor" would be
+   * describing something else.
+   */
+  readonly label: string;
+  readonly disabled: boolean;
+  readonly pending: boolean;
+}
+
 interface DiffTabToolbarProps {
   readonly view: DiffTabToolbarView;
   readonly onViewPatch: (patch: DiffTabToolbarViewPatch) => void;
@@ -65,19 +83,12 @@ interface DiffTabToolbarProps {
   // `null` hides the refresh control entirely (snapshot diffs are immutable -
   // there is nothing to re-fetch).
   readonly onRefresh: (() => void) | null;
-  // Editor-open action; null hides the row (e.g. bundle tiles with no single file).
-  readonly onOpenFile: (() => void) | null;
-  readonly openFileDisabled: boolean;
-  readonly openFileOpening: boolean;
-  /**
-   * Names the resolved default target, because it is not always an editor -
-   * a Finder default opens the file revealed in Finder, and "Open in editor"
-   * would be describing something else.
-   */
-  readonly openFileLabel: string;
+  // `null` hides the row (e.g. bundle tiles with no single file).
+  readonly openFile: DiffTabToolbarOpenFile | null;
 }
 
 export function DiffTabToolbar(props: DiffTabToolbarProps) {
+  const openFile = props.openFile;
   const view = props.view;
   const isSplit = view.mode === "split";
 
@@ -235,18 +246,18 @@ export function DiffTabToolbar(props: DiffTabToolbarProps) {
               }
             />
           </div>
-          {props.onOpenFile !== null ? (
+          {openFile !== null ? (
             <>
               <Separator className="my-1" />
               <Button
                 type="button"
                 variant="ghost"
                 size="sm"
-                onClick={props.onOpenFile}
-                disabled={props.openFileDisabled}
+                onClick={openFile.onClick}
+                disabled={openFile.disabled}
                 className="h-7 w-full justify-start font-normal text-foreground"
               >
-                {props.openFileOpening ? (
+                {openFile.pending ? (
                   <AgentSpinningDots
                     className="size-4 text-muted-foreground"
                     testId="diff-tab-open-editor-spinner"
@@ -255,7 +266,7 @@ export function DiffTabToolbar(props: DiffTabToolbarProps) {
                 ) : (
                   <ExternalLink className="size-4 text-muted-foreground" />
                 )}
-                {props.openFileLabel}
+                {openFile.label}
               </Button>
             </>
           ) : null}

@@ -390,10 +390,16 @@ function GitDiffTileToolbar(props: GitDiffTileToolbarProps): ReactNode {
       collapseAll={collapseAll}
       refreshing={refresh.refreshing}
       onRefresh={refresh.trigger}
-      onOpenFile={props.onOpenFile !== null ? handleOpenFile : null}
-      openFileDisabled={openFileOpening}
-      openFileOpening={openFileOpening}
-      openFileLabel={openTargetActionLabel(effectiveEditor)}
+      openFile={
+        props.onOpenFile !== null
+          ? {
+              onClick: handleOpenFile,
+              label: openTargetActionLabel(effectiveEditor),
+              disabled: openFileOpening,
+              pending: openFileOpening,
+            }
+          : null
+      }
     />
   );
 }

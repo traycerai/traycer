@@ -47,12 +47,8 @@ const FINDER_ENTRY: OpenTargetEntry = { id: FINDER_TARGET, label: "Finder" };
  * editor because the id is not worth spelling out on a one-line button, and
  * specific for Finder because "Open in editor" would name the wrong app.
  */
-export const OPEN_IN_EDITOR_ACTION_LABEL = "Open in editor";
-
 export function openTargetActionLabel(target: DefaultOpenTarget): string {
-  return target === FINDER_TARGET
-    ? "Reveal in Finder"
-    : OPEN_IN_EDITOR_ACTION_LABEL;
+  return target === FINDER_TARGET ? "Reveal in Finder" : "Open in editor";
 }
 
 /** Appends Finder to an editor catalog when that host may be offered it. */

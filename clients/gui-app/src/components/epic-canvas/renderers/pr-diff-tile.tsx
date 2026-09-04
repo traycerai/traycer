@@ -35,7 +35,6 @@ import {
 import { DiffBundleLoadingSkeleton } from "@/components/epic-canvas/git-diff/diff-bundle-loading-skeleton";
 import { PrLocalDiffBody } from "@/components/epic-canvas/pr/pr-local-diff-body";
 import { PrDetailDeadTileBanner } from "./dead-tile-banner";
-import { OPEN_IN_EDITOR_ACTION_LABEL } from "@/lib/editor/editor-menu-catalog";
 
 interface PrDiffTileProps {
   readonly node: PrDiffTileRef;
@@ -415,10 +414,7 @@ function PrDiffTileLive(props: PrDiffTileProps): ReactNode {
           // No editor-open row: a PR diff spans many files and the range's
           // endpoints are commits, so there is no single path to hand an
           // editor. The per-file sections keep their own affordances.
-          onOpenFile={null}
-          openFileLabel={OPEN_IN_EDITOR_ACTION_LABEL}
-          openFileDisabled={false}
-          openFileOpening={false}
+          openFile={null}
         />
       }
     >
