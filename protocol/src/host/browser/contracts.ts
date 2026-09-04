@@ -489,6 +489,12 @@ const electronTabCreateReasonSchema = z.enum([
   "session-bootstrap",
   "agent-open",
   "restore",
+  // A `moveTab`: the guest already exists under ANOTHER window of the same
+  // desktop, and this create asks main to transfer it to the sender's window
+  // without touching its WebContents. Like `restore`, it may replace a birth
+  // the window already holds for the tab - a window that moved a tab away
+  // still remembers it, and the move back must not be refused for that.
+  "move",
 ]);
 export type ElectronTabCreateReason = z.infer<
   typeof electronTabCreateReasonSchema
@@ -881,6 +887,24 @@ export const browserSessionsClientFrameSchema = z.discriminatedUnion("kind", [
     .strict(),
   z
     .object({
+      // "Show this tab HERE": the electron-capable tile asking that a tab
+      // currently bound in another window of the same desktop be moved into
+      // the window that asked, page state intact. A distinct kind rather than
+      // a flag on `attachTab`, because the tile sends `attachTab` on every
+      // activation and that frame must stay reject-never-relocate by
+      // construction; only this one may displace a live guest.
+      //
+      // Resolved inside this stream's scope like `attachTab`, answered with
+      // the same `actionAck`. Every rejection (an agent is driving the tab,
+      // a birth is in flight, the session is closing) is an ordinary answer
+      // whose reason the sender shows and then puts its button back.
+      kind: z.literal("moveTab"),
+      ...requestFrameFields,
+      tabId: z.string(),
+    })
+    .strict(),
+  z
+    .object({
       kind: z.literal("cdpResult"),
       ...requestFrameFields,
       result: browserCdpResultSchema,
@@ -1195,6 +1219,10 @@ export const BROWSER_SESSIONS_UX_CLIENT_FRAME_KINDS = [
   // that renderer holds, and it carries no jar material and no capability -
   // the host authorizes it against the stream's scope like every other one.
   "attachTab",
+  // Its sibling for a tab bound in ANOTHER window of this desktop. Renderer
+  // frame for the same reason: the target window is the fact only the
+  // renderer holds, and the host authorizes it against the stream's scope.
+  "moveTab",
 ] as const;
 
 export type BrowserSessionsUxClientFrame = Extract<

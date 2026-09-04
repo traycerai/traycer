@@ -67,6 +67,14 @@ const RENDERER_FRAMES: Record<string, Record<string, unknown>> = {
     requestId: "request-1",
     tabId: "tab-1",
   },
+  // Same coverage role as `attachTab` above: the coordinator records what it
+  // sent without validating the shape.
+  moveTab: {
+    kind: "moveTab",
+    hasBinaryPayload: false,
+    requestId: "request-1",
+    tabId: "tab-1",
+  },
 };
 
 describe("a renderer may only ask for the tab requests", () => {
