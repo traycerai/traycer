@@ -63,6 +63,7 @@ import {
 } from "@/components/epic-canvas/git-diff/diff-tab-toolbar";
 import { SnapshotDiffSourceUnavailableBanner } from "./dead-tile-banner";
 import { BoundedTileLoad } from "./tile-host-load-state";
+import { OPEN_IN_EDITOR_ACTION_LABEL } from "@/lib/editor/editor-menu-catalog";
 
 const SNAPSHOT_DIFF_LOADING_FIND_MESSAGE =
   "Snapshot diff content is still loading.";
@@ -181,6 +182,7 @@ const SnapshotDiffTileShell = memo(function SnapshotDiffTileShell(
         refreshing={false}
         onRefresh={null}
         onOpenFile={null}
+        openFileLabel={OPEN_IN_EDITOR_ACTION_LABEL}
         openFileDisabled={false}
         openFileOpening={false}
       />

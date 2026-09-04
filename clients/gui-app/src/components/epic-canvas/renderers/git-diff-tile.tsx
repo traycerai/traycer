@@ -59,6 +59,7 @@ import { GitErrorBlock } from "@/components/epic-canvas/git-diff/git-error-block
 import { GitWatcherStatusNotice } from "@/components/epic-canvas/git-diff/git-watcher-status-notice";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { useEffectiveDefaultEditor } from "@/hooks/editor/use-effective-default-editor";
+import { openTargetActionLabel } from "@/lib/editor/editor-menu-catalog";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
 import { BoundedTileLoad } from "@/components/epic-canvas/renderers/tile-host-load-state";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
@@ -392,6 +393,7 @@ function GitDiffTileToolbar(props: GitDiffTileToolbarProps): ReactNode {
       onOpenFile={props.onOpenFile !== null ? handleOpenFile : null}
       openFileDisabled={openFileOpening}
       openFileOpening={openFileOpening}
+      openFileLabel={openTargetActionLabel(effectiveEditor)}
     />
   );
 }

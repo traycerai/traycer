@@ -69,6 +69,12 @@ interface DiffTabToolbarProps {
   readonly onOpenFile: (() => void) | null;
   readonly openFileDisabled: boolean;
   readonly openFileOpening: boolean;
+  /**
+   * Names the resolved default target, because it is not always an editor -
+   * a Finder default opens the file revealed in Finder, and "Open in editor"
+   * would be describing something else.
+   */
+  readonly openFileLabel: string;
 }
 
 export function DiffTabToolbar(props: DiffTabToolbarProps) {
@@ -249,7 +255,7 @@ export function DiffTabToolbar(props: DiffTabToolbarProps) {
                 ) : (
                   <ExternalLink className="size-4 text-muted-foreground" />
                 )}
-                Open in editor
+                {props.openFileLabel}
               </Button>
             </>
           ) : null}
