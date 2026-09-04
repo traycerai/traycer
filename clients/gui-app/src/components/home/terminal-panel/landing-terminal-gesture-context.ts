@@ -41,11 +41,6 @@ export interface LandingTerminalGestureValue {
   /** The pending gesture's generation (for settlement matching), else `null`. */
   readonly pendingGeneration: number | null;
   /**
-   * The draft the current open episode belongs to. The empty-panel auto-spawn
-   * is pinned to it so navigating to a different draft never spawns there.
-   */
-  readonly openEpisodeDraftId: string | null;
-  /**
    * The workspace source for the EFFECTIVE draft (captured draft while pending).
    * Consumers (the folder picker) write through this so a folder lands in the
    * captured draft, not the focused partner.

@@ -25,7 +25,6 @@ import {
   type DiffViewerPreferences,
   type DiffViewerPreferencesPatch,
 } from "@/lib/diff/diff-viewer-preferences";
-import { type EditorId } from "@traycer/protocol/host";
 import { worktreeBranchPrefixError } from "@/lib/worktree/worktree-branch-prefix-validation";
 import {
   DEFAULT_NOTIFICATION_CHIME_SOUNDS,
@@ -35,6 +34,7 @@ import {
   type NotificationChimeSound,
   type NotificationChimeSoundsByEvent,
 } from "@/lib/notifications/notification-chime";
+import type { DefaultOpenTarget } from "@/lib/editor/editor-menu-catalog";
 
 export type ThemeMode = "system" | "light" | "dark";
 export type EpicNodeIconColorMode = "byType" | "none";
@@ -161,7 +161,12 @@ export interface SettingsState {
   terminalCursorBlink: boolean;
   artifactIconColorMode: EpicNodeIconColorMode;
   artifactIconColors: EpicNodeIconColors;
-  defaultEditor: EditorId | null;
+  /**
+   * What the open-in-editor surfaces default to. Widened past `EditorId`
+   * because Finder is a first-class choice in those menus; `"system"` is not,
+   * being a PDF routing decision rather than something a user picks.
+   */
+  defaultEditor: DefaultOpenTarget | null;
   /**
    * Voice input (on-device dictation). Opt-in: enabling it surfaces the mic
    * button in the composer and prompts the host to download the STT model.
@@ -242,7 +247,7 @@ export interface SettingsState {
   setArtifactIconColorMode: (mode: EpicNodeIconColorMode) => void;
   setArtifactIconColor: (type: EpicNodeKind, color: string) => void;
   resetArtifactIconColors: () => void;
-  setDefaultEditor: (id: EditorId | null) => void;
+  setDefaultEditor: (id: DefaultOpenTarget | null) => void;
   setVoiceInputEnabled: (value: boolean) => void;
   setVoiceLanguage: (value: string) => void;
   setWorktreeBranchPrefix: (value: string) => void;

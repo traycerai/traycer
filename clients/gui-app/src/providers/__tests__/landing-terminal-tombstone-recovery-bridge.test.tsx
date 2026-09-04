@@ -6,7 +6,7 @@ import type {
   HostConnectivity,
   HostListItem,
 } from "@traycer/protocol/host/host-status";
-import { useLandingTerminalStore } from "@/stores/home/landing-terminal-store";
+import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
 
 const mocks = vi.hoisted(() => {
   const initialAuthorityStatus = (): "legacy" | "capable" | "unknown" =>
@@ -138,6 +138,7 @@ vi.mock(
 );
 
 import { LandingTerminalTombstoneRecoveryBridge } from "@/providers/landing-terminal-tombstone-recovery-bridge";
+import { terminalTombstoneOutstanding } from "@/providers/landing-terminal-tombstone-outstanding";
 import { requestLandingTerminalClose } from "@/lib/terminals/landing-terminal-close-coordinator";
 
 /**
@@ -185,17 +186,18 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
     // Drain cases run with the registry unanswered, so every tombstoned host
     // is probed and probe scoping cannot be confused for what they assert.
     mocks.fleetSettled.current = false;
-    useLandingTerminalStore.getState().resetForTests();
+    useLandingPanelStore.getState().resetForTests();
   });
 
   afterEach(() => {
     cleanup();
     vi.useRealTimers();
-    useLandingTerminalStore.getState().resetForTests();
+    useLandingPanelStore.getState().resetForTests();
   });
 
   it("drains an offline close after navigation leaves the landing page", async () => {
-    useLandingTerminalStore.getState().addTab({
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
       instanceId: "closed-tab",
       sessionId: "session-b",
       hostId: "host-b",
@@ -203,7 +205,7 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
       name: "project",
       titleSource: "default",
     });
-    useLandingTerminalStore.getState().closeTab("landing-page", "closed-tab");
+    useLandingPanelStore.getState().closeTab("landing-page", "closed-tab");
     const view = render(<LandingTerminalTombstoneRecoveryBridge />);
 
     expect(mocks.kill).not.toHaveBeenCalled();
@@ -236,7 +238,8 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
     mocks.authorityStatus = "capable";
     mocks.canMutate = true;
     mocks.terminalsById = { "session-capable": {} };
-    useLandingTerminalStore.getState().addTab({
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
       instanceId: "capable-tab",
       sessionId: "session-capable",
       hostId: "host-b",
@@ -245,7 +248,7 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
       titleSource: "default",
       hostAuthorityAcknowledged: true,
     });
-    useLandingTerminalStore.getState().closeTab("landing-page", "capable-tab");
+    useLandingPanelStore.getState().closeTab("landing-page", "capable-tab");
 
     render(<LandingTerminalTombstoneRecoveryBridge />);
 
@@ -254,7 +257,7 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
         hostId: "host-b",
         terminalId: "session-capable",
       });
-      expect(useLandingTerminalStore.getState().pendingKills).toEqual([]);
+      expect(useLandingPanelStore.getState().pendingKills).toEqual([]);
     });
     expect(mocks.kill).not.toHaveBeenCalled();
   });
@@ -271,7 +274,8 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
     mocks.canMutate = true;
     // The create has not landed, so the host projects nothing for this id yet.
     mocks.terminalsById = {};
-    useLandingTerminalStore.getState().addTab({
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
       instanceId: "creating-tab",
       sessionId: "session-creating",
       hostId: "host-b",
@@ -280,7 +284,7 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
       titleSource: "default",
       pendingCreate: true,
     });
-    useLandingTerminalStore.getState().closeTab("landing-page", "creating-tab");
+    useLandingPanelStore.getState().closeTab("landing-page", "creating-tab");
 
     render(<LandingTerminalTombstoneRecoveryBridge />);
 
@@ -310,7 +314,8 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
     mocks.authorityStatus = "capable";
     mocks.canMutate = true;
     mocks.terminalsById = {};
-    useLandingTerminalStore.getState().addTab({
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
       instanceId: "legacy-tab",
       sessionId: "session-legacy",
       hostId: "host-b",
@@ -318,7 +323,7 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
       name: "Legacy",
       titleSource: "default",
     });
-    useLandingTerminalStore.getState().closeTab("landing-page", "legacy-tab");
+    useLandingPanelStore.getState().closeTab("landing-page", "legacy-tab");
 
     render(<LandingTerminalTombstoneRecoveryBridge />);
 
@@ -331,8 +336,9 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
     // A session that was never a plain terminal has no projection to vanish
     // from, so the capable arm must not read its absence as death.
     expect(mocks.closeAsync).not.toHaveBeenCalled();
-    expect(useLandingTerminalStore.getState().pendingKills).toEqual([
+    expect(useLandingPanelStore.getState().pendingKills).toEqual([
       {
+        kind: "terminal",
         hostId: "host-b",
         sessionId: "session-legacy",
         hostAuthorityAcknowledged: false,
@@ -352,7 +358,8 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
     mocks.authorityStatus = "capable";
     mocks.canMutate = false;
     mocks.terminalsById = { "session-stale": {} };
-    useLandingTerminalStore.getState().addTab({
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
       instanceId: "stale-tab",
       sessionId: "session-stale",
       hostId: "host-b",
@@ -361,15 +368,16 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
       titleSource: "default",
       hostAuthorityAcknowledged: true,
     });
-    useLandingTerminalStore.getState().closeTab("landing-page", "stale-tab");
+    useLandingPanelStore.getState().closeTab("landing-page", "stale-tab");
 
     render(<LandingTerminalTombstoneRecoveryBridge />);
     await act(async () => Promise.resolve());
 
     expect(mocks.closeAsync).not.toHaveBeenCalled();
     expect(mocks.kill).not.toHaveBeenCalled();
-    expect(useLandingTerminalStore.getState().pendingKills).toEqual([
+    expect(useLandingPanelStore.getState().pendingKills).toEqual([
       {
+        kind: "terminal",
         hostId: "host-b",
         sessionId: "session-stale",
         hostAuthorityAcknowledged: true,
@@ -400,7 +408,8 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
       },
     ];
     mocks.authorityStatus = "legacy";
-    useLandingTerminalStore.getState().addTab({
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
       instanceId: "unsettled-kill-tab",
       sessionId: "session-unsettled-kill",
       hostId: "host-b",
@@ -409,7 +418,7 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
       titleSource: "default",
       pendingCreate: true,
     });
-    useLandingTerminalStore
+    useLandingPanelStore
       .getState()
       .closeTab("landing-page", "unsettled-kill-tab");
 
@@ -443,7 +452,8 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
     mocks.canMutate = true;
     mocks.terminalsById = {};
     mocks.kill.mockRejectedValueOnce(new Error("not created yet"));
-    useLandingTerminalStore.getState().addTab({
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
       instanceId: "arm-swap-tab",
       sessionId: "session-arm-swap",
       hostId: "host-b",
@@ -452,7 +462,7 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
       titleSource: "default",
       pendingCreate: true,
     });
-    useLandingTerminalStore.getState().closeTab("landing-page", "arm-swap-tab");
+    useLandingPanelStore.getState().closeTab("landing-page", "arm-swap-tab");
 
     const view = render(<LandingTerminalTombstoneRecoveryBridge />);
     await act(async () => Promise.resolve());
@@ -491,7 +501,8 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
     mocks.authorityStatus = "capable";
     mocks.canMutate = false;
     mocks.terminalsById = {};
-    useLandingTerminalStore.getState().addTab({
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
       instanceId: "stale-kill-tab",
       sessionId: "session-stale-kill",
       hostId: "host-b",
@@ -499,9 +510,7 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
       name: "Legacy",
       titleSource: "default",
     });
-    useLandingTerminalStore
-      .getState()
-      .closeTab("landing-page", "stale-kill-tab");
+    useLandingPanelStore.getState().closeTab("landing-page", "stale-kill-tab");
 
     render(<LandingTerminalTombstoneRecoveryBridge />);
 
@@ -531,7 +540,8 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
     mocks.authorityStatus = "capable";
     mocks.canMutate = true;
     mocks.terminalsById = { "session-joined": {} };
-    useLandingTerminalStore.getState().addTab({
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
       instanceId: "joined-tab",
       sessionId: "session-joined",
       hostId: "host-b",
@@ -540,7 +550,7 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
       titleSource: "default",
       hostAuthorityAcknowledged: true,
     });
-    useLandingTerminalStore.getState().closeTab("landing-page", "joined-tab");
+    useLandingPanelStore.getState().closeTab("landing-page", "joined-tab");
 
     // Someone else's request is already in flight for this lifetime, and it
     // settles WITHOUT retiring the record.
@@ -569,7 +579,7 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
     });
 
     expect(mocks.closeAsync).not.toHaveBeenCalled();
-    expect(useLandingTerminalStore.getState().pendingKills).toHaveLength(1);
+    expect(useLandingPanelStore.getState().pendingKills).toHaveLength(1);
   });
 
   it("re-arms the plain close after joining a kill that kept the tombstone", async () => {
@@ -592,7 +602,8 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
     mocks.authorityStatus = "capable";
     mocks.canMutate = true;
     mocks.terminalsById = { "session-rearm": {} };
-    useLandingTerminalStore.getState().addTab({
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
       instanceId: "rearm-tab",
       sessionId: "session-rearm",
       hostId: "host-b",
@@ -601,7 +612,7 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
       titleSource: "default",
       hostAuthorityAcknowledged: true,
     });
-    useLandingTerminalStore.getState().closeTab("landing-page", "rearm-tab");
+    useLandingPanelStore.getState().closeTab("landing-page", "rearm-tab");
 
     // Someone else owns the in-flight request for this lifetime and settles it
     // WITHOUT retiring the record - what `terminal.kill` does for a
@@ -636,7 +647,7 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
     // The joined settlement is not this arm's answer, so nothing is concluded
     // from it and nothing is dispatched off it either.
     expect(mocks.closeAsync).not.toHaveBeenCalled();
-    expect(useLandingTerminalStore.getState().pendingKills).toHaveLength(1);
+    expect(useLandingPanelStore.getState().pendingKills).toHaveLength(1);
 
     // The re-arm. The key is free now, so this close is OWNED and may retire
     // the record on its own settlement.
@@ -644,7 +655,7 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
       await vi.advanceTimersByTimeAsync(500);
     });
     expect(mocks.closeAsync).toHaveBeenCalledTimes(1);
-    expect(useLandingTerminalStore.getState().pendingKills).toEqual([]);
+    expect(useLandingPanelStore.getState().pendingKills).toEqual([]);
   });
 
   it("wakes a plain close when listing freshness returns", async () => {
@@ -666,7 +677,8 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
     mocks.canMutate = true;
     mocks.terminalsById = { "session-refresh": {} };
     mocks.closeAsync.mockRejectedValueOnce(new Error("stream went stale"));
-    useLandingTerminalStore.getState().addTab({
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
       instanceId: "refresh-tab",
       sessionId: "session-refresh",
       hostId: "host-b",
@@ -675,7 +687,7 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
       titleSource: "default",
       hostAuthorityAcknowledged: true,
     });
-    useLandingTerminalStore.getState().closeTab("landing-page", "refresh-tab");
+    useLandingPanelStore.getState().closeTab("landing-page", "refresh-tab");
 
     const view = render(<LandingTerminalTombstoneRecoveryBridge />);
     await act(async () => Promise.resolve());
@@ -714,7 +726,8 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
       },
     ];
     mocks.authorityStatus = "legacy";
-    useLandingTerminalStore.getState().addTab({
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
       instanceId: "doomed-create-tab",
       sessionId: "session-doomed-create",
       hostId: "host-b",
@@ -723,7 +736,7 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
       titleSource: "default",
       pendingCreate: true,
     });
-    useLandingTerminalStore
+    useLandingPanelStore
       .getState()
       .closeTab("landing-page", "doomed-create-tab");
 
@@ -741,7 +754,7 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
       });
     }
     expect(mocks.kill).toHaveBeenCalledTimes(9);
-    expect(useLandingTerminalStore.getState().pendingKills).toHaveLength(1);
+    expect(useLandingPanelStore.getState().pendingKills).toHaveLength(1);
 
     // The tenth answer spends the budget, and the record retires on that same
     // pass rather than arming an eleventh attempt.
@@ -750,7 +763,7 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
       await Promise.resolve();
     });
     expect(mocks.kill).toHaveBeenCalledTimes(10);
-    expect(useLandingTerminalStore.getState().pendingKills).toEqual([]);
+    expect(useLandingPanelStore.getState().pendingKills).toEqual([]);
 
     // And it stays retired - no timer left armed to ask an eleventh time.
     await act(async () => {
@@ -775,7 +788,8 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
     ];
     mocks.authorityStatus = "legacy";
     mocks.kill.mockRejectedValue(new Error("transport flap"));
-    useLandingTerminalStore.getState().addTab({
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
       instanceId: "rejected-kill-tab",
       sessionId: "session-rejected-kill",
       hostId: "host-b",
@@ -784,7 +798,7 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
       titleSource: "default",
       pendingCreate: true,
     });
-    useLandingTerminalStore
+    useLandingPanelStore
       .getState()
       .closeTab("landing-page", "rejected-kill-tab");
 
@@ -799,7 +813,7 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
       });
     }
     expect(mocks.kill.mock.calls.length).toBeGreaterThan(10);
-    expect(useLandingTerminalStore.getState().pendingKills).toHaveLength(1);
+    expect(useLandingPanelStore.getState().pendingKills).toHaveLength(1);
   });
 
   it("closes a terminal that appears after the reprieve is spent", async () => {
@@ -817,7 +831,8 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
     mocks.authorityStatus = "capable";
     mocks.canMutate = true;
     mocks.terminalsById = {};
-    useLandingTerminalStore.getState().addTab({
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
       instanceId: "late-create-tab",
       sessionId: "session-late-create",
       hostId: "host-b",
@@ -826,9 +841,7 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
       titleSource: "default",
       pendingCreate: true,
     });
-    useLandingTerminalStore
-      .getState()
-      .closeTab("landing-page", "late-create-tab");
+    useLandingPanelStore.getState().closeTab("landing-page", "late-create-tab");
 
     const view = render(<LandingTerminalTombstoneRecoveryBridge />);
     await act(async () => Promise.resolve());
@@ -840,7 +853,7 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
         await Promise.resolve();
       });
     }
-    expect(useLandingTerminalStore.getState().pendingKills).toHaveLength(1);
+    expect(useLandingPanelStore.getState().pendingKills).toHaveLength(1);
 
     // Hold the TENTH kill in flight - the one whose answer spends the budget.
     let releaseFinalKill: (() => void) | null = null;
@@ -891,7 +904,8 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
     mocks.closeAsync
       .mockRejectedValueOnce(new Error("transient"))
       .mockResolvedValueOnce(undefined);
-    useLandingTerminalStore.getState().addTab({
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
       instanceId: "retry-tab",
       sessionId: "session-retry",
       hostId: "host-b",
@@ -900,19 +914,19 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
       titleSource: "default",
       hostAuthorityAcknowledged: true,
     });
-    useLandingTerminalStore.getState().closeTab("landing-page", "retry-tab");
+    useLandingPanelStore.getState().closeTab("landing-page", "retry-tab");
 
     render(<LandingTerminalTombstoneRecoveryBridge />);
     await act(async () => Promise.resolve());
     expect(mocks.closeAsync).toHaveBeenCalledTimes(1);
-    expect(useLandingTerminalStore.getState().pendingKills).toHaveLength(1);
+    expect(useLandingPanelStore.getState().pendingKills).toHaveLength(1);
 
     await act(async () => {
       vi.advanceTimersByTime(500);
       await Promise.resolve();
     });
     expect(mocks.closeAsync).toHaveBeenCalledTimes(2);
-    expect(useLandingTerminalStore.getState().pendingKills).toEqual([]);
+    expect(useLandingPanelStore.getState().pendingKills).toEqual([]);
   });
 
   it("retries a LEGACY kill after a transient rejection", async () => {
@@ -932,7 +946,8 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
     mocks.kill
       .mockRejectedValueOnce(new Error("transient"))
       .mockResolvedValueOnce(undefined);
-    useLandingTerminalStore.getState().addTab({
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
       instanceId: "legacy-retry-tab",
       sessionId: "session-legacy-retry",
       hostId: "host-b",
@@ -940,7 +955,7 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
       name: "Legacy",
       titleSource: "default",
     });
-    useLandingTerminalStore
+    useLandingPanelStore
       .getState()
       .closeTab("landing-page", "legacy-retry-tab");
 
@@ -972,7 +987,8 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
     mocks.canMutate = true;
     mocks.terminalsById = { "session-backoff": {} };
     mocks.closeAsync.mockRejectedValue(new Error("still unavailable"));
-    useLandingTerminalStore.getState().addTab({
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
       instanceId: "backoff-tab",
       sessionId: "session-backoff",
       hostId: "host-b",
@@ -981,7 +997,7 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
       titleSource: "default",
       hostAuthorityAcknowledged: true,
     });
-    useLandingTerminalStore.getState().closeTab("landing-page", "backoff-tab");
+    useLandingPanelStore.getState().closeTab("landing-page", "backoff-tab");
 
     render(<LandingTerminalTombstoneRecoveryBridge />);
     await act(async () => Promise.resolve());
@@ -1008,7 +1024,7 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
       await Promise.resolve();
     });
     expect(mocks.closeAsync).toHaveBeenCalledTimes(3);
-    expect(useLandingTerminalStore.getState().pendingKills).toHaveLength(1);
+    expect(useLandingPanelStore.getState().pendingKills).toHaveLength(1);
   });
 
   it("cancels capable retries when the bound host route disappears", async () => {
@@ -1024,7 +1040,8 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
     mocks.canMutate = true;
     mocks.terminalsById = { "session-host-change": {} };
     mocks.closeAsync.mockRejectedValue(new Error("transient"));
-    useLandingTerminalStore.getState().addTab({
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
       instanceId: "host-change-tab",
       sessionId: "session-host-change",
       hostId: "host-b",
@@ -1033,9 +1050,7 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
       titleSource: "default",
       hostAuthorityAcknowledged: true,
     });
-    useLandingTerminalStore
-      .getState()
-      .closeTab("landing-page", "host-change-tab");
+    useLandingPanelStore.getState().closeTab("landing-page", "host-change-tab");
 
     const view = render(<LandingTerminalTombstoneRecoveryBridge />);
     await act(async () => Promise.resolve());
@@ -1048,7 +1063,7 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
       await Promise.resolve();
     });
     expect(mocks.closeAsync).toHaveBeenCalledTimes(1);
-    expect(useLandingTerminalStore.getState().pendingKills).toHaveLength(1);
+    expect(useLandingPanelStore.getState().pendingKills).toHaveLength(1);
   });
 
   it("cancels capable retries when the bridge unmounts", async () => {
@@ -1064,7 +1079,8 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
     mocks.canMutate = true;
     mocks.terminalsById = { "session-unmount": {} };
     mocks.closeAsync.mockRejectedValue(new Error("transient"));
-    useLandingTerminalStore.getState().addTab({
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
       instanceId: "unmount-tab",
       sessionId: "session-unmount",
       hostId: "host-b",
@@ -1073,7 +1089,7 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
       titleSource: "default",
       hostAuthorityAcknowledged: true,
     });
-    useLandingTerminalStore.getState().closeTab("landing-page", "unmount-tab");
+    useLandingPanelStore.getState().closeTab("landing-page", "unmount-tab");
 
     const view = render(<LandingTerminalTombstoneRecoveryBridge />);
     await act(async () => Promise.resolve());
@@ -1084,7 +1100,7 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
       await Promise.resolve();
     });
     expect(mocks.closeAsync).toHaveBeenCalledTimes(1);
-    expect(useLandingTerminalStore.getState().pendingKills).toHaveLength(1);
+    expect(useLandingPanelStore.getState().pendingKills).toHaveLength(1);
   });
 
   it("fires the kill on offline -> connectable even when the offline stretch sat inside the relay-fuse window", async () => {
@@ -1140,7 +1156,8 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
 
     // A terminal on it is closed during that window.
     act(() => {
-      useLandingTerminalStore.getState().addTab({
+      useLandingPanelStore.getState().addTab({
+        kind: "terminal",
         instanceId: "fuse-tab",
         sessionId: "session-fuse",
         hostId: "host-b",
@@ -1148,7 +1165,7 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
         name: "project",
         titleSource: "default",
       });
-      useLandingTerminalStore.getState().closeTab("landing-page", "fuse-tab");
+      useLandingPanelStore.getState().closeTab("landing-page", "fuse-tab");
     });
     expect(mocks.kill).not.toHaveBeenCalled();
 
@@ -1207,7 +1224,8 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
       const view = render(<LandingTerminalTombstoneRecoveryBridge />);
 
       act(() => {
-        useLandingTerminalStore.getState().addTab({
+        useLandingPanelStore.getState().addTab({
+          kind: "terminal",
           instanceId: "incident-tab",
           sessionId: "session-incident",
           hostId: "host-b",
@@ -1215,7 +1233,7 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
           name: "project",
           titleSource: "default",
         });
-        useLandingTerminalStore
+        useLandingPanelStore
           .getState()
           .closeTab("landing-page", "incident-tab");
       });
@@ -1247,7 +1265,8 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
     // killing has to outlive the probe that would have delivered it.
     mocks.entries = [offlineHost];
     mocks.fleetSettled.current = true;
-    useLandingTerminalStore.getState().addTab({
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
       instanceId: "gone-tab",
       sessionId: "session-gone",
       hostId: "host-gone",
@@ -1255,14 +1274,15 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
       name: "project",
       titleSource: "default",
     });
-    useLandingTerminalStore.getState().closeTab("landing-page", "gone-tab");
+    useLandingPanelStore.getState().closeTab("landing-page", "gone-tab");
 
     render(<LandingTerminalTombstoneRecoveryBridge />);
     await act(async () => Promise.resolve());
 
     expect(mocks.probedHostIds).toEqual([]);
-    expect(useLandingTerminalStore.getState().pendingKills).toEqual([
+    expect(useLandingPanelStore.getState().pendingKills).toEqual([
       {
+        kind: "terminal",
         hostId: "host-gone",
         sessionId: "session-gone",
         hostAuthorityAcknowledged: false,
@@ -1278,7 +1298,8 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
     // the exact moment it became useful again.
     mocks.entries = [offlineHost];
     mocks.fleetSettled.current = true;
-    useLandingTerminalStore.getState().addTab({
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
       instanceId: "gone-tab",
       sessionId: "session-gone",
       hostId: "host-gone",
@@ -1286,7 +1307,7 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
       name: "project",
       titleSource: "default",
     });
-    useLandingTerminalStore.getState().closeTab("landing-page", "gone-tab");
+    useLandingPanelStore.getState().closeTab("landing-page", "gone-tab");
 
     const view = render(<LandingTerminalTombstoneRecoveryBridge />);
     await act(async () => Promise.resolve());
@@ -1309,7 +1330,8 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
     // drain at every launch that started offline.
     mocks.entries = [localHost];
     mocks.fleetSettled.current = false;
-    useLandingTerminalStore.getState().addTab({
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
       instanceId: "boot-tab",
       sessionId: "session-boot",
       hostId: "host-b",
@@ -1317,14 +1339,15 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
       name: "project",
       titleSource: "default",
     });
-    useLandingTerminalStore.getState().closeTab("landing-page", "boot-tab");
+    useLandingPanelStore.getState().closeTab("landing-page", "boot-tab");
 
     render(<LandingTerminalTombstoneRecoveryBridge />);
     await act(async () => Promise.resolve());
 
     expect(mocks.probedHostIds).toEqual(["host-b"]);
-    expect(useLandingTerminalStore.getState().pendingKills).toEqual([
+    expect(useLandingPanelStore.getState().pendingKills).toEqual([
       {
+        kind: "terminal",
         hostId: "host-b",
         sessionId: "session-boot",
         hostAuthorityAcknowledged: false,
@@ -1336,7 +1359,8 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
   it("keeps probing a host that is offline but still listed in the settled fleet", async () => {
     mocks.entries = [offlineHost];
     mocks.fleetSettled.current = true;
-    useLandingTerminalStore.getState().addTab({
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
       instanceId: "offline-tab",
       sessionId: "session-offline",
       hostId: "host-b",
@@ -1344,14 +1368,15 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
       name: "project",
       titleSource: "default",
     });
-    useLandingTerminalStore.getState().closeTab("landing-page", "offline-tab");
+    useLandingPanelStore.getState().closeTab("landing-page", "offline-tab");
 
     render(<LandingTerminalTombstoneRecoveryBridge />);
     await act(async () => Promise.resolve());
 
     expect(mocks.probedHostIds).toEqual(["host-b"]);
-    expect(useLandingTerminalStore.getState().pendingKills).toEqual([
+    expect(useLandingPanelStore.getState().pendingKills).toEqual([
       {
+        kind: "terminal",
         hostId: "host-b",
         sessionId: "session-offline",
         hostAuthorityAcknowledged: false,
@@ -1369,7 +1394,8 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
     // id the tombstone already names.
     mocks.entries = [];
     mocks.fleetSettled.current = true;
-    useLandingTerminalStore.getState().addTab({
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
       instanceId: "solo-tab",
       sessionId: "session-solo",
       hostId: "host-b",
@@ -1377,14 +1403,15 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
       name: "project",
       titleSource: "default",
     });
-    useLandingTerminalStore.getState().closeTab("landing-page", "solo-tab");
+    useLandingPanelStore.getState().closeTab("landing-page", "solo-tab");
 
     render(<LandingTerminalTombstoneRecoveryBridge />);
     await act(async () => Promise.resolve());
 
     expect(mocks.probedHostIds).toEqual([]);
-    expect(useLandingTerminalStore.getState().pendingKills).toEqual([
+    expect(useLandingPanelStore.getState().pendingKills).toEqual([
       {
+        kind: "terminal",
         hostId: "host-b",
         sessionId: "session-solo",
         hostAuthorityAcknowledged: false,
@@ -1406,7 +1433,8 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
         transportDialability: "dialable",
       },
     ];
-    useLandingTerminalStore.getState().addTab({
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
       instanceId: "first-tab",
       sessionId: "session-first",
       hostId: "host-b",
@@ -1414,7 +1442,7 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
       name: "project",
       titleSource: "default",
     });
-    useLandingTerminalStore.getState().closeTab("landing-page", "first-tab");
+    useLandingPanelStore.getState().closeTab("landing-page", "first-tab");
 
     render(<LandingTerminalTombstoneRecoveryBridge />);
     await waitFor(() => {
@@ -1430,7 +1458,8 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
 
     // Host stays drainable throughout - only the tombstone set changes.
     act(() => {
-      useLandingTerminalStore.getState().addTab({
+      useLandingPanelStore.getState().addTab({
+        kind: "terminal",
         instanceId: "second-tab",
         sessionId: "session-second",
         hostId: "host-b",
@@ -1438,7 +1467,7 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
         name: "project",
         titleSource: "default",
       });
-      useLandingTerminalStore.getState().closeTab("landing-page", "second-tab");
+      useLandingPanelStore.getState().closeTab("landing-page", "second-tab");
     });
 
     await waitFor(() => {
@@ -1460,7 +1489,8 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
     // here; only the flag moves.
     mocks.entries = [localHost];
     mocks.fleetSettled.current = false;
-    useLandingTerminalStore.getState().addTab({
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
       instanceId: "gone-tab",
       sessionId: "session-gone",
       hostId: "host-gone",
@@ -1468,7 +1498,7 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
       name: "project",
       titleSource: "default",
     });
-    useLandingTerminalStore.getState().closeTab("landing-page", "gone-tab");
+    useLandingPanelStore.getState().closeTab("landing-page", "gone-tab");
 
     render(<LandingTerminalTombstoneRecoveryBridge />);
     await act(async () => Promise.resolve());
@@ -1481,8 +1511,9 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
     });
 
     expect(mocks.probedHostIds).toEqual([]);
-    expect(useLandingTerminalStore.getState().pendingKills).toEqual([
+    expect(useLandingPanelStore.getState().pendingKills).toEqual([
       {
+        kind: "terminal",
         hostId: "host-gone",
         sessionId: "session-gone",
         hostAuthorityAcknowledged: false,
@@ -1516,7 +1547,8 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
           rejectClose = reject;
         }),
     );
-    useLandingTerminalStore.getState().addTab({
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
       instanceId: "flip-tab",
       sessionId: "session-flip",
       hostId: "host-b",
@@ -1525,7 +1557,7 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
       titleSource: "default",
       hostAuthorityAcknowledged: true,
     });
-    useLandingTerminalStore.getState().closeTab("landing-page", "flip-tab");
+    useLandingPanelStore.getState().closeTab("landing-page", "flip-tab");
 
     const view = render(<LandingTerminalTombstoneRecoveryBridge />);
     await act(async () => Promise.resolve());
@@ -1573,7 +1605,8 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
           rejectKill = reject;
         }),
     );
-    useLandingTerminalStore.getState().addTab({
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
       instanceId: "mirror-tab",
       sessionId: "session-mirror",
       hostId: "host-b",
@@ -1581,7 +1614,7 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
       name: "project",
       titleSource: "default",
     });
-    useLandingTerminalStore.getState().closeTab("landing-page", "mirror-tab");
+    useLandingPanelStore.getState().closeTab("landing-page", "mirror-tab");
 
     const view = render(<LandingTerminalTombstoneRecoveryBridge />);
     await act(async () => Promise.resolve());
@@ -1627,7 +1660,8 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
     mocks.kill.mockImplementation(() =>
       Promise.reject(new Error("permanently rejected")),
     );
-    useLandingTerminalStore.getState().addTab({
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
       instanceId: "doomed-tab",
       sessionId: "session-doomed",
       hostId: "host-b",
@@ -1635,7 +1669,7 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
       name: "project",
       titleSource: "default",
     });
-    useLandingTerminalStore.getState().closeTab("landing-page", "doomed-tab");
+    useLandingPanelStore.getState().closeTab("landing-page", "doomed-tab");
 
     render(<LandingTerminalTombstoneRecoveryBridge />);
     await act(async () => Promise.resolve());
@@ -1656,8 +1690,9 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
     expect(afterAnHour).toBeLessThan(30);
 
     // Still owed, and still trying - the drain has not parked itself.
-    expect(useLandingTerminalStore.getState().pendingKills).toEqual([
+    expect(useLandingPanelStore.getState().pendingKills).toEqual([
       {
+        kind: "terminal",
         hostId: "host-b",
         sessionId: "session-doomed",
         hostAuthorityAcknowledged: false,
@@ -1683,7 +1718,8 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
     mocks.kill.mockImplementation(() =>
       Promise.reject(new Error("permanently rejected")),
     );
-    useLandingTerminalStore.getState().addTab({
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
       instanceId: "budget-tab",
       sessionId: "session-budget",
       hostId: "host-b",
@@ -1692,7 +1728,7 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
       titleSource: "default",
       hostAuthorityAcknowledged: true,
     });
-    useLandingTerminalStore.getState().closeTab("landing-page", "budget-tab");
+    useLandingPanelStore.getState().closeTab("landing-page", "budget-tab");
 
     const view = render(<LandingTerminalTombstoneRecoveryBridge />);
     await act(async () => Promise.resolve());
@@ -1727,5 +1763,80 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
     // had climbed to.
     await advance(1_000);
     expect(mocks.closeAsync.mock.calls.length).toBeGreaterThan(1);
+  });
+});
+
+/**
+ * The two retry arms read `pendingKills`, which is MIXED. Their effect is
+ * masked downstream - the drain narrows its own dispatch list and
+ * `cancelUndrainableCapableCloseRetries` reaps any retry whose key is not in
+ * it - so a component-level case cannot tell the two answers apart. The
+ * predicate is what is wrong when it is wrong, so the predicate is what this
+ * pins.
+ */
+describe("terminalTombstoneOutstanding", () => {
+  afterEach(() => {
+    useLandingPanelStore.getState().resetForTests();
+  });
+
+  function tombstoneFor(instanceId: string): void {
+    useLandingPanelStore.getState().closeTab("landing-page", instanceId);
+  }
+
+  it("does not read a browser tombstone as the terminal's, on the same ids", () => {
+    // Same host, same session id, different kind - which the store's own key
+    // helper is built to keep apart, and nothing proves the two host-minted
+    // namespaces disjoint.
+    useLandingPanelStore.getState().addTab({
+      kind: "browser",
+      instanceId: "browser-tab",
+      sessionId: "session-shared",
+      hostId: "host-b",
+      tabId: "tab-1",
+      name: "example.com",
+      titleSource: "default",
+    });
+    tombstoneFor("browser-tab");
+    expect(useLandingPanelStore.getState().pendingKills).toHaveLength(1);
+
+    expect(
+      terminalTombstoneOutstanding({
+        hostId: "host-b",
+        sessionId: "session-shared",
+      }),
+    ).toBe(false);
+  });
+
+  it("reads the terminal's own tombstone, and only on matching ids", () => {
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
+      instanceId: "terminal-tab",
+      sessionId: "session-shared",
+      hostId: "host-b",
+      cwd: "/legacy",
+      name: "Shared",
+      titleSource: "default",
+      hostAuthorityAcknowledged: true,
+    });
+    tombstoneFor("terminal-tab");
+
+    expect(
+      terminalTombstoneOutstanding({
+        hostId: "host-b",
+        sessionId: "session-shared",
+      }),
+    ).toBe(true);
+    expect(
+      terminalTombstoneOutstanding({
+        hostId: "host-other",
+        sessionId: "session-shared",
+      }),
+    ).toBe(false);
+    expect(
+      terminalTombstoneOutstanding({
+        hostId: "host-b",
+        sessionId: "session-other",
+      }),
+    ).toBe(false);
   });
 });
