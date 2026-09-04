@@ -1010,16 +1010,68 @@ export function createEpicReplicaRuntime(
   }
 
   /**
+   * Whether the sockets serving this runtime are replaced as part of the
+   * reset, so the transport legs may honestly go back to `connecting`.
+   *
+   * Enumerated rather than defaulted, for the reason `replacesThePositionSpace`
+   * gives: a reason added later is a compile error here, and getting this
+   * wrong in either direction is a stuck pill - "reconnecting" forever when
+   * the legs are reset under sockets that never re-report, "synced" over a
+   * dialing socket when they are kept under ones that were just detached.
+   *
+   *  - `manifest-changed` is the arm swap: `executeTransition` detaches the
+   *    outgoing arm before this reset and attaches the incoming one after.
+   *  - `host-repointed` moves the session to another host; nothing carries
+   *    over, sockets included.
+   *  - A client-origin reset is `requestFreshSnapshot`, which closes and
+   *    reopens around the reset itself (it does not reach this function today,
+   *    but the answer is the same).
+   *
+   * The three in-band authority reasons and `resume-too-old` arrive on
+   * sessions that stay open.
+   */
+  function replacesTransportUnderReset(cause: ReplicaResetCause): boolean {
+    if (cause.origin === "client") return true;
+    switch (cause.reason) {
+      case "manifest-changed":
+      case "host-repointed":
+        return true;
+      case "authority-epoch-changed":
+      case "security-epoch-changed":
+      case "migration-completed":
+      case "resume-too-old":
+        return false;
+    }
+  }
+
+  /**
    * Empty every plane, carrying the cause.
    *
    * The same sequence `requestFreshSnapshot` runs, minus the transport dance:
    * the caller owns the sockets, because a replacement closes BEFORE it
    * discards and opens AFTER, while a targeted authority reset does not close
    * at all.
+   *
+   * "Does not close at all" is why the control plane takes
+   * `beginAuthorityReplacementCycle` for an in-band replacement and NOT
+   * `beginFreshCycle`: the sessions stay open, and an open `StreamSession`
+   * never re-reports `open`, so a leg reset to `connecting` on this path had
+   * nothing left to move it and the pill sat on "Still reconnecting…" over a
+   * healthy link. The one caller that DOES swap sockets under this reset -
+   * `executeTransition`, which detaches the outgoing arm first and attaches
+   * the incoming one after - takes the fresh cycle, because its replacement
+   * sessions start from `connecting` and will report `open` themselves;
+   * keeping the outgoing arm's `open` there would read as synced while the
+   * new sockets are still dialing. {@link replacesTransportUnderReset} is the
+   * split.
    */
   function resetAllPlanes(cause: ReplicaResetCause): void {
     records.clearUnsyncedQueue();
-    control.beginFreshCycle();
+    if (replacesTransportUnderReset(cause)) {
+      control.beginFreshCycle();
+    } else {
+      control.beginAuthorityReplacementCycle();
+    }
     records.replaceReplica();
     records.resetCoverage();
     laneArm?.reset(cause);
@@ -1057,9 +1109,9 @@ export function createEpicReplicaRuntime(
    *    the records plane's other half - so dropping it would leave the arm
    *    holding the old rows and watermark while the runtime's records plane is
    *    empty. Half a reseed is worse than none.
-   *  - `control.beginFreshCycle()` and `rooms.reset(cause)` GO. They are the
-   *    control snapshot and the bodies, and both are exactly what the state
-   *    lane's contract says a `resumeTooOld` keeps.
+   *  - `control.beginAuthorityReplacementCycle()` and `rooms.reset(cause)`
+   *    GO. They are the control snapshot and the bodies, and both are exactly
+   *    what the state lane's contract says a `resumeTooOld` keeps.
    */
   function resetStateRecordsOnly(cause: ReplicaResetCause): void {
     delivery.batch(() => {
