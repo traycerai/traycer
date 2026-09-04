@@ -301,6 +301,33 @@ describe("PingRing", () => {
     expect(ring.style.opacity).toBe("0.6");
     expect(ring.style.transform).toBe("");
   });
+
+  it("restores the peak opacity and drops the transform when reduced motion turns on mid-run", () => {
+    // Install the listener-recording stub BEFORE the first render: the
+    // module attaches its change listener only once, on the first
+    // subscribe/render after a reset.
+    const stub = stubReducedMotionWithListener(false);
+    render(<PingRing toneClass="bg-emerald-500" peakOpacity={0.6} />);
+    const ring = queryStatusPing();
+    expect(ring).not.toBeNull();
+    if (ring === null) throw new Error("ring not found");
+
+    act(() => {
+      vi.advanceTimersByTime(80);
+    });
+    expect(parseFloat(ring.style.opacity)).toBeLessThan(0.6);
+    expect(ring.style.transform).toMatch(/scale\(/);
+
+    stub.setMatches(true);
+    act(() => {
+      stub.fireChange();
+    });
+
+    // `clear` restores the peak opacity (the resting look the element
+    // mounts with) rather than blanking it, and drops the transform.
+    expect(ring.style.opacity).toBe("0.6");
+    expect(ring.style.transform).toBe("");
+  });
 });
 
 describe("LivePulse", () => {

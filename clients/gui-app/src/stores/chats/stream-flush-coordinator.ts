@@ -21,7 +21,9 @@
  *   inside its interval (a hidden store's slow tier, or a visible store's
  *   floor). For a visible store the deadline only hands off to a frame plus
  *   its fallback - it never flushes the store itself - so a starved rAF keeps
- *   a visible store at the fallback cadence instead of a timer cadence.
+ *   a visible store at the fallback cadence instead of a timer cadence. The
+ *   fallback's due time survives those hand-offs: hidden-store deadlines
+ *   firing first re-arm the frame but never push the fallback later.
  *
  * Visibility tiers - each registration carries a visibility flag reported
  * from the React layer (chat is visible when ANY surface rendering it is
@@ -123,12 +125,22 @@ export function createStreamFlushCoordinator(
   let frameHandle: number | null = null;
   let timerHandle: number | null = null;
   let timerDueAt: number | null = null;
+  /**
+   * When the fallback for the pending frame is due; non-null exactly while a
+   * frame is pending. Preserved across a deadline tick (which cancels and
+   * re-arms the frame) so a starved rAF beside a stream of earlier
+   * hidden-store deadlines still flushes the visible store at the ORIGINAL
+   * fallback time, instead of pushing it out by 500 ms every time a deadline
+   * fires first. Dropped with the frame everywhere else.
+   */
+  let fallbackDueAt: number | null = null;
 
   function disarm(): void {
     if (frameHandle !== null) {
       timers.cancelFrame(frameHandle);
       frameHandle = null;
     }
+    fallbackDueAt = null;
     if (timerHandle !== null) {
       timers.clearTimer(timerHandle);
       timerHandle = null;
@@ -175,7 +187,10 @@ export function createStreamFlushCoordinator(
     if (frameHandle === null) {
       frameHandle = timers.requestFrame(() => tick("frame"));
     }
-    armTimer("fallback", timers.now() + FRAME_TIMEOUT_FALLBACK_MS);
+    if (fallbackDueAt === null) {
+      fallbackDueAt = timers.now() + FRAME_TIMEOUT_FALLBACK_MS;
+    }
+    armTimer("fallback", fallbackDueAt);
   }
 
   /** Arms for one entry: a frame if it is due now, else a deadline at its due time. */
@@ -203,13 +218,18 @@ export function createStreamFlushCoordinator(
         earliestDeadline === null ? due : Math.min(earliestDeadline, due);
     }
     if (frameNeeded) armFrame();
+    else fallbackDueAt = null; // no frame to stand in for
     // Armed even beside a frame: a hidden store's deadline must not wait for
     // a frame that a throttled rAF may never deliver.
     if (earliestDeadline !== null) armTimer("deadline", earliestDeadline);
   }
 
   function tick(source: TickSource): void {
+    // A deadline tick stands in for neither the frame nor its fallback: the
+    // frame is re-requested in `rearm` and the fallback keeps its due time.
+    const preservedFallbackDueAt = source === "deadline" ? fallbackDueAt : null;
     disarm();
+    fallbackDueAt = preservedFallbackDueAt;
     const now = timers.now();
     for (const entry of entries) {
       if (!isEntryDue(entry, now)) continue;
@@ -241,10 +261,11 @@ export function createStreamFlushCoordinator(
         setVisible: (visible) => {
           if (!entry.active || entry.visible === visible) return;
           entry.visible = visible;
-          // A newly-visible store with a buffered tail should paint on the
-          // next frame (or as soon as its floor allows), not wait out the
-          // hidden-tier interval.
-          if (visible && entry.hasPending()) armFor(entry, timers.now());
+          // Re-arm for the new tier: a newly-visible store with a buffered
+          // tail paints on the next frame (or as soon as its floor allows)
+          // instead of waiting out the hidden interval, and a newly-hidden one
+          // gets its own deadline instead of riding the frame's fallback.
+          if (entry.hasPending()) armFor(entry, timers.now());
         },
         unregister: () => {
           if (!entry.active) return;

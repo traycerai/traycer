@@ -38,10 +38,16 @@ export function PingRing(props: {
     },
     [peakOpacity],
   );
-  const clear = useCallback((element: HTMLSpanElement) => {
-    element.style.transform = "";
-    element.style.opacity = "";
-  }, []);
+  // Back to the resting look the element mounts with (the JSX `style`
+  // below): React only rewrites `style` when the prop changes, so the
+  // cleanup has to restore it, not blank it.
+  const clear = useCallback(
+    (element: HTMLSpanElement) => {
+      element.style.transform = "";
+      element.style.opacity = String(peakOpacity);
+    },
+    [peakOpacity],
+  );
   useStatusAnimation(ref, write, clear, STATUS_ANIMATION_PULSE_CADENCE_MS);
   return (
     <span
