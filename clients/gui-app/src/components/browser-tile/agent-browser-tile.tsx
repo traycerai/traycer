@@ -65,9 +65,11 @@ interface ElectronTabSurfaceProps {
   readonly pageSessionId: string;
   readonly onRequestClose: () => void;
   readonly persistViewportPreset:
-    ((preset: BrowserViewViewportPresetId) => void) | null;
+    | ((preset: BrowserViewViewportPresetId) => void)
+    | null;
   readonly onOpenLinkInNewTile:
-    ((url: string, disposition: "foreground" | "background") => void) | null;
+    | ((url: string, disposition: "foreground" | "background") => void)
+    | null;
   /** See `BrowserTabTileProps.onRequestNewTab`. `null` falls back to a link open. */
   readonly onRequestNewTab: (() => void) | null;
   readonly onConvertToPip: (() => void) | null;
