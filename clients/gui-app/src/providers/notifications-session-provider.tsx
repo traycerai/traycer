@@ -71,6 +71,7 @@ import {
 import {
   notificationEntitiesMatch,
   notificationEntityFromHostEntry,
+  notificationEntityFromPayload,
   notificationEntityMatchesPresence,
   notificationPayloadBelongsToEntity,
   type NotificationNavigate,
@@ -536,13 +537,12 @@ export function NotificationsSessionProvider(
             ? previous.byId[entry.id]
             : null;
           const isNewUnreadOccurrence = prior === null || prior.readAt !== null;
+          const entity = notificationEntityFromPayload(entry.payload);
           return (
             isNewUnreadOccurrence &&
             (entry.originHostId ?? null) === activeEntity.originHostId &&
-            notificationPayloadBelongsToEntity(
-              entry.payload,
-              activeEntity.entity,
-            )
+            entity !== null &&
+            notificationEntityMatchesPresence(entity, activeEntity.entity)
           );
         },
       );

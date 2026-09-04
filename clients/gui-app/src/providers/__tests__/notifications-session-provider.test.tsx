@@ -2799,6 +2799,43 @@ describe("<NotificationsSessionProvider />", () => {
     ).toBeNull();
   });
 
+  it("consumes a Task-level app-local row inserted after focusing a child chat", async () => {
+    const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(false);
+    const { markReadCalls } = await renderHostNotificationsProvider();
+
+    act(() => {
+      setFocusedChat("epic-a", "chat-a");
+      hasFocus.mockReturnValue(true);
+      sendPresence();
+    });
+    await waitFor(() => expect(markReadCalls).toHaveLength(1));
+    markReadCalls.splice(0);
+
+    act(() => {
+      useAppLocalNotificationsStore.getState().upsert({
+        id: "task-local-error",
+        originHostId: mockLocalHostEntry.hostId,
+        updatedAt: 2,
+        readAt: null,
+        kind: "worktree.delete.error",
+        sourceRef: "epic-a",
+        payload: { kind: "epic", epicId: "epic-a" },
+        message: "Task worktree deletion failed",
+        detail: null,
+      });
+    });
+
+    await waitFor(() => {
+      expect(
+        useAppLocalNotificationsStore.getState().byId["task-local-error"]
+          .readAt,
+      ).not.toBeNull();
+    });
+    expect(markReadCalls).toEqual([
+      { kind: "entity", entity: { epicId: "epic-a", chatId: "chat-a" } },
+    ]);
+  });
+
   it("does not consume chat rows for an epic-only presence", async () => {
     const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(false);
     const { markReadCalls, streamClient } =
