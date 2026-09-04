@@ -223,9 +223,16 @@ export function ensureBrowserViewSession(
  * version tracks the runtime; the platform token is the standard per-OS string
  * a real Chrome reports (macOS reports Intel even on Apple Silicon, matching
  * Chrome). Traycer's own host/renderer comms keep their branded UA via
- * `configureUserAgent()` on the default session - only guests change here.
+ * `configureUserAgent()` on the default session.
+ *
+ * Guests get this clean UA too, but not via a session-level `setUserAgent`
+ * call here: guest partition sessions are never the default session, so with
+ * no explicit session UA they fall through to `app.userAgentFallback`, which
+ * `configureUserAgent()` sets to this same value. That one lever covers both
+ * guests and their popups (popups share the opener's partition session) -
+ * exported for `configureUserAgent()` to consume.
  */
-function guestBrowserUserAgent(): string {
+export function guestBrowserUserAgent(): string {
   const platformToken = guestBrowserPlatformToken();
   return `Mozilla/5.0 (${platformToken}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${process.versions.chrome} Safari/537.36`;
 }
@@ -243,10 +250,6 @@ export function ensureBrowserViewSessionForPartition(
   const existing = sessionsByPartition.get(partition);
   if (existing !== undefined) return existing;
   const browserSession = session.fromPartition(partition, { cache: true });
-  // Session-level, so it covers every guest on this partition AND every popup
-  // (popups share the opener's partition session), sparing the OAuth popup the
-  // "Electron" UA that providers reject.
-  browserSession.setUserAgent(guestBrowserUserAgent());
   installBrowserViewSessionPolicy(browserSession);
   sessionsByPartition.set(partition, browserSession);
   observePrimaryProfileCookieChanges(partition, browserSession);

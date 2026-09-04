@@ -2,10 +2,7 @@ import type { Event, Input, RenderProcessGoneDetails, Result } from "electron";
 import type { BrowserViewStatus } from "@traycer-clients/shared/platform/browser-view";
 import { log } from "../../app/logger";
 import { guestNavigationGuards } from "../browser-guest-navigation";
-import type {
-  BrowserViewPopupWindow,
-  BrowserViewWebContents,
-} from "../browser-view-port";
+import type { BrowserViewWebContents } from "../browser-view-port";
 import type { BrowserSessionProfile } from "../browser-session";
 import type { BrowserViewAnnotationHost } from "./browser-view-annotation-host";
 import type { BrowserViewChords } from "./browser-view-chords";
@@ -101,9 +98,6 @@ export class BrowserViewEntryFactory {
         "before-input-event": (event: Event, input: Input): void => {
           this.handleBeforeInputEvent(entry, event, input);
         },
-        "did-create-window": (window: BrowserViewPopupWindow): void => {
-          this.popups.handleDidCreateWindow(entry, window);
-        },
         "did-navigate": (_event: Event, url: string): void => {
           this.handleCommittedNavigation(entry, url);
         },
@@ -168,8 +162,16 @@ export class BrowserViewEntryFactory {
       closePromise: null,
       internalNavigation: false,
     };
+    this.popups.installGuestGesture(webContents);
+    // The tile's opener context is a live view of the entry: read at open time,
+    // so a `window.open` resolves against the tile's current location and
+    // surface. A popup gets its own context installed by the popups module.
     webContents.setWindowOpenHandler((details) =>
-      this.popups.handleWindowOpen(entry, details),
+      this.popups.handleWindowOpen(
+        { surface: entry.surface, currentUrl: entry.currentUrl },
+        details,
+        webContents,
+      ),
     );
     for (const [event, handler] of Object.entries(entry.listeners)) {
       webContents.on(event, handler);

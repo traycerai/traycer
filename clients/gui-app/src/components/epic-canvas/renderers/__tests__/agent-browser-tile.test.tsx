@@ -2,7 +2,10 @@ import "../../../../../__tests__/test-browser-apis";
 import type { ComponentProps } from "react";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ElectronTabSurface } from "@/components/epic-canvas/renderers/agent-browser-tile";
+import {
+  ElectronTabSurface,
+  settleMatchesLatch,
+} from "@/components/epic-canvas/renderers/agent-browser-tile";
 import { startPersistentBrowserGuestHost } from "@/lib/browser-view/guest/persistent-browser-guest-host";
 import { FakeBrowserViewBridge } from "@/lib/browser-view/__tests__/fake-browser-view-bridge";
 import type {
@@ -35,6 +38,8 @@ const state = vi.hoisted(() => ({
   focusAddress: vi.fn(),
   /** Shared across renders so a Retry click can be asserted against it. */
   navigateToUrl: vi.fn<(url: string) => void>(),
+  /** The tile's latch callback, captured from the chrome hook's inputs. */
+  latchAttemptedUrl: null as ((url: string) => void) | null,
 }));
 
 vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
@@ -84,9 +89,13 @@ vi.mock("@/stores/epics/canvas/store", () => ({
     { getState: () => canvasState },
   ),
 }));
+interface ChromeMockInput extends Record<string, unknown> {
+  readonly onAttemptedUrl: (url: string) => void;
+}
 vi.mock("@/components/epic-canvas/renderers/use-electron-tile-chrome", () => ({
-  useElectronTabChrome: (input: Record<string, unknown>) => {
+  useElectronTabChrome: (input: ChromeMockInput) => {
     state.chromeInputs.push(input);
+    state.latchAttemptedUrl = input.onAttemptedUrl;
     return {
       controller: CHROME_CONTROLLER,
       navigateToUrl: state.navigateToUrl,
@@ -831,5 +840,159 @@ describe("ElectronTabSurface navigation stall", () => {
     });
 
     expect(state.navigateToUrl).toHaveBeenCalledExactlyOnceWith(NODE.url);
+  });
+});
+
+/**
+ * The honest loader's stale-settle guard must not pin `status` at `loading`
+ * forever after an echo-less settle. A back/forward history nav or a session
+ * reconnect re-attach settles straight to `ready` with no preceding `loading`
+ * echo, so `echoSeen` never flips; a settle whose URL matches the latch is
+ * that attempt completing, not a stale settle, and clears the latch.
+ */
+describe("ElectronTabSurface echo-less settle", () => {
+  function statusChange(
+    url: string,
+    status: "loading" | "ready" | "dead",
+  ): NativeStatusChange {
+    return {
+      hostId: "host-1",
+      sessionId: "session-1",
+      tabId: "tab-1",
+      url,
+      title: null,
+      status,
+      reason: null,
+      canGoBack: false,
+      canGoForward: false,
+      zoomPercent: 100,
+    };
+  }
+
+  beforeEach(() => {
+    state.visible = true;
+    state.bridge = new TestBridge();
+    state.chromeInputs = [];
+    state.latchAttemptedUrl = null;
+    state.sessions = liveSessions();
+    canvasState.tabsById = { "view-1": { epicId: "epic-1" } };
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+  });
+
+  afterEach(async () => {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    cleanup();
+    stopGuestHost?.();
+    stopGuestHost = null;
+    vi.useRealTimers();
+  });
+
+  function latch(url: string): void {
+    if (state.latchAttemptedUrl === null) {
+      throw new Error("latch callback missing");
+    }
+    state.latchAttemptedUrl(url);
+  }
+
+  // The loader panel stays mounted at `opacity-0` when hidden, so its
+  // painted-ness is the overlay ancestor's opacity class, not the text's
+  // presence in the DOM.
+  function loaderOverlayClassName(): string {
+    const banner = screen.getByText("Reconnecting to this session");
+    const overlay = banner.closest('[class*="opacity-"]');
+    if (!(overlay instanceof HTMLElement)) {
+      throw new Error("expected loader overlay ancestor");
+    }
+    return overlay.className;
+  }
+
+  it("accepts an echo-less ready for the latched url and never stalls", async () => {
+    const bridge = state.bridge;
+    if (bridge === null) throw new Error("bridge missing");
+    renderTile(
+      createBinding(() => Promise.resolve({ detach: () => Promise.resolve() })),
+    );
+    await act(() => Promise.resolve());
+    expect(loaderOverlayClassName()).toContain("opacity-100");
+
+    // Back/forward (or reconnect) latches the destination, then the page
+    // settles straight to ready with no `loading` echo.
+    act(() => {
+      latch("https://example.com/");
+      bridge.emitStatus(statusChange("https://example.com/", "ready"));
+    });
+
+    expect(loaderOverlayClassName()).toContain("opacity-0");
+
+    // Latch cleared: the stall clock is moot now that status is ready.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    expect(screen.queryByText("This page did not load")).toBeNull();
+  });
+
+  it("still drops an echo-less ready for a different url (newest submit wins)", async () => {
+    const bridge = state.bridge;
+    if (bridge === null) throw new Error("bridge missing");
+    renderTile(
+      createBinding(() => Promise.resolve({ detach: () => Promise.resolve() })),
+    );
+    await act(() => Promise.resolve());
+
+    act(() => {
+      latch("https://example.com/page-b");
+      bridge.emitStatus(statusChange("https://other.example/", "ready"));
+    });
+
+    // Dropped as a stale pre-echo settle: overlay stays painted, latch kept.
+    expect(loaderOverlayClassName()).toContain("opacity-100");
+  });
+
+  it("clears the latch on the normal echo path (loading echo then ready)", async () => {
+    const bridge = state.bridge;
+    if (bridge === null) throw new Error("bridge missing");
+    renderTile(
+      createBinding(() => Promise.resolve({ detach: () => Promise.resolve() })),
+    );
+    await act(() => Promise.resolve());
+
+    act(() => {
+      latch("https://example.com/page-b");
+      bridge.emitStatus(statusChange("https://example.com/page-b", "loading"));
+      bridge.emitStatus(statusChange("https://example.com/page-b", "ready"));
+    });
+
+    expect(loaderOverlayClassName()).toContain("opacity-0");
+  });
+});
+
+describe("settleMatchesLatch", () => {
+  it("matches across trailing-slash, hash and http↔https differences", () => {
+    expect(
+      settleMatchesLatch("https://example.com/a", "https://example.com/a/"),
+    ).toBe(true);
+    expect(
+      settleMatchesLatch("https://example.com/a", "https://example.com/a#x"),
+    ).toBe(true);
+    expect(
+      settleMatchesLatch("http://example.com/a", "https://example.com/a"),
+    ).toBe(true);
+  });
+
+  it("distinguishes genuinely different pages", () => {
+    expect(
+      settleMatchesLatch("https://example.com/a", "https://other.example/a"),
+    ).toBe(false);
+    expect(
+      settleMatchesLatch("https://example.com/a", "https://example.com/b"),
+    ).toBe(false);
+  });
+
+  it("falls back to exact equality for non-http(s) urls", () => {
+    expect(settleMatchesLatch("about:blank", "about:blank")).toBe(true);
+    expect(settleMatchesLatch("about:blank", "about:config")).toBe(false);
   });
 });

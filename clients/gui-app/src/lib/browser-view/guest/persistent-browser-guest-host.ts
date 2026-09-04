@@ -211,6 +211,9 @@ function createGuestWebview(
   // (`params.src`).
   webview.setAttribute("src", `${BLANK_GUEST_SRC}#${registrationId}`);
   webview.setAttribute("partition", partition);
+  // GSI/OAuth open their sign-in window after async work, so Chromium only
+  // creates it when the guest is allowed popups; main gesture-gates the open.
+  webview.setAttribute("allowpopups", "");
   webview.style.display = "flex";
   webview.style.width = "100%";
   webview.style.height = "100%";

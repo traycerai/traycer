@@ -49,6 +49,7 @@ import {
   makeBrowserSessionTileRef,
 } from "@/stores/epics/canvas/tile-schema/browser-tile";
 import { claimHostedPaneActivationFocus } from "@/components/epic-canvas/pane-activation";
+import { samePageKey } from "@/lib/links/normalize-url";
 
 interface ElectronTabSurfaceNode {
   readonly id: string;
@@ -244,7 +245,7 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
         return;
       }
       const current = attemptedNavigationRef.current;
-      if (!isStaleSettleBeforeEcho(current, change.status)) {
+      if (!isStaleSettleBeforeEcho(current, change.status, change.url)) {
         setStatus(change.status);
         setStatusReason(change.reason);
         setStatusUrl(change.url);
@@ -256,7 +257,11 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
       if (change.status === "loading") {
         setLoadingNonce((nonce) => nonce + 1);
       }
-      const next = nextAttemptedNavigationAfterStatus(current, change.status);
+      const next = nextAttemptedNavigationAfterStatus(
+        current,
+        change.status,
+        change.url,
+      );
       attemptedNavigationRef.current = next;
     });
     return () => {
@@ -760,55 +765,84 @@ interface AttemptedNavigation {
 }
 
 /**
- * Address submit latches {url, echoSeen:false}. navigate() emits a
- * synchronous `loading` echo before loadURL, so the first loading
- * status after a submit is this attempt's echo (echoSeen=true). A
- * later `ready` then clears the latch. A `ready` that arrives before
- * that echo is a stale settle from a previous attempt - ignore it
- * (newest submit wins; do not let it replace the latch or feed
- * the toolbar state).
+ * True when a settle's URL is the latched attempt's own page completing,
+ * tolerating the trailing-slash / hash / http↔https differences a site
+ * introduces between the submitted URL and where the tab commits.
+ * `samePageKey` keys http(s) URLs on host+path+query (scheme-insensitive);
+ * a non-http(s) latch (e.g. `about:blank`) falls back to exact equality.
+ */
+// eslint-disable-next-line react-refresh/only-export-components -- test-only export; the component's own callers use this helper directly, the export exists only for the latch unit tests.
+export function settleMatchesLatch(
+  latchUrl: string,
+  settledUrl: string,
+): boolean {
+  const a = samePageKey(latchUrl);
+  const b = samePageKey(settledUrl);
+  return a !== null && b !== null ? a === b : latchUrl === settledUrl;
+}
+
+/**
+ * Address submit (and back/forward) latches {url, echoSeen:false}.
+ * navigate() emits a synchronous `loading` echo before loadURL, so the
+ * first loading status after such an attempt is its echo (echoSeen=true),
+ * and a later `ready` then clears the latch. A `ready` that arrives before
+ * that echo is normally a stale settle from a previous attempt - ignore it
+ * (newest submit wins; do not let it replace the latch or feed the toolbar
+ * state).
  *
- * A submit whose URL equals the active latch is a no-op (echoSeen
- * stays). That matches the manager skipping navigate when
- * requestedUrl already equals the upsert. Resetting would mint a
- * phantom attempt that never gets an echo.
+ * Exception: a back/forward history nav or a session reconnect re-attach
+ * settles straight to `ready` with NO loading echo. Such a settle whose URL
+ * matches the latch (`settleMatchesLatch`) is that very attempt completing,
+ * not a stale one - accept it and clear the latch. Only an echo-less `ready`
+ * whose URL does NOT match the latch is still dropped as stale.
  *
- * `dead` keeps the latch so a later Retry still upserts the submitted
- * URL rather than the pre-submit page. Residual B: the dead branch
- * currently has no Retry button; if Retry is ever exposed there it
- * must force reload (user-tile `reloadTile`), not rely on upsert
- * identity - manager already set requestedUrl to the attempt before
- * loadURL failed.
+ * That URL-match also closes the "Residual B" resubmit-same-URL cases:
+ * resubmitting B when the manager skips navigate (requestedUrl already B)
+ * emits no echo, but the eventual `ready` for B now matches the latch and
+ * clears it instead of sitting inert.
  *
- * Same root cause (submit-via-upsert-identity): if B settled via
- * redirect to C (latch cleared) and the user resubmits B, the
- * manager may skip navigate (requestedUrl still B) and emit nothing.
- * A fresh {B, echoSeen:false} then sits inert. Do not patch the
- * latch; the honest fix is a force-navigate submit path
- * (reloadTile-style), which is shared manager semantics.
+ * A submit whose URL equals the active latch is a no-op (echoSeen stays) -
+ * see `latchAttemptedUrl`.
+ *
+ * `dead` keeps the latch so a later Retry still upserts the submitted URL
+ * rather than the pre-submit page. The dead branch currently has no Retry
+ * button; if Retry is ever exposed there it must force reload (user-tile
+ * `reloadTile`), not rely on upsert identity - manager already set
+ * requestedUrl to the attempt before loadURL failed.
  */
 function nextAttemptedNavigationAfterStatus(
   current: AttemptedNavigation | null,
   status: BrowserViewStatus,
+  settledUrl: string,
 ): AttemptedNavigation | null {
   if (current === null) return null;
-  // Residual B + redirected-away resubmit: keep latch. Both are
-  // submit-via-upsert-identity. Dead-state Retry, if ever exposed,
-  // must use a forced reload path like the user tile's reloadTile.
+  // Dead-state Retry, if ever exposed, must use a forced reload path like
+  // the user tile's reloadTile rather than upsert identity.
   if (status === "dead") return current;
   if (status === "loading") {
     if (current.echoSeen) return current;
     return { url: current.url, echoSeen: true };
   }
-  if (!current.echoSeen) return current;
+  // Echo-less `ready` for a different page is still a stale pre-echo settle;
+  // keep waiting. Echo seen, or a settle that matches the latch (echo-less
+  // history/reconnect settle), is this attempt completing - clear it.
+  if (!current.echoSeen && !settleMatchesLatch(current.url, settledUrl)) {
+    return current;
+  }
   return null;
 }
 
 function isStaleSettleBeforeEcho(
   current: AttemptedNavigation | null,
   status: BrowserViewStatus,
+  settledUrl: string,
 ): boolean {
-  return current !== null && status === "ready" && !current.echoSeen;
+  return (
+    current !== null &&
+    status === "ready" &&
+    !current.echoSeen &&
+    !settleMatchesLatch(current.url, settledUrl)
+  );
 }
 
 /**

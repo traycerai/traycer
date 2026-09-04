@@ -392,15 +392,11 @@ describe("browser view session policy", () => {
     expect(electronState.defaultSession?.downloadListeners).toEqual([]);
   });
 
-  it("gives the guest partition a clean desktop Chrome UA (no Electron, no product token)", async () => {
+  it("exports a clean desktop Chrome UA (no Electron, no product token) for the app-level fallback", async () => {
     const mod = await import("../browser-session");
 
-    mod.ensureBrowserViewSession(PRIMARY);
+    const ua = mod.guestBrowserUserAgent();
 
-    const ua = electronState.browserSession?.userAgent;
-    if (ua === null || ua === undefined) {
-      throw new Error("expected a guest user agent");
-    }
     expect(ua).not.toMatch(/Electron/i);
     expect(ua).not.toMatch(/Traycer/i);
     expect(ua).toContain(`Chrome/${process.versions.chrome}`);

@@ -1,9 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
+import type { WebContents } from "electron";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Mock } from "vitest";
 import { log } from "../../app/logger";
 import { RunnerHostEvent } from "../../../ipc-contracts/ipc-channels";
 import { BrowserViewManager } from "../browser-view-manager";
+import { MAX_BROWSER_VIEW_POPUPS } from "../manager/browser-view-popups";
 import type {
   BrowserViewCapturedImage,
   BrowserViewDebugger,
@@ -88,6 +91,48 @@ const BASE_KEY = {
   ...BASE_TILE_KEY,
   theme: TEST_ANNOTATION_THEME,
 };
+
+type PopupWindowOpenHandler = NonNullable<FakeWebContents["windowOpenHandler"]>;
+
+type FakeAdoptedWebContents = WebContents & {
+  readonly setUserAgent: Mock<(userAgent: string) => void>;
+};
+
+// Stands in for the popup contents Chromium pre-creates for a scripted
+// window.open. WebContents extends EventEmitter, so a bare emitter satisfies the
+// structural cast the adoption path only ever passes through, never inspects -
+// `setUserAgent` is spied on only to assert the adoption path no longer calls
+// it (that UA now comes from app.userAgentFallback, see network.ts).
+function fakeAdoptedContents(): FakeAdoptedWebContents {
+  return Object.assign(new EventEmitter(), {
+    setUserAgent: vi.fn(),
+  }) as FakeAdoptedWebContents;
+}
+
+// Drives a native popup the way Electron does: a fresh gesture on the opener,
+// the window-open handler, then the `createWindow` callback that adopts the
+// pre-created contents. Returns the popup window the manager tracked.
+function openPopupThroughHandler(
+  harness: Harness,
+  handler: PopupWindowOpenHandler,
+  gestureTarget: EventEmitter,
+  details: {
+    readonly url: string;
+    readonly frameName: string;
+    readonly features: string;
+    readonly disposition: string;
+  },
+): FakePopupWindow {
+  gestureTarget.emit("input-event", {}, { type: "mouseDown" });
+  const result = handler(details);
+  if (result.action !== "allow") {
+    throw new Error(`expected a popup allow, received ${result.action}`);
+  }
+  result.createWindow({ webContents: fakeAdoptedContents() });
+  const created = harness.createdPopupWindows.at(-1);
+  if (created === undefined) throw new Error("expected a created popup window");
+  return created.window;
+}
 
 class FakeDebugger implements BrowserViewDebugger {
   attached = false;
@@ -274,18 +319,7 @@ class FakeWebContents extends EventEmitter implements BrowserViewWebContents {
   devToolsWebContentsId: number | null = null;
   openDevToolsCalls: unknown[] = [];
   windowOpenHandler:
-    | ((details: {
-        readonly url: string;
-        readonly frameName: string;
-        readonly features: string;
-        readonly disposition: string;
-      }) =>
-        | { readonly action: "deny" }
-        | {
-            readonly action: "allow";
-            readonly overrideBrowserWindowOptions: unknown;
-            readonly outlivesOpener: boolean;
-          })
+    | Parameters<BrowserViewWebContents["setWindowOpenHandler"]>[0]
     | null = null;
   private url = "about:blank";
 
@@ -435,18 +469,7 @@ class FakeWebContents extends EventEmitter implements BrowserViewWebContents {
   }
 
   setWindowOpenHandler(
-    handler: (details: {
-      readonly url: string;
-      readonly frameName: string;
-      readonly features: string;
-      readonly disposition: string;
-    }) =>
-      | { readonly action: "deny" }
-      | {
-          readonly action: "allow";
-          readonly overrideBrowserWindowOptions: unknown;
-          readonly outlivesOpener: boolean;
-        },
+    handler: Parameters<BrowserViewWebContents["setWindowOpenHandler"]>[0],
   ): void {
     this.windowOpenHandler = handler;
   }
@@ -496,6 +519,11 @@ class FakePopupWebContents extends EventEmitter {
     return super.once(event, listener);
   }
 
+  setUserAgent(_userAgent: string): void {
+    // Not asserted through this fake - the popup-adoption test drives the
+    // pre-created contents directly via `fakeAdoptedContents()`.
+  }
+
   setWindowOpenHandler(
     handler: Parameters<BrowserViewPopupWebContents["setWindowOpenHandler"]>[0],
   ): void {
@@ -521,6 +549,11 @@ class FakePopupWindow extends EventEmitter {
     this.closeCalls += 1;
     this.destroyed = true;
   }
+}
+
+interface CreatedPopupWindow {
+  readonly window: FakePopupWindow;
+  readonly adopted: WebContents | undefined;
 }
 
 class FakeDevToolsWindow {
@@ -567,6 +600,7 @@ interface Harness {
   readonly primaryProfileObservedUrls: string[];
   readonly releasedIsolatedSessions: BrowserSessionProfileRequest[];
   readonly registeredPopupWebContents: BrowserViewPopupWebContents[];
+  readonly createdPopupWindows: CreatedPopupWindow[];
   emitDownload(change: BrowserSessionDownloadChange): void;
   emitCertificateError(change: BrowserSessionCertificateErrorChange): void;
   emitWindowChange(): void;
@@ -648,6 +682,7 @@ function createHarnessWithOptions(
   const primaryProfileObservedUrls: string[] = [];
   const releasedIsolatedSessions: BrowserSessionProfileRequest[] = [];
   const registeredPopupWebContents: BrowserViewPopupWebContents[] = [];
+  const createdPopupWindows: CreatedPopupWindow[] = [];
   const windowListeners = new Set<() => void>();
   const downloadListeners = new Set<
     (change: BrowserSessionDownloadChange) => void
@@ -740,6 +775,15 @@ function createHarnessWithOptions(
       rendererResetWindowIds.push(windowId);
     },
     createPopupWindowOptions: () => ({ width: 900 }),
+    createPopupWindow: (input) => {
+      const window = new FakePopupWindow(nextWebContentsId);
+      nextWebContentsId += 1;
+      createdPopupWindows.push({
+        window,
+        adopted: input.createWindowOptions.webContents,
+      });
+      return window;
+    },
     createDevToolsWindow: () => {
       const window = new FakeDevToolsWindow(nextWebContentsId);
       nextWebContentsId += 1;
@@ -831,6 +875,7 @@ function createHarnessWithOptions(
     primaryProfileObservedUrls,
     releasedIsolatedSessions,
     registeredPopupWebContents,
+    createdPopupWindows,
     emitDownload: (change) => {
       for (const listener of downloadListeners) listener(change);
     },
@@ -1455,9 +1500,14 @@ describe("BrowserViewManager native tab lifecycle", () => {
       BASE_TILE_KEY,
       "https://example.com/",
     );
-    const popup = new FakePopupWindow(999);
-
-    view.emit("did-create-window", popup);
+    const handler = view.windowOpenHandler;
+    if (handler === null) throw new Error("expected a window-open handler");
+    const popup = openPopupThroughHandler(harness, handler, view, {
+      url: "https://example.com/popup",
+      frameName: "popup",
+      features: "width=400,height=300",
+      disposition: "new-window",
+    });
 
     // A popup shares the opener's jar, so `window.open()` then
     // `location = "file:///..."` would otherwise walk around every gate.
@@ -3093,6 +3143,9 @@ describe("BrowserViewManager in-page window.open (Decision #22)", () => {
     );
     const handler = view.windowOpenHandler;
     if (handler === null) throw new Error("expected a window-open handler");
+    // A real popup allow needs a recent user gesture on the opener; tile and
+    // scheme denials return before the gate, so this is inert for them.
+    view.emit("input-event", {}, { type: "mouseDown" });
     const result = handler({
       url,
       frameName: features.length > 0 ? "popup" : "_blank",
@@ -3182,7 +3235,11 @@ describe("BrowserViewManager in-page window.open (Decision #22)", () => {
     expect(safelyOpenExternalMock).not.toHaveBeenCalled();
   });
 
-  it("reapplies the popup policy recursively without duplicate listeners", async () => {
+  it("does not set a per-contents UA on adopted popup contents (app.userAgentFallback covers it)", async () => {
+    // A pre-created popup WebContents ignores both the guest session's UA
+    // and a per-contents setUserAgent call, so that responsibility moved to
+    // `app.userAgentFallback` (set once in configureUserAgent()) - see
+    // network.ts. This only asserts createWindow no longer calls it here.
     const harness = createHarness();
     const { view } = await attachNativeTab(
       harness,
@@ -3190,28 +3247,101 @@ describe("BrowserViewManager in-page window.open (Decision #22)", () => {
       BASE_KEY,
       "https://opener.example/",
     );
-    const popup = new FakePopupWindow(101);
-    view.emit("did-create-window", popup);
+    const handler = view.windowOpenHandler;
+    if (handler === null) throw new Error("expected a window-open handler");
+    view.emit("input-event", {}, { type: "mouseDown" });
+    const result = handler({
+      url: "https://accounts.example/o/oauth2/auth",
+      frameName: "popup",
+      features: "width=400,height=300",
+      disposition: "new-window",
+    });
+    if (result.action !== "allow") {
+      throw new Error(`expected a popup allow, received ${result.action}`);
+    }
+    const adopted = fakeAdoptedContents();
+    result.createWindow({ webContents: adopted });
+
+    expect(adopted.setUserAgent).not.toHaveBeenCalled();
+  });
+
+  it("denies a real popup opened without a recent user gesture", async () => {
+    const harness = createHarness();
+    const { view } = await attachNativeTab(
+      harness,
+      "window-1",
+      BASE_KEY,
+      "https://opener.example/",
+    );
+    const handler = view.windowOpenHandler;
+    if (handler === null) throw new Error("expected a window-open handler");
+    const result = handler({
+      url: "https://target.example/popup",
+      frameName: "popup",
+      features: "width=400,height=300",
+      disposition: "new-window",
+    });
+    expect(result).toEqual({ action: "deny" });
+    expect(harness.openTileRequests).toEqual([]);
+  });
+
+  it("denies a real popup once the concurrent-popup cap is filled", async () => {
+    const harness = createHarness();
+    const { view } = await attachNativeTab(
+      harness,
+      "window-1",
+      BASE_KEY,
+      "https://opener.example/",
+    );
+    const handler = view.windowOpenHandler;
+    if (handler === null) throw new Error("expected a window-open handler");
+    for (let i = 0; i < MAX_BROWSER_VIEW_POPUPS; i += 1) {
+      openPopupThroughHandler(harness, handler, view, {
+        url: "https://target.example/popup",
+        frameName: "popup",
+        features: "width=400,height=300",
+        disposition: "new-window",
+      });
+    }
+    view.emit("input-event", {}, { type: "mouseDown" });
+    const result = handler({
+      url: "https://target.example/popup",
+      frameName: "popup",
+      features: "width=400,height=300",
+      disposition: "new-window",
+    });
+    expect(result).toEqual({ action: "deny" });
+  });
+
+  it("installs the popup policy recursively so a popup-of-popup is governed", async () => {
+    const harness = createHarness();
+    const { view } = await attachNativeTab(
+      harness,
+      "window-1",
+      BASE_KEY,
+      "https://opener.example/",
+    );
+    const handler = view.windowOpenHandler;
+    if (handler === null) throw new Error("expected a window-open handler");
+    const popup = openPopupThroughHandler(harness, handler, view, {
+      url: "https://opener.example/popup",
+      frameName: "popup",
+      features: "width=400,height=300",
+      disposition: "new-window",
+    });
 
     const popupHandler = popup.webContents.windowOpenHandler;
     expect(popupHandler).toEqual(expect.any(Function));
-    const popupOpenTileListeners =
-      popup.webContents.listenerCount("did-create-window");
-    expect(popupOpenTileListeners).toBe(1);
-
-    const nestedPopup = new FakePopupWindow(102);
-    popup.webContents.emit("did-create-window", nestedPopup);
-    expect(nestedPopup.webContents.windowOpenHandler).toEqual(
-      expect.any(Function),
-    );
-    expect(nestedPopup.webContents.listenerCount("did-create-window")).toBe(1);
-
-    const nestedPopupHandler = nestedPopup.webContents.windowOpenHandler;
-    if (nestedPopupHandler === null) {
-      throw new Error("expected recursive popup window-open handler");
+    if (popupHandler === null || popupHandler === undefined) {
+      throw new Error("expected a popup window-open handler");
     }
+    // The policy is installed exactly once - one navigation tracker per popup.
+    expect(popup.webContents.listenerCount("did-navigate")).toBe(1);
+
+    // The popup can open a tile of its own, routed onto the opener's surface.
+    popup.webContents.emit("input-event", {}, { type: "mouseDown" });
     expect(
-      nestedPopupHandler({
+      popupHandler({
         url: "https://target.example/tile",
         frameName: "_blank",
         features: "",
@@ -3224,13 +3354,98 @@ describe("BrowserViewManager in-page window.open (Decision #22)", () => {
       disposition: "foreground",
     });
 
-    // A repeated did-create-window delivery for the same native child must
-    // not register another handler or closed listener.
-    view.emit("did-create-window", popup);
-    expect(popup.webContents.listenerCount("did-create-window")).toBe(
-      popupOpenTileListeners,
+    // And a native popup-of-popup gets its OWN governed contents.
+    const nestedPopup = openPopupThroughHandler(
+      harness,
+      popupHandler,
+      popup.webContents,
+      {
+        url: "https://target.example/nested",
+        frameName: "popup",
+        features: "width=400,height=300",
+        disposition: "new-window",
+      },
     );
-    expect(popup.webContents.windowOpenHandler).toBe(popupHandler);
+    expect(nestedPopup.webContents.windowOpenHandler).toEqual(
+      expect.any(Function),
+    );
+    expect(nestedPopup.webContents.listenerCount("did-navigate")).toBe(1);
+  });
+
+  it("adopts the contents Electron pre-created and keeps options chrome-only", async () => {
+    const harness = createHarness();
+    const { view } = await attachNativeTab(
+      harness,
+      "window-1",
+      BASE_KEY,
+      "https://opener.example/",
+    );
+    const handler = view.windowOpenHandler;
+    if (handler === null) throw new Error("expected a window-open handler");
+    view.emit("input-event", {}, { type: "mouseDown" });
+    const result = handler({
+      url: "https://target.example/popup",
+      frameName: "popup",
+      features: "width=400,height=300",
+      disposition: "new-window",
+    });
+    if (result.action !== "allow") throw new Error("expected a popup allow");
+    // No webPreferences may travel with an adopted contents - the adopted
+    // contents already carry the opener's hardened prefs and session.
+    expect(result.overrideBrowserWindowOptions).not.toHaveProperty(
+      "webPreferences",
+    );
+    const adopted = fakeAdoptedContents();
+    const returned = result.createWindow({ webContents: adopted });
+    // Electron's contract: createWindow returns the adopted contents.
+    expect(returned).toBe(adopted);
+    const created = harness.createdPopupWindows.at(-1);
+    if (created === undefined)
+      throw new Error("expected a created popup window");
+    expect(created.adopted).toBe(adopted);
+    expect(harness.registeredPopupWebContents).toContain(
+      created.window.webContents,
+    );
+    expect(created.window.webContents.windowOpenHandler).toEqual(
+      expect.any(Function),
+    );
+  });
+
+  it("resolves a popup's own window.open against the popup, not the tile", async () => {
+    const harness = createHarness();
+    const { view } = await attachNativeTab(
+      harness,
+      "window-1",
+      BASE_TILE_KEY,
+      "https://tile.example/home",
+    );
+    const handler = view.windowOpenHandler;
+    if (handler === null) throw new Error("expected a window-open handler");
+    const popup = openPopupThroughHandler(harness, handler, view, {
+      url: "https://accounts.example/oauth",
+      frameName: "popup",
+      features: "width=400,height=300",
+      disposition: "new-window",
+    });
+    // The popup navigates within its own origin...
+    popup.webContents.emit("did-navigate", {}, "https://accounts.example/pick");
+    const popupHandler = popup.webContents.windowOpenHandler;
+    if (popupHandler === null || popupHandler === undefined) {
+      throw new Error("expected a popup window-open handler");
+    }
+    // ...then opens a RELATIVE target. It must resolve against the popup's
+    // current location, never the original tile's - the popup-of-popup fix.
+    popupHandler({
+      url: "/add-account",
+      frameName: "_blank",
+      features: "",
+      disposition: "foreground-tab",
+    });
+    expect(harness.openTileRequests).toContainEqual({
+      ...BASE_TILE_KEY,
+      url: "https://accounts.example/add-account",
+      disposition: "foreground",
+    });
   });
 });
 

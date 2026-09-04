@@ -40,7 +40,9 @@ import type {
   BrowserViewGuestAttachResult,
   BrowserViewDevToolsWindow,
   BrowserViewNavigationHistory,
+  BrowserViewPopupCreateWindowOptions,
   BrowserViewPopupWebContents,
+  BrowserViewPopupWindow,
   BrowserViewWebContents,
   BrowserViewWindow,
 } from "./browser-view-port";
@@ -89,9 +91,11 @@ interface BrowserViewManagerOptions {
     windowId: string,
   ) => void;
   readonly getWindow: (windowId: string) => BrowserViewWindow | null;
-  readonly createPopupWindowOptions: (
-    request: BrowserSessionProfileRequest,
-  ) => BrowserWindowConstructorOptions;
+  readonly createPopupWindowOptions: () => BrowserWindowConstructorOptions;
+  readonly createPopupWindow: (input: {
+    readonly windowOptions: BrowserWindowConstructorOptions;
+    readonly createWindowOptions: BrowserViewPopupCreateWindowOptions;
+  }) => BrowserViewPopupWindow;
   readonly createDevToolsWindow: (
     windowId: string,
   ) => BrowserViewDevToolsWindow;
@@ -217,6 +221,7 @@ export class BrowserViewManager {
     });
     this.popups = new BrowserViewPopups({
       createPopupWindowOptions: options.createPopupWindowOptions,
+      createPopupWindow: options.createPopupWindow,
       registerPopupWebContents: options.registerPopupWebContents,
       send: options.send,
     });

@@ -1,4 +1,4 @@
-import type { BrowserWindowConstructorOptions } from "electron";
+import type { BrowserWindowConstructorOptions, WebContents } from "electron";
 import type {
   BrowserCdpCommand,
   BrowserCdpTarget,
@@ -85,12 +85,36 @@ export interface BrowserViewWindowOpenDetails {
   readonly disposition: string;
 }
 
+/**
+ * The window-open options Electron hands to a {@link WindowOpenHandlerResponse}
+ * `createWindow` callback. `webContents` is the popup contents Chromium has
+ * already created for a scripted `window.open`; it is present at runtime but
+ * absent from the published `electron.d.ts`, so it is re-declared here. It is
+ * optional because Chromium omits it for the dispositions that never reach the
+ * allow path (Cmd/Ctrl-click), and keeping it optional is what lets this stay
+ * assignable to Electron's own `createWindow(options)` parameter.
+ */
+export interface BrowserViewPopupCreateWindowOptions extends BrowserWindowConstructorOptions {
+  readonly webContents?: WebContents;
+}
+
 export type BrowserViewWindowOpenResult =
   | { readonly action: "deny" }
   | {
       readonly action: "allow";
       readonly overrideBrowserWindowOptions: BrowserWindowConstructorOptions;
       readonly outlivesOpener: boolean;
+      /**
+       * Called instead of `new BrowserWindow` so the popup ADOPTS the contents
+       * Chromium pre-created (`options.webContents`). Adopting them - rather
+       * than constructing fresh contents - is what preserves `window.opener`
+       * and the inherited session that OAuth/SSO popups relay their params
+       * through, and it is why `did-create-window` is not emitted for these
+       * windows. Returns the adopted contents, as Electron's contract requires.
+       */
+      readonly createWindow: (
+        options: BrowserViewPopupCreateWindowOptions,
+      ) => WebContents;
     };
 
 export interface BrowserViewCropRect {
@@ -122,6 +146,7 @@ export interface BrowserViewDevToolsWindow {
 export interface BrowserViewPopupWebContents {
   readonly id: number;
   once(event: "destroyed", listener: () => void): void;
+  setUserAgent(userAgent: string): void;
   setWindowOpenHandler(
     handler: (
       details: BrowserViewWindowOpenDetails,

@@ -200,7 +200,7 @@ describe("webview guest birth", () => {
     const { event, webPreferences } = willAttach(
       host,
       mount.registrationId,
-      {},
+      { disablePopups: true },
       {},
     );
 
@@ -216,9 +216,11 @@ describe("webview guest birth", () => {
         allowRunningInsecureContent: false,
         webviewTag: false,
         partition: PARTITION,
-        disablePopups: true,
       }),
     );
+    // No longer hardened: a renderer-supplied disablePopups is stripped, so
+    // Chromium's popup blocker stays off and OAuth/GSI popups can open.
+    expect(webPreferences.disablePopups).toBeUndefined();
     expect(webPreferences.preload).toBeUndefined();
     expect(webPreferences.additionalArguments).toBeUndefined();
     expect(webPreferences.enableBlinkFeatures).toBeUndefined();

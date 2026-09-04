@@ -19,6 +19,8 @@ import type { IpcManagedWindow } from "./runner-ipc-bridge";
 import { BrowserViewManager } from "../browser-view/browser-view-manager";
 import type {
   BrowserViewGuestAttachResult,
+  BrowserViewPopupCreateWindowOptions,
+  BrowserViewPopupWindow,
   BrowserViewWindow,
 } from "../browser-view/browser-view-port";
 import { hostPlatformFromProcessPlatform } from "../browser-view/manager/browser-view-chords";
@@ -344,8 +346,8 @@ export function registerBrowserViewIpc(
       toBrowserViewWindow(
         bridge.windowRegistry.getRecordById(windowId)?.window,
       ),
-    createPopupWindowOptions: (request) =>
-      createBrowserPopupWindowOptions(request),
+    createPopupWindowOptions: () => createBrowserPopupWindowOptions(),
+    createPopupWindow: (input) => createBrowserPopupWindow(input),
     createDevToolsWindow: (windowId) =>
       createBrowserDevToolsWindow(bridge, windowId),
     registerPopupWebContents: (webContents) => {
@@ -1243,9 +1245,13 @@ export function requestRendererGuestRelease(
   );
 }
 
-function createBrowserPopupWindowOptions(
-  request: BrowserSessionProfileRequest,
-): BrowserWindowConstructorOptions {
+// Chrome-only: the popup ADOPTS the contents Chromium pre-created (see
+// createBrowserPopupWindow), and passing `webPreferences` alongside an adopted
+// `webContents` is rejected by Electron - the adopted contents already carry
+// the opener's hardened prefs, partition and session. That inheritance is the
+// fix: it is what preserves `window.opener` and the login the popup's OAuth/SSO
+// flow relays through.
+function createBrowserPopupWindowOptions(): BrowserWindowConstructorOptions {
   return {
     show: true,
     width: 900,
@@ -1259,8 +1265,24 @@ function createBrowserPopupWindowOptions(
     fullscreenable: false,
     modal: false,
     kiosk: false,
-    webPreferences: createBrowserViewWebPreferences(request),
   };
+}
+
+// Adopts `createWindowOptions.webContents` - the popup contents Chromium
+// already created - instead of letting `new BrowserWindow` mint fresh ones.
+// Adopting is what carries `window.opener` and the inherited session into the
+// popup, so a nested OAuth "add account" popup still has the channel it relays
+// its params through.
+function createBrowserPopupWindow(input: {
+  readonly windowOptions: BrowserWindowConstructorOptions;
+  readonly createWindowOptions: BrowserViewPopupCreateWindowOptions;
+}): BrowserViewPopupWindow {
+  const adopted = input.createWindowOptions.webContents;
+  const options: BrowserViewPopupCreateWindowOptions =
+    adopted === undefined
+      ? input.windowOptions
+      : { ...input.windowOptions, webContents: adopted };
+  return new BrowserWindow(options);
 }
 
 function createBrowserDevToolsWindow(

@@ -27,7 +27,6 @@ const BLANK_GUEST_SRC_PREFIX = `${BLANK_GUEST_SRC}#`;
 
 /** Every `webPreferences` key `hardenGuestPreferences` assigns; the rest go. */
 const HARDENED_GUEST_PREFERENCE_KEYS = new Set([
-  "disablePopups",
   "nodeIntegration",
   "nodeIntegrationInSubFrames",
   "sandbox",
@@ -283,13 +282,12 @@ function hardenGuestPreferences(
   webPreferences: WebPreferences,
   partition: string,
 ): void {
-  const prefs: WebPreferences & { disablePopups?: boolean } = webPreferences;
+  const prefs: WebPreferences = webPreferences;
   for (const key of Object.keys(prefs)) {
     if (!HARDENED_GUEST_PREFERENCE_KEYS.has(key)) {
       delete prefs[key as keyof typeof prefs];
     }
   }
-  prefs.disablePopups = true;
   prefs.nodeIntegration = false;
   prefs.nodeIntegrationInSubFrames = false;
   prefs.sandbox = true;
