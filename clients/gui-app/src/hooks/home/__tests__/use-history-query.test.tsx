@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -37,7 +37,12 @@ const testState = vi.hoisted(() => {
     localHomedTaskIds: new Set<string>(),
     taskContextsError: null as Error | null,
     chatHostSupport: "supported",
+    // The cloud hook's GUARDED refresh - the one `useHistoryQuery` must expose.
     refetch: vi.fn(),
+    // TanStack's raw `query.refetch`, which overrides `enabled` and resets the
+    // page identity before the verdict is consulted; History must never hand
+    // this one out.
+    rawRefetch: vi.fn(),
     fetchNextPage: vi.fn(),
     // T5a/T5b: `isCloudPagePending` and `completeness` are the two NEW
     // fields `useCloudEpicTasksQuery` exposes so `useHistoryQuery` can pass
@@ -96,8 +101,9 @@ vi.mock("@/hooks/epics/use-cloud-epic-tasks-query", () => ({
         isFetching: testState.isFetching,
         isPlaceholderData: testState.isPlaceholderData,
         error: null,
-        refetch: testState.refetch,
+        refetch: testState.rawRefetch,
       },
+      refetch: testState.refetch,
       fetchNextPage: testState.fetchNextPage,
       hasNextPage: testState.hasNextPage,
       isFetchingNextPage: false,
@@ -183,6 +189,7 @@ describe("useHistoryQuery", () => {
     testState.localHomedTaskIds = new Set<string>();
     testState.chatHostSupport = "supported";
     testState.refetch.mockReset();
+    testState.rawRefetch.mockReset();
     testState.fetchNextPage.mockReset();
     testState.isCloudPagePending = false;
     testState.completenessOverride = null;
@@ -202,6 +209,20 @@ describe("useHistoryQuery", () => {
     // Zustand stores are module scope, so a status staged here outlives this
     // file inside the same worker.
     useAuthStore.setState({ status: "signed-out" });
+  });
+
+  it("exposes the cloud hook's guarded refetch, never the raw query's", () => {
+    // TanStack's `query.refetch` overrides `enabled` and resets the page
+    // identity before the dispatch-time verdict check can refuse the cloud
+    // leg, so a pull-to-refresh holding it across a demotion discarded every
+    // retained cursor page for a request it never sent. History must hand out
+    // the hook's own callback, which re-reads the verdict at dispatch.
+    render(<HistoryQueryHarness search={DEFAULT_HISTORY_SEARCH} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+
+    expect(testState.refetch).toHaveBeenCalledTimes(1);
+    expect(testState.rawRefetch).not.toHaveBeenCalled();
   });
 
   it("locally narrows existing rows while a new search query is debouncing", () => {
@@ -935,6 +956,14 @@ function HistoryQueryHarness(props: {
   const result = useHistoryQuery({ search: props.search, nowMs: null });
   return (
     <div>
+      <button
+        type="button"
+        onClick={() => {
+          void result.refetch();
+        }}
+      >
+        Refresh
+      </button>
       <div data-testid="pending">{String(result.isPending)}</div>
       <div data-testid="fetching">{String(result.isFetching)}</div>
       <div data-testid="host-requires-cloud-to-list">

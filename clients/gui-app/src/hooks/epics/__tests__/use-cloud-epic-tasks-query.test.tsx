@@ -688,10 +688,12 @@ describe("useCloudEpicTasksQuery", () => {
       expect(taskLightIds(result.current.tasks)).toEqual(["first-local"]);
     });
 
-    // This is exactly the real History refresh path: `useHistoryQuery`
-    // exposes the raw `tasksQuery.refetch`, not this hook's convenience
-    // wrapper. Starting a query-owned episode here must supersede the
-    // unresolved predecessor before its response can overwrite the fresh page.
+    // The raw `query.refetch` is what this hook's guarded `refetch` delegates
+    // to once it admits the leg (and what `useHistoryQuery` exposed directly
+    // before it adopted the guarded callback), so the episode boundary is
+    // pinned on the raw path: starting a query-owned episode here must
+    // supersede the unresolved predecessor before its response can overwrite
+    // the fresh page.
     await act(async () => {
       await result.current.query.refetch();
     });
@@ -1189,9 +1191,10 @@ describe("useCloudEpicTasksQuery", () => {
       ]);
     });
 
-    // This is the exact bypass that History exposes today: raw Query.refetch,
-    // rather than this hook's returned convenience callback. The queryFn must
-    // own the reset so every caller observes the same generation boundary.
+    // Raw `query.refetch`, deliberately: the guarded `refetch` delegates to
+    // it once the leg is admitted, and any other caller that reaches for the
+    // raw callback lands here too. The queryFn must own the reset so every
+    // caller observes the same generation boundary.
     await act(async () => {
       await result.current.query.refetch();
     });
@@ -1835,11 +1838,10 @@ describe("useCloudEpicTasksQuery", () => {
       });
       expect(result.current.initialLegRefused).toBe(true);
 
-      act(() => {
-        result.current.refetch();
-      });
+      // A refused refresh still RESOLVES - a pull-to-refresh awaits it to end
+      // its spinner - it just dispatches nothing.
       await act(async () => {
-        await Promise.resolve();
+        await result.current.refetch();
       });
       expect(mockHostClient.request).not.toHaveBeenCalled();
       unmount();
@@ -1877,18 +1879,15 @@ describe("useCloudEpicTasksQuery", () => {
       // Non-vacuity: the held closure dispatches while the verdict holds.
       const refetchHeldUnderVerdict = result.current.refetch;
       act(() => {
-        refetchHeldUnderVerdict();
+        void refetchHeldUnderVerdict();
       });
       await waitFor(() => {
         expect(mockHostClient.request).toHaveBeenCalledTimes(2);
       });
 
       setUnverified();
-      act(() => {
-        refetchHeldUnderVerdict();
-      });
       await act(async () => {
-        await Promise.resolve();
+        await refetchHeldUnderVerdict();
       });
       expect(mockHostClient.request).toHaveBeenCalledTimes(2);
       unmount();

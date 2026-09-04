@@ -97,7 +97,15 @@ export interface CloudEpicTasksQueryResult {
   readonly fetchNextPage: () => void;
   readonly hasNextPage: boolean;
   readonly isFetchingNextPage: boolean;
-  readonly refetch: () => void;
+  /**
+   * The manual refresh (refresh button, pull-to-refresh, retry). Consult THIS,
+   * never `query.refetch`: TanStack's `refetch()` overrides `enabled`, so the
+   * raw callback dispatches the cloud leg the render-time refusal exists to
+   * prevent, and it resets the page identity before that refusal is ever
+   * consulted. Resolves without dispatching when the leg is refused, so a
+   * caller awaiting it to end a spinner is not left hanging.
+   */
+  readonly refetch: () => Promise<unknown>;
   /**
    * The local-first revalidation leg is outstanding: the rendered first page is
    * a renderable LOCAL snapshot whose cloud half has not landed.
@@ -622,8 +630,14 @@ export function useCloudEpicTasksQuery(
     // Both the render's answer AND the dispatch-time one: the render-captured
     // flag covers a surface that re-rendered, the live read covers a callback
     // captured under a verdict (or a `1.6` negotiation) that no longer holds.
-    if (initialLegRefused || !mayDispatchInitialLegNow()) return;
-    void queryRefetch();
+    //
+    // Returns the fetch's own promise so a surface that awaits the refresh
+    // (pull-to-refresh ends its spinner on it) follows the real request, and
+    // a refusal resolves at once rather than leaving that surface hanging.
+    if (initialLegRefused || !mayDispatchInitialLegNow()) {
+      return Promise.resolve(undefined);
+    }
+    return queryRefetch();
   }, [initialLegRefused, mayDispatchInitialLegNow, queryRefetch]);
 
   return {

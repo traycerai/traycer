@@ -146,11 +146,18 @@ export function useHistoryQuery(
     fetchNextPage,
     hasNextPage,
     isFetchingNextPage,
+    // The GUARDED refresh, not `tasksQuery.refetch`. TanStack's own `refetch`
+    // overrides `enabled` and resets the page identity before the dispatch-time
+    // verdict check can refuse the cloud leg, so a pull-to-refresh that held
+    // the raw callback across a demotion (or on a pre-1.6 host after the
+    // verdict was withdrawn) discarded every retained cursor page for a
+    // request it then never sent. The hook's callback re-reads the verdict at
+    // dispatch and resolves without touching the list when it refuses.
+    refetch: refetchCloudTasks,
     isCloudPagePending,
     completeness: unionCompleteness,
     initialLegRefused,
   } = useCloudEpicTasksQuery(request, { enabled: true });
-  const tasksQueryRefetch = tasksQuery.refetch;
   const chatHostFilterActive = params.search.chatHosts.length > 0;
   const hostChatHostSupport = useChatHostFilterSupport(hostId);
   const isQueryDebouncing = debouncedQuery !== trimmedQuery;
@@ -367,7 +374,7 @@ export function useHistoryQuery(
     worktreesByEpicId,
   ]);
 
-  const refetch = useCallback(() => tasksQueryRefetch(), [tasksQueryRefetch]);
+  const refetch = useCallback(() => refetchCloudTasks(), [refetchCloudTasks]);
 
   return {
     data,
