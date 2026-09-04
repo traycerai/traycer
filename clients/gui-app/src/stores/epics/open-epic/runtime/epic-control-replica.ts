@@ -212,8 +212,28 @@ export interface EpicControlReplica extends Replica<
    * back to its optimistic default, the connected-once latch cleared, this
    * cycle's durability proof and snapshot freshness reset, migration back to
    * idle and any fetch error dropped.
+   *
+   * Only for a cycle that REDIALS (`requestFreshSnapshot`): the legs go back
+   * to `connecting` on the promise that the reopened sessions report `open`
+   * again. A reset that keeps its sockets must use
+   * {@link beginAuthorityReplacementCycle} instead.
    */
   beginFreshCycle(): void;
+  /**
+   * Move to a fresh cycle over sockets that STAY OPEN: an authority-side
+   * replacement (`authority-epoch-changed`, `security-epoch-changed`,
+   * `migration-completed`) reached through `resetAllPlanes`.
+   *
+   * Resets the same per-cycle state as {@link beginFreshCycle} - durability
+   * proof, snapshot freshness, migration back to idle, fetch error dropped -
+   * but keeps both transport legs, the aggregate, the cloud status and the
+   * connected-once latch exactly as the sessions last reported them. A
+   * `StreamSession` never reports `connecting` and an already-open one never
+   * re-reports `open`, so a leg this method reset to `connecting` would have
+   * nothing left to move it: the pill read "Still reconnecting…" over a
+   * healthy link for hours (staging, 2026-09-04).
+   */
+  beginAuthorityReplacementCycle(): void;
   /** Reset this cycle's snapshot freshness without touching anything else. */
   clearRootSnapshotFreshness(): void;
   /**
@@ -920,6 +940,24 @@ export function createEpicControlReplica(
         // Re-subscribing is the moment the migration story restarts - the host
         // will re-emit `migrationStarted` if the new subscription still hits
         // the migration path.
+        migration: IDLE_MIGRATION_SLICE,
+      });
+    },
+
+    beginAuthorityReplacementCycle(): void {
+      // Deliberately NOT `transportStatus` / the two legs / `hasConnectedOnce`
+      // / `cloudSyncStatus`: the sessions behind them are still open and will
+      // not report again, so whatever they last reported stays the truth.
+      const cycleDurabilityState = resetDurabilityProofForOpenCycle();
+      hasFreshRootSnapshotForOpenCycle = false;
+      publish({
+        // The slice re-publishes the untouched legs alongside the cleared
+        // durability proof, so the projection stays one consistent cycle.
+        ...connectionStateSlice(),
+        snapshotFetchError: null,
+        ...cycleDurabilityState,
+        // The replacement snapshot the host sends next restarts the migration
+        // story exactly as a re-subscribe would.
         migration: IDLE_MIGRATION_SLICE,
       });
     },

@@ -12,13 +12,13 @@ import type {
   BrowserViewDownloadChange,
   BrowserViewFindChange,
   BrowserViewOpenTileRequest,
-  BrowserViewOverlayOcclusionResult,
-  BrowserViewOverlayReleaseResult,
   BrowserViewSnapshotInvalidatedChange,
   BrowserViewTileCommandEvent,
   BrowserViewTileKey,
   BrowserViewNativeTabCapability,
   BrowserViewNativeTabStatusChange,
+  BrowserViewGuestMountRequested,
+  BrowserViewGuestReleaseRequested,
   LoginImportResult,
   LoginImportScan,
   LoginImportSource,
@@ -69,21 +69,11 @@ export function buildBrowserViewBridge(): { browserView: BrowserViewBridge } {
           RunnerHostInvoke.browserViewControlElectronTab,
           input,
         ) as Promise<void>,
-      updateBounds: (input) =>
-        ipcRenderer.invoke(
-          RunnerHostInvoke.browserViewUpdateBounds,
-          input,
-        ) as Promise<void>,
       setReservedChords: async (chords) => {
         await ipcRenderer.invoke(
           RunnerHostInvoke.browserViewSetReservedChords,
           { chords },
         );
-      },
-      overlayPaintAck: async (overlayId) => {
-        await ipcRenderer.invoke(RunnerHostInvoke.browserViewOverlayPaintAck, {
-          overlayId,
-        });
       },
       findInPage: (input) =>
         ipcRenderer.invoke(
@@ -135,16 +125,6 @@ export function buildBrowserViewBridge(): { browserView: BrowserViewBridge } {
           RunnerHostInvoke.browserViewAnnotationAttachResult,
           input,
         ) as Promise<void>,
-      occludeForOverlay: (input) =>
-        ipcRenderer.invoke(
-          RunnerHostInvoke.browserViewOccludeForOverlay,
-          input,
-        ) as Promise<BrowserViewOverlayOcclusionResult>,
-      releaseOverlay: (input) =>
-        ipcRenderer.invoke(
-          RunnerHostInvoke.browserViewReleaseOverlay,
-          input,
-        ) as Promise<BrowserViewOverlayReleaseResult>,
       getSaveLogins: () =>
         ipcRenderer.invoke(
           RunnerHostInvoke.browserViewSaveLoginsGet,
@@ -213,6 +193,11 @@ export function buildBrowserViewBridge(): { browserView: BrowserViewBridge } {
           RunnerHostEvent.browserViewTileCommand,
           handler,
         ),
+      onTileFocused: (handler) =>
+        subscribe<BrowserViewTileKey>(
+          RunnerHostEvent.browserViewTileFocused,
+          handler,
+        ),
       onSnapshotInvalidated: (handler) =>
         subscribe<BrowserViewSnapshotInvalidatedChange>(
           RunnerHostEvent.browserViewSnapshotInvalidated,
@@ -250,6 +235,16 @@ export function buildBrowserViewBridge(): { browserView: BrowserViewBridge } {
       onNativeTabStatusChange: (handler) =>
         subscribe<BrowserViewNativeTabStatusChange>(
           RunnerHostEvent.browserViewNativeTabStatusChange,
+          handler,
+        ),
+      onGuestMountRequested: (handler) =>
+        subscribe<BrowserViewGuestMountRequested>(
+          RunnerHostEvent.browserViewGuestMountRequested,
+          handler,
+        ),
+      onGuestReleaseRequested: (handler) =>
+        subscribe<BrowserViewGuestReleaseRequested>(
+          RunnerHostEvent.browserViewGuestReleaseRequested,
           handler,
         ),
     },

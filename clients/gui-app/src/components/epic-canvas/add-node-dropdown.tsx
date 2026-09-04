@@ -438,6 +438,10 @@ function TerminalAgentSubMenuContent(props: TerminalAgentSubMenuContentProps) {
             // own `providers.list` read.
             createProfileHostId={launchHostId}
             runTargetHostId={launchHostId}
+            // A menu has no terminal surface of its own, and its launch host
+            // may not be the tab's; the setup CTA shows its steps without the
+            // button and names the chat picker instead.
+            terminalLoginSurface={null}
             profileAdmission={null}
           />
         </div>

@@ -1245,7 +1245,8 @@ describe("resume-too-old replacement scope (FIX C)", () => {
     // A resume-too-old reply on the STATE lane, under the SAME authority
     // epoch: the offered cursor could no longer be served, which
     // `resetStateRecordsOnly` treats as a records-plane-only fact and never
-    // reaches `control.beginFreshCycle()`. Driven through the state lane
+    // reaches `control.beginAuthorityReplacementCycle()`. Driven through the
+    // state lane
     // ALONE (never touching the status lane again) so nothing here can be
     // explained by the status lane's own accompanying snapshot.
     rig.state.deliverSnapshot(
@@ -1280,9 +1281,10 @@ describe("resume-too-old replacement scope (FIX C)", () => {
       updatedAt: 3000,
     });
     await flushMicrotasks();
-    // The write gate is shut: `beginFreshCycle` reset this cycle's
-    // freshness and the transport leg, and nothing has re-established
-    // either for the new epoch, so this command never reaches the host.
+    // The write gate is shut: `beginAuthorityReplacementCycle` reset this
+    // cycle's snapshot freshness (the transport legs stay as the still-open
+    // sessions reported them), and nothing has re-established it for the
+    // new epoch, so this command never reaches the host.
     expect(rig.sentCommandCount()).toBe(2);
   });
 });

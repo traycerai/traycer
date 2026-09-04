@@ -124,6 +124,7 @@ import {
   useChatTranscriptJumpStore,
 } from "@/stores/chats/chat-transcript-jump-store";
 import { makeCommGraphTileRef } from "@/stores/epics/canvas/tile-schema/comm-graph-tile";
+import type { CommGraphTileRef } from "@/stores/epics/canvas/types";
 import { TestEpicSessionWrapper } from "@/components/epic-canvas/__tests__/test-epic-session";
 import { createEpicSessionTestHarness } from "@/components/epic-canvas/__tests__/test-epic-session-harness";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
@@ -245,9 +246,19 @@ function created(
   };
 }
 
+/**
+ * These cases assert on React Flow nodes, so the tile is opened in the
+ * NODE-GRAPH mode explicitly. The tile's own default is the office floor, which
+ * draws to a canvas and mounts no nodes at all.
+ */
+function graphModeTileRef(): CommGraphTileRef {
+  const ref = makeCommGraphTileRef(EPIC_ID);
+  return { ...ref, view: { ...ref.view, mode: "graph" } };
+}
+
 async function renderTile(): Promise<void> {
   await renderSurfaces(
-    <CommGraphTile node={makeCommGraphTileRef(EPIC_ID)} viewTabId={EPIC_ID} />,
+    <CommGraphTile node={graphModeTileRef()} viewTabId={EPIC_ID} />,
   );
 }
 

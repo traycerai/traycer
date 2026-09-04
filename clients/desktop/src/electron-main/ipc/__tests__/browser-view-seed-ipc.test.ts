@@ -41,10 +41,6 @@ vi.mock("electron", () => {
   class BrowserWindow {
     constructor(_options: unknown) {}
   }
-  class WebContentsView {
-    readonly webContents = { id: 1, once: () => undefined };
-    constructor(_options: unknown) {}
-  }
   return {
     app: {
       getPath: (_key: string): string => fixture.userDataDir,
@@ -52,7 +48,6 @@ vi.mock("electron", () => {
       exit: (_code: number): void => undefined,
     },
     BrowserWindow,
-    WebContentsView,
     dialog: {
       showSaveDialogSync: () => undefined,
       // The destructive handlers ask asynchronously; nothing here raises one.
@@ -92,7 +87,6 @@ const managerOptions = vi.hoisted(() => ({
 }));
 
 vi.mock("../../browser-view/browser-view-manager", () => ({
-  BOUNDS_STREAM_LOG_INTERVAL_MS: 1_000,
   BrowserViewManager: class {
     constructor(options: {
       readonly seedStorageState: (

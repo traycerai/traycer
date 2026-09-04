@@ -147,9 +147,6 @@ export function useElectronTabChrome(
   const applyViewportPreset = (preset: BrowserViewViewportPresetId): void => {
     setViewportPreset(preset);
     persistViewportPreset(preset);
-    void control({ kind: "setViewportPreset", viewportPreset: preset }).catch(
-      ignoreError,
-    );
   };
 
   const cancelDownload = (downloadId: string): void => {

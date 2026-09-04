@@ -102,6 +102,28 @@ describe("readMacosKeychainPassphrase", () => {
       "Brave",
     ]);
   });
+
+  it("asks for Helium's 'Storage Key' item, which breaks the Safe Storage naming", async () => {
+    const { run, calls } = fakeRunner({
+      kind: "exited",
+      exitCode: 0,
+      stdout: "helium-secret\n",
+    });
+
+    await readMacosKeychainPassphrase("helium", run);
+
+    expect(calls).toHaveLength(1);
+    const call = calls[0];
+    if (call === undefined) throw new Error("expected one call");
+    expect(call.args).toEqual([
+      "find-generic-password",
+      "-w",
+      "-s",
+      "Helium Storage Key",
+      "-a",
+      "Helium",
+    ]);
+  });
 });
 
 describe("readLinuxSecretServicePassphrase", () => {
@@ -158,6 +180,8 @@ describe("readLinuxSecretServicePassphrase", () => {
       arc: "chromium",
       vivaldi: "chrome",
       opera: "chromium",
+      aside: "chromium",
+      helium: "chromium",
     };
 
     for (const [browser, application] of Object.entries(

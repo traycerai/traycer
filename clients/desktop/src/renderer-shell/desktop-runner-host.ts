@@ -76,6 +76,7 @@ import type {
   InstalledFont,
   PendingCertificateError,
   ProcessMetricsSnapshot,
+  RendererJsHeapBreakdown,
   TrustedCertificateEntry,
   Vibrancy,
 } from "../ipc-contracts/platform-types";
@@ -418,6 +419,7 @@ export interface DesktopPlatformBridge {
   diagnostics: {
     getMetrics(): Promise<ProcessMetricsSnapshot>;
     takeHeapSnapshot(): Promise<string | null>;
+    measureJsHeaps(): Promise<RendererJsHeapBreakdown | null>;
     traceStart(): Promise<boolean>;
     traceStop(): Promise<string | null>;
   };

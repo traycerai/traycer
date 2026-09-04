@@ -31,6 +31,10 @@ import {
 import { useFileTreeRevealStore } from "@/stores/file-tree/file-tree-reveal-store";
 import { useSidebarNodeRevealStore } from "@/stores/epics/sidebar-node-reveal-store";
 import { useEpicLeftPanelStore } from "@/stores/epics/left-panel-store";
+import {
+  tabSurfaceKey,
+  useSurfaceHostSelectionStore,
+} from "@/stores/host/surface-host-selection-store";
 import { useTabsStore } from "@/stores/tabs/store";
 import type { TabRef } from "@/stores/tabs/types";
 import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
@@ -57,6 +61,18 @@ import { buildSyntheticTileSurfaceEnvironment } from "@/components/epic-canvas/s
 import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
 import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { epicTerminalUiIdentityKey } from "@/lib/terminals/pending-create-identity";
+
+vi.mock("@/hooks/terminal/use-epic-terminal-authority", () => ({
+  useEpicTerminalAuthority: () => ({
+    capability: "legacy",
+    projection: undefined,
+    viewModel: null,
+    canMutate: false,
+    migrationPending: false,
+    rename: { mutate: vi.fn() },
+  }),
+}));
 
 const VIEW_TAB_ID = "view-tab-1";
 
@@ -161,6 +177,10 @@ vi.mock("@dnd-kit/core", () => ({
 // mounts without a HostRuntimeProvider / EpicSessionProvider.
 vi.mock("@/components/epic-canvas/canvas/use-rename-canvas-tab", () => ({
   useRenameCanvasTab: () => () => undefined,
+}));
+
+vi.mock("@/components/epic-canvas/canvas/browser-tab-presentation", () => ({
+  useBrowserTabPresentation: () => null,
 }));
 
 // TabItem resolves the tab's bound-host client for terminal renames; these
@@ -419,6 +439,16 @@ const CHAT: EpicCanvasTileRef = {
   type: "chat",
   name: "Chat",
   hostId: "host-A",
+};
+
+const TERMINAL: EpicCanvasTileRef = {
+  id: "terminal-1",
+  instanceId: "inst-terminal-1",
+  type: "terminal",
+  name: "Terminal",
+  hostId: "host-A",
+  titleSource: "default",
+  cwd: "/repo",
 };
 
 function specTab(n: number): EpicCanvasTileRef {
@@ -2118,7 +2148,11 @@ describe("<TabGroupView /> Reveal in Sidebar", () => {
     testState.missingArtifactIds.clear();
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     useFileTreeRevealStore.setState({ requestsByViewTabId: {} }, true);
-    useSidebarNodeRevealStore.setState({ requestsByViewTabId: {} }, true);
+    useSidebarNodeRevealStore.setState(
+      { requestsByViewTabId: {}, visibleByViewTabId: {} },
+      true,
+    );
+    useSurfaceHostSelectionStore.getState().resetForTests();
     useEpicLeftPanelStore.setState(
       useEpicLeftPanelStore.getInitialState(),
       true,
@@ -2133,6 +2167,17 @@ describe("<TabGroupView /> Reveal in Sidebar", () => {
     hostId: "host-A",
     workspacePath: "/repo",
     filePath: "src/lib/a.ts",
+  };
+
+  const BROWSER_TAB: EpicCanvasTileRef = {
+    id: "browser-session:sess-1:browser-tab-1",
+    instanceId: "inst-browser-1",
+    type: "browser-session",
+    name: "Browser",
+    hostId: "host-B",
+    sessionId: "sess-1",
+    tabId: "browser-tab-1",
+    viewportPreset: "responsive",
   };
 
   it("writes a reveal request and switches to the Files panel for a workspace-file tab", () => {
@@ -2163,7 +2208,7 @@ describe("<TabGroupView /> Reveal in Sidebar", () => {
     ).toBe("file-tree");
   });
 
-  it("writes no reveal request for a non-file tab and switches to its own panel", () => {
+  it("writes a reveal request for an artifact tab and switches to its own panel", () => {
     const tabs = [SPEC, WORKSPACE_FILE_TAB];
     seedCanvas(tabs, SPEC.instanceId);
     render(groupView(tabs, SPEC.instanceId, true));
@@ -2174,11 +2219,36 @@ describe("<TabGroupView /> Reveal in Sidebar", () => {
     );
 
     expect(
-      useFileTreeRevealStore.getState().requestsByViewTabId[VIEW_TAB_ID],
-    ).toBeUndefined();
+      useSidebarNodeRevealStore.getState().requestsByViewTabId[VIEW_TAB_ID],
+    ).toEqual({ nodeId: SPEC.id, nonce: 1 });
     expect(
       useEpicLeftPanelStore.getState().activePanelIdByTabId[VIEW_TAB_ID],
     ).toBe("artifacts");
+  });
+
+  it("targets the browser row, panel, and host for an independent browser tab", () => {
+    const tabs = [SPEC, BROWSER_TAB];
+    seedCanvas(tabs, BROWSER_TAB.instanceId);
+    render(groupView(tabs, BROWSER_TAB.instanceId, true));
+
+    fireEvent.contextMenu(
+      screen.getByTestId(`tab-item-${BROWSER_TAB.instanceId}`),
+    );
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Reveal in Sidebar" }),
+    );
+
+    expect(
+      useSidebarNodeRevealStore.getState().requestsByViewTabId[VIEW_TAB_ID],
+    ).toEqual({ nodeId: BROWSER_TAB.id, nonce: 1 });
+    expect(useEpicLeftPanelStore.getState().getActivePanelId(VIEW_TAB_ID)).toBe(
+      "browsers",
+    );
+    expect(
+      useSurfaceHostSelectionStore.getState().selections[
+        tabSurfaceKey("browsers", VIEW_TAB_ID)
+      ],
+    ).toBe(BROWSER_TAB.hostId);
   });
 
   it("writes a node reveal request for an agent tab", () => {
@@ -2196,6 +2266,33 @@ describe("<TabGroupView /> Reveal in Sidebar", () => {
     ).toEqual({ nodeId: CHAT.id, nonce: 1 });
     expect(useEpicLeftPanelStore.getState().getActivePanelId(VIEW_TAB_ID)).toBe(
       "chats",
+    );
+  });
+
+  it("targets a host-bound terminal row", () => {
+    const tabs = [SPEC, TERMINAL];
+    seedCanvas(tabs, SPEC.instanceId);
+    render(groupView(tabs, SPEC.instanceId, true));
+
+    fireEvent.contextMenu(
+      screen.getByTestId(`tab-item-${TERMINAL.instanceId}`),
+    );
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Reveal in Sidebar" }),
+    );
+
+    expect(
+      useSidebarNodeRevealStore.getState().requestsByViewTabId[VIEW_TAB_ID],
+    ).toEqual({
+      nodeId: epicTerminalUiIdentityKey(
+        "session",
+        TERMINAL.hostId,
+        TERMINAL.id,
+      ),
+      nonce: 1,
+    });
+    expect(useEpicLeftPanelStore.getState().getActivePanelId(VIEW_TAB_ID)).toBe(
+      "terminals",
     );
   });
 });

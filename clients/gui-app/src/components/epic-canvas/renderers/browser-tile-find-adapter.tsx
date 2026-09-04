@@ -19,7 +19,7 @@ interface BrowserTileFindAdapterBridgeProps {
   readonly tileKey: BrowserViewTileKey;
 }
 
-interface BrowserTileFindAdapter extends TileFindAdapter {
+export interface BrowserTileFindAdapter extends TileFindAdapter {
   applyChange(change: BrowserViewFindChange): void;
 }
 
@@ -53,7 +53,8 @@ export function BrowserTileFindAdapterBridge(
   return null;
 }
 
-function createBrowserTileFindAdapter(args: {
+// eslint-disable-next-line react-refresh/only-export-components -- test-only export; the component above builds the adapter through this factory, the export exists only for the adapter unit tests.
+export function createBrowserTileFindAdapter(args: {
   readonly browserView: BrowserViewBridge | null;
   readonly tileKey: BrowserViewTileKey;
 }): BrowserTileFindAdapter {
@@ -125,7 +126,11 @@ function createBrowserTileFindAdapter(args: {
         matchCase: snapshot.matchCase,
       },
       forward,
-      true,
+      // Follow-up request that advances within the active session, so
+      // findNext is false (Electron: true begins a NEW session, false is a
+      // follow-up). Passing true here restarts the find at the first match on
+      // every next/previous.
+      false,
     );
   };
 
@@ -179,7 +184,11 @@ function createBrowserTileFindAdapter(args: {
       };
     },
     search: (input) => {
-      runSearch(input, true, false);
+      // A new/changed query begins a fresh finding session, so findNext is
+      // true (Electron: true = initial request, false = follow-up). Passing
+      // false made each keystroke a follow-up into a session that did not
+      // exist yet, so results lagged a keystroke behind the query.
+      runSearch(input, true, true);
     },
     next: () => {
       navigate(true);

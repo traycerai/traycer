@@ -29,6 +29,47 @@ export interface ProcessMetricsSnapshot {
   readonly cpuUsage: { readonly user: number; readonly system: number };
 }
 
+/**
+ * One V8 isolate inside the renderer process: the page itself, or one of the
+ * dedicated workers it has spawned. `url` is the isolate's script URL - for a
+ * worker, the chunk it was started from, which is what tells an epic runtime
+ * worker apart from a diff highlighter worker.
+ */
+export interface RendererJsHeapIsolate {
+  readonly kind: "page" | "worker";
+  readonly url: string;
+  /** `Runtime.getHeapUsage` - live objects after the last GC. */
+  readonly usedBytes: number;
+  /** `Runtime.getHeapUsage` - pages V8 has committed for this isolate. */
+  readonly totalBytes: number;
+  /**
+   * `Runtime.getHeapUsage` - memory the embedder (Blink) holds for this
+   * isolate, outside the JS heap the two fields above measure. `null` when the
+   * protocol build does not report it (both fields are experimental).
+   */
+  readonly embedderBytes: number | null;
+  /**
+   * `Runtime.getHeapUsage` - backing stores for `ArrayBuffer`s and WebAssembly
+   * memory. A diff highlighter worker's Oniguruma engine lives here, not in
+   * `usedBytes`, so a row without it undercounts exactly the off-main-thread
+   * memory this readout exists to attribute.
+   */
+  readonly backingStorageBytes: number | null;
+}
+
+/**
+ * The renderer's JS heaps, one row per isolate. A main-thread heap snapshot
+ * sees the page's isolate only; a renderer that runs a dozen dedicated workers
+ * can hold most of its memory where that snapshot cannot look. This is the
+ * readout that says where.
+ */
+export interface RendererJsHeapBreakdown {
+  readonly capturedAt: number;
+  /** The whole renderer process's working set, or `null` if it has no metric. */
+  readonly workingSetBytes: number | null;
+  readonly isolates: ReadonlyArray<RendererJsHeapIsolate>;
+}
+
 export type Vibrancy =
   | "titlebar"
   | "selection"

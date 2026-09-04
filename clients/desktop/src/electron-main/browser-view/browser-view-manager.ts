@@ -7,7 +7,6 @@ import type {
 import { RunnerHostEvent } from "../../ipc-contracts/ipc-channels";
 import type {
   BrowserViewAttachSurface,
-  BrowserViewBoundsUpdate,
   BrowserViewCapturePageResult,
   BrowserViewCertificateErrorChange,
   BrowserViewDebugSnapshot,
@@ -18,7 +17,6 @@ import type {
   BrowserViewElectronTabControl,
   BrowserViewNativeTabCapability,
   BrowserViewTileKey,
-  BrowserViewViewportPresetId,
   PipCaptureStartInput,
 } from "@traycer-clients/shared/platform/browser-view";
 import type { PipCaptureIpcPayload } from "../../ipc-contracts/pip-capture-types";
@@ -26,6 +24,7 @@ import { registrableDomainForUrl } from "@traycer/protocol/host/browser/registra
 import { describeLogError, log } from "../app/logger";
 import {
   isAllowedGuestNavigationUrl,
+  isAllowedHostInitiatedNavigationUrl,
   traceRefusedGuestNavigation,
 } from "./browser-guest-navigation";
 import type {
@@ -37,12 +36,15 @@ import type {
 import type {
   BrowserViewElectronTabCdpDispatch,
   BrowserViewEnsureTab,
+  BrowserViewGuestAttachRequest,
+  BrowserViewGuestAttachResult,
   BrowserViewDevToolsWindow,
   BrowserViewNavigationHistory,
+  BrowserViewPopupCreateWindowOptions,
   BrowserViewPopupWebContents,
+  BrowserViewPopupWindow,
   BrowserViewWebContents,
   BrowserViewWindow,
-  ManagedBrowserView,
 } from "./browser-view-port";
 import { BrowserViewAnnotationHost } from "./manager/browser-view-annotation-host";
 import {
@@ -68,11 +70,6 @@ import {
   type BrowserViewEntryKey,
 } from "./manager/browser-view-entry-registry";
 import { BrowserViewFind } from "./manager/browser-view-find";
-import {
-  assertEntryCapturable,
-  BrowserViewGeometry,
-} from "./manager/browser-view-geometry";
-import { BrowserViewOverlay } from "./manager/browser-view-overlay";
 import { BrowserViewPipCapture } from "./manager/browser-view-pip-capture";
 import { BrowserViewPopups } from "./manager/browser-view-popups";
 import {
@@ -82,21 +79,23 @@ import {
 import { BrowserViewWindowAttachment } from "./manager/browser-view-window-attachment";
 import { BrowserViewDebugSessions } from "./manager/debug-session-for";
 
-// BT-101: aggregate window for the `bounds_stream` perf log. During a resize
-// drag the renderer streams rects every frame; per-call logging would flood
-// the lane, so outcomes accumulate here and flush once per window.
-export const BOUNDS_STREAM_LOG_INTERVAL_MS = 1000;
-
 const DEVTOOLS_TITLE = "Traycer Browser DevTools";
 
 interface BrowserViewManagerOptions {
-  readonly createView: (
-    request: BrowserSessionProfileRequest,
-  ) => ManagedBrowserView;
+  readonly attachRendererGuest: (
+    windowId: string,
+    request: BrowserViewGuestAttachRequest,
+  ) => BrowserViewGuestAttachResult;
+  readonly releaseRendererGuest: (
+    registrationId: string,
+    windowId: string,
+  ) => void;
   readonly getWindow: (windowId: string) => BrowserViewWindow | null;
-  readonly createPopupWindowOptions: (
-    request: BrowserSessionProfileRequest,
-  ) => BrowserWindowConstructorOptions;
+  readonly createPopupWindowOptions: () => BrowserWindowConstructorOptions;
+  readonly createPopupWindow: (input: {
+    readonly windowOptions: BrowserWindowConstructorOptions;
+    readonly createWindowOptions: BrowserViewPopupCreateWindowOptions;
+  }) => BrowserViewPopupWindow;
   readonly createDevToolsWindow: (
     windowId: string,
   ) => BrowserViewDevToolsWindow;
@@ -111,12 +110,12 @@ interface BrowserViewManagerOptions {
   ) => () => void;
   readonly onWindowChange: (listener: () => void) => () => void;
   /**
-   * Page zoom of the app windows. Tile rects arrive in renderer CSS pixels,
-   * so every native rect is derived from the stored CSS rect times this.
+   * This desktop's local host id, read at navigate time. `file:` is only
+   * honored for a tab whose owning host IS this desktop (co-located); a remote
+   * host's tab is held to the narrower http/https/about:blank set, so a
+   * non-co-located host can never make this machine read a local file.
    */
-  readonly getZoomFactor: () => number;
-  /** Fires after the app windows have been re-zoomed. */
-  readonly onZoomChange: (listener: () => void) => () => void;
+  readonly localHostId: () => string | null;
   readonly notifyHostWindowRendererReset: (windowId: string) => void;
   readonly send: BrowserViewSend;
   /**
@@ -130,11 +129,11 @@ interface BrowserViewManagerOptions {
    */
   readonly seedStorageState: (
     input: BrowserViewEnsureTab,
-    webContents: ManagedBrowserView["webContents"],
+    webContents: BrowserViewWebContents,
   ) => Promise<BrowserStorageState | null>;
   readonly observePrimaryProfileOrigin: (
     url: string,
-    webContents: ManagedBrowserView["webContents"],
+    webContents: BrowserViewWebContents,
     profile: BrowserSessionProfile,
   ) => void;
   /**
@@ -145,8 +144,6 @@ interface BrowserViewManagerOptions {
   readonly releaseSessionStorage: (
     request: BrowserSessionProfileRequest,
   ) => void;
-  /** Flush window for the aggregate `bounds_stream` perf log. */
-  readonly boundsStreamLogIntervalMs: number;
   /** Platform used to resolve reserved chords (BT-301). */
   readonly hostPlatform: HostPlatform;
 }
@@ -155,27 +152,29 @@ interface BrowserViewManagerOptions {
  * Coordinates the browser-view modules: it owns surface binding, the control
  * dispatch the renderer drives, page/debug capture, status emission and
  * teardown. Guest birth lives in `manager/browser-view-provisioning`, host
- * window parenting in `manager/browser-view-window-attachment`, and guest
+ * window lifecycle in `manager/browser-view-window-attachment`, and guest
  * event wiring in `manager/browser-view-entry-factory`.
  */
 export class BrowserViewManager {
-  private readonly getWindow: (windowId: string) => BrowserViewWindow | null;
   private readonly createDevToolsWindow: (
     windowId: string,
   ) => BrowserViewDevToolsWindow;
   private readonly send: BrowserViewSend;
+  private readonly releaseRendererGuest: (
+    registrationId: string,
+    windowId: string,
+  ) => void;
   private readonly releaseSessionStorage: (
     request: BrowserSessionProfileRequest,
   ) => void;
+  private readonly localHostId: () => string | null;
   private readonly offWindowChange: () => void;
-  private readonly offZoomChange: () => void;
   private readonly offDownloadChange: () => void;
   private readonly offCertificateError: () => void;
   private readonly entries = new BrowserViewEntryRegistry<BrowserViewEntry>();
   private readonly nativeTabStatusListeners = new Set<
     (change: BrowserViewNativeTabStatusChange) => void
   >();
-  private readonly geometry: BrowserViewGeometry;
   private readonly popups: BrowserViewPopups;
   private readonly debugSessions: BrowserViewDebugSessions;
   private readonly windows: BrowserViewWindowAttachment;
@@ -185,21 +184,16 @@ export class BrowserViewManager {
   // calls them directly (`manager.find.find(...)`) rather than through
   // pass-through methods that add no policy.
   readonly annotations: BrowserViewAnnotationHost;
-  readonly overlay: BrowserViewOverlay;
   readonly find: BrowserViewFind;
   readonly chords: BrowserViewChords;
   readonly pip: BrowserViewPipCapture;
 
   constructor(options: BrowserViewManagerOptions) {
-    this.getWindow = options.getWindow;
     this.createDevToolsWindow = options.createDevToolsWindow;
     this.send = options.send;
+    this.releaseRendererGuest = options.releaseRendererGuest;
     this.releaseSessionStorage = options.releaseSessionStorage;
-    this.geometry = new BrowserViewGeometry({
-      getWindow: options.getWindow,
-      getZoomFactor: options.getZoomFactor,
-      boundsStreamLogIntervalMs: options.boundsStreamLogIntervalMs,
-    });
+    this.localHostId = options.localHostId;
     this.debugSessions = new BrowserViewDebugSessions({
       onDetached: (entry, webContentsId, reason) => {
         this.handleDebugSessionDetached(entry, webContentsId, reason);
@@ -209,11 +203,6 @@ export class BrowserViewManager {
       entries: this.entries,
       send: options.send,
       debugSessions: this.debugSessions,
-    });
-    this.overlay = new BrowserViewOverlay({
-      entries: this.entries,
-      geometry: this.geometry,
-      send: options.send,
     });
     this.find = new BrowserViewFind({
       entries: this.entries,
@@ -227,7 +216,6 @@ export class BrowserViewManager {
     this.windows = new BrowserViewWindowAttachment({
       entries: this.entries,
       getWindow: options.getWindow,
-      geometry: this.geometry,
       annotations: this.annotations,
       notifyHostWindowRendererReset: options.notifyHostWindowRendererReset,
       emitStatus: (entry) => {
@@ -238,21 +226,16 @@ export class BrowserViewManager {
       },
     });
     this.pip = new BrowserViewPipCapture({
-      getWindow: options.getWindow,
-      geometry: this.geometry,
-      windows: this.windows,
       debugSessions: this.debugSessions,
     });
     this.popups = new BrowserViewPopups({
       createPopupWindowOptions: options.createPopupWindowOptions,
+      createPopupWindow: options.createPopupWindow,
       registerPopupWebContents: options.registerPopupWebContents,
       send: options.send,
     });
     this.entryFactory = new BrowserViewEntryFactory({
-      createView: options.createView,
       entries: this.entries,
-      geometry: this.geometry,
-      overlay: this.overlay,
       annotations: this.annotations,
       find: this.find,
       popups: this.popups,
@@ -265,6 +248,14 @@ export class BrowserViewManager {
       emitStatus: (entry) => {
         this.emitStatus(entry);
       },
+      emitFocus: (entry) => {
+        if (entry.surface === null) return;
+        this.send(
+          entry.surface.windowId,
+          RunnerHostEvent.browserViewTileFocused,
+          toTileKey(entry.surface),
+        );
+      },
       closeEntry: (entry) => {
         void this.closeEntry(entry);
       },
@@ -273,8 +264,20 @@ export class BrowserViewManager {
       entries: this.entries,
       windows: this.windows,
       debugSessions: this.debugSessions,
-      createEntry: (requestedUrl, identity, profile) =>
-        this.entryFactory.create(requestedUrl, identity, profile),
+      createEntryFromWebContents: (
+        requestedUrl,
+        identity,
+        profile,
+        webContents,
+      ) =>
+        this.entryFactory.createFromWebContents(
+          requestedUrl,
+          identity,
+          profile,
+          webContents,
+        ),
+      attachRendererGuest: options.attachRendererGuest,
+      releaseRendererGuest: options.releaseRendererGuest,
       seedStorageState: options.seedStorageState,
       closeEntry: (entry) => this.closeEntry(entry),
       navigate: (entry, url) => this.navigate(entry, url),
@@ -283,17 +286,7 @@ export class BrowserViewManager {
       },
     });
     this.offWindowChange = options.onWindowChange(() => {
-      this.windows.reconcileVisibility(this.pip);
-    });
-    // Zoom rescales the renderer's CSS pixel, so every stored tile rect now
-    // maps to a different native rect. Re-deriving here is authoritative:
-    // the renderer's own resize-driven re-send is asynchronous and may
-    // arrive before or after this, and either order lands on the same rect.
-    this.offZoomChange = options.onZoomChange(() => {
-      for (const entry of Array.from(this.entries.surfaceValues())) {
-        this.geometry.applyBounds(entry);
-        this.geometry.applyVisibility(entry);
-      }
+      this.windows.reconcileBoundWindows();
     });
     this.offDownloadChange = options.onDownloadChange((change) => {
       this.handleDownloadChange(change);
@@ -360,9 +353,8 @@ export class BrowserViewManager {
     }
     entry.desiredVisible = true;
     entry.rendererResetPending = false;
-    this.windows.attachToCurrentWindow(entry);
+    this.windows.ensureResetListener(surface.windowId);
     this.emitStatus(entry);
-    this.geometry.applyVisibility(entry);
     return true;
   }
 
@@ -412,9 +404,6 @@ export class BrowserViewManager {
       case "goForward":
         this.moveEntryInHistory(entry, "forward");
         return true;
-      case "setViewportPreset":
-        this.setEntryViewportPreset(entry, action.viewportPreset);
-        return true;
       case "zoomIn":
         this.applyZoomStep(entry, 1);
         return true;
@@ -428,23 +417,6 @@ export class BrowserViewManager {
         this.openEntryDevTools(entry, windowId);
         return true;
     }
-  }
-
-  updateBounds(windowId: string, input: BrowserViewBoundsUpdate): void {
-    const entry = this.entries.getTile(windowId, input);
-    if (entry === undefined) {
-      // A renderer that measures before its surface is (re)bound loses its
-      // only send - the rAF loop dedupes the identical rect forever after.
-      log.debug("[browser-view] bounds update for an unbound surface", {
-        surfaceKeyId: entryKeyId({ ...input, windowId }),
-      });
-      return;
-    }
-    // Stored exactly as the renderer measured it (CSS pixels); rounding and
-    // the CSS -> DIP conversion belong to the apply seam in geometry.
-    entry.bounds = input.bounds;
-    this.geometry.applyBounds(entry);
-    this.geometry.applyVisibility(entry);
   }
 
   canTrustCertificateError(
@@ -480,7 +452,7 @@ export class BrowserViewManager {
   ): Promise<boolean> {
     const entry = this.findExactNativeEntry(input);
     if (entry === null) return false;
-    return this.pip.start(entry, windowId, input, onFrame);
+    return this.pip.start(entry, input, onFrame);
   }
 
   async capturePage(
@@ -492,14 +464,14 @@ export class BrowserViewManager {
       throw new Error("Browser view tile is not available for capture");
     }
     const surface = requireSurface(entry);
-    assertEntryCapturable(
-      entry,
-      this.getWindow(surface.windowId),
-      this.geometry.zoomFactor(),
-    );
-    const bytes = Buffer.from(
-      (await entry.view.webContents.capturePage()).toPNG(),
-    );
+    if (entry.webContents.isDestroyed()) {
+      throw new Error("Browser view tile is not available for capture");
+    }
+    const image = await entry.webContents.capturePage();
+    if (image.isEmpty()) {
+      throw new Error("Browser view tile is not available for capture");
+    }
+    const bytes = Buffer.from(image.toPNG());
     return {
       ...toTileKey(surface),
       mediaType: "image/png",
@@ -590,15 +562,12 @@ export class BrowserViewManager {
 
   dispose(): void {
     this.offWindowChange();
-    this.offZoomChange();
     this.offDownloadChange();
     this.offCertificateError();
-    this.geometry.dispose();
     for (const entry of Array.from(this.entries.guestValues())) {
       void this.closeEntry(entry);
     }
     this.popups.dispose();
-    this.overlay.dispose();
     this.annotations.dispose();
   }
 
@@ -677,16 +646,7 @@ export class BrowserViewManager {
     if (previousSurface !== null) {
       this.annotations.end(entry, "tile-close");
     }
-    const previousKeyId =
-      previousSurface === null ? null : entryKeyId(previousSurface);
-    const nextKeyId = entryKeyId(key);
-    // The frame-cache slot is keyed by entry key; drop the stale slot so the
-    // next visibility pass re-attaches under the new key (BT-202).
-    if (previousKeyId !== null) {
-      this.geometry.detachFrames(previousKeyId);
-    }
     this.entries.bindSurface(entry, key);
-    this.overlay.rekeyEntry(entry, previousKeyId, nextKeyId);
     if (previousSurface !== null && previousSurface.windowId !== key.windowId) {
       this.windows.detachResetListenerIfUnused(previousSurface.windowId);
     }
@@ -695,17 +655,10 @@ export class BrowserViewManager {
   private detachEntrySurface(entry: BrowserViewEntry): void {
     const surface = entry.surface;
     if (surface === null) return;
-    const keyId = entryKeyId(surface);
-    this.geometry.detachFrames(keyId);
     this.annotations.end(entry, "tile-close");
-    this.overlay.forgetEntry(entry, keyId);
     entry.desiredVisible = false;
-    this.geometry.hide(entry);
-    this.windows.detachFromParentWindow(entry);
     this.entries.detachSurface(entry);
     entry.surfaceBindingId = null;
-    entry.bounds = null;
-    entry.lastAppliedBounds = null;
     entry.rendererResetPending = false;
     this.windows.detachResetListenerIfUnused(surface.windowId);
     // LAST, once every field the reading depends on has moved: `viewed` is
@@ -719,25 +672,43 @@ export class BrowserViewManager {
    * The one funnel for every navigation this process asks a guest to perform -
    * the renderer's `navigate` control action and the initial navigation the
    * host's accepted tab starts with - so the scheme gate sits here rather than
-   * at either caller.
+   * at either caller. Both callers are host-initiated, so a CO-LOCATED tab (one
+   * whose owning host is this desktop) uses the wider
+   * {@link isAllowedHostInitiatedNavigationUrl} that also permits `file:`; a
+   * page-driven navigation to `file:` still hits the narrower guest guards.
+   *
+   * A tab owned by a REMOTE host is held to {@link isAllowedGuestNavigationUrl}
+   * (http/https/about:blank, no `file:`): remote hosts are headless-only by
+   * protocol, but nothing else stops a remote `createElectronTab`/`navigate`
+   * frame from asking THIS machine to read a local file, so the funnel enforces
+   * it rather than trusting the convention.
    *
    * It refuses BEFORE any entry state moves: a blocked target must not leave
    * the tile reporting `loading` for a page that will never commit.
    */
   private async navigate(entry: BrowserViewEntry, url: string): Promise<void> {
-    if (!isAllowedGuestNavigationUrl(url)) {
+    const localHostId = this.localHostId();
+    const coLocated =
+      localHostId !== null && entry.identity.key.hostId === localHostId;
+    const allowed = coLocated
+      ? isAllowedHostInitiatedNavigationUrl(url)
+      : isAllowedGuestNavigationUrl(url);
+    if (!allowed) {
       traceRefusedGuestNavigation(url, "navigate");
-      throw new Error("Browser tabs can only open http, https or about:blank.");
+      throw new Error(
+        coLocated
+          ? "Browser tabs can only open file, http, https or about:blank."
+          : "Browser tabs can only open http, https or about:blank.",
+      );
     }
     this.annotations.end(entry, "navigation");
     entry.requestedUrl = url;
     entry.status = "loading";
     entry.statusReason = null;
     entry.certificateError = null;
-    this.overlay.invalidateSnapshot(entry, "navigation-started");
     this.emitStatus(entry);
     try {
-      await entry.view.webContents.loadURL(url);
+      await entry.webContents.loadURL(url);
     } catch (err: unknown) {
       log.warn("[browser-view] loadURL failed", {
         error: describeLogError(err),
@@ -745,7 +716,6 @@ export class BrowserViewManager {
       });
       if (this.entries.isCurrent(entry)) {
         this.setStatus(entry, "ready", "Navigation failed");
-        this.geometry.applyVisibility(entry);
       }
       throw err;
     }
@@ -753,9 +723,7 @@ export class BrowserViewManager {
 
   private reloadEntry(entry: BrowserViewEntry): void {
     this.setStatus(entry, "loading", null);
-    this.overlay.invalidateSnapshot(entry, "reload");
-    entry.view.webContents.reload();
-    this.geometry.applyVisibility(entry);
+    entry.webContents.reload();
   }
 
   private moveEntryInHistory(
@@ -781,10 +749,6 @@ export class BrowserViewManager {
       return;
     }
     this.setStatus(entry, "loading", null);
-    this.overlay.invalidateSnapshot(
-      entry,
-      direction === "back" ? "go-back" : "go-forward",
-    );
     try {
       if (direction === "back") {
         navigationHistory.goBack();
@@ -794,20 +758,10 @@ export class BrowserViewManager {
     } catch (err) {
       log.warn(`[browser-view] go ${direction} failed`, {
         error: describeLogError(err),
-        webContentsId: entry.view.webContents.id,
+        webContentsId: entry.webContents.id,
       });
       this.emitStatus(entry);
     }
-    this.geometry.applyVisibility(entry);
-  }
-
-  private setEntryViewportPreset(
-    entry: BrowserViewEntry,
-    viewportPreset: BrowserViewViewportPresetId,
-  ): void {
-    entry.viewportPreset = viewportPreset;
-    this.geometry.applyBounds(entry);
-    this.geometry.applyVisibility(entry);
   }
 
   private applyZoomStep(entry: BrowserViewEntry, direction: 1 | -1): void {
@@ -822,8 +776,8 @@ export class BrowserViewManager {
     this.destroyDevToolsWindow(entry);
     const devToolsWindow = this.createDevToolsWindow(windowId);
     entry.devToolsWindow = devToolsWindow;
-    entry.view.webContents.setDevToolsWebContents(devToolsWindow.webContents);
-    entry.view.webContents.openDevTools({
+    entry.webContents.setDevToolsWebContents(devToolsWindow.webContents);
+    entry.webContents.openDevTools({
       mode: "detach",
       activate: true,
       title: DEVTOOLS_TITLE,
@@ -873,14 +827,13 @@ export class BrowserViewManager {
       tileChange,
     );
     this.setStatus(entry, "dead", "Certificate error");
-    this.geometry.applyVisibility(entry);
   }
 
   private findEntryByWebContentsId(
     webContentsId: number,
   ): BrowserViewEntry | null {
     for (const entry of this.entries.guestValues()) {
-      if (entry.view.webContents.id === webContentsId) return entry;
+      if (entry.webContents.id === webContentsId) return entry;
     }
     return null;
   }
@@ -985,7 +938,7 @@ export class BrowserViewManager {
     entry: BrowserViewEntry,
   ): BrowserViewWebContents | null {
     if (!this.entries.isCurrent(entry)) return null;
-    const webContents = entry.view.webContents;
+    const webContents = entry.webContents;
     if (webContents.isDestroyed()) return null;
     return webContents;
   }
@@ -1023,7 +976,6 @@ export class BrowserViewManager {
   private async destroyEntry(entry: BrowserViewEntry): Promise<void> {
     const surface = entry.surface;
     const keyId = surface === null ? null : entryKeyId(surface);
-    if (keyId !== null) this.geometry.detachFrames(keyId);
     log.info("[browser-view] view destroy started", {
       keyId,
       status: entry.status,
@@ -1034,8 +986,7 @@ export class BrowserViewManager {
     if (surface !== null) {
       this.windows.detachResetListenerIfUnused(surface.windowId);
     }
-    this.windows.detachFromParentWindow(entry);
-    const webContents = entry.view.webContents;
+    const webContents = entry.webContents;
     for (const [event, handler] of Object.entries(entry.listeners)) {
       webContents.off(event, handler);
     }
@@ -1044,8 +995,10 @@ export class BrowserViewManager {
     this.pip.forget(entry);
     entry.debugSession?.dispose();
     entry.debugSession = null;
-    this.geometry.hide(entry);
-    webContents.close();
+    this.releaseRendererGuest(
+      entry.identity.registrationId,
+      entry.identity.lifecycleWindowId,
+    );
     this.entries.remove(entry);
     this.releaseIsolatedSessionStorage(entry);
     this.windows.detachResetListenerIfUnused(entry.identity.lifecycleWindowId);

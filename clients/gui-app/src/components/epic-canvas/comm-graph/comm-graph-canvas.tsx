@@ -10,7 +10,14 @@
  * just the cursor being live. The transport that MOVES the cursor is docked at
  * the bottom of this canvas.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   Background,
   Controls,
@@ -49,8 +56,8 @@ import {
   type CommGraphFlowEdge,
 } from "@/components/epic-canvas/comm-graph/comm-graph-edge";
 import { CommGraphThreadPanel } from "@/components/epic-canvas/comm-graph/comm-graph-thread-panel";
-import { CommGraphAgentDetailPanel } from "@/components/epic-canvas/comm-graph/comm-graph-agent-detail-panel";
-import { commGraphEventTouchesAgent } from "@/lib/comm-graph/comm-graph-timeline";
+import { CommGraphAgentDetailSurface } from "@/components/epic-canvas/comm-graph/comm-graph-agent-detail-surface";
+import { useCommGraphOpenAgentById } from "@/components/epic-canvas/comm-graph/use-comm-graph-open-agent-by-id";
 import { commGraphEdgeInteraction } from "@/components/epic-canvas/comm-graph/comm-graph-edge-interaction";
 import {
   commGraphEdgeTravel,
@@ -61,7 +68,7 @@ import type {
   CommGraphPulseKind,
 } from "@/lib/comm-graph/comm-graph-timeline";
 import type { CommGraphTileViewState } from "@/stores/epics/canvas/types";
-import { DEFAULT_COMM_GRAPH_VIEW } from "@/stores/epics/canvas/tile-schema/comm-graph-tile";
+import { isDefaultCommGraphView } from "@/stores/epics/canvas/tile-schema/comm-graph-tile";
 import { useRegisterTileFindAdapter } from "@/components/epic-canvas/tile-find/tile-find-adapter-context";
 import { createCommGraphFindAdapter } from "@/components/epic-canvas/comm-graph/comm-graph-find-adapter";
 
@@ -146,6 +153,24 @@ export interface CommGraphCanvasProps {
   readonly playing: boolean;
   /** What the cursor event lights up, or null when it lights up nothing. */
   readonly pulse: CommGraphPulse | null;
+  /**
+   * Stable identity of the ROW behind `pulse` (`commGraphEventKey`), or null.
+   *
+   * The pulse itself is a derived value with no identity, so two consecutive
+   * rows between the same pair are indistinguishable from one row re-supplied.
+   * The office renderer spawns an envelope per key change and needs to tell
+   * those apart; the node graph re-renders either way and ignores this.
+   */
+  readonly pulseKey: string | null;
+  /**
+   * The office/graph switch, floated over the canvas AREA by each renderer.
+   *
+   * The tile owns the control (it owns the view state it writes) but cannot
+   * position it: a detail panel is the canvas's own sibling, so a toggle
+   * anchored to the tile would sit on top of that panel's close button
+   * whenever one is open.
+   */
+  readonly modeToggle: ReactNode;
   readonly view: CommGraphTileViewState;
   readonly onViewChange: (view: CommGraphTileViewState) => void;
   /** Whether this row's owning cloud origin can currently open endpoints. */
@@ -197,14 +222,6 @@ export function CommGraphCanvas(props: CommGraphCanvasProps) {
   return <CommGraphCanvasBody {...props} />;
 }
 
-function isDefaultView(view: CommGraphTileViewState): boolean {
-  return (
-    view.x === DEFAULT_COMM_GRAPH_VIEW.x &&
-    view.y === DEFAULT_COMM_GRAPH_VIEW.y &&
-    view.zoom === DEFAULT_COMM_GRAPH_VIEW.zoom
-  );
-}
-
 function CommGraphCanvasBody(props: CommGraphCanvasProps) {
   const {
     agentIds,
@@ -217,6 +234,7 @@ function CommGraphCanvasBody(props: CommGraphCanvasProps) {
     events,
     hosts,
     initialHistoryCaughtUp,
+    modeToggle,
     onJump,
     onJumpToCreated,
     onJumpToSender,
@@ -508,40 +526,25 @@ function CommGraphCanvasBody(props: CommGraphCanvasProps) {
     selectedDetail?.kind === "pair"
       ? (aggregated.find((edge) => edge.id === selectedDetail.edgeId) ?? null)
       : null;
-  const selectedAgent =
-    selectedDetail?.kind === "agent"
-      ? (agents.find((agent) => agent.id === selectedDetail.agentId) ?? null)
-      : null;
-  // A pure filter over the merged as-of array - an agent's activity is its slice
-  // of the same raw record, in the same order, not a new aggregation.
-  const selectedAgentEvents = useMemo(() => {
-    if (selectedAgent === null) return [];
-    return events.filter((event) =>
-      commGraphEventTouchesAgent(event, selectedAgent.id),
-    );
-  }, [events, selectedAgent]);
+  const selectedAgentId =
+    selectedDetail?.kind === "agent" ? selectedDetail.agentId : null;
   const selectedEdgeHistoryCaughtUp =
     selectedEdge !== null && initialHistoryCaughtUp;
-  const selectedAgentHistoryCaughtUp = initialHistoryCaughtUp;
 
   const handleMoveEnd = useCallback(
     (_event: unknown, viewport: Viewport) => {
-      onViewChange({ x: viewport.x, y: viewport.y, zoom: viewport.zoom });
+      // `mode` is carried through: the viewport moved, the rendering did not.
+      onViewChange({
+        x: viewport.x,
+        y: viewport.y,
+        zoom: viewport.zoom,
+        mode: view.mode,
+      });
     },
-    [onViewChange],
+    [onViewChange, view.mode],
   );
 
-  // The sender-side heading link. Resolves the id against the epic's agents and
-  // opens that tile - no scroll, because origin refs are receiver-side and the
-  // sender's transcript carries no captured anchor.
-  const openAgentById = useCallback(
-    (agentId: string) => {
-      const agent = agents.find((candidate) => candidate.id === agentId);
-      if (agent === undefined) return;
-      onOpenAgent(agent);
-    },
-    [agents, onOpenAgent],
-  );
+  const openAgentById = useCommGraphOpenAgentById(agents, onOpenAgent);
 
   const closePanel = useCallback(() => setSelectedDetail(null), []);
 
@@ -551,7 +554,9 @@ function CommGraphCanvasBody(props: CommGraphCanvasProps) {
     <div className="flex h-full min-h-0 w-full min-w-0">
       <div
         ref={canvasRef}
-        className="min-h-0 min-w-0 flex-1"
+        // `relative` so the mode toggle floats over the graph rather than over
+        // a detail panel, which is this element's sibling.
+        className="relative min-h-0 min-w-0 flex-1"
         data-testid="comm-graph-canvas"
         onPointerDownCapture={stopAutoPan}
         onWheelCapture={stopAutoPan}
@@ -561,11 +566,13 @@ function CommGraphCanvasBody(props: CommGraphCanvasProps) {
           edges={[...edges]}
           nodeTypes={NODE_TYPES}
           edgeTypes={EDGE_TYPES}
-          defaultViewport={view}
+          // The tile's view carries a `mode` React Flow has no use for, so the
+          // viewport is handed over as its own three fields.
+          defaultViewport={{ x: view.x, y: view.y, zoom: view.zoom }}
           // A neutral schema viewport means this graph has never been framed by
           // the user. Let React Flow derive its first viewport from every node;
           // a persisted pan/zoom still restores exactly as the user left it.
-          fitView={isDefaultView(view)}
+          fitView={isDefaultCommGraphView(view)}
           minZoom={COMM_GRAPH_MIN_ZOOM}
           onInit={setFlowInstance}
           onMoveStart={handleMoveStart}
@@ -614,6 +621,7 @@ function CommGraphCanvasBody(props: CommGraphCanvasProps) {
           <Background />
           <Controls showInteractive={false} />
         </ReactFlow>
+        {modeToggle}
       </div>
       {selectedEdge === null ? null : (
         <CommGraphThreadPanel
@@ -633,26 +641,23 @@ function CommGraphCanvasBody(props: CommGraphCanvasProps) {
           onClose={closePanel}
         />
       )}
-      {selectedAgent === null ? null : (
-        <CommGraphAgentDetailPanel
-          key={selectedAgent.id}
-          agent={selectedAgent}
-          epicId={epicId}
-          agentNames={nameById}
-          events={selectedAgentEvents}
-          initialHistoryCaughtUp={selectedAgentHistoryCaughtUp}
-          canOpenAgentForEvent={canOpenAgentForEvent}
-          canJump={canJump}
-          onJump={onJump}
-          canJumpToSender={canJumpToSender}
-          onJumpToSender={onJumpToSender}
-          canJumpToCreated={canJumpToCreated}
-          onJumpToCreated={onJumpToCreated}
-          onOpenAgent={onOpenAgent}
-          onOpenAgentId={openAgentById}
-          onClose={closePanel}
-        />
-      )}
+      <CommGraphAgentDetailSurface
+        agentId={selectedAgentId}
+        agents={agents}
+        agentNames={nameById}
+        events={events}
+        epicId={epicId}
+        initialHistoryCaughtUp={initialHistoryCaughtUp}
+        canOpenAgentForEvent={canOpenAgentForEvent}
+        canJump={canJump}
+        onJump={onJump}
+        canJumpToSender={canJumpToSender}
+        onJumpToSender={onJumpToSender}
+        canJumpToCreated={canJumpToCreated}
+        onJumpToCreated={onJumpToCreated}
+        onOpenAgent={onOpenAgent}
+        onClose={closePanel}
+      />
     </div>
   );
 }

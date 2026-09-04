@@ -217,8 +217,10 @@ import {
   EMPTY_PENDING_LIST,
   EMPTY_PRE_ACK_LIST,
   INDENT_PX,
+  SIDEBAR_REVEAL_HIGHLIGHT_CLASS,
   anyMutationPending,
   nodePadRightClass,
+  revealSidebarNode,
   useNodeIconDisplay,
 } from "./epic-sidebar-tree-shared";
 import { TreeGroupGuide } from "./epic-sidebar-tree-guide";
@@ -1029,11 +1031,9 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     for (const ancestorId of ancestorIdsOfReveal) {
       expandAction(tabId, panelId, ancestorId);
     }
-    const row = Array.from(
-      region.querySelectorAll<HTMLElement>("[data-sidebar-node-id]"),
-    ).find((element) => element.dataset.sidebarNodeId === revealRequest.nodeId);
-    if (row === undefined) return;
-    row.scrollIntoView({ block: "nearest", inline: "nearest" });
+    if (!revealSidebarNode(region, revealRequest.nodeId, revealRequest.nonce)) {
+      return;
+    }
     clearSidebarNodeRevealRequest(tabId, revealRequest.nonce);
   }, [
     ancestorIdsOfReveal,
@@ -2718,6 +2718,7 @@ function ChatRenameRow(props: ChatRenameRowProps) {
       className={cn(
         "flex min-h-7 min-w-0 flex-1 items-center gap-1.5 rounded-md px-2 py-1",
         props.isArchived && ARCHIVED_ROW_CLASS,
+        SIDEBAR_REVEAL_HIGHLIGHT_CLASS,
       )}
       style={{
         paddingLeft: `${depth * INDENT_PX + BASE_PAD_LEFT}px`,
@@ -2903,6 +2904,7 @@ function chatRowClassName(state: {
     state.isActive
       ? "bg-accent text-accent-foreground"
       : "text-foreground/75 hover:bg-accent/70 hover:text-accent-foreground",
+    SIDEBAR_REVEAL_HIGHLIGHT_CLASS,
   );
 }
 
@@ -3088,6 +3090,7 @@ function ChatRowButton(props: ChatRowButtonProps) {
         ownerHostUnreachable={false}
         ownerKind={null}
         roleClaims={roleClaims}
+        extraContent={null}
         side="right"
       />
     );
@@ -3215,6 +3218,7 @@ function ChatRowButton(props: ChatRowButtonProps) {
       ownerHostUnreachable={ownerIsUnreachable}
       ownerKind={ownerKind}
       roleClaims={roleClaims}
+      extraContent={null}
       side="right"
     />
   );

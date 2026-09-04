@@ -45,6 +45,7 @@ import { useRelativeTimestamp } from "@/lib/relative-time";
 import { useIsActiveTile } from "@/stores/epics/canvas/store";
 import { cn } from "@/lib/utils";
 import { onMiddleClick } from "@/lib/dom/on-middle-click";
+import { SIDEBAR_REVEAL_HIGHLIGHT_CLASS } from "@/components/epic-canvas/sidebar/epic-sidebar-tree-shared";
 
 /**
  * Every badge on row 1 speaks the hover card's dialect: borderless tint,
@@ -192,8 +193,12 @@ export function PrRow(props: {
 
   return (
     <div
-      className="group/pr-row flex min-w-0 flex-col"
+      className={cn(
+        "group/pr-row flex min-w-0 flex-col",
+        SIDEBAR_REVEAL_HIGHLIGHT_CLASS,
+      )}
       data-testid="pr-row"
+      data-sidebar-node-id={props.entry.tileId ?? undefined}
       data-active={isActive ? "true" : "false"}
       data-pr-state={item.state}
       data-pr-identified={identified !== null ? "true" : "false"}

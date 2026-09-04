@@ -65,6 +65,7 @@ import {
   activateHostedTopLevelSurface,
   refIsFocused,
   refsMatch,
+  registerHostedTopLevelActivationClaims,
 } from "@/components/epic-canvas/surface-host/hosted-top-level-activation";
 
 export { MAX_RETAINED_TOP_LEVEL_SURFACES } from "@/stores/tabs/top-level-surface-retention";
@@ -216,9 +217,9 @@ function HostedTileSurfaceHostMount(props: {
     claimPointerDown: claimActivationPointerDown,
   } = activation;
 
-  const claimFocus = useCallback(
-    (event: FocusEvent<HTMLDivElement>): void => {
-      activateHostedTopLevelSurface(event.target, event.defaultPrevented, {
+  const claimFocusFromTarget = useCallback(
+    (target: EventTarget | null, defaultPrevented: boolean): void => {
+      activateHostedTopLevelSurface(target, defaultPrevented, {
         tabsByRefKey,
         activeItem,
         activate:
@@ -228,17 +229,17 @@ function HostedTileSurfaceHostMount(props: {
                 pendingTabRef.current = tab;
                 claimActivationFocus({
                   defaultPrevented: false,
-                  scope: event.target,
-                  target: event.target,
+                  scope: target,
+                  target,
                 });
               },
       });
     },
     [activeItem, activateSurface, claimActivationFocus, tabsByRefKey],
   );
-  const claimPointerDown = useCallback(
-    (event: PointerEvent<HTMLDivElement>): void => {
-      activateHostedTopLevelSurface(event.target, event.defaultPrevented, {
+  const claimPointerDownFromTarget = useCallback(
+    (target: EventTarget | null, defaultPrevented: boolean): void => {
+      activateHostedTopLevelSurface(target, defaultPrevented, {
         tabsByRefKey,
         activeItem,
         activate:
@@ -248,13 +249,34 @@ function HostedTileSurfaceHostMount(props: {
                 pendingTabRef.current = tab;
                 claimActivationPointerDown({
                   defaultPrevented: false,
-                  scope: event.target,
-                  target: event.target,
+                  scope: target,
+                  target,
                 });
               },
       });
     },
     [activeItem, activateSurface, claimActivationPointerDown, tabsByRefKey],
+  );
+  const claimFocus = useCallback(
+    (event: FocusEvent<HTMLDivElement>): void => {
+      claimFocusFromTarget(event.target, event.defaultPrevented);
+    },
+    [claimFocusFromTarget],
+  );
+  const claimPointerDown = useCallback(
+    (event: PointerEvent<HTMLDivElement>): void => {
+      claimPointerDownFromTarget(event.target, event.defaultPrevented);
+    },
+    [claimPointerDownFromTarget],
+  );
+
+  useLayoutEffect(
+    () =>
+      registerHostedTopLevelActivationClaims({
+        claimFocus: claimFocusFromTarget,
+        claimPointerDown: claimPointerDownFromTarget,
+      }),
+    [claimFocusFromTarget, claimPointerDownFromTarget],
   );
 
   return (

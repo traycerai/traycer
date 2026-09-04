@@ -26,6 +26,9 @@ const SECRET_SERVICE_APPLICATION: Readonly<
   arc: "chromium",
   vivaldi: "chrome",
   opera: "chromium",
+  // Neither has a Linux root in discovery; the entries only close the record.
+  aside: "chromium",
+  helium: "chromium",
 };
 
 export async function readLinuxSecretServicePassphrase(

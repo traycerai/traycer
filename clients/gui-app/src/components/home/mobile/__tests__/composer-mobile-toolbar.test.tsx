@@ -47,6 +47,7 @@ function renderToolbar(modelSlug: string, onSubmit: () => void) {
       settingsLocked={false}
       createProfileHostId={null}
       runTargetHostId={null}
+      terminalLoginSurface={null}
     />,
   );
 }

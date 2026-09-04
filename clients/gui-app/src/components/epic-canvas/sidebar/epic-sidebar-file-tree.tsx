@@ -58,11 +58,14 @@ import { usePierreCanvasDragBridge } from "@/components/epic-canvas/dnd/use-pier
 import { extractPierreItemPathFromEvent } from "@/components/epic-canvas/pierre-tree-adapter";
 import {
   PIERRE_FILE_TREE_THEME_STYLE,
+  PIERRE_FILE_TREE_REVEAL_HIGHLIGHT_CSS,
   PIERRE_FILE_TREE_TRUNCATION_TOLERANCE_CSS,
 } from "@/components/epic-canvas/pierre-tree-theme";
+import { flashSidebarElement } from "@/components/epic-canvas/sidebar/epic-sidebar-tree-shared";
 import { workspaceFileRefFromTreePath } from "@/components/epic-canvas/workspace-file/workspace-file-ref";
 import { getBasename } from "@/lib/path/cross-platform-path";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { FileTreeRowContextMenu } from "@/components/epic-canvas/sidebar/file-tree-row-context-menu";
 import { PanelSearchField } from "@/components/epic-canvas/sidebar/epic-sidebar-search-field";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
@@ -614,7 +617,7 @@ function FileTreeBodyForResolvedHost(
     // `hide-non-matches`: the filter input below drops every row whose
     // name does not match, keeping only matches and their parents.
     fileTreeSearchMode: "hide-non-matches",
-    unsafeCSS: PIERRE_FILE_TREE_TRUNCATION_TOLERANCE_CSS,
+    unsafeCSS: `${PIERRE_FILE_TREE_TRUNCATION_TOLERANCE_CSS}\n${PIERRE_FILE_TREE_REVEAL_HIGHLIGHT_CSS}`,
     onSelectionChange: (selectedPaths) => {
       const selectedPath = selectedPaths.at(-1);
       if (selectedPath === undefined) return;
@@ -791,53 +794,62 @@ function FileTreeBodyForResolvedHost(
           which keeps the sheet's modal scroll lock from freezing the
           shadow-rooted scroller (see `useShadowScrollerTouchShield`). Both are
           inert on desktop, which mounts no drawer. */}
-      <div
-        {...bridge.wrapperProps}
-        ref={touchShieldRef}
-        data-vaul-no-drag=""
-        className="relative min-h-0 flex-1"
+      {/* The whole container is the context-menu trigger: Pierre's rows live
+          in a shadow root, so the row a right-click landed on is recovered
+          from the event rather than from a per-row handler. */}
+      <FileTreeRowContextMenu
+        hostId={hostId}
+        workspacePath={props.workspacePath}
+        fileNameByPath={nameByTreePath}
       >
-        {/* `invisible`, not unmount: the model keeps its DOM/state for the
-            instant the query changes to something that does match. */}
-        <div className={cn("h-full", noMatches && "invisible")}>
-          <FileTree model={model} style={PIERRE_FILE_TREE_THEME_STYLE} />
-        </div>
-        {noMatches ? (
-          <output
-            aria-label="No matching files"
-            className="pointer-events-none absolute inset-0 flex items-center justify-center px-3 text-center text-ui-xs text-muted-foreground"
-          >
-            No files match the filter.
-          </output>
-        ) : null}
-        {source.isLoading ? (
-          <output
-            aria-label="Loading files"
-            className="pointer-events-none absolute inset-0 flex items-center justify-center"
-          >
-            <AgentSpinningDots
-              className="text-muted-foreground"
-              testId={undefined}
-              variant={undefined}
-            />
-          </output>
-        ) : null}
-        {source.hasError ? (
-          <div className="flex items-center justify-between gap-2 p-1 text-ui-xs text-destructive">
-            <span>Unable to load files.</span>
-            <ReportIssueAction
-              context={createReportIssueContext({
-                title: "Unable to load files",
-                message: "The workspace file tree could not be loaded.",
-                code: null,
-                source: "File tree",
-              })}
-              presentation="icon"
-              className={undefined}
-            />
+        <div
+          {...bridge.wrapperProps}
+          ref={touchShieldRef}
+          data-vaul-no-drag=""
+          className="relative min-h-0 flex-1"
+        >
+          {/* `invisible`, not unmount: the model keeps its DOM/state for the
+              instant the query changes to something that does match. */}
+          <div className={cn("h-full", noMatches && "invisible")}>
+            <FileTree model={model} style={PIERRE_FILE_TREE_THEME_STYLE} />
           </div>
-        ) : null}
-      </div>
+          {noMatches ? (
+            <output
+              aria-label="No matching files"
+              className="pointer-events-none absolute inset-0 flex items-center justify-center px-3 text-center text-ui-xs text-muted-foreground"
+            >
+              No files match the filter.
+            </output>
+          ) : null}
+          {source.isLoading ? (
+            <output
+              aria-label="Loading files"
+              className="pointer-events-none absolute inset-0 flex items-center justify-center"
+            >
+              <AgentSpinningDots
+                className="text-muted-foreground"
+                testId={undefined}
+                variant={undefined}
+              />
+            </output>
+          ) : null}
+          {source.hasError ? (
+            <div className="flex items-center justify-between gap-2 p-1 text-ui-xs text-destructive">
+              <span>Unable to load files.</span>
+              <ReportIssueAction
+                context={createReportIssueContext({
+                  title: "Unable to load files",
+                  message: "The workspace file tree could not be loaded.",
+                  code: null,
+                  source: "File tree",
+                })}
+                presentation="icon"
+                className={undefined}
+              />
+            </div>
+          ) : null}
+        </div>
+      </FileTreeRowContextMenu>
       {source.truncationNotice !== null ? (
         <p className="shrink-0 px-1 pt-1 text-ui-xs text-muted-foreground">
           {source.truncationNotice}
@@ -1056,6 +1068,9 @@ function useWorkspaceFileTreeReveal(args: {
       suppressSelectionOpenRef.current = false;
     }
     model.scrollToPath(filePath, { offset: "nearest" });
+    const container = model.getFileTreeContainer();
+    if (container === undefined) return;
+    flashSidebarElement(container, request.nonce);
     clearFileTreeRevealRequest(viewTabId, request.nonce);
   }, [
     browsing,

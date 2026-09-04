@@ -1137,6 +1137,12 @@ export function NewConversationModalBody(props: {
       hasPastedImageBytes={hasPastedImageBytes}
       ingestPastedComposerImages={null}
       onEditorReady={null}
+      // No terminal surface: a sign-in terminal tile is bound to the TAB's
+      // host, while this composer creates on a placement-resolved host that
+      // may be another machine, and this modal sits above the canvas the tile
+      // would open on. The picker's setup CTA shows its steps and names the
+      // chat picker instead.
+      terminalLoginSurface={null}
       // The pinned host, else this composer's surface-pin resolution - the
       // same id `hostClient` above resolves, so the toolbar's and terminal
       // launcher's pickers offer this host's harnesses/models/profiles and

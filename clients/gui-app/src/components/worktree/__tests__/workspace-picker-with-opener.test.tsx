@@ -22,9 +22,12 @@ vi.mock("@/providers/use-runner-host", () => ({
 // `OpenInEditorButton` (rendered inside this picker) gates on the open
 // TARGET's own host directory entry now (Y6), not any app-wide "effective"
 // or "active" host - no such hook is mocked here.
+// Takes `string | null`, matching the real hook: an absent open target is
+// looked up as "no host", and a stub that only accepted a string would fail on
+// the null rather than answering it.
 vi.mock("@/hooks/host/use-host-directory-entry", () => ({
-  useHostDirectoryEntry: (hostId: string) =>
-    hostId.length > 0 ? { kind: "local" } : null,
+  useHostDirectoryEntry: (hostId: string | null) =>
+    hostId !== null && hostId.length > 0 ? { kind: "local" } : null,
 }));
 
 describe("<WorkspacePickerWithOpener />", () => {
