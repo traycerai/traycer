@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
@@ -45,13 +45,6 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
     getActiveHostId: () => HOST_ID,
     request: mocks.startTerminalLoginRequest,
   }),
-}));
-
-// The picker passes `runTargetHostId={null}` (follow the app-wide default),
-// which the scope gate resolves through this hook - so it has to name the same
-// host the negotiated manifest below is recorded for.
-vi.mock("@/hooks/host/use-addressable-host-id", () => ({
-  useAddressableHostId: () => HOST_ID,
 }));
 
 function baseProviderState(providerId: ProviderId): ProviderCliState {
@@ -287,7 +280,7 @@ describe("<PickerProviderAuthLine />", () => {
           kind: "landing",
           resolveLandingPageId: () => "draft-1",
         }}
-        runTargetHostId={null}
+        runTargetHostId={HOST_ID}
         onClosePicker={() => undefined}
       />,
     );
@@ -324,7 +317,7 @@ describe("<PickerProviderAuthLine />", () => {
           kind: "landing",
           resolveLandingPageId: () => "draft-1",
         }}
-        runTargetHostId={null}
+        runTargetHostId={HOST_ID}
         onClosePicker={() => undefined}
       />,
     );
@@ -355,7 +348,7 @@ describe("<PickerProviderAuthLine />", () => {
           kind: "landing",
           resolveLandingPageId: () => "draft-1",
         }}
-        runTargetHostId={null}
+        runTargetHostId={HOST_ID}
         onClosePicker={() => undefined}
       />,
     );
@@ -366,15 +359,61 @@ describe("<PickerProviderAuthLine />", () => {
     expect(
       screen.queryByRole("button", { name: /Set up in terminal/ }),
     ).toBeNull();
-    // And not the "it's on another surface" copy either: there is no surface
-    // on this host that draws it, so the steps must lead with the manual
-    // route rather than pointing at a button nobody can find.
+    // And not the "it's on another surface" copy either: that sentence names
+    // the start page as a place the button exists, which on this host it does
+    // not.
     expect(
       screen.queryByText(
         "Choose \u201CSet up in terminal\u201D from a chat's model picker or the start page's. It opens Reasonix's setup wizard on the host that composer runs on.",
       ),
     ).toBeNull();
-    expect(screen.getByRole("note", { name: "Setup required" })).toBeDefined();
+    // The steps lead with the route this host DOES have - `@1.0` opens the
+    // terminal from a chat natively - rather than "finish in that terminal"
+    // when nothing here opened one.
+    const note = screen.getByRole("note", { name: "Setup required" });
+    const items = within(note).getAllByRole("listitem");
+    expect(items.map((item) => item.textContent)).toEqual([
+      "Open a chat and choose \u201CSet up in terminal\u201D from its model picker. This host's version can open Reasonix's setup wizard from a chat, but not from the start page.",
+      "Paste your provider API key when asked (DeepSeek by default).",
+      "Refresh this list.",
+    ]);
+  });
+
+  it("hides the landing action when the composer has no resolved host at all, without reading the app-wide host", () => {
+    recordNegotiatedHostManifest(HOST_ID, {
+      "providers.startTerminalLogin": { major: 2, minor: 0 },
+    });
+
+    renderAuthLine(
+      <PickerProviderAuthLine
+        state={withTerminalLoginCapability(baseProviderState("reasonix"))}
+        harness={null}
+        terminalLoginSurface={{
+          kind: "landing",
+          resolveLandingPageId: () => "draft-1",
+        }}
+        // The \u2205 case: nothing usable to create on. The picker is also drawn
+        // inside Epic tabs, so the gate must not fill this from an app-wide
+        // host authority - it reads as unsupported, the same as an unknown
+        // host.
+        runTargetHostId={null}
+        onClosePicker={() => undefined}
+      />,
+    );
+
+    expect(
+      screen.queryByRole("button", { name: /Set up in terminal/ }),
+    ).toBeNull();
+    const note = screen.getByRole("note", { name: "Setup required" });
+    // And no claim about the machine either: "this host's version can open
+    // the setup wizard from a chat" is only true of a RECORDED pre-scope
+    // manifest, and there is no host here to have recorded one. The
+    // claim-free copy leads with the manual route.
+    const items = within(note).getAllByRole("listitem");
+    expect(items.map((item) => item.textContent)).toEqual([
+      "Paste your provider API key when asked (DeepSeek by default).",
+      "Refresh this list.",
+    ]);
   });
 
   it("shows the pack's preparing state instead of the button while the provider cannot spawn", () => {
@@ -391,7 +430,7 @@ describe("<PickerProviderAuthLine />", () => {
           kind: "landing",
           resolveLandingPageId: () => "draft-1",
         }}
-        runTargetHostId={null}
+        runTargetHostId={HOST_ID}
         onClosePicker={() => undefined}
       />,
     );

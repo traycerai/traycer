@@ -4,6 +4,7 @@ import type {
   ProviderLoginCapability,
 } from "@traycer/protocol/host/provider-schemas";
 import {
+  defaultTerminalSignInGuidance,
   providerSetupActionPlacement,
   providerSetupGuidance,
   providerSetupPreparingLabel,
@@ -121,6 +122,28 @@ describe("providerSetupSteps", () => {
     expect(steps).toEqual(guidance.stepsAfterAction);
     expect(steps).not.toContain(guidance.noSurfaceStep);
   });
+
+  it("leads with the epic-only step for 'unsupported-scope' - the post-action steps alone would say to finish in a terminal nothing here opened", () => {
+    const guidance = providerSetupGuidance("reasonix");
+    expect(guidance).not.toBeNull();
+    if (guidance === null) return;
+    const steps = providerSetupSteps(guidance, "unsupported-scope");
+    expect(steps).toEqual([
+      guidance.epicOnlyStep,
+      ...guidance.stepsAfterAction,
+    ]);
+    // Not the no-surface sentence: that one names the start page as a place
+    // the button exists, which on this host it does not.
+    expect(steps).not.toContain(guidance.noSurfaceStep);
+  });
+
+  it("gives the generic guidance an epic-only step too, so a provider with no manual command (copilot) still has a route", () => {
+    const guidance = defaultTerminalSignInGuidance("copilot");
+    expect(guidance.manualCommand).toBeNull();
+    expect(providerSetupSteps(guidance, "unsupported-scope")[0]).toBe(
+      "Open a chat and choose “Sign in from a terminal” from its model picker. This host's version can open the Copilot sign-in from a chat, but not from the start page.",
+    );
+  });
 });
 
 describe("resolveProviderTerminalSetup", () => {
@@ -192,10 +215,10 @@ describe("providerSetupActionPlacement", () => {
     expect(setup).not.toBeNull();
     if (setup === null) return;
     expect(setup.canStartTerminal).toBe(false);
-    expect(providerSetupActionPlacement(setup, true, true)).toBe(
+    expect(providerSetupActionPlacement(setup, true, "supported")).toBe(
       "unsupported-host",
     );
-    expect(providerSetupActionPlacement(setup, false, true)).toBe(
+    expect(providerSetupActionPlacement(setup, false, "supported")).toBe(
       "unsupported-host",
     );
   });
@@ -207,10 +230,10 @@ describe("providerSetupActionPlacement", () => {
     );
     expect(setup).not.toBeNull();
     if (setup === null) return;
-    expect(providerSetupActionPlacement(setup, true, true)).toBe("here");
+    expect(providerSetupActionPlacement(setup, true, "supported")).toBe("here");
   });
 
-  it("returns 'unsupported-host' when the host cannot carry this surface's scope, even with a surface and the capability", () => {
+  it("returns 'unsupported-scope' when the host cannot carry this surface's scope, even with a surface and the capability", () => {
     const setup = resolveProviderTerminalSetup(
       "reasonix",
       stateWith(capabilityWithTerminalLogin(["setup"])),
@@ -219,8 +242,29 @@ describe("providerSetupActionPlacement", () => {
     if (setup === null) return;
     // The provider row says yes and the surface exists; only the host's
     // negotiated `providers.startTerminalLogin` major says no. Reporting
-    // 'here' would lead the steps with a button that can only ever fail.
-    expect(providerSetupActionPlacement(setup, true, false)).toBe(
+    // 'here' would lead the steps with a button that can only ever fail, and
+    // 'unsupported-host' would lead with nothing - but this host DOES draw
+    // the button, in an Epic, and the steps have to say so.
+    expect(providerSetupActionPlacement(setup, true, "unsupported")).toBe(
+      "unsupported-scope",
+    );
+  });
+
+  it("returns 'unsupported-host', not 'unsupported-scope', while the host's scope support is unknown", () => {
+    const setup = resolveProviderTerminalSetup(
+      "reasonix",
+      stateWith(capabilityWithTerminalLogin(["setup"])),
+    );
+    expect(setup).not.toBeNull();
+    if (setup === null) return;
+    // No manifest recorded, or no host at all: the button stays hidden, but
+    // the epic-only sentence claims this host negotiated the pre-scope major,
+    // which nothing has proven. The claim-free copy leads with the manual
+    // route instead.
+    expect(providerSetupActionPlacement(setup, true, "unknown")).toBe(
+      "unsupported-host",
+    );
+    expect(providerSetupActionPlacement(setup, false, "unknown")).toBe(
       "unsupported-host",
     );
   });
@@ -237,9 +281,13 @@ describe("providerSetupActionPlacement", () => {
     if (setup === null) return;
     expect(setup.canStartTerminal).toBe(true);
     expect(setup.packPreparing).not.toBeNull();
-    expect(providerSetupActionPlacement(setup, true, true)).toBe("preparing");
+    expect(providerSetupActionPlacement(setup, true, "supported")).toBe(
+      "preparing",
+    );
     // A transient wait never becomes "the button is on another surface".
-    expect(providerSetupActionPlacement(setup, false, true)).toBe("preparing");
+    expect(providerSetupActionPlacement(setup, false, "supported")).toBe(
+      "preparing",
+    );
     // The wait reads as the same sentence every other gated surface shows.
     expect(providerSetupPreparingLabel(setup, "reasonix")).toBe(
       "Preparing Reasonix… 30%",
@@ -270,10 +318,10 @@ describe("providerSetupActionPlacement", () => {
     if (setup === null) return;
     expect(setup.packPreparing).toBeNull();
     expect(providerSetupPreparingLabel(setup, "reasonix")).toBeNull();
-    expect(providerSetupActionPlacement(setup, true, true)).toBe("here");
+    expect(providerSetupActionPlacement(setup, true, "supported")).toBe("here");
   });
 
-  it("permanent reasons outrank the transient one: an unsupported scope on a preparing pack is 'unsupported-host'", () => {
+  it("permanent reasons outrank the transient one: an unsupported scope on a preparing pack is 'unsupported-scope'", () => {
     const setup = resolveProviderTerminalSetup(
       "reasonix",
       providerState(capabilityWithTerminalLogin(["setup"]), {
@@ -283,8 +331,8 @@ describe("providerSetupActionPlacement", () => {
     );
     expect(setup).not.toBeNull();
     if (setup === null) return;
-    expect(providerSetupActionPlacement(setup, true, false)).toBe(
-      "unsupported-host",
+    expect(providerSetupActionPlacement(setup, true, "unsupported")).toBe(
+      "unsupported-scope",
     );
   });
 
@@ -295,7 +343,7 @@ describe("providerSetupActionPlacement", () => {
     );
     expect(setup).not.toBeNull();
     if (setup === null) return;
-    expect(providerSetupActionPlacement(setup, false, true)).toBe(
+    expect(providerSetupActionPlacement(setup, false, "supported")).toBe(
       "other-surface",
     );
   });
