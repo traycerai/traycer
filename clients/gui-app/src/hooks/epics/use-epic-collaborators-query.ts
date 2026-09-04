@@ -10,6 +10,7 @@ import type { HostRequester } from "@traycer-clients/shared/host-client/host-cli
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { normalizeAvatarUrl } from "@/lib/avatar-url";
+import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
 
 export const EPIC_COLLABORATORS_CLOSED_STALE_TIME_MS = 30_000;
 export const EPIC_COLLABORATORS_OPEN_REFRESH_MS = 5 * 60_000;
@@ -96,9 +97,22 @@ export interface UseEpicCollaboratorsQueryOptions {
  * with no polling.
  *
  * `options.enabled` is the cloud-authorization gate every caller must answer -
- * see {@link UseEpicCollaboratorsQueryOptions.enabled}. A disabled query returns
- * `data: undefined`, which every consumer here already renders as "not loaded"
- * rather than as an empty grant set.
+ * see {@link UseEpicCollaboratorsQueryOptions.enabled}. It holds at all three
+ * edges, in here, so that no consumer has to remember it:
+ *
+ * - the NEXT fetch (`enabled` on the query);
+ * - the DISPATCH of a fetch already committed to - a `refetch()` override, or
+ *   the transient-retry episode running when the session is demoted, which a
+ *   same-user demotion would otherwise carry through on the retained host
+ *   credential (`preflight`, the same read every other cloud-gated query
+ *   makes);
+ * - the PROJECTION. `enabled: false` stops fetching, but TanStack keeps the
+ *   last `data` on the shared cache entry, and a consumer that read only
+ *   `data` kept rendering the grants it loaded under the verdict the session
+ *   has since lost - the "Shared with task" glyph stayed on a chat after
+ *   demotion for as long as the tab lived. Withheld means `data: undefined`,
+ *   whatever the cache still holds, which every consumer renders as "not
+ *   loaded" rather than as an empty grant set.
  */
 export function useEpicCollaboratorsQuery(
   epicId: string,
@@ -108,22 +122,24 @@ export function useEpicCollaboratorsQuery(
     options.staleTime ?? EPIC_COLLABORATORS_CLOSED_STALE_TIME_MS;
   const poll = options.poll ?? false;
   const client = options.client;
+  const enabled = options.enabled;
   const query = useHostQuery({
     cacheKeyIdentity: undefined,
     client,
     method: "epic.listCollaborators",
     params: { epicId },
+    preflight: cloudVerdictPreflight("epic.listCollaborators"),
     options: {
-      enabled: options.enabled,
+      enabled,
       poll,
       staleTime,
     },
   });
 
   const data = useMemo<EpicCollaboratorsView | undefined>(() => {
-    if (query.data === undefined) return undefined;
+    if (!enabled || query.data === undefined) return undefined;
     return projectCollaborators(query.data.collaborators);
-  }, [query.data]);
+  }, [enabled, query.data]);
 
   return {
     query,

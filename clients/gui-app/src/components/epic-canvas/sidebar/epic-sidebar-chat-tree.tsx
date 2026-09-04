@@ -757,7 +757,9 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
   // `taskHasCollaborators` already reads `undefined` as solo so the indicator
   // cannot flash during load, and `shouldShowSharedWithTaskIndicator` only ever
   // ADDS a glyph - an unauthorized session shows one fewer badge and asserts
-  // nothing about who has access.
+  // nothing about who has access. "Hidden" holds after a DEMOTION too: the
+  // hook withholds `data` while `enabled` is false, whatever TanStack still
+  // caches, so a glyph loaded under a verdict goes away with it.
   const cloudAuthorized = useAuthStore((state) =>
     authorizesCloudCapability(state.status),
   );

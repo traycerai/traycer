@@ -10,6 +10,7 @@ import {
   EPIC_COLLABORATORS_OPEN_REFRESH_MS,
   useEpicCollaboratorsQuery,
 } from "@/hooks/epics/use-epic-collaborators-query";
+import { useAuthStore } from "@/stores/auth/auth-store";
 
 const guiAppSrc = path.resolve(import.meta.dirname, "../..");
 
@@ -17,6 +18,7 @@ interface CapturedHostQuery {
   readonly client: unknown;
   readonly method: string;
   readonly params: { readonly epicId: string };
+  readonly preflight: (() => void) | undefined;
   readonly options: {
     readonly poll: boolean | undefined;
     readonly staleTime: number | undefined;
@@ -240,6 +242,72 @@ describe("useEpicCollaboratorsQuery", () => {
         }),
       ],
     });
+  });
+
+  it("withholds the retained list once the caller's verdict gate closes", () => {
+    // `enabled: false` stops the next fetch, but TanStack keeps the last
+    // `data` on the shared cache entry. The sidebar's "Shared with task" glyph
+    // and the mention picker read this hook's `data`, so a demotion that only
+    // flipped `enabled` left both showing grants loaded under the verdict the
+    // session no longer holds.
+    mockQueryResult.current = {
+      data: makeCollaboratorResponse("retained@example.com"),
+      error: null,
+      isError: false,
+      isFetching: false,
+      isLoading: false,
+    };
+
+    const hook = renderHook(
+      ({ enabled }: { enabled: boolean }) =>
+        useEpicCollaboratorsQuery("epic-open", {
+          client: fakeClient,
+          enabled,
+          poll: undefined,
+          staleTime: undefined,
+        }),
+      { initialProps: { enabled: true } },
+    );
+    expect(hook.result.current.data?.directUsers).toHaveLength(1);
+
+    hook.rerender({ enabled: false });
+    expect(hook.result.current.data).toBeUndefined();
+    // The underlying query result is untouched: the withholding is this
+    // hook's projection, not a cache eviction.
+    expect(hook.result.current.query.data).toBeDefined();
+  });
+
+  it("refuses a dispatch at preflight while the session holds no cloud verdict", () => {
+    // The render-time gate above cannot reach a retry already in flight when
+    // the session is demoted; the preflight is what ends that episode.
+    renderHook(() =>
+      useEpicCollaboratorsQuery("epic-open", {
+        client: fakeClient,
+        enabled: true,
+        poll: undefined,
+        staleTime: undefined,
+      }),
+    );
+    const preflight = capturedQuery.current?.preflight;
+    if (preflight === undefined) {
+      throw new Error("the collaborators query must carry a preflight");
+    }
+
+    useAuthStore.getState().setSignedOut();
+    expect(() => preflight()).toThrow(/no longer holds a cloud verdict/);
+
+    useAuthStore
+      .getState()
+      .setSignedIn(
+        { userId: "user-1", userName: "U", email: "u@example.com" },
+        { userId: "user-1", username: "U" },
+        [],
+      );
+    try {
+      expect(() => preflight()).not.toThrow();
+    } finally {
+      useAuthStore.getState().setSignedOut();
+    }
   });
 });
 
