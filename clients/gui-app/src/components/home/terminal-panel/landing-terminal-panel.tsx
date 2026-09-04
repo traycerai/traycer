@@ -674,16 +674,29 @@ export function LandingTerminalPanel(): ReactNode {
   useEffect(() => {
     const previous = previousPanelLayoutRef.current;
     previousPanelLayoutRef.current = { landingPageId, panelOpen };
+    const store = useLandingTerminalStore.getState();
     if (previous.landingPageId !== landingPageId) {
       clearPendingTerminalFocus(null);
+      // A reveal written for the page just left has had its transition there
+      // or never will; left standing it would suppress this page's next real
+      // gesture.
+      store.clearPanelReveal();
       return;
     }
     const wasOpen = previous.panelOpen;
     if (wasOpen === panelOpen) return;
     if (panelOpen) {
-      if (!pending) capture();
-      const openActiveInstanceId =
-        useLandingTerminalStore.getState().activeInstanceId;
+      const openActiveInstanceId = store.activeInstanceId;
+      // An open made to SHOW the active tab is not an opening gesture. Settling
+      // it as one re-targets the launch cwd, which a host-created sign-in tab
+      // (display-only `"~"`) never matches - so it would spawn a bare shell
+      // over the tab the open was for. Consumed here whatever it named, so a
+      // reveal cannot outlive the one transition it describes.
+      const revealed =
+        store.panelReveal !== null &&
+        store.panelReveal === openActiveInstanceId;
+      store.clearPanelReveal();
+      if (!pending && !revealed) capture();
       if (
         openActiveInstanceId !== null &&
         directoryRequestRef.current === null
@@ -694,7 +707,10 @@ export function LandingTerminalPanel(): ReactNode {
     }
     // Every collapse path converges on this store transition: the chord, the
     // header button, closing the last tab, close-all, and a shell exiting.
-    // All of them should hand the keyboard back to the composer.
+    // All of them should hand the keyboard back to the composer. A reveal that
+    // found the panel already open never saw a transition; it retires here so
+    // the NEXT open - a real gesture - is settled as one.
+    store.clearPanelReveal();
     clearPendingTerminalFocus(null);
     focusActiveComposer();
   }, [capture, landingPageId, panelOpen, pending]);
