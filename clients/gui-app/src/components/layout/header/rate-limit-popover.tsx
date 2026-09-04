@@ -15,8 +15,10 @@ import {
 } from "@traycer/protocol/common/schemas";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
-import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
-import { WorkingDots } from "@/components/ui/working-dots";
+import {
+  AgentSpinningDots,
+  MutedAgentSpinner,
+} from "@/components/ui/agent-spinning-dots";
 import { WorkingShimmerText } from "@/components/ui/working-shimmer-text";
 import { PopoverContent } from "@/components/ui/popover";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -2247,7 +2249,11 @@ function RefreshingText(): ReactNode {
   return (
     <span className="inline-flex items-baseline gap-1 text-ui-xs text-muted-foreground">
       <WorkingShimmerText className="text-ui-xs">Refreshing</WorkingShimmerText>
-      <WorkingDots className={undefined} testId="usage-limit-refreshing-dots" />
+      <AgentSpinningDots
+        className={undefined}
+        testId="usage-limit-refreshing-dots"
+        variant="typing"
+      />
     </span>
   );
 }

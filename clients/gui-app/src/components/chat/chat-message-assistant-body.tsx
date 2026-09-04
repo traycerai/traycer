@@ -7,7 +7,7 @@ import {
 import { isFastModeEnabled } from "@/components/home/data/landing-options";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
-import { WorkingDots } from "@/components/ui/working-dots";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { WorkingShimmerText } from "@/components/ui/working-shimmer-text";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import type {
@@ -739,7 +739,11 @@ function AssistantRunIndicator({
         <WorkingShimmerText className="text-ui-sm">{verb}</WorkingShimmerText>
         {/* 3-dot typing loader rather than the braille spinner: three steady,
             sequentially-pulsing dots instead of a morphing glyph. */}
-        <WorkingDots className={undefined} testId="assistant-run-dots" />
+        <AgentSpinningDots
+          className={undefined}
+          testId="assistant-run-dots"
+          variant="typing"
+        />
       </span>
       {/* Separate node so the once-per-second tick re-renders ONLY the timer,
           not the shimmering verb, the dots, or the rest of the body. */}

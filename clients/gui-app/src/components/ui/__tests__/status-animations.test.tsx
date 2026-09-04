@@ -1,7 +1,7 @@
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetStatusAnimationClockForTests } from "@/lib/animation/status-animation-clock";
-import { WorkingDots } from "@/components/ui/working-dots";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { WorkingShimmerText } from "@/components/ui/working-shimmer-text";
 import { Shimmer } from "@/components/ui/shimmer";
 import { PingRing } from "@/components/ui/ping-ring";
@@ -80,9 +80,15 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe("WorkingDots", () => {
+describe("AgentSpinningDots typing variant (WorkingDots)", () => {
   it("writes distinct inline opacity per dot from the stagger, both pre-paint and after ticks", () => {
-    render(<WorkingDots className={undefined} testId="working-dots" />);
+    render(
+      <AgentSpinningDots
+        className={undefined}
+        testId="working-dots"
+        variant="typing"
+      />,
+    );
     const container = screen.getByTestId("working-dots");
     const dots = container.querySelectorAll<HTMLSpanElement>(":scope > span");
     expect(dots.length).toBe(3);
@@ -101,7 +107,13 @@ describe("WorkingDots", () => {
 
   it("writes no inline opacity or transform under reduced motion", () => {
     stubReducedMotion(true);
-    render(<WorkingDots className={undefined} testId="working-dots" />);
+    render(
+      <AgentSpinningDots
+        className={undefined}
+        testId="working-dots"
+        variant="typing"
+      />,
+    );
     const container = screen.getByTestId("working-dots");
     const dots = container.querySelectorAll<HTMLSpanElement>(":scope > span");
     dots.forEach((dot) => {
@@ -115,7 +127,13 @@ describe("WorkingDots", () => {
     // module attaches its change listener only once, on the first
     // subscribe/render after a reset.
     const stub = stubReducedMotionWithListener(false);
-    render(<WorkingDots className={undefined} testId="working-dots" />);
+    render(
+      <AgentSpinningDots
+        className={undefined}
+        testId="working-dots"
+        variant="typing"
+      />,
+    );
     const container = screen.getByTestId("working-dots");
     const dots = container.querySelectorAll<HTMLSpanElement>(":scope > span");
 
@@ -138,7 +156,13 @@ describe("WorkingDots", () => {
   });
 
   it("holds steady through the first 40ms tick and only changes once the pulse cadence (80ms) elapses", () => {
-    render(<WorkingDots className={undefined} testId="working-dots" />);
+    render(
+      <AgentSpinningDots
+        className={undefined}
+        testId="working-dots"
+        variant="typing"
+      />,
+    );
     const container = screen.getByTestId("working-dots");
     const dots = container.querySelectorAll<HTMLSpanElement>(":scope > span");
     const initialOpacities = Array.from(dots).map((dot) => dot.style.opacity);

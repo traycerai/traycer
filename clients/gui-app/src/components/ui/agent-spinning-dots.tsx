@@ -1,12 +1,13 @@
-import { useLayoutEffect, useRef } from "react";
+import { useCallback, useLayoutEffect, useRef } from "react";
 import { usePaneVisible } from "@/components/epic-tabs/pane-visibility-context";
 import {
+  STATUS_ANIMATION_PULSE_CADENCE_MS,
   STATUS_ANIMATION_SMOOTH_CADENCE_MS,
   subscribeStatusAnimation,
+  useStatusAnimation,
 } from "@/lib/animation/status-animation-clock";
 import { cn } from "@/lib/utils";
 import type { AgentSpinnerVariant } from "@/components/ui/agent-spinner-variant";
-import { WorkingDots } from "@/components/ui/working-dots";
 
 interface AgentSpinnerPreset {
   readonly frames: readonly string[];
@@ -608,6 +609,74 @@ export interface AgentSpinningDotsProps {
   readonly variant: AgentSpinnerVariant | undefined;
 }
 
+const WORKING_DOTS_CYCLE_MS = 1400;
+const WORKING_DOTS_STAGGER_MS = 200;
+/** Fraction of the cycle spent rising and falling; the rest is rest. */
+const WORKING_DOTS_ACTIVE_FRACTION = 0.8;
+const WORKING_DOTS_REST_OPACITY = 0.3;
+
+function easeInOut(t: number): number {
+  return t < 0.5 ? 2 * t * t : 1 - ((-2 * t + 2) * (-2 * t + 2)) / 2;
+}
+
+/** 0 at rest, 1 at the top of the bounce, eased, per dot. */
+function dotLift(elapsedMs: number, index: number): number {
+  const shifted = elapsedMs - index * WORKING_DOTS_STAGGER_MS;
+  const phase = (((shifted / WORKING_DOTS_CYCLE_MS) % 1) + 1) % 1;
+  if (phase >= WORKING_DOTS_ACTIVE_FRACTION) return 0;
+  const half = WORKING_DOTS_ACTIVE_FRACTION / 2;
+  const linear = phase < half ? phase / half : 1 - (phase - half) / half;
+  return easeInOut(linear);
+}
+
+/**
+ * The `typing` variant: three steadily, sequentially pulsing dots. Private
+ * to this module - `AgentSpinningDots` is the only spinner seam, so cadence,
+ * reduced-motion and pane-visibility behaviour cannot diverge between
+ * spinner APIs. Static layout comes from the `.working-dots` rules in
+ * index.css; the bounce is written as inline styles from the shared status
+ * animation clock (see `status-animation-clock.ts` for why it is not a CSS
+ * animation).
+ */
+function WorkingDots(props: {
+  readonly className: string | undefined;
+  readonly testId: string | undefined;
+}) {
+  const ref = useRef<HTMLSpanElement | null>(null);
+  const write = useCallback((element: HTMLSpanElement, elapsedMs: number) => {
+    const dots = element.children;
+    for (let index = 0; index < dots.length; index++) {
+      const dot = dots[index];
+      if (!(dot instanceof HTMLElement)) continue;
+      const lift = dotLift(elapsedMs, index);
+      dot.style.opacity = String(
+        WORKING_DOTS_REST_OPACITY + (1 - WORKING_DOTS_REST_OPACITY) * lift,
+      );
+      dot.style.transform = `translateY(${(-lift).toFixed(3)}px)`;
+    }
+  }, []);
+  const clear = useCallback((element: HTMLSpanElement) => {
+    for (const dot of element.children) {
+      if (!(dot instanceof HTMLElement)) continue;
+      dot.style.opacity = "";
+      dot.style.transform = "";
+    }
+  }, []);
+  useStatusAnimation(ref, write, clear, STATUS_ANIMATION_PULSE_CADENCE_MS);
+  return (
+    <span
+      ref={ref}
+      className={cn("working-dots text-current", props.className)}
+      aria-hidden="true"
+      data-testid={props.testId}
+    >
+      <span />
+      <span />
+      <span />
+    </span>
+  );
+}
+
 export function AgentSpinningDots(props: AgentSpinningDotsProps) {
   const frameRef = useRef<HTMLSpanElement | null>(null);
   const variant = props.variant ?? "dots";
@@ -638,6 +707,7 @@ export function AgentSpinningDots(props: AgentSpinningDotsProps) {
   //   clock's 40 ms tick.
   const paneVisible = usePaneVisible();
   useLayoutEffect(() => {
+    // The `typing` variant renders `WorkingDots` below, which has no frames.
     if (presetFrames === null || presetIntervalMs === null) return;
     const node = frameRef.current;
     if (node === null) return;
