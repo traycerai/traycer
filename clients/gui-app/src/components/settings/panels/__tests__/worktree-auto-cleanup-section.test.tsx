@@ -64,6 +64,21 @@ async function loadedCleanupToggle(): Promise<HTMLElement> {
   return screen.getByRole("switch", { name: "Automatic cleanup" });
 }
 
+/**
+ * The threshold controls live behind a default-collapsed disclosure, so every
+ * test that touches them has to open it first - which is also the assertion
+ * that the trigger is the only way in.
+ */
+async function openThresholdEditor(): Promise<void> {
+  const trigger = await screen.findByRole("button", {
+    name: "Configure automatic cleanup",
+  });
+  fireEvent.click(trigger);
+  await waitFor(() => {
+    screen.getByRole("textbox", { name: "Custom inactivity days" });
+  });
+}
+
 function policyFixture(
   overrides: Partial<WorktreeAutoCleanupPolicyState>,
 ): WorktreeAutoCleanupPolicyState {
@@ -159,9 +174,128 @@ describe("WorktreeAutoCleanupSection", () => {
     expect(toggle.getAttribute("data-state")).toBe("unchecked");
     // Default-off says so in words, and the threshold control is not offered
     // for a policy that deletes nothing.
-    screen.getByText(
-      "Cleanup is off. Nothing is deleted automatically on this host.",
+    expect(
+      screen.getByTestId("worktree-auto-cleanup-summary").textContent,
+    ).toBe("Automatic cleanup · Off");
+    screen.getByText("Nothing is deleted automatically.");
+    expect(
+      screen.queryByRole("textbox", { name: "Custom inactivity days" }),
+    ).toBeNull();
+  });
+
+  it("offers no way to configure a policy that is switched off", async () => {
+    renderSection(
+      clientWithPolicy({
+        get: () => policyFixture({}),
+        set: (r) => policyFixture(r),
+      }),
     );
+
+    await loadedCleanupToggle();
+    // Nothing to unfold while cleanup deletes nothing: a disclosure over an
+    // inert threshold is a control that cannot change an outcome.
+    expect(screen.queryByRole("button", { name: /configure/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /7 days/ })).toBeNull();
+  });
+
+  it("starts collapsed for an enabled policy and keeps the switch reachable", async () => {
+    renderSection(
+      clientWithPolicy({
+        get: () => policyFixture({ enabled: true, inactivityDays: 30 }),
+        set: (r) => policyFixture(r),
+      }),
+    );
+
+    const toggle = await loadedCleanupToggle();
+    expect(toggle.getAttribute("data-state")).toBe("checked");
+    // The summary carries the threshold, so the collapsed card still answers
+    // "after how long" without unfolding anything.
+    expect(
+      screen.getByTestId("worktree-auto-cleanup-summary").textContent,
+    ).toBe("Automatic cleanup · On · after 30 days");
+    for (const days of [7, 14, 30, 60, 90]) {
+      expect(screen.queryByRole("button", { name: `${days} days` })).toBeNull();
+    }
+    expect(
+      screen.queryByRole("textbox", { name: "Custom inactivity days" }),
+    ).toBeNull();
+    screen.getByRole("button", { name: "Configure automatic cleanup" });
+  });
+
+  it("mounts the threshold editor on Configure and unmounts it on Collapse", async () => {
+    renderSection(
+      clientWithPolicy({
+        get: () => policyFixture({ enabled: true }),
+        set: (r) => policyFixture(r),
+      }),
+    );
+
+    await openThresholdEditor();
+    // The fuller safety explanation belongs to the decision, so it arrives
+    // with the editor rather than sitting on the collapsed row.
+    screen.getByText(/Age alone never makes one safe/);
+    screen.getByRole("button", { name: "30 days" });
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Collapse automatic cleanup settings",
+      }),
+    );
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("textbox", { name: "Custom inactivity days" }),
+      ).toBeNull();
+    });
+    expect(screen.queryByRole("button", { name: "30 days" })).toBeNull();
+    screen.getByRole("button", { name: "Configure automatic cleanup" });
+  });
+
+  it("toggles the policy from the collapsed summary without unfolding it", async () => {
+    const requests: boolean[] = [];
+    let policy = policyFixture({ enabled: true, revision: 4 });
+    renderSection(
+      clientWithPolicy({
+        get: () => policy,
+        set: (request) => {
+          requests.push(request.enabled);
+          policy = policyFixture({
+            ...request,
+            revision: request.expectedRevision + 1,
+          });
+          return policy;
+        },
+      }),
+    );
+
+    fireEvent.click(await loadedCleanupToggle());
+
+    await waitFor(() => {
+      expect(requests).toEqual([false]);
+    });
+    // Off takes the disclosure with it - and the summary states the new state
+    // rather than leaving the threshold on screen.
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("worktree-auto-cleanup-summary").textContent,
+      ).toBe("Automatic cleanup · Off");
+    });
+    expect(screen.queryByRole("button", { name: /configure/i })).toBeNull();
+  });
+
+  it("returns to the collapsed summary on a remount", async () => {
+    const client = clientWithPolicy({
+      get: () => policyFixture({ enabled: true }),
+      set: (r) => policyFixture(r),
+    });
+    const { unmount } = renderSection(client);
+
+    await openThresholdEditor();
+    unmount();
+
+    // Disclosure state is component-local and never persisted, so re-entering
+    // Settings - or switching hosts - starts from the summary again.
+    renderSection(client);
+    await screen.findByRole("button", { name: "Configure automatic cleanup" });
     expect(
       screen.queryByRole("textbox", { name: "Custom inactivity days" }),
     ).toBeNull();
@@ -373,9 +507,7 @@ describe("WorktreeAutoCleanupSection", () => {
       }),
     );
 
-    await waitFor(() => {
-      screen.getByRole("button", { name: "7 days" });
-    });
+    await openThresholdEditor();
     fireEvent.click(screen.getByRole("button", { name: "7 days" }));
 
     await waitFor(() => {
@@ -410,9 +542,7 @@ describe("WorktreeAutoCleanupSection", () => {
       }),
     );
 
-    await waitFor(() => {
-      screen.getByRole("textbox", { name: "Custom inactivity days" });
-    });
+    await openThresholdEditor();
     const input = screen.getByRole("textbox", {
       name: "Custom inactivity days",
     });
@@ -462,13 +592,18 @@ describe("WorktreeAutoCleanupSection", () => {
       screen.getByTestId("worktree-auto-cleanup-conflict");
     });
     expect(setCalls).toBe(1);
-    // The re-read wins: the control now shows the state that actually landed.
+    // The re-read wins: the summary states what actually landed, and the
+    // editor behind Configure agrees with it.
     await waitFor(() => {
       expect(
-        screen
-          .getByRole("button", { name: "14 days" })
-          .getAttribute("aria-pressed"),
-      ).toBe("true");
+        screen.getByTestId("worktree-auto-cleanup-summary").textContent,
+      ).toBe("Automatic cleanup · On · after 14 days");
     });
+    await openThresholdEditor();
+    expect(
+      screen
+        .getByRole("button", { name: "14 days" })
+        .getAttribute("aria-pressed"),
+    ).toBe("true");
   });
 });

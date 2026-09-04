@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useState, type ReactNode } from "react";
-import { History, Info } from "lucide-react";
+import { ChevronRight, History, Info } from "lucide-react";
 import type { WorktreeAutoCleanupPolicyState } from "@traycer/protocol/host/worktree-auto-cleanup-schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -8,9 +8,18 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import { SETTINGS_ROW_STACK } from "@/components/settings/settings-row-layout";
 import { isHostScopeUsable } from "@/components/settings/host-scope/host-scope-status";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
+import {
+  useSettingsDensity,
+  type SettingsDensity,
+} from "@/providers/settings-density-context";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import {
@@ -111,6 +120,32 @@ function AutoCleanupNotice(props: {
   );
 }
 
+const SUMMARY_PADDING: Record<SettingsDensity, string> = {
+  compact: "gap-2.5 px-3 py-2",
+  relaxed: "gap-3.5 px-3.5 py-2.5",
+};
+
+const SECONDARY_PADDING: Record<SettingsDensity, string> = {
+  compact: "px-3 py-1.5",
+  relaxed: "px-3.5 py-2",
+};
+
+const DISCLOSURE_PADDING: Record<SettingsDensity, string> = {
+  compact: "px-3 py-2",
+  relaxed: "px-3.5 py-2.5",
+};
+
+/**
+ * The card is a two-line SUMMARY, and everything that only matters while
+ * someone is changing the policy lives behind a disclosure.
+ *
+ * The reason is the card's neighbour: it sits directly above the worktree
+ * inventory in a panel of fixed height, so every row it spends
+ * unconditionally is a worktree the list below cannot show. The threshold
+ * presets and the safety explanation are read while deciding and then never
+ * again, while the switch, the schedule and the history entry point are what
+ * the card is consulted for — so those stay on screen and the rest folds away.
+ */
 function AutoCleanupControls(props: {
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly hostLabel: string;
@@ -120,137 +155,267 @@ function AutoCleanupControls(props: {
   const policyQuery = useWorktreeAutoCleanupPolicy(client, true);
   const setPolicy = useWorktreeSetAutoCleanupPolicy(client);
   const policy = policyQuery.data ?? null;
+  const density = useSettingsDensity();
+  // Component-local and never persisted. The collapsed summary is this card's
+  // resting shape on every mount, so re-entering Settings or switching hosts
+  // starts closed rather than restoring someone's last visit to the threshold.
+  const [configuring, setConfiguring] = useState(false);
+  const enabled = policy !== null && policy.enabled;
+  // A policy that deletes nothing has nothing to configure, so a disclosure
+  // left open by an earlier visit closes with the switch rather than
+  // outliving the thing it edits.
+  const expanded = enabled && configuring;
 
   return (
     <div
       className="w-full overflow-hidden rounded-lg border border-border/60 bg-card/40"
       data-testid="worktree-auto-cleanup-section"
     >
-      <div
-        className={cn(
-          "flex flex-wrap items-center gap-3.5 px-3.5 py-2.5",
-          SETTINGS_ROW_STACK.container,
-        )}
-      >
-        <div className={cn("min-w-0 flex-1", SETTINGS_ROW_STACK.label)}>
-          <span className="text-ui-sm font-medium text-foreground">
-            Automatic cleanup
-          </span>
-          <p className="mt-0.5 text-ui-xs text-muted-foreground">
-            Removes worktrees on this host that have been inactive and stay
-            proven safe to delete. Age alone never makes one safe.
-          </p>
-        </div>
-        <div
-          className={cn(
-            "flex shrink-0 items-center gap-2",
-            SETTINGS_ROW_STACK.control,
-          )}
-        >
-          {setPolicy.isPending ? (
-            <AgentSpinningDots
-              className="text-muted-foreground"
-              testId="worktree-auto-cleanup-saving"
-              variant={undefined}
+      <Collapsible open={expanded} onOpenChange={setConfiguring}>
+        <AutoCleanupSummaryRow
+          policy={policy}
+          density={density}
+          busy={setPolicy.isPending}
+          expanded={expanded}
+          onSetEnabled={(next) => {
+            if (policy === null) return;
+            // Turning the policy off closes the editor with it, and turning it
+            // back on must NOT re-open it: the summary is the resting shape,
+            // not a state the toggle can talk the card out of.
+            if (!next) setConfiguring(false);
+            setPolicy.mutate({
+              enabled: next,
+              inactivityDays: policy.inactivityDays,
+              expectedRevision: policy.revision,
+            });
+          }}
+        />
+        <CollapsibleContent>
+          {policy !== null && policy.enabled ? (
+            <AutoCleanupThresholdEditor
+              policy={policy}
+              density={density}
+              busy={setPolicy.isPending}
+              onCommitDays={(days) => {
+                setPolicy.mutate({
+                  enabled: policy.enabled,
+                  inactivityDays: days,
+                  expectedRevision: policy.revision,
+                });
+              }}
             />
           ) : null}
-          <Switch
-            aria-label="Automatic cleanup"
-            checked={policy?.enabled ?? false}
-            disabled={policy === null || setPolicy.isPending}
-            onCheckedChange={(next) => {
-              if (policy === null) return;
-              setPolicy.mutate({
-                enabled: next,
-                inactivityDays: policy.inactivityDays,
-                expectedRevision: policy.revision,
-              });
-            }}
-          />
-        </div>
+        </CollapsibleContent>
+      </Collapsible>
+      <AutoCleanupStatusRows
+        density={density}
+        pending={policyQuery.isPending}
+        readError={policyQuery.isError ? policyQuery.error.message : null}
+        conflicted={isAutoCleanupRevisionConflict(setPolicy.error)}
+      />
+      {policy !== null && policy.pausedReason !== null ? (
+        <p
+          role="status"
+          data-testid="worktree-auto-cleanup-paused"
+          className={cn(
+            "border-t border-border/40 text-ui-xs text-amber-700 dark:text-amber-300",
+            SECONDARY_PADDING[density],
+          )}
+        >
+          {AUTO_CLEANUP_PAUSED_COPY[policy.pausedReason]}
+        </p>
+      ) : null}
+      {enabled ? (
+        <AutoCleanupScheduleRow
+          policy={policy}
+          density={density}
+          onOpenHistory={onOpenHistory}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * Line one: what the policy currently does, the disclosure, and the switch.
+ *
+ * The disclosure trigger is its OWN button rather than the whole row, because
+ * the row's trailing edge holds the switch — a row-wide trigger would nest an
+ * interactive control inside a button and make the one control that must stay
+ * a single tab stop unreachable.
+ */
+function AutoCleanupSummaryRow(props: {
+  readonly policy: WorktreeAutoCleanupPolicyState | null;
+  readonly density: SettingsDensity;
+  readonly busy: boolean;
+  readonly expanded: boolean;
+  readonly onSetEnabled: (next: boolean) => void;
+}): ReactNode {
+  const { policy, density, busy, expanded, onSetEnabled } = props;
+  const enabled = policy !== null && policy.enabled;
+  return (
+    <div
+      className={cn(
+        "flex flex-wrap items-center",
+        SUMMARY_PADDING[density],
+        SETTINGS_ROW_STACK.container,
+      )}
+    >
+      <div className={cn("min-w-0 flex-1", SETTINGS_ROW_STACK.label)}>
+        <p
+          className="text-ui-sm text-foreground"
+          data-testid="worktree-auto-cleanup-summary"
+        >
+          <span className="font-medium">Automatic cleanup</span>
+          {policy === null ? null : (
+            <span className="text-muted-foreground">
+              {enabled
+                ? ` · On · after ${autoCleanupDaysLabel(policy.inactivityDays)}`
+                : " · Off"}
+            </span>
+          )}
+        </p>
+        {policy !== null && !enabled ? (
+          <p className="mt-0.5 text-ui-xs text-muted-foreground">
+            Nothing is deleted automatically.
+          </p>
+        ) : null}
       </div>
-      {policyQuery.isPending ? (
-        <p className="border-t border-border/40 px-3.5 py-2 text-ui-xs text-muted-foreground">
+      <div
+        className={cn(
+          "flex shrink-0 items-center gap-2",
+          SETTINGS_ROW_STACK.control,
+        )}
+      >
+        {busy ? (
+          <AgentSpinningDots
+            className="text-muted-foreground"
+            testId="worktree-auto-cleanup-saving"
+            variant={undefined}
+          />
+        ) : null}
+        {enabled ? (
+          <CollapsibleTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="group text-muted-foreground"
+              aria-label={
+                expanded
+                  ? "Collapse automatic cleanup settings"
+                  : "Configure automatic cleanup"
+              }
+            >
+              <span>{expanded ? "Collapse" : "Configure"}</span>
+              <ChevronRight
+                className="transition-transform group-data-[state=open]:rotate-90"
+                aria-hidden
+              />
+            </Button>
+          </CollapsibleTrigger>
+        ) : null}
+        <Switch
+          aria-label="Automatic cleanup"
+          checked={enabled}
+          disabled={policy === null || busy}
+          onCheckedChange={onSetEnabled}
+        />
+      </div>
+    </div>
+  );
+}
+
+/** "1 day" / "30 days" — the summary reads as a sentence, so it agrees. */
+function autoCleanupDaysLabel(days: number): string {
+  return days === 1 ? "1 day" : `${days} days`;
+}
+
+/** Loading, the read's failure, and the write's one non-toasted rejection. */
+function AutoCleanupStatusRows(props: {
+  readonly density: SettingsDensity;
+  readonly pending: boolean;
+  readonly readError: string | null;
+  readonly conflicted: boolean;
+}): ReactNode {
+  const { density, pending, readError, conflicted } = props;
+  return (
+    <>
+      {pending ? (
+        <p
+          className={cn(
+            "border-t border-border/40 text-ui-xs text-muted-foreground",
+            SECONDARY_PADDING[density],
+          )}
+        >
           Loading automatic cleanup settings…
         </p>
       ) : null}
-      {policyQuery.isError ? (
+      {readError !== null ? (
         <p
           role="alert"
-          className="border-t border-border/40 px-3.5 py-2 text-ui-xs text-destructive"
+          className={cn(
+            "border-t border-border/40 text-ui-xs text-destructive",
+            SECONDARY_PADDING[density],
+          )}
         >
-          {policyQuery.error.message}
+          {readError}
         </p>
       ) : null}
-      {isAutoCleanupRevisionConflict(setPolicy.error) ? (
+      {conflicted ? (
         <p
           role="alert"
           data-testid="worktree-auto-cleanup-conflict"
-          className="border-t border-border/40 px-3.5 py-2 text-ui-xs text-amber-700 dark:text-amber-300"
+          className={cn(
+            "border-t border-border/40 text-ui-xs text-amber-700 dark:text-amber-300",
+            SECONDARY_PADDING[density],
+          )}
         >
           Automatic cleanup was changed somewhere else. The current setting is
           shown above — apply your change again if you still want it.
         </p>
       ) : null}
-      {policy !== null && policy.enabled ? (
-        <AutoCleanupThresholdRow
-          policy={policy}
-          busy={setPolicy.isPending}
-          onCommitDays={(days) => {
-            setPolicy.mutate({
-              enabled: policy.enabled,
-              inactivityDays: days,
-              expectedRevision: policy.revision,
-            });
-          }}
-        />
-      ) : null}
-      {policy !== null && policy.pausedReason !== null ? (
-        <p
-          role="status"
-          data-testid="worktree-auto-cleanup-paused"
-          className="border-t border-border/40 px-3.5 py-2 text-ui-xs text-amber-700 dark:text-amber-300"
-        >
-          {AUTO_CLEANUP_PAUSED_COPY[policy.pausedReason]}
-        </p>
-      ) : null}
-      <AutoCleanupFooter policy={policy} onOpenHistory={onOpenHistory} />
-    </div>
+    </>
   );
 }
 
-/** The schedule line and the history entry point. */
-function AutoCleanupFooter(props: {
-  readonly policy: WorktreeAutoCleanupPolicyState | null;
+/**
+ * Line two: when the host last looked and when it looks next, plus the way
+ * into the record of what it did.
+ *
+ * Both stay OUTSIDE the disclosure. They are the two things a person opens
+ * this card to check without changing anything, and a schedule that has to be
+ * unfolded to be read is a schedule nobody reads.
+ */
+function AutoCleanupScheduleRow(props: {
+  readonly policy: WorktreeAutoCleanupPolicyState;
+  readonly density: SettingsDensity;
   readonly onOpenHistory: () => void;
 }): ReactNode {
-  const { policy, onOpenHistory } = props;
+  const { policy, density, onOpenHistory } = props;
   return (
-    <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border/40 px-3.5 py-2">
-      {policy !== null && policy.enabled ? (
-        <AutoCleanupSchedule policy={policy} />
-      ) : (
-        <span className="text-ui-xs text-muted-foreground">
-          Cleanup is off. Nothing is deleted automatically on this host.
-        </span>
+    <div
+      className={cn(
+        "flex flex-wrap items-center justify-between gap-2 border-t border-border/40",
+        SECONDARY_PADDING[density],
       )}
-      {policy !== null && policy.enabled ? (
-        // History records AUTOMATIC runs only - manual deletions never appear
-        // in it - so the button belongs to the enabled policy and nowhere
-        // else. With cleanup off, a button here read as the place manual
-        // deletions should show up. The rows themselves persist (retention
-        // is 200 runs / 90 days), so re-enabling brings the record back.
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="shrink-0"
-          onClick={onOpenHistory}
-        >
-          <History className="size-4" />
-          <span>Automatic cleanup history</span>
-        </Button>
-      ) : null}
+    >
+      <AutoCleanupSchedule policy={policy} />
+      {/* History records AUTOMATIC runs only - manual deletions never appear
+          in it - so the button belongs to the enabled policy and nowhere
+          else. With cleanup off, a button here read as the place manual
+          deletions should show up. The rows themselves persist (retention
+          is 200 runs / 90 days), so re-enabling brings the record back. */}
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        className="shrink-0"
+        onClick={onOpenHistory}
+      >
+        <History className="size-4" />
+        <span>Automatic cleanup history</span>
+      </Button>
     </div>
   );
 }
@@ -263,6 +428,10 @@ function AutoCleanupFooter(props: {
  * missing timestamp. Paused time does not advance `lastEvaluatedAt` either,
  * which is exactly why the pause line above exists: a stale "last checked"
  * must never be the only evidence that nothing is happening.
+ *
+ * Deliberately NOT a live region: it repaints every minute on a shared clock,
+ * and a countdown that announces itself would talk over everything else on
+ * the page for as long as Settings is open.
  */
 function AutoCleanupSchedule(props: {
   readonly policy: WorktreeAutoCleanupPolicyState;
@@ -341,18 +510,25 @@ function AutoCleanupNextCheck(props: { readonly at: number }): ReactNode {
 }
 
 /**
- * The inactivity threshold: five presets plus a validated free value.
+ * The disclosure's whole content: what cleanup actually does, then the
+ * inactivity threshold — five presets plus a validated free value.
+ *
+ * The safety sentence lives HERE rather than on the collapsed row. It answers
+ * "what am I turning on", which is a question asked while configuring; the
+ * summary answers "what is it doing right now", and carrying both made the
+ * card two lines taller for every reader who had already decided.
  *
  * Validation reads the HOST's `bounds` rather than a constant here, so a host
  * that moves them needs no client release — and the control can never offer a
  * value the host is about to refuse.
  */
-function AutoCleanupThresholdRow(props: {
+function AutoCleanupThresholdEditor(props: {
   readonly policy: WorktreeAutoCleanupPolicyState;
+  readonly density: SettingsDensity;
   readonly busy: boolean;
   readonly onCommitDays: (days: number) => void;
 }): ReactNode {
-  const { policy, busy, onCommitDays } = props;
+  const { policy, density, busy, onCommitDays } = props;
   const errorId = useId();
   const [draft, setDraft] = useState(String(policy.inactivityDays));
   const [hasLocalEdit, setHasLocalEdit] = useState(false);
@@ -379,10 +555,16 @@ function AutoCleanupThresholdRow(props: {
   );
 
   return (
-    <div className="border-t border-border/40 px-3.5 py-2.5">
+    <div
+      className={cn("border-t border-border/40", DISCLOSURE_PADDING[density])}
+    >
+      <p className="max-w-[68ch] text-ui-xs text-pretty text-muted-foreground">
+        Removes worktrees on this host that have been inactive and stay proven
+        safe to delete. Age alone never makes one safe.
+      </p>
       <div
         className={cn(
-          "flex flex-wrap items-center gap-3",
+          "mt-2.5 flex flex-wrap items-center gap-3",
           SETTINGS_ROW_STACK.container,
         )}
       >
