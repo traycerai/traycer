@@ -32,6 +32,7 @@ import {
 } from "@/components/onboarding/onboarding-agent-guide-pane";
 import { OnboardingDetectedAgents } from "@/components/onboarding/onboarding-detected-agents";
 import type { OnboardingHostPicker } from "@/components/onboarding/onboarding-host-picker-model";
+import { OnboardingHostPickerBar } from "@/components/onboarding/onboarding-host-picker";
 import { OnboardingDiorama } from "@/components/onboarding/onboarding-diorama";
 import {
   OnboardingPhoneDiorama,
@@ -790,6 +791,13 @@ function ActCopy(props: {
           stretched layout leaves it. */}
       {act.addon === "agent-guide" ? (
         <div className="flex min-h-0 w-full flex-1 flex-col self-stretch overflow-hidden pt-1 text-left">
+          {/* The phone rail has no mini-app window to carry the picker as its
+              title, so the editor is headed with the same bar here. */}
+          <OnboardingHostPickerBar
+            picker={hostPicker}
+            trafficLights={false}
+            className="rounded-t-lg"
+          />
           <OnboardingAgentGuidePane
             agentGuide={agentGuide}
             hostPicker={hostPicker}

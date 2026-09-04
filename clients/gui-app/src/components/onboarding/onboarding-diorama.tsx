@@ -37,6 +37,7 @@ import {
   type OnboardingAgentGuideState,
 } from "@/components/onboarding/onboarding-agent-guide-pane";
 import type { OnboardingHostPicker } from "@/components/onboarding/onboarding-host-picker-model";
+import { OnboardingHostPickerBar } from "@/components/onboarding/onboarding-host-picker";
 import { EASE, TASKS } from "@/components/onboarding/onboarding-diorama-shared";
 import { OnboardingClaudeTui } from "@/components/onboarding/onboarding-claude-tui";
 import { OnboardingOpencodeTui } from "@/components/onboarding/onboarding-opencode-tui";
@@ -323,7 +324,19 @@ function DioramaScene(props: {
           scene === "command-theme" && "max-lg:hidden",
         )}
       >
-        <MiniAppHeader activeIndex={activeTaskIndex} className="" />
+        {scene === "agent-guide" ? (
+          // The window's title is the host picker on this act: the guide is
+          // stored on a host, and the card floating below already says what
+          // it is. `z-30` lifts the bar above the modal's scrim (`z-20`), or
+          // the one control that changes the host would sit under a dimmer.
+          <OnboardingHostPickerBar
+            picker={hostPicker}
+            trafficLights
+            className="z-30"
+          />
+        ) : (
+          <MiniAppHeader activeIndex={activeTaskIndex} className="" />
+        )}
         <div
           ref={dragLayerRef}
           className="relative min-h-0 flex-1 bg-background"

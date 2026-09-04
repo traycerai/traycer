@@ -7,21 +7,24 @@ import {
   type OnboardingHostPicker,
 } from "@/components/onboarding/onboarding-host-picker-model";
 import { useRegisteredHostsPollLiveness } from "@/hooks/auth/use-registered-hosts-query";
+import { cn } from "@/lib/utils";
 
 /**
  * The title bar of the tour's mini-app window, with the host picker where the
- * static title used to be. Both host-dependent acts draw it, so the control a
- * person used on one act is recognisably the same control on the other.
+ * static title used to be - centred, the way the login-import window centres
+ * its title, so the three live acts read as one window with a different
+ * title. No words before the name: the card or wizard beneath already says
+ * what the act is about, and "Agent guide for ⟨host⟩" over a card headed
+ * "Agent selection guide" said it twice.
  *
  * A single-host account gets plain text: there is nothing to choose, and a
  * chevron that opens a list of one is a control that lies about what it does.
  */
 export function OnboardingHostPickerBar(props: {
-  /** The words before the host name - "Your work on ⟨host⟩". */
-  readonly label: string;
   readonly picker: OnboardingHostPicker;
   /** The window dots. Off where this bar heads a card inside a window. */
   readonly trafficLights: boolean;
+  readonly className: string;
 }): ReactNode {
   const { scope } = props.picker;
   // The host rows are served by a NON-polling observer; the Settings sidebar
@@ -32,27 +35,30 @@ export function OnboardingHostPickerBar(props: {
   return (
     <header
       data-testid="onboarding-host-picker-bar"
-      className="relative flex h-10 shrink-0 items-center gap-2 bg-canvas pl-3 text-canvas-foreground after:absolute after:inset-x-0 after:bottom-0 after:h-px after:bg-border/90 after:content-['']"
+      className={cn(
+        "relative flex h-10 shrink-0 items-center justify-center bg-canvas px-3 text-canvas-foreground after:absolute after:inset-x-0 after:bottom-0 after:h-px after:bg-border/90 after:content-['']",
+        props.className,
+      )}
     >
       {props.trafficLights ? (
-        <div aria-hidden="true" className="flex shrink-0 items-center gap-1.5">
+        <div
+          aria-hidden="true"
+          className="absolute left-3 flex items-center gap-1.5"
+        >
           <span className="size-2 rounded-full bg-[#ff5f57]" />
           <span className="size-2 rounded-full bg-[#ffbd2e]" />
           <span className="size-2 rounded-full bg-[#28c840]" />
         </div>
       ) : null}
-      <span className="shrink-0 text-ui-xs text-muted-foreground">
-        {props.label}
-      </span>
       {scope.hosts.length < 2 ? (
         <span
           data-testid="onboarding-host-name"
-          className="min-w-0 flex-1 truncate px-3 py-2 text-ui-sm font-medium text-foreground"
+          className="min-w-0 truncate px-3 py-2 text-ui-xs text-muted-foreground"
         >
           {scope.hostLabel}
         </span>
       ) : (
-        <div className="flex min-w-0 flex-1">
+        <div className="flex min-w-0 max-w-[70%]">
           <HostSwitcher
             hosts={scope.hosts}
             selected={scope.host}

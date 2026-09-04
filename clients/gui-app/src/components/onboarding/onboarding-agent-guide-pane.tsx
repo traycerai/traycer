@@ -1,9 +1,6 @@
 import { ArrowRight } from "lucide-react";
 import { AgentSelectionGuideEditorSurface } from "@/components/agent-selection-guide-editor-surface";
-import {
-  OnboardingHostPickerBar,
-  OnboardingHostUnavailableNotice,
-} from "@/components/onboarding/onboarding-host-picker";
+import { OnboardingHostUnavailableNotice } from "@/components/onboarding/onboarding-host-picker";
 import {
   onboardingHostIsUsable,
   type OnboardingHostPicker,
@@ -33,17 +30,11 @@ export function OnboardingAgentGuidePane(props: {
   const { agentGuide, hostPicker } = props;
   const isAtDefault = agentGuide.value === agentGuide.generatedDefaultContent;
   return (
+    // No host bar of its own: on desktop the picker is the title of the
+    // mini-app window this card floats in (`DioramaScene`), and on the phone
+    // rail `ActCopy` heads the editor with it. Drawing it here too put the
+    // host's name twice on one screen.
     <div className="flex size-full min-h-0 flex-col overflow-hidden rounded-lg border border-border bg-card shadow-2xl">
-      {/* The same strip the session-import window heads itself with, so the
-          picker reads as one control across both acts. Its own traffic lights
-          would be a second set: on desktop this card floats INSIDE the mini-app
-          window, which already draws them, and on the phone rail there is no
-          window to dress. */}
-      <OnboardingHostPickerBar
-        label="Agent guide for"
-        picker={hostPicker}
-        trafficLights={false}
-      />
       {onboardingHostIsUsable(hostPicker) ? (
         <AgentSelectionGuideEditorSurface
           titleId="onboarding-agent-selection-guide-heading"

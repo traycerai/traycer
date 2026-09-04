@@ -50,11 +50,7 @@ export function OnboardingSessionImportStage(props: {
       data-testid="onboarding-session-import-stage"
       className="flex h-[var(--onboarding-diorama-max-height)] w-full min-w-0 flex-col overflow-hidden rounded-xl border border-white/12 bg-background text-foreground shadow-[0_2rem_4rem_-1.75rem_rgba(0,0,0,0.72),0_0.875rem_2rem_-1.25rem_rgba(0,0,0,0.55)]"
     >
-      <OnboardingHostPickerBar
-        label="Your work on"
-        picker={hostPicker}
-        trafficLights
-      />
+      <OnboardingHostPickerBar picker={hostPicker} trafficLights className="" />
       {hostReady && scanSupported ? (
         <SessionImportWizard
           surface="onboarding"
