@@ -28,6 +28,11 @@ import {
   type LandingTerminalTabRef,
 } from "@/stores/home/landing-panel-store";
 import {
+  recordProviderLoginTerminal,
+  useProviderLoginTerminalsStore,
+} from "@/stores/providers/provider-login-terminals";
+import { openLandingSignInTerminal } from "@/lib/terminals/landing-sign-in-terminal";
+import {
   landingTerminalRightActionsKey,
   useMobileHeaderStore,
 } from "@/stores/layout/mobile-header-store";
@@ -818,6 +823,10 @@ describe("<LandingTerminalPanel />", () => {
     resetTerminalFocusRegistryForTests();
     resetPrimaryFocusCoordinatorForTests();
     useLandingPanelStore.getState().resetForTests();
+    useProviderLoginTerminalsStore.setState({
+      providerBySessionKey: {},
+      recentKeys: [],
+    });
     setSystemTabModalApi(null);
     useTabsStore.setState(INITIAL_TABS_LAYOUT);
   });
@@ -1744,6 +1753,151 @@ describe("<LandingTerminalPanel />", () => {
     // The capable arm's shared mutation never sees a provider-login close -
     // it has no plain-terminal row to require, and would reject.
     expect(mocks.plainCloseAsync).not.toHaveBeenCalled();
+  });
+
+  it("reveals a host-created sign-in tab into a CLOSED panel without settling the open as a gesture", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    mocks.plainAuthorityStatus = "capable";
+    mocks.plainCanMutate = true;
+    // A fresh projection, or the capable pass waits instead of settling and
+    // the gesture below would never be acted on either way.
+    mocks.plainCollection = freshPlainCollection([]);
+    // Panel closed when the host answers `providers.startTerminalLogin`. The
+    // mount pass runs closed and fetches too; let it fetch and settle first so
+    // the count below is the TRANSITION's own pass, not the mount's.
+    render(panelUi());
+    await waitFor(() => {
+      expect(mocks.queryClient.fetchQuery).toHaveBeenCalled();
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    const fetchesBeforeOpen = mocks.queryClient.fetchQuery.mock.calls.length;
+
+    act(() => {
+      openLandingSignInTerminal({
+        landingPageId: TEST_LANDING_PAGE_ID,
+        hostId: "host-a",
+        providerId: "reasonix",
+        sessionId: "term-sign-in",
+        replacedSessionId: null,
+        launchedFromSessionId: null,
+      });
+    });
+    expect(
+      landingPanelLayoutFor(
+        useLandingPanelStore.getState(),
+        TEST_LANDING_PAGE_ID,
+      ).panelOpen,
+    ).toBe(true);
+
+    // The closed-to-open transition used to be read as the user's opening
+    // gesture, which settles by re-targeting the launch cwd. The sign-in
+    // tab's display-only `"~"` matches none, so settlement spawned a plain
+    // shell and activated it - over the tab that carries the sign-in code.
+    // The transition re-keys reconciliation; wait for its fresh list, then
+    // let the settlement run, so "nothing spawned" is an ordering claim.
+    await waitFor(() => {
+      expect(mocks.queryClient.fetchQuery.mock.calls.length).toBeGreaterThan(
+        fetchesBeforeOpen,
+      );
+    });
+    // Settlement is several awaits past the fetch (stale checks, the capable
+    // pass); drain them all before claiming nothing spawned.
+    await act(async () => {
+      for (let tick = 0; tick < 10; tick += 1) await Promise.resolve();
+    });
+
+    const state = useLandingPanelStore.getState();
+    expect(state.tabs).toHaveLength(1);
+    expect(state.tabs[0]).toMatchObject({ origin: "provider-login" });
+    expect(state.activeInstanceId).toBe(state.tabs[0]?.instanceId);
+    expect(mocks.plainCreateAsync).not.toHaveBeenCalled();
+    // Consumed by that one transition, so the next open is a real gesture.
+    expect(state.panelReveal).toBeNull();
+  });
+
+  it("adopts a sign-in session another window started, from terminal.list, on a capable host whose projection cannot carry it", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    // Listed by the host - it is a live manager-owned session - but absent
+    // from the plain projection, which only ever holds plain-registry rows.
+    mocks.probeData = listWith(
+      [runningSession("term-peer-sign-in")],
+      "/Users/dev",
+    );
+    mocks.freshProbeData = mocks.probeData;
+    mocks.plainAuthorityStatus = "capable";
+    mocks.plainCanMutate = true;
+    mocks.plainCollection = freshPlainCollection([]);
+    // The peer window's record, arrived through the shared registry.
+    recordProviderLoginTerminal({
+      hostId: "host-a",
+      sessionId: "term-peer-sign-in",
+      providerId: "reasonix",
+    });
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+
+    await waitFor(() => {
+      expect(useLandingPanelStore.getState().tabs).toHaveLength(1);
+    });
+    // Through the rendered panel too: the adopted tab is reachable, not only
+    // stored.
+    await screen.findByRole("tab", { name: /Reasonix sign-in/ });
+    const tab = useLandingPanelStore.getState().tabs[0];
+    expect(tab).toMatchObject({
+      sessionId: "term-peer-sign-in",
+      hostId: "host-a",
+      name: "Reasonix sign-in",
+      titleSource: "manual",
+      origin: "provider-login",
+      originProviderId: "reasonix",
+    });
+    // Adopted as the host's session, never created or imported under its id:
+    // the durable bootstrap would `terminal.plain.create` a bare shell, and
+    // an import would hand the plain registry a session it never spawned.
+    expect(mocks.plainCreateAsync).not.toHaveBeenCalled();
+    expect(mocks.plainImportAsync).not.toHaveBeenCalled();
+  });
+
+  it("adopts a listed sign-in even while the capable host's plain stream is read-only - the list that answered is all it needs", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = listWith(
+      [runningSession("term-peer-sign-in")],
+      "/Users/dev",
+    );
+    mocks.freshProbeData = mocks.probeData;
+    mocks.plainAuthorityStatus = "capable";
+    // A reconnecting list stream: the capable pass waits for mutability and
+    // returns without settling. A sign-in is short-lived; one that exits
+    // during that wait could never be adopted afterwards (running sessions
+    // only), and its restart surface with it.
+    mocks.plainCanMutate = false;
+    mocks.plainCollection = freshPlainCollection([]);
+    recordProviderLoginTerminal({
+      hostId: "host-a",
+      sessionId: "term-peer-sign-in",
+      providerId: "reasonix",
+    });
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+
+    await waitFor(() => {
+      expect(useLandingPanelStore.getState().tabs).toHaveLength(1);
+    });
+    await screen.findByRole("tab", { name: /Reasonix sign-in/ });
+    expect(useLandingPanelStore.getState().tabs[0]).toMatchObject({
+      sessionId: "term-peer-sign-in",
+      origin: "provider-login",
+    });
   });
 
   it("leaves the tombstone to the owner when its close merely joins one", async () => {

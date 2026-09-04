@@ -1,10 +1,8 @@
 import type {
-  BrowserViewBounds,
   BrowserViewCertificateErrorChange,
   BrowserViewNativeTabKey,
   BrowserViewStatus,
   BrowserViewTileKey,
-  BrowserViewViewportPresetId,
 } from "@traycer-clients/shared/platform/browser-view";
 import type { BrowserAnnotationSession } from "../annotation/browser-annotation-session";
 import type { BrowserSessionProfile } from "../browser-session";
@@ -12,7 +10,7 @@ import type { BrowserDebugSession } from "../debug/browser-debug-session";
 import type { BrowserViewEntryKey } from "./browser-view-entry-registry";
 import type {
   BrowserViewDevToolsWindow,
-  ManagedBrowserView,
+  BrowserViewWebContents,
 } from "../browser-view-port";
 import type { NativeBrowserViewLifecycle } from "./native-browser-view-lifecycle";
 import type { RunnerHostEvent } from "../../../ipc-contracts/ipc-channels";
@@ -47,25 +45,10 @@ export interface BrowserViewEntry {
    * by then the host frame that named the profile is long gone.
    */
   readonly profile: BrowserSessionProfile;
-  readonly view: ManagedBrowserView;
+  /** The guest itself. Capability code talks only to this. */
+  readonly webContents: BrowserViewWebContents;
   readonly listeners: BrowserViewListenerMap;
-  parentWindowId: string | null;
   desiredVisible: boolean;
-  /**
-   * Last rect the renderer measured for this tile, in RENDERER CSS PIXELS -
-   * the space `getBoundingClientRect` reports and page zoom scales. The native
-   * rect is always re-derived from it (`BrowserViewGeometry.applyBounds`), so
-   * a zoom change needs no new measurement.
-   */
-  bounds: BrowserViewBounds | null;
-  /**
-   * BT-101: last effective rect, in window DIPs, actually handed to
-   * `view.setBounds`. Identical follow-up
-   * updates coalesce to a no-op so a streamed drag burst does not
-   * relayout the guest per frame for unchanged geometry. Invalidated when
-   * anything else moves the view directly (PiP offscreen parking).
-   */
-  lastAppliedBounds: BrowserViewBounds | null;
   requestedUrl: string;
   currentUrl: string;
   currentTitle: string;
@@ -76,38 +59,10 @@ export interface BrowserViewEntry {
   debugSession: BrowserDebugSession | null;
   annotationSession: BrowserAnnotationSession | null;
   devToolsWindow: BrowserViewDevToolsWindow | null;
-  viewportPreset: BrowserViewViewportPresetId;
-  overlayOwnerIds: string[];
-  overlaySnapshotStale: boolean;
-  /**
-   * BT-202 two-phase park: true between serving the replacement frame and
-   * the renderer's paint acknowledgement. While pending, the view stays at
-   * its real onscreen geometry so the page never blanks.
-   */
-  overlayAwaitingPaintAck: boolean;
-  /** Set once the parked posture is actually applied (post-ack). */
-  overlayParked: boolean;
-  /**
-   * Ticket 04 exit-edge handshake: non-null while a release is waiting for
-   * the un-parked view's first composited frame before telling the renderer
-   * to drop its stand-in (invariant 4, the restore-side counterpart of
-   * `overlayAwaitingPaintAck`). Identifies the in-flight wait so a late
-   * resolution that lost the race to a newer release (or to `forgetEntry`)
-   * can tell it is stale and skip notifying. `rekeyEntry` needs no handling:
-   * this lives on the entry object itself, so it carries across a rebind for
-   * free, and the eventual notification reads the entry's *current* tile key.
-   */
-  overlayRestoreToken: symbol | null;
-  /** Visibility last computed by the geometry pass; null before the first. */
-  visible: boolean | null;
-  /** Last `visible` value logged, so forensics logging fires only on change. */
-  lastLoggedVisible: boolean | null;
   /**
    * Set when the host window's own renderer starts a fresh main-frame
    * navigation or crashes, before the new renderer has re-upserted this
-   * entry. Forces `applyEntryVisibility` to hide the tile so it cannot
-   * composite over the blank/reloading window; cleared when the surface is
-   * rebound.
+   * entry. Cleared when the surface is rebound.
    */
   rendererResetPending: boolean;
   internalNavigation: boolean;
@@ -118,13 +73,13 @@ export interface BrowserViewEntry {
 export interface BrowserViewNativeIdentity {
   readonly key: BrowserViewNativeTabKey;
   /**
-   * The incarnation every host-side capability quotes. Mutable because a
-   * cross-window transfer mints a new one: that mint is what makes the old
-   * window's release, detach, control and PiP calls inert in one stroke
-   * (`findExactNativeEntry` and `releaseTab`'s own check both compare it),
-   * rather than needing a guard per consumer.
+   * The incarnation every host-side capability quotes. Fixed for the entry's
+   * life: a cross-window move REPLACES the entry (see
+   * `BrowserViewProvisioning.replaceNativeGuestForWindow`), so the new window's
+   * guest carries a freshly minted id and every call still quoting the old one
+   * finds no entry (`findExactNativeEntry` and `releaseTab`'s own check).
    */
-  registrationId: string;
+  readonly registrationId: string;
   /** Current renderer connection that owns this guest's lifecycle stream. */
   lifecycleWindowId: string;
   readonly lifecycle: NativeBrowserViewLifecycle;

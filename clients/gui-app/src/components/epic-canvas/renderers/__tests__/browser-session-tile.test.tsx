@@ -1546,11 +1546,11 @@ describe("BrowserSessionTile adapter props", () => {
    */
   it("claims its pane's activation when the native guest takes focus", () => {
     const claim = vi.fn();
-    const unregister = registerHostedPaneActivationClaim(
-      "view-1",
-      "pane-1",
-      claim,
-    );
+    const claimPointerDown = vi.fn();
+    const unregister = registerHostedPaneActivationClaim("view-1", "pane-1", {
+      claimFocus: claim,
+      claimPointerDown,
+    });
     renderTile();
 
     expect(surfaceCapture.onNativeTileFocused).not.toBeNull();
@@ -1558,6 +1558,9 @@ describe("BrowserSessionTile adapter props", () => {
       surfaceCapture.onNativeTileFocused?.();
     });
 
+    // The FOCUS claim: main reported the guest took keyboard focus. The
+    // pointer-down half belongs to the guest host, not to this report.
+    expect(claimPointerDown).not.toHaveBeenCalled();
     expect(claim).toHaveBeenCalledExactlyOnceWith({
       defaultPrevented: false,
       scope: null,
@@ -1570,11 +1573,10 @@ describe("BrowserSessionTile adapter props", () => {
   // view tab would otherwise activate the same pane.
   it("claims the pane it was rendered in", () => {
     const otherPane = vi.fn();
-    const unregister = registerHostedPaneActivationClaim(
-      "view-1",
-      "pane-1",
-      otherPane,
-    );
+    const unregister = registerHostedPaneActivationClaim("view-1", "pane-1", {
+      claimFocus: otherPane,
+      claimPointerDown: vi.fn(),
+    });
     render(tileElement("pane-2"));
 
     act(() => {

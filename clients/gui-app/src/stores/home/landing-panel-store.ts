@@ -352,27 +352,51 @@ export interface LandingPanelStoreState {
    */
   readonly fallbackLayout: LandingPanelLayout | null;
   readonly pendingKills: ReadonlyArray<LandingPanelPendingKill>;
+  /**
+   * The tab a programmatic panel open was made to SHOW, or `null`. Not
+   * persisted: it describes one open transition in this window.
+   *
+   * The panel reads a closed-to-open transition as the user's opening gesture
+   * and settles it by re-targeting the launch cwd - reuse a terminal already
+   * running there, else spawn one and focus it. An open made to reveal a tab
+   * that already exists (a host-created sign-in terminal, whose display-only
+   * `"~"` cwd matches no launch cwd) is not that gesture: settling it would
+   * spawn a bare shell and put it in front of the tab the open was for. The
+   * panel consumes this on its next open transition to tell the two apart.
+   */
+  readonly panelReveal: string | null;
   readonly setPanelOpen: (landingPageId: string, open: boolean) => void;
   /**
-   * Opens the panel on EVERY start page - each page that has recorded a layout
-   * of its own, and through the fallback every page that has not. The
-   * page-less form of {@link setPanelOpen}, for a caller with a tab to show and
-   * no live page to show it on.
+   * Opens the panel to SHOW `instanceId` on each of `landingPageIds`, and
+   * with `everyPage` on EVERY start page as well: each page that has recorded
+   * a layout of its own, and through the fallback every page that has not.
+   * Records `panelReveal` so the panel does not settle the open as a gesture.
    *
-   * The one caller is the sign-in open: a start page can be discarded while
-   * `providers.startTerminalLogin` is in flight, and if no other pane is
-   * mounted there is no id left to key an open by. Whichever start page mounts
-   * NEXT then shows the panel, which is where the tab (tabs are shared across
-   * pages) already is. Both halves are needed: `landingPanelLayoutFor` gives a
-   * page's own layout precedence over the fallback, so a page that once closed
-   * its panel would ignore a fallback-only write and hide the terminal behind
-   * the very layout it recorded.
+   * The one caller is the sign-in open. `everyPage` is for a start page
+   * discarded while `providers.startTerminalLogin` was in flight with no
+   * other pane mounted, so no id names a surface the user can see this on.
+   * Whichever start page mounts NEXT then shows the panel, which is where the
+   * tab (tabs are shared across pages) already is. Both halves of that form
+   * are needed: `landingPanelLayoutFor` gives a page's own layout precedence
+   * over the fallback, so a page that once closed its panel would ignore a
+   * fallback-only write and hide the terminal behind the very layout it
+   * recorded.
    *
    * Bounded by the same rule that retires layouts generally: the collapse on
    * an empty tab set closes every one of them once the last tab is gone, so
    * this cannot outlive the terminal it was written for.
    */
-  readonly openPanelForEveryPage: () => void;
+  readonly revealPanel: (reveal: {
+    readonly landingPageIds: ReadonlyArray<string>;
+    readonly everyPage: boolean;
+    readonly instanceId: string;
+  }) => void;
+  /**
+   * Retires `panelReveal`. The panel calls it on every open or collapse
+   * transition and on a page switch, so a reveal that never saw its
+   * transition (the panel was already open) cannot suppress a later gesture.
+   */
+  readonly clearPanelReveal: () => void;
   readonly setPanelWidthFraction: (
     landingPageId: string,
     fraction: number,
@@ -614,6 +638,7 @@ export const useLandingPanelStore = create<LandingPanelStoreState>()(
   persist(
     (set, get) => ({
       ...initialLandingPanelState(),
+      panelReveal: null,
       setPanelOpen: (landingPageId, panelOpen) =>
         set((state) =>
           updateLandingPanelLayout(state, landingPageId, {
@@ -621,29 +646,19 @@ export const useLandingPanelStore = create<LandingPanelStoreState>()(
             panelOpen,
           }),
         ),
-      openPanelForEveryPage: () =>
+      revealPanel: ({ landingPageIds, everyPage, instanceId }) =>
         set((state) => {
-          const layoutsByLandingPageId: Partial<
-            Record<string, LandingPanelLayout>
-          > = {};
-          for (const [landingPageId, layout] of Object.entries(
-            state.layoutsByLandingPageId,
-          )) {
-            if (layout !== undefined) {
-              layoutsByLandingPageId[landingPageId] = {
-                ...layout,
-                panelOpen: true,
-              };
-            }
-          }
+          const opened = everyPage ? openEveryPageLayout(state) : {};
           return {
-            layoutsByLandingPageId,
-            fallbackLayout: {
-              ...(state.fallbackLayout ?? DEFAULT_LANDING_PANEL_LAYOUT),
-              panelOpen: true,
-            },
+            ...opened,
+            ...openPageLayouts({ ...state, ...opened }, landingPageIds),
+            panelReveal: instanceId,
           };
         }),
+      clearPanelReveal: () =>
+        set((state) =>
+          state.panelReveal === null ? state : { panelReveal: null },
+        ),
       setPanelWidthFraction: (landingPageId, panelWidthFraction) =>
         set((state) =>
           updateLandingPanelLayout(state, landingPageId, {
@@ -899,7 +914,8 @@ export const useLandingPanelStore = create<LandingPanelStoreState>()(
               : {}),
           };
         }),
-      resetForTests: () => set(initialLandingPanelState()),
+      resetForTests: () =>
+        set({ ...initialLandingPanelState(), panelReveal: null }),
     }),
     {
       ...basePersistOptions(landingTerminalsKey(null)),
@@ -920,6 +936,50 @@ export const useLandingPanelStore = create<LandingPanelStoreState>()(
     },
   ),
 );
+
+function openPageLayouts(
+  state: Pick<
+    LandingPanelStoreState,
+    "layoutsByLandingPageId" | "fallbackLayout"
+  >,
+  landingPageIds: ReadonlyArray<string>,
+): Pick<LandingPanelStoreState, "layoutsByLandingPageId"> {
+  let next = state;
+  for (const landingPageId of landingPageIds) {
+    next = {
+      ...next,
+      ...updateLandingPanelLayout(next, landingPageId, {
+        ...landingPanelLayoutFor(next, landingPageId),
+        panelOpen: true,
+      }),
+    };
+  }
+  return { layoutsByLandingPageId: next.layoutsByLandingPageId };
+}
+
+function openEveryPageLayout(
+  state: Pick<
+    LandingPanelStoreState,
+    "layoutsByLandingPageId" | "fallbackLayout"
+  >,
+): Pick<LandingPanelStoreState, "layoutsByLandingPageId" | "fallbackLayout"> {
+  const layoutsByLandingPageId: Partial<Record<string, LandingPanelLayout>> =
+    {};
+  for (const [landingPageId, layout] of Object.entries(
+    state.layoutsByLandingPageId,
+  )) {
+    if (layout !== undefined) {
+      layoutsByLandingPageId[landingPageId] = { ...layout, panelOpen: true };
+    }
+  }
+  return {
+    layoutsByLandingPageId,
+    fallbackLayout: {
+      ...(state.fallbackLayout ?? DEFAULT_LANDING_PANEL_LAYOUT),
+      panelOpen: true,
+    },
+  };
+}
 
 /**
  * Whether the panel has nothing left to display.

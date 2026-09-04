@@ -3,8 +3,8 @@ import type { ToasterProps } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrowserViewTileKey } from "@traycer-clients/shared/platform/browser-view";
 import { Toaster } from "@/components/ui/sonner";
-import type { BrowserOverlayRect } from "@/lib/browser-view/tiles/browser-overlay-coordinator";
-import { registerBrowserOverlayTile } from "@/lib/browser-view/tiles/browser-overlay-coordinator";
+import type { TileRect } from "@/lib/browser-view/tiles/tile-rect-registry";
+import { registerTileRect } from "@/lib/browser-view/tiles/tile-rect-registry";
 
 // Ticket 06: the toaster picks the least-overlapping of sonner's six fixed
 // anchors against live registered tile rects, and freezes that choice while
@@ -88,7 +88,7 @@ function makeTileKey(id: string): BrowserViewTileKey {
 // Rects for each of sonner's six anchors, matching the jsdom default
 // 1200x800 viewport, the stub's 356x120 toaster size, and the wrapper's
 // 24px edge offset (sonner's own unoverridden `VIEWPORT_OFFSET` default).
-const TOP_LEFT_RECT: BrowserOverlayRect = {
+const TOP_LEFT_RECT: TileRect = {
   left: 24,
   top: 24,
   right: 380,
@@ -96,7 +96,7 @@ const TOP_LEFT_RECT: BrowserOverlayRect = {
   width: 356,
   height: 120,
 };
-const TOP_CENTER_RECT: BrowserOverlayRect = {
+const TOP_CENTER_RECT: TileRect = {
   left: 422,
   top: 24,
   right: 778,
@@ -104,7 +104,7 @@ const TOP_CENTER_RECT: BrowserOverlayRect = {
   width: 356,
   height: 120,
 };
-const TOP_RIGHT_RECT: BrowserOverlayRect = {
+const TOP_RIGHT_RECT: TileRect = {
   left: 820,
   top: 24,
   right: 1176,
@@ -112,7 +112,7 @@ const TOP_RIGHT_RECT: BrowserOverlayRect = {
   width: 356,
   height: 120,
 };
-const BOTTOM_LEFT_RECT: BrowserOverlayRect = {
+const BOTTOM_LEFT_RECT: TileRect = {
   left: 24,
   top: 656,
   right: 380,
@@ -120,7 +120,7 @@ const BOTTOM_LEFT_RECT: BrowserOverlayRect = {
   width: 356,
   height: 120,
 };
-const BOTTOM_CENTER_RECT: BrowserOverlayRect = {
+const BOTTOM_CENTER_RECT: TileRect = {
   left: 422,
   top: 656,
   right: 778,
@@ -128,7 +128,7 @@ const BOTTOM_CENTER_RECT: BrowserOverlayRect = {
   width: 356,
   height: 120,
 };
-const BOTTOM_RIGHT_RECT: BrowserOverlayRect = {
+const BOTTOM_RIGHT_RECT: TileRect = {
   left: 820,
   top: 656,
   right: 1176,
@@ -139,10 +139,15 @@ const BOTTOM_RIGHT_RECT: BrowserOverlayRect = {
 
 let pendingDeregisters: Array<() => void> = [];
 
-function registerTile(id: string, rect: BrowserOverlayRect): void {
-  pendingDeregisters.push(
-    registerBrowserOverlayTile({ key: makeTileKey(id), rect }),
-  );
+function registerTile(id: string, rect: TileRect): void {
+  const element = document.createElement("div");
+  element.getBoundingClientRect = () => ({
+    ...rect,
+    x: rect.left,
+    y: rect.top,
+    toJSON: () => ({}),
+  });
+  pendingDeregisters.push(registerTileRect(makeTileKey(id), element));
 }
 
 describe("<Toaster /> toast placement", () => {

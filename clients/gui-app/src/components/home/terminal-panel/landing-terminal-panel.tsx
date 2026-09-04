@@ -954,6 +954,7 @@ export function LandingTerminalPanel(): ReactNode {
   useEffect(() => {
     const previous = previousPanelLayoutRef.current;
     previousPanelLayoutRef.current = { landingPageId, panelOpen };
+    const store = useLandingPanelStore.getState();
     // An open panel holding nothing shows the CHOOSER. This is a CONDITION,
     // not an open-transition step, because the panel reaches that state by
     // several routes that are not `togglePanel`: the phone header's toggle
@@ -969,18 +970,32 @@ export function LandingTerminalPanel(): ReactNode {
     }
     if (previous.landingPageId !== landingPageId) {
       clearPendingTerminalFocus(null);
+      // A reveal written for the page just left has had its transition there
+      // or never will; left standing it would suppress this page's next real
+      // gesture.
+      store.clearPanelReveal();
       return;
     }
     const wasOpen = previous.panelOpen;
     if (wasOpen === panelOpen) return;
     if (panelOpen) {
-      if (!pending) capture();
+      // An open made to SHOW the active tab is not an opening gesture. Settling
+      // it as one re-targets the launch cwd, which a host-created sign-in tab
+      // (display-only `"~"`) never matches - so it would spawn a bare shell
+      // over the tab the open was for. Consumed here whatever it named, so a
+      // reveal cannot outlive the one transition it describes. Compared
+      // against the RAW active instance: a reveal names the row it activated,
+      // whatever kind of row that is.
+      const opened = useLandingPanelStore.getState();
+      const revealed =
+        store.panelReveal !== null &&
+        store.panelReveal === opened.activeInstanceId;
+      store.clearPanelReveal();
+      if (!pending && !revealed) capture();
       // Only a terminal row can claim a terminal focus request. An open panel
       // whose active row is the chooser or a browser tab leaves the request
       // unsent - those surfaces focus themselves on mount.
-      const openActiveInstanceId = activeLandingTerminalInstanceId(
-        useLandingPanelStore.getState(),
-      );
+      const openActiveInstanceId = activeLandingTerminalInstanceId(opened);
       if (
         openActiveInstanceId !== null &&
         directoryRequestRef.current === null
@@ -991,7 +1006,10 @@ export function LandingTerminalPanel(): ReactNode {
     }
     // Every collapse path converges on this store transition: the chord, the
     // header button, closing the last tab, close-all, and a shell exiting.
-    // All of them should hand the keyboard back to the composer.
+    // All of them should hand the keyboard back to the composer. A reveal that
+    // found the panel already open never saw a transition; it retires here so
+    // the NEXT open - a real gesture - is settled as one.
+    store.clearPanelReveal();
     clearPendingTerminalFocus(null);
     focusActiveComposer();
   }, [

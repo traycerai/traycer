@@ -14,8 +14,10 @@ import {
 } from "@/stores/home/landing-panel-store";
 import {
   reconcileHostAuthoritativeLandingTerminalTabs,
+  adoptListedProviderLoginSessions,
   reconcileLandingTerminalTabs,
   resolveLandingTerminalSyncedTitle,
+  retiredProviderLoginPredecessors,
   resolveLandingTerminalTitleCwd,
 } from "@/components/home/terminal-panel/landing-terminal-reconciliation";
 import { resolveLandingTerminalAvailability } from "@/components/home/terminal-panel/landing-terminal-availability";
@@ -487,6 +489,22 @@ describe("landing terminal lifecycle", () => {
     expect(result.adoptedTabs[0]?.name).not.toBe("project · New Terminal");
   });
 
+  it("adopts no unmatched EXITED session, registry-claimed or not", () => {
+    const result = reconcileLandingTerminalTabs({
+      tabs: [],
+      activeHostId: HOST_A,
+      sessions: [
+        session({ sessionId: "signin-session", status: "exited" }),
+        session({ sessionId: "plain-session", status: "exited" }),
+      ],
+      excludedSessionKeys: new Set(),
+      mintInstanceId: () => "never",
+      providerLoginProviderFor: (sessionId) =>
+        sessionId === "signin-session" ? "reasonix" : null,
+    });
+    expect(result.adoptedTabs).toEqual([]);
+  });
+
   it("adopts the same unmatched running session as an ordinary tab when providerLoginProviderFor returns null", () => {
     const result = reconcileLandingTerminalTabs({
       tabs: [],
@@ -907,6 +925,394 @@ describe("landing terminal lifecycle", () => {
     });
 
     expect(result.tabs).toEqual([{ ...defaultTab, name: "vim" }]);
+  });
+});
+
+describe("adoptListedProviderLoginSessions", () => {
+  const providerLoginProviderFor = (sessionId: string) =>
+    sessionId === "signin-session" ? ("reasonix" as const) : null;
+
+  it("adopts a registry-claimed running session that has no tab, in the sign-in shape", () => {
+    const adopted = adoptListedProviderLoginSessions({
+      tabs: [],
+      activeHostId: HOST_A,
+      sessions: [
+        session({ sessionId: "signin-session", status: "running" }),
+        session({ sessionId: "ordinary-session", status: "running" }),
+      ],
+      excludedSessionKeys: new Set(),
+      mintInstanceId: () => "adopted-signin-instance",
+      providerLoginProviderFor,
+    });
+
+    // The ordinary session is left alone: on a capable host the plain
+    // projection is the authority over it, and adopting it from the list
+    // would race that arm with a second, unacknowledged tab.
+    expect(adopted).toEqual([
+      {
+        kind: "terminal",
+        instanceId: "adopted-signin-instance",
+        sessionId: "signin-session",
+        hostId: HOST_A,
+        cwd: "/workspace/project",
+        name: "Reasonix sign-in",
+        titleSource: "manual",
+        origin: "provider-login",
+        originProviderId: "reasonix",
+      },
+    ]);
+  });
+
+  it("adopts nothing for a session that already has a tab on this host, whatever that tab's shape", () => {
+    const adopted = adoptListedProviderLoginSessions({
+      tabs: [
+        tab({
+          instanceId: "existing",
+          sessionId: "signin-session",
+          hostId: HOST_A,
+        }),
+      ],
+      activeHostId: HOST_A,
+      sessions: [session({ sessionId: "signin-session", status: "running" })],
+      excludedSessionKeys: new Set(),
+      mintInstanceId: () => "never",
+      providerLoginProviderFor,
+    });
+
+    // Reclassifying that tab is the reconciliation pass's job
+    // (`classifyLandingTab`); this only fills an ABSENCE.
+    expect(adopted).toEqual([]);
+  });
+
+  it("adopts nothing for a tombstoned session", () => {
+    const tombstoned = adoptListedProviderLoginSessions({
+      tabs: [],
+      activeHostId: HOST_A,
+      sessions: [session({ sessionId: "signin-session", status: "running" })],
+      // Closed here; the kill is still in flight, so the host still lists it.
+      excludedSessionKeys: new Set([
+        landingTabRefKey({
+          kind: "terminal",
+          hostId: HOST_A,
+          sessionId: "signin-session",
+        }),
+      ]),
+      mintInstanceId: () => "never",
+      providerLoginProviderFor,
+    });
+    expect(tombstoned).toEqual([]);
+  });
+
+  it("never adopts an EXITED session, even a registry-claimed one - an ended tab belongs to the window that had it", () => {
+    // The host lists an exited sign-in through a grace window and evicts it
+    // on `terminal.kill`, so which exited retry is "the one" changes with
+    // every close; every rule built on that resurrected some retry. The
+    // window that opened the sign-in keeps its ended tab through the exit
+    // (the matched arm); any other window starts fresh from the picker.
+    const adopted = adoptListedProviderLoginSessions({
+      tabs: [],
+      activeHostId: HOST_A,
+      sessions: [session({ sessionId: "signin-session", status: "exited" })],
+      excludedSessionKeys: new Set(),
+      mintInstanceId: () => "never",
+      providerLoginProviderFor,
+    });
+    expect(adopted).toEqual([]);
+  });
+
+  it("does not adopt an exited sign-in whose provider has a RUNNING sign-in on the host - the predecessor a restart killed", () => {
+    const adopted = adoptListedProviderLoginSessions({
+      tabs: [],
+      activeHostId: HOST_A,
+      sessions: [
+        session({ sessionId: "signin-session", status: "exited" }),
+        session({ sessionId: "signin-session-2", status: "running" }),
+      ],
+      excludedSessionKeys: new Set(),
+      mintInstanceId: () => "adopted-live-instance",
+      providerLoginProviderFor: (sessionId) =>
+        sessionId.startsWith("signin-session") ? "reasonix" : null,
+    });
+    // The window that pressed "Start again" retired the dead tab; this one
+    // must not raise it beside the live successor.
+    expect(adopted.map((entry) => entry.sessionId)).toEqual([
+      "signin-session-2",
+    ]);
+  });
+
+  it("does not let another host's tab for the same session id stand in", () => {
+    const adopted = adoptListedProviderLoginSessions({
+      tabs: [
+        tab({
+          instanceId: "other-host",
+          sessionId: "signin-session",
+          hostId: HOST_B,
+        }),
+      ],
+      activeHostId: HOST_A,
+      sessions: [session({ sessionId: "signin-session", status: "running" })],
+      excludedSessionKeys: new Set(),
+      mintInstanceId: () => "adopted-signin-instance",
+      providerLoginProviderFor,
+    });
+
+    expect(adopted.map((entry) => entry.instanceId)).toEqual([
+      "adopted-signin-instance",
+    ]);
+  });
+});
+
+describe("retiredProviderLoginPredecessors", () => {
+  const signInTab = (input: {
+    readonly instanceId: string;
+    readonly sessionId: string;
+    readonly providerId: "reasonix" | "copilot";
+  }): LandingTerminalTabRef => ({
+    ...tab({
+      instanceId: input.instanceId,
+      sessionId: input.sessionId,
+      hostId: HOST_A,
+    }),
+    origin: "provider-login",
+    originProviderId: input.providerId,
+  });
+  const providerLoginProviderFor = (sessionId: string) => {
+    if (sessionId.startsWith("signin-")) return "reasonix" as const;
+    if (sessionId.startsWith("copilot-")) return "copilot" as const;
+    return null;
+  };
+
+  it("retires this host's exited sign-in tab for a provider the listing shows a running successor for", () => {
+    // Another window pressed "Start again": the host killed the predecessor
+    // this window still shows as an ended tab, and lists the successor.
+    const retired = retiredProviderLoginPredecessors({
+      tabs: [
+        signInTab({
+          instanceId: "old-signin",
+          sessionId: "signin-old",
+          providerId: "reasonix",
+        }),
+        // Another provider's ended tab is untouched: nothing newer listed.
+        signInTab({
+          instanceId: "copilot-ended",
+          sessionId: "copilot-old",
+          providerId: "copilot",
+        }),
+        // An ordinary tab is never a predecessor.
+        tab({ instanceId: "plain", sessionId: "plain-1", hostId: HOST_A }),
+      ],
+      activeHostId: HOST_A,
+      sessions: [
+        session({ sessionId: "signin-old", status: "exited" }),
+        session({ sessionId: "signin-new", status: "running" }),
+        session({ sessionId: "copilot-old", status: "exited" }),
+      ],
+      providerLoginProviderFor,
+    });
+    expect(retired).toEqual(["old-signin"]);
+  });
+
+  it("retires the predecessor even when the successor is ALREADY a tab here - adopted as ordinary before its record arrived, classified since", () => {
+    const retired = retiredProviderLoginPredecessors({
+      tabs: [
+        signInTab({
+          instanceId: "old-signin",
+          sessionId: "signin-old",
+          providerId: "reasonix",
+        }),
+        signInTab({
+          instanceId: "new-signin",
+          sessionId: "signin-new",
+          providerId: "reasonix",
+        }),
+      ],
+      activeHostId: HOST_A,
+      sessions: [
+        session({ sessionId: "signin-old", status: "exited" }),
+        session({ sessionId: "signin-new", status: "running" }),
+      ],
+      providerLoginProviderFor,
+    });
+    // Nothing is adopted in this pass (both sessions are tabbed), and the
+    // predecessor still has to go.
+    expect(retired).toEqual(["old-signin"]);
+  });
+
+  it("keeps every ended tab while nothing for its provider runs - a newer EXITED sign-in supersedes nothing", () => {
+    const retired = retiredProviderLoginPredecessors({
+      tabs: [
+        signInTab({
+          instanceId: "older",
+          sessionId: "signin-older",
+          providerId: "reasonix",
+        }),
+      ],
+      activeHostId: HOST_A,
+      sessions: [
+        {
+          ...session({ sessionId: "signin-older", status: "exited" }),
+          createdAt: 1,
+        },
+        {
+          ...session({ sessionId: "signin-newest", status: "exited" }),
+          createdAt: 2,
+        },
+      ],
+      providerLoginProviderFor,
+    });
+    expect(retired).toEqual([]);
+  });
+
+  it("never retires a tab whose own session is still running, nor one whose provider has nothing newer listed", () => {
+    const retired = retiredProviderLoginPredecessors({
+      tabs: [
+        signInTab({
+          instanceId: "live-signin",
+          sessionId: "signin-live",
+          providerId: "reasonix",
+        }),
+        // Aged out of the grace listing entirely, and nothing newer listed
+        // for its provider: the ended tab stays, it is still the restart
+        // surface.
+        signInTab({
+          instanceId: "copilot-absent",
+          sessionId: "copilot-gone",
+          providerId: "copilot",
+        }),
+      ],
+      activeHostId: HOST_A,
+      sessions: [
+        session({ sessionId: "signin-live", status: "running" }),
+        session({ sessionId: "signin-new", status: "running" }),
+      ],
+      providerLoginProviderFor,
+    });
+    expect(retired).toEqual([]);
+  });
+
+  it("the legacy arm drops the retired predecessor while adopting its successor", () => {
+    const result = reconcileLandingTerminalTabs({
+      tabs: [
+        signInTab({
+          instanceId: "old-signin",
+          sessionId: "signin-old",
+          providerId: "reasonix",
+        }),
+      ],
+      activeHostId: HOST_A,
+      sessions: [
+        session({ sessionId: "signin-old", status: "exited" }),
+        session({ sessionId: "signin-new", status: "running" }),
+      ],
+      excludedSessionKeys: new Set(),
+      mintInstanceId: () => "new-signin",
+      providerLoginProviderFor,
+    });
+    expect(result.tabs.map((entry) => entry.instanceId)).toEqual([
+      "new-signin",
+    ]);
+  });
+
+  it("a tombstoned RUNNING successor still retires its predecessor, and retiring the last tab collapses the panel", () => {
+    // The user closed the running successor here; its kill is in flight and
+    // the host still lists it running. The exited predecessor stays retired
+    // (it is not coming back), nothing is adopted (the successor is
+    // tombstoned), and the pass ends with no tabs - which must collapse the
+    // panel, or the settlement's empty-panel path spawns a plain shell right
+    // after the user closed the sign-in.
+    const sessions = [
+      session({ sessionId: "signin-old", status: "exited" }),
+      session({ sessionId: "signin-new", status: "running" }),
+    ];
+    const excludedSessionKeys = new Set([
+      landingTabRefKey({
+        kind: "terminal",
+        hostId: HOST_A,
+        sessionId: "signin-new",
+      }),
+    ]);
+    const result = reconcileLandingTerminalTabs({
+      tabs: [
+        signInTab({
+          instanceId: "old-signin",
+          sessionId: "signin-old",
+          providerId: "reasonix",
+        }),
+      ],
+      activeHostId: HOST_A,
+      sessions,
+      excludedSessionKeys,
+      mintInstanceId: () => "never",
+      providerLoginProviderFor,
+    });
+    expect(result.tabs).toEqual([]);
+    expect(result.adoptedTabs).toEqual([]);
+    expect(result.collapseWhenEmpty).toBe(true);
+  });
+});
+
+describe("revealPanel", () => {
+  beforeEach(() => {
+    useLandingPanelStore.getState().resetForTests();
+  });
+
+  it("opens the named pages and records the reveal; clearPanelReveal retires it", () => {
+    const store = useLandingPanelStore.getState();
+    store.setPanelOpen("page-a", false);
+    store.setPanelOpen("page-b", false);
+
+    store.revealPanel({
+      landingPageIds: ["page-a", "page-b"],
+      everyPage: false,
+      instanceId: "sign-in-instance",
+    });
+
+    const state = useLandingPanelStore.getState();
+    expect(landingPanelLayoutFor(state, "page-a").panelOpen).toBe(true);
+    expect(landingPanelLayoutFor(state, "page-b").panelOpen).toBe(true);
+    // A page it did not name keeps its own layout.
+    expect(state.fallbackLayout?.panelOpen ?? false).toBe(false);
+    expect(state.panelReveal).toBe("sign-in-instance");
+
+    state.clearPanelReveal();
+    expect(useLandingPanelStore.getState().panelReveal).toBeNull();
+  });
+
+  it("with everyPage opens the named pages AND every other - each keyed layout and the fallback - and still records the reveal", () => {
+    const store = useLandingPanelStore.getState();
+    store.setPanelOpen("page-closed", false);
+
+    store.revealPanel({
+      landingPageIds: ["page-initiating"],
+      everyPage: true,
+      instanceId: "sign-in-instance",
+    });
+
+    const state = useLandingPanelStore.getState();
+    expect(landingPanelLayoutFor(state, "page-closed").panelOpen).toBe(true);
+    expect(landingPanelLayoutFor(state, "page-never-seen").panelOpen).toBe(
+      true,
+    );
+    // The initiating page still records a layout of its own.
+    expect(state.layoutsByLandingPageId["page-initiating"]?.panelOpen).toBe(
+      true,
+    );
+    expect(state.panelReveal).toBe("sign-in-instance");
+  });
+
+  it("does not persist the reveal", async () => {
+    useLandingPanelStore.getState().revealPanel({
+      landingPageIds: [],
+      everyPage: true,
+      instanceId: "sign-in-instance",
+    });
+    await useLandingPanelStore.persist.rehydrate();
+    const persisted = JSON.parse(
+      window.localStorage.getItem(
+        useLandingPanelStore.persist.getOptions().name ?? "",
+      ) ?? "{}",
+    ) as { state?: Record<string, unknown> };
+    expect(persisted.state).not.toHaveProperty("panelReveal");
   });
 });
 

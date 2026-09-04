@@ -76,6 +76,15 @@ export function openLandingSignInTerminal(args: {
     origin: "provider-login",
     originProviderId: providerId,
   });
+  // `addTab` activated the tab to show - the new one, or the existing tab for
+  // the same session on a retry.
+  const activeInstanceId = useLandingPanelStore.getState().activeInstanceId;
+  if (activeInstanceId === null) return;
+  // Opened as a REVEAL of that tab, never as an opening gesture: the panel
+  // settles a gesture by re-targeting the launch cwd, and this tab's
+  // display-only `"~"` matches none, so a gesture-open would spawn a bare
+  // shell and put it in front of the sign-in code.
+  //
   // The page this started from, plus every start page with a mounted panel
   // slot. They differ when focus moved while the host was answering: there is
   // ONE panel per window, portaled into whichever page `LandingTerminalHost`
@@ -89,19 +98,20 @@ export function openLandingSignInTerminal(args: {
   // (an epic tab), and that retained id lives in the host's React state, which
   // nothing outside it can read. Every id it can return is in this set, so
   // opening all of them covers the hosted one without guessing which it is.
-  const anchoredPageIds = landingPaneAnchorDraftIds();
-  for (const pageId of new Set([landingPageId, ...anchoredPageIds])) {
-    store.setPanelOpen(pageId, true);
-  }
-  // No pane mounted at all, so none of the ids above names a surface the user
+  //
+  // No pane mounted at all means none of those ids names a surface the user
   // can see this on right now - and `landingPageId` may not even name a live
   // start page: a draft bound at press time can be submitted or discarded
   // while the host is still answering, which is a window a picker press opens
-  // by construction. The page-less open covers whichever start page mounts
+  // by construction. The page-less reveal covers whichever start page mounts
   // next - one that already recorded a closed layout included - so the
   // terminal carrying the sign-in code is never left behind a panel with no
   // way to ask for it.
-  if (anchoredPageIds.length === 0) store.openPanelForEveryPage();
-  const activeInstanceId = useLandingPanelStore.getState().activeInstanceId;
-  if (activeInstanceId !== null) focusTerminalInstance(activeInstanceId);
+  const anchoredPageIds = landingPaneAnchorDraftIds();
+  store.revealPanel({
+    landingPageIds: [...new Set([landingPageId, ...anchoredPageIds])],
+    everyPage: anchoredPageIds.length === 0,
+    instanceId: activeInstanceId,
+  });
+  focusTerminalInstance(activeInstanceId);
 }

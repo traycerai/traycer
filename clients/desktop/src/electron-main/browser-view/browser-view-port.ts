@@ -1,4 +1,4 @@
-import type { BrowserWindowConstructorOptions } from "electron";
+import type { BrowserWindowConstructorOptions, WebContents } from "electron";
 import type {
   BrowserCdpCommand,
   BrowserCdpTarget,
@@ -6,7 +6,6 @@ import type {
   BrowserStorageState,
 } from "@traycer/protocol/host/browser/contracts";
 import type {
-  BrowserViewBounds,
   BrowserViewNativeTabCapability,
   BrowserViewNativeTabKey,
 } from "@traycer-clients/shared/platform/browser-view";
@@ -108,12 +107,36 @@ export interface BrowserViewWindowOpenDetails {
   readonly disposition: string;
 }
 
+/**
+ * The window-open options Electron hands to a {@link WindowOpenHandlerResponse}
+ * `createWindow` callback. `webContents` is the popup contents Chromium has
+ * already created for a scripted `window.open`; it is present at runtime but
+ * absent from the published `electron.d.ts`, so it is re-declared here. It is
+ * optional because Chromium omits it for the dispositions that never reach the
+ * allow path (Cmd/Ctrl-click), and keeping it optional is what lets this stay
+ * assignable to Electron's own `createWindow(options)` parameter.
+ */
+export interface BrowserViewPopupCreateWindowOptions extends BrowserWindowConstructorOptions {
+  readonly webContents?: WebContents;
+}
+
 export type BrowserViewWindowOpenResult =
   | { readonly action: "deny" }
   | {
       readonly action: "allow";
       readonly overrideBrowserWindowOptions: BrowserWindowConstructorOptions;
       readonly outlivesOpener: boolean;
+      /**
+       * Called instead of `new BrowserWindow` so the popup ADOPTS the contents
+       * Chromium pre-created (`options.webContents`). Adopting them - rather
+       * than constructing fresh contents - is what preserves `window.opener`
+       * and the inherited session that OAuth/SSO popups relay their params
+       * through, and it is why `did-create-window` is not emitted for these
+       * windows. Returns the adopted contents, as Electron's contract requires.
+       */
+      readonly createWindow: (
+        options: BrowserViewPopupCreateWindowOptions,
+      ) => WebContents;
     };
 
 export interface BrowserViewCropRect {
@@ -132,19 +155,6 @@ export interface BrowserViewCapturedImage {
   toPNG(): Uint8Array;
 }
 
-/**
- * Compositor frames additionally support downscaling: the BT-201 frame cache
- * caps the long edge before encoding, and `NativeImage` - the only production
- * source - provides `resize`. Kept separate from `BrowserViewCapturedImage`
- * so the crop/annotation paths keep the smaller contract they actually use.
- */
-export interface BrowserViewFrameImage extends BrowserViewCapturedImage {
-  resize(options: {
-    readonly width: number;
-    readonly height: number;
-  }): BrowserViewFrameImage;
-}
-
 interface BrowserViewDevToolsWebContents {
   readonly id: number;
 }
@@ -158,6 +168,7 @@ export interface BrowserViewDevToolsWindow {
 export interface BrowserViewPopupWebContents {
   readonly id: number;
   once(event: "destroyed", listener: () => void): void;
+  setUserAgent(userAgent: string): void;
   setWindowOpenHandler(
     handler: (
       details: BrowserViewWindowOpenDetails,
@@ -200,23 +211,24 @@ export interface BrowserViewWebContents {
       details: BrowserViewWindowOpenDetails,
     ) => BrowserViewWindowOpenResult,
   ): void;
-  beginFrameSubscription(
-    callback: (image: BrowserViewFrameImage) => void,
-  ): void;
-  endFrameSubscription(): void;
   on: NodeJS.EventEmitter["on"];
   off: NodeJS.EventEmitter["off"];
 }
 
-export interface ManagedBrowserView {
-  readonly webContents: BrowserViewWebContents;
-  setBounds(bounds: BrowserViewBounds): void;
-  setVisible(visible: boolean): void;
+/**
+ * Main-owned mint of a renderer `<webview>` guest.
+ * `onAttached` runs seed/CDP while the request gate is still up.
+ * The mint's `ready` Promise settles after that gate is disposed, or
+ * rejects on timeout/terminal drop. It is not a renderer payload.
+ */
+export interface BrowserViewGuestAttachRequest {
+  readonly partition: string;
+  readonly onAttached: (guest: BrowserViewWebContents) => Promise<void>;
 }
 
-interface ManagedContentView {
-  addChildView(view: ManagedBrowserView): void;
-  removeChildView(view: ManagedBrowserView): void;
+export interface BrowserViewGuestAttachResult {
+  readonly registrationId: string;
+  readonly ready: Promise<void>;
 }
 
 export type BrowserViewInputModifier = "meta" | "control" | "shift" | "alt";
@@ -227,7 +239,7 @@ export interface BrowserViewHostWebContents {
   /**
    * Move OS keyboard focus off a focused guest and onto the host renderer.
    * Focusing a host DOM element is not enough by itself - the caret would
-   * render while keystrokes still went to the `WebContentsView`.
+   * render while keystrokes still went to the guest `webContents`.
    */
   focus(): void;
   sendInputEvent(event: {
@@ -238,9 +250,6 @@ export interface BrowserViewHostWebContents {
 }
 
 export interface BrowserViewWindow {
-  readonly contentView: ManagedContentView;
   readonly webContents: BrowserViewHostWebContents | null;
   isDestroyed(): boolean;
-  isVisible(): boolean;
-  isMinimized(): boolean;
 }

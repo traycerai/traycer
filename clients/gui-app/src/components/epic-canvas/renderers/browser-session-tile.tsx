@@ -16,7 +16,7 @@ import { browserSessionsRefusal } from "@traycer-clients/shared/platform/browser
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { makeBrowserSessionTileRef } from "@/stores/epics/canvas/tile-schema/browser-tile";
 import type { BrowserSessionTileRef } from "@/stores/epics/canvas/types";
-import { claimHostedPaneActivation } from "@/components/epic-canvas/pane-activation";
+import { claimHostedPaneActivationFocus } from "@/components/epic-canvas/pane-activation";
 
 interface BrowserSessionTileProps {
   readonly node: BrowserSessionTileRef;
@@ -110,7 +110,10 @@ export function BrowserSessionTile(props: BrowserSessionTileProps) {
    * also the Start Page panel's, where there is nothing to claim.
    */
   const claimThisPaneActivation = useCallback(() => {
-    claimHostedPaneActivation(props.viewTabId, props.paneId, {
+    // The FOCUS claim, not the pointer-down one: main reports the guest took
+    // keyboard focus, and the pointer-down half is claimed by the guest host
+    // itself when the reader clicks into the webview.
+    claimHostedPaneActivationFocus(props.viewTabId, props.paneId, {
       defaultPrevented: false,
       scope: null,
       target: null,
