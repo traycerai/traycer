@@ -2099,21 +2099,29 @@ export class RemoteSession<
       connection.reassembler.forget(frame.streamId);
     }
     this.markStreamTerminal(frame.streamId);
+    // Retired BEFORE the enqueue even though the delete used to sit below
+    // it: the CLOSE draws its seq when the scheduler pulls, which is after
+    // every synchronous line of this method, so a delete anywhere in here
+    // sent it at seq 0.
+    const nextSeq = this.retireOutboundSeq(frame.streamId);
     if (this.phase === "ready" && connection !== null) {
-      this.enqueueMessage(connection, {
-        type: MuxFrameType.CLOSE,
-        streamId: frame.streamId,
-        qos: QosClass.INTERACTIVE,
-        json: { reason: `inbound stream failed: ${details.code}` },
-        binary: null,
-      });
+      this.enqueueMessageWithSeq(
+        connection,
+        {
+          type: MuxFrameType.CLOSE,
+          streamId: frame.streamId,
+          qos: QosClass.INTERACTIVE,
+          json: { reason: `inbound stream failed: ${details.code}` },
+          binary: null,
+        },
+        nextSeq,
+      );
     }
     const stream = this.subscriptions.get(frame.streamId);
     if (stream !== undefined) {
       stream.goFatal(details);
       this.subscriptions.delete(frame.streamId);
       this.restoredStreamIds.delete(frame.streamId);
-      this.outboundSeq.delete(frame.streamId);
       this.stallReopenedStreamIds.delete(frame.streamId);
       this.maybeReachReadyBoundary();
     }

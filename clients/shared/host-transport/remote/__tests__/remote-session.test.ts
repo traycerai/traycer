@@ -7428,3 +7428,102 @@ describe("RemoteSession outbound seq continuity across a stream's CLOSE (host H1
     TEST_BUDGET_MS,
   );
 });
+
+describe("RemoteSession outbound seq continuity across a client-detected inbound failure (host H11 gate)", () => {
+  it(
+    "a stream failed on inbound reassembly sends its CLOSE at the seq after the SUBSCRIBE",
+    async () => {
+      // The fifth retire site, and the one a source-order reading misses:
+      // `failStreamOnInboundError` enqueued the CLOSE ABOVE its delete, but
+      // the seq is drawn when the scheduler pulls - after every synchronous
+      // line of the method - so the CLOSE still left at seq 0. Unlike a
+      // host-sent FATAL, the host has NOT tombstoned this stream (the fault
+      // was detected here), so this CLOSE reaches its seq gate for real.
+      const relay = new FakeRelayHost();
+      relay.streamManifest = buildStreamManifest(
+        cursorStreamRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      );
+      const warnSpy = vi
+        .spyOn(console, "warn")
+        .mockImplementation(() => undefined);
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        streamRegistry: cursorStreamRegistry,
+      });
+      const faulted = session.subscribe("cursor.subscribe", { cursor: null });
+      let fatalCode: string | null = null;
+      faulted.onStatusChange((_status, reason) => {
+        if (reason?.kind === "fatalError") {
+          fatalCode = reason.details.code;
+        }
+      });
+      // The sibling whose outbound keeps the pump busy. It needs one delivered
+      // server frame to reach `open`, which is what `sendClientFrame` gates on.
+      const sibling = session.subscribe("cursor.subscribe", { cursor: null });
+      sibling.onServerFrame(() => undefined);
+      let siblingOpen = false;
+      sibling.onStatusChange((status) => {
+        if (status === "open") {
+          siblingOpen = true;
+        }
+      });
+      try {
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(2),
+          WAIT,
+        );
+        const faultedId = relay.subscribeStreamIds[0];
+        const siblingId = relay.subscribeStreamIds[1];
+        await relay.sendStreamFrame(
+          siblingId,
+          { kind: "snapshot", hasBinaryPayload: false },
+          null,
+          QosClass.INTERACTIVE,
+        );
+        await vi.waitFor(() => expect(siblingOpen).toBe(true), WAIT);
+        // A continuation chunk with no start in flight: a per-stream
+        // reassembly fault the client attributes to `faulted`. Sealed ahead
+        // so the two sends below share one synchronous tick.
+        const [, continuation] = buildChunkFrames(faultedId);
+        const sealedFault = await relay.encryptFrame(continuation);
+
+        // The interleaving that made the old code wrong ONLY here: a 3-chunk
+        // client message on the sibling puts the pump mid-`await write` when
+        // the fault lands, so the CLOSE cannot draw its seq synchronously at
+        // enqueue and instead draws it when the pump comes back - after every
+        // line of `failStreamOnInboundError` has run. With an idle pump the
+        // old source order happened to work, which is why a single-stream
+        // version of this test stayed green against the bug.
+        sibling.sendClientFrame(
+          { kind: "snapshot", hasBinaryPayload: true },
+          new Uint8Array(3 * BULK_CHUNK_SIZE_BYTES),
+        );
+        relay.deliverToClient(sealedFault);
+
+        await vi.waitFor(
+          () => expect(relay.closesSent).toContain(faultedId),
+          WAIT,
+        );
+        expect(fatalCode).toBe("STREAM_CHUNK_REASSEMBLY_FAILED");
+        expect(
+          relay.clientFrames
+            .filter((frame) => frame.streamId === faultedId)
+            .map((frame) => ({ type: frame.type, seq: frame.seq })),
+        ).toEqual([
+          { type: MuxFrameType.SUBSCRIBE, seq: 0 },
+          { type: MuxFrameType.CLOSE, seq: 1 },
+        ]);
+        // Stream-local verdict: the sibling is untouched and nobody redialed.
+        expect(siblingOpen).toBe(true);
+        expect(relay.openBearers).toHaveLength(1);
+        expect(relay.errors).toEqual([]);
+      } finally {
+        warnSpy.mockRestore();
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+});
