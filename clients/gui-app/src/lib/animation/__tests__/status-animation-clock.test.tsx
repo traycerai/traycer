@@ -1,6 +1,7 @@
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { useRef } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { PaneVisibilityContext } from "@/components/epic-tabs/pane-visibility-context";
 import {
   resetStatusAnimationClockForTests,
   STATUS_ANIMATION_PULSE_CADENCE_MS,
@@ -510,5 +511,51 @@ describe("useStatusAnimation", () => {
       STATUS_ANIMATION_TICK_MS,
       STATUS_ANIMATION_TICK_MS * 2,
     ]);
+  });
+
+  it("does not write or subscribe inside a hidden keep-alive pane, clears when the pane hides, and resumes when it shows", () => {
+    const writes: number[] = [];
+    const cleared: HTMLDivElement[] = [];
+    const write = (_element: HTMLDivElement, elapsedMs: number): void => {
+      writes.push(elapsedMs);
+    };
+    const clear = (element: HTMLDivElement): void => {
+      cleared.push(element);
+    };
+
+    const { rerender } = render(
+      <PaneVisibilityContext.Provider value={false}>
+        <Probe write={write} clear={clear} />
+      </PaneVisibilityContext.Provider>,
+    );
+    // Hidden from the start: nothing written, no interval.
+    expect(writes).toEqual([]);
+    expect(vi.getTimerCount()).toBe(0);
+
+    rerender(
+      <PaneVisibilityContext.Provider value>
+        <Probe write={write} clear={clear} />
+      </PaneVisibilityContext.Provider>,
+    );
+    // Shown: a synchronous write and a live interval.
+    expect(writes).toEqual([0]);
+    expect(vi.getTimerCount()).toBe(1);
+    act(() => {
+      vi.advanceTimersByTime(STATUS_ANIMATION_TICK_MS);
+    });
+    expect(writes).toEqual([0, STATUS_ANIMATION_TICK_MS]);
+
+    rerender(
+      <PaneVisibilityContext.Provider value={false}>
+        <Probe write={write} clear={clear} />
+      </PaneVisibilityContext.Provider>,
+    );
+    // Hidden again: the element is cleared, the interval stops, no writes.
+    expect(cleared).toEqual([screen.getByTestId("probe")]);
+    expect(vi.getTimerCount()).toBe(0);
+    act(() => {
+      vi.advanceTimersByTime(STATUS_ANIMATION_TICK_MS * 3);
+    });
+    expect(writes).toEqual([0, STATUS_ANIMATION_TICK_MS]);
   });
 });

@@ -1,6 +1,7 @@
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetStatusAnimationClockForTests } from "@/lib/animation/status-animation-clock";
+import { PaneVisibilityContext } from "@/components/epic-tabs/pane-visibility-context";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 
 beforeEach(() => {
@@ -120,5 +121,39 @@ describe("AgentSpinningDots", () => {
       </>,
     );
     expect(vi.getTimerCount()).toBe(1);
+  });
+
+  it("holds the first frame with no interval inside a hidden keep-alive pane, and starts ticking once the pane shows", () => {
+    const { rerender } = render(
+      <PaneVisibilityContext.Provider value={false}>
+        <AgentSpinningDots
+          className={undefined}
+          testId="spinner"
+          variant="dots"
+        />
+      </PaneVisibilityContext.Provider>,
+    );
+    const node = screen.getByTestId("spinner");
+    expect(node.textContent).toBe("⠋");
+    expect(vi.getTimerCount()).toBe(0);
+    act(() => {
+      vi.advanceTimersByTime(160);
+    });
+    expect(node.textContent).toBe("⠋");
+
+    rerender(
+      <PaneVisibilityContext.Provider value>
+        <AgentSpinningDots
+          className={undefined}
+          testId="spinner"
+          variant="dots"
+        />
+      </PaneVisibilityContext.Provider>,
+    );
+    expect(vi.getTimerCount()).toBe(1);
+    act(() => {
+      vi.advanceTimersByTime(80);
+    });
+    expect(node.textContent).not.toBe("⠋");
   });
 });

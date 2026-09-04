@@ -1,4 +1,5 @@
 import { useLayoutEffect, useSyncExternalStore, type RefObject } from "react";
+import { usePaneVisible } from "@/components/epic-tabs/pane-visibility-context";
 
 /**
  * One shared 25 Hz clock for every long-lived status animation: the run
@@ -189,6 +190,11 @@ export function useReducedMotion(): boolean {
  * Each tick re-reads `ref`, so a host element swapped underneath the same
  * component (a polymorphic `as` prop) picks up the animation on the next tick.
  * `cadenceMs` is one of the `STATUS_ANIMATION_*_CADENCE_MS` constants.
+ *
+ * A pane kept mounted but hidden (`TopLevelTabHost` keeps inactive tabs under
+ * `display:none`) cannot paint, so its writers unsubscribe while the pane is
+ * hidden (`usePaneVisible`, `true` outside a pane) and resume on the next show
+ * - the same gate the stream flush coordinator's hidden tier follows.
  */
 export function useStatusAnimation<T extends HTMLElement>(
   ref: RefObject<T | null>,
@@ -197,8 +203,9 @@ export function useStatusAnimation<T extends HTMLElement>(
   cadenceMs: number,
 ): void {
   const reducedMotion = useReducedMotion();
+  const paneVisible = usePaneVisible();
   useLayoutEffect(() => {
-    if (reducedMotion) return;
+    if (reducedMotion || !paneVisible) return;
     const mounted = ref.current;
     if (mounted === null) return;
     // The element last written: `ref` is re-read per tick (not in the
@@ -214,7 +221,7 @@ export function useStatusAnimation<T extends HTMLElement>(
       unsubscribe();
       clear(target);
     };
-  }, [ref, write, clear, cadenceMs, reducedMotion]);
+  }, [ref, write, clear, cadenceMs, reducedMotion, paneVisible]);
 }
 
 /** Test seam: drops every writer and listener, stops the interval and rewinds the clock. */

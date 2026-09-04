@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef } from "react";
+import { usePaneVisible } from "@/components/epic-tabs/pane-visibility-context";
 import {
   STATUS_ANIMATION_SMOOTH_CADENCE_MS,
   subscribeStatusAnimation,
@@ -635,13 +636,15 @@ export function AgentSpinningDots(props: AgentSpinningDotsProps) {
   //   spinners on screen are one timer task and one style/layout/paint pass
   //   per tick, not N. Presets keep their own cadence, quantized to the
   //   clock's 40 ms tick.
+  const paneVisible = usePaneVisible();
   useLayoutEffect(() => {
     if (presetFrames === null || presetIntervalMs === null) return;
     const node = frameRef.current;
     if (node === null) return;
     const text = document.createTextNode(presetFrames[0] ?? "");
     node.replaceChildren(text);
-    if (presetFrames.length === 1) return;
+    // A hidden keep-alive pane cannot paint: hold the first frame, no ticks.
+    if (presetFrames.length === 1 || !paneVisible) return;
     let shownIndex = 0;
     return subscribeStatusAnimation((elapsedMs) => {
       const frameIndex =
@@ -650,7 +653,7 @@ export function AgentSpinningDots(props: AgentSpinningDotsProps) {
       shownIndex = frameIndex;
       text.data = presetFrames[frameIndex] ?? "";
     }, STATUS_ANIMATION_SMOOTH_CADENCE_MS);
-  }, [presetFrames, presetIntervalMs]);
+  }, [presetFrames, presetIntervalMs, paneVisible]);
 
   if (preset === null) {
     return <WorkingDots className={props.className} testId={props.testId} />;
