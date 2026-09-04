@@ -115,9 +115,7 @@ function ConfirmClaimHeadline(props: { readonly claim: LiveClaim }) {
         data-testid="link-phone-no-match-code"
       >
         <TriangleAlert aria-hidden="true" />
-        <p className="text-title-xs">
-          This phone did not show a sign-in code.
-        </p>
+        <p className="text-title-xs">This phone did not show a sign-in code.</p>
         <p className="text-ui-xs">
           An up-to-date Traycer app always shows one. Approve only if you just
           scanned this code yourself and your phone is waiting without a code;

@@ -589,7 +589,9 @@ describe("link-code entry is gated on the mobile-app PRODUCT signal", () => {
     });
     const waiting = screen.getByTestId("link-code-signin-waiting").textContent;
     expect(waiting).toContain("Waiting for approval on your computer…");
-    expect(waiting).toContain("If your computer asks, it should show this code.");
+    expect(waiting).toContain(
+      "If your computer asks, it should show this code.",
+    );
 
     // Still up across a pending poll (the loop republishes progress every
     // interval), then gone with the decision — nothing retains it.

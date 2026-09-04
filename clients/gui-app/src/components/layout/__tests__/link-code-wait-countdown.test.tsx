@@ -88,7 +88,9 @@ describe("link-login approval countdown", () => {
     // if it matches" would have the user refuse a prompt that has no code.
     const waiting = screen.getByTestId("link-code-signin-waiting").textContent;
     expect(waiting).toContain("Waiting for approval on your computer…");
-    expect(waiting).toContain("If your computer asks, it should show this code.");
+    expect(waiting).toContain(
+      "If your computer asks, it should show this code.",
+    );
     expect(waiting).not.toContain("only if");
 
     progressHolder.current = {

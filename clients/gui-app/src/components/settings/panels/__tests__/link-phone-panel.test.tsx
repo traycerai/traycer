@@ -699,7 +699,9 @@ describe("LinkPhonePanel", () => {
     expect(warning.textContent).toContain(
       "This phone did not show a sign-in code.",
     );
-    expect(warning.textContent).toContain("Sign-in request from iPhone 16 Pro.");
+    expect(warning.textContent).toContain(
+      "Sign-in request from iPhone 16 Pro.",
+    );
     expect(warning.className).toContain("destructive");
     expect(screen.queryByTestId("link-phone-match-code")).toBeNull();
     const card = screen.getByTestId("link-phone-confirm");
