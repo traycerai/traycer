@@ -416,7 +416,19 @@ function NotificationsSessionBody(
       // The host-binding guard still applies to the local half. The v1 entity
       // RPC consumes ONE host's SQLite - the SERVING host's - so a tile bound
       // to another host must not acknowledge the same entity there.
-      if (scope.originHostId === null || scope.originHostId === servingHostId) {
+      //
+      // And the verdict gate applies to it too: the entity RPC has no `home`
+      // selector, so it marks the host's WHOLE origin store - the cloud-home
+      // replicas the host retains included - and a focus change from an
+      // `unverified` session (still admitted to the host lane, feed mode
+      // still `cloud`) would set markers the origin later reconciles upstream
+      // as writes the withheld verdict never authorized. Same dispatch-time
+      // read as every other whole-origin host write
+      // (`hostOriginWriteAuthorized` in `merged-notifications.ts`).
+      if (
+        (scope.originHostId === null || scope.originHostId === servingHostId) &&
+        authorizesCloudCapability(useAuthStore.getState().status)
+      ) {
         markEntityRead(scope.entity);
       }
       if (notificationFeedMode === "cloud") {

@@ -761,6 +761,47 @@ describe("useEpicCommentsHaveNoUsableRoom", () => {
     expect(result.current).toBe(true);
   });
 
+  it("reads a @1.4/@1.5 peer's frame without the datum as the cloud answer, not as pending", () => {
+    // Through @1.5 the enum has no `cloud` member: an ordinary cloud-homed
+    // epic is the ABSENT key on every frame such a peer sends. RED before the
+    // fix: `checking` forever, comments disabled on a healthy cloud epic.
+    const handle = createHandle("epic-comment-gate-pre16-frame");
+    handle.store.setState({
+      durabilityStatus: null,
+      durabilityPauseReason: null,
+      retainedDurabilityStatus: null,
+      durabilityStatusNegotiated: true,
+      durabilityLegsNegotiated: false,
+      hasFreshCloudSyncStatus: true,
+    });
+
+    const { result } = renderHook(() => useEpicCommentsHaveNoUsableRoom(), {
+      wrapper: openEpicWrapper(handle),
+    });
+
+    expect(result.current).toBe(false);
+  });
+
+  it("keeps a @1.6 peer's frame without the datum pending: its absence means unknown", () => {
+    // The @1.6 peer can say `cloud`; a frame that does not is the
+    // indeterminate state the widening exists to express.
+    const handle = createHandle("epic-comment-gate-16-frame");
+    handle.store.setState({
+      durabilityStatus: null,
+      durabilityPauseReason: null,
+      retainedDurabilityStatus: null,
+      durabilityStatusNegotiated: true,
+      durabilityLegsNegotiated: true,
+      hasFreshCloudSyncStatus: true,
+    });
+
+    const { result } = renderHook(() => useEpicCommentsHaveNoUsableRoom(), {
+      wrapper: openEpicWrapper(handle),
+    });
+
+    expect(result.current).toBe(true);
+  });
+
   it("does not gate a peer with only the later @1.6 legs negotiated", () => {
     // The @1.6 legs are not evidence that this peer can emit the status this
     // selector waits for. Treating them as the old gate would disable every

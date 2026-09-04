@@ -971,6 +971,53 @@ describe("<NotificationsSessionProvider />", () => {
     resetNegotiatedManifests();
   });
 
+  it("does not mark a focused entity read on the host while the session holds no cloud verdict", async () => {
+    // The entity RPC has no `home` selector: it marks the host's whole origin
+    // store, cloud-home replicas included. An `unverified` session is still
+    // admitted to the host lane, so the focus consumption must withhold the
+    // host leg exactly as the cloud leg already does.
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    setFocusedChat("epic-startup", "chat-startup");
+
+    const markReadCalls: Array<HostNotificationsMarkReadRequest> = [];
+    const streamClient = new MockWsStreamClient();
+    const queryClient = new QueryClient();
+    hostState.id = mockLocalHostEntry.hostId;
+    hostState.client =
+      createHostClient(markReadCalls).createRequesterForHostId(null);
+    streamState.client = streamClient;
+    useAppLocalNotificationsStore
+      .getState()
+      .activateIdentity("alice@example.com");
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <NotificationsSessionProvider>
+          <div />
+        </NotificationsSessionProvider>
+      </QueryClientProvider>,
+    );
+    act(() => {
+      resetAuthUnverified("alice@example.com", "alice@example.com");
+    });
+
+    await waitFor(() => {
+      expect(streamClient.subscribedMethods).toContain(
+        "host.notifications.feed.subscribe",
+      );
+    });
+    act(() => {
+      streamClient.session.emitOpen();
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+
+    // The sibling case below proves the same setup dispatches once the
+    // session is signed in; here the only difference is the verdict.
+    expect(markReadCalls).toEqual([]);
+  });
+
   it("marks a restored focused entity read through the local host before effective-host selection", async () => {
     vi.spyOn(document, "hasFocus").mockReturnValue(true);
     setFocusedChat("epic-startup", "chat-startup");

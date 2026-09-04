@@ -356,6 +356,14 @@ export function useEpicCommentRoomAvailability(): EpicCommentRoomAvailability {
     (s) => s.durabilityStatusNegotiated,
     false,
   );
+  const durabilityLegsNegotiated = useMaybeEpicStore(
+    (s) => s.durabilityLegsNegotiated,
+    false,
+  );
+  const hasFreshCloudSyncStatus = useMaybeEpicStore(
+    (s) => s.hasFreshCloudSyncStatus,
+    false,
+  );
   const durabilityStatement = currentOrRetainedDurabilityStatement(
     status,
     pauseReason,
@@ -407,6 +415,18 @@ export function useEpicCommentRoomAvailability(): EpicCommentRoomAvailability {
   if (!durabilityStatusNegotiated) {
     // A pre-`@1.4` host has no local homes at all, so its comment room is
     // cloud-backed by construction: the verdict gate applies unchanged.
+    return cloudAuthorized ? { kind: "available" } : { kind: "unauthorized" };
+  }
+  // A `@1.4` / `@1.5` peer that HAS spoken this cycle (a cloud-status frame
+  // arrived) and omitted the datum. Through `@1.5` the durability enum has no
+  // positive calm member: an ordinary cloud-homed epic served by such a peer
+  // is exactly the absent key, every frame, forever - so absence beside a
+  // frame is the cloud answer, not a pending one, and reading it as pending
+  // disabled comments on every healthy cloud epic those peers serve. A
+  // `@1.6` peer (`durabilityLegsNegotiated`) states `cloud` positively and
+  // its absence means UNKNOWN (see the protocol's `@1.6` widening), which
+  // stays pending below.
+  if (hasFreshCloudSyncStatus && !durabilityLegsNegotiated) {
     return cloudAuthorized ? { kind: "available" } : { kind: "unauthorized" };
   }
   // A negotiated peer that has not spoken yet, about an epic nothing has ever
