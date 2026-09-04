@@ -21,6 +21,7 @@ import {
   interviewQuestionSchema,
 } from "@traycer/protocol/persistence/epic/schemas";
 import {
+  agentMessageReceiptSchema,
   agentMessageSendSchema,
   artifactOperationActionSchema,
   backgroundTaskOutputSchema,
@@ -38,6 +39,7 @@ import {
 import { imageResolutionEntrySchema } from "@traycer/protocol/persistence/epic/messages";
 
 export {
+  agentMessageReceiptSchema,
   agentMessageSendSchema,
   backgroundTaskOutputSchema,
   diffSourceSchema,
@@ -421,6 +423,13 @@ export const toolCallCompletedEventSchema = z.object({
   // re-completion cannot erase what a first one established. See
   // `toolCallManagedCommandSchema`.
   managedCommand: toolCallManagedCommandSchema.nullable().optional(),
+  // Where a `traycer_send_message` call landed in the receiver's transcript.
+  // Carried on COMPLETION for the same reason as `managedCommand`: the host
+  // mints the receipt while serving the call, and the tool result is the only
+  // place it is observable. Optional rather than defaulted for the same reason
+  // too - an omission is "nothing to say", not "no receipt". See
+  // `agentMessageReceiptSchema`.
+  agentMessageReceipt: agentMessageReceiptSchema.nullable().optional(),
   backgroundOutput: backgroundTaskOutputSchema.nullable().optional(),
   // For detached background command/Monitor completion, this is the SDK task's
   // own start time from BackgroundItem, not the short foreground spawn call.
@@ -438,6 +447,23 @@ export const toolCallCompletedEventSchema = z.object({
 export type ToolCallCompletedEvent = z.infer<
   typeof toolCallCompletedEventSchema
 >;
+
+// Wire-freeze copy of `toolCallCompletedEventSchema` as `chat.subscribe@1.6`
+// shipped it in `host-v1.2.0`: image results present, `agentMessageReceipt`
+// absent. Bound to `@1.6`'s `blockDelta` frame via
+// `runtimeEventSchemaPreSettlement`. Hand-frozen, NOT derived from the live
+// shape.
+export const toolCallCompletedEventSchemaPreReceipt = z.object({
+  ...baseRuntimeEventFields,
+  type: z.literal("tool_call.completed"),
+  toolName: z.string(),
+  agentMessageSend: agentMessageSendSchema.nullable().default(null),
+  managedCommand: toolCallManagedCommandSchema.nullable().optional(),
+  backgroundOutput: backgroundTaskOutputSchema.nullable().optional(),
+  backgroundStartedAt: z.number().optional(),
+  backgroundTask: z.boolean().optional(),
+  imageResults: z.array(imageGenerationResultSchema).default([]),
+});
 
 // Wire-freeze copy of `toolCallCompletedEventSchema` from before
 // `imageResults` existed. Bound (via `runtimeEventSchemaPreImage` /
@@ -1603,10 +1629,11 @@ export const runtimeEventSchemaPreInReplyTo = z.discriminatedUnion("type", [
 // it in `host-v1.2.0-rc.1`: every live member (image events included - `1.6`
 // is the minor that added them) with `interview.resolved` swapped for its
 // pre-settlement freeze, so a `1.6` peer's `blockDelta` can never carry answer
-// selection evidence - AND every harness-bearing member swapped for its
-// pre-Reasonix copy, since `1.6` is released with a nineteen-id enum and its
-// decoder rejects any frame naming an id outside it. Explicitly listed rather
-// than derived from the live
+// selection evidence, `tool_call.completed` swapped for its pre-receipt freeze
+// (`host-v1.2.0` shipped `1.6` without `agentMessageReceipt`) - AND every
+// harness-bearing member swapped for its pre-Reasonix copy, since `1.6` is
+// released with a nineteen-id enum and its decoder rejects any frame naming an
+// id outside it. Explicitly listed rather than derived from the live
 // union, for the same reason `runtimeEventSchemaPreImage` is: a future event
 // must not silently join a line that has shipped peers.
 export const runtimeEventSchemaPreSettlement = z.discriminatedUnion("type", [
@@ -1615,7 +1642,7 @@ export const runtimeEventSchemaPreSettlement = z.discriminatedUnion("type", [
   reasoningDeltaEventSchema,
   reasoningCompletedEventSchema,
   toolCallStartedEventSchema,
-  toolCallCompletedEventSchema,
+  toolCallCompletedEventSchemaPreReceipt,
   toolCallErroredEventSchema,
   toolCallProgressEventSchema,
   approvalRequestedEventSchema,

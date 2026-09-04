@@ -3,11 +3,13 @@ import { useCallback, useMemo } from "react";
 import type { ReactNode } from "react";
 import { v4 as uuidv4 } from "uuid";
 import type {
+  AgentMessageReceipt,
   AgentMessageSend,
   BackgroundTaskOutput,
   ImageGenerationResult,
   ToolCallManagedCommand,
 } from "@traycer/protocol/persistence/epic/content-blocks";
+import { useChatTranscriptJumpStore } from "@/stores/chats/chat-transcript-jump-store";
 import type { SegmentEndState } from "@/stores/composer/chat-store";
 import { deriveA2ASendCollapsibleKey } from "@/components/chat/chat-collapsible-key";
 import { chatFindA2ASendBodyUnitId } from "@/components/chat/chat-find";
@@ -65,6 +67,9 @@ interface ToolSegmentProps {
   inputDetail: ToolInputDetail | null;
   error: string | null;
   agentMessageSend: AgentMessageSend | null;
+  // Where that send landed in the receiver's transcript, stamped at
+  // completion. Non-null lets the receiver link jump to the exact row.
+  agentMessageReceipt: AgentMessageReceipt | null;
   isStreaming: boolean;
   // Terminal outcome when the turn ended mid-call (else null): drives a neutral
   // "stopped"/"superseded" badge instead of a spinner.
@@ -654,6 +659,7 @@ function A2ASendToolSegment(
   props: ToolSegmentProps & { readonly send: AgentMessageSend },
 ) {
   const { id, error, isStreaming, endState, send, variant } = props;
+  const receipt = props.agentMessageReceipt;
   const bodyFindUnitId = chatFindA2ASendBodyUnitId(id);
   const tileInstanceId = useChatCollapsibleTileInstanceId();
   const collapsibleKey = useMemo(
@@ -683,6 +689,7 @@ function A2ASendToolSegment(
   const activeHostId = useTabHostId();
   const epicId = useOpenEpicId();
   const tileNavigation = useEpicTileNavigation();
+  const requestJump = useChatTranscriptJumpStore((s) => s.requestJump);
   const receiverName = receiverDisplayName(receiverNode, send.receiverAgentId);
   const openTarget = receiverOpenTarget(receiverNode, activeHostId);
   const openReceiverTab = () => {
@@ -693,6 +700,23 @@ function A2ASendToolSegment(
       type: openTarget.type,
       name: receiverName,
       hostId: openTarget.hostId,
+    });
+    // Same mechanism the communication graph uses for its receiver-side
+    // anchor: park a jump for the receiver's tile, which picks it up whether
+    // it is already mounted or is being opened by the call above. The receipt
+    // is the receiver's own transcript message id, so this lands on the exact
+    // row the message was delivered as. A send without one (TUI receiver, or
+    // a block persisted before the host carried receipts) just opens the tile.
+    if (
+      receipt === null ||
+      openTarget.type !== "chat" ||
+      receipt.receiverAgentId !== receiverNode.id
+    ) {
+      return;
+    }
+    requestJump(openTarget.hostId, receiverNode.id, {
+      kind: "message",
+      messageId: receipt.messageId,
     });
   };
 

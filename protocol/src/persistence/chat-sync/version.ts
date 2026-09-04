@@ -45,6 +45,14 @@ import { z } from "zod";
 // in `raw`, and re-publish it unchanged - the mechanism `COMPATIBILITY.md`
 // names as reclassifying this class of addition from breaking to additive.
 // (Renumbered from 1.2 when main's interview-settlement bump took that minor.)
+//
+// 1.3 also carries `tool_call.agentMessageReceipt` (the receiver-side message
+// id a `traycer_send_message` call landed as - a `chat.subscribe@1.7+` field
+// that lands in a publication). It rides this still-unreleased minor rather
+// than opening 1.4: `host-v1.2.0` shipped chat-sync 1.1, so 1.3 is already the
+// next line a released reader will meet. Defaulted `null`, so a 1.1 record
+// parses unchanged and residual capture (§3) carries it through an older
+// publisher losslessly - `CHAT_SYNC_1_1_READER_FLOOR` stays where it is.
 export const CHAT_SYNC_SCHEMA_VERSION = { major: 1, minor: 3 } as const;
 
 export type ChatSyncSchemaVersion = typeof CHAT_SYNC_SCHEMA_VERSION;

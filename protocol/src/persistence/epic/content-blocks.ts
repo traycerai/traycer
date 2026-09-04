@@ -239,6 +239,22 @@ export const agentMessageSendSchema = z.object({
 });
 export type AgentMessageSend = z.infer<typeof agentMessageSendSchema>;
 
+// Where a `traycer_send_message` call LANDED: the receiver's own transcript
+// message id, pre-minted by the host at delivery time and returned in the
+// tool's result. The result-side sibling of `agentMessageSend` (which reads the
+// call's input at `tool_call.started`): the receipt does not exist until the
+// host has served the call, so it is stamped at `tool_call.completed` from the
+// result, exactly like `toolCallManagedCommandSchema`. It is the same id the
+// communication graph records as the event's receiver-side origin ref, which is
+// what lets the sender's "Sent message" card jump to the exact row in the
+// receiver's scrollback. Null for a TUI receiver (its receipt is an inbox event,
+// not a transcript row) and for every block persisted before this field.
+export const agentMessageReceiptSchema = z.object({
+  receiverAgentId: z.string(),
+  messageId: z.string(),
+});
+export type AgentMessageReceipt = z.infer<typeof agentMessageReceiptSchema>;
+
 // Structured rendering of a tool call's input - the collapsed summary line
 // (`inputSummary`) plus this optional expand body. Computed on the host at
 // block-build time from the raw harness input, which is itself NOT persisted (it
@@ -433,6 +449,12 @@ export const toolCallBlockSchema = z.object({
   taskTodoItems: z.array(parsedTaskTodoSchema).nullable().default(null),
   error: z.string().nullable(),
   agentMessageSend: agentMessageSendSchema.nullable().default(null),
+  // Where that send landed in the receiver's transcript - see
+  // `agentMessageReceiptSchema`. Null for every other tool call and for blocks
+  // persisted before this field. Deliberately NOT on the hand-frozen
+  // `toolCallBlockSchemaPreImage` below, so released `chat.subscribe` lines
+  // never observe it.
+  agentMessageReceipt: agentMessageReceiptSchema.nullable().default(null),
   // The shell a `traycer_run_shell` call created - see
   // `toolCallManagedCommandSchema`. Null for every other tool call.
   managedCommand: toolCallManagedCommandSchema.nullable().default(null),
@@ -480,6 +502,31 @@ export const toolCallBlockSchema = z.object({
   imageResults: z.array(imageGenerationResultSchema).default([]),
 });
 export type ToolCallBlock = z.infer<typeof toolCallBlockSchema>;
+
+// Wire-freeze copy of `toolCallBlockSchema` as `chat.subscribe@1.6` shipped it
+// in `host-v1.2.0`: image results present, `agentMessageReceipt` absent. Bound
+// to `@1.6` via `contentBlockSchemaPreSettlement`, so that released line never
+// observes a receipt. Hand-frozen, NOT derived from the live shape via
+// `.omit()`, for the same reason as `toolCallBlockSchemaPreImage` below.
+export const toolCallBlockSchemaPreReceipt = z.object({
+  ...baseBlockFields,
+  status: actionBlockStatus,
+  type: z.literal("tool_call"),
+  toolName: z.string(),
+  inputSummary: z.string().nullable().default(null),
+  inputDetail: toolInputDetailSchema.nullable().default(null),
+  taskTodoItems: z.array(parsedTaskTodoSchema).nullable().default(null),
+  error: z.string().nullable(),
+  agentMessageSend: agentMessageSendSchema.nullable().default(null),
+  managedCommand: toolCallManagedCommandSchema.nullable().default(null),
+  progress: z.string().nullable().default(null),
+  backgroundOutput: backgroundTaskOutputSchema.nullable().default(null),
+  startedAt: z.number().nullable().default(null),
+  endedAt: z.number().nullable().default(null),
+  backgroundTask: z.boolean().nullable().default(false),
+  stopped: z.boolean().default(false),
+  imageResults: z.array(imageGenerationResultSchema).default([]),
+});
 
 // Wire-freeze copy of `toolCallBlockSchema` from before `imageResults`
 // existed (`chat.subscribe@1.0-1.5`). Bound (via the frozen content-block
@@ -1490,17 +1537,19 @@ export const contentBlockSchemaPreImage = z.discriminatedUnion("type", [
 ]);
 
 // Wire-freeze copy of `contentBlockSchema` as `chat.subscribe@1.6` shipped it
-// in `host-v1.2.0-rc.1`: the LIVE `tool_call` (that line does carry image
-// results) with `interview` swapped for its pre-settlement freeze, so the RC
-// cohort in the field keeps decoding exactly the block union it was shipped
-// with. `text`/`plan`/`steer` additionally take their pre-Reasonix freezes:
-// `1.6` is released with a nineteen-id harness enum, so it cannot observe a
-// Reasonix id either. Bound to `@1.6` via `messageSchemaPreSettlement` /
-// `chatSchemaV16`. Every other member reuses the live sub-schema.
+// in `host-v1.2.0-rc.1`: `tool_call` swapped for its pre-receipt freeze (that
+// line does carry image results, but `host-v1.2.0` shipped it without
+// `agentMessageReceipt`), and `interview` swapped for its pre-settlement
+// freeze, so the RC cohort in the field keeps decoding exactly the block union
+// it was shipped with. `text`/`plan`/`steer` additionally take their
+// pre-Reasonix freezes: `1.6` is released with a nineteen-id harness enum, so
+// it cannot observe a Reasonix id either. Bound to `@1.6` via
+// `messageSchemaPreSettlement` / `chatSchemaV16`. Every other member reuses
+// the live sub-schema.
 export const contentBlockSchemaPreSettlement = z.discriminatedUnion("type", [
   textBlockSchemaPreReasonix,
   reasoningBlockSchema,
-  toolCallBlockSchema,
+  toolCallBlockSchemaPreReceipt,
   fileChangeBlockSchema,
   commandBlockSchema,
   subAgentBlockSchema,
