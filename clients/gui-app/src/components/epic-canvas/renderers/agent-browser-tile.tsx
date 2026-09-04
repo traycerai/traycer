@@ -5,6 +5,7 @@ import type {
   BrowserTabDriver,
 } from "@traycer/protocol/host/browser/contracts";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { usePublishBrowserGuestTile } from "@/components/epic-canvas/browser-guest/use-publish-browser-guest-tile";
 import { useTileBodyVisible } from "@/components/epic-canvas/hooks/use-tile-body-visible";
@@ -25,6 +26,8 @@ import { useBrowserAnnotationSession } from "@/hooks/browser/use-browser-annotat
 import { useCloseCanvasTileWithNestedFocus } from "@/components/epic-canvas/renderers/use-close-canvas-tile-with-nested-focus";
 import { useElectronTabChrome } from "@/components/epic-canvas/renderers/use-electron-tile-chrome";
 import { isSameBrowserViewTile } from "@/lib/browser-view/tiles/browser-view-keys";
+import { resolveTileOverlay } from "@/components/epic-canvas/renderers/resolve-tile-overlay";
+import type { TileOverlaySurface } from "@/components/epic-canvas/renderers/resolve-tile-overlay";
 import type {
   BrowserViewStatus,
   BrowserViewTileKey,
@@ -96,6 +99,12 @@ function agentTileSessionFacts(
 }
 
 /**
+ * How long a tile may sit at `loading` with no progress report before it
+ * resolves to the stalled/retry surface (see the stall effect below).
+ */
+const NAVIGATION_STALL_TIMEOUT_MS = 30_000;
+
+/**
  * Electron tile used for agent-created pages and native session tabs.
  * Host-owned Electron tabs always use the primary browser partition.
  */
@@ -108,6 +117,12 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
   const [status, setStatus] = useState<BrowserViewStatus>("loading");
   const [statusReason, setStatusReason] = useState<string | null>(null);
   const [statusUrl, setStatusUrl] = useState("");
+  // A wire `loading` with no follow-up settle would spin forever; a silent
+  // stretch resolves to a terminal retry surface instead. `loadingNonce`
+  // bumps on every incoming `loading`, so ongoing progress keeps rearming
+  // the clock and only a genuinely stalled tab trips it.
+  const [stalledNonce, setStalledNonce] = useState<number | null>(null);
+  const [loadingNonce, setLoadingNonce] = useState(0);
   const attemptedNavigationRef = useRef<AttemptedNavigation | null>(null);
   const [canGoBack, setCanGoBack] = useState(false);
   const [canGoForward, setCanGoForward] = useState(false);
@@ -189,6 +204,28 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
       statusReason,
     );
 
+  // Terminal stall is derived, not a synchronously-reset flag: the tile is
+  // stalled only when the current loading episode is the one the timer fired
+  // for. A new episode - a status flip or a `loadingNonce` bump from a fresh
+  // progress report - clears it for free, with no setState in the effect.
+  const navigationStalled =
+    effectiveStatus === "loading" && stalledNonce === loadingNonce;
+
+  // Deterministic terminal transition: a `loading` that neither settles nor
+  // reports further progress within the window trips the stalled surface.
+  // `loadingNonce` restarts the timer on each progress report, so only true
+  // silence trips it. ponytail: fixed 30s ceiling; a page still streaming
+  // status updates keeps rearming, a wedged navigation does not.
+  useEffect(() => {
+    if (effectiveStatus !== "loading") return;
+    const timer = setTimeout(() => {
+      setStalledNonce(loadingNonce);
+    }, NAVIGATION_STALL_TIMEOUT_MS);
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [effectiveStatus, loadingNonce]);
+
   const closeCanvasTile = useCloseCanvasTileWithNestedFocus(
     props.viewTabId,
     props.paneId,
@@ -212,6 +249,10 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
         setCanGoBack(change.canGoBack);
         setCanGoForward(change.canGoForward);
         setZoomPercent(change.zoomPercent);
+      }
+      // Every fresh loading report is progress: rearm the stall clock.
+      if (change.status === "loading") {
+        setLoadingNonce((nonce) => nonce + 1);
       }
       const next = nextAttemptedNavigationAfterStatus(current, change.status);
       attemptedNavigationRef.current = next;
@@ -346,6 +387,14 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
     proceedCertificate,
   } = chrome;
   const focusAddress = chromeController.focusAddress;
+  const retryNavigation = useCallback(() => {
+    // Bump the episode so the derived stall clears immediately on click,
+    // before the re-driven navigation's own status echoes back.
+    setLoadingNonce((nonce) => nonce + 1);
+    // Re-drive the intended navigation rather than reloading the wedged
+    // about:blank the initial navigation never left.
+    navigateToUrl(props.node.url);
+  }, [navigateToUrl, props.node.url]);
   useEffect(() => {
     if (browserView === null) return;
     const subscription = browserView.onTileCommand((event) => {
@@ -431,6 +480,12 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
     };
   }, [bindSurface, bindingId, registrationId, showStartPage, tileKey, visible]);
 
+  const overlay = resolveTileOverlay(
+    effectiveStatus,
+    surfaceReady,
+    navigationStalled,
+  );
+
   return (
     <div
       className="flex h-full w-full flex-col bg-canvas text-foreground"
@@ -477,16 +532,24 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
           hidden={showStartPage}
           className={cn(
             "absolute inset-0 z-20 flex min-h-0 flex-col items-center justify-center gap-3 px-4 text-center",
-            effectiveStatus === "ready" && "pointer-events-none opacity-0",
+            overlay.visible ? "opacity-100" : "opacity-0",
+            // Pointer events are gated on the guest not yet being interactive,
+            // NOT on the same flag that hides the overlay: a presented, live
+            // guest must never be click-blocked by a stale loader. A terminal
+            // surface keeps them so its Retry stays clickable.
+            overlay.blocking ? "pointer-events-auto" : "pointer-events-none",
           )}
-          role={effectiveStatus === "dead" ? "alert" : "status"}
-          aria-live={effectiveStatus === "dead" ? "assertive" : "polite"}
-          aria-busy={effectiveStatus === "loading"}
+          role={overlay.surface === "loading" ? "status" : "alert"}
+          aria-live={overlay.surface === "loading" ? "polite" : "assertive"}
+          aria-busy={
+            overlay.visible ? overlay.surface === "loading" : undefined
+          }
         >
           <ElectronTabSurfaceStatus
-            status={effectiveStatus}
+            surface={overlay.surface}
             reason={effectiveStatusReason}
             hostId={hostId}
+            onRetry={retryNavigation}
           />
         </div>
         <BrowserTileDownloadStrip
@@ -583,20 +646,37 @@ function resolveCurrentSurfaceAttachment(
 }
 
 interface ElectronTabSurfaceStatusProps {
-  readonly status: BrowserViewStatus;
+  readonly surface: TileOverlaySurface;
   readonly reason: string | null;
   readonly hostId: string;
+  readonly onRetry: () => void;
 }
 
 /** Shows only lifecycle states reported by the native browser owner. */
 function ElectronTabSurfaceStatus(props: ElectronTabSurfaceStatusProps) {
-  if (props.status === "dead") {
+  if (props.surface === "dead") {
     return (
       <>
         <div className="text-ui-base font-medium">
           Agent browser unavailable
         </div>
         <ElectronTabSurfaceReason reason={props.reason} hostId={props.hostId} />
+      </>
+    );
+  }
+  if (props.surface === "stalled") {
+    return (
+      <>
+        <div className="text-ui-base font-medium">This page did not load</div>
+        <ElectronTabSurfaceReason reason={props.reason} hostId={props.hostId} />
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          onClick={props.onRetry}
+        >
+          Retry
+        </Button>
       </>
     );
   }

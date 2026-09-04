@@ -31,6 +31,8 @@ const state = vi.hoisted(() => ({
   ),
   closeCanvasTile: vi.fn(),
   focusAddress: vi.fn(),
+  /** Shared across renders so a Retry click can be asserted against it. */
+  navigateToUrl: vi.fn<(url: string) => void>(),
 }));
 
 vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
@@ -85,7 +87,7 @@ vi.mock("@/components/epic-canvas/renderers/use-electron-tile-chrome", () => ({
     state.chromeInputs.push(input);
     return {
       controller: CHROME_CONTROLLER,
-      navigateToUrl: vi.fn(),
+      navigateToUrl: state.navigateToUrl,
       viewportPreset: "responsive",
       downloads: [],
       cancelDownload: vi.fn(),
@@ -654,5 +656,137 @@ describe("ElectronTabSurface browser-scoped chords", () => {
     // What `focusAddress` actually does to the DOM is pinned in
     // `use-address-draft.test.ts`, which owns the field.
     expect(state.focusAddress).toHaveBeenCalledOnce();
+  });
+});
+
+/**
+ * A `loading` that neither settles nor reports further progress within
+ * `NAVIGATION_STALL_TIMEOUT_MS` resolves to the terminal stalled/Retry
+ * surface. Each fresh `loading` status rearms the clock; a `ready`/`dead`
+ * status clears the stalled state outright.
+ */
+describe("ElectronTabSurface navigation stall", () => {
+  function loadingStatus(): NativeStatusChange {
+    return {
+      hostId: "host-1",
+      sessionId: "session-1",
+      tabId: "tab-1",
+      url: "https://example.com/",
+      title: null,
+      status: "loading",
+      reason: null,
+      canGoBack: false,
+      canGoForward: false,
+      zoomPercent: 100,
+    };
+  }
+
+  function readyStatus(): NativeStatusChange {
+    return { ...loadingStatus(), status: "ready" };
+  }
+
+  beforeEach(() => {
+    state.visible = true;
+    state.bridge = new TestBridge();
+    state.chromeInputs = [];
+    state.sessions = liveSessions();
+    canvasState.tabsById = { "view-1": { epicId: "epic-1" } };
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+  });
+
+  afterEach(async () => {
+    // Let any pending microtasks (e.g. the surface attach promise) settle
+    // under fake timers before tearing the timers down.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    cleanup();
+    stopGuestHost?.();
+    stopGuestHost = null;
+    vi.useRealTimers();
+  });
+
+  it("shows the spinner while loading, then the stalled Retry surface once the stall timeout elapses", async () => {
+    renderTile(
+      createBinding(() => Promise.resolve({ detach: () => Promise.resolve() })),
+    );
+    await act(() => Promise.resolve());
+
+    expect(screen.getByText("Reconnecting to this session")).toBeTruthy();
+    expect(screen.queryByText("This page did not load")).toBeNull();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+
+    expect(screen.getByText("This page did not load")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+  });
+
+  it("rearms the stall clock on every fresh loading status", async () => {
+    const bridge = state.bridge;
+    if (bridge === null) throw new Error("bridge missing");
+    renderTile(
+      createBinding(() => Promise.resolve({ detach: () => Promise.resolve() })),
+    );
+    await act(() => Promise.resolve());
+
+    // 20s in, a fresh loading report arrives - this must push the deadline
+    // out rather than let the original 30s window expire.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(20_000);
+    });
+    act(() => {
+      bridge.emitStatus(loadingStatus());
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(20_000);
+    });
+    expect(screen.queryByText("This page did not load")).toBeNull();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(screen.getByText("This page did not load")).toBeTruthy();
+  });
+
+  it("clears the stalled surface once the status settles to ready", async () => {
+    const bridge = state.bridge;
+    if (bridge === null) throw new Error("bridge missing");
+    renderTile(
+      createBinding(() => Promise.resolve({ detach: () => Promise.resolve() })),
+    );
+    await act(() => Promise.resolve());
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    expect(screen.getByText("This page did not load")).toBeTruthy();
+
+    act(() => {
+      bridge.emitStatus(readyStatus());
+    });
+
+    expect(screen.queryByText("This page did not load")).toBeNull();
+  });
+
+  it("Retry re-drives navigation to the tile's node url", async () => {
+    renderTile(
+      createBinding(() => Promise.resolve({ detach: () => Promise.resolve() })),
+    );
+    await act(() => Promise.resolve());
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    const retryButton = screen.getByRole("button", { name: "Retry" });
+
+    act(() => {
+      retryButton.click();
+    });
+
+    expect(state.navigateToUrl).toHaveBeenCalledExactlyOnceWith(NODE.url);
   });
 });

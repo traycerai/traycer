@@ -41,6 +41,26 @@ export function isAllowedGuestNavigationUrl(url: string): boolean {
 }
 
 /**
+ * What THIS process may ask a guest to load - the host-initiated path only
+ * (`navigate()`, reached from the renderer's `navigate` control action and the
+ * accepted tab's initial navigation). It adds `file:` to the guest set so the
+ * local-HTML preview flow works.
+ *
+ * `file:` stays OUT of {@link isAllowedGuestNavigationUrl}: a loaded website
+ * must never pivot itself to `file:`, so every page-driven door
+ * (`will-navigate`, `will-redirect`, `will-frame-navigate`, `window-open`,
+ * `cdp-navigate`) keeps refusing it. Only a target the host chose reaches here.
+ */
+export function isAllowedHostInitiatedNavigationUrl(url: string): boolean {
+  if (isAllowedGuestNavigationUrl(url)) return true;
+  try {
+    return new URL(url).protocol === "file:";
+  } catch {
+    return false;
+  }
+}
+
+/**
  * The one line a refusal writes, carrying the SCHEME and nothing else.
  *
  * Not the URL: a refused target is by construction a scheme this guest may not

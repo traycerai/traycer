@@ -190,6 +190,14 @@ export class BrowserViewEntryFactory {
     url: string,
   ): void {
     if (entry.internalNavigation) return;
+    // The renderer-owned guest is born at `about:blank`, and that birth
+    // navigation commits on this listener after the entry already carries the
+    // host's intended `requestedUrl`. Recording it here would overwrite that
+    // intent with `about:blank`, so the accepted initial navigation would then
+    // load `about:blank` and the tile would hang. Guest-driven navigations
+    // only count once the host has accepted the tab and issued its intended
+    // navigation.
+    if (!entry.identity.lifecycle.accepted) return;
     entry.currentUrl = url;
     entry.requestedUrl = url;
     entry.currentTitle = entry.webContents.getTitle();
@@ -209,6 +217,9 @@ export class BrowserViewEntryFactory {
   ): void {
     if (entry.internalNavigation) return;
     if (!isMainFrame) return;
+    // See handleCommittedNavigation: a pre-acceptance guest navigation must not
+    // overwrite the host's intended initial URL.
+    if (!entry.identity.lifecycle.accepted) return;
     entry.currentUrl = url;
     entry.requestedUrl = url;
     entry.currentTitle = entry.webContents.getTitle();

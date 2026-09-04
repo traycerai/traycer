@@ -24,6 +24,7 @@ import { registrableDomainForUrl } from "@traycer/protocol/host/browser/registra
 import { describeLogError, log } from "../app/logger";
 import {
   isAllowedGuestNavigationUrl,
+  isAllowedHostInitiatedNavigationUrl,
   traceRefusedGuestNavigation,
 } from "./browser-guest-navigation";
 import type {
@@ -649,15 +650,19 @@ export class BrowserViewManager {
    * The one funnel for every navigation this process asks a guest to perform -
    * the renderer's `navigate` control action and the initial navigation the
    * host's accepted tab starts with - so the scheme gate sits here rather than
-   * at either caller.
+   * at either caller. Both callers are host-initiated, so this uses the wider
+   * {@link isAllowedHostInitiatedNavigationUrl} that also permits `file:`; a
+   * page-driven navigation to `file:` still hits the narrower guest guards.
    *
    * It refuses BEFORE any entry state moves: a blocked target must not leave
    * the tile reporting `loading` for a page that will never commit.
    */
   private async navigate(entry: BrowserViewEntry, url: string): Promise<void> {
-    if (!isAllowedGuestNavigationUrl(url)) {
+    if (!isAllowedHostInitiatedNavigationUrl(url)) {
       traceRefusedGuestNavigation(url, "navigate");
-      throw new Error("Browser tabs can only open http, https or about:blank.");
+      throw new Error(
+        "Browser tabs can only open file, http, https or about:blank.",
+      );
     }
     this.annotations.end(entry, "navigation");
     entry.requestedUrl = url;

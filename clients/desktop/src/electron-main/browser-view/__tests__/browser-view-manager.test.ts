@@ -1089,6 +1089,36 @@ describe("BrowserViewManager native tab lifecycle", () => {
     ]);
   });
 
+  it("keeps the host's intended URL when the guest's birth about:blank commits before acceptance", async () => {
+    const harness = createHarness();
+    const provisioned = await harness.manager.ensureTab("window-1", {
+      hostId: "host-1",
+      sessionId: "session-1",
+      tabId: "tab-1",
+      requestedUrl: "https://example.com/target",
+      profile: "primary",
+      seedStorageState: null,
+      connectionId: null,
+    });
+    const view = harness.guests[0];
+    if (view === undefined) throw new Error("expected native guest");
+
+    // The renderer-owned guest is born at about:blank; that birth navigation
+    // commits on the entry's own did-navigate listener before the host accepts
+    // the tab. It must NOT overwrite the intended initial URL, or the accepted
+    // navigation would load about:blank and the tile would hang forever.
+    view.emit("did-navigate", {}, "about:blank", 200, "OK");
+    await Promise.resolve();
+
+    await harness.manager.acceptTab(provisioned);
+    await Promise.resolve();
+
+    expect(view.loadUrls).toEqual([
+      "about:blank",
+      "https://example.com/target",
+    ]);
+  });
+
   it("does not report a native tab provisioned until its tab-keyed CDP route is enabled", async () => {
     const harness = createHarness();
     const ensure = harness.manager.ensureTab("window-1", {
@@ -1143,6 +1173,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
     const ready = await harness.manager.ensureTab("window-1", input);
     const view = harness.guests[0];
     if (view === undefined) throw new Error("expected native guest");
+    await harness.manager.acceptTab(ready);
 
     view.emit("did-navigate", {}, "https://example.com/next", 200, "OK");
     view.debugger.emitDetach("target closed");
@@ -1205,7 +1236,6 @@ describe("BrowserViewManager native tab lifecycle", () => {
   // `traycer:` app scheme were reachable from a tile. Both doors are pinned:
   // what this process is ASKED to navigate to, and what the page tries itself.
   it.each([
-    ["file", "file:///etc/passwd"],
     ["javascript", "javascript:fetch('https://attacker.test')"],
     ["data", "data:text/html,<script>1</script>"],
     ["custom scheme", "traycer://internal/settings"],
@@ -1241,6 +1271,33 @@ describe("BrowserViewManager native tab lifecycle", () => {
       expect(view.loadUrls).toEqual(loadedBefore);
     },
   );
+
+  it("loads a file:// URL the host asks for - the local-HTML preview flow", async () => {
+    const harness = createHarness();
+    const nativeKey = {
+      hostId: "host-1",
+      sessionId: "session-1",
+      tabId: "tab-1",
+    } as const;
+    const ready = await harness.manager.ensureTab("window-1", {
+      ...nativeKey,
+      requestedUrl: "https://example.com/",
+      profile: "primary",
+      seedStorageState: null,
+      connectionId: null,
+    });
+    await harness.manager.acceptTab(ready);
+    const view = harness.guests[0];
+    if (view === undefined) throw new Error("expected native guest");
+
+    await harness.manager.controlElectronTab("window-1", {
+      ...nativeKey,
+      registrationId: ready.registrationId,
+      action: { kind: "navigate", url: "file:///tmp/modal.html" },
+    });
+
+    expect(view.loadUrls).toContain("file:///tmp/modal.html");
+  });
 
   it.each([
     ["file", "file:///etc/passwd"],
