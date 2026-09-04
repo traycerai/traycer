@@ -54,6 +54,12 @@ export interface UseHostQueriesOptions<
     Method,
     ResponseOfMethod<Registry, Method>
   > | null;
+  /**
+   * Same role as `UseHostQueryWithResponseMapOptions.preflight`: runs inside
+   * each request's queryFn immediately before it goes out, and a throw
+   * refuses that dispatch as a `HostRpcError` with nothing sent.
+   */
+  readonly preflight?: () => void;
 }
 
 export interface UseHostQueriesWithCombineOptions<
@@ -106,6 +112,8 @@ export interface UseHostQueriesWithResponseMapOptions<
   readonly requests: ReadonlyArray<HostRequestSpec<Registry, Method>>;
   readonly cacheKeyIdentity: string | undefined;
   readonly options: HostQueryTanstackOptions<Method, TData> | null;
+  /** See `UseHostQueriesOptions.preflight`. */
+  readonly preflight?: () => void;
   /**
    * Same role as `UseHostQueryWithResponseMapOptions.mapResponse` in
    * `use-host-query.ts` (see that doc comment), applied per-request here -
@@ -192,6 +200,7 @@ export function useHostQueriesWithResponseMap<
             hostClientUnavailableError(request.method),
           );
         }
+        args.preflight?.();
         const response = await client.requestWithSignal(
           request.method,
           request.params,

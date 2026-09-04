@@ -90,19 +90,23 @@ export class DesktopAuthSession {
    * after a sibling window's fresh sign-in was verified here; an unfenced
    * revoke would then strip the NEW session's verification and tear the jar
    * plane down for an account the cloud still vouches for. A revoke naming a
-   * bearer this session does not hold never touches the held session - but it
-   * is RETAINED, not dropped: `authSessionSet` awaits JWKS verification before
-   * storing, so the bearer may be the one whose verification is still in
-   * flight, and a set that completes after its bearer's terminal verdict must
-   * land unverified (`setVerified`). A genuinely stale revoke (a bearer a
-   * sibling window has already replaced) is retained harmlessly: nothing sets
-   * a rejected bearer again.
+   * bearer this session does not hold never touches the held session.
+   *
+   * Every revoke is RETAINED (`revokedBearers`), the held bearer's included:
+   * `authSessionSet` awaits JWKS verification before storing, so a set for
+   * the revoked bearer - a sibling window's, or one still in flight for the
+   * bearer main already holds - can complete after this revoke, and its
+   * `setVerified` must land unverified. A genuinely stale revoke (a bearer a
+   * sibling window has already replaced) is retained harmlessly: nothing
+   * legitimately re-verifies a rejected bearer.
    */
   revokeVerification(rejectedToken: string): void {
-    if (this.snapshotValue.token !== rejectedToken) {
-      this.retainRevocation(rejectedToken);
-      return;
-    }
+    // Retained whether or not main holds the bearer: another window's
+    // `authSessionSet` for this SAME bearer may still be awaiting JWKS, and
+    // its `setVerified` landing after this revoke must not restore the
+    // verification the renderer has already withdrawn.
+    this.retainRevocation(rejectedToken);
+    if (this.snapshotValue.token !== rejectedToken) return;
     this.store(this.snapshotValue, false);
   }
 

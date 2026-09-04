@@ -80,6 +80,21 @@ describe("DesktopAuthSession.revokeVerification", () => {
     expect(session.get().verified).toBe(true);
   });
 
+  it("keeps a revoked bearer unverified when a set for that same bearer lands afterwards", () => {
+    // Main holds and has verified `bearer-1`; a second window's set for the
+    // same bearer is still awaiting JWKS when the terminal verdict arrives.
+    // The revoke strips the held verification - and must ALSO outlast the
+    // pending set, or that set restores `verified: true`.
+    const session = new DesktopAuthSession();
+    session.setVerified(SIGNED_IN);
+    session.revokeVerification(SIGNED_IN.token);
+    expect(session.get().verified).toBe(false);
+
+    session.setVerified(SIGNED_IN);
+
+    expect(session.get()).toEqual({ ...SIGNED_IN, verified: false });
+  });
+
   it("is a no-op on a session main never verified", () => {
     const session = new DesktopAuthSession();
     session.set(SIGNED_IN);

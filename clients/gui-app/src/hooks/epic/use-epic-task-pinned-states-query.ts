@@ -7,6 +7,7 @@ import {
   type GetTaskContextsResponse,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import { useHostQueries } from "@/hooks/host/use-host-queries";
+import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { useLocalHomedOpenEpicIds } from "@/lib/registries/epic-session-registry";
 import {
@@ -85,6 +86,7 @@ export function useEpicTaskPinnedStates(
     client,
     requests,
     cacheKeyIdentity: userId ?? undefined,
+    preflight: cloudVerdictPreflight("epic.getTaskContexts"),
     options: {
       enabled: cloudAuthorized && userId !== null && normalizedIds.length > 0,
       staleTime: Infinity,

@@ -1,5 +1,5 @@
 import { createElement, type ReactNode } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type {
@@ -7,6 +7,7 @@ import type {
   ListTaskLight,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import { useEpicGetTaskContexts } from "@/hooks/epic/use-epic-get-task-contexts-query";
+import { useAuthStore } from "@/stores/auth/auth-store";
 
 const HOST_ID = "host-test";
 const USER_ID = "user-test";
@@ -72,6 +73,15 @@ function listTaskLight(id: string, title: string): ListTaskLight {
 describe("useEpicGetTaskContexts", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // The dispatch-time preflight reads the live verdict: every production
+    // caller of this hook is cloud-gated, so the fixture holds one.
+    useAuthStore
+      .getState()
+      .setSignedIn(
+        { userId: USER_ID, userName: "U", email: "u@example.com" },
+        { userId: USER_ID, username: "U" },
+        [],
+      );
     request.mockImplementation((method: string, params: unknown) => {
       if (method !== "epic.getTaskContexts") {
         return Promise.reject(new Error(`unexpected method: ${method}`));
@@ -83,6 +93,10 @@ describe("useEpicGetTaskContexts", () => {
       }
       return Promise.resolve({ tasks });
     });
+  });
+
+  afterEach(() => {
+    useAuthStore.getState().setSignedOut();
   });
 
   it("reuses a completed batch across a remount inside the stale window", async () => {

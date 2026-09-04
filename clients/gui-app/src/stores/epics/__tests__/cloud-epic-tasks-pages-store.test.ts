@@ -235,6 +235,38 @@ describe("useCloudEpicTasksPagesStore", () => {
     expect(pagesFor(otherUser)).toHaveLength(1);
   });
 
+  it("keeps a host id containing the separator inside its own scope", () => {
+    // `a|b` is a valid host id (`git-rich-slot-ordering.test.ts` uses it).
+    // Unencoded, the parsers read host `a` / user `b`: a scope reset for
+    // (`a|b`, `user-a`) matched nothing, and a delete tombstone recorded for
+    // that scope was looked up under the wrong one.
+    const identity = cloudEpicTasksPageIdentity("a|b", "user-a", {
+      limit: 20,
+      filters: {},
+      sort: "recent" as const,
+      extensionPhaseVersion: "1",
+      extensionEpicVersion: "1",
+    });
+    const state = useCloudEpicTasksPagesStore.getState();
+    state.registerIdentity(identity);
+    state.recordDeletedEpicIdsForScope("a|b", "user-a", ["epic-1"]);
+
+    // The tombstone reaches this identity's scope, not host `a` / user `b`.
+    state.appendPage(identity, 0, {
+      tasks: [epicTask("epic-1", false), epicTask("epic-2", false)],
+      hasMore: false,
+    });
+    expect(
+      pagesFor(identity)?.flatMap((p) =>
+        p.tasks.map((t) => t.epic?.light?.id ?? null),
+      ),
+    ).toEqual(["epic-2"]);
+
+    resetCloudEpicTasksPagesForScope("a|b", "user-a");
+    expect(pagesFor(identity)).toBeUndefined();
+    expect(cloudEpicTasksPageGeneration(identity)).toBe(1);
+  });
+
   it("patches one epic's pin bit across a scope's tails without resetting them", () => {
     const scopedIdentity = "host-a|user-a|recent";
     const otherUserIdentity = "host-a|user-b|recent";

@@ -30,6 +30,7 @@ import {
 } from "@/lib/chats/cloud-chat-read-port";
 import { activeChatPartCache } from "@/lib/chats/cloud-chat-part-cache";
 import { cloudChatQueryKeys } from "@/lib/query-keys/cloud-chat-query-keys";
+import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
 import {
   authorizesCloudCapability,
   useAuthStore,
@@ -135,14 +136,8 @@ export function useCloudChatList(
     method: "epic.listCloudChats",
     params,
     // The verdict is re-read at DISPATCH, as the head, part and payload reads
-    // do: `enabled` below stops the next fetch, not the transient-retry
-    // episode already running when the session is demoted, and a same-user
-    // demotion retains the host credential the retries would ride.
-    preflight: () => {
-      if (!authorizesCloudCapability(useAuthStore.getState().status)) {
-        throw cloudChatReadRefusedWithoutVerdict("epic.listCloudChats");
-      }
-    },
+    // do (see `cloudVerdictPreflight`).
+    preflight: cloudVerdictPreflight("epic.listCloudChats"),
     options: {
       enabled:
         args.enabled &&

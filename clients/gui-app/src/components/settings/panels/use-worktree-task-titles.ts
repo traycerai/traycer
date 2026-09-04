@@ -11,6 +11,7 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { type HostRpcRegistry } from "@/lib/host";
 import { useHostQueries } from "@/hooks/host/use-host-queries";
+import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
 import { TASK_CONTEXT_TITLE_STALE_TIME_MS } from "@/hooks/epic/use-epic-get-task-contexts-query";
 import { useCloudEpicTasksQuery } from "@/hooks/epics/use-cloud-epic-tasks-query";
 import { readEpicTitlesFromCloudTaskCaches } from "@/lib/cloud-epic-tasks-query/cache";
@@ -98,6 +99,7 @@ export function useWorktreeTaskTitles(
     client,
     requests: batchRequests,
     cacheKeyIdentity: userId === null ? undefined : userId,
+    preflight: cloudVerdictPreflight("epic.getTaskContexts"),
     options: {
       enabled: cloudAuthorized && userId !== null && unresolvedIds.length > 0,
       // Same presentation-only window as the History reader: the Settings

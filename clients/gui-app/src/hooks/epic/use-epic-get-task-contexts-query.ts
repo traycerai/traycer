@@ -8,6 +8,7 @@ import {
 } from "@traycer/protocol/host/epic/unary-schemas";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
+import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
 import { useHostQueries } from "@/hooks/host/use-host-queries";
 
 /**
@@ -96,6 +97,9 @@ export function useEpicGetTaskContexts(
     client,
     requests,
     cacheKeyIdentity: userId === null ? undefined : userId,
+    // `options.enabled` is the verdict at render; this is the verdict at
+    // dispatch, which a retry episode already running at demotion needs.
+    preflight: cloudVerdictPreflight("epic.getTaskContexts"),
     options: {
       enabled: options.enabled && userId !== null && taskIds.length > 0,
       staleTime: TASK_CONTEXT_TITLE_STALE_TIME_MS,

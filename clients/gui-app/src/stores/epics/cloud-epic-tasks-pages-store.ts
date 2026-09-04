@@ -242,9 +242,31 @@ export function cloudEpicTasksPageIdentity(
   // order with `hashKey`. Cursor tails must name that same semantic request:
   // a raw JSON serialization makes two equivalent filters one first page but
   // two retained-tail buckets, so a first-page reset can miss an old tail.
-  return `${hostId}|${userId}|${hashKey(
+  return `${cloudEpicTasksPageIdentityPrefix(hostId, userId)}${hashKey(
     queryKeys.cloudEpicTasks(hostId, userId, request),
   )}`;
+}
+
+/**
+ * The `<host>|<user>|` prefix every identity in a scope shares, with each
+ * segment ENCODED so a `|` inside a host or user id cannot be read as the
+ * boundary by the scope parsers below. Spelled once, because a prefix built
+ * by hand at a call site is what let an unencoded `a|b` host pass a scope
+ * reset and a delete-tombstone lookup under host `a`, user `b`.
+ */
+export function cloudEpicTasksPageIdentityPrefix(
+  hostId: string,
+  userId: string,
+): string {
+  return `${encodeIdentitySegment(hostId)}|${encodeIdentitySegment(userId)}|`;
+}
+
+function encodeIdentitySegment(segment: string): string {
+  return encodeURIComponent(segment);
+}
+
+function decodeIdentitySegment(segment: string): string {
+  return decodeURIComponent(segment);
 }
 
 /**
@@ -333,7 +355,7 @@ export function deletedCloudEpicTasksPageEpicIdsForScope(
  */
 export function resetCloudEpicTasksPagesForHost(hostId: string): void {
   const state = useCloudEpicTasksPagesStore.getState();
-  const prefix = `${hostId}|`;
+  const prefix = `${encodeIdentitySegment(hostId)}|`;
   const identities = new Set([
     ...Object.keys(state.pagesByIdentity),
     ...Object.keys(state.generationByIdentity),
@@ -353,7 +375,7 @@ export function resetLastViewedCloudEpicTasksPagesForScope(
   userId: string,
 ): void {
   const state = useCloudEpicTasksPagesStore.getState();
-  const prefix = `${hostId}|${userId}|`;
+  const prefix = cloudEpicTasksPageIdentityPrefix(hostId, userId);
   const identities = new Set([
     ...Object.keys(state.pagesByIdentity),
     ...Object.keys(state.generationByIdentity),
@@ -377,9 +399,12 @@ function cloudEpicTasksPageIdentityMatchesScope(
   if (firstSeparator < 0) return false;
   const secondSeparator = identity.indexOf("|", firstSeparator + 1);
   if (secondSeparator < 0) return false;
+  // Compared ENCODED, the way the identity was written.
   return (
-    identity.slice(firstSeparator + 1, secondSeparator) === userId &&
-    (hostId === null || identity.slice(0, firstSeparator) === hostId)
+    identity.slice(firstSeparator + 1, secondSeparator) ===
+      encodeIdentitySegment(userId) &&
+    (hostId === null ||
+      identity.slice(0, firstSeparator) === encodeIdentitySegment(hostId))
   );
 }
 
@@ -390,8 +415,10 @@ function deletedEpicIdsForIdentity(
   const firstSeparator = identity.indexOf("|");
   const secondSeparator = identity.indexOf("|", firstSeparator + 1);
   if (firstSeparator < 0 || secondSeparator < 0) return new Set<string>();
-  const hostId = identity.slice(0, firstSeparator);
-  const userId = identity.slice(firstSeparator + 1, secondSeparator);
+  const hostId = decodeIdentitySegment(identity.slice(0, firstSeparator));
+  const userId = decodeIdentitySegment(
+    identity.slice(firstSeparator + 1, secondSeparator),
+  );
   return deletedEpicIdsForScope(state, hostId, userId);
 }
 
@@ -424,7 +451,9 @@ function userIdFromIdentity(identity: string): string {
   const secondSeparator = identity.indexOf("|", firstSeparator + 1);
   return secondSeparator < 0
     ? ""
-    : identity.slice(firstSeparator + 1, secondSeparator);
+    : decodeIdentitySegment(
+        identity.slice(firstSeparator + 1, secondSeparator),
+      );
 }
 
 /**
@@ -441,7 +470,11 @@ export function setCloudEpicTasksPagePinned(
 ): void {
   useCloudEpicTasksPagesStore
     .getState()
-    .setTaskPinned(`${hostId}|${userId}|`, epicId, pinned);
+    .setTaskPinned(
+      cloudEpicTasksPageIdentityPrefix(hostId, userId),
+      epicId,
+      pinned,
+    );
 }
 
 /**
@@ -458,5 +491,9 @@ export function setCloudEpicTasksPageLocalHome(
 ): void {
   useCloudEpicTasksPagesStore
     .getState()
-    .setTaskLocalHome(`${hostId}|${userId}|`, epicId, localHome);
+    .setTaskLocalHome(
+      cloudEpicTasksPageIdentityPrefix(hostId, userId),
+      epicId,
+      localHome,
+    );
 }
