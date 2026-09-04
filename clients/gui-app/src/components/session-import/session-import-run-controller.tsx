@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useReducer, useRef } from "react";
+import type { PermissionMode } from "@traycer/protocol/persistence/epic/schemas";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   SessionImportRunClient,
@@ -18,12 +19,27 @@ import {
 } from "@/stores/session-import/session-import-run-store";
 import { useImportedUnseenStore } from "@/stores/session-import/imported-unseen-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
+import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
 import {
   getSessionImportStartHandle,
   setSessionImportStartHandle,
   type SessionImportRunRequest,
   type SessionImportRunTarget,
 } from "@/components/session-import/session-import-run-handle";
+
+/**
+ * The permission mode a NEW chat on this host would start under, read at
+ * subscribe time: the last mode any composer ran with on that host, else the
+ * install's default. That is exactly what the composer seeds a fresh chat
+ * from, so an imported chat is no stricter and no looser than one the user
+ * creates. The host has no default of its own to consult.
+ */
+function newChatPermissionModeFor(hostId: string): PermissionMode {
+  return (
+    useComposerRunSettingsStore.getState().getGlobalRunSettings(hostId)
+      ?.permissionMode ?? useSettingsStore.getState().defaultPermission
+  );
+}
 
 /**
  * Owns the `sessionImport.run` subscriptions for the whole app - ONE PER HOST.
@@ -149,10 +165,7 @@ export function SessionImportRunController(): null {
       const client = new SessionImportRunClient({
         wsStreamClient: input.target.binding.wsStreamClient,
         selections: input.selections,
-        // Read at subscribe time, not rendered into: an imported chat starts
-        // under the permission mode a NEW chat would get right now, which is
-        // this install's default setting. The host has no default of its own.
-        permissionMode: useSettingsStore.getState().defaultPermission,
+        permissionMode: newChatPermissionModeFor(input.target.hostId),
         callbacks: input.callbacks,
       });
       runsRef.current.set(input.target.hostId, {
