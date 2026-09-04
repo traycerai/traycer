@@ -993,6 +993,54 @@ describe("<SessionImportWizard />", () => {
     expect(screen.queryAllByTestId("session-import-group")).toHaveLength(0);
   });
 
+  it("offers Import more on the summary, and pressing it retires the run and brings the list back", () => {
+    render(
+      <TestWizard
+        surface="dialog"
+        onImportStarted={vi.fn()}
+        secondaryAction={{ label: "Close", onSelect: vi.fn() }}
+      />,
+    );
+    act(() => {
+      const store = useSessionImportRunStore.getState();
+      store.markStarting("host-a", new Map([["claude:s1", "One"]]));
+      store.applyStarted("host-a", {
+        runId: "run-1",
+        total: 1,
+        attached: false,
+      });
+      store.applyComplete("host-a", {
+        runId: "run-1",
+        counts: { imported: 1, skippedAlreadyImported: 0, failed: 0 },
+      });
+    });
+    expect(screen.getByTestId("session-import-summary")).toBeTruthy();
+    // The summary holds: nothing retires it but the button (or a reopen).
+    expect(screen.queryByTestId("session-import-submit")).toBeNull();
+    const more = screen.getByTestId("session-import-more");
+    expect(more.textContent).toBe("Import more");
+
+    fireEvent.click(more);
+
+    expect(
+      useSessionImportRunStore.getState().runs.get("host-a"),
+    ).toBeUndefined();
+    expect(screen.queryByTestId("session-import-summary")).toBeNull();
+    expect(screen.getByTestId("session-import-submit")).toBeTruthy();
+  });
+
+  it("labels the way back from a failed run as Back to sessions", () => {
+    renderWizard(vi.fn());
+    act(() => {
+      const store = useSessionImportRunStore.getState();
+      store.markStarting("host-a", new Map());
+      store.applyError("host-a");
+    });
+    expect(screen.getByTestId("session-import-more").textContent).toBe(
+      "Back to sessions",
+    );
+  });
+
   it("on the onboarding surface, renders its own Import button that starts the run and notifies the caller", () => {
     const onImportStarted = vi.fn();
     render(

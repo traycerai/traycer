@@ -48,6 +48,7 @@ import {
   sessionImportRunFor,
   useSessionImportRun,
   useSessionImportRunStore,
+  type SessionImportRunStatus,
 } from "@/stores/session-import/session-import-run-store";
 import { useFeatureAnnouncementsStore } from "@/stores/settings/feature-announcements-store";
 
@@ -84,7 +85,8 @@ export function SessionImportWizard(props: {
   // the submission is aimed at.
   const streamBinding = useStreamRuntimeBinding();
   const hostId = streamBinding?.hostId ?? null;
-  const runIdle = useSessionImportRun(hostId).status === "idle";
+  const runStatus = useSessionImportRun(hostId).status;
+  const runIdle = runStatus === "idle";
   // Meeting the wizard on any surface - the tour act, the Settings dialog,
   // the release toast's own dialog - is the announcement: the id is consumed
   // on mount so the toast never follows for a user who has already opened
@@ -141,21 +143,12 @@ export function SessionImportWizard(props: {
 
   if (!runIdle) {
     return (
-      <div className="flex min-h-0 w-full flex-1 flex-col">
-        <SessionImportProgress tone={tone} hostId={hostId} />
-        {secondaryAction !== null ? (
-          <div className="flex shrink-0 justify-end px-4 py-3">
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={secondaryAction.onSelect}
-            >
-              {secondaryAction.label}
-            </Button>
-          </div>
-        ) : null}
-      </div>
+      <SessionImportRunView
+        tone={tone}
+        hostId={hostId}
+        runStatus={runStatus}
+        secondaryAction={secondaryAction}
+      />
     );
   }
 
@@ -569,4 +562,59 @@ function emptyMessage(
   }
   if (state.query.trim().length > 0) return "No work matches your search.";
   return "No work from the providers you picked.";
+}
+
+/**
+ * What the wizard shows while a run owns the screen: the live progress or
+ * the summary it leaves behind, over the same action row the list phase ends
+ * in, so the wizard's footer stays where the hand already knows it - the
+ * surface's own exit on the left, this wizard's next step on the right.
+ */
+function SessionImportRunView(props: {
+  readonly tone: SessionImportTone;
+  readonly hostId: string | null;
+  readonly runStatus: SessionImportRunStatus;
+  readonly secondaryAction: SessionImportSecondaryAction | null;
+}) {
+  const { tone, hostId, runStatus, secondaryAction } = props;
+  const runFinished = runStatus === "complete" || runStatus === "error";
+  return (
+    <div className="flex min-h-0 w-full flex-1 flex-col">
+      <SessionImportProgress tone={tone} hostId={hostId} />
+      {secondaryAction !== null || runFinished ? (
+        <div className="flex shrink-0 items-center justify-end gap-2 border-t px-4 py-3">
+          {secondaryAction !== null ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={secondaryAction.onSelect}
+            >
+              {secondaryAction.label}
+            </Button>
+          ) : null}
+          {runFinished && hostId !== null ? (
+            // The way back to the list without leaving the wizard. The
+            // summary holds until this is pressed - it is what the user
+            // waited for, and a screen that rewrites itself on a timer would
+            // pull it away mid-read. Retiring the run is all it takes: the
+            // scan is paused only while a run is in flight and resumes on
+            // idle, so the folder list comes back freshly read, with what
+            // just landed now marked as already imported.
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              data-testid="session-import-more"
+              onClick={() => {
+                useSessionImportRunStore.getState().reset(hostId);
+              }}
+            >
+              {runStatus === "error" ? "Back to sessions" : "Import more"}
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
 }
