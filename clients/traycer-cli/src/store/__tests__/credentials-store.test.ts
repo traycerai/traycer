@@ -37,7 +37,11 @@ function revalidatorFor(
   credentials: StoredCredentials | null,
 ): { revalidate: () => Promise<unknown>; lease: MutableBearerLease } {
   const lease = new MutableBearerLease("old-token", "u1");
-  const store = storeReturning(async () => ({ outcome, credentials }));
+  const store = storeReturning(async () => ({
+    outcome,
+    credentials,
+    rejection: null,
+  }));
   const reval = createStoreBackedRevalidator({ store, lease, signal: null });
   return { revalidate: () => reval.revalidateCurrentContext(), lease };
 }

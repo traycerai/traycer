@@ -374,7 +374,11 @@ function createBaseRunnerHost(): IRunnerHost {
       get: () => Promise.resolve(null),
       signIn: () => Promise.resolve(),
       rotate: () =>
-        Promise.resolve({ outcome: "deleted" as const, pair: null }),
+        Promise.resolve({
+          outcome: "deleted" as const,
+          pair: null,
+          rejection: null,
+        }),
       delete: () => Promise.resolve(),
       deleteIfToken: () => Promise.resolve("kept" as const),
       subscribe: () => ({ dispose: () => undefined }),

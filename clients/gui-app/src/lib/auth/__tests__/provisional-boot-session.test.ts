@@ -831,7 +831,11 @@ describe("AuthService provisional boot session", () => {
       let rotateCalls = 0;
       host.tokenStore.rotate = () => {
         rotateCalls += 1;
-        return Promise.resolve({ outcome: "lock-busy" as const, pair: null });
+        return Promise.resolve({
+          outcome: "lock-busy" as const,
+          pair: null,
+          rejection: null,
+        });
       };
       deferred.resolve(await status(401));
       await vi.advanceTimersByTimeAsync(0);
