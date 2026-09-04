@@ -198,7 +198,18 @@ export function reconcileLandingTerminalTabs(
     return [tab];
   });
   const adoptedTabs = [...signInTabs, ...ordinaryTabs];
-  const nextTabs = [...tabs, ...adoptedTabs];
+  const retired = new Set(
+    retiredProviderLoginPredecessors({
+      tabs,
+      activeHostId: input.activeHostId,
+      sessions,
+      adopted: signInTabs,
+    }),
+  );
+  const nextTabs = [
+    ...tabs.filter((tab) => !retired.has(tab.instanceId)),
+    ...adoptedTabs,
+  ];
   const activeInstanceId = resolveActiveInstanceId(
     input.activeInstanceId,
     nextTabs,
@@ -336,6 +347,51 @@ export function adoptListedProviderLoginSessions(
       }),
     ];
   });
+}
+
+/**
+ * The sign-in tabs an adoption SUPERSEDES: this host's existing tabs for the
+ * same provider as an adopted session, whose own session is no longer
+ * running. Returned as instance ids for the caller to drop alongside the
+ * adoption, in both arms.
+ *
+ * A restart kills its predecessor, and only the window that pressed it
+ * retires that tab (`openLandingSignInTerminal`). Every other window that had
+ * adopted the predecessor - the ended-state tab is kept on purpose - would
+ * otherwise adopt the successor beside it and hold two "Start again" tabs
+ * for one provider, the stale one restarting only itself. A predecessor
+ * whose session is still running is NOT retired: that is two live sign-ins,
+ * which is the host's to resolve, not this window's to hide.
+ */
+export function retiredProviderLoginPredecessors(input: {
+  readonly tabs: ReadonlyArray<LandingTerminalTabRef>;
+  readonly activeHostId: string;
+  readonly sessions: LandingTerminalReconciliationInput["sessions"];
+  readonly adopted: ReadonlyArray<LandingTerminalTabRef>;
+}): ReadonlyArray<string> {
+  if (input.adopted.length === 0) return [];
+  const runningSessionIds = new Set(
+    input.sessions
+      .filter((session) => session.status === "running")
+      .map((session) => session.sessionId),
+  );
+  const adoptedSessionIds = new Set(input.adopted.map((tab) => tab.sessionId));
+  const adoptedProviders = new Set(
+    input.adopted.flatMap((tab) =>
+      tab.originProviderId === undefined ? [] : [tab.originProviderId],
+    ),
+  );
+  return input.tabs
+    .filter(
+      (tab) =>
+        tab.hostId === input.activeHostId &&
+        isProviderLoginLandingTab(tab) &&
+        tab.originProviderId !== undefined &&
+        adoptedProviders.has(tab.originProviderId) &&
+        !adoptedSessionIds.has(tab.sessionId) &&
+        !runningSessionIds.has(tab.sessionId),
+    )
+    .map((tab) => tab.instanceId);
 }
 
 /**

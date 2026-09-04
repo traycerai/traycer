@@ -41,6 +41,7 @@ import {
   adoptListedProviderLoginSessions,
   reconcileHostAuthoritativeLandingTerminalTabs,
   reconcileLandingTerminalTabs,
+  retiredProviderLoginPredecessors,
   type LandingTerminalReconciliationInput,
 } from "./landing-terminal-reconciliation";
 import type { LandingTerminalAvailability } from "./landing-terminal-availability";
@@ -457,9 +458,19 @@ function adoptListedSignInSessions(args: {
       providerLoginTerminalProviderId(activeHostId, sessionId),
   });
   if (adopted.length === 0) return;
+  // The predecessors these adoptions supersede - a restart another window
+  // pressed killed them, and only that window retired its tab.
+  const retired = new Set(
+    retiredProviderLoginPredecessors({
+      tabs: current.tabs,
+      activeHostId,
+      sessions: args.sessions,
+      adopted,
+    }),
+  );
   current.applyReconciliation(
     args.landingPageId,
-    [...current.tabs, ...adopted],
+    [...current.tabs.filter((tab) => !retired.has(tab.instanceId)), ...adopted],
     current.activeInstanceId,
     false,
   );

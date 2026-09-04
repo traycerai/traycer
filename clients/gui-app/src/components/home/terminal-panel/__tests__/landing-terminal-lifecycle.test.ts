@@ -16,6 +16,7 @@ import {
   adoptListedProviderLoginSessions,
   reconcileLandingTerminalTabs,
   resolveLandingTerminalSyncedTitle,
+  retiredProviderLoginPredecessors,
   resolveLandingTerminalTitleCwd,
 } from "@/components/home/terminal-panel/landing-terminal-reconciliation";
 import { resolveLandingTerminalAvailability } from "@/components/home/terminal-panel/landing-terminal-availability";
@@ -1139,6 +1140,119 @@ describe("adoptListedProviderLoginSessions", () => {
     expect(adopted.map((entry) => entry.instanceId)).toEqual([
       "adopted-signin-instance",
     ]);
+  });
+});
+
+describe("retiredProviderLoginPredecessors", () => {
+  const signInTab = (input: {
+    readonly instanceId: string;
+    readonly sessionId: string;
+    readonly providerId: "reasonix" | "copilot";
+  }): LandingTerminalTabRef => ({
+    ...tab({
+      instanceId: input.instanceId,
+      sessionId: input.sessionId,
+      hostId: HOST_A,
+    }),
+    origin: "provider-login",
+    originProviderId: input.providerId,
+  });
+
+  it("retires this host's exited sign-in tab for a provider whose successor is being adopted", () => {
+    // Another window pressed "Start again": the host killed the predecessor
+    // this window still shows as an ended tab, and lists the successor.
+    const retired = retiredProviderLoginPredecessors({
+      tabs: [
+        signInTab({
+          instanceId: "old-signin",
+          sessionId: "signin-old",
+          providerId: "reasonix",
+        }),
+        // Another provider's ended tab is untouched.
+        signInTab({
+          instanceId: "copilot-ended",
+          sessionId: "copilot-old",
+          providerId: "copilot",
+        }),
+        // An ordinary tab is never a predecessor.
+        tab({ instanceId: "plain", sessionId: "plain-1", hostId: HOST_A }),
+      ],
+      activeHostId: HOST_A,
+      sessions: [
+        session({ sessionId: "signin-old", status: "exited" }),
+        session({ sessionId: "signin-new", status: "running" }),
+      ],
+      adopted: [
+        signInTab({
+          instanceId: "new-signin",
+          sessionId: "signin-new",
+          providerId: "reasonix",
+        }),
+      ],
+    });
+    expect(retired).toEqual(["old-signin"]);
+  });
+
+  it("does not retire a predecessor whose session is still running, nor anything when nothing was adopted", () => {
+    const tabs = [
+      signInTab({
+        instanceId: "live-signin",
+        sessionId: "signin-live",
+        providerId: "reasonix",
+      }),
+    ];
+    const sessions = [
+      session({ sessionId: "signin-live", status: "running" }),
+      session({ sessionId: "signin-new", status: "running" }),
+    ];
+    expect(
+      retiredProviderLoginPredecessors({
+        tabs,
+        activeHostId: HOST_A,
+        sessions,
+        adopted: [
+          signInTab({
+            instanceId: "new-signin",
+            sessionId: "signin-new",
+            providerId: "reasonix",
+          }),
+        ],
+      }),
+    ).toEqual([]);
+    expect(
+      retiredProviderLoginPredecessors({
+        tabs,
+        activeHostId: HOST_A,
+        sessions: [session({ sessionId: "signin-live", status: "exited" })],
+        adopted: [],
+      }),
+    ).toEqual([]);
+  });
+
+  it("the legacy arm drops the retired predecessor while adopting its successor", () => {
+    const result = reconcileLandingTerminalTabs({
+      tabs: [
+        signInTab({
+          instanceId: "old-signin",
+          sessionId: "signin-old",
+          providerId: "reasonix",
+        }),
+      ],
+      activeInstanceId: "old-signin",
+      activeHostId: HOST_A,
+      sessions: [
+        session({ sessionId: "signin-old", status: "exited" }),
+        session({ sessionId: "signin-new", status: "running" }),
+      ],
+      excludedSessionKeys: new Set(),
+      mintInstanceId: () => "new-signin",
+      providerLoginProviderFor: (sessionId) =>
+        sessionId.startsWith("signin-") ? "reasonix" : null,
+    });
+    expect(result.tabs.map((entry) => entry.instanceId)).toEqual([
+      "new-signin",
+    ]);
+    expect(result.activeInstanceId).toBe("new-signin");
   });
 });
 
