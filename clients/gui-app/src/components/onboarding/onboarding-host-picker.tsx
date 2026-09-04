@@ -72,7 +72,13 @@ export function OnboardingHostPickerBar(props: {
             // Settings' job; the tour only picks among the ones that exist.
             action={null}
             surface="panel-header"
-            intent="view"
+            // `pin`, not `view`: the tour WRITES to the picked host - it imports
+            // sessions onto it and stores the guide on it - so, like every
+            // picker that acts on a host, a row with no route is inert rather
+            // than a click that lands on a dead stage. `view` is for surfaces
+            // that only watch (the usage popover, Settings), where an offline
+            // host is still worth opening to read what the registry knows.
+            intent="pin"
             disabled={false}
             isLoading={scope.isLoading}
             listsFailed={scope.listsFailed}
