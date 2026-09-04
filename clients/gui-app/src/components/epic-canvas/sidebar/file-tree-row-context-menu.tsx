@@ -23,7 +23,7 @@ import {
   type PointerEvent,
   type ReactElement,
 } from "react";
-import { Copy, FolderOpen } from "lucide-react";
+import { Copy } from "lucide-react";
 import { toast } from "sonner";
 import type { OpenPathsTarget } from "@traycer/protocol/host/editor/unary-schemas";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -39,8 +39,8 @@ import {
   type PierreActivationEvent,
 } from "@/components/epic-canvas/pierre-tree-adapter";
 import {
-  EDITOR_ICONS,
-  resolveEditorState,
+  OPEN_TARGET_ICONS,
+  resolveOpenMenuState,
 } from "@/lib/editor/editor-menu-catalog";
 import { useEditorAvailability } from "@/hooks/editor/use-editor-availability-query";
 import { useEditorOpenFeedback } from "@/hooks/editor/use-editor-open-feedback";
@@ -59,14 +59,11 @@ const COPY_FEEDBACK_RESET_MS = 2000;
 interface FileTreeContextMenuRow {
   /** Workspace-relative tree path; directory rows keep their trailing `/`. */
   readonly treePath: string;
-  readonly isDirectory: boolean;
 }
 
 export interface FileTreeRowContextMenuProps {
   readonly hostId: string | null;
   readonly workspacePath: string;
-  /** Openable file rows; a tree path absent here is a directory row. */
-  readonly fileNameByPath: ReadonlyMap<string, string>;
   /**
    * The tree container, which becomes the menu's trigger. Exactly ONE element:
    * `ContextMenuTrigger asChild` merges its props onto this node through
@@ -85,7 +82,6 @@ function reportCopyFailure(): void {
 }
 
 export function FileTreeRowContextMenu(props: FileTreeRowContextMenuProps) {
-  const { fileNameByPath } = props;
   const [row, setRow] = useState<FileTreeContextMenuRow | null>(null);
 
   const captureRow = useCallback(
@@ -96,15 +92,9 @@ export function FileTreeRowContextMenu(props: FileTreeRowContextMenuProps) {
         setRow(null);
         return;
       }
-      // Two independent tells for a directory: the live listings mark folders
-      // with a trailing separator, and every source omits them from the
-      // openable file map. Either is sufficient.
-      setRow({
-        treePath,
-        isDirectory: treePath.endsWith("/") || !fileNameByPath.has(treePath),
-      });
+      setRow({ treePath });
     },
-    [fileNameByPath],
+    [],
   );
 
   const handleContextMenu = useCallback(
@@ -180,20 +170,21 @@ function FileTreeRowContextMenuContent(
   });
 
   // An editor launches through a URL-scheme handler registered on the host's
-  // own machine, so the editor items are local-host-only for the same reason
-  // the workspace header's are (see `OpenInEditorButton`).
+  // own machine, so the open items are local-host-only for the same reason the
+  // workspace header's are (see `OpenInEditorButton`).
   const hostIsLocal =
     hostEntry !== null &&
     (hostEntry.kind === "local" || hostEntry.kind === "mock");
-  // A context menu has no primary half, so no default editor is consulted -
-  // every editor this host will accept and this machine has installed is
-  // simply listed.
-  const { availableEditors } = resolveEditorState(
-    offerableEditors,
-    availability.data ?? null,
-    null,
-  );
-  const editorEntries = hostIsLocal ? availableEditors : [];
+  // A row menu has no primary half and does not record a default, so no stored
+  // target is consulted - it simply lists what this host and machine can open
+  // the row with, Finder last.
+  const { targets } = resolveOpenMenuState({
+    catalog: offerableEditors,
+    availableEditorIds: availability.data ?? null,
+    finderAvailable,
+    defaultTarget: null,
+  });
+  const openTargets = hostIsLocal ? targets : [];
 
   const absolutePath = resolveAbsolutePath(workspacePath, row.treePath);
   // The tree path already IS the workspace-relative path; a directory row only
@@ -219,29 +210,29 @@ function FileTreeRowContextMenuContent(
 
   return (
     <ContextMenuContent data-testid="epic-file-tree-row-menu">
-      {editorEntries.map((editor) => {
-        const Icon = EDITOR_ICONS[editor.id];
+      {openTargets.map((target) => {
+        const Icon = OPEN_TARGET_ICONS[target.id];
         return (
           <ContextMenuItem
-            key={editor.id}
-            data-testid={`epic-file-tree-row-open-${editor.id}`}
+            key={target.id}
+            data-testid={`epic-file-tree-row-open-${target.id}`}
             disabled={opening}
-            onSelect={() => openPath(editor.id)}
+            onSelect={() => openPath(target.id)}
           >
             {opening ? (
               <AgentSpinningDots
                 className="size-3.5"
-                testId={`epic-file-tree-row-open-${editor.id}-spinner`}
+                testId={`epic-file-tree-row-open-${target.id}-spinner`}
                 variant={undefined}
               />
             ) : (
               <Icon className="size-3.5" aria-hidden />
             )}
-            <span>{editor.label}</span>
+            <span>{target.label}</span>
           </ContextMenuItem>
         );
       })}
-      {editorEntries.length > 0 ? <ContextMenuSeparator /> : null}
+      {openTargets.length > 0 ? <ContextMenuSeparator /> : null}
       <ContextMenuItem
         data-testid="epic-file-tree-row-copy-path"
         onSelect={() => copyAbsolutePath(absolutePath)}
@@ -256,31 +247,6 @@ function FileTreeRowContextMenuContent(
         <Copy className="size-3.5" aria-hidden />
         <span>Copy Relative Path</span>
       </ContextMenuItem>
-      {finderAvailable ? (
-        <>
-          <ContextMenuSeparator />
-          <ContextMenuItem
-            data-testid="epic-file-tree-row-finder"
-            disabled={opening}
-            onSelect={() => openPath("finder")}
-          >
-            {opening ? (
-              <AgentSpinningDots
-                className="size-3.5"
-                testId="epic-file-tree-row-finder-spinner"
-                variant={undefined}
-              />
-            ) : (
-              <FolderOpen className="size-3.5" aria-hidden />
-            )}
-            {/* A folder IS the Finder window; a file is revealed selected
-                inside its parent, which is a different gesture and says so. */}
-            <span>
-              {row.isDirectory ? "Open in Finder" : "Reveal in Finder"}
-            </span>
-          </ContextMenuItem>
-        </>
-      ) : null}
     </ContextMenuContent>
   );
 }

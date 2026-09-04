@@ -261,7 +261,7 @@ describe("<OpenInEditorButton />", () => {
     expect(screen.queryByTestId("workspace-open-in-editor")).toBeNull();
   });
 
-  it("offers Open in Finder and dispatches the finder target when the gate is open", () => {
+  it("offers Finder and dispatches the finder target when the gate is open", () => {
     editorState.finderAvailable = true;
     render(
       <OpenInEditorButton
@@ -271,11 +271,11 @@ describe("<OpenInEditorButton />", () => {
     );
 
     fireEvent.pointerDown(
-      screen.getByTestId("workspace-open-in-editor-chevron"),
+      screen.getByRole("button", { name: "Choose editor" }),
       { button: 0 },
     );
 
-    fireEvent.click(screen.getByTestId("workspace-open-in-editor-finder"));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Finder" }));
 
     expect(editorState.mutate).toHaveBeenCalledWith({
       editorId: "finder",
@@ -316,7 +316,7 @@ describe("<OpenInEditorButton />", () => {
     ).toContain("VS Code");
     expect(
       screen.getByTestId("workspace-open-in-editor-finder").textContent,
-    ).toContain("Open in Finder");
+    ).toContain("Finder");
     // Copy path reaches no host, so it neither disables nor spins.
     expect(
       screen.queryByTestId("workspace-open-in-editor-copy-path-spinner"),
@@ -345,7 +345,7 @@ describe("<OpenInEditorButton />", () => {
     ).toBeNull();
   });
 
-  it("hides Open in Finder when the gate is closed, without hiding the rest of the menu", () => {
+  it("hides Finder when the gate is closed, without hiding the rest of the menu", () => {
     editorState.finderAvailable = false;
     render(
       <OpenInEditorButton
@@ -355,13 +355,94 @@ describe("<OpenInEditorButton />", () => {
     );
 
     fireEvent.pointerDown(
-      screen.getByTestId("workspace-open-in-editor-chevron"),
+      screen.getByRole("button", { name: "Choose editor" }),
       { button: 0 },
     );
 
-    expect(screen.queryByTestId("workspace-open-in-editor-finder")).toBeNull();
-    screen.getByTestId("workspace-open-in-editor-vscode");
-    screen.getByTestId("workspace-open-in-editor-copy-path");
+    expect(screen.queryByRole("menuitem", { name: "Finder" })).toBeNull();
+    screen.getByRole("menuitem", { name: "VS Code" });
+    screen.getByRole("menuitem", { name: "Copy path" });
+  });
+
+  it("lists Finder last in the editor group, after every editor", () => {
+    editorState.finderAvailable = true;
+    render(
+      <OpenInEditorButton
+        openTarget={{ workspacePath: "/repo", hostId: "host-1" }}
+        hostClient={null}
+      />,
+    );
+
+    fireEvent.pointerDown(
+      screen.getByRole("button", { name: "Choose editor" }),
+      { button: 0 },
+    );
+
+    // The whole menu in order: Finder closes the open group, and Copy path
+    // stays below it.
+    expect(
+      screen.getAllByRole("menuitem").map((item) => item.textContent),
+    ).toEqual(["VS Code", "Cursor", "Windsurf", "Zed", "Finder", "Copy path"]);
+  });
+
+  it("records Finder as the default when it is picked, like any editor row", () => {
+    editorState.finderAvailable = true;
+    render(
+      <OpenInEditorButton
+        openTarget={{ workspacePath: "/repo", hostId: "host-1" }}
+        hostClient={null}
+      />,
+    );
+
+    fireEvent.pointerDown(
+      screen.getByRole("button", { name: "Choose editor" }),
+      { button: 0 },
+    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Finder" }));
+
+    expect(useSettingsStore.getState().defaultEditor).toBe("finder");
+  });
+
+  it("opens the workspace in Finder from the primary button once Finder is the default", () => {
+    editorState.finderAvailable = true;
+    useSettingsStore.setState({ defaultEditor: "finder" });
+    render(
+      <OpenInEditorButton
+        openTarget={{ workspacePath: "/repo", hostId: "host-1" }}
+        hostClient={null}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open workspace in editor" }),
+    );
+
+    expect(editorState.mutate).toHaveBeenCalledWith({
+      editorId: "finder",
+      paths: ["/repo"],
+    });
+  });
+
+  it("falls the primary button back off a stored Finder default when the gate is closed", () => {
+    // A Mac-only target stored while it was offerable, read on a host that
+    // cannot serve it - the same fallback an unofferable editor id takes.
+    editorState.finderAvailable = false;
+    useSettingsStore.setState({ defaultEditor: "finder" });
+    render(
+      <OpenInEditorButton
+        openTarget={{ workspacePath: "/repo", hostId: "host-1" }}
+        hostClient={null}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open workspace in editor" }),
+    );
+
+    expect(editorState.mutate).toHaveBeenCalledWith({
+      editorId: "vscode",
+      paths: ["/repo"],
+    });
   });
 
   it("gates the vscodium menu item on the offer list, not merely on install detection", () => {
@@ -443,7 +524,9 @@ describe("<OpenInEditorButton />", () => {
       />,
     );
 
-    fireEvent.click(screen.getByTestId("workspace-open-in-editor-primary"));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open workspace in editor" }),
+    );
 
     expect(editorState.mutate).toHaveBeenCalledWith({
       editorId: "vscode",
