@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { hashOf, samePageKey } from "@/lib/links/normalize-url";
+import {
+  hashOf,
+  isSecurityUpgrade,
+  samePageKey,
+} from "@/lib/links/normalize-url";
 
 describe("samePageKey", () => {
   it.each([
@@ -53,6 +57,36 @@ describe("samePageKey", () => {
     );
     expect(samePageKey("https://a.example.test/x")).not.toBe(
       samePageKey("https://b.example.test/x"),
+    );
+  });
+});
+
+describe("isSecurityUpgrade", () => {
+  it("is the http tab -> https request of the same page", () => {
+    expect(isSecurityUpgrade("http://ex.test/a", "https://ex.test/a")).toBe(
+      true,
+    );
+    // Ignores the fragment and a trailing slash, like samePageKey.
+    expect(isSecurityUpgrade("http://ex.test/a/", "https://ex.test/a#x")).toBe(
+      true,
+    );
+  });
+
+  it("is NOT the reverse - an http link never downgrades an https tab", () => {
+    expect(isSecurityUpgrade("https://ex.test/a", "http://ex.test/a")).toBe(
+      false,
+    );
+  });
+
+  it("is false for same-scheme, a different page, or a non-http url", () => {
+    expect(isSecurityUpgrade("https://ex.test/a", "https://ex.test/a")).toBe(
+      false,
+    );
+    expect(isSecurityUpgrade("http://ex.test/a", "https://ex.test/b")).toBe(
+      false,
+    );
+    expect(isSecurityUpgrade("http://ex.test/a", "mailto:x@ex.test")).toBe(
+      false,
     );
   });
 });

@@ -29,3 +29,22 @@ export function samePageKey(url: string): string | null {
 export function hashOf(url: string): string {
   return parseHttpUrl(url)?.hash ?? "";
 }
+
+/**
+ * `from` is an insecure `http://` view of the very page `to` asks for over
+ * `https://`. Because {@link samePageKey} is scheme-insensitive, a request for
+ * the secure page would otherwise match an already-open `http://` tab and only
+ * focus it - stranding the user on the insecure page it never navigated off of.
+ * The caller upgrades the tab instead when this is true.
+ *
+ * The reverse (an `http://` link focusing an already-open `https://` tab) is
+ * deliberately NOT an upgrade: it stays on the secure tab, which is the whole
+ * point of matching across schemes.
+ */
+export function isSecurityUpgrade(from: string, to: string): boolean {
+  const a = parseHttpUrl(from);
+  const b = parseHttpUrl(to);
+  if (a === null || b === null) return false;
+  if (a.protocol !== "http:" || b.protocol !== "https:") return false;
+  return samePageKey(from) === samePageKey(to);
+}
