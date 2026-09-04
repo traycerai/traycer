@@ -108,6 +108,42 @@ function requireScalarKeys(value, keys, where) {
   return record;
 }
 
+/**
+ * An install root the consumers may treat as home-relative.
+ *
+ * `windowsLauncherPath` in `release-target-electron-builder.cjs` does
+ * `cliInstallRoot.slice(2)` to drop a leading `~/` before joining it onto
+ * `$PROFILE`. An absolute value such as `/opt/traycer/cli` survives every
+ * other check here and then loses its first two characters instead, producing
+ * `$PROFILE\pt\traycer\cli\...` - so the NSIS uninstaller deletes nothing and
+ * leaves the registered launcher behind. Refuse the shape rather than let a
+ * consumer assume it.
+ *
+ * The prefix alone is not the whole property: `~/../shared` also starts with
+ * `~/` and still resolves outside the home directory, which is the same escape
+ * by a different spelling, and a bare `~/` names the home directory itself
+ * rather than a root under it. A guard called "home-relative" has to mean it.
+ */
+function requireHomeRelativePath(value, where) {
+  requireString(value, where);
+  if (!value.startsWith("~/")) {
+    throw new ClientTargetStampError(
+      `${where} must be home-relative and start with "~/", got ${JSON.stringify(value)}`,
+    );
+  }
+  const segments = value.slice(2).split("/");
+  if (segments.some((segment) => segment.length === 0)) {
+    throw new ClientTargetStampError(
+      `${where} must name a directory under the home directory, got ${JSON.stringify(value)}`,
+    );
+  }
+  if (segments.includes("..")) {
+    throw new ClientTargetStampError(
+      `${where} must stay inside the home directory, got ${JSON.stringify(value)}`,
+    );
+  }
+}
+
 /** A non-empty array whose every entry is a non-empty string. */
 function requireStringArray(value, where) {
   if (!Array.isArray(value) || value.length === 0) {
@@ -144,6 +180,13 @@ function readClientTargetStamp(inputPath, expectedTarget, component) {
   }
   for (const key of ["credentialSources", "authorizedOrigins"]) {
     requireStringArray(stamp[key], `client target stamp.${key}`);
+  }
+  // Both components carry `cliInstallRoot`; only the CLI stamp carries
+  // `hostInstallRoot`. Every consumer of either treats them as home-relative.
+  for (const key of ["cliInstallRoot", "hostInstallRoot"]) {
+    if (key in stamp) {
+      requireHomeRelativePath(stamp[key], `client target stamp.${key}`);
+    }
   }
   if (
     !KNOWN_TARGETS.includes(stamp.target) ||

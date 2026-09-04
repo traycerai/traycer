@@ -64,11 +64,31 @@ function readUninstallMacro(): string {
     join(DESKTOP_ROOT, build.directories.buildResources, include),
     "utf8",
   );
-  const defaults: Record<string, string> = {
-    TRAYCER_WINDOWS_TASK_NAME: "\\Traycer\\Host",
-    TRAYCER_WINDOWS_TASK_FOLDER: "Traycer",
-    TRAYCER_HOST_LAUNCHER: "$PROFILE\\.traycer\\cli\\host-start-hidden.vbs",
-  };
+  // The macro's OWN `!ifndef` defaults, read from the file rather than
+  // restated here. This is the substitution an unstamped (production) build
+  // gets, so a copy of it in this test could go stale against the `!define`
+  // lines and quietly make every assertion below check the wrong string.
+  //
+  // Note this is deliberately NOT read from the release-target stamp: the
+  // assertions compare against `windowsTaskName(serviceLabelFor("production"))`
+  // plus an independent literal, and sourcing the expectation from the same
+  // place the generator reads would turn a lockstep check into `X === X`.
+  const defaults: Record<string, string> = {};
+  for (const [, name, value] of source.matchAll(
+    /^!define\s+(TRAYCER_WINDOWS_TASK_NAME|TRAYCER_WINDOWS_TASK_FOLDER|TRAYCER_HOST_LAUNCHER)\s+"([^"]*)"$/gm,
+  )) {
+    defaults[name] = value;
+  }
+  const missing = [
+    "TRAYCER_WINDOWS_TASK_NAME",
+    "TRAYCER_WINDOWS_TASK_FOLDER",
+    "TRAYCER_HOST_LAUNCHER",
+  ].filter((name) => defaults[name] === undefined);
+  if (missing.length > 0) {
+    throw new Error(
+      `uninstall-host-autostart.nsh declares no !define default for ${missing.join(", ")}; an unstamped build would expand the macro to an empty string and the uninstaller would delete nothing`,
+    );
+  }
   return source.replace(
     /\$\{(TRAYCER_WINDOWS_TASK_NAME|TRAYCER_WINDOWS_TASK_FOLDER|TRAYCER_HOST_LAUNCHER)\}/g,
     (_macro: string, name: string) => defaults[name] ?? "",

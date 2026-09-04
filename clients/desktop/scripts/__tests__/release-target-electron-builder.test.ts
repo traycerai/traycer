@@ -53,7 +53,11 @@ function desktopStamp(
     appId: staging ? "ai.traycer.desktop.staging" : "ai.traycer.desktop",
     productName: staging ? "Traycer Staging" : "Traycer",
     protocolScheme: staging ? "traycer-staging" : "traycer",
-    releaseChannel: target,
+    // NOT `target`: the production line's channel is `stable`, and only
+    // staging's channel happens to share its target's name. Spelling it
+    // `production` here fabricated a stamp the generator has never emitted,
+    // which is exactly what `readClientTargetStamp`'s channel check refuses.
+    releaseChannel: staging ? "staging" : "stable",
     mac: {
       bundleName: staging ? "Traycer Staging" : "Traycer",
       helperBundleId: `ai.traycer.${target}.host`,

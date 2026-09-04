@@ -353,6 +353,104 @@ describe("readClientTargetStamp", () => {
       ),
     ).toThrow(/cliInstallRoot/);
   });
+
+  it("refuses a desktop stamp missing windowsTaskName", () => {
+    // Only the cli component's missing-key sweep above exercises
+    // windowsTaskName; a desktop stamp is a separate COMPONENT_KEYS entry and
+    // was never itself driven through this deletion.
+    const stamp = desktopStamp();
+    delete stamp.windowsTaskName;
+    expect(() =>
+      stampModule.readClientTargetStamp(
+        writeStamp(stamp),
+        "staging",
+        "desktop",
+      ),
+    ).toThrow(/windowsTaskName/);
+  });
+});
+
+describe("cliInstallRoot and hostInstallRoot must be home-relative", () => {
+  // `windowsLauncherPath` in release-target-electron-builder.cjs does
+  // `cliInstallRoot.slice(2)` to drop a leading `~/`. An absolute value such
+  // as "/opt/traycer/cli" survived every other check here before this guard
+  // and then lost its first two characters instead of the `~/` prefix.
+
+  it("rejects an absolute cliInstallRoot on the cli stamp", () => {
+    const stamp = cliStamp();
+    stamp.cliInstallRoot = "/opt/traycer/cli";
+    expect(() =>
+      stampModule.readClientTargetStamp(writeStamp(stamp), "staging", "cli"),
+    ).toThrow(/cliInstallRoot must be home-relative/);
+  });
+
+  it("accepts a home-relative cliInstallRoot on the cli stamp", () => {
+    const stamp = cliStamp();
+    stamp.cliInstallRoot = "~/.traycer/cli";
+    expect(
+      stampModule.readClientTargetStamp(writeStamp(stamp), "staging", "cli"),
+    ).toMatchObject({ cliInstallRoot: "~/.traycer/cli" });
+  });
+
+  it("rejects an absolute cliInstallRoot on the desktop stamp", () => {
+    const stamp = desktopStamp();
+    stamp.cliInstallRoot = "/opt/traycer/cli";
+    expect(() =>
+      stampModule.readClientTargetStamp(
+        writeStamp(stamp),
+        "staging",
+        "desktop",
+      ),
+    ).toThrow(/cliInstallRoot must be home-relative/);
+  });
+
+  it("accepts a home-relative cliInstallRoot on the desktop stamp", () => {
+    const stamp = desktopStamp();
+    stamp.cliInstallRoot = "~/.traycer/cli";
+    expect(
+      stampModule.readClientTargetStamp(
+        writeStamp(stamp),
+        "staging",
+        "desktop",
+      ),
+    ).toMatchObject({ cliInstallRoot: "~/.traycer/cli" });
+  });
+
+  it("rejects an absolute hostInstallRoot on the cli stamp", () => {
+    const stamp = cliStamp();
+    stamp.hostInstallRoot = "/opt/traycer/host";
+    expect(() =>
+      stampModule.readClientTargetStamp(writeStamp(stamp), "staging", "cli"),
+    ).toThrow(/hostInstallRoot must be home-relative/);
+  });
+
+  it("accepts a home-relative hostInstallRoot on the cli stamp", () => {
+    const stamp = cliStamp();
+    stamp.hostInstallRoot = "~/.traycer/host";
+    expect(
+      stampModule.readClientTargetStamp(writeStamp(stamp), "staging", "cli"),
+    ).toMatchObject({ hostInstallRoot: "~/.traycer/host" });
+  });
+
+  it("rejects a hostInstallRoot that escapes the home directory via ..", () => {
+    const stamp = cliStamp();
+    stamp.hostInstallRoot = "~/../shared";
+    expect(() =>
+      stampModule.readClientTargetStamp(writeStamp(stamp), "staging", "cli"),
+    ).toThrow(/must stay inside the home directory/);
+  });
+
+  it("rejects a bare ~/ cliInstallRoot that names the home directory itself", () => {
+    const stamp = desktopStamp();
+    stamp.cliInstallRoot = "~/";
+    expect(() =>
+      stampModule.readClientTargetStamp(
+        writeStamp(stamp),
+        "staging",
+        "desktop",
+      ),
+    ).toThrow(/must name a directory under the home directory/);
+  });
 });
 
 function productionDesktopStamp(): Stamp {
