@@ -24,6 +24,12 @@ import {
 } from "@traycer/protocol/host/epic/unary-schemas";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useHostMutation } from "@/hooks/host/use-host-query";
+import { liveHostServesLocalFirst } from "@/lib/cloud-epic-tasks-query/local-first-admission";
+import { createWithoutCloudVerdictMessage } from "@/lib/composer/landing-placement";
+import {
+  authorizesCloudCapability,
+  useAuthStore,
+} from "@/stores/auth/auth-store";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { cloudEpicTasksQueryKeyMatchesScope } from "@/lib/cloud-epic-tasks-query/cache";
 import type { ListCloudTasksRequest } from "@/lib/cloud-epic-tasks-query";
@@ -94,6 +100,7 @@ export function useEpicCreateForClient(
       }
       return variables;
     },
+    preflight: () => assertCreateAdmittedOnLiveHost(client),
     options: {
       onMutate: (variables) => {
         Analytics.getInstance().track(AnalyticsEvent.TaskCreationStarted, {
@@ -672,4 +679,38 @@ function liveOpenEpicTitle(epicId: string): string | null {
   if (handle === null) return null;
   const title = handle.store.getState().epic.title.trim();
   return title.length > 0 ? title : null;
+}
+
+/**
+ * The submit-time gate (`refuseCreateWithoutCloudVerdict`), re-asked of the
+ * LIVE host at dispatch.
+ *
+ * The composer's gate reads the negotiated-manifest registry, which remembers
+ * a host's last handshake until traffic replaces it. A host that advertised
+ * the local-first line and then restarted or rolled back under the same id
+ * therefore still admits an unverified create from the moment it went away
+ * until this very request's handshake lands - and `epic.create@1.0` on the
+ * older process is the cloud-backed create, on the retained credential. So
+ * the mutation forces a handshake first and decides on what it wrote.
+ *
+ * A `signed-in` session never pays this; a refusal surfaces through the
+ * mutation's error path with the same copy the composer shows inline.
+ */
+async function assertCreateAdmittedOnLiveHost(
+  client: HostClient<HostRpcRegistry> | null,
+): Promise<void> {
+  if (authorizesCloudCapability(useAuthStore.getState().status)) return;
+  const hostId = client?.getActiveHostId() ?? null;
+  const admitted =
+    client !== null &&
+    hostId !== null &&
+    (await liveHostServesLocalFirst(client, hostId));
+  if (admitted) return;
+  throw new HostRpcError({
+    code: "RPC_ERROR",
+    message: createWithoutCloudVerdictMessage("this device"),
+    requestId: "client-pre-flight",
+    method: "epic.create",
+    fatalDetails: null,
+  });
 }

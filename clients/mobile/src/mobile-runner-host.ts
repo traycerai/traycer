@@ -919,13 +919,13 @@ class MobileTokenStore implements ITokenStore {
   }): Promise<TokenRotateResult> {
     const stored = await this.get();
     if (stored === null) {
-      return { outcome: "deleted", pair: null };
+      return { outcome: "deleted", pair: null, rejection: null };
     }
     if (stored.user.id !== expected.userId) {
-      return { outcome: "user-mismatch", pair: stored };
+      return { outcome: "user-mismatch", pair: stored, rejection: null };
     }
     if (stored.token !== expected.token) {
-      return { outcome: "superseded", pair: stored };
+      return { outcome: "superseded", pair: stored, rejection: null };
     }
     const refreshed = await refreshOnceAbortable({
       authnBaseUrl: this.authnBaseUrl,
@@ -935,10 +935,24 @@ class MobileTokenStore implements ITokenStore {
       signal: null,
     });
     if (refreshed.kind === "network-error") {
-      return { outcome: "refresh-network", pair: null };
+      return { outcome: "refresh-network", pair: null, rejection: null };
     }
     if (refreshed.kind === "rejected") {
-      return { outcome: "refresh-rejected", pair: null };
+      // Carried through rather than collapsed. `refreshOnceAbortable` already
+      // knows WHAT the rejection was about - 403/404 is a statement about the
+      // ACCOUNT, 400/401 about the TOKEN - and that distinction is only
+      // knowable at the HTTP boundary. Collapsing it here would land the
+      // renderer three layers up with no way to decide whether to keep serving
+      // this device's own epics from disk, which is the defect the split
+      // exists to fix.
+      return {
+        outcome:
+          refreshed.rejection.kind === "account"
+            ? "refresh-rejected-account"
+            : "refresh-rejected-credential",
+        pair: null,
+        rejection: refreshed.rejection,
+      };
     }
     const next: StoredCredentials = {
       ...stored,
@@ -947,7 +961,7 @@ class MobileTokenStore implements ITokenStore {
       savedAt: new Date().toISOString(),
     };
     await this.write(next);
-    return { outcome: "applied", pair: next };
+    return { outcome: "applied", pair: next, rejection: null };
   }
 
   async delete(): Promise<void> {

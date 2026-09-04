@@ -261,6 +261,12 @@ function pillStateOf(state: OpenEpicState): EpicSyncPillState {
     hasUnsyncedDocClassChanges: state.isDirty,
     writeCommands: summarizeEpicWriteCommands(state.writeCommands),
     hasConnectedOnce: state.hasConnectedOnce,
+    // The durability and freshness legs, mapped exactly as
+    // `useEpicSyncPillState` maps them (`epic-selectors.ts`).
+    durability: state.durabilityStatus ?? undefined,
+    localProtection: state.localProtection ?? undefined,
+    durabilityLegsNegotiated: state.durabilityLegsNegotiated,
+    cloudFreshness: state.cloudFreshness ?? undefined,
   });
 }
 

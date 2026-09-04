@@ -136,6 +136,7 @@ export const RunnerHostInvoke = {
   perWindowStateClear: "runnerHost:windows:perWindowState:clear",
   authSessionGet: "runnerHost:windows:authSession:get",
   authSessionSet: "runnerHost:windows:authSession:set",
+  authSessionRevoke: "runnerHost:windows:authSession:revoke",
   supportSnapshotGet: "runnerHost:support:snapshot:get",
   supportRevealLog: "runnerHost:support:log:reveal",
   supportSubmitReport: "runnerHost:support:report:submit",

@@ -235,6 +235,14 @@ export function createBrowserSessionsHostDirectory(
 export interface BrowserSessionsTransportDeps {
   readonly authnBaseUrl: () => string;
   readonly bearer: BearerSourceProvider;
+  /**
+   * Whether the account currently holds a CLOUD capability, read live per
+   * attach - main's answer is the jar-plane principal (a signed-in session
+   * whose bearer main verified itself), so this and `bearer` are one fact.
+   * See `CreateRemoteTransportOptions.cloudAuthorized`: it gates the attach
+   * grant mint alone, and an unverified session must not spend one.
+   */
+  readonly cloudAuthorized: () => boolean;
   /** Re-read on every (re)dial, so a host that moved is followed. */
   readonly endpoint: () => HostTransportEndpoint | null;
   readonly appVersion: string | null;
@@ -277,6 +285,7 @@ export function openBrowserSessionsTransport(
       authnBaseUrl: deps.authnBaseUrl(),
       hostPublicKey: target.publicKey,
       bearer: deps.bearer,
+      cloudAuthorized: deps.cloudAuthorized,
       auth: null,
       clock: null,
       rpcRegistry: hostRpcRegistry,

@@ -56,6 +56,7 @@ import {
 import {
   prepareStreamSubscribeRequest,
   type ParamsOf,
+  type StreamMethodSupport,
 } from "../ws-stream-client";
 import type { WakeProbeTuning } from "../host-stream-client";
 import { jitteredBackoffFor } from "../backoff";
@@ -516,6 +517,29 @@ export interface IRemoteSession<
    * died is not a session that became unready).
    */
   subscribeReadinessLost(listener: () => void): () => void;
+  /**
+   * The stream method's compatibility against the manifest from this
+   * connection's most recent `openAck`. Until that acknowledgement arrives,
+   * the remote session has no capability evidence and answers `"unknown"`.
+   */
+  getMethodSupport<Method extends keyof StreamRegistry & string>(
+    method: Method,
+  ): StreamMethodSupport;
+  /**
+   * The version a new subscription would declare against this connection's
+   * current manifest, or `null` before its `openAck` settles.
+   */
+  getMethodSchemaVersion<Method extends keyof StreamRegistry & string>(
+    method: Method,
+  ): SchemaVersion | null;
+  /**
+   * Notified when manifest-derived stream capability evidence changes. A
+   * closed session retires its observers after the terminal retraction and
+   * accepts no new ones - like `onClosed`, a late attacher must check
+   * `isClosed()` and read `getMethodSupport` directly, which answers
+   * `"unknown"` forever from there.
+   */
+  subscribeMethodSupport(listener: () => void): () => void;
   close(): void;
 }
 
@@ -733,6 +757,7 @@ export class RemoteSession<
   private readonly closedListeners = new Set<() => void>();
   private readonly availabilityRecoveredListeners = new Set<() => void>();
   private readonly readinessLostListeners = new Set<() => void>();
+  private readonly methodSupportListeners = new Set<() => void>();
   /**
    * Last readiness this session PUBLISHED, not last readiness it had.
    *
@@ -940,6 +965,31 @@ export class RemoteSession<
       this.connection !== null &&
       this.connection.hostAttached
     );
+  }
+
+  getMethodSupport<Method extends keyof StreamRegistry & string>(
+    method: Method,
+  ): StreamMethodSupport {
+    return this.streamMethodCapability(method).support;
+  }
+
+  getMethodSchemaVersion<Method extends keyof StreamRegistry & string>(
+    method: Method,
+  ): SchemaVersion | null {
+    return this.streamMethodCapability(method).schemaVersion;
+  }
+
+  subscribeMethodSupport(listener: () => void): () => void {
+    // The closed guard the other three subscribers carry, for the same reason:
+    // `emitClosed` retires the set, so an attacher arriving after that would
+    // be added to a set nothing ever clears or notifies again.
+    if (this.phase === "closed") {
+      return () => undefined;
+    }
+    this.methodSupportListeners.add(listener);
+    return () => {
+      this.methodSupportListeners.delete(listener);
+    };
   }
 
   /**
@@ -2477,6 +2527,11 @@ export class RemoteSession<
     }
     connection.hostManifest = parsed.data.manifest;
     connection.hostRpcMerged = hostRpcMerged;
+    // This is the first moment a remote session can answer a stream
+    // capability pre-check. Publish before re-opening streams: callers such as
+    // notification-feed selection deliberately need the prediction that lets
+    // them decide whether to open an optional stream in the first place.
+    this.notifyMethodSupportListeners();
     connection.credentialUpdateSupported = parsed.data.capabilities.includes(
       SESSION_CAPABILITY_CREDENTIAL_UPDATE,
     );
@@ -2781,6 +2836,66 @@ export class RemoteSession<
       // them. The arm retires through the same evidence/verdict/close/drop
       // set as any other.
       this.armReassemblyWatchdog(this.connectGeneration, stream.streamId);
+    }
+  }
+
+  /**
+   * Mirrors `openSubscription`'s manifest selection and compatibility check
+   * without opening a stream. A remote session has one peer manifest, so this
+   * is the exact answer a fresh subscription would reach on its current
+   * connection.
+   */
+  private streamMethodCapability(method: string): {
+    readonly support: StreamMethodSupport;
+    readonly schemaVersion: SchemaVersion | null;
+  } {
+    const hostManifest = this.connection?.hostManifest;
+    if (hostManifest === null || hostManifest === undefined) {
+      return { support: "unknown", schemaVersion: null };
+    }
+    const selectedClientManifest = selectConnectionManifestForPeer(
+      this.options.streamRegistry,
+      this.clientManifests.stream,
+      hostManifest.stream,
+    );
+    const clientCanonical = selectedClientManifest[method];
+    const hostCanonical = hostManifest.stream[method];
+    if (clientCanonical === undefined || hostCanonical === undefined) {
+      return { support: "unsupported", schemaVersion: null };
+    }
+    const compatibility = checkStreamMethodCompatibility(
+      this.options.streamRegistry,
+      selectedClientManifest,
+      hostManifest.stream,
+      "client",
+      method,
+    );
+    if (!compatibility.ok) {
+      return { support: "unsupported", schemaVersion: null };
+    }
+    // `prepareStreamSubscribeRequest` declares the older same-major minor.
+    // Compatibility above proved that either canonical can be selected safely;
+    // this is its payload-independent version half.
+    const schemaVersion =
+      clientCanonical.minor <= hostCanonical.minor
+        ? clientCanonical
+        : hostCanonical;
+    return { support: "supported", schemaVersion };
+  }
+
+  private notifyMethodSupportListeners(): void {
+    // Guarded per listener, same reason as the readiness-lost and
+    // availability-recovered emitters: the `handleOpenAck` publish runs inside
+    // inbound frame dispatch, whose rejection handler reads ANY throw as
+    // `inbound-decode-failed` and drops the connection. A capability observer
+    // that faults would therefore cost a healthy session - and would silence
+    // the other observers on the way out.
+    for (const listener of Array.from(this.methodSupportListeners)) {
+      try {
+        listener();
+      } catch (error) {
+        console.error("[remote-session] method-support listener threw", error);
+      }
     }
   }
 
@@ -3164,6 +3279,17 @@ export class RemoteSession<
    *                       is untouched, so this never counts toward the
    *                       give-up bound.
    *   - "rejected"      → terminal (the revalidator has already signed out).
+   *   - "local-plane-retained"
+   *                     → terminal HERE, unlike the local stream transport.
+   *                       That outcome says a local plane survives the lost
+   *                       cloud verdict; a relay session is not on it. Reaching
+   *                       this host means minting an attach grant, which
+   *                       `cloudAuthorized()` now refuses, so every redial is
+   *                       futile - and `demoteVerifiedSessionToUnverified`
+   *                       force-retires these sessions on the same edge for
+   *                       exactly that reason. Kept explicit rather than left
+   *                       to fall through to the "rotated" tail below, where it
+   *                       would spend the whole no-progress bound first.
    * A no-progress streak (revalidation keeps returning a current credential
    * the host keeps rejecting) is bounded and goes terminal to stop looping.
    */
@@ -3186,7 +3312,7 @@ export class RemoteSession<
       // revalidation was in flight.
       return;
     }
-    if (outcome === "rejected") {
+    if (outcome === "rejected" || outcome === "local-plane-retained") {
       this.goTerminalFatal(details);
       return;
     }
@@ -3588,7 +3714,8 @@ export class RemoteSession<
     // A newly armed timer has not been collapsed, so the next wake gets its
     // one draw against it.
     this.backoffCollapsed = false;
-    this.armBackoffTimer(Date.now(), delay);
+    const now = Date.now();
+    this.armBackoffTimer(now, delay, now);
     return delay;
   }
 
@@ -3632,10 +3759,14 @@ export class RemoteSession<
    *
    * The delay is expressed against `armedAt`, not against now, so re-arming an
    * EXISTING deadline stays a deadline: the timer is set to whatever is left of
-   * it. Passing `Date.now()` as `armedAt` - what a fresh backoff does - makes
-   * the two the same thing.
+   * it. Passing the same instant as both `armedAt` and `now` - what a fresh
+   * backoff does - makes the two the same thing, and EXACTLY so: `now` is the
+   * caller's one clock read rather than a second read in here, because the
+   * millisecond that could tick between the two turned a 1000ms rung into a
+   * 999ms timer, which the reattach-duration log then reported and the ladder
+   * tests caught.
    */
-  private armBackoffTimer(armedAt: number, delayMs: number): void {
+  private armBackoffTimer(armedAt: number, delayMs: number, now: number): void {
     this.backoffArmedAt = armedAt;
     this.backoffDelayMs = delayMs;
     this.backoffTimer = setTimeout(
@@ -3643,7 +3774,7 @@ export class RemoteSession<
         this.backoffTimer = null;
         this.beginConnectGuarded();
       },
-      Math.max(0, armedAt + delayMs - Date.now()),
+      Math.max(0, armedAt + delayMs - now),
     );
   }
 
@@ -3701,7 +3832,7 @@ export class RemoteSession<
     console.info(
       `[remote-session] remote session (host ${this.options.hostId}) redialing early (${reason}) in ${wokenDelayMs}ms - ${Math.round(armedRemainingMs)}ms of backoff left`,
     );
-    this.armBackoffTimer(now, wokenDelayMs);
+    this.armBackoffTimer(now, wokenDelayMs, now);
   }
 
   /**
@@ -3770,7 +3901,8 @@ export class RemoteSession<
     console.info(
       `[remote-session] remote session (host ${this.options.hostId}) redialing now (${reason})`,
     );
-    this.armBackoffTimer(Date.now(), 0);
+    const now = Date.now();
+    this.armBackoffTimer(now, 0, now);
   }
 
   /**
@@ -4306,6 +4438,13 @@ export class RemoteSession<
     this.closedListeners.clear();
     this.availabilityRecoveredListeners.clear();
     this.readinessLostListeners.clear();
+    // Retired AFTER its last notification, not before: both terminal paths
+    // (`close`, `goTerminalFatal`) run `teardownConnection` first, and that is
+    // where the final `unknown` publish is delivered. A retired session can
+    // never answer anything but `unknown` again, so a retained observer is
+    // pure retention - the closure, and everything it captured, outliving the
+    // session that was cached for it.
+    this.methodSupportListeners.clear();
     for (const listener of listeners) {
       try {
         listener();
@@ -4379,6 +4518,12 @@ export class RemoteSession<
     this.retractSession();
     const connection = this.connection;
     this.connection = null;
+    // A reconnect can attach to a different host incarnation. Once this ack's
+    // manifest is gone, retaining its verdict would turn stale capability
+    // evidence into a pre-check answer; observers must re-read `unknown`.
+    if (connection !== null && connection.hostManifest !== null) {
+      this.notifyMethodSupportListeners();
+    }
     this.openFrameBearer = null;
     this.clearPhaseTimer();
     this.clearReauthTimer();

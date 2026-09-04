@@ -17,8 +17,13 @@
 import type { EpicAdapterArm } from "./epic-adapter-selection";
 import type { PermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
 import type {
+  EpicCloudFreshness,
   EpicCloudSyncStatus,
+  EpicDurabilityPauseReasonV15,
+  EpicDurabilityStatusV15,
+  EpicLocalProtection,
   EpicMigrationPhase,
+  EpicPromotionState,
 } from "@traycer/protocol/host/epic/subscribe";
 import type { ChatRecordRemovalReason } from "@traycer/protocol/host/epic/chat-records";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
@@ -52,6 +57,8 @@ export interface SnapshotFetchError {
    * `describeVersionSkew` (`@/lib/host/version-skew-copy`).
    */
   readonly upgradeGuidance: FatalErrorDetails["upgradeGuidance"];
+  /** The local-store repair copy is carried separately from the error text. */
+  readonly localStoreRemedy?: string;
 }
 
 /**
@@ -269,6 +276,69 @@ export interface EpicControlProjection {
    * becoming sync proof.
    */
   readonly cloudSyncStatus: EpicCloudSyncStatus;
+  /**
+   * Where the epic is durable, at `@1.6` width.
+   *
+   * `null` here means the host said NOTHING, and at `@1.6` that reads as
+   * unknown - never as synced. It is not a licence for the calm rendering;
+   * see `deriveEpicDurabilityView`, which requires a POSITIVE statement
+   * before it will resolve a missing durability claim as fine.
+   */
+  readonly durabilityStatus: EpicDurabilityStatusV15 | null;
+  /** Present for a recognised paused reason, at `@1.6` width. */
+  readonly durabilityPauseReason: EpicDurabilityPauseReasonV15 | null;
+  /** Optional @1.5 distinction behind a durable promotion reservation. */
+  readonly durabilityPromotionState: EpicPromotionState | null;
+  /**
+   * Whether this session has local (WAL) protection - `@1.6`.
+   *
+   * `null` means the host did not say, which is `unknown`: an unarmed session
+   * used to be indistinguishable from an armed one, so the ONLY reading that
+   * closes that hole is that silence is not protection.
+   */
+  readonly localProtection: EpicLocalProtection | null;
+  /**
+   * How the served document stands relative to the cloud - `@1.6`,
+   * `s5-mirror-first-serving`.
+   *
+   * `null` means the host did not say, and the rule that already governs
+   * `durabilityStatus` and `localProtection` governs this too: silence is
+   * UNKNOWN, and unknown is not `current`. Mirror-first serving makes an epic
+   * usable before it is up to date, so "the document rendered" stopped being
+   * evidence that it is the cloud's document.
+   */
+  readonly cloudFreshness: EpicCloudFreshness | null;
+  /**
+   * Whether the peer serving this stream negotiated the `@1.6` minor that
+   * carries the three legs above - `s5-status-truthfulness`.
+   *
+   * Recorded because every one of those legs is optional on the wire, so
+   * `null` alone cannot say WHICH silence it is. A pre-`@1.6` peer has no
+   * durability opinion and keeps its prior rendering; a `@1.6` peer that omits
+   * a leg has stated UNKNOWN, and unknown may not render as reassurance. Both
+   * arrive here as `null`, and this bit is what separates them.
+   */
+  readonly durabilityLegsNegotiated: boolean;
+  /** Whether this connection can report `epic.subscribe@1.4` durability. */
+  readonly durabilityStatusNegotiated: boolean;
+  /**
+   * The last durability the host actually STATED, kept across subscription
+   * cycles - unlike {@link durabilityStatus}, which a reconnect clears.
+   *
+   * The two answer different questions. `durabilityStatus` is "what has THIS
+   * cycle's peer told us", and clearing it is right: last cycle's answer is no
+   * evidence about this one. But where an epic is durable is a property of the
+   * EPIC - a local-homed epic does not acquire a cloud room by reconnecting -
+   * and a gate that fails dangerous on silence needs the retained fact rather
+   * than the cycle's.
+   *
+   * Written only by a positive statement, so it never manufactures an answer
+   * the host has not given, and cleared by `requestFreshSnapshot`, which
+   * bootstraps from scratch rather than reconnecting.
+   */
+  readonly retainedDurabilityStatus: EpicDurabilityStatusV15 | null;
+  /** The pause reason observed beside {@link retainedDurabilityStatus}. */
+  readonly retainedDurabilityPauseReason: EpicDurabilityPauseReasonV15 | null;
   /** `true` only after a cloud-status frame for this exact open cycle. */
   readonly hasFreshCloudSyncStatus: boolean;
   /**
@@ -323,6 +393,15 @@ export const INITIAL_CONTROL_PROJECTION: EpicControlProjection = Object.freeze({
   hostTransportStatus: "connecting",
   recordsTransportStatus: "connecting",
   cloudSyncStatus: "connected",
+  durabilityStatus: null,
+  durabilityPauseReason: null,
+  durabilityPromotionState: null,
+  localProtection: null,
+  cloudFreshness: null,
+  durabilityLegsNegotiated: false,
+  durabilityStatusNegotiated: false,
+  retainedDurabilityStatus: null,
+  retainedDurabilityPauseReason: null,
   hasFreshCloudSyncStatus: false,
   hasConnectedOnce: false,
   accessLost: false,

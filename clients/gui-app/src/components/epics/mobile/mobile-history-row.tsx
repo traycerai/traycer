@@ -13,7 +13,18 @@ import {
   type HistoryItem,
 } from "@/components/home/data/home-page.data";
 import { HistoryRowLeadingIcon } from "@/components/epics/epics-list-shared";
+import {
+  historyPinControlLabel,
+  historyPinUnavailableReason,
+  historyPinUnavailableTooltip,
+  type HistoryPinUnavailableReason,
+} from "@/components/epics/history-pin-availability";
 import { historyItemDisplayTitle } from "@/components/epics/history-item-title";
+import {
+  authorizesCloudCapability,
+  useAuthStore,
+} from "@/stores/auth/auth-store";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import {
   TRAY_ACTION_PX,
   useRowSwipeTray,
@@ -45,6 +56,7 @@ interface TrayAction {
   readonly label: string;
   readonly icon: ReactNode;
   readonly destructive: boolean;
+  readonly unavailableReason: HistoryPinUnavailableReason | null;
   readonly run: () => void;
 }
 
@@ -93,11 +105,19 @@ export const MobileHistoryRow = memo(function MobileHistoryRow(
   } = props;
 
   const displayTitle = historyItemDisplayTitle(item);
-  const canDelete = canDeleteHistoryItem(item);
-  const canRename = canEditHistoryItemTitle(item);
-  // Phases carry no pin bit of their own - they are reached through the epic
-  // that owns them - so pinning is an epic-only affordance.
-  const canPin = item.taskType === "epic";
+  const cloudAuthorized = useAuthStore((state) =>
+    authorizesCloudCapability(state.status),
+  );
+  // The same verdict the pin gate below already reads, now also asked of
+  // delete: the tray's delete dispatches the same cloud-backed
+  // `epic.batchDelete` the desktop row does, so the two surfaces admit on one
+  // rule or the class survives at whichever of them was left out.
+  const canDelete = canDeleteHistoryItem(item, cloudAuthorized);
+  const canRename = canEditHistoryItemTitle(item, cloudAuthorized);
+  const pinUnavailableReason = historyPinUnavailableReason(
+    item,
+    cloudAuthorized,
+  );
   const isPhase = item.taskType === "phase";
   const linkTabId = useEpicCanvasStore(
     (s) => s.resolveTabIdForEpic(item.epicId) ?? item.epicId,
@@ -107,11 +127,19 @@ export const MobileHistoryRow = memo(function MobileHistoryRow(
     useEpicUpdateTitle();
   const commitTitle = useCallback(
     (nextTitle: string) => {
+      // Re-checked at COMMIT, as the desktop row does: a rename begun before
+      // a demotion must not land on the retained credential afterwards.
+      if (
+        item.isLocalHome !== true &&
+        !authorizesCloudCapability(useAuthStore.getState().status)
+      ) {
+        return;
+      }
       renameEpicTitle({
         epicDelta: { id: item.epicId, title: nextTitle, updatedAt: Date.now() },
       });
     },
-    [item.epicId, renameEpicTitle],
+    [item.epicId, item.isLocalHome, renameEpicTitle],
   );
   const {
     isEditing: isRenaming,
@@ -135,7 +163,7 @@ export const MobileHistoryRow = memo(function MobileHistoryRow(
   const actions = buildTrayActions({
     item,
     displayTitle,
-    canPin,
+    pinUnavailableReason,
     canRename,
     canDelete,
     isPinPending,
@@ -497,34 +525,68 @@ function RowActionTray(props: {
       }}
     >
       {props.actions.map((action) => (
-        <button
+        // `TooltipWrapper` degrades to a transparent Slot when `label` is
+        // null, so an available action costs nothing. The unavailable pin is
+        // the one that needs it: `aria-label` already carries the reason for a
+        // screen reader, and this is how a sighted touch user reaches the same
+        // sentence - the native `title` it replaces never fired on touch.
+        <TooltipWrapper
           key={action.kind}
-          type="button"
-          aria-label={action.label}
-          data-testid={`epics-list-row-tray-${action.kind}`}
-          style={{ width: `${TRAY_ACTION_PX}px` }}
-          className={cn(
-            "flex shrink-0 items-center justify-center outline-none active:press-scrim focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/50",
-            action.destructive
-              ? "bg-destructive/15 text-destructive"
-              : "bg-muted text-muted-foreground",
-          )}
-          onClick={() => {
-            props.onRun();
-            action.run();
-          }}
+          label={
+            action.unavailableReason === null
+              ? null
+              : historyPinUnavailableTooltip(action.unavailableReason)
+          }
+          side="top"
+          sideOffset={undefined}
+          align={undefined}
         >
-          {action.icon}
-        </button>
+          <button
+            type="button"
+            aria-label={action.label}
+            aria-disabled={action.unavailableReason !== null || undefined}
+            data-local-home-pin-unavailable={
+              action.unavailableReason !== null || undefined
+            }
+            data-testid={`epics-list-row-tray-${action.kind}`}
+            style={{ width: `${TRAY_ACTION_PX}px` }}
+            className={cn(
+              "flex shrink-0 items-center justify-center outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/50",
+              action.unavailableReason === null && "active:press-scrim",
+              trayActionToneClass(action),
+            )}
+            onClick={() => {
+              if (action.unavailableReason !== null) return;
+              props.onRun();
+              action.run();
+            }}
+          >
+            {action.icon}
+          </button>
+        </TooltipWrapper>
       ))}
     </div>
   );
 }
 
+/**
+ * Tone for one tray button. Unavailability outranks destructiveness: a delete
+ * that cannot run should not still read as dangerous.
+ */
+function trayActionToneClass(action: TrayAction): string {
+  if (action.unavailableReason !== null) {
+    return "cursor-default bg-foreground/8 text-muted-foreground opacity-60";
+  }
+  if (action.destructive) {
+    return "bg-destructive/15 text-destructive";
+  }
+  return "bg-foreground/8 text-muted-foreground";
+}
+
 function buildTrayActions(args: {
   readonly item: HistoryItem;
   readonly displayTitle: string;
-  readonly canPin: boolean;
+  readonly pinUnavailableReason: HistoryPinUnavailableReason | null;
   readonly canRename: boolean;
   readonly canDelete: boolean;
   readonly isPinPending: boolean;
@@ -534,18 +596,24 @@ function buildTrayActions(args: {
 }): ReadonlyArray<TrayAction> {
   const { item, displayTitle } = args;
   const actions: TrayAction[] = [];
-  if (args.canPin) {
+  // Phase rows have no pin state. Local-home and preserved-orphan epics do,
+  // but leave an unavailable action in the tray so a touch surface can name
+  // the same cloud boundary that desktop exposes by tooltip.
+  if (args.pinUnavailableReason !== "phase") {
     actions.push({
       kind: "pin",
-      label: item.isPinned
-        ? `Unpin ${displayTitle} from top`
-        : `Pin ${displayTitle} to top`,
+      label: historyPinControlLabel({
+        displayTitle,
+        unavailableReason: args.pinUnavailableReason,
+        isPinned: item.isPinned,
+      }),
       icon: item.isPinned ? (
         <PinOff className="size-4" />
       ) : (
         <Pin className="size-4" />
       ),
       destructive: false,
+      unavailableReason: args.pinUnavailableReason,
       run: () => {
         // The pin flips optimistically, so a second tap landing inside the
         // mutation's window would toggle it straight back.
@@ -560,6 +628,7 @@ function buildTrayActions(args: {
       label: `Rename ${displayTitle}`,
       icon: <Pencil className="size-4" />,
       destructive: false,
+      unavailableReason: null,
       // Inline, exactly as the desktop row renames: the input lands where the
       // row already is, so the keyboard pushes the list rather than covering a
       // centred dialog.
@@ -572,6 +641,7 @@ function buildTrayActions(args: {
       label: `Delete ${displayTitle}`,
       icon: <Trash2 className="size-4" />,
       destructive: true,
+      unavailableReason: null,
       // Opens the shared confirm dialog rather than deleting here. A swipe is
       // a cheap gesture and this is the one irreversible thing a row can do.
       run: () => {

@@ -26,7 +26,15 @@
  * split the shared contract asks for.
  */
 import type { PermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
-import type { EpicCloudSyncStatus } from "@traycer/protocol/host/epic/subscribe";
+import type {
+  EpicCloudFreshness,
+  EpicCloudSyncStatus,
+  EpicDurabilityPauseReasonV15,
+  EpicDurabilityStatusV15,
+  EpicLocalProtection,
+  EpicPromotionState,
+} from "@traycer/protocol/host/epic/subscribe";
+import type { EpicCloudSyncDurability } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import type {
   StreamCloseReason,
@@ -94,13 +102,30 @@ function isUnavailableFatal(details: FatalErrorDetails): boolean {
   return isUnavailableEpicCode(details.code);
 }
 
+// `details.reason` is a host-authored string aimed at a log line, which is the
+// right default for codes the renderer has nothing better to say about. The two
+// terminal codes s0 added are the exception: they name a condition the user can
+// understand and, for one of them, act on - so they get copy rather than the
+// raw reason. Unknown codes keep falling through to `reason`.
+function terminalCloseMessage(details: FatalErrorDetails): string {
+  switch (details.code) {
+    case "ROOM_UNINITIALIZED":
+      return "This epic cannot be opened because its collaboration room was never initialized.";
+    case "ENTITLEMENT_REQUIRED":
+      return "Cloud sync is not available on your current plan.";
+    default:
+      return details.reason;
+  }
+}
+
 function snapshotFetchErrorFrom(
   details: FatalErrorDetails,
 ): SnapshotFetchError {
   return {
     code: details.code,
-    message: details.reason,
+    message: terminalCloseMessage(details),
     upgradeGuidance: details.upgradeGuidance,
+    localStoreRemedy: details.localStoreRemedy,
   };
 }
 
@@ -288,6 +313,32 @@ export function createEpicControlReplica(
   // connection status. The sync pill must instead consult
   // `hasFreshCloudSyncStatus`, which is the per-cycle acknowledgement proof.
   let cloudSyncStatus: EpicCloudSyncStatus = "connected";
+  let durabilityStatus: EpicDurabilityStatusV15 | null = null;
+  let durabilityPauseReason: EpicDurabilityPauseReasonV15 | null = null;
+  let durabilityPromotionState: EpicPromotionState | null = null;
+  let localProtection: EpicLocalProtection | null = null;
+  let cloudFreshness: EpicCloudFreshness | null = null;
+  let durabilityLegsNegotiated = false;
+  let durabilityStatusNegotiated = false;
+  /**
+   * The last durability the host actually STATED for this epic, kept across
+   * subscription cycles.
+   *
+   * `durabilityStatus` is cycle-scoped on purpose: last cycle's answer is not
+   * evidence about this cycle's peer, so a reconnect clears it. But where an
+   * epic is DURABLE is a property of the epic, not of the connection - a
+   * local-homed epic does not acquire a cloud room by reconnecting - and gates
+   * that fail dangerous on an absent answer need the retained fact rather than
+   * the cycle's silence. See `useEpicCommentsHaveNoUsableRoom`.
+   *
+   * Only a positive statement writes it, so it never manufactures an answer
+   * the host has not given - and a `@1.4`/`@1.5` peer's fresh frame WITHOUT
+   * the key is one (its enum has no `cloud` member, so that is how such a
+   * peer says cloud), which clears it. Also cleared by `beginFreshCycle`,
+   * which bootstraps the epic from scratch.
+   */
+  let retainedDurabilityStatus: EpicDurabilityStatusV15 | null = null;
+  let retainedDurabilityPauseReason: EpicDurabilityPauseReasonV15 | null = null;
   let hasFreshCloudSyncStatus = false;
   /** Counts publishes that touch the migration slice; see {@link publish}. */
   let migrationEventSeq = 0;
@@ -321,6 +372,15 @@ export function createEpicControlReplica(
     | "hostTransportStatus"
     | "recordsTransportStatus"
     | "cloudSyncStatus"
+    | "durabilityStatus"
+    | "durabilityPauseReason"
+    | "durabilityPromotionState"
+    | "localProtection"
+    | "cloudFreshness"
+    | "durabilityLegsNegotiated"
+    | "durabilityStatusNegotiated"
+    | "retainedDurabilityStatus"
+    | "retainedDurabilityPauseReason"
     | "hasFreshCloudSyncStatus"
     | "hasConnectedOnce"
   > {
@@ -329,6 +389,15 @@ export function createEpicControlReplica(
       hostTransportStatus: transportStatus,
       recordsTransportStatus,
       cloudSyncStatus,
+      durabilityStatus,
+      durabilityPauseReason,
+      durabilityPromotionState,
+      localProtection,
+      cloudFreshness,
+      durabilityLegsNegotiated,
+      durabilityStatusNegotiated,
+      retainedDurabilityStatus,
+      retainedDurabilityPauseReason,
       hasFreshCloudSyncStatus,
       hasConnectedOnce,
     };
@@ -447,11 +516,15 @@ export function createEpicControlReplica(
   }
 
   function applyTransportStatus(
-    status: StreamConnectionStatus,
-    reason: StreamCloseReason | null,
-    ownsControlCycle: boolean,
-    carriesRecords: boolean,
+    event: Extract<EpicControlEvent, { kind: "transport-status" }>,
   ): void {
+    const {
+      status,
+      reason,
+      ownsControlCycle,
+      carriesRecords,
+      durabilityStatusNegotiated: peerSpeaksDurabilityStatus,
+    } = event;
     const previousTransportStatus = transportStatus;
     recordLegTransportStatus(status, ownsControlCycle, carriesRecords);
     const startedSubscriptionCycle =
@@ -472,6 +545,24 @@ export function createEpicControlReplica(
     const cycleDurabilityState = startedSubscriptionCycle
       ? resetDurabilityProofForOpenCycle()
       : null;
+    if (startedSubscriptionCycle) {
+      durabilityStatus = null;
+      durabilityPauseReason = null;
+      durabilityPromotionState = null;
+      localProtection = null;
+      // Cleared with the rest of the cycle's durability proof. A `current`
+      // retained across a re-subscribe would be this window claiming the new
+      // cycle's document is up to date on the strength of the previous one's
+      // reconciliation.
+      cloudFreshness = null;
+      // A re-subscribe can renegotiate onto a different host incarnation, so
+      // the previous cycle's answer is not evidence about this one's peer.
+      durabilityLegsNegotiated = false;
+      // Unlike the @1.6 legs, this capability controls the pre-status branch:
+      // a peer that negotiated @1.4 or @1.5 can still report durability and
+      // its initial silence is therefore not legacy reassurance.
+      durabilityStatusNegotiated = peerSpeaksDurabilityStatus;
+    }
     const nextStatus = syncCurrentConnectionStatus();
     if (ownsControlCycle) hasFreshRootSnapshotForOpenCycle = false;
     publish(
@@ -521,9 +612,44 @@ export function createEpicControlReplica(
     effects.emitRootAwareness();
   }
 
-  function applyCloudSyncStatus(status: EpicCloudSyncStatus): void {
+  function applyCloudSyncStatus(
+    status: EpicCloudSyncStatus,
+    durable: EpicCloudSyncDurability,
+  ): void {
     const previousCloudSyncStatus = cloudSyncStatus;
     cloudSyncStatus = status;
+    durabilityStatus = durable.durability ?? null;
+    durabilityPauseReason =
+      durable.durability === "paused" ? (durable.pauseReason ?? null) : null;
+    if (durabilityStatus !== null) {
+      retainedDurabilityStatus = durabilityStatus;
+      retainedDurabilityPauseReason = durabilityPauseReason;
+    } else if (
+      durabilityStatusNegotiated &&
+      !durable.peerSpeaksDurabilityLegs
+    ) {
+      // Through `@1.5` the durability enum has no `cloud` member, so a frame
+      // from a `@1.4`/`@1.5` peer that omits the key IS its positive cloud
+      // statement - the reading `useEpicCommentRoomAvailability` and
+      // `useEpicHomeCacheSync` already make of the same frame. It has to
+      // reach the retained pair too: a promotion that completes under such a
+      // peer ends in exactly this frame, and a `local`/`promoting` retained
+      // across it would keep every gate that reads the retained statement
+      // (`isLocalHomedEpicHandle`, the dispatch-time comment and attachment
+      // gates, the local-home registry) answering "local-homed" for an epic
+      // the host now serves from the cloud. A `@1.6` peer's omission means
+      // UNKNOWN and leaves the retained pair standing, as before.
+      retainedDurabilityStatus = null;
+      retainedDurabilityPauseReason = null;
+    }
+    durabilityPromotionState = durable.promotionState ?? null;
+    localProtection = durable.localProtection ?? null;
+    cloudFreshness = durable.freshness ?? null;
+    // Recorded from the SAME frame the legs came on, so the reading "this
+    // peer omitted a leg it speaks" is made against the peer that actually
+    // omitted it rather than against whatever the handshake looks like by the
+    // time a selector runs.
+    durabilityLegsNegotiated = durable.peerSpeaksDurabilityLegs;
     hasFreshCloudSyncStatus = true;
     if (
       hasConnectedOnce &&
@@ -684,7 +810,7 @@ export function createEpicControlReplica(
           adoptSnapshotRole(event.role);
           break;
         case "cloud-sync-status":
-          applyCloudSyncStatus(event.status);
+          applyCloudSyncStatus(event.status, event.durability);
           break;
         case "dirty-snapshot":
         case "root-dirty":
@@ -701,12 +827,7 @@ export function createEpicControlReplica(
           applyMigration(event.migration);
           break;
         case "transport-status":
-          applyTransportStatus(
-            event.status,
-            event.reason,
-            event.ownsControlCycle,
-            event.carriesRecords,
-          );
+          applyTransportStatus(event);
           break;
       }
       // The control lane on this line carries no cursor of its own.
@@ -749,6 +870,17 @@ export function createEpicControlReplica(
       controlTransportStatus = "connecting";
       recordsTransportStatus = "connecting";
       cloudSyncStatus = "connected";
+      // An authority-driven replacement replaces the EPIC, so even the
+      // retained durability is not evidence about what arrives next.
+      durabilityStatus = null;
+      durabilityPauseReason = null;
+      durabilityPromotionState = null;
+      localProtection = null;
+      cloudFreshness = null;
+      durabilityLegsNegotiated = false;
+      durabilityStatusNegotiated = false;
+      retainedDurabilityStatus = null;
+      retainedDurabilityPauseReason = null;
       hasFreshCloudSyncStatus = false;
       hasConnectedOnce = false;
       currentRole = null;
@@ -794,6 +926,19 @@ export function createEpicControlReplica(
       controlTransportStatus = "connecting";
       recordsTransportStatus = "connecting";
       cloudSyncStatus = "connected";
+      durabilityStatus = null;
+      durabilityPauseReason = null;
+      durabilityPromotionState = null;
+      localProtection = null;
+      cloudFreshness = null;
+      durabilityLegsNegotiated = false;
+      durabilityStatusNegotiated = false;
+      // Cleared HERE and not on an ordinary cycle reset: a re-subscribe is
+      // the same epic reconnecting, while this is a bootstrap from scratch,
+      // and carrying a retained durability across it would be the previous
+      // epic session answering for a new one.
+      retainedDurabilityStatus = null;
+      retainedDurabilityPauseReason = null;
       const cycleDurabilityState = resetDurabilityProofForOpenCycle();
       // A fresh re-subscribe bootstraps from scratch, so the next connect is
       // "connecting", not "reconnecting": clear the latch and let only a

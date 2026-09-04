@@ -12,7 +12,9 @@ import {
   type RequestOfMethod,
   type ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import {
+  recordNegotiatedHostManifest,
   recordNegotiatedHostMethods,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
@@ -61,6 +63,15 @@ const localSnapshot: LocalHostSnapshot = {
   availability: "available",
 };
 
+const SECOND_HOST: HostDirectoryEntry = {
+  hostId: "remote-protection-host",
+  label: "Remote protection host",
+  kind: "remote",
+  websocketUrl: "ws://127.0.0.1:4920/rpc",
+  version: "1.2.3",
+  transportDialability: "dialable",
+};
+
 type HostStatusResponse = ResponseOfMethod<HostRpcRegistry, "host.status">;
 type GetTaskContextsResponse = ResponseOfMethod<
   HostRpcRegistry,
@@ -70,6 +81,23 @@ type GetTaskContextsRequest = RequestOfMethod<
   HostRpcRegistry,
   "epic.getTaskContexts"
 >;
+type ListTasksResponse = ResponseOfMethod<HostRpcRegistry, "epic.listTasks">;
+type ListTasksRequest = RequestOfMethod<HostRpcRegistry, "epic.listTasks">;
+
+// Explicitly complete. Fixtures record method NAMES for the mock host, never
+// versions, and a page with no `completeness` marker from a host of unknown
+// line is not proof it was untruncated - an unproven page may not close any
+// tab. Cases about completeness build their own page.
+const EMPTY_LIST_TASKS_RESPONSE: ListTasksResponse = {
+  tasks: [],
+  hasMore: false,
+  completeness: {
+    cloudPage: "settled",
+    facets: "server",
+    localRows: "none",
+    sort: "loaded-union",
+  },
+};
 
 const UNKNOWN_TASK_CONTEXTS: GetTaskContextsResponse = {
   tasks: {
@@ -167,20 +195,40 @@ interface MountOptions {
   readonly getTaskContexts: (
     params: GetTaskContextsRequest,
   ) => Promise<GetTaskContextsResponse> | GetTaskContextsResponse;
+  readonly listTasks?: (
+    params: ListTasksRequest,
+  ) => Promise<ListTasksResponse> | ListTasksResponse;
+  readonly listTasksByHost?: (
+    hostId: string,
+    params: ListTasksRequest,
+  ) => Promise<ListTasksResponse> | ListTasksResponse;
+  readonly remoteEntries?: readonly HostDirectoryEntry[];
 }
 
 function buildMessengerFactory(
   options: MountOptions,
 ): MessengerFactory<HostRpcRegistry> {
-  return (args) =>
-    new MockHostMessenger<HostRpcRegistry>({
+  const listTasks = options.listTasks ?? (() => EMPTY_LIST_TASKS_RESPONSE);
+  return (args) => {
+    let messenger: MockHostMessenger<HostRpcRegistry> | null = null;
+    messenger = new MockHostMessenger<HostRpcRegistry>({
       registry: args.registry,
       requestId: () => `req-${String(nextRequestId++)}`,
       handlers: {
         "host.status": () => compatibleHostStatus,
         "epic.getTaskContexts": (params) => options.getTaskContexts(params),
+        "epic.listTasks": (params) => {
+          const hostId =
+            messenger?.calls.at(-1)?.authority.endpoint.hostId ??
+            localSnapshot.hostId;
+          return options.listTasksByHost === undefined
+            ? listTasks(params)
+            : options.listTasksByHost(hostId, params);
+        },
       },
     });
+    return messenger;
+  };
 }
 
 let nextRequestId = 1;
@@ -202,7 +250,7 @@ function mountReconciler(options: MountOptions): MountedReconciler {
     signInUrl: "https://auth.traycer.invalid/sign-in",
     authnBaseUrl: "http://localhost:5005",
     localHost: localSnapshot,
-    hosts: [],
+    hosts: options.remoteEntries ?? [],
     workspaceFolderPickerPaths: undefined,
     hasLocalHost: undefined,
     traycerCli: undefined,
@@ -232,7 +280,10 @@ function mountReconciler(options: MountOptions): MountedReconciler {
   // therefore does not restart the runtime.
   const messengerFactory = buildMessengerFactory(options);
   const remoteFetcher = () =>
-    Promise.resolve({ kind: "hosts" as const, entries: [] });
+    Promise.resolve({
+      kind: "hosts" as const,
+      entries: options.remoteEntries ?? [],
+    });
   const tree = (reconcilerMounted: boolean) => (
     <RunnerHostProvider runnerHost={host}>
       <QueryClientProvider client={queryClient}>
@@ -267,6 +318,44 @@ function reconcileQueryKeys(queryClient: QueryClient): ReadonlyArray<QueryKey> {
     .getAll()
     .map((query) => query.queryKey)
     .filter((queryKey) => queryKey.includes("epic.getTaskContexts"));
+}
+
+/**
+ * Every cache key the reconciler's local-home exemption probe currently
+ * occupies - `epicTabLocalHomeListQueryOptions` tags its key with this
+ * literal so it never collides with History's own `epic.listTasks` cache.
+ */
+function reconcileLocalHomeQueryKeys(
+  queryClient: QueryClient,
+): ReadonlyArray<QueryKey> {
+  return queryClient
+    .getQueryCache()
+    .getAll()
+    .map((query) => query.queryKey)
+    .filter((queryKey) => queryKey.includes("local-home"));
+}
+
+/**
+ * Whether every query named by `keys` has settled to `"success"` in the
+ * cache - i.e. the RESPONSE was incorporated, not merely that the mock was
+ * called. `useHostQueries`/`useQueries` recompute their combined value off
+ * this same cache, so once both the existence batch and the local-home
+ * probe read back `"success"` here, the reconciler's apply effect has
+ * everything it will ever have for this run and has had a render to act on
+ * it - the deterministic version of "give it a moment".
+ */
+function queriesSettled(
+  queryClient: QueryClient,
+  keys: ReadonlyArray<QueryKey>,
+): boolean {
+  return (
+    keys.length > 0 &&
+    keys.every(
+      (queryKey) =>
+        queryClient.getQueryCache().find({ queryKey })?.state.status ===
+        "success",
+    )
+  );
 }
 
 function unsupportedError(): HostRpcError {
@@ -535,6 +624,631 @@ describe("EpicTabExistenceReconciler fail-closed paths", () => {
       ).toBe(true);
     });
     expect(collectOpenEpicIds()).toContain(OPEN_EPIC_ID);
+    queryClient.clear();
+  });
+});
+
+/**
+ * Durability proof for the local-homed protection path. `mountReconciler`
+ * mounts a fresh reconciler with none of the session-scoped exemptions
+ * (`wasEpicCreatedThisSession`, the open-epic registry, an active initial-chat
+ * handoff) ever populated for this epic - the same state a cold app relaunch
+ * starts from. If the tab survives here, survival can only be attributed to
+ * the durable `home: "local"` marker on the host-merged `epic.listTasks` row,
+ * not to a session marker that a relaunch would have already cleared.
+ */
+const LOCAL_HOME_EPIC_ID = "epic-local-homed-across-relaunch";
+const PRESERVED_ORPHAN_EPIC_ID = "epic-preserved-orphan";
+/**
+ * A genuinely-stale persisted tab: absent from `getTaskContexts`, absent from
+ * the list page, and carrying no session-scoped exemption. Its CLOSURE is what
+ * proves reconciliation actually ran, which the local-home assertion below
+ * needs and cannot establish for itself - `OPEN_EPIC_ID` is open before the
+ * reconciler mounts, so waiting for it passes on the first tick either way.
+ */
+const STALE_EPIC_ID = "epic-stale-persisted";
+/** A second confirmed-absent tab, used only by the truncation test below to
+ * prove a COMPLETE exemption set would have force-closed more than one. */
+const SECOND_STALE_EPIC_ID = "epic-also-stale-truncated";
+
+/** A LISTED row with no `home` marker - a cloud-homed epic, which is what a
+ * promotion that lands between the two reconciliation RPCs produces. */
+function cloudHomedListTasksRow(
+  epicId: string,
+): ListTasksResponse["tasks"][number] {
+  const { home: _home, ...row } = localHomedListTasksRow(epicId);
+  return row;
+}
+
+function preservedOrphanListTasksRow(
+  epicId: string,
+): ListTasksResponse["tasks"][number] {
+  const { home: _home, ...row } = localHomedListTasksRow(epicId);
+  return { ...row, preservation: "orphaned-local-edits" };
+}
+
+/** A `getTaskContexts` row the host POSITIVELY confirmed. */
+function confirmedRow(
+  taskId: string,
+): NonNullable<GetTaskContextsResponse["tasks"][string]> {
+  return {
+    status: "found",
+    task: confirmedTaskLight(taskId),
+  };
+}
+
+function confirmedTaskLight(taskId: string) {
+  return {
+    epic: {
+      light: {
+        id: taskId,
+        title: "Confirmed",
+        initialUserPrompt: "",
+        ticketCount: 0,
+        specCount: 0,
+        storyCount: 0,
+        reviewCount: 0,
+        status: "active",
+        createdAt: 1,
+        updatedAt: 2,
+        createdBy: "user-1",
+        version: "1",
+      },
+      permission: null,
+      repos: [],
+      workspaces: [],
+      roomInfo: null,
+    },
+  };
+}
+
+function localHomedListTasksRow(
+  epicId: string,
+): ListTasksResponse["tasks"][number] {
+  return {
+    epic: {
+      light: {
+        id: epicId,
+        title: "Local-only epic",
+        initialUserPrompt: "",
+        ticketCount: 0,
+        specCount: 0,
+        storyCount: 0,
+        reviewCount: 0,
+        status: "active",
+        createdAt: 1,
+        updatedAt: 2,
+        createdBy: "user-1",
+        version: "1",
+      },
+      permission: null,
+      repos: [],
+      workspaces: [],
+      roomInfo: null,
+    },
+    pinned: false,
+    home: "local",
+  };
+}
+
+function completeListTasksResponse(
+  tasks: ReadonlyArray<ListTasksResponse["tasks"][number]>,
+): ListTasksResponse {
+  return {
+    tasks: [...tasks],
+    hasMore: false,
+    completeness: {
+      cloudPage: "settled",
+      facets: "server",
+      localRows: tasks.length === 0 ? "none" : "present",
+      sort: "loaded-union",
+    },
+  };
+}
+
+describe("EpicTabExistenceReconciler local-homed durable protection", () => {
+  beforeEach(() => {
+    restoreFetch = installAuthFetch();
+    useTabsStore.setState(useTabsStore.getInitialState(), true);
+    tabCommandCoordinator.installSourceReconciliation();
+  });
+
+  afterEach(() => {
+    cleanup();
+    useAuthStore.getState().setSignedOut();
+    useEpicCanvasStore
+      .getState()
+      .closeTabsForEpics([
+        OPEN_EPIC_ID,
+        LOCAL_HOME_EPIC_ID,
+        PRESERVED_ORPHAN_EPIC_ID,
+        STALE_EPIC_ID,
+        SECOND_STALE_EPIC_ID,
+      ]);
+    useInitialChatHandoffStore.getState().resetForTests();
+    clearSessionCreatedEpics();
+    resetNegotiatedManifests();
+    vi.restoreAllMocks();
+    restoreFetch();
+  });
+
+  it("unions local-home protection across every settled directory host", async () => {
+    recordNegotiatedHostMethods(localSnapshot.hostId, [
+      "host.status",
+      "epic.getTaskContexts",
+    ]);
+    useEpicCanvasStore
+      .getState()
+      .openEpicTab(LOCAL_HOME_EPIC_ID, "Remote home");
+    useEpicCanvasStore.getState().openEpicTab(STALE_EPIC_ID, "Stale Epic");
+
+    const getTaskContexts = vi.fn(
+      (params: GetTaskContextsRequest): GetTaskContextsResponse => {
+        const tasks: GetTaskContextsResponse["tasks"] = {};
+        for (const taskId of params.taskIds) {
+          tasks[taskId] =
+            taskId === LOCAL_HOME_EPIC_ID || taskId === STALE_EPIC_ID
+              ? { status: "confirmed-absent" as const }
+              : confirmedRow(taskId);
+        }
+        return { tasks };
+      },
+    );
+    const listTaskHosts: string[] = [];
+    const listTasksByHost = vi.fn(
+      (hostId: string, _params: ListTasksRequest): ListTasksResponse => {
+        listTaskHosts.push(hostId);
+        return completeListTasksResponse(
+          hostId === SECOND_HOST.hostId
+            ? [localHomedListTasksRow(LOCAL_HOME_EPIC_ID)]
+            : [],
+        );
+      },
+    );
+
+    const { queryClient } = mountReconciler({
+      getTaskContexts,
+      listTasksByHost,
+      remoteEntries: [SECOND_HOST],
+    });
+
+    await waitFor(() => {
+      expect(getTaskContexts).toHaveBeenCalledTimes(1);
+      expect(listTasksByHost).toHaveBeenCalledTimes(2);
+    });
+    expect(listTaskHosts).toEqual(
+      expect.arrayContaining([localSnapshot.hostId, SECOND_HOST.hostId]),
+    );
+    await waitFor(() => {
+      expect(collectOpenEpicIds()).not.toContain(STALE_EPIC_ID);
+    });
+    expect(collectOpenEpicIds()).toContain(LOCAL_HOME_EPIC_ID);
+    queryClient.clear();
+  });
+
+  it("does not close tabs when any host's local-home page is truncated", async () => {
+    recordNegotiatedHostMethods(localSnapshot.hostId, [
+      "host.status",
+      "epic.getTaskContexts",
+    ]);
+    useEpicCanvasStore
+      .getState()
+      .openEpicTab(LOCAL_HOME_EPIC_ID, "Remote home");
+    useEpicCanvasStore.getState().openEpicTab(STALE_EPIC_ID, "Stale Epic");
+
+    const getTaskContexts = vi.fn(
+      (params: GetTaskContextsRequest): GetTaskContextsResponse => {
+        const tasks: GetTaskContextsResponse["tasks"] = {};
+        for (const taskId of params.taskIds) {
+          tasks[taskId] =
+            taskId === LOCAL_HOME_EPIC_ID || taskId === STALE_EPIC_ID
+              ? { status: "confirmed-absent" as const }
+              : confirmedRow(taskId);
+        }
+        return { tasks };
+      },
+    );
+    const listTasksByHost = vi.fn(
+      (hostId: string, _params: ListTasksRequest): ListTasksResponse =>
+        hostId === SECOND_HOST.hostId
+          ? {
+              ...completeListTasksResponse([]),
+              completeness: {
+                cloudPage: "settled",
+                facets: "server",
+                localRows: "truncated",
+                sort: "loaded-union",
+              },
+            }
+          : completeListTasksResponse([]),
+    );
+
+    const { queryClient } = mountReconciler({
+      getTaskContexts,
+      listTasksByHost,
+      remoteEntries: [SECOND_HOST],
+    });
+
+    await waitFor(() => {
+      expect(getTaskContexts).toHaveBeenCalledTimes(1);
+      expect(listTasksByHost).toHaveBeenCalledTimes(2);
+    });
+    // A negative assertion has to be anchored on the reconciler having had
+    // its chance: both query groups settled, then one flush so the apply
+    // effect commits on that data. A fixed sleep could elapse before the
+    // apply pass on a loaded runner and pass without exercising the guard.
+    await waitFor(() => {
+      expect(queriesSettled(queryClient, reconcileQueryKeys(queryClient))).toBe(
+        true,
+      );
+      expect(
+        queriesSettled(queryClient, reconcileLocalHomeQueryKeys(queryClient)),
+      ).toBe(true);
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(collectOpenEpicIds()).toContain(STALE_EPIC_ID);
+    expect(collectOpenEpicIds()).toContain(LOCAL_HOME_EPIC_ID);
+    queryClient.clear();
+  });
+
+  it("keeps a local-homed epic's tab open even when getTaskContexts reports it missing, with no session-scoped exemption in play", async () => {
+    recordNegotiatedHostMethods(localSnapshot.hostId, [
+      "host.status",
+      "epic.getTaskContexts",
+    ]);
+    // Open a second tab for the local-homed epic before mounting - mirrors a
+    // persisted tab restored at app start, before any session state (created-
+    // this-session marker, open-epic registry entry, initial-chat handoff)
+    // could exist for it.
+    useEpicCanvasStore.getState().openEpicTab(LOCAL_HOME_EPIC_ID, "Local Epic");
+    useEpicCanvasStore.getState().openEpicTab(STALE_EPIC_ID, "Stale Epic");
+
+    const getTaskContexts = vi.fn(
+      (params: GetTaskContextsRequest): GetTaskContextsResponse => {
+        const tasks: GetTaskContextsResponse["tasks"] = {};
+        for (const taskId of params.taskIds) {
+          // The cloud has no record of this local-only epic; every other
+          // open id (OPEN_EPIC_ID) resolves confirmed so the test isolates
+          // the local-homed exemption rather than the "missing" default.
+          tasks[taskId] =
+            taskId === LOCAL_HOME_EPIC_ID || taskId === STALE_EPIC_ID
+              ? { status: "confirmed-absent" as const }
+              : confirmedRow(taskId);
+        }
+        return { tasks };
+      },
+    );
+
+    const listTasks = vi.fn((_params: ListTasksRequest): ListTasksResponse =>
+      completeListTasksResponse([localHomedListTasksRow(LOCAL_HOME_EPIC_ID)]),
+    );
+
+    const { queryClient } = mountReconciler({ getTaskContexts, listTasks });
+
+    await waitFor(() => {
+      expect(getTaskContexts).toHaveBeenCalledTimes(1);
+    });
+    await waitFor(() => {
+      expect(listTasks).toHaveBeenCalledTimes(1);
+    });
+
+    // Wait on the reconciler's own OUTPUT - the stale tab closing - so the
+    // local-home assertion below runs against a completed sweep. Waiting for
+    // `OPEN_EPIC_ID` instead was vacuous: that tab is open before the
+    // reconciler mounts, so the condition held before it had done anything.
+    await waitFor(() => {
+      expect(collectOpenEpicIds()).not.toContain(STALE_EPIC_ID);
+    });
+    expect(collectOpenEpicIds()).toContain(LOCAL_HOME_EPIC_ID);
+    expect(collectOpenEpicIds()).toContain(OPEN_EPIC_ID);
+    queryClient.clear();
+  });
+
+  it("keeps a tab open when the host leaves its id UNANSWERED, closing only ids answered null", async () => {
+    // An id absent from a successful `getTaskContexts` response is the
+    // resolver's INDETERMINATE encoding - "this host could not classify it"
+    // (an unreadable home record, or a store that exists on disk but could
+    // not open). It is a distinct wire fact from `null` ("deleted"), and
+    // reading the two identically force-closed every local tab whenever the
+    // store was unavailable at relaunch.
+    recordNegotiatedHostMethods(localSnapshot.hostId, [
+      "host.status",
+      "epic.getTaskContexts",
+    ]);
+    useEpicCanvasStore
+      .getState()
+      .openEpicTab(LOCAL_HOME_EPIC_ID, "Unclassified");
+    useEpicCanvasStore.getState().openEpicTab(STALE_EPIC_ID, "Stale Epic");
+
+    const getTaskContexts = vi.fn(
+      (params: GetTaskContextsRequest): GetTaskContextsResponse => {
+        const tasks: GetTaskContextsResponse["tasks"] = {};
+        for (const taskId of params.taskIds) {
+          // LOCAL_HOME_EPIC_ID is deliberately ABSENT from the answer;
+          // STALE_EPIC_ID is answered null (positively deleted).
+          if (taskId === LOCAL_HOME_EPIC_ID) continue;
+          tasks[taskId] =
+            taskId === STALE_EPIC_ID
+              ? { status: "confirmed-absent" as const }
+              : confirmedRow(taskId);
+        }
+        return { tasks };
+      },
+    );
+    // States its completeness explicitly: with only method NAMES recorded for
+    // this host (no versions), a page that carries no `completeness` marker
+    // is not proof it was untruncated, and an unproven page may not close
+    // any tab. Completeness is not what this case is about.
+    const listTasks = vi.fn((_params: ListTasksRequest): ListTasksResponse =>
+      completeListTasksResponse([]),
+    );
+
+    const { queryClient } = mountReconciler({ getTaskContexts, listTasks });
+
+    // The stale tab's closure proves the sweep completed...
+    await waitFor(() => {
+      expect(collectOpenEpicIds()).not.toContain(STALE_EPIC_ID);
+    });
+    // ...and the unanswered id survived it.
+    expect(collectOpenEpicIds()).toContain(LOCAL_HOME_EPIC_ID);
+    queryClient.clear();
+  });
+
+  it("declines destructive reconciliation when the local-rows page reports truncation", async () => {
+    // With more local-homed epics than the first-page injection cap, the
+    // 100-row list page does not carry every local epic - so the force-close
+    // exemption set is provably incomplete and nothing destructive may rest
+    // on it.
+    //
+    // The truncation guard means the apply effect can NEVER complete its
+    // destructive branch for this run (`locallyProtectedEpicIds` stays
+    // `null` forever) - so unlike the sibling tests, there is no tab-closing
+    // event this test can wait on as proof the sweep actually ran. A second
+    // confirmed-absent tab is opened alongside `STALE_EPIC_ID` - both are
+    // exactly what a COMPLETE exemption set would force-close - and the
+    // assertion is anchored on both underlying queries reaching `"success"`
+    // in the cache (the response genuinely incorporated, not merely
+    // requested) before checking that neither closed. A fixed sleep here
+    // previously let the assertion run before the apply pass had a chance to
+    // observe the settled data on a loaded runner, which would have passed
+    // for the wrong reason - because nothing had been checked yet, not
+    // because the guard held.
+    useEpicCanvasStore.getState().openEpicTab(STALE_EPIC_ID, "Maybe Stale");
+    useEpicCanvasStore
+      .getState()
+      .openEpicTab(SECOND_STALE_EPIC_ID, "Also Maybe Stale");
+    recordNegotiatedHostMethods(localSnapshot.hostId, [
+      "host.status",
+      "epic.getTaskContexts",
+    ]);
+
+    const getTaskContexts = vi.fn(
+      (params: GetTaskContextsRequest): GetTaskContextsResponse => {
+        const tasks: GetTaskContextsResponse["tasks"] = {};
+        for (const taskId of params.taskIds) {
+          tasks[taskId] =
+            taskId === STALE_EPIC_ID || taskId === SECOND_STALE_EPIC_ID
+              ? { status: "confirmed-absent" as const }
+              : confirmedRow(taskId);
+        }
+        return { tasks };
+      },
+    );
+    const listTasks = vi.fn((_params: ListTasksRequest): ListTasksResponse => ({
+      tasks: [],
+      hasMore: false,
+      completeness: {
+        cloudPage: "settled",
+        facets: "server",
+        localRows: "truncated",
+        sort: "loaded-union",
+      },
+    }));
+
+    const { queryClient } = mountReconciler({ getTaskContexts, listTasks });
+
+    await waitFor(() => {
+      expect(queriesSettled(queryClient, reconcileQueryKeys(queryClient))).toBe(
+        true,
+      );
+      expect(
+        queriesSettled(queryClient, reconcileLocalHomeQueryKeys(queryClient)),
+      ).toBe(true);
+    });
+    // One more flush past the settled render: `useHostQueries`/`useQueries`
+    // notify their subscribers on a microtask, so this gives the apply
+    // effect a commit on the data this `waitFor` just confirmed is there,
+    // rather than trusting that the poll that satisfied it already included
+    // one.
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(collectOpenEpicIds()).toContain(STALE_EPIC_ID);
+    expect(collectOpenEpicIds()).toContain(SECOND_STALE_EPIC_ID);
+    queryClient.clear();
+  });
+
+  it("does not read a completeness-less page from a local-row-capable line as exhaustive", async () => {
+    // `home: "local"` rows arrive from `epic.listTasks@1.4`; the `completeness`
+    // marker only from `@1.5`+. A `@1.4` page can therefore have truncated its
+    // local rows without saying so. RED before the fix: the missing marker was
+    // read as "complete" - the legacy-peer allowance meant for pre-`@1.4`
+    // lines, which cannot carry local rows at all - and the persisted tab of
+    // an epic beyond the page's cap was force-closed.
+    useEpicCanvasStore.getState().openEpicTab(STALE_EPIC_ID, "Maybe Stale");
+    recordNegotiatedHostManifest(localSnapshot.hostId, {
+      "host.status": { major: 1, minor: 0 },
+      "epic.getTaskContexts": { major: 1, minor: 0 },
+      "epic.listTasks": { major: 1, minor: 4 },
+    });
+
+    const getTaskContexts = vi.fn(
+      (params: GetTaskContextsRequest): GetTaskContextsResponse => {
+        const tasks: GetTaskContextsResponse["tasks"] = {};
+        for (const taskId of params.taskIds) {
+          tasks[taskId] =
+            taskId === STALE_EPIC_ID
+              ? { status: "confirmed-absent" as const }
+              : confirmedRow(taskId);
+        }
+        return { tasks };
+      },
+    );
+    const listTasks = vi.fn((_params: ListTasksRequest): ListTasksResponse => ({
+      tasks: [],
+      hasMore: true,
+    }));
+
+    const { queryClient } = mountReconciler({ getTaskContexts, listTasks });
+
+    await waitFor(() => {
+      expect(queriesSettled(queryClient, reconcileQueryKeys(queryClient))).toBe(
+        true,
+      );
+      expect(
+        queriesSettled(queryClient, reconcileLocalHomeQueryKeys(queryClient)),
+      ).toBe(true);
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(collectOpenEpicIds()).toContain(STALE_EPIC_ID);
+    queryClient.clear();
+  });
+
+  it("still closes a confirmed-absent tab on a pre-@1.4 line, whose page cannot have truncated local rows", async () => {
+    // The vacuity guard for the case above: the same completeness-less page
+    // from a line that cannot produce local rows is exhaustive by construction,
+    // so the legacy allowance still applies and the stale tab still closes.
+    useEpicCanvasStore.getState().openEpicTab(STALE_EPIC_ID, "Stale Epic");
+    recordNegotiatedHostManifest(localSnapshot.hostId, {
+      "host.status": { major: 1, minor: 0 },
+      "epic.getTaskContexts": { major: 1, minor: 0 },
+      "epic.listTasks": { major: 1, minor: 3 },
+    });
+
+    const getTaskContexts = vi.fn(
+      (params: GetTaskContextsRequest): GetTaskContextsResponse => {
+        const tasks: GetTaskContextsResponse["tasks"] = {};
+        for (const taskId of params.taskIds) {
+          tasks[taskId] =
+            taskId === STALE_EPIC_ID
+              ? { status: "confirmed-absent" as const }
+              : confirmedRow(taskId);
+        }
+        return { tasks };
+      },
+    );
+    const listTasks = vi.fn((_params: ListTasksRequest): ListTasksResponse => ({
+      tasks: [],
+      hasMore: true,
+    }));
+
+    const { queryClient } = mountReconciler({ getTaskContexts, listTasks });
+
+    await waitFor(() => {
+      expect(collectOpenEpicIds()).not.toContain(STALE_EPIC_ID);
+    });
+    expect(collectOpenEpicIds()).toContain(OPEN_EPIC_ID);
+    queryClient.clear();
+  });
+
+  it("keeps an epic the host could not classify open, so a promotion racing the reconcile cannot force-close it", async () => {
+    recordNegotiatedHostMethods(localSnapshot.hostId, [
+      "host.status",
+      "epic.getTaskContexts",
+    ]);
+    useEpicCanvasStore.getState().openEpicTab(LOCAL_HOME_EPIC_ID, "Promoted");
+    useEpicCanvasStore.getState().openEpicTab(STALE_EPIC_ID, "Stale Epic");
+
+    // The race this closes: `getTaskContexts` answered from BEFORE the
+    // promotion, when the cloud side it consults has no row yet. The honest
+    // wire answer there is the explicit `unknown` resolution arm - never
+    // `confirmed-absent`, which is reserved for a positively-known deletion -
+    // and only a positive absence may force-close. The `listTasks` page from
+    // after the promotion carries the row cloud-homed (no `home` marker), so
+    // the durable exemption set rightly does not include it either.
+    const getTaskContexts = vi.fn(
+      (params: GetTaskContextsRequest): GetTaskContextsResponse => {
+        const tasks: GetTaskContextsResponse["tasks"] = {};
+        for (const taskId of params.taskIds) {
+          if (taskId === LOCAL_HOME_EPIC_ID) {
+            tasks[taskId] = {
+              status: "unknown" as const,
+              reason: "not-found-or-not-permitted" as const,
+            };
+            continue;
+          }
+          tasks[taskId] =
+            taskId === STALE_EPIC_ID
+              ? { status: "confirmed-absent" as const }
+              : confirmedRow(taskId);
+        }
+        return { tasks };
+      },
+    );
+    // States its completeness explicitly: with only method NAMES recorded for
+    // this host (no versions), a page that carries no `completeness` marker
+    // is not proof it was untruncated, and an unproven page may not close
+    // any tab. Completeness is not what this case is about.
+    const listTasks = vi.fn((_params: ListTasksRequest): ListTasksResponse =>
+      completeListTasksResponse([cloudHomedListTasksRow(LOCAL_HOME_EPIC_ID)]),
+    );
+
+    const { queryClient } = mountReconciler({ getTaskContexts, listTasks });
+
+    await waitFor(() => {
+      expect(collectOpenEpicIds()).not.toContain(STALE_EPIC_ID);
+    });
+    expect(collectOpenEpicIds()).toContain(LOCAL_HOME_EPIC_ID);
+    queryClient.clear();
+  });
+
+  it("keeps a preserved orphan open even when home, cloud, and registry are absent", async () => {
+    recordNegotiatedHostMethods(localSnapshot.hostId, [
+      "host.status",
+      "epic.getTaskContexts",
+    ]);
+    useEpicCanvasStore
+      .getState()
+      .openEpicTab(PRESERVED_ORPHAN_EPIC_ID, "Preserved orphan");
+    useEpicCanvasStore.getState().openEpicTab(STALE_EPIC_ID, "Stale Epic");
+
+    const getTaskContexts = vi.fn(
+      (params: GetTaskContextsRequest): GetTaskContextsResponse => {
+        const tasks: GetTaskContextsResponse["tasks"] = {};
+        for (const taskId of params.taskIds) {
+          tasks[taskId] =
+            taskId === PRESERVED_ORPHAN_EPIC_ID || taskId === STALE_EPIC_ID
+              ? { status: "confirmed-absent" as const }
+              : confirmedRow(taskId);
+        }
+        return { tasks };
+      },
+    );
+    // States its completeness explicitly: with only method NAMES recorded for
+    // this host (no versions), a page that carries no `completeness` marker
+    // is not proof it was untruncated, and an unproven page may not close
+    // any tab. Completeness is not what this case is about.
+    const listTasks = vi.fn((_params: ListTasksRequest): ListTasksResponse =>
+      // The preserved marker is the only protection in this fixture: the
+      // row is cloud-homed (no `home`), has no cloud task-context answer,
+      // and no live registry/session exemption has been installed.
+      completeListTasksResponse([
+        preservedOrphanListTasksRow(PRESERVED_ORPHAN_EPIC_ID),
+      ]),
+    );
+
+    const { queryClient } = mountReconciler({ getTaskContexts, listTasks });
+
+    await waitFor(() => {
+      expect(collectOpenEpicIds()).not.toContain(STALE_EPIC_ID);
+    });
+    expect(collectOpenEpicIds()).toContain(PRESERVED_ORPHAN_EPIC_ID);
     queryClient.clear();
   });
 });

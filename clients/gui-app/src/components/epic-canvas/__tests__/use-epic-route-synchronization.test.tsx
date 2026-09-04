@@ -77,6 +77,15 @@ interface TestState {
    * because the substitution resolver refuses to serve them. */
   cloudCollaboratorChatIds: ReadonlySet<string>;
   chatRecordListAuthoritative: boolean;
+  /**
+   * The verdict `useCloudChatHasCloudAuthorization()` answers - whether this session
+   * may SPEND the account's cloud capability. `false` models `unverified`: the
+   * cloud-chat list is disabled for want of authorization, not because there is
+   * nothing left to ask, and the sweep guard must fail closed on that
+   * ignorance rather than reading the disabled query as "nothing will ever
+   * answer".
+   */
+  cloudAuthorized: boolean;
   canvasStore: CanvasStoreSlice;
   openEpicState: {
     readonly setLastFocusedArtifactId: Mock;
@@ -102,6 +111,7 @@ const testState = vi.hoisted<TestState>(() => ({
   cloudChatIds: new Set<string>(),
   cloudCollaboratorChatIds: new Set<string>(),
   chatRecordListAuthoritative: true,
+  cloudAuthorized: true,
   canvasStore: {
     renameTab: vi.fn(),
     applyNestedRouteFocus: vi.fn(),
@@ -284,20 +294,39 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", () => {
       isFetching: false,
       error: null,
     }),
-    isCloudChatListSettled: (query: {
-      readonly isEnabled: boolean;
-      readonly isSuccess: boolean;
-      readonly isError: boolean;
-    }) => !query.isEnabled || query.isSuccess || query.isError,
-    cloudChatListAuthorizesRecordSweep: (query: {
-      readonly isEnabled: boolean;
-      readonly isSuccess: boolean;
-      readonly isError: boolean;
-      readonly error: { readonly code: string } | null;
-    }) =>
-      !query.isEnabled ||
-      query.isSuccess ||
-      (query.isError && query.error?.code === "E_HOST_UNSUPPORTED"),
+    // The verdict the list above would have been gated on in production. Read
+    // straight from `testState` so a test can model `unverified` (`false`)
+    // without the query mock above having to fake a disabled state - the two
+    // are DIFFERENT reasons a real query disables and the sweep guard must
+    // tell them apart (see `cloudChatListAuthorizesRecordSweep` below).
+    useCloudChatHasCloudAuthorization: () => testState.cloudAuthorized,
+    isCloudChatListSettled: (
+      query: {
+        readonly isEnabled: boolean;
+        readonly isSuccess: boolean;
+        readonly isError: boolean;
+      },
+      cloudAuthorized: boolean,
+    ) => {
+      if (!cloudAuthorized) return false;
+      return !query.isEnabled || query.isSuccess || query.isError;
+    },
+    cloudChatListAuthorizesRecordSweep: (
+      query: {
+        readonly isEnabled: boolean;
+        readonly isSuccess: boolean;
+        readonly isError: boolean;
+        readonly error: { readonly code: string } | null;
+      },
+      cloudAuthorized: boolean,
+    ) => {
+      if (!cloudAuthorized) return false;
+      return (
+        !query.isEnabled ||
+        query.isSuccess ||
+        (query.isError && query.error?.code === "E_HOST_UNSUPPORTED")
+      );
+    },
   };
 });
 
@@ -351,6 +380,7 @@ function resetStores(): void {
   testState.cloudChatIds = new Set();
   testState.cloudCollaboratorChatIds = new Set();
   testState.chatRecordListAuthoritative = true;
+  testState.cloudAuthorized = true;
   vi.mocked(testState.canvasStore.renameTab).mockClear();
   tileNavigationMocks.openTile.mockClear();
   tileNavigationMocks.navigationSeams.length = 0;
@@ -1313,6 +1343,165 @@ describe("useEpicRouteSynchronization", () => {
       TAB_ID,
       "group-1",
       cloudKnownChat.instanceId,
+    );
+  });
+
+  // T17: an `unverified` session's cloud-chat list is disabled for want of
+  // AUTHORIZATION, not because there is nothing left to ask - the cloud rows
+  // exist and this session simply may not look. `cloudChatListAuthorizesRecordSweep`
+  // must fail closed on that ignorance, so a restored record-less chat tab
+  // must survive under `unverified` even though the identical fixture is
+  // reaped under `signed-in`. Both arms are asserted in one test: a
+  // "does not close" assertion alone is satisfied by an effect that never ran
+  // at all, so the SAME fixture reaped under `signed-in` is what proves the
+  // unverified arm's silence means something.
+  it("does not sweep a restored record-less chat tab for an unverified session, but does for signed-in", async () => {
+    testState.autoOpenTarget = null;
+    testState.records = [{ id: "live-artifact" }];
+    const restoredChat: EpicCanvasTileRef = {
+      id: "restored-record-less-chat",
+      instanceId: "inst-restored-record-less-chat",
+      type: "chat",
+      name: "Restored, record-less chat",
+      hostId: "host-1",
+    };
+    testState.canvasRoot = {
+      kind: "pane",
+      id: "group-1",
+      tabInstanceIds: [restoredChat.instanceId],
+      activeTabId: restoredChat.instanceId,
+      previewTabId: null,
+      activationHistory: [restoredChat.instanceId],
+    };
+    testState.canvasTiles = {
+      [restoredChat.instanceId]: restoredChat,
+    };
+
+    // The unverified arm: the cloud list holds a real answer in this fixture
+    // (isSuccess/isEnabled from the module mock), but `cloudAuthorized` is
+    // `false` - modelling a session that may not spend the account's cloud
+    // capability at all, not one whose list genuinely came back empty.
+    testState.cloudAuthorized = false;
+    const unverified = renderHook(
+      (intent: EpicRouteFocusIntent) => useEpicRouteSynchronization(intent),
+      {
+        initialProps: {
+          epicId: EPIC_ID,
+          tabId: TAB_ID,
+          focusedAt: undefined,
+          focusArtifactId: undefined,
+          focusThreadId: undefined,
+          focusPaneId: undefined,
+          focusTileInstanceId: undefined,
+        },
+      },
+    );
+
+    // There is nothing to `waitFor` on the negative arm itself (see the
+    // comment above this test) - give the effect the same tick budget the
+    // positive control below needs to actually run, then assert it did not
+    // touch this tab.
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(testState.canvasStore.closeCanvasTab).not.toHaveBeenCalled();
+    unverified.unmount();
+
+    // The positive control: the identical fixture, `signed-in`
+    // (`cloudAuthorized: true`), with no cloud row for this chat - a
+    // genuinely dead record the sweep must reap. Proves the negative arm
+    // above is silence because authorization was withheld, not because the
+    // effect never ran.
+    testState.cloudAuthorized = true;
+    renderHook(
+      (intent: EpicRouteFocusIntent) => useEpicRouteSynchronization(intent),
+      {
+        initialProps: {
+          epicId: EPIC_ID,
+          tabId: TAB_ID,
+          focusedAt: undefined,
+          focusArtifactId: undefined,
+          focusThreadId: undefined,
+          focusPaneId: undefined,
+          focusTileInstanceId: undefined,
+        },
+      },
+    );
+
+    await waitFor(() => {
+      expect(testState.canvasStore.closeCanvasTab).toHaveBeenCalledWith(
+        TAB_ID,
+        "group-1",
+        restoredChat.instanceId,
+      );
+    });
+  });
+
+  // The withheld verdict withholds only the CHAT answer, not the sweep. An
+  // artifact is doc-shared, so its absence from the projection is evidence of
+  // deletion whatever the cloud list can say - an unverified user deleting a
+  // record in a local-homed epic must still see its tile close, while the
+  // record-less same-host chat beside it stays open on the non-authoritative
+  // chat-absence flag alone.
+  it("still closes a removed artifact tile for an unverified session while keeping its record-less chat", async () => {
+    testState.autoOpenTarget = null;
+    testState.records = [{ id: "live-artifact" }];
+    testState.cloudAuthorized = false;
+    const removedArtifact: EpicCanvasTileRef = {
+      id: "removed-artifact",
+      instanceId: "inst-removed-artifact",
+      type: "spec",
+      name: "Removed artifact",
+      hostId: "host-1",
+    };
+    const restoredChat: EpicCanvasTileRef = {
+      id: "restored-record-less-chat",
+      instanceId: "inst-restored-record-less-chat",
+      type: "chat",
+      name: "Restored, record-less chat",
+      hostId: "host-1",
+    };
+    testState.canvasRoot = {
+      kind: "pane",
+      id: "group-1",
+      tabInstanceIds: [removedArtifact.instanceId, restoredChat.instanceId],
+      activeTabId: removedArtifact.instanceId,
+      previewTabId: null,
+      activationHistory: [removedArtifact.instanceId],
+    };
+    testState.canvasTiles = {
+      [removedArtifact.instanceId]: removedArtifact,
+      [restoredChat.instanceId]: restoredChat,
+    };
+
+    renderHook(
+      (intent: EpicRouteFocusIntent) => useEpicRouteSynchronization(intent),
+      {
+        initialProps: {
+          epicId: EPIC_ID,
+          tabId: TAB_ID,
+          focusedAt: undefined,
+          focusArtifactId: undefined,
+          focusThreadId: undefined,
+          focusPaneId: undefined,
+          focusTileInstanceId: undefined,
+        },
+      },
+    );
+
+    await waitFor(() => {
+      expect(testState.canvasStore.closeCanvasTab).toHaveBeenCalledWith(
+        TAB_ID,
+        "group-1",
+        removedArtifact.instanceId,
+      );
+    });
+    expect(testState.canvasStore.closeCanvasTab).toHaveBeenCalledTimes(1);
+    expect(testState.canvasStore.closeCanvasTab).not.toHaveBeenCalledWith(
+      TAB_ID,
+      "group-1",
+      restoredChat.instanceId,
     );
   });
 

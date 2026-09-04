@@ -274,6 +274,7 @@ function DrawerTaskList(props: DrawerTaskListProps): ReactNode {
     fetchNextPage,
     hasNextPage,
     isFetchingNextPage,
+    cloudPagePending,
   } = useHistoryQuery({ search, nowMs: null });
   const items = data?.items ?? [];
 
@@ -334,6 +335,33 @@ function DrawerTaskList(props: DrawerTaskListProps): ReactNode {
           <Skeleton key={i} className="h-10 w-full rounded-md" />
         ))}
       </div>
+    );
+  } else if (cloudPagePending) {
+    body = (
+      <div
+        className="flex flex-col gap-1 px-1"
+        data-testid="mobile-nav-task-list-loading"
+        aria-busy="true"
+        aria-label="Loading tasks"
+      >
+        {[0, 1, 2].map((i) => (
+          <Skeleton key={i} className="h-10 w-full rounded-md" />
+        ))}
+      </div>
+    );
+  } else if (data?.hostRequiresCloudToList === true) {
+    // No listing was requested: no cloud verdict, and a host too old to list
+    // from this device. `items` is empty because nothing was asked, so the
+    // "No tasks yet" arm below would state as fact something this session has
+    // no evidence for. The full explanation lives on History proper; this
+    // drawer is a shortcut list, so it says only what it can stand behind.
+    body = (
+      <p
+        className="px-3 py-2 text-ui-sm text-muted-foreground"
+        data-testid="mobile-nav-task-list-host-requires-cloud"
+      >
+        Tasks can&apos;t be listed until your sign-in is confirmed
+      </p>
     );
   } else if (items.length === 0) {
     body = (

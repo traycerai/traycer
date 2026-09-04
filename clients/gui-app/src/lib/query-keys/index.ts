@@ -73,6 +73,8 @@ export const queryKeys = {
   hostEpicTaskContexts: hostQueryKeys.epicTaskContexts,
   cloudEpicTasks: cloudQueryKeys.epicTasks,
   cloudEpicTasksLastKnown: cloudQueryKeys.epicTasksLastKnown,
+  cloudEpicTasksLocalFirstRevalidation:
+    cloudQueryKeys.epicTasksLocalFirstRevalidation,
   workspaceEntries: uiQueryKeys.workspaceEntries,
   hostPicker: uiQueryKeys.hostPicker,
   hostPickerMissing: uiQueryKeys.hostPickerMissing,

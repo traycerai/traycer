@@ -1,5 +1,5 @@
 import { createElement, type ReactNode } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderHook } from "@testing-library/react";
 import {
@@ -49,7 +49,14 @@ vi.mock("@/hooks/host/use-host-query", () => ({
   },
 }));
 
-import { useEpicRecordViewed } from "@/hooks/epic/use-epic-record-viewed-mutation";
+import {
+  EPIC_RECORD_VIEWED_UNAUTHORIZED_MESSAGE,
+  useEpicRecordViewed,
+} from "@/hooks/epic/use-epic-record-viewed-mutation";
+import { useAuthStore } from "@/stores/auth/auth-store";
+
+const PROFILE = { userId: "user-1", userName: "U", email: "u@example.com" };
+const CONTEXT = { userId: "user-1", username: "U" };
 
 function makeWrapper(
   queryClient: QueryClient,
@@ -66,6 +73,31 @@ describe("useEpicRecordViewed", () => {
     useCloudEpicTasksPagesStore.setState({
       pagesByIdentity: {},
       generationByIdentity: {},
+    });
+    useAuthStore.getState().setSignedIn(PROFILE, CONTEXT, []);
+  });
+
+  afterEach(() => {
+    useAuthStore.getState().setSignedOut();
+  });
+
+  it("refuses a dispatch once the verdict is withdrawn, and admits it again when the verdict returns", () => {
+    // The route's effect captured `cloudAuthorized === true` at render; the
+    // demotion landed before the effect flushed. The verdict is re-read here.
+    renderHook(() => useEpicRecordViewed(), {
+      wrapper: makeWrapper(new QueryClient()),
+    });
+    useAuthStore.getState().setUnverifiedSession(PROFILE, CONTEXT);
+
+    expect(() => capturedOptions.onMutate?.({ epicId: "epic-1" })).toThrow(
+      EPIC_RECORD_VIEWED_UNAUTHORIZED_MESSAGE,
+    );
+
+    // Non-vacuity: the verdict returning is what admits the same dispatch.
+    useAuthStore.getState().setSignedIn(PROFILE, CONTEXT, []);
+    expect(capturedOptions.onMutate?.({ epicId: "epic-1" })).toEqual({
+      hostId: "host-1",
+      userId: "user-1",
     });
   });
 

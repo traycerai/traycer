@@ -49,6 +49,31 @@ export interface CredentialsMutationPaths {
 }
 
 /**
+ * What a refresh rejection was ABOUT. Mirrors the shared
+ * `AuthRefreshRejection`; see that declaration for the full rationale.
+ *
+ * Carried through this layer rather than collapsed at it, because the branch
+ * that needs the distinction — whether the renderer keeps serving this
+ * machine's own epics from disk — sits several layers above, and a status code
+ * discarded here cannot be recovered there.
+ */
+export type RefreshRejection =
+  | { readonly kind: "account" }
+  | {
+      readonly kind: "credential";
+      readonly revocation: "user-epoch" | null;
+    };
+
+export type RefreshResult =
+  | {
+      readonly kind: "refreshed";
+      readonly token: string;
+      readonly refreshToken: string;
+    }
+  | { readonly kind: "rejected"; readonly rejection: RefreshRejection }
+  | { readonly kind: "network-error" };
+
+/**
  * Injected single-attempt refresh. Mirrors the shared `AuthTokenRefreshResult`
  * shape; never throws (every failure maps to a kind). The store calls it as the
  * last fallible-remote step under the lock, honoring the abort signal.
@@ -60,15 +85,6 @@ export interface CredentialsMutationPaths {
  * refreshes against its own live local authn), instead of every process chasing
  * whichever stack happened to sign in last.
  */
-export type RefreshResult =
-  | {
-      readonly kind: "refreshed";
-      readonly token: string;
-      readonly refreshToken: string;
-    }
-  | { readonly kind: "rejected" }
-  | { readonly kind: "network-error" };
-
 export type RefreshFn = (args: {
   readonly token: string;
   readonly refreshToken: string;
@@ -83,7 +99,13 @@ export type MutationOutcome =
   | "tombstoned"
   | "lock-busy"
   | "spend-pending"
-  | "refresh-rejected"
+  // Two members rather than one `refresh-rejected`, so every consumer's
+  // exhaustive switch is FORCED to decide which side of the
+  // credential/account line it is on. A single member with the scope on a
+  // sibling field would let a caller keep its old one-armed branch and
+  // compile clean - which is how the collapse this replaces survived.
+  | "refresh-rejected-credential"
+  | "refresh-rejected-account"
   | "refresh-network"
   | "commit-failed";
 
@@ -94,7 +116,7 @@ export type MutationOutcome =
  *   - `user-mismatch` -> the foreign file pair (for the reconcile worker);
  *   - `commit-failed` -> the minted pair the caller keeps active in memory;
  * and is `null` for `deleted`/`tombstoned`/`lock-busy`/`spend-pending`/
- * `refresh-rejected`/`refresh-network`.
+ * `refresh-rejected-credential`/`refresh-rejected-account`/`refresh-network`.
  *
  * `spend-pending` is transient, exactly like `lock-busy`: a SIBLING process
  * spent the on-disk refresh token but has not landed the successor pair yet
@@ -107,6 +129,16 @@ export type MutationOutcome =
 export interface MutationResult {
   readonly outcome: MutationOutcome;
   readonly credentials: StoredCredentials | null;
+  /**
+   * WHAT a `refresh-rejected-*` outcome was about, carried rather than
+   * collapsed: the outcome says which side of the credential/account line
+   * the verdict fell on, this says whether a credential verdict was the
+   * user's own "sign out everywhere" (`revocation: "user-epoch"`) - the
+   * distinction the renderer's copy and an operator's log need, and one no
+   * layer above here could recover from a string. `null` for every other
+   * outcome.
+   */
+  readonly rejection: RefreshRejection | null;
 }
 
 /**
@@ -199,7 +231,7 @@ export interface CredentialsMutationStore {
    * snapshot / spent-base marker - a sibling slot migrating the same legacy
    * pair defers with `spend-pending`), then spends `candidate.refreshToken`
    * under its own armed marker and commits the refreshed pair stamped with the
-   * pre-validated `identity`. `refresh-rejected` → caller maps to
+   * pre-validated `identity`. Either `refresh-rejected-*` → caller maps to
    * terminal-dead; commit failure arms the same first-write continuation
    * `guardedSignIn` uses, with the marker held until it lands or drops.
    */
@@ -749,6 +781,7 @@ export function createCredentialsMutationStore(
           return {
             outcome: "commit-failed",
             credentials: pendingCredentials(pending),
+            rejection: null,
           };
         }
         let file = await readCredentialsFile(paths.credentialsPath);
@@ -763,7 +796,7 @@ export function createCredentialsMutationStore(
     );
     return result.acquired
       ? result.value
-      : { outcome: "lock-busy", credentials: null };
+      : { outcome: "lock-busy", credentials: null, rejection: null };
   }
 
   async function read(): Promise<StoredCredentials | null> {
@@ -817,18 +850,23 @@ export function createCredentialsMutationStore(
       false,
       async ({ state, file }): Promise<MutationResult> => {
         // Guards before any spend (R7-C2).
-        if (file === null) return { outcome: "deleted", credentials: null };
+        if (file === null)
+          return { outcome: "deleted", credentials: null, rejection: null };
         // A committed/pending sign-out stands: an automatic rotate must never
         // resurrect it by spending (e.g. a raw writer recreated F after logout).
         if (hasTombstone(state)) {
-          return { outcome: "tombstoned", credentials: null };
+          return { outcome: "tombstoned", credentials: null, rejection: null };
         }
         if (file.user.id !== args.expectedUserId) {
-          return { outcome: "user-mismatch", credentials: file };
+          return {
+            outcome: "user-mismatch",
+            credentials: file,
+            rejection: null,
+          };
         }
         if (file.token !== args.expectedToken) {
           // A sibling already rotated: adopt the file's pair, spend nothing.
-          return { outcome: "superseded", credentials: file };
+          return { outcome: "superseded", credentials: file, rejection: null };
         }
         // Cross-process spent-base gate (before the spend, like every other
         // guard): a live sibling armed a marker for THIS base - it spent (or
@@ -844,7 +882,11 @@ export function createCredentialsMutationStore(
             !markerOwnerProvablyDead(marker) &&
             markerIsFresh(marker, Date.now());
           if (blocked) {
-            return { outcome: "spend-pending", credentials: null };
+            return {
+              outcome: "spend-pending",
+              credentials: null,
+              rejection: null,
+            };
           }
           // Reclaimable - but do NOT unlink it here. The arm below replaces it
           // atomically, and unlinking first would leave the base momentarily
@@ -875,13 +917,26 @@ export function createCredentialsMutationStore(
           // Whether the request spent the base server-side is unknowable, so
           // the marker deliberately stays armed: siblings defer while this
           // process (which recognizes its own marker) retries.
-          return { outcome: "refresh-network", credentials: null };
+          return {
+            outcome: "refresh-network",
+            credentials: null,
+            rejection: null,
+          };
         }
         if (refreshed.kind === "rejected") {
           // The base is dead regardless of who spends it - nothing left for
-          // the marker to protect.
+          // the marker to protect. WHICH rejection it was travels on, because
+          // the file is kept either way here and the decision that needs the
+          // distinction is the renderer's.
           await clearSpentBaseMarker(paths.credentialsPath);
-          return { outcome: "refresh-rejected", credentials: null };
+          return {
+            outcome:
+              refreshed.rejection.kind === "account"
+                ? "refresh-rejected-account"
+                : "refresh-rejected-credential",
+            credentials: null,
+            rejection: refreshed.rejection,
+          };
         }
         const next: StoredCredentials = {
           token: refreshed.token,
@@ -897,7 +952,7 @@ export function createCredentialsMutationStore(
         });
         if (commit.kind === "committed") {
           await clearSpentBaseMarker(paths.credentialsPath);
-          return { outcome: "applied", credentials: next };
+          return { outcome: "applied", credentials: next, rejection: null };
         }
         // Post-spend local-commit failure: keep the minted pair active in
         // memory and land it under a fresh lock later. The armed marker is
@@ -905,7 +960,7 @@ export function createCredentialsMutationStore(
         // process just burned.
         pending = { kind: "pair", expectedToken: file.token, pair: next };
         scheduleContinuationRetry();
-        return { outcome: "commit-failed", credentials: next };
+        return { outcome: "commit-failed", credentials: next, rejection: null };
       },
     );
   }
@@ -946,9 +1001,13 @@ export function createCredentialsMutationStore(
         // rather than leave it to lazy cleanup.
         if (commit.kind === "committed") {
           await clearSpentBaseMarker(paths.credentialsPath);
-          return { outcome: "applied", credentials: resolved };
+          return { outcome: "applied", credentials: resolved, rejection: null };
         }
-        return { outcome: "commit-failed", credentials: resolved };
+        return {
+          outcome: "commit-failed",
+          credentials: resolved,
+          rejection: null,
+        };
       },
     );
   }
@@ -970,9 +1029,9 @@ export function createCredentialsMutationStore(
         // the file the marker was guarding - remove the marker with it.
         if (commit.kind === "committed") {
           await clearSpentBaseMarker(paths.credentialsPath);
-          return { outcome: "deleted", credentials: null };
+          return { outcome: "deleted", credentials: null, rejection: null };
         }
-        return { outcome: "commit-failed", credentials: null };
+        return { outcome: "commit-failed", credentials: null, rejection: null };
       },
     );
   }
@@ -1004,7 +1063,7 @@ export function createCredentialsMutationStore(
         if (file === null || file.token !== expectedToken) {
           quarantined.delete(digest);
           await writeQuarantinedDigests(qPath, quarantined);
-          return { outcome: "superseded", credentials: file };
+          return { outcome: "superseded", credentials: file, rejection: null };
         }
         const commit = await commitMutation({
           paths: commitPaths,
@@ -1020,10 +1079,10 @@ export function createCredentialsMutationStore(
           await clearSpentBaseMarker(paths.credentialsPath);
           quarantined.delete(digest);
           await writeQuarantinedDigests(qPath, quarantined);
-          return { outcome: "deleted", credentials: null };
+          return { outcome: "deleted", credentials: null, rejection: null };
         }
         scheduleQuarantineRetry();
-        return { outcome: "commit-failed", credentials: null };
+        return { outcome: "commit-failed", credentials: null, rejection: null };
       },
     );
   }
@@ -1040,13 +1099,13 @@ export function createCredentialsMutationStore(
       async ({ state, file }): Promise<MutationResult> => {
         const quarantined = await readQuarantinedDigests(qPath);
         if (quarantined.size === 0) {
-          return { outcome: "deleted", credentials: null };
+          return { outcome: "deleted", credentials: null, rejection: null };
         }
         if (file === null || !quarantined.has(digestToken(file.token))) {
           // Nothing quarantined is durable any more — every entry is
           // residue of a pair that was already replaced or removed.
           await writeQuarantinedDigests(qPath, new Set());
-          return { outcome: "deleted", credentials: null };
+          return { outcome: "deleted", credentials: null, rejection: null };
         }
         const commit = await commitMutation({
           paths: commitPaths,
@@ -1057,9 +1116,9 @@ export function createCredentialsMutationStore(
         if (commit.kind === "committed") {
           await clearSpentBaseMarker(paths.credentialsPath);
           await writeQuarantinedDigests(qPath, new Set());
-          return { outcome: "deleted", credentials: null };
+          return { outcome: "deleted", credentials: null, rejection: null };
         }
-        return { outcome: "commit-failed", credentials: null };
+        return { outcome: "commit-failed", credentials: null, rejection: null };
       },
     );
     if (result.outcome === "deleted") return true;
@@ -1077,15 +1136,16 @@ export function createCredentialsMutationStore(
       false,
       false,
       async ({ state, file }): Promise<MutationResult> => {
-        if (file === null) return { outcome: "deleted", credentials: null };
+        if (file === null)
+          return { outcome: "deleted", credentials: null, rejection: null };
         // A committed/pending sign-out stands: the advisory profile merge must
         // not clear the tombstone and resurrect a signed-out session.
         if (hasTombstone(state)) {
-          return { outcome: "tombstoned", credentials: null };
+          return { outcome: "tombstoned", credentials: null, rejection: null };
         }
         if (file.token !== args.expectedToken) {
           // A sibling rotated under us - skip the advisory profile write.
-          return { outcome: "superseded", credentials: file };
+          return { outcome: "superseded", credentials: file, rejection: null };
         }
         const next: StoredCredentials = { ...file, user: args.user };
         const commit = await commitMutation({
@@ -1097,8 +1157,8 @@ export function createCredentialsMutationStore(
         // The profile block is advisory; a commit failure is surfaced but arms no
         // continuation (nothing was spent, the token is unchanged).
         return commit.kind === "committed"
-          ? { outcome: "applied", credentials: next }
-          : { outcome: "commit-failed", credentials: next };
+          ? { outcome: "applied", credentials: next, rejection: null }
+          : { outcome: "commit-failed", credentials: next, rejection: null };
       },
     );
   }
@@ -1119,14 +1179,14 @@ export function createCredentialsMutationStore(
         // state. The snapshot guard is a full-file digest, so a same-token
         // content change (e.g. a sibling profile merge) still supersedes.
         if (hasTombstone(state)) {
-          return { outcome: "tombstoned", credentials: null };
+          return { outcome: "tombstoned", credentials: null, rejection: null };
         }
         const snapshotMatches =
           expectedDigest === null
             ? file === null
             : file !== null && digestCredentials(file) === expectedDigest;
         if (!snapshotMatches) {
-          return { outcome: "superseded", credentials: file };
+          return { outcome: "superseded", credentials: file, rejection: null };
         }
         const commit = await commitMutation({
           paths: commitPaths,
@@ -1138,7 +1198,11 @@ export function createCredentialsMutationStore(
           // Same rationale as `signIn`: a landed first-write replaces the
           // session wholesale, so any lingering marker is an orphan.
           await clearSpentBaseMarker(paths.credentialsPath);
-          return { outcome: "applied", credentials: args.credentials };
+          return {
+            outcome: "applied",
+            credentials: args.credentials,
+            rejection: null,
+          };
         }
         pending = {
           kind: "firstWrite",
@@ -1148,7 +1212,11 @@ export function createCredentialsMutationStore(
           spentBaseToken: null,
         };
         scheduleContinuationRetry();
-        return { outcome: "commit-failed", credentials: args.credentials };
+        return {
+          outcome: "commit-failed",
+          credentials: args.credentials,
+          rejection: null,
+        };
       },
     );
   }
@@ -1172,14 +1240,14 @@ export function createCredentialsMutationStore(
         // Guards before the spend (R7-C2), identical to guardedSignIn: never
         // resurrect a signed-out session, never overwrite a newer state.
         if (hasTombstone(state)) {
-          return { outcome: "tombstoned", credentials: null };
+          return { outcome: "tombstoned", credentials: null, rejection: null };
         }
         const snapshotMatches =
           expectedDigest === null
             ? file === null
             : file !== null && digestCredentials(file) === expectedDigest;
         if (!snapshotMatches) {
-          return { outcome: "superseded", credentials: file };
+          return { outcome: "superseded", credentials: file, rejection: null };
         }
         // Cross-process spent-base gate + arm, mirroring `rotate`: on upgrade
         // every slot migrates the SAME legacy pair, and the first-write
@@ -1201,7 +1269,11 @@ export function createCredentialsMutationStore(
             !markerOwnerProvablyDead(marker) &&
             markerIsFresh(marker, Date.now());
           if (blocked) {
-            return { outcome: "spend-pending", credentials: null };
+            return {
+              outcome: "spend-pending",
+              credentials: null,
+              rejection: null,
+            };
           }
           // Reclaimable - but do NOT unlink it here. The arm below replaces it
           // atomically, and unlinking first would leave the base momentarily
@@ -1222,12 +1294,25 @@ export function createCredentialsMutationStore(
           signal: args.signal,
         });
         if (refreshed.kind === "network-error") {
-          return { outcome: "refresh-network", credentials: null };
+          return {
+            outcome: "refresh-network",
+            credentials: null,
+            rejection: null,
+          };
         }
         if (refreshed.kind === "rejected") {
-          // Dead regardless of who spends it - nothing left to guard.
+          // Dead regardless of who spends it - nothing left to guard. The
+          // credential/account split rides along for the same reason as the
+          // sibling site above.
           await clearSpentBaseMarker(paths.credentialsPath);
-          return { outcome: "refresh-rejected", credentials: null };
+          return {
+            outcome:
+              refreshed.rejection.kind === "account"
+                ? "refresh-rejected-account"
+                : "refresh-rejected-credential",
+            credentials: null,
+            rejection: refreshed.rejection,
+          };
         }
         // Identity comes from the caller's pre-lock non-spending `/user` probe
         // (invariant 2): the refresh response carries only the pair, so it cannot
@@ -1246,7 +1331,7 @@ export function createCredentialsMutationStore(
         });
         if (commit.kind === "committed") {
           await clearSpentBaseMarker(paths.credentialsPath);
-          return { outcome: "applied", credentials: next };
+          return { outcome: "applied", credentials: next, rejection: null };
         }
         // Post-spend local-commit failure: keep the minted pair and land it under
         // a fresh lock later - the same first-write continuation guardedSignIn
@@ -1261,7 +1346,7 @@ export function createCredentialsMutationStore(
           spentBaseToken: args.candidate.token,
         };
         scheduleContinuationRetry();
-        return { outcome: "commit-failed", credentials: next };
+        return { outcome: "commit-failed", credentials: next, rejection: null };
       },
     );
   }

@@ -1,4 +1,4 @@
-import { queryOptions } from "@tanstack/react-query";
+import { queryOptions, replaceEqualDeep } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
   ListTasksRequest,
@@ -14,18 +14,56 @@ import {
 import type { HostRpcRegistry } from "@/lib/host";
 import { queryKeys } from "@/lib/query-keys";
 import { getCloudEpicTasksClient } from "@/lib/cloud-epic-tasks-query/client-registry";
+import { liveHostServesLocalFirst } from "@/lib/cloud-epic-tasks-query/local-first-admission";
+import {
+  authorizesCloudCapability,
+  useAuthStore,
+} from "@/stores/auth/auth-store";
+import { beginLocalFirstRevalidationEpisode } from "@/lib/cloud-epic-tasks-query/local-first-revalidation-coordinator";
+import { CloudEpicTasksRequestContextTimeoutError } from "@/lib/cloud-epic-tasks-query/request-context-timeout-error";
+import { CloudEpicTasksVerdictWithdrawnError } from "@/lib/cloud-epic-tasks-query/verdict-withdrawn-error";
+import { admitCloudEpicTasksFirstPage } from "@/lib/cloud-epic-tasks-query/cache";
 import type { HistorySearchState } from "@/lib/history-search";
 import { dedupSortWorkspaces } from "@/components/home/data/home-page.data";
+import {
+  cloudEpicTasksPageIdentity,
+  resetCloudEpicTasksPageIdentity,
+} from "@/stores/epics/cloud-epic-tasks-pages-store";
 
 const PAGE_LIMIT = 20;
+// One first-page attempt may wait this long for a matching RequestContext.
+// This is deliberately not an end-to-end discovery deadline: the host's
+// cloud deadline starts only after this wait authorizes dispatch. The
+// QueryClient treats this timeout as terminal so its one ordinary retry cannot
+// start one additional full wait and violate this one-attempt policy.
+const REQUEST_CONTEXT_WAIT_TIMEOUT_MS = 15_000;
 
-export type ListCloudTasksRequest = Omit<ListTasksRequest, "cursor">;
+/**
+ * Semantic History filters only. Transport-local `localFirstPhase` is kept
+ * out of this type and its query key: initial and revalidation pages describe
+ * the same list, merely at different freshness points.
+ */
+export type ListCloudTasksRequest = Omit<
+  ListTasksRequest,
+  "cursor" | "localFirstPhase"
+>;
 
-interface FetchCloudEpicTasksPageOptions {
+type LocalFirstPhase = "initial" | "revalidate";
+
+interface FetchCloudEpicTasksScopedPageOptions {
   readonly expectedUserId: string;
   readonly request: ListCloudTasksRequest;
   readonly cursor: string | undefined;
   readonly abortSignal: AbortSignal | undefined;
+  /** Cursor pages are ordinary settled requests and omit this directive. */
+  readonly localFirstPhase: LocalFirstPhase | undefined;
+  /**
+   * The initial page may wait for a rotating request context to become usable.
+   * A cache-owned follow-up must instead fail closed if that context no longer
+   * names its query user: it cannot wait across an A -> B transition and then
+   * write B's page under A's infinite-lifetime cache key.
+   */
+  readonly requestContextPolicy: "wait" | "require-current";
 }
 
 export const LIST_CLOUD_TASKS_REQUEST: ListCloudTasksRequest = {
@@ -51,27 +89,86 @@ export function cloudEpicTasksLastKnownQueryKey(
   return queryKeys.cloudEpicTasksLastKnown(hostId, fingerprint);
 }
 
-export async function fetchCloudEpicTasksPage(
-  client: HostClient<HostRpcRegistry>,
-  request: ListCloudTasksRequest,
-  cursor: string | undefined,
-): Promise<ListTasksResponse> {
-  return client.request(
-    "epic.listTasks",
-    buildListTasksRequest(request, cursor),
-  );
-}
-
-function fetchCloudEpicTasksFirstPageByHostId(
+/**
+ * Raw dispatch private to this list-specific module. Its exported first-page
+ * and cursor delivery functions both cross the delete-admission boundary.
+ *
+ * Generic host RPC APIs intentionally remain able to dispatch arbitrary
+ * methods, including `epic.listTasks`, and return their raw responses. No
+ * current production caller uses those APIs for this list; this function's
+ * privacy protects this module's list-specific delivery path, not generic RPC.
+ */
+function fetchCloudEpicTasksScopedPageByHostId(
   hostId: string,
-  options: FetchCloudEpicTasksPageOptions,
+  options: FetchCloudEpicTasksScopedPageOptions,
 ): Promise<ListTasksResponse> {
   const client = getCloudEpicTasksClient(hostId);
   if (client === null) {
     return Promise.reject(new Error(`No host client registered for ${hostId}`));
   }
+  if (options.requestContextPolicy === "require-current") {
+    return dispatchScopedPageWithCurrentRequestContext(client, options);
+  }
   return waitForMatchingRequestContext(client, options).then(() =>
-    fetchCloudEpicTasksPage(client, options.request, options.cursor),
+    // Waiting is only permission to try the synchronous boundary below; an
+    // already-resolved wait still resumes in a microtask, after which the
+    // client may represent a different principal.
+    dispatchScopedPageWithCurrentRequestContext(client, options),
+  );
+}
+
+interface FetchCloudEpicTasksFirstPageOptions {
+  readonly request: ListCloudTasksRequest;
+  readonly abortSignal: AbortSignal | undefined;
+  readonly localFirstPhase: LocalFirstPhase | undefined;
+  readonly requestContextPolicy: "wait" | "require-current";
+}
+
+/**
+ * Fetches one first page and admits it before exposing it to any Query writer.
+ * This is the public first-page delivery API for History and reconciliation.
+ */
+export function fetchCloudEpicTasksFirstPageByHostId(
+  hostId: string,
+  userId: string,
+  options: FetchCloudEpicTasksFirstPageOptions,
+): Promise<ListTasksResponse> {
+  return fetchCloudEpicTasksScopedPageByHostId(hostId, {
+    expectedUserId: userId,
+    request: options.request,
+    cursor: undefined,
+    abortSignal: options.abortSignal,
+    localFirstPhase: options.localFirstPhase,
+    requestContextPolicy: options.requestContextPolicy,
+  }).then((response) =>
+    admitCloudEpicTasksFirstPage(response, { hostId, userId }),
+  );
+}
+
+interface FetchCloudEpicTasksCursorPageOptions {
+  readonly request: ListCloudTasksRequest;
+  readonly cursor: string;
+}
+
+/**
+ * Fetches one cursor page and applies the same ledger before the retained-tail
+ * store receives it. `appendPage` repeats the ledger check to fence a delete
+ * that lands after this page settles but before it is committed.
+ */
+export function fetchCloudEpicTasksCursorPageByHostId(
+  hostId: string,
+  userId: string,
+  options: FetchCloudEpicTasksCursorPageOptions,
+): Promise<ListTasksResponse> {
+  return fetchCloudEpicTasksScopedPageByHostId(hostId, {
+    expectedUserId: userId,
+    request: options.request,
+    cursor: options.cursor,
+    abortSignal: undefined,
+    localFirstPhase: undefined,
+    requestContextPolicy: "require-current",
+  }).then((response) =>
+    admitCloudEpicTasksFirstPage(response, { hostId, userId }),
   );
 }
 
@@ -82,13 +179,39 @@ export function cloudEpicTasksFirstPageQueryOptions(
 ) {
   return queryOptions<ListTasksResponse>({
     queryKey: cloudEpicTasksQueryKey(hostId, userId, request),
-    queryFn: ({ signal }) =>
-      fetchCloudEpicTasksFirstPageByHostId(hostId, {
-        expectedUserId: userId,
+    queryFn: ({ signal, client }) => {
+      const queryKey = cloudEpicTasksQueryKey(hostId, userId, request);
+      // Query dispatch, not a consumer-owned wrapper, defines this page's
+      // replacement boundary. Any active invalidation or raw Query.refetch
+      // therefore clears retained cursor pages before either its first page or
+      // a late cursor response can reintroduce old rows.
+      resetCloudEpicTasksPageIdentity(
+        cloudEpicTasksPageIdentity(hostId, userId, request),
+      );
+      // The local-first episode is likewise owned by query dispatch so no raw
+      // refetch can leave a prior follow-up eligible to overwrite this page.
+      beginLocalFirstRevalidationEpisode(client, queryKey);
+      return fetchCloudEpicTasksFirstPageByHostId(hostId, userId, {
         request,
-        cursor: undefined,
         abortSignal: signal,
-      }),
+        localFirstPhase: "initial",
+        requestContextPolicy: "wait",
+      });
+    },
+    // First-page delivery admits the response before it reaches TanStack so
+    // callers see a fenced value. Re-apply that ledger at TanStack's actual
+    // write boundary as well: a delete can land in the microtask between that
+    // early admission and either an initial fetch or revalidation replacement
+    // committing this query. The custom hook must also retain TanStack's
+    // default identity behavior, so deep-share the admitted page against the
+    // prior cache value rather than unconditionally adopting the new object.
+    structuralSharing: (previous, incoming) =>
+      replaceEqualDeep(
+        previous,
+        isListTasksResponse(incoming)
+          ? admitCloudEpicTasksFirstPage(incoming, { hostId, userId })
+          : incoming,
+      ),
     staleTime: Infinity,
     gcTime: Infinity,
     refetchOnMount: false,
@@ -147,6 +270,17 @@ function sortRepoIdentifiers(
   );
 }
 
+function isListTasksResponse(value: unknown): value is ListTasksResponse {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "tasks" in value &&
+    Array.isArray(value.tasks) &&
+    "hasMore" in value &&
+    typeof value.hasMore === "boolean"
+  );
+}
+
 function sortOwnershipScopes(
   scopes: ReadonlyArray<TaskOwnershipScope>,
 ): TaskOwnershipScope[] {
@@ -184,7 +318,7 @@ function parseRepoLabel(label: string): TaskRepoIdentifier[] {
 
 function waitForMatchingRequestContext(
   client: HostClient<HostRpcRegistry>,
-  options: FetchCloudEpicTasksPageOptions,
+  options: FetchCloudEpicTasksScopedPageOptions,
 ): Promise<void> {
   if (hasMatchingRequestContext(client, options.expectedUserId)) {
     return Promise.resolve();
@@ -193,6 +327,7 @@ function waitForMatchingRequestContext(
     return Promise.reject(createAbortError());
   }
   return new Promise((resolve, reject) => {
+    let timeoutId: number | null = null;
     const unsubscribe = client.onChange(() => {
       if (!hasMatchingRequestContext(client, options.expectedUserId)) {
         return;
@@ -207,9 +342,59 @@ function waitForMatchingRequestContext(
     const cleanup = () => {
       unsubscribe();
       options.abortSignal?.removeEventListener("abort", onAbort);
+      if (timeoutId !== null) {
+        window.clearTimeout(timeoutId);
+        timeoutId = null;
+      }
     };
     options.abortSignal?.addEventListener("abort", onAbort, { once: true });
+    timeoutId = window.setTimeout(() => {
+      cleanup();
+      reject(
+        new CloudEpicTasksRequestContextTimeoutError(
+          REQUEST_CONTEXT_WAIT_TIMEOUT_MS,
+        ),
+      );
+    }, REQUEST_CONTEXT_WAIT_TIMEOUT_MS);
   });
+}
+
+/**
+ * Couples the final RequestContext check and HostClient capture in one stack.
+ * Both request policies converge here: `wait` may resume after an identity
+ * transition, while `require-current` must never wait at all.
+ */
+async function dispatchScopedPageWithCurrentRequestContext(
+  client: HostClient<HostRpcRegistry>,
+  options: FetchCloudEpicTasksScopedPageOptions,
+): Promise<ListTasksResponse> {
+  if (!hasMatchingRequestContext(client, options.expectedUserId)) {
+    throw new Error(
+      "Cloud epic tasks request context no longer matches its cache user.",
+    );
+  }
+  if (!(await cloudLegAdmittedAtDispatch(client, options))) {
+    throw new CloudEpicTasksVerdictWithdrawnError();
+  }
+  const request = buildListTasksRequest(options.request, options.cursor);
+  if (options.localFirstPhase === undefined) {
+    return client.requestWithSignal(
+      "epic.listTasks",
+      request,
+      options.abortSignal,
+    );
+  }
+  return client.requestWithSignal(
+    "epic.listTasks",
+    {
+      ...request,
+      // On a pre-1.6 host the same-major transport downgrade parses against
+      // its frozen request schema and strips this additive field. Its response
+      // therefore remains exactly the released one-shot list request.
+      localFirstPhase: options.localFirstPhase,
+    },
+    options.abortSignal,
+  );
 }
 
 function hasMatchingRequestContext(
@@ -217,6 +402,40 @@ function hasMatchingRequestContext(
   expectedUserId: string,
 ): boolean {
   return client.getRequestContextUserId() === expectedUserId;
+}
+
+/**
+ * The verdict half of the admission, re-read at the POST-WAIT dispatch
+ * boundary rather than trusted from the render that started the fetch.
+ *
+ * `wait` may resume after an arbitrary interval: a signed-in first page
+ * waiting out a reconnect for its host client's request context can see the
+ * session demoted to `unverified` before the same-user context arrives, and
+ * the request-context check above is about the USER, not the verdict. On a
+ * pre-`epic.listTasks@1.6` host the local-first directive is stripped and
+ * the continuation is the ordinary cloud-backed list call - so without this
+ * the render and manual-refetch gates were bypassed by the one path that
+ * waits. Same shape as those gates: the live verdict admits everything; an
+ * initial leg is still admitted when the live negotiated version says the
+ * host serves it local-first; a page with no directive - a cursor page, or
+ * the tab reconciler's local-home probe - needs the verdict. The reconciler
+ * only seeds a run under `signed-in`, so this bites it solely when the
+ * verdict is withdrawn mid-run, and its combiner reads any error as "do not
+ * close anything": the refusal is the fail-closed outcome that path wants.
+ */
+async function cloudLegAdmittedAtDispatch(
+  client: HostClient<HostRpcRegistry>,
+  options: FetchCloudEpicTasksScopedPageOptions,
+): Promise<boolean> {
+  if (authorizesCloudCapability(useAuthStore.getState().status)) return true;
+  if (options.localFirstPhase === undefined) return false;
+  const hostId = client.getActiveHostId();
+  if (hostId === null) return false;
+  // The live host's answer, not the registry's memory of it: the initial leg
+  // is the one page an unverified session may send, and a stale `1.6` from a
+  // host since rolled back under the same id would send it to that older
+  // process's cloud-backed list. See `liveHostServesLocalFirst`.
+  return liveHostServesLocalFirst(client, hostId);
 }
 
 function createAbortError(): Error {

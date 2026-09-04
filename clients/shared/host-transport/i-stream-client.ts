@@ -72,10 +72,9 @@ export interface IStreamClient<Registry extends VersionedStreamRpcRegistry> {
    *
    * Part of this seam rather than the concrete `WsStreamClient` because those
    * wrappers depend on the interface: leaving it off would make a wrapper that
-   * gates on a minor version non-substitutable over a remote transport.
-   * `RemoteStreamClient` answers `null` (the mux carries no per-method
-   * negotiation), so a gated feature degrades to "unsupported" over a remote
-   * host instead of being falsely advertised.
+   * gates on a minor version non-substitutable over a remote transport. A
+   * remote mux returns `null` before its `openAck`, then derives the selected
+   * version from that peer manifest using the same path a subscription uses.
    */
   getMethodSchemaVersion<Method extends keyof Registry & string>(
     method: Method,

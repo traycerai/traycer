@@ -167,6 +167,12 @@ export const authenticatedUserBaseSchema = z.object({
   user: userSchema,
   userSubscription: traycerUserSubscriptionSchema,
   payAsYouGoUsage: payAsYouGoUsageSchema,
+  // Additive cloud-sync entitlement (traycer-server is the sole computation
+  // site; authn embeds the snapshot). Optional so old hosts and fail-soft
+  // payloads without the fields still parse; Zod clients on this contract
+  // retain the keys instead of stripping them as unknown.
+  cloudSyncAllowed: z.boolean().optional(),
+  graceExpiresAt: z.string().optional(),
 });
 
 // ---- Authenticated-user response records ------------------------------- //

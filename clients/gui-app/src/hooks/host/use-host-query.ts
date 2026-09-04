@@ -83,6 +83,17 @@ export interface UseHostQueryWithResponseMapOptions<
   /** Captures cache-side ordering state immediately before request dispatch. */
   readonly captureRequestContext?: () => TRequestContext;
   /**
+   * The query-side twin of `UseHostMutationOptions.preflight`: runs inside the
+   * queryFn immediately before the request goes out, and a throw refuses THIS
+   * dispatch as a `HostRpcError` (normalized by the boundary) with no request
+   * sent. For a condition `enabled` cannot enforce:
+   * `enabled` stops the NEXT fetch, not a `refetch()` override nor the retry
+   * episode already running when the condition changed - so a verdict
+   * withdrawn mid-retry must be re-read here or the retries keep dispatching
+   * on the retained host credential.
+   */
+  readonly preflight?: () => void;
+  /**
    * Transforms the raw RPC response into what TanStack caches/returns for
    * this query. Runs inside the queryFn, so its return value - not the raw
    * response - is what ends up in the cache. `queryClient`/`queryKey` are
@@ -211,6 +222,7 @@ export function useHostQueryWithResponseMap<
       if (client === null) {
         return Promise.reject<TData>(hostClientUnavailableError(method));
       }
+      args.preflight?.();
       const requestContext = args.captureRequestContext?.();
       const response = await client.requestWithSignal(method, params, signal);
       return mapResponse({ response, queryClient, queryKey, requestContext });
@@ -277,6 +289,14 @@ export interface UseHostMutationOptions<
     response: ResponseOfMethod<Registry, Method>,
     variables: TVariables,
   ) => void;
+  /**
+   * An ASYNC pre-flight, awaited inside the same error boundary as
+   * `mapVariables` and before the request goes out. For a check whose
+   * evidence has to come from the live host - a probe RPC and a re-read -
+   * rather than from what the renderer already holds. A throw refuses the
+   * mutation as a `HostRpcError`, exactly like a `mapVariables` throw.
+   */
+  readonly preflight?: (variables: TVariables) => Promise<void>;
 }
 
 /**
@@ -313,6 +333,7 @@ export function useHostMutation<
             hostClientUnavailableError(args.method),
           );
         }
+        await args.preflight?.(variables);
         const response = await args.client.request(
           args.method,
           args.mapVariables(variables),
@@ -361,6 +382,7 @@ export function useHostMutationWithResponseTimeout<
             hostClientUnavailableError(args.method),
           );
         }
+        await args.preflight?.(variables);
         const response = await args.client.requestWithResponseTimeout(
           args.method,
           args.mapVariables(variables),

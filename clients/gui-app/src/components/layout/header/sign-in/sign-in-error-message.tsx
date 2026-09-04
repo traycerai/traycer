@@ -1,8 +1,10 @@
 import {
+  AUTH_ERROR_ACCOUNT_UNAVAILABLE,
   AUTH_ERROR_DEVICE_DENIED,
   AUTH_ERROR_DEVICE_EXPIRED,
   AUTH_ERROR_LAUNCH_FAILED,
   AUTH_ERROR_SESSION_EXPIRED,
+  AUTH_ERROR_SIGNED_OUT_EVERYWHERE,
   AUTH_ERROR_SIGN_IN_FAILED,
   AUTH_ERROR_STORE_UNAVAILABLE,
 } from "@/lib/auth/auth-service";
@@ -16,10 +18,30 @@ export function SignInErrorMessage(props: {
   readonly lastError: string | null;
   readonly isHero: boolean;
 }) {
+  // `AUTH_ERROR_ACCOUNT_UNAVAILABLE` renders under `unverified` as well as
+  // `signed-out`, and it is the only error that does.
+  //
+  // The account arm HOLDS the local plane by product ruling, so it never
+  // reaches `signed-out` - and this component and the session-expired toast
+  // were the only two surfaces that could carry its copy, both keyed on states
+  // that arm no longer visits. Without this widening a person whose account was
+  // deleted gets the workspace and total silence, then watches cloud actions
+  // fail one at a time with no explanation.
+  //
+  // Deliberately NOT widened to every error under `unverified`: the others are
+  // sign-in-attempt failures that belong to a signed-out surface, and the
+  // expiry case is the toast's (it is transient and self-clearing, this one is
+  // terminal and must persist).
+  const isTerminalAccountError =
+    props.lastError === AUTH_ERROR_ACCOUNT_UNAVAILABLE;
+  const statusCarriesError =
+    props.status === "signed-out" ||
+    (isTerminalAccountError && props.status === "unverified");
   if (
-    props.status !== "signed-out" ||
+    !statusCarriesError ||
     props.lastError === null ||
-    props.lastError === AUTH_ERROR_SESSION_EXPIRED
+    props.lastError === AUTH_ERROR_SESSION_EXPIRED ||
+    props.lastError === AUTH_ERROR_SIGNED_OUT_EVERYWHERE
   ) {
     return null;
   }
@@ -62,6 +84,15 @@ function messageForError(error: string): string {
   }
   if (error === AUTH_ERROR_SESSION_EXPIRED) {
     return "Session expired - sign in again.";
+  }
+  if (error === AUTH_ERROR_SIGNED_OUT_EVERYWHERE) {
+    return "You signed out everywhere - sign in again to continue.";
+  }
+  if (error === AUTH_ERROR_ACCOUNT_UNAVAILABLE) {
+    // Deliberately does NOT say "sign in again": this arm is reached when authn
+    // answered 403/404 for the account, and a retry with the same account
+    // cannot succeed. See `AUTH_ERROR_ACCOUNT_UNAVAILABLE`.
+    return "This account is no longer available.";
   }
   if (error === AUTH_ERROR_SIGN_IN_FAILED) {
     return "Sign-in failed - please try again.";

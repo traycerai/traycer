@@ -659,6 +659,10 @@ export function acquireRemoteSession<
       session.subscribeAvailabilityRecovered(listener),
     subscribeReadinessLost: (listener) =>
       session.subscribeReadinessLost(listener),
+    getMethodSupport: (method) => session.getMethodSupport(method),
+    getMethodSchemaVersion: (method) => session.getMethodSchemaVersion(method),
+    subscribeMethodSupport: (listener) =>
+      session.subscribeMethodSupport(listener),
     close: release,
   };
 }
@@ -695,6 +699,22 @@ export function acquireRemoteSession<
  * on the NEWER identity's cache miss, which has already happened by the time
  * that consumer releases. Without the mark, the release path would linger an
  * obsolete ready session for the full window and keep answering for the host.
+ *
+ * THE DELIBERATE ASYMMETRY WITH {@link retireAllRemoteSessions}, stated here so
+ * the two are not "unified" by a later reader who notices they nearly match.
+ * That one force-closes held entries; this one does not, and the difference is
+ * a difference in what the holder is about to do rather than in how thorough
+ * each sweep feels like being.
+ *
+ * Supersession is TRIGGERED BY an acquire of the newer identity - the render
+ * layer has already rebuilt its transport, so a holder of the old entry is a
+ * consumer on its way out, and its release is imminent. Waiting for it costs a
+ * moment and takes the session down at the point its owner is finished with it.
+ *
+ * An authorization boundary has no such acquire behind it and no such release
+ * ahead of it: the holder is an open tab that will keep holding, and what it
+ * can still SEND over an already-attached socket is the whole problem. Waiting
+ * there means not enforcing.
  */
 function closeSupersededIdentities(
   identity: RemoteSessionIdentity,
@@ -762,32 +782,64 @@ function closeSupersededIdentities(
 }
 
 /**
- * Retires EVERY cached session: marks each entry superseded, closing the free
- * ones outright and leaving held ones to close at their release (the sticky
- * `superseded` mark carries the verdict, exactly as in
- * {@link closeSupersededIdentities}).
+ * THE AUTH BOUNDARY'S SWEEP: force-closes EVERY cached session, including ones
+ * a consumer still holds.
  *
- * For the auth boundary. Supersession is otherwise detected only at ACQUIRE
- * time, which leaves a hole on sign-out: every consumer releases, the entries
- * enter the keep-warm linger un-marked, and until someone acquires for a
- * given host - which a read-only surface never does - a retired user's
- * still-attached session keeps answering {@link hasReadyRemoteSession} for up
- * to the full window, rendering the host Online to whoever signs in next off
- * the signed-out user's connection. The sign-out transition releases the
- * credential lease, so none of these sessions can mint again anyway; retiring
- * them at the boundary just makes the cache say so immediately.
+ * Called when the client's authorization to reach these hosts ends - sign-out,
+ * a cross-user transition, a same-user re-sign-in that mints a fresh lease, and
+ * a terminal server verdict that demotes a verified session to `unverified`.
+ *
+ * WHY IT DOES NOT STOP AT `refCount > 0`, which is the one thing to understand
+ * here and the thing this function used to get wrong. Everywhere else in this
+ * module a held entry is marked {@link CacheEntry.superseded} and left to close
+ * at its release - see {@link closeSupersededIdentities}, which still works
+ * exactly that way and deliberately so. That rule rests on a premise:
+ * release-on-let-go assumes the HOLDER'S OWN LIFECYCLE will end the session
+ * soon, which is true of the thing supersession is about - a render rebuilding
+ * its transport onto a new identity, already in flight by the time the sweep
+ * runs.
+ *
+ * An authorization boundary breaks that premise in both directions:
+ *
+ *  - A holder is an OPEN TAB, and it holds its reference for as long as the tab
+ *    is open. There is no imminent release to wait for.
+ *  - The acquired view's `sendUnary` / `subscribe` delegate straight through to
+ *    the shared session, so the mark alone changes only what surfaces that ASK
+ *    {@link hasReadyRemoteSession} can see. It changes nothing about what a
+ *    bound tab can still SEND, which it does over an already-attached socket
+ *    bounded only by the relay's client-leg deadline.
+ *
+ * Marking a held entry and walking away therefore left the account's data
+ * flowing after the act whose entire meaning was that access ends. Closing is
+ * the enforcement; the mark is only bookkeeping.
+ *
+ * NOR IS THE LEASE ENOUGH, which is what the old premise really leaned on
+ * ("sign-out releases the credential, so these sessions cannot mint again
+ * anyway"). Two holes: an already-attached session does not mint again, and the
+ * demotion path deliberately RETAINS the live bearer and `RequestContext` so
+ * the local, disk-served plane keeps working - so nothing is released and
+ * nothing re-keys, since the cache key's `authEpoch` is the identity of the
+ * bearer SOURCE OBJECT, which an in-place rotation does not change.
+ * `CreateRemoteTransportOptions.cloudAuthorized` does not cover it either: it
+ * is read per ATTACH, so it refuses the next grant and says nothing about a
+ * connection that already has one.
+ *
+ * Closing under a live consumer is not a new state for that consumer to handle:
+ * a session-level fatal already closes a session in place beneath every holder,
+ * and each holder's later `release()` finds its entry displaced from the map and
+ * closes it again idempotently.
+ *
+ * LOCAL HOST SESSIONS ARE UNTOUCHED, by construction rather than by a filter:
+ * this cache holds `RemoteSession`s only, so a sweep of it cannot reach the
+ * local plane that `unverified` exists to keep serving.
  */
 export function retireAllRemoteSessions(): void {
   for (const [key, entry] of [...entriesByKey]) {
-    // The MARK alone changes this host's answer: a superseded entry stops
-    // counting for `hasReadyRemoteSession` whether or not it can be closed
-    // yet, so the notify belongs here and not only on the close path below.
+    // Marked as well as closed. The per-consumer view captured THIS entry
+    // object, and its `wake()` guard reads `entry.superseded` - so the mark is
+    // what refuses an accelerated redial from a holder that has not noticed
+    // the close yet.
     entry.superseded = true;
-    notifyReadinessChanged();
-    if (entry.refCount > 0) {
-      // Still held. `release` closes it the moment its last consumer lets go.
-      continue;
-    }
     if (entry.lingerTimer !== null) {
       clearTimeout(entry.lingerTimer);
       entry.lingerTimer = null;
@@ -796,9 +848,14 @@ export function retireAllRemoteSessions(): void {
       clearTimeout(entry.planRestrictedTimer);
       entry.planRestrictedTimer = null;
     }
-    entry.disposeReadinessWiring();
+    // Delete BEFORE closing, exactly as `closeSupersededIdentities` does:
+    // `close()` fires `onClosed` listeners synchronously, and a listener that
+    // re-enters `acquireRemoteSession` for this key must take a clean miss
+    // rather than adopt the corpse this loop is in the middle of retiring.
     entriesByKey.delete(key);
+    entry.disposeReadinessWiring();
     entry.session.close();
+    notifyReadinessChanged();
   }
 }
 

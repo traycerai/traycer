@@ -68,7 +68,11 @@ function createFixture(succeedsOnRequest: number): Fixture {
 describe("useCloudChatList recovery", () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    // Identity AND verdict: a cloud-chat read needs a viewer id and a
+    // `signed-in` status, or the query is disabled and never recovers because
+    // it never ran.
     useAuthStore.setState({
+      status: "signed-in",
       contextMetadata: { userId: "viewer-1", username: "viewer-1" },
     });
   });

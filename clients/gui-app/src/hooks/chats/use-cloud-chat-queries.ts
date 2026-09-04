@@ -24,10 +24,17 @@ import type { CloudChatIdentity } from "@traycer/protocol/host/epic/cloud-chat";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { cloudChatListCacheKeyIdentity } from "@/lib/chats/cloud-chat-list-cache";
-import { createHostCloudChatReadPort } from "@/lib/chats/cloud-chat-read-port";
+import {
+  cloudChatReadRefusedWithoutVerdict,
+  createHostCloudChatReadPort,
+} from "@/lib/chats/cloud-chat-read-port";
 import { activeChatPartCache } from "@/lib/chats/cloud-chat-part-cache";
 import { cloudChatQueryKeys } from "@/lib/query-keys/cloud-chat-query-keys";
-import { useAuthStore } from "@/stores/auth/auth-store";
+import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
+import {
+  authorizesCloudCapability,
+  useAuthStore,
+} from "@/stores/auth/auth-store";
 
 /**
  * The cloud-chat read hooks.
@@ -38,6 +45,15 @@ import { useAuthStore } from "@/stores/auth/auth-store";
  * have different correct answers. The signed-in user id therefore rides every
  * key (see `cloud-chat-query-keys.ts`), and every hook disables itself when no
  * viewer is resolved - there is no such thing as an unattributed cloud read.
+ *
+ * Every hook here also disables itself when the session holds no cloud verdict
+ * (see {@link useCloudChatHasCloudAuthorization}). A resolved viewer is not an
+ * authorization: `unverified` carries an identity read off this device's disk
+ * precisely so the LOCAL plane stays readable, and these four methods are the
+ * cloud one. The read gate has a destructive companion - see
+ * {@link cloudChatListAuthorizesRecordSweep}, which must be handed the same
+ * answer, and which is the reason gating the reads alone would have made things
+ * worse rather than better.
  *
  * No hook here attaches a toast. Every consumer is an inline surface: a list
  * section that hides itself, a dialog that states its refusal in place. A toast
@@ -55,6 +71,31 @@ import { useAuthStore } from "@/stores/auth/auth-store";
  */
 export function useCloudChatViewerId(): string {
   return useAuthStore((state) => state.contextMetadata?.userId ?? "");
+}
+
+/**
+ * Whether this session may SPEND the account's cloud capability, which every
+ * read in this module does.
+ *
+ * Deliberately NOT folded into {@link useCloudChatViewerId}. That helper answers
+ * "who is viewing", and `unverified` has an answer to that - an identity read
+ * off this device's credentials file - which the LOCAL chat-registry reads keyed
+ * by the same viewer still need. Gating the identity would disable those too,
+ * which is the local plane this PR exists to keep serving.
+ *
+ * The reads below are the other half: `epic.listCloudChats`,
+ * `epic.resolveCloudChatHead`, `epic.listCloudChatPayloads` and
+ * `epic.readCloudChatPayload` all reach the account's servers on a bearer the
+ * cloud has stopped vouching for, so they take this test in addition to the
+ * viewer one.
+ *
+ * Exported because {@link cloudChatListAuthorizesRecordSweep}'s callers must
+ * hand it the SAME answer these queries were gated on - a second spelling at a
+ * consumer would eventually disagree with this one, and the direction it would
+ * disagree in is "authorize a sweep the list was never allowed to inform".
+ */
+export function useCloudChatHasCloudAuthorization(): boolean {
+  return useAuthStore((state) => authorizesCloudCapability(state.status));
 }
 
 export interface UseCloudChatListArgs {
@@ -83,6 +124,7 @@ export function useCloudChatList(
   HostRpcError
 > {
   const viewerUserId = useCloudChatViewerId();
+  const cloudAuthorized = useCloudChatHasCloudAuthorization();
   const params = useMemo(() => ({ taskId: args.taskId }), [args.taskId]);
   return useHostQuery<HostRpcRegistry, "epic.listCloudChats">({
     // The one shared spelling of this key's viewer component -
@@ -93,9 +135,15 @@ export function useCloudChatList(
     client: args.client,
     method: "epic.listCloudChats",
     params,
+    // The verdict is re-read at DISPATCH, as the head, part and payload reads
+    // do (see `cloudVerdictPreflight`).
+    preflight: cloudVerdictPreflight("epic.listCloudChats"),
     options: {
       enabled:
-        args.enabled && args.taskId.length > 0 && viewerUserId.length > 0,
+        args.enabled &&
+        cloudAuthorized &&
+        args.taskId.length > 0 &&
+        viewerUserId.length > 0,
       staleTime: 30_000,
       // Only transport failures (or fatal frames explicitly marked retryable)
       // can recover without a user decision. Authorization, compatibility and
@@ -124,13 +172,31 @@ export function useCloudChatList(
  * is no client or no resolved viewer, and a disabled query never reaches either
  * flag - so a consumer gating on them waits forever for a response nobody will
  * send. A query that will not run has given its final answer.
+ *
+ * ## `cloudAuthorized`, and why it is required here too
+ *
+ * Same trap as {@link cloudChatListAuthorizesRecordSweep}, same fix, and they
+ * are required arguments in both places precisely so the family cannot be half
+ * fixed: `!query.isEnabled` conflates two disabled states that mean opposite
+ * things. Disabled for want of a client or a viewer is "nothing will ever
+ * answer" - a final answer, and the reason this predicate exists. Disabled for
+ * want of AUTHORIZATION is "the answer exists and this session may not ask for
+ * it", which is not settled at all.
+ *
+ * Left unsplit, this predicate reported an unverified session's list as SETTLED
+ * and EMPTY, which the sidebar turned into "No agents yet." for a task whose
+ * agents are all remote - a false statement produced by a session that simply
+ * could not look. Consumers must render the unauthorized case as its own arm;
+ * see the sidebar's empty-state branch.
  */
 export function isCloudChatListSettled(
   query: Pick<
     UseQueryResult<unknown, HostRpcError>,
     "isEnabled" | "isSuccess" | "isError"
   >,
+  cloudAuthorized: boolean,
 ): boolean {
+  if (!cloudAuthorized) return false;
   return !query.isEnabled || query.isSuccess || query.isError;
 }
 
@@ -149,13 +215,38 @@ export function isCloudChatListSettled(
  * and record policing on local records alone is that host's correct
  * pre-cloud-list behavior. A disabled query authorizes for the same reason it
  * settles - nothing will ever answer, and the sweep cannot wait forever.
+ *
+ * ## Why `cloudAuthorized` is a REQUIRED second argument
+ *
+ * The `!query.isEnabled` arm above is the whole reason this parameter exists,
+ * and it is a trap rather than a subtlety. `useCloudChatList` now disables
+ * itself when the session holds no cloud verdict, and "disabled" was the
+ * strongest AUTHORIZING arm here - so gating the query alone would have turned
+ * an `unverified` session into one that reaps every restored record-less tab on
+ * mount. The read would have been made safe and the destruction it feeds
+ * unleashed by the same edit.
+ *
+ * The two disabled cases are genuinely different and cannot be told apart from
+ * `isEnabled`: disabled for want of a viewer or a task id means nothing will
+ * ever answer, so policing on local records is the whole truth available;
+ * disabled for want of AUTHORIZATION means the cloud rows exist and this
+ * session merely may not look at them, which is exactly the ignorance the
+ * failed-list arm already refuses to destroy on. So this arm fails closed:
+ * absent authorization, no sweep, and the never-adopted tabs stay open until a
+ * verdict returns and the list can answer for them.
+ *
+ * Required, not defaulted: a permissive default is how the second consumer of a
+ * predicate inherits an answer nobody made for it, and both consumers here
+ * close things that a later, better answer does not reopen.
  */
 export function cloudChatListAuthorizesRecordSweep(
   query: Pick<
     UseQueryResult<unknown, HostRpcError>,
     "isEnabled" | "isSuccess" | "isError" | "error"
   >,
+  cloudAuthorized: boolean,
 ): boolean {
+  if (!cloudAuthorized) return false;
   if (!query.isEnabled || query.isSuccess) return true;
   return query.isError && query.error?.code === "E_HOST_UNSUPPORTED";
 }
@@ -224,6 +315,7 @@ export function useCloudChatRead(
   args: UseCloudChatReadArgs,
 ): UseQueryResult<CloudChatRead, HostRpcError> {
   const viewerUserId = useCloudChatViewerId();
+  const cloudAuthorized = useCloudChatHasCloudAuthorization();
   const { client, identity } = args;
   const hostId = client?.getActiveHostId() ?? null;
 
@@ -237,7 +329,12 @@ export function useCloudChatRead(
     try {
       return await readCloudChat({
         identity,
-        port: createHostCloudChatReadPort(client),
+        // The verdict is re-read by the port before every head and part
+        // request: `enabled` below stops the next read, not the fan-out of
+        // part reads already running when a session is demoted.
+        port: createHostCloudChatReadPort(client, () =>
+          authorizesCloudCapability(useAuthStore.getState().status),
+        ),
         // Resolved per read, not captured at module load: sign-out DROPS the
         // store (an already-opened `Cache` handle survives its own deletion, and
         // the no-Cache-API fallback is not in `CacheStorage` at all), so a
@@ -270,6 +367,7 @@ export function useCloudChatRead(
       queryFn: run,
       enabled:
         args.enabled &&
+        cloudAuthorized &&
         client !== null &&
         identity !== null &&
         viewerUserId.length > 0,
@@ -385,6 +483,7 @@ export function useCloudChatPayloadList(args: {
   HostRpcError
 > {
   const viewerUserId = useCloudChatViewerId();
+  const cloudAuthorized = useCloudChatHasCloudAuthorization();
   const { identity } = args;
   // `identity` is frequently a fresh object per render at the call site, so the
   // params are memoized on its three fields rather than its reference -
@@ -403,7 +502,11 @@ export function useCloudChatPayloadList(args: {
     method: "epic.listCloudChatPayloads",
     params,
     options: {
-      enabled: args.enabled && identity !== null && viewerUserId.length > 0,
+      enabled:
+        args.enabled &&
+        cloudAuthorized &&
+        identity !== null &&
+        viewerUserId.length > 0,
       staleTime: 0,
       retry: false,
     },
@@ -445,12 +548,22 @@ export function useCloudChatPayload(args: {
   readonly enabled: boolean;
 }): UseQueryResult<CloudChatPayloadBytes, HostRpcError> {
   const viewerUserId = useCloudChatViewerId();
+  const cloudAuthorized = useCloudChatHasCloudAuthorization();
   const { client, identity, ref } = args;
   const hostId = client?.getActiveHostId() ?? null;
 
   const run = async (): Promise<CloudChatPayloadBytes> => {
     if (client === null || identity === null || ref === null) {
       throw new Error("Cloud chat payload read ran without its inputs");
+    }
+    // The verdict is re-read at DISPATCH, not only in `enabled` below. A
+    // `refetch()` is a caller override of `enabled` in TanStack v5, and the
+    // published-chat surfaces expose exactly that as their Retry action for a
+    // failed side - so a Retry still rendered after a demotion would otherwise
+    // send this read on the retained host credential. Same refusal, same
+    // shape, as the port `useCloudChatRead` reads through.
+    if (!authorizesCloudCapability(useAuthStore.getState().status)) {
+      throw cloudChatReadRefusedWithoutVerdict("epic.readCloudChatPayload");
     }
     // Same normalization boundary as `useCloudChatRead`: the decode's own
     // rejections (a digest mismatch, `crypto.subtle` unavailable) are plain
@@ -479,6 +592,7 @@ export function useCloudChatPayload(args: {
       queryFn: run,
       enabled:
         args.enabled &&
+        cloudAuthorized &&
         client !== null &&
         identity !== null &&
         ref !== null &&

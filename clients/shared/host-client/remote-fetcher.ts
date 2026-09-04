@@ -4,6 +4,7 @@ import {
   type HostListResponse,
   type HostStatusDTO,
 } from "@traycer/protocol/host/host-status";
+import type { CloudBearerSource } from "../auth/bearer-source";
 import type { AuthEra } from "../auth/request-context-provider";
 import { applyHostKeyPins } from "./host-key-pin";
 import type { HostDirectoryEntry } from "./host-directory";
@@ -638,8 +639,17 @@ export interface RemoteHostFetcherDeps {
    * `(bearer) => fetchRegisteredHostsViaHttp(authnBaseUrl, bearer)`.
    */
   readonly listHosts: (bearerToken: string) => Promise<HostListFetchResult>;
-  /** Reads the current user bearer, or `null` when signed out. */
-  readonly getBearerToken: () => string | null;
+  /**
+   * The CLOUD-authorized user bearer, or `null` when there is none to spend -
+   * signed out, or a session holding a token with no `/api/v3/user` verdict
+   * behind it. `GET /api/v3/hosts` reads the account's registry, so it is a
+   * cloud capability and not something a merely-present token buys.
+   *
+   * Typed as {@link CloudBearerSource} rather than `() => string | null` so a
+   * shell adopting this fetcher cannot hand it a raw bearer reader by accident;
+   * see that type for what the brand does and does not guarantee.
+   */
+  readonly bearer: CloudBearerSource;
   /**
    * Reads whether the ACCOUNT's plan includes remote hosts, at fetch time —
    * the second axis every projected entry is stamped with (see
@@ -661,18 +671,25 @@ export interface RemoteHostFetcherDeps {
  * a background list poll. A `network-error` result maps to `failed` so a
  * transient blip never drops the merged directory (T20 / audit P4).
  *
- * The browser/dev shell's fetcher: `getBearerToken` hands back whatever is
- * current, with no era attached, so this cannot honour the era check the
- * desktop path performs. It is not on the desktop composition — the GUI wires
+ * The browser/dev shell's fetcher: `bearer` hands back whatever is current,
+ * with no era attached, so this cannot honour the era check the desktop path
+ * performs. It is not on the desktop composition — the GUI wires
  * `AuthService.fetchRegisteredHosts`, which owns both the bearer and the era
  * it belongs to and refuses a mismatch. A shell that adopts this fetcher for
  * a real credential must supply an era-aware credential read.
+ *
+ * At the time of writing this function has NO production caller at all — every
+ * shipped composition is the desktop one above — so the {@link CloudBearerSource}
+ * requirement on `bearer` is a fence for whoever wires the browser/dev shell
+ * next, not a gate closing a live egress. Said plainly because a reader
+ * counting converted call sites would otherwise credit it with more than it
+ * does.
  */
 export function createRemoteHostFetcher(
   deps: RemoteHostFetcherDeps,
 ): RemoteHostFetcher {
   return async () => {
-    const bearerToken = deps.getBearerToken();
+    const bearerToken = deps.bearer.getBearerToken();
     if (bearerToken === null) {
       return { kind: "signed-out" };
     }

@@ -9,6 +9,10 @@ import { useUsageSummarySupported } from "@/hooks/usage-analytics/use-usage-summ
 import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import { UsageSummaryPanel } from "@/components/usage-analytics/usage-summary-panel";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
+import {
+  authorizesCloudCapability,
+  useAuthStore,
+} from "@/stores/auth/auth-store";
 
 /**
  * The route / modal entry point. `host.usage.summary` is an OPTIONAL RPC
@@ -66,6 +70,9 @@ export function UsageSettingsPanel(): ReactNode {
   // handshake has completed yet", so a cold start shows a spinner instead of
   // claiming the active host is too old to report usage.
   const support = useHostMethodSupport(activeHostId, "host.usage.summary");
+  const cloudAuthorized = useAuthStore((state) =>
+    authorizesCloudCapability(state.status),
+  );
   return (
     <SettingsPanelShell
       title="Usage"
@@ -87,6 +94,7 @@ export function UsageSettingsPanel(): ReactNode {
     >
       <UsageSettingsPanelBody
         support={support}
+        cloudAuthorized={cloudAuthorized}
         client={client}
         hostNames={hostNames}
         activeHostId={activeHostId}
@@ -100,6 +108,8 @@ export function UsageSettingsPanel(): ReactNode {
 function UsageSettingsPanelBody(props: {
   /** `null` = no handshake yet, so neither "supported" nor "too old" is known. */
   readonly support: boolean | null;
+  /** `authorizesCloudCapability(status)` - see the notice below for why. */
+  readonly cloudAuthorized: boolean;
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly hostNames: ReadonlyMap<string, string>;
   readonly activeHostId: string | null;
@@ -121,6 +131,9 @@ function UsageSettingsPanelBody(props: {
         testId="usage-no-host-notice"
       />
     );
+  }
+  if (!props.cloudAuthorized) {
+    return <UsageUnverifiedNotice />;
   }
   if (props.support === null) {
     return (
@@ -167,6 +180,12 @@ export function UsageSettingsPanelForClient(props: {
 }): ReactNode {
   const hostId = props.client?.getActiveHostId() ?? null;
   const supported = useUsageSummarySupported(hostId);
+  const cloudAuthorized = useAuthStore((state) =>
+    authorizesCloudCapability(state.status),
+  );
+  if (!cloudAuthorized) {
+    return <UsageUnverifiedNotice />;
+  }
   if (!supported) {
     return (
       <UsageNotice
@@ -187,6 +206,29 @@ export function UsageSettingsPanelForClient(props: {
 
 /** Stable identity so the panel's `hostOptions` memo is not invalidated every render. */
 const EMPTY_HOST_NAMES: ReadonlyMap<string, string> = new Map();
+
+/**
+ * What an `unverified` session sees instead of the dashboard.
+ *
+ * `host.usage.summary` is served by whichever reader the HOST picks - the
+ * protocol says so (`servedBy`), and the client has no selector to ask for the
+ * local one - so a session whose cloud verdict authn could not confirm would
+ * otherwise read account-wide usage through the retained local-host
+ * credential. Withholding the whole panel, rather than just its initial
+ * fetch, also covers the manual Retry and the window/metric changes that
+ * refetch. A negotiated local-only selector could give this cohort the
+ * genuinely local reads back; until then the panel is a cloud surface and is
+ * gated as one. Found in review.
+ */
+function UsageUnverifiedNotice(): ReactNode {
+  return (
+    <UsageNotice
+      title="Usage needs a verified sign-in"
+      detail="Traycer couldn't confirm your session with the account service. Usage reads account-wide data, so it stays hidden until you're signed in again."
+      testId="usage-unverified-notice"
+    />
+  );
+}
 
 /**
  * Same anatomy as `HostScopeGate`'s internal `HostScopeNotice` (icon chip +

@@ -91,6 +91,7 @@ function makeClient(
     connectionId: undefined,
     operationId: undefined,
     externalAbortSignal: undefined,
+    cloudAuthorized: true,
   });
   return new WsStreamClient({
     clientIdentity: TEST_CLIENT_IDENTITY,

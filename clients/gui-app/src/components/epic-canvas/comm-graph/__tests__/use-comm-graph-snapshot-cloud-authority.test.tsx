@@ -1,5 +1,13 @@
-import { act, renderHook, waitFor } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest";
 import type { HostCommunicationGraphCloudFeedEvent } from "@traycer/protocol/host/epic/communication-graph";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type { RemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
@@ -17,6 +25,10 @@ import {
   useCommGraphTimelineStore,
 } from "@/stores/epics/comm-graph-timeline-store";
 import { commGraphCursorForEvent } from "@/lib/comm-graph/comm-graph-timeline";
+import { useAuthStore } from "@/stores/auth/auth-store";
+
+const PROFILE = { userId: "user-1", userName: "U", email: "u@example.com" };
+const CONTEXT = { userId: "user-1", username: "U" };
 
 const directoryEntries = vi.hoisted(() => ({
   current: [] as ReadonlyArray<HostDirectoryEntry>,
@@ -66,12 +78,21 @@ function cloudEvent(): HostCommunicationGraphCloudFeedEvent {
 describe("useCommGraphSnapshot cloud authority", () => {
   beforeEach(() => {
     directoryEntries.current = [];
+    // The cloud claim is held only under a cloud verdict; every case here
+    // models a verified session unless it says otherwise.
+    useAuthStore.getState().setSignedIn(PROFILE, CONTEXT, []);
     useCommGraphTimelineStore.setState({ stateByEpicId: {} });
     __resetCommGraphCloudRegistryForTests();
     __resetCommGraphRegistryForTests();
   });
 
   afterEach(() => {
+    // Unmount BEFORE the store flips: a hook left mounted by an earlier case
+    // re-renders on every auth change the next case makes, re-claims the
+    // relay through the next case's opener override, and its release then
+    // redials the orphaned host - an extra open attributed to nobody.
+    cleanup();
+    useAuthStore.getState().setSignedOut();
     __setCommGraphCloudSubscriptionOpenerForTests(null);
     __setCommGraphSubscriptionOpenerForTests(null);
     __resetCommGraphCloudRegistryForTests();
@@ -366,6 +387,102 @@ describe("useCommGraphSnapshot cloud authority", () => {
       ingestVersion: 21,
       eventId: "unrepresentable-row",
     });
+  });
+
+  it("holds the cloud claim only while the session holds a cloud verdict", async () => {
+    const localRequests: CommGraphSubscriptionRequest[] = [];
+    __setCommGraphSubscriptionOpenerForTests((request) => {
+      localRequests.push(request);
+      return { close: vi.fn() };
+    });
+    const cloudRequests: CommGraphCloudSubscriptionRequest[] = [];
+    // One close spy PER handle: the manager may redial the same relay on a
+    // readiness-key change, so "the stream is closed" is a claim about every
+    // handle it opened, not about a call count on one shared spy.
+    const cloudCloses: Mock<() => void>[] = [];
+    __setCommGraphCloudSubscriptionOpenerForTests((request) => {
+      cloudRequests.push(request);
+      const close = vi.fn<() => void>();
+      cloudCloses.push(close);
+      return { close };
+    });
+    useAuthStore.getState().setUnverifiedSession(PROFILE, CONTEXT);
+
+    renderHook(() => useCommGraphSnapshot("epic-1", ["origin-a"]));
+
+    // The local fan-in is this host's own event log and serves the unverified
+    // session; the cloud-sourced relay is not claimed without a verdict.
+    await waitFor(() => expect(localRequests).toHaveLength(1));
+    expect(cloudRequests).toHaveLength(0);
+
+    // Non-vacuity: the verdict returning is what claims the relay...
+    act(() => {
+      useAuthStore.getState().setSignedIn(PROFILE, CONTEXT, []);
+    });
+    await waitFor(() => expect(cloudRequests.length).toBeGreaterThan(0));
+
+    // ...and withdrawing it while the tile stays mounted closes every handle
+    // and opens no other.
+    const openedBeforeDemotion = cloudRequests.length;
+    act(() => {
+      useAuthStore.getState().setUnverifiedSession(PROFILE, CONTEXT);
+    });
+    await waitFor(() =>
+      expect(cloudCloses.every((close) => close.mock.calls.length > 0)).toBe(
+        true,
+      ),
+    );
+    expect(cloudRequests).toHaveLength(openedBeforeDemotion);
+  });
+
+  it("falls back to the local fan-in after a demotion, even once the cloud was authoritative", async () => {
+    const localRequests: CommGraphSubscriptionRequest[] = [];
+    const localClose = vi.fn();
+    __setCommGraphSubscriptionOpenerForTests((request) => {
+      localRequests.push(request);
+      return { close: localClose };
+    });
+    const cloudRequests: CommGraphCloudSubscriptionRequest[] = [];
+    __setCommGraphCloudSubscriptionOpenerForTests((request) => {
+      cloudRequests.push(request);
+      return { close: vi.fn() };
+    });
+
+    const { result } = renderHook(() =>
+      useCommGraphSnapshot("epic-1", ["origin-a"]),
+    );
+    await waitFor(() => expect(cloudRequests).toHaveLength(1));
+    act(() => {
+      cloudRequests[0].handlers.onAvailability("available");
+      cloudRequests[0].handlers.onSnapshot([cloudEvent()], 20, null);
+    });
+    await waitFor(() => expect(localClose).toHaveBeenCalledTimes(1));
+    expect(result.current.events.map((event) => event.eventId)).toEqual([
+      "cloud-event",
+    ]);
+
+    // The detached manager retains its `available` verdict for the next
+    // attach; without a session verdict it is not read as authoritative, so
+    // the local fan-in re-attaches and its snapshot is selected.
+    const cloudOpenedBeforeDemotion = cloudRequests.length;
+    act(() => {
+      useAuthStore.getState().setUnverifiedSession(PROFILE, CONTEXT);
+    });
+    await waitFor(() => expect(localRequests.length).toBeGreaterThan(1));
+    expect(result.current.events).toEqual([]);
+
+    // Re-verification re-claims the relay and the retained cloud rows return.
+    act(() => {
+      useAuthStore.getState().setSignedIn(PROFILE, CONTEXT, []);
+    });
+    await waitFor(() =>
+      expect(cloudRequests.length).toBeGreaterThan(cloudOpenedBeforeDemotion),
+    );
+    await waitFor(() =>
+      expect(result.current.events.map((event) => event.eventId)).toEqual([
+        "cloud-event",
+      ]),
+    );
   });
 
   it("uses a signed-in non-origin host to relay the cloud feed", async () => {

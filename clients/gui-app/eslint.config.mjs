@@ -33,6 +33,10 @@ import {
   selectionKernelImportRestrictions,
   selectionKernelOwner,
 } from "../../eslint/traycer-host-selection-layer-rules.mjs";
+import {
+  cloudBearerFenceGuiAllowlist,
+  cloudBearerFenceRestrictions,
+} from "../../eslint/traycer-cloud-bearer-fence-rules.mjs";
 
 // ── IMPORT RESTRICTIONS ARE COMPOSED FROM DIMENSIONS. READ THIS BEFORE ADDING ONE. ──
 //
@@ -364,6 +368,7 @@ const generalCustomSyntaxRestrictions = [
   epicTabRouteConstructionBan,
   ...selectByIdRestrictions,
   ...selectionAuthorityRestrictions,
+  ...cloudBearerFenceRestrictions,
   ...LINK_EGRESS_RESTRICTIONS,
   ...TILE_OPEN_RESTRICTIONS,
 ];
@@ -403,6 +408,7 @@ const syntaxExemptions = {
   epicTabRoute: [epicTabRouteConstructionBan],
   selectById: selectByIdRestrictions,
   selectionAuthority: selectionAuthorityRestrictions,
+  cloudBearerFence: cloudBearerFenceRestrictions,
   // Two groups, not one: tests lift the bridge half (they stub
   // `{ openExternalLink: vi.fn() }` and assert on it) and keep the DOM half.
   linkEgressBridge: LINK_EGRESS_BRIDGE_RESTRICTIONS,
@@ -905,6 +911,53 @@ export default tseslint.config(
       // component - is scaffolding these two bans were never written about.
       "no-restricted-syntax": syntaxRestrictions({
         exempt: [
+          "nativeTitleTooltip",
+          "forwardRef",
+          "selectById",
+          "selectionAuthority",
+          "tileOpen",
+          "linkEgressBridge",
+          "linkEgressHook",
+        ],
+        nestedFocus: null,
+        tabNavigation: [
+          "useEpicCanvasStore.setActiveTab",
+          "useLandingDraftStore.setActiveDraft",
+        ],
+      }),
+    },
+  },
+  {
+    // The cloud-bearer fence's one gui-app allowance. `auth-service.test.ts`
+    // asserts what the service INSTALLS on the request context - that a sign-in
+    // publishes the bearer, that a same-user rotation replaces it in place, that
+    // a sign-out releases the lease - and reading it back through the context is
+    // how those are observable at all. Same exemption class as the shared
+    // lease-contract suites; see `traycer-cloud-bearer-fence-rules.mjs`.
+    //
+    // Scoped to this ONE file rather than added to the `__tests__` block's
+    // `exempt` list: a test elsewhere reaching a raw bearer out of a context is
+    // a real violation of the rule's intent, and a blanket test exemption would
+    // erase exactly what the fence protects.
+    //
+    // MUST STAY BELOW THE `__tests__` BLOCK ABOVE. That block matches every test
+    // file and supplies a from-scratch `no-restricted-syntax` value, so this
+    // allowance placed anywhere earlier is silently overwritten and reads as
+    // configured while doing nothing. That is not hypothetical - this block WAS
+    // written higher up, lint stayed red on the five sites it names, and only
+    // running it found out. It restates the same `nestedFocus` / `tabNavigation`
+    // shape the test block sets so moving it down costs those files nothing -
+    // and the three test-scaffolding exemptions too (`tileOpen` /
+    // `linkEgressBridge` / `linkEgressHook`): `auth-service.test.ts` stubs
+    // `runnerHost.openExternalLink` to observe the sign-in ordering, and a
+    // from-scratch value here that dropped them re-banned exactly the
+    // test-double reading the block above lifts. Same overwrite, other
+    // direction.
+    files: cloudBearerFenceGuiAllowlist,
+    rules: {
+      "no-restricted-syntax": syntaxRestrictions({
+        exempt: [
+          "cloudBearerFence",
           "nativeTitleTooltip",
           "forwardRef",
           "selectById",

@@ -6,6 +6,10 @@ import {
 } from "../../eslint/flat-base.mjs";
 import { traycerTypeSafetyRestrictions } from "../../eslint/traycer-type-safety-rules.mjs";
 import { traycerClientsImportBoundaryRestrictions } from "../../eslint/traycer-clients-import-boundary-rules.mjs";
+import {
+  cloudBearerFenceAllowlist,
+  cloudBearerFenceRestrictions,
+} from "../../eslint/traycer-cloud-bearer-fence-rules.mjs";
 
 // Modules the host-lifecycle probe must not reach, by request path.
 //
@@ -82,11 +86,32 @@ export default tseslint.config(
     },
     plugins: { "@typescript-eslint": tseslint.plugin },
     rules: {
-      "no-restricted-syntax": ["error", ...traycerTypeSafetyRestrictions],
+      "no-restricted-syntax": [
+        "error",
+        ...traycerTypeSafetyRestrictions,
+        ...cloudBearerFenceRestrictions,
+      ],
       "@typescript-eslint/no-restricted-imports": [
         "error",
         traycerClientsImportBoundaryRestrictions,
       ],
+    },
+  },
+  // The cloud-bearer fence's allowlist — the suites that test the credential
+  // lease's own contract by reading a bearer through a context. See
+  // `traycer-cloud-bearer-fence-rules.mjs` for why the fence is scoped to the
+  // `.credentials.` reach rather than to the method name; widening this list is
+  // a scope decision, not a lint fix.
+  //
+  // Restates the type-safety selectors for the reason the block below does:
+  // flat config REPLACES a rule's options rather than merging them, so an
+  // exemption written as the fence alone would silently lift `as any`,
+  // optional-parameter and default-argument enforcement from these three files
+  // as well. Only the fence is being lifted here.
+  {
+    files: cloudBearerFenceAllowlist,
+    rules: {
+      "no-restricted-syntax": ["error", ...traycerTypeSafetyRestrictions],
     },
   },
   // host-lifecycle world probe is read-only by construction (T3). Ban
@@ -102,6 +127,7 @@ export default tseslint.config(
       "no-restricted-syntax": [
         "error",
         ...traycerTypeSafetyRestrictions,
+        ...cloudBearerFenceRestrictions,
         ...hostLifecycleDynamicImportRestrictions,
       ],
       "no-restricted-imports": [
@@ -136,7 +162,11 @@ export default tseslint.config(
   {
     files: ["host-lifecycle/__tests__/real-supervisor-*.ts"],
     rules: {
-      "no-restricted-syntax": ["error", ...traycerTypeSafetyRestrictions],
+      "no-restricted-syntax": [
+        "error",
+        ...traycerTypeSafetyRestrictions,
+        ...cloudBearerFenceRestrictions,
+      ],
       "no-restricted-imports": "off",
     },
   },

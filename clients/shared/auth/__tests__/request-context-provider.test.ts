@@ -461,6 +461,160 @@ describe("DefaultRequestContextProvider - listener management", () => {
   });
 });
 
+/**
+ * `announceSessionVerified()` / `onSessionVerified(...)`.
+ *
+ * This signal is driven by the AUTH BOUNDARY (auth-service.ts), not by this
+ * class itself - none of `setSignedIn` / `rotateCurrentBearer` / `signOut`
+ * call it internally. So every test here drives it directly, the same way
+ * the boundary would once it has committed a verdict everywhere it is
+ * readable (see the long comment on `announceSessionVerified` in the
+ * production file for why that ordering matters).
+ */
+describe("DefaultRequestContextProvider - session verified announcement", () => {
+  it("invokes a registered listener once with the live identity and the post-commit generation", () => {
+    const provider = createProvider();
+    const user = createAuthenticatedUserFixture({});
+    (user.user as { id: string }).id = "user-verified";
+    provider.setSignedIn({
+      user,
+      bearerToken: "bearer-1",
+      operationId: undefined,
+      externalAbortSignal: undefined,
+    });
+
+    const eras: AuthEra[] = [];
+    provider.onSessionVerified((era) => eras.push(era));
+
+    provider.announceSessionVerified();
+
+    // Read the live generation AFTER the signed-in commit, per the brief -
+    // `setSignedIn` already bumped it before this call, so the era the
+    // listener received must match what the provider reports right now.
+    expect(eras).toEqual([
+      {
+        identity: "user-verified",
+        credentialGeneration: provider.getCredentialGeneration(),
+      },
+    ]);
+  });
+
+  it("is a no-op while signed out: no listener call with no prior setSignedIn", () => {
+    const provider = createProvider();
+    let called = false;
+    provider.onSessionVerified(() => {
+      called = true;
+    });
+
+    provider.announceSessionVerified();
+
+    expect(called).toBe(false);
+  });
+
+  it("is a no-op after signOut: the session that was verified is gone", () => {
+    const provider = createProvider();
+    const user = createAuthenticatedUserFixture({});
+    provider.setSignedIn({
+      user,
+      bearerToken: "bearer-1",
+      operationId: undefined,
+      externalAbortSignal: undefined,
+    });
+    provider.signOut();
+
+    let called = false;
+    provider.onSessionVerified(() => {
+      called = true;
+    });
+
+    provider.announceSessionVerified();
+
+    expect(called).toBe(false);
+  });
+
+  it("the returned disposer removes the listener from future announcements", () => {
+    const provider = createProvider();
+    const user = createAuthenticatedUserFixture({});
+    provider.setSignedIn({
+      user,
+      bearerToken: "bearer-1",
+      operationId: undefined,
+      externalAbortSignal: undefined,
+    });
+
+    let callCount = 0;
+    const dispose = provider.onSessionVerified(() => {
+      callCount += 1;
+    });
+
+    dispose();
+    provider.announceSessionVerified();
+
+    expect(callCount).toBe(0);
+  });
+
+  // `announceSessionVerified()` calls `this.assertNotDisposed()` as its very
+  // first line (see the production source), so calling it after `dispose()`
+  // THROWS rather than silently doing nothing - the same contract every
+  // other imperative transition (`setSignedIn` / `rotateCurrentBearer` /
+  // `signOut`) already has. This test pins that observed behavior rather
+  // than assuming a no-op.
+  it("throws when called after dispose(), matching every other imperative transition", () => {
+    const provider = createProvider();
+    const user = createAuthenticatedUserFixture({});
+    provider.setSignedIn({
+      user,
+      bearerToken: "bearer-1",
+      operationId: undefined,
+      externalAbortSignal: undefined,
+    });
+
+    let callCount = 0;
+    provider.onSessionVerified(() => {
+      callCount += 1;
+    });
+
+    provider.dispose();
+
+    expect(() => provider.announceSessionVerified()).toThrow(
+      /has been disposed/,
+    );
+    expect(callCount).toBe(0);
+  });
+
+  it("dispose() clears onSessionVerified subscribers registered before it", () => {
+    const provider = createProvider();
+    const user = createAuthenticatedUserFixture({});
+    provider.setSignedIn({
+      user,
+      bearerToken: "bearer-1",
+      operationId: undefined,
+      externalAbortSignal: undefined,
+    });
+
+    let called = false;
+    provider.onSessionVerified(() => {
+      called = true;
+    });
+
+    provider.dispose();
+
+    // `announceSessionVerified()` itself throws post-dispose (pinned above),
+    // so the only way to observe subscriber clearing directly is that a
+    // fresh `onSessionVerified` registration after dispose is a no-op
+    // disposer over an empty set - mirroring `onChange`'s post-dispose
+    // contract exercised elsewhere in this file.
+    let calledAfterDisposeRegistration = false;
+    const dispose = provider.onSessionVerified(() => {
+      calledAfterDisposeRegistration = true;
+    });
+    dispose();
+
+    expect(called).toBe(false);
+    expect(calledAfterDisposeRegistration).toBe(false);
+  });
+});
+
 describe("RequestContextProvider - provider contract is raw-token-free (static guard)", () => {
   type ForbiddenRawTokenKeys =
     | "getToken"

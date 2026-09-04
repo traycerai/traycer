@@ -376,6 +376,7 @@ describe("RequestContext - origin fixtures", () => {
       connectionId: "conn-1",
       operationId: "op-1",
       externalAbortSignal: external.signal,
+      cloudAuthorized: true,
     });
 
     expect(ctx.connectionId).toBe("conn-1");

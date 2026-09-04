@@ -16,6 +16,15 @@ export const hostQueryKeys = {
       : ([...hostQueryKeys.base(), hostId] as const),
   methodScope: <Method extends string>(hostId: string | null, method: Method) =>
     [...hostQueryKeys.scope(hostId), method] as const,
+  /**
+   * Whether `queryKey` is a `method` key under ANY host scope - the
+   * `predicate` form of `methodScope` for a fact that is not one host's. A
+   * key built with a null host has the method at index 1, a host-bound key at
+   * index 2; a host id is never a method name, so both slots are tested.
+   */
+  matchesMethodOnAnyHost: (queryKey: readonly unknown[], method: string) =>
+    queryKey[0] === "host" &&
+    (queryKey[1] === method || queryKey[2] === method),
   method: <
     Registry extends VersionedRpcRegistry,
     Method extends keyof Registry & string,

@@ -9,8 +9,10 @@ import {
   resetAgentActivity,
 } from "@/__tests__/agent-activity-harness";
 import {
+  __resetAgentActivityStoreForTests,
   __setAgentActivityPlaneAnsweringForTests,
-  useAgentActivityStore,
+  __setHostAgentActivityHealthForTests,
+  TEST_LOCAL_ACTIVITY_HOST_ID,
 } from "@/stores/agent-activity-store";
 import { OpenEpicSessionRegistry } from "@/stores/epics/open-epic/session-registry";
 import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
@@ -328,12 +330,15 @@ describe("OpenEpicSessionRegistry", () => {
     // left open and documented: an open transport used to make a session
     // evictable regardless of which host it was bound to, because the
     // plane's own map had no per-session host to compare against.
-    useAgentActivityStore.setState({
+    // The file's `beforeEach` leaves the local test host answering with a
+    // fleet-spanning union, which would cover every host; start from an
+    // empty store so the only slice is the narrow serving host's.
+    __resetAgentActivityStoreForTests();
+    __setHostAgentActivityHealthForTests("host-serving", {
       connectionStatus: "open",
       servedBy: "local",
       stateFrameSeenThisEpoch: true,
       cloudSyncStatus: null,
-      servingHostId: "host-serving",
     });
     const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
     const elsewhere = withHostId(
@@ -364,12 +369,15 @@ describe("OpenEpicSessionRegistry", () => {
     // session on the host that built the union is exactly what the union
     // describes, open transport or not - holding those too would make the
     // cap inert for every install without a cloud link.
-    useAgentActivityStore.setState({
+    // The file's `beforeEach` leaves the local test host answering with a
+    // fleet-spanning union, which would cover every host; start from an
+    // empty store so the only slice is the narrow serving host's.
+    __resetAgentActivityStoreForTests();
+    __setHostAgentActivityHealthForTests("host-serving", {
       connectionStatus: "open",
       servedBy: "local",
       stateFrameSeenThisEpoch: true,
       cloudSyncStatus: null,
-      servingHostId: "host-serving",
     });
     const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
     const handles: TestHandle[] = [];
@@ -622,7 +630,9 @@ describe("cap eviction defers to the activity plane's own health", () => {
   }
 
   it("evicts nothing while the activity plane's stream is closed, even though every entry is clean", () => {
-    useAgentActivityStore.setState({ connectionStatus: "closed" });
+    __setHostAgentActivityHealthForTests(TEST_LOCAL_ACTIVITY_HOST_ID, {
+      connectionStatus: "closed",
+    });
     const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
     const handles = acquireOverflowing(registry, 6);
 
@@ -638,7 +648,7 @@ describe("cap eviction defers to the activity plane's own health", () => {
     // thing that says this epoch has not re-attested the union is the marker.
     // Reading `servedBy` here would vouch with the PREVIOUS epoch's working
     // set and evict an Epic whose agent started during the gap.
-    useAgentActivityStore.setState({
+    __setHostAgentActivityHealthForTests(TEST_LOCAL_ACTIVITY_HOST_ID, {
       connectionStatus: "open",
       servedBy: "cloud",
       stateFrameSeenThisEpoch: false,
@@ -653,7 +663,7 @@ describe("cap eviction defers to the activity plane's own health", () => {
   });
 
   it("evicts nothing while the host's cloud link is reconnecting", () => {
-    useAgentActivityStore.setState({
+    __setHostAgentActivityHealthForTests(TEST_LOCAL_ACTIVITY_HOST_ID, {
       connectionStatus: "open",
       servedBy: "cloud",
       // Everything else vouches, so the cloud stamp is the only refusal in
@@ -671,7 +681,9 @@ describe("cap eviction defers to the activity plane's own health", () => {
   });
 
   it("prunes overflow the moment the plane starts answering again, with no new acquire", () => {
-    useAgentActivityStore.setState({ connectionStatus: "closed" });
+    __setHostAgentActivityHealthForTests(TEST_LOCAL_ACTIVITY_HOST_ID, {
+      connectionStatus: "closed",
+    });
     const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
     const handles = acquireOverflowing(registry, 6);
     expect(registry.size()).toBe(6);
@@ -821,7 +833,7 @@ function buildRetentionHandleWithNeverSettlingWrite(epicId: string): {
     writeCommand: () => new Promise<{ readonly hostId: string }>(() => {}),
   });
   if (captured.value === null) throw new Error("factory not invoked");
-  captured.value.onConnectionStatus("open", null);
+  captured.value.onConnectionStatus("open", null, false);
   captured.value.onSnapshot(
     writeGateOpenSnapshotMeta(epicId),
     Y.encodeStateAsUpdate(new Y.Doc()),

@@ -341,8 +341,9 @@ describe("callHostRpc", () => {
     // A dead refresh token leaves the lease untouched, so the wrapper does not
     // retry and the UNAUTHORIZED surfaces.
     rotateMock.mockResolvedValue({
-      outcome: "refresh-rejected",
+      outcome: "refresh-rejected-credential",
       credentials: null,
+      rejection: null,
     });
 
     await expect(

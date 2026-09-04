@@ -541,8 +541,54 @@ export type ListTaskLightPre13 = z.infer<typeof listTaskLightSchemaPre13>;
  * distinction matters, because `[]` is a truthful "none of my chats anywhere"
  * and would let a local predicate confidently filter the row OUT.
  */
-export const listTaskLightSchema = listTaskLightSchemaPre13.extend({
+export const listTaskLightSchemaPre14 = listTaskLightSchemaPre13.extend({
   chatHostIds: z.array(z.string()).optional(),
+});
+export type ListTaskLightPre14 = z.infer<typeof listTaskLightSchemaPre14>;
+
+/**
+ * Durable home for an epic as known by the host local-room registry.
+ * Present only on host-merged `epic.listTasks` rows (never on pure cloud
+ * payloads). Optional so released clients and older hosts ignore absence.
+ *
+ * - `local`: unpromoted / mid-promotion; synthesized from the home registry
+ * - `cloud`: reserved for future host-side tagging of cloud-homed rows
+ *
+ * Support-facing fact: unpromoted (`home: "local"`) epics exist only on this
+ * device's host. Cloud tooling (platform UI, support reports, server
+ * listTasks) cannot see them until promotion flips home to cloud.
+ */
+export const epicListHomeSchema = z.enum(["local", "cloud"]);
+export type EpicListHome = z.infer<typeof epicListHomeSchema>;
+
+// `epic.listTasks@1.4` list row: @1.3's chat-host dimension plus the optional
+// durability home.
+export const listTaskLightSchemaPre15 = listTaskLightSchemaPre14.extend({
+  home: epicListHomeSchema.optional(),
+});
+export type ListTaskLightPre15 = z.infer<typeof listTaskLightSchemaPre15>;
+
+/**
+ * Why a row survived a deletion, on a row the client would otherwise never
+ * see - `s5-orphaned-epic-recovery`.
+ *
+ * `orphaned-local-edits` is the listable half of
+ * `orphaned-local-edits-after-cloud-delete`: completion was refused to protect
+ * never-uploaded bytes, so the epic is cloud-homed, absent from the server's
+ * own list, and 404s on a known-id cloud open. Before this marker there was no
+ * surface a pause badge could render on - the epic was durably recorded and
+ * permanently unreachable.
+ *
+ * A closed enum with one member on purpose. The other two `@1.6` delete-path
+ * pause reasons are informational states of an epic the user can already see;
+ * only this one describes an epic that has to be RE-ADMITTED to discovery.
+ */
+export const epicListPreservationSchema = z.enum(["orphaned-local-edits"]);
+export type EpicListPreservation = z.infer<typeof epicListPreservationSchema>;
+
+// `epic.listTasks@1.5` list row: adds the preservation marker.
+export const listTaskLightSchema = listTaskLightSchemaPre15.extend({
+  preservation: epicListPreservationSchema.optional(),
 });
 export type ListTaskLight = z.infer<typeof listTaskLightSchema>;
 
@@ -559,8 +605,22 @@ export const listTasksRequestSchemaPre13 = listTasksRequestSchemaV11.extend({
 });
 export type ListTasksRequestPre13 = z.infer<typeof listTasksRequestSchemaPre13>;
 
-export const listTasksRequestSchema = listTasksRequestSchemaPre13.extend({
+export const listTasksRequestSchemaPre16 = listTasksRequestSchemaPre13.extend({
   filters: taskFiltersSchema.nullable(),
+});
+export type ListTasksRequestPre16 = z.infer<typeof listTasksRequestSchemaPre16>;
+
+/**
+ * A two-response local-first read. `initial` asks a capable host to return
+ * its locally provable rows without waiting for cloud; `revalidate` is the
+ * single bounded follow-up that obtains and merges the cloud page.
+ *
+ * This is deliberately an explicit phase rather than a boolean. A cloud page
+ * that arrives after a local deletion must be merged against a fresh local
+ * projection, which is work only the revalidation phase needs to request.
+ */
+export const listTasksRequestSchema = listTasksRequestSchemaPre16.extend({
+  localFirstPhase: z.enum(["initial", "revalidate"]).optional(),
 });
 export type ListTasksRequest = z.infer<typeof listTasksRequestSchema>;
 
@@ -625,9 +685,147 @@ export type ListTasksResponsePre13 = z.infer<
 // `tasks` on the frozen pre-1.3 row, and since zod STRIPS unknown keys, every
 // row's `chatHostIds` would be silently discarded at response validation -
 // the field would simply never arrive, with nothing failing.
-export const listTasksResponseSchema = listTasksResponseSchemaPre13.extend({
+//
+// FROZEN at @1.3 - `@1.4` adds a row key this schema would strip. `facets`
+// names the live schema on purpose: the facet shape does not move again on
+// this line, so freezing it would only add a name. Freeze it here the moment
+// a later minor extends `listTasksFacetsSchema`.
+export const listTasksResponseSchemaPre14 = listTasksResponseSchemaPre13.extend(
+  {
+    tasks: z.array(listTaskLightSchemaPre14),
+    facets: listTasksFacetsSchema.optional(),
+  },
+);
+export type ListTasksResponsePre14 = z.infer<
+  typeof listTasksResponseSchemaPre14
+>;
+
+// `epic.listTasks@1.4` response: @1.3's rows plus the optional host-side home
+// marker. FROZEN - `@1.5` adds keys this schema would strip.
+export const listTasksResponseSchemaPre15 = listTasksResponseSchemaPre14.extend(
+  {
+    tasks: z.array(listTaskLightSchemaPre15),
+  },
+);
+export type ListTasksResponsePre15 = z.infer<
+  typeof listTasksResponseSchemaPre15
+>;
+
+/**
+ * How complete this page actually is - `s5-offline-history` C6.
+ *
+ * Through `@1.4` a page that had lost its cloud leg was indistinguishable from
+ * a complete one: the host swallowed the failure, fell back to an empty body,
+ * prepended the local rows, and the client rendered the result under whatever
+ * filter chips and sort the user had picked. There was no key on the wire that
+ * could say otherwise, so the renderer's only honest option was one it had no
+ * evidence for.
+ *
+ * Each member is a POSITIVE statement, not a flag:
+ *
+ * - `cloudPage` - whether the server's own page was read. `unavailable` means
+ *   the cloud leg failed or ran out of budget, so anything the server alone
+ *   knows (other devices' epics, cursors, totals) is missing from this answer.
+ * - `facets` - `server` when the counts came from the server's own faceting
+ *   over its own result set; `partial` the moment host rows were injected
+ *   beside them or the cloud page is missing, because the counts then describe
+ *   a different set than the rows do.
+ * - `localRows` - whether host-synthesized rows are present, absent because
+ *   there were none, TRUNCATED because rows that may have belonged on this
+ *   page were dropped from it, or SUPPRESSED because the request carried a
+ *   filter term this host cannot prove against durable state. The last two
+ *   are the ones worth naming: `truncated` is the difference between "these
+ *   are your offline tasks" and "these are the first N of them" (a silent cap
+ *   reads as covered-everything - the defect this key exists to prevent), and
+ *   `suppressed-unprovable-filter` is the difference between "you have no
+ *   local epics matching" and "this filter cannot be answered locally" -
+ *   collapsing that one is how a filtered offline History came to look
+ *   empty-but-authoritative.
+ *
+ *   `truncated` has THREE producers and a client must not read it as the cap
+ *   alone. The first is the page-injection cap trimming admissible mirror
+ *   rows. The second is a repo/workspace filter meeting a row that carries no
+ *   association evidence to be judged against - an ordinary cloud mirror, or a
+ *   local epic created before those associations were retained. The third is a
+ *   text query judged against a row whose root document could not be read, so
+ *   the only title available was the immutable creation payload: an epic
+ *   renamed after creation is then dropped from a search for its CURRENT name
+ *   on evidence that is known stale, which is a drop the host cannot prove and
+ *   must not report as proven.
+ *
+ *   All three leave the page missing rows for a reason the client cannot see,
+ *   which is the only distinction this member is asked to carry; the
+ *   differences between them are diagnostic and live in the host log.
+ *
+ *   The producers are deliberately not distinguished on the wire, and the
+ *   count above is documentation rather than contract - a client that branches
+ *   on WHICH producer fired is reading a distinction this member does not
+ *   carry, and will break when a fourth is added.
+ * - `sort` - `server` when the returned order is the server's evaluation of
+ *   the requested sort; `loaded-union` when host rows were merged in, so the
+ *   order holds over the rows present and is not a global ranking.
+ */
+export const listTasksCompletenessSchemaPre16 = z.object({
+  cloudPage: z.enum(["settled", "unavailable"]),
+  facets: z.enum(["server", "partial"]),
+  localRows: z.enum([
+    "present",
+    "none",
+    "truncated",
+    "suppressed-unprovable-filter",
+  ]),
+  sort: z.enum(["server", "loaded-union"]),
+});
+export type ListTasksCompletenessPre16 = z.infer<
+  typeof listTasksCompletenessSchemaPre16
+>;
+
+// `epic.listTasks@1.6` adds the in-flight state. A `pending` page is a
+// renderable local snapshot, never a cloud failure or a claim of completeness.
+export const listTasksCompletenessSchema =
+  listTasksCompletenessSchemaPre16.extend({
+    cloudPage: z.enum(["settled", "unavailable", "pending"]),
+  });
+export type ListTasksCompleteness = z.infer<typeof listTasksCompletenessSchema>;
+
+// `epic.listTasks@1.5` row alias - FROZEN, and NOT a redundant second name for
+// the live row.
+//
+// The bare `listTaskLightSchema` is a MOVING TARGET by this file's own
+// convention: the unsuffixed name always means the latest row, so the minor
+// that adds the next row key REBINDS it, and every site that named it by
+// identifier adopts the new shape without anyone editing that site. The two
+// values are the same object today; the alias is what keeps them from
+// diverging silently tomorrow.
+//
+// That is not hypothetical here - it is how `taskContextResolutionSchema`
+// below picked up `home` and `preservation` at an ALREADY-RELEASED `@1.2`,
+// with nobody touching a getTaskContexts schema, and the released-baseline
+// gate reported it as a BREAKING structural change at a shipped version.
+export const listTaskLightSchemaPre16 = listTaskLightSchema;
+export type ListTaskLightPre16 = z.infer<typeof listTaskLightSchemaPre16>;
+
+// `epic.listTasks@1.5` response: `@1.4`'s rows plus the preservation marker and
+// the pre-local-first `completeness` statement. FROZEN - `@1.6` widens
+// `completeness.cloudPage`.
+export const listTasksResponseSchemaPre16 = listTasksResponseSchemaPre15.extend(
+  {
+    tasks: z.array(listTaskLightSchemaPre16),
+    completeness: listTasksCompletenessSchemaPre16.optional(),
+  },
+);
+export type ListTasksResponsePre16 = z.infer<
+  typeof listTasksResponseSchemaPre16
+>;
+
+// Latest listTasks response: `@1.6` adds the negotiated local-first
+// `pending` completeness value. Both keys stay optional so an older HOST on
+// this line simply omits them; absence remains "this host cannot say", never
+// "complete". The `tasks` redeclaration below carries the LIVE row and is the
+// one place on this line that should.
+export const listTasksResponseSchema = listTasksResponseSchemaPre16.extend({
   tasks: z.array(listTaskLightSchema),
-  facets: listTasksFacetsSchema.optional(),
+  completeness: listTasksCompletenessSchema.optional(),
 });
 export type ListTasksResponse = z.infer<typeof listTasksResponseSchema>;
 
@@ -716,7 +914,24 @@ export const taskContextResolutionSchemaPre12 = z.discriminatedUnion("status", [
 export const taskContextResolutionSchema = z.discriminatedUnion("status", [
   z.object({
     status: z.literal("found"),
-    task: listTaskLightSchema,
+    // FROZEN at the row shape `epic.getTaskContexts@1.2` released with, NOT
+    // the live `listTaskLightSchema`.
+    //
+    // This reference is shared by every getTaskContexts minor, so pointing it
+    // at the live row silently reshapes ALREADY-RELEASED versions whenever
+    // `epic.listTasks` grows a row key - which is a different method, on its
+    // own minor line, whose authors have no reason to look here. `@1.2` picked
+    // up `home` and `preservation` that way, with nobody editing a
+    // getTaskContexts schema, and the released-baseline gate caught it as a
+    // BREAKING structural change at a shipped version.
+    //
+    // Nothing wants the newer keys here: `@1.3` deliberately answers the
+    // local-home question with the `localHomedTaskIds` SIBLING list rather
+    // than a row field, and `combineTaskPinnedStateResults` reads that list.
+    // A later minor that genuinely needs a richer row must add its own
+    // resolution schema against the frozen alias of ITS release, never move
+    // this one forward.
+    task: listTaskLightSchemaPre14,
   }),
   z.object({
     status: z.literal("confirmed-absent"),
@@ -754,9 +969,44 @@ export type GetTaskContextsResponsePre12 = z.infer<
   typeof getTaskContextsResponseSchemaPre12
 >;
 
-export const getTaskContextsResponseSchema = z.object({
+/**
+ * `epic.getTaskContexts@1.2` response - FROZEN. Rows are the resolution
+ * union; the `@1.3` growth below is a sibling key on the response object,
+ * never a change to this record's value shape.
+ */
+export const getTaskContextsResponseSchemaPre13 = z.object({
   tasks: z.record(z.string(), taskContextResultSchema),
 });
+export type GetTaskContextsResponsePre13 = z.infer<
+  typeof getTaskContextsResponseSchemaPre13
+>;
+
+/**
+ * `epic.getTaskContexts@1.3` - which of the returned ids are local-homed.
+ *
+ * The host has always KNOWN this here: the resolver overlays owned local-home
+ * rows precisely so a released GUI reconciling its open tabs does not read an
+ * unpromoted epic as deleted. It just had nowhere on the wire to say so, and
+ * the consequence is `s5-parity-gaps` gap 4 - the tab strip learns about its
+ * epics through this method ALONE, so it offered a CLOUD-ONLY pin action on a
+ * local epic, fired the mutation, and toasted that it had pinned it.
+ *
+ * ## A sibling id list rather than `home` on the row
+ *
+ * `epic.listTasks@1.4` puts `home` on the row and this would ideally match it.
+ * It cannot: `tasks` is a `z.record`, which the additivity gate compares
+ * structurally as an opaque node, so growing its VALUE schema is a hard
+ * compatibility violation even when the added key is optional. Adding an
+ * optional sibling property to the response object is the additive shape the
+ * gate is built around, and it carries the same fact.
+ *
+ * Absence means the host did not say - an older host, or a `@1.0`-`@1.2`
+ * negotiation - and must be read as cloud-or-unknown, never as local.
+ */
+export const getTaskContextsResponseSchema =
+  getTaskContextsResponseSchemaPre13.extend({
+    localHomedTaskIds: z.array(z.string()).optional(),
+  });
 export type GetTaskContextsResponse = z.infer<
   typeof getTaskContextsResponseSchema
 >;

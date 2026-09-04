@@ -111,6 +111,23 @@ type ListHarnessesResponse = ResponseOfMethod<
   HostRpcRegistry,
   "agent.gui.listHarnesses"
 >;
+type ListTasksResponse = ResponseOfMethod<HostRpcRegistry, "epic.listTasks">;
+type ListTasksRequest = RequestOfMethod<HostRpcRegistry, "epic.listTasks">;
+
+// Explicitly complete. This suite records method NAMES for the mock host,
+// never versions, and the reconciler reads a page with no `completeness`
+// marker from a host of unknown line as unproven - and an unproven page may
+// not close any tab.
+const EMPTY_LIST_TASKS_RESPONSE: ListTasksResponse = {
+  tasks: [],
+  hasMore: false,
+  completeness: {
+    cloudPage: "settled",
+    facets: "server",
+    localRows: "none",
+    sort: "loaded-union",
+  },
+};
 
 interface Deferred<T> {
   readonly promise: Promise<T>;
@@ -125,6 +142,9 @@ interface StartupConsumersOptions {
   readonly listHarnesses: () =>
     | Promise<ListHarnessesResponse>
     | ListHarnessesResponse;
+  readonly listTasks?: (
+    params: ListTasksRequest,
+  ) => Promise<ListTasksResponse> | ListTasksResponse;
   readonly onMethod: (method: string) => void;
 }
 
@@ -171,6 +191,7 @@ function buildQueryClient(): QueryClient {
 function buildMessengerFactory(
   options: StartupConsumersOptions,
 ): MessengerFactory<HostRpcRegistry> {
+  const listTasks = options.listTasks ?? (() => EMPTY_LIST_TASKS_RESPONSE);
   return (args) =>
     new MockHostMessenger<HostRpcRegistry>({
       registry: args.registry,
@@ -187,6 +208,10 @@ function buildMessengerFactory(
         "agent.gui.listHarnesses": () => {
           options.onMethod("agent.gui.listHarnesses");
           return options.listHarnesses();
+        },
+        "epic.listTasks": (params) => {
+          options.onMethod("epic.listTasks");
+          return listTasks(params);
         },
       },
     });

@@ -22,7 +22,11 @@ import {
   epicStatusSubscribeClientFrameSchemaV10,
   epicStatusSubscribeServerFrameSchemaV10,
 } from "@traycer/protocol/host/epic/status-subscribe";
-import { epicCloudSyncStatusSchema } from "@traycer/protocol/host/epic/subscribe";
+import {
+  epicCloudSyncStatusSchema,
+  epicSubscribeV13,
+  epicSubscribeV16,
+} from "@traycer/protocol/host/epic/subscribe";
 import {
   artifactSubscribeClientFrameSchemaV10,
   artifactSubscribeOpenRequestSchemaV10,
@@ -79,10 +83,19 @@ describe("registry shape: the epic lane surface installs at the versions the spl
     }
   });
 
-  it("keeps epic.subscribe pinned to exactly major 1, with @2.0 gone and @1 intact at latestMinor 3", () => {
+  it("keeps epic.subscribe pinned to exactly major 1, with @2.0 gone and @1 intact at latestMinor 6", () => {
     const epicSubscribeMajors = hostStreamRpcRegistry["epic.subscribe"];
     expect(Object.keys(epicSubscribeMajors)).toEqual(["1"]);
-    expect(epicSubscribeMajors[1].latestMinor).toBe(3);
+    // The `@1` line is six minors tall here: the local-room branch mints
+    // @1.4-@1.6 (durability, promotion, the s5 status pass) above mainline's
+    // released @1.3. What this assertion is about is that the line SURVIVES
+    // the lane split rather than being replaced by it - both its mainline
+    // floor and its current top are pinned so a regression either way is
+    // visible. (This carries the registry coverage of the deleted
+    // `epic-subscribe-v2.test.ts` forward.)
+    expect(epicSubscribeMajors[1].latestMinor).toBe(6);
+    expect(epicSubscribeMajors[1].versions[3]?.contract).toBe(epicSubscribeV13);
+    expect(epicSubscribeMajors[1].versions[6]?.contract).toBe(epicSubscribeV16);
   });
 
   it("installs the two lane unaries at 1.0, degrade: unsupported, and off the released floor", () => {
@@ -123,7 +136,7 @@ describe("the released epic.subscribe@1 line and epic.listChatRecords@1.0 did no
     "../../__tests__/__fixtures__/released-baseline-surface.json",
   );
 
-  it("stream['epic.subscribe'] is byte-for-byte the released baseline surface", () => {
+  it("stream['epic.subscribe']'s released minors are byte-for-byte the baseline; only @1.4-@1.6 were added", () => {
     const baseline: unknown = JSON.parse(readFileSync(fixturePath, "utf8"));
     const mine = buildProtocolSurface({
       unary: hostRpcRegistry,
@@ -131,11 +144,32 @@ describe("the released epic.subscribe@1 line and epic.listChatRecords@1.0 did no
       stream: hostStreamRpcRegistry,
     });
 
-    expect(mine.stream["epic.subscribe"]).toEqual(
-      (baseline as { stream: Record<string, unknown> }).stream[
-        "epic.subscribe"
-      ],
-    );
+    // Not byte-for-byte over the WHOLE entry: this branch adds the unreleased
+    // @1.4-@1.6 minors, so the frozen claim is scoped to the released schemas
+    // and the addition set is pinned exactly - a seventh minor or a missing
+    // one fails here rather than sliding through.
+    const baselineEntry = (
+      baseline as {
+        stream: Record<
+          string,
+          { schemas: Record<string, unknown>; majors: unknown }
+        >;
+      }
+    ).stream["epic.subscribe"];
+    for (const released of Object.keys(baselineEntry.schemas)) {
+      expect(mine.stream["epic.subscribe"].schemas[released]).toEqual(
+        baselineEntry.schemas[released],
+      );
+    }
+    expect(Object.keys(mine.stream["epic.subscribe"].schemas).sort()).toEqual([
+      "1.0",
+      "1.1",
+      "1.2",
+      "1.3",
+      "1.4",
+      "1.5",
+      "1.6",
+    ]);
   });
 
   it("optionalUnary['epic.listChatRecords'].schemas['1.0'] is unchanged; only 1.1 was added", () => {

@@ -4,7 +4,7 @@ import type { HostLeaseSnapshot } from "@traycer-clients/shared/host-selection/s
 import type { MutationProgress } from "@traycer-clients/shared/platform/runner-host";
 import type { HostStatusSnapshot } from "@/lib/host/compatibility-state";
 import { dialableHostEndpointFor } from "@/lib/host/transport-key";
-import type { AuthStatus } from "@/stores/auth/auth-store";
+import { admitsLocalPlane, type AuthStatus } from "@/stores/auth/auth-store";
 
 export type HostReadinessScope = "none" | "default-host" | "tab-host";
 
@@ -470,7 +470,7 @@ export function resolveSurfaceReadiness(args: {
   readonly authorityAttached: boolean;
 }): SurfaceReadiness {
   if (args.scope === "none") return READY;
-  if (args.authStatus === "signed-in" && args.requestContextUserId === null) {
+  if (admitsLocalPlane(args.authStatus) && args.requestContextUserId === null) {
     return { kind: "restoring-request-context" };
   }
   if (args.scope === "default-host") return defaultHostReadiness(args);

@@ -8,12 +8,22 @@ interface HookState {
   localEntry: HostDirectoryEntry | null;
   runnerHost: Pick<IRunnerHost, "hasLocalHost"> | null;
   boundHostId: string | null;
+  /**
+   * When `true`, the mocked `useHostDirectoryEntry` throws instead of
+   * answering - standing in for the real hook's documented behaviour outside
+   * a `<HostRuntimeProvider>` (it reads `useHostDirectory()`, which throws).
+   * Exists so a test can prove `useNotificationsServingHostId` never reaches
+   * the entry hook's fallback path: flip this on, and the ID hook must still
+   * answer from `fallbackHostId` without tripping it.
+   */
+  throwOnDirectoryEntry: boolean;
 }
 
 const state = vi.hoisted<HookState>(() => ({
   localEntry: null,
   runnerHost: null,
   boundHostId: null,
+  throwOnDirectoryEntry: false,
 }));
 
 vi.mock("@/hooks/host/use-reactive-local-host-entry", () => ({
@@ -30,11 +40,20 @@ vi.mock("@/hooks/host/use-addressable-host-id", () => ({
 }));
 
 vi.mock("@/hooks/host/use-host-directory-entry", () => ({
-  useHostDirectoryEntry: (hostId: string): HostDirectoryEntry | null =>
-    hostId.length === 0 ? null : { ...mockLocalHostEntry, hostId },
+  useHostDirectoryEntry: (hostId: string): HostDirectoryEntry | null => {
+    if (state.throwOnDirectoryEntry) {
+      throw new Error(
+        "useHostDirectoryEntry called outside a HostRuntimeProvider",
+      );
+    }
+    return hostId.length === 0 ? null : { ...mockLocalHostEntry, hostId };
+  },
 }));
 
-import { useNotificationsServingHostEntry } from "@/hooks/host/use-notifications-serving-host-entry";
+import {
+  useNotificationsServingHostEntry,
+  useNotificationsServingHostId,
+} from "@/hooks/host/use-notifications-serving-host-entry";
 
 describe("useNotificationsServingHostEntry", () => {
   afterEach(() => {
@@ -42,6 +61,7 @@ describe("useNotificationsServingHostEntry", () => {
     state.localEntry = null;
     state.runnerHost = null;
     state.boundHostId = null;
+    state.throwOnDirectoryEntry = false;
   });
 
   it("returns the local entry when a local host is present and the shell declares local capability", () => {
@@ -102,5 +122,79 @@ describe("useNotificationsServingHostEntry", () => {
     const { result } = renderHook(() => useNotificationsServingHostEntry());
 
     expect(result.current).toBeNull();
+  });
+});
+
+describe("useNotificationsServingHostId", () => {
+  afterEach(() => {
+    cleanup();
+    state.localEntry = null;
+    state.runnerHost = null;
+    state.boundHostId = null;
+    state.throwOnDirectoryEntry = false;
+  });
+
+  it("does not throw outside a HostRuntimeProvider - it answers from fallbackHostId directly, never through the entry hook's directory read", () => {
+    // Relay-only shell taking the fallback, with the mocked directory read
+    // configured to throw exactly as the real `useHostDirectoryEntry` does
+    // outside a `<HostRuntimeProvider>`. If this hook composed through
+    // `useNotificationsServingHostEntry()` (which calls that directory read
+    // to resolve the fallback), this render would throw.
+    state.localEntry = null;
+    state.runnerHost = { hasLocalHost: false };
+    state.boundHostId = "host-b";
+    state.throwOnDirectoryEntry = true;
+
+    const { result } = renderHook(() => useNotificationsServingHostId());
+
+    expect(result.current).toBe("host-b");
+  });
+
+  it("agrees with useNotificationsServingHostEntry when a local host is present", () => {
+    state.localEntry = mockLocalHostEntry;
+    state.runnerHost = { hasLocalHost: true };
+    state.boundHostId = "host-b";
+
+    const entryResult = renderHook(() => useNotificationsServingHostEntry());
+    const idResult = renderHook(() => useNotificationsServingHostId());
+
+    expect(idResult.result.current).toBe(entryResult.result.current?.hostId);
+    expect(idResult.result.current).toBe(mockLocalHostEntry.hostId);
+  });
+
+  it("agrees with useNotificationsServingHostEntry on a relay-only shell with a bound host", () => {
+    state.localEntry = null;
+    state.runnerHost = { hasLocalHost: false };
+    state.boundHostId = "host-b";
+
+    const entryResult = renderHook(() => useNotificationsServingHostEntry());
+    const idResult = renderHook(() => useNotificationsServingHostId());
+
+    expect(idResult.result.current).toBe(entryResult.result.current?.hostId);
+    expect(idResult.result.current).toBe("host-b");
+  });
+
+  it("agrees with useNotificationsServingHostEntry on a relay-only shell with no bound host yet", () => {
+    state.localEntry = null;
+    state.runnerHost = { hasLocalHost: false };
+    state.boundHostId = null;
+
+    const entryResult = renderHook(() => useNotificationsServingHostEntry());
+    const idResult = renderHook(() => useNotificationsServingHostId());
+
+    expect(entryResult.result.current).toBeNull();
+    expect(idResult.result.current).toBeNull();
+  });
+
+  it("agrees with useNotificationsServingHostEntry on an undeclared shell (no RunnerHostProvider)", () => {
+    state.localEntry = null;
+    state.runnerHost = null;
+    state.boundHostId = "host-b";
+
+    const entryResult = renderHook(() => useNotificationsServingHostEntry());
+    const idResult = renderHook(() => useNotificationsServingHostId());
+
+    expect(entryResult.result.current).toBeNull();
+    expect(idResult.result.current).toBeNull();
   });
 });

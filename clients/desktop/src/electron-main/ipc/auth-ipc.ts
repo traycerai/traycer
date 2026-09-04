@@ -341,6 +341,12 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
         bridge.authSession.set(parsed);
         return { outcome: "accepted" };
       }
+      // Taken before the await: this set is the newest intent from here until
+      // another begins, and the JWKS round-trip is where a sibling window's
+      // set (or sign-out) can overtake it. The commit below is dropped if a
+      // newer one COMMITTED meanwhile - a newer set that was refused, or is
+      // still verifying, supersedes nothing (`DesktopAuthSession.setVerified`).
+      const generation = bridge.authSession.beginSet();
       const reason = await bearerVerifier.verify(
         parsed.token,
         parsed.profile.userId,
@@ -352,8 +358,26 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
         log.warn("[auth] refused an unverifiable auth session", { reason });
         return { outcome: "refused", reason };
       }
-      bridge.authSession.setVerified(parsed);
-      return { outcome: "accepted" };
+      // Reported, not swallowed: an `accepted` for a set main did not install
+      // would leave the sender believing main holds what it sent.
+      return bridge.authSession.setVerified(parsed, generation)
+        ? { outcome: "accepted" }
+        : { outcome: "superseded" };
+    },
+  );
+
+  // The renderer's terminal verdict loss. Not a session transition - the
+  // session main holds stays as it is and fans out unchanged - only the
+  // verification behind it goes, which is what the jar plane reads. The
+  // revoke names the bearer it is about: windows' IPC is unordered, so one
+  // that arrives after a sibling's fresh sign-in must not strip THAT session
+  // (`DesktopAuthSession.revokeVerification`). A revoke without a bearer
+  // names nothing and is dropped.
+  bridge.handleInvoke(
+    RunnerHostInvoke.authSessionRevoke,
+    (_event, rejectedToken: unknown) => {
+      if (typeof rejectedToken !== "string") return;
+      bridge.authSession.revokeVerification(rejectedToken);
     },
   );
 

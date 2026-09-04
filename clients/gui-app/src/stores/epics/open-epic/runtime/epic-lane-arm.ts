@@ -433,6 +433,10 @@ export function createEpicLaneArm(sources: EpicLaneArmSources): EpicLaneArm {
           kind: "transport-status",
           status: status.connection,
           reason: status.closeReason,
+          // The lanes do not negotiate the `@1` durability capability; see
+          // the event's own doc for why `false` keeps the pre-status branch
+          // honest rather than reassuring.
+          durabilityStatusNegotiated: false,
           // The records lane rides ALONGSIDE the control snapshot; it never
           // carries one. So its transitions must not open or close the control
           // cycle - the same "one reconnect is one fact, and it is the control
@@ -570,6 +574,9 @@ export function createEpicLaneArm(sources: EpicLaneArmSources): EpicLaneArm {
           kind: "transport-status",
           status: status.connection,
           reason: status.closeReason,
+          // Same answer as the records lane's, for the same reason: no lane
+          // negotiates the `@1` durability capability yet.
+          durabilityStatusNegotiated: false,
           // This lane serves `control-snapshot`, so its open/close IS the
           // control cycle's boundary - the third consumer of the same
           // one-reconnect-is-one-fact rule the two calls above apply.

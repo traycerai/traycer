@@ -1159,11 +1159,47 @@ export interface IDeviceFlowHost {
 }
 
 /**
+ * WHAT a refresh rejection was ABOUT, carried from the wire because the answer
+ * cannot be recovered downstream.
+ *
+ * The distinction decides whether this device keeps serving its own on-disk
+ * data. A dead TOKEN says nothing about who is at the keyboard: the stored
+ * identity still names them, the epics are already on their disk, and holding
+ * that plane grants nothing new.
+ *
+ *   - `credential` — 400/401. A verdict about the token.
+ *   - `account`    — 403/404. A verdict about the account.
+ *
+ * BOTH hold the local plane. The distinction is real and worth carrying, but it
+ * decides the COPY and the recovery policy, not whether local data renders:
+ * gating the renderer on a dead account is unenforceable, since the host serves
+ * local-homed epics with zero `/api/v3/user` calls and the CLI reads the same
+ * files. Refusing to render them deletes nothing and inconveniences only the
+ * legitimate owner. Cloud surfaces stay gated by `authorizesCloudCapability`.
+ *
+ * `revocation` refines a credential rejection WITHOUT changing that verdict: a
+ * user-initiated "sign out everywhere" (the per-user epoch gate) is still a
+ * statement about tokens, so it holds exactly like an expiry. It exists so the
+ * copy can say the true thing, and so an operator reading a log can tell a
+ * routine global sign-out from a fork-suspicious reject. `null` covers absent,
+ * malformed AND unrecognised scopes — see {@link readRefreshRejectionScope} for
+ * why that direction is not a default but a decision.
+ */
+export type AuthRefreshRejection =
+  | { readonly kind: "account" }
+  | {
+      readonly kind: "credential";
+      readonly revocation: "user-epoch" | null;
+    };
+
+/**
  * Outcome of a forced access-token refresh (`POST /api/v3/auth/refresh`),
  * independent of any `/api/v3/user` validation. `refreshed` rotates BOTH the
  * bearer and the refresh token; `rejected` means the refresh credential is dead
- * (revoked / expired) and the session must sign out; `network-error` is
- * transient and leaves the current credential untouched so a retry can follow.
+ * (revoked / expired) and carries {@link AuthRefreshRejection} saying whether
+ * the CLOUD session or the ACCOUNT ended, because the two have different
+ * consequences for local data; `network-error` is transient and leaves the
+ * current credential untouched so a retry can follow.
  */
 export type AuthTokenRefreshResult =
   | {
@@ -1171,7 +1207,7 @@ export type AuthTokenRefreshResult =
       readonly token: string;
       readonly refreshToken: string;
     }
-  | { readonly kind: "rejected" }
+  | { readonly kind: "rejected"; readonly rejection: AuthRefreshRejection }
   | { readonly kind: "network-error" };
 
 /**
@@ -1222,7 +1258,16 @@ export type StoredCredentialsIdentity = StoredCredentials["user"];
  *   - `lock-busy`       → a live holder held the lock; bounded retry, no state lost;
  *   - `spend-pending`   → a sibling process spent this base and is still landing
  *                         the successor; transient exactly like `lock-busy`;
- *   - `refresh-rejected`→ authn rejected the refresh; UI-only sign-out, file KEPT;
+ *   - `refresh-rejected-credential`
+ *                       → authn rejected the refresh with a verdict about the
+ *                         TOKEN (400/401). UI-only; the file is KEPT and the
+ *                         local plane is HELD - see {@link AuthRefreshRejection};
+ *   - `refresh-rejected-account`
+ *                       → authn rejected it with a verdict about the ACCOUNT
+ *                         (403/404). The file is KEPT and the local plane is
+ *                         HELD, same as the credential case - what differs is
+ *                         that the error is TERMINAL, so the copy must not
+ *                         invite a retry with the same account;
  *   - `refresh-network` → transient; the access token in hand stays valid, retry;
  *   - `commit-failed`   → spent + local-commit failed; `pair` is the minted pair
  *                         the caller keeps active while main retries the commit.
@@ -1235,7 +1280,8 @@ export type TokenRotateOutcome =
   | "tombstoned"
   | "lock-busy"
   | "spend-pending"
-  | "refresh-rejected"
+  | "refresh-rejected-credential"
+  | "refresh-rejected-account"
   | "refresh-network"
   | "commit-failed";
 
@@ -1244,8 +1290,17 @@ export interface TokenRotateResult {
   // The credentials the caller should act on: the committed/adopted/minted pair
   // for `applied`/`superseded`/`user-mismatch`/`commit-failed`; `null` for the
   // outcomes that carry no pair (`deleted`/`tombstoned`/`lock-busy`/
-  // `spend-pending`/`refresh-rejected`/`refresh-network`).
+  // `spend-pending`/`refresh-rejected-credential`/`refresh-rejected-account`/
+  // `refresh-network`).
   readonly pair: StoredCredentials | null;
+  /**
+   * WHAT a `refresh-rejected-*` outcome was about - {@link AuthRefreshRejection},
+   * carried through from the mutation layer rather than collapsed into the
+   * outcome string, so the renderer can tell the user's own "sign out
+   * everywhere" (`revocation: "user-epoch"`) from an expiry or a
+   * fork-suspicious reject. `null` for every other outcome.
+   */
+  readonly rejection: AuthRefreshRejection | null;
 }
 
 /**

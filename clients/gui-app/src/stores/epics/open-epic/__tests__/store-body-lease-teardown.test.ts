@@ -214,7 +214,7 @@ function legacySnapshotMeta(epicId: string): SnapshotMetaEpic {
 /** A legacy-arm store whose write/body gates are open, but no artifact exists. */
 function openLegacyRigWithNoArtifact(epicId: string): OpenedStoreForTest {
   const factory: EpicStreamClientFactory = (_id, callbacks) => {
-    callbacks.onConnectionStatus("open", null);
+    callbacks.onConnectionStatus("open", null, false);
     callbacks.onSnapshot(
       legacySnapshotMeta(epicId),
       Y.encodeStateAsUpdate(new Y.Doc()),

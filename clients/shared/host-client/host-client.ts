@@ -202,9 +202,25 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
 
   /**
    * Returns the active `RequestContext`, or `null` when signed out / not
-   * yet authenticated. Final transport clients call this to extract a
-   * bearer (`ctx.credentials.getBearerToken()`) when opening a WS frame;
-   * shared-core consumers thread the context itself past the boundary.
+   * yet authenticated. Shared-core consumers thread the context itself past
+   * the boundary.
+   *
+   * Composition roots also read `.credentials` off this to hand the LEASE
+   * OBJECT to a transport as its `BearerSourceProvider` — that is the
+   * injection pattern, and it is what the five `bearer: () =>
+   * …getRequestContext()?.credentials ?? null` sites in gui-app are doing.
+   * Handing over the lease is fine; EXTRACTING the token from it here is not.
+   * `ctx.credentials.getBearerToken()` is lint-fenced
+   * (`eslint/traycer-cloud-bearer-fence-rules.mjs`), because reaching a raw
+   * bearer out of a context is how a call helps itself to a credential the
+   * composition never authorized for cloud use.
+   *
+   * An earlier version of this comment said final transport clients call this
+   * to extract a bearer when opening a WS frame. That was wrong in both halves:
+   * they receive an `OpenFrameBearerSource` INJECTED and call
+   * `source.getBearerToken()` on it (`ws-rpc-client.ts`,
+   * `auth-aware-messenger.ts` — the fence's allowlist), and they never call
+   * this method at all.
    */
   getRequestContext(): RequestContext | null {
     return this.requestContext;

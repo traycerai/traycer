@@ -177,9 +177,11 @@ describe("epic.subscribe@1.3 contracts and registry wiring", () => {
     expect(epicSubscribeV13.schemaVersion).toEqual({ major: 1, minor: 3 });
   });
 
-  it("registers epic.subscribe@1.3 as the latest minor with a 3: version entry", () => {
+  it("registers epic.subscribe@1.3 with a 3: version entry above @1.2", () => {
     const line = hostStreamRpcRegistry["epic.subscribe"][1];
-    expect(line.latestMinor).toBe(3);
+    // Not `latestMinor` - the status minors (@1.4-@1.6) sit above this one,
+    // and the top of the line is pinned once in `versioned-stream-rpc.test.ts`
+    // rather than re-asserted by every minor's own test.
     expect(line.versions[3]?.contract).toBe(epicSubscribeV13);
     expect(line.versions[0]?.contract).toBe(epicSubscribeV10);
     expect(line.versions[1]?.contract).toBe(epicSubscribeV11);

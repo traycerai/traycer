@@ -220,7 +220,7 @@ function createLegacyArm(): AvailabilityArm {
   return {
     handle,
     open(): void {
-      live().onConnectionStatus("open", null);
+      live().onConnectionStatus("open", null, false);
       // The snapshot is what names this artifact's ROOM. Without it the
       // fan-out has no mapping and no room frame could ever reach the tile.
       live().onSnapshot(buildMeta(), rootDocNamingArtifactRoom());
@@ -229,8 +229,8 @@ function createLegacyArm(): AvailabilityArm {
     reportGivenUp: () => live().onArtifactRoomState(ROOM, "unavailable"),
     reportRetrying: () => live().onArtifactRoomState(ROOM, "retrying"),
     cycleTransport(): void {
-      live().onConnectionStatus("reconnecting", null);
-      live().onConnectionStatus("open", null);
+      live().onConnectionStatus("reconnecting", null, false);
+      live().onConnectionStatus("open", null, false);
     },
     // NOTHING, and deliberately not "unimplemented". A `@1` room that went
     // unavailable can be called ready again on the same stream, with no

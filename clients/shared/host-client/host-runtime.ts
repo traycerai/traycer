@@ -53,6 +53,12 @@ export interface HostRuntimeOptions<Registry extends VersionedRpcRegistry> {
    * transition). Same-user credential rotation does NOT emit through the
    * provider - the lease is mutated in place - so the host-scoped cache
    * survives token refreshes intact.
+   *
+   * The runtime also takes `onSessionVerified`, which is neither of those: it
+   * is the post-commit edge for a session the servers have just confirmed, and
+   * it is what refreshes the directory when a promotion rotates in place (so
+   * `onChange` is silent) or when `onChange` fires one commit too early to be
+   * allowed to read the registry.
    */
   readonly requestContextProvider: RequestContextProvider;
   readonly directory: IHostDirectoryService;
@@ -113,6 +119,7 @@ export class HostRuntime<Registry extends VersionedRpcRegistry> {
   private readonly disposables: Disposable[] = [];
   private contextUnsubscribe: (() => void) | null = null;
   private bearerRotationUnsubscribe: (() => void) | null = null;
+  private sessionVerifiedUnsubscribe: (() => void) | null = null;
 
   constructor(options: HostRuntimeOptions<Registry>) {
     this.runnerHost = options.runnerHost;
@@ -201,6 +208,28 @@ export class HostRuntime<Registry extends VersionedRpcRegistry> {
         this.hostClient.notifyBearerRotated();
       });
 
+    // A session that has just been CONFIRMED by the account's servers, with the
+    // verdict already committed everywhere it is readable. Two shapes reach
+    // here and both need this, which is why it is not filtered further:
+    //
+    //  - `unverified` -> verified for the same user. The lease rotates in
+    //    place, so `onChange` above is silent by contract and nothing else
+    //    would ever refresh the directory.
+    //  - signed-out -> signed-in. `onChange` DOES fire, but it fires from
+    //    inside the context transition, one commit before the verdict lands -
+    //    so that refresh asks the fetcher for a credential it is told this
+    //    session may not spend yet, and comes back empty.
+    //
+    // In both cases the previous read is worthless rather than merely stale, so
+    // the in-flight slot is DROPPED before re-asking: `refreshForEra` coalesces
+    // on the era, this era is the same era, and joining is how the second
+    // attempt would inherit the first one's empty answer.
+    this.sessionVerifiedUnsubscribe =
+      this.requestContextProvider.onSessionVerified((era) => {
+        this.directory.invalidateInFlightRefresh();
+        void this.directory.refreshForEra(era);
+      });
+
     this.disposables.push(
       this.runnerHost.onLocalHostChange(() => {
         void this.directory.refresh();
@@ -226,6 +255,10 @@ export class HostRuntime<Registry extends VersionedRpcRegistry> {
     if (this.bearerRotationUnsubscribe !== null) {
       this.bearerRotationUnsubscribe();
       this.bearerRotationUnsubscribe = null;
+    }
+    if (this.sessionVerifiedUnsubscribe !== null) {
+      this.sessionVerifiedUnsubscribe();
+      this.sessionVerifiedUnsubscribe = null;
     }
     for (const disposable of this.disposables) {
       disposable.dispose();

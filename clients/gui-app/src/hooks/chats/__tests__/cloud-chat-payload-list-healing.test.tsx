@@ -124,7 +124,11 @@ describe("useCloudChatPayloadList healing", () => {
   // Viewer-scoped by construction: the hook disables itself without a resolved
   // identity, so every test seeds one and the reset keeps them independent.
   beforeEach(() => {
+    // Identity AND verdict - see `use-cloud-chat-queries.ts`. Without
+    // `status`, the store's `signed-out` default disables every hook in that
+    // module and the request counts this file measures are all zero.
     useAuthStore.setState({
+      status: "signed-in",
       contextMetadata: { userId: "viewer-1", username: "viewer-1" },
     });
   });

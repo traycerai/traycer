@@ -80,6 +80,10 @@ export function createAuthAwareMessenger<Registry extends VersionedRpcRegistry>(
       if (outcome === "superseded") {
         throw new HostAuthoritySupersededError();
       }
+      // Anything but a rotation rethrows, and that is the right answer for
+      // `local-plane-retained` too: a unary call has no reconnect ladder to put
+      // a retained local plane on, and the bearer in hand is the one the host
+      // just refused. The caller sees the original failure and decides.
       if (outcome !== "rotated" || authority.abortSignal.aborted) {
         if (authority.abortSignal.aborted) {
           throw new HostRequestAbortedError({

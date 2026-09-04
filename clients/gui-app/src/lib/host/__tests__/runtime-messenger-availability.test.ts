@@ -22,7 +22,11 @@ import {
   HostRequestAbortedError,
   HostTransportFailureError,
 } from "@traycer-clients/shared/host-transport/host-messenger";
-import type { FatalErrorDetails } from "@traycer/protocol/framework/index";
+import type {
+  FatalErrorDetails,
+  SchemaVersion,
+} from "@traycer/protocol/framework/index";
+import type { StreamMethodSupport } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import {
   hostRpcRegistry,
   type HostRpcRegistry,
@@ -75,13 +79,20 @@ interface ControllableSession extends IRemoteSession<
   fatal: FatalErrorDetails | null;
   emitReady(): void;
   emitClosed(): void;
+  setMethodSupport(
+    support: StreamMethodSupport,
+    schemaVersion: SchemaVersion | null,
+  ): void;
 }
 
 function controllableSession(): ControllableSession {
   const availability = new Set<() => void>();
   const closed = new Set<() => void>();
+  const methodSupportListeners = new Set<() => void>();
   let closeCalls = 0;
   let terminallyClosed = false;
+  let methodSupport: StreamMethodSupport = "unknown";
+  let methodSchemaVersion: SchemaVersion | null = null;
   const session: ControllableSession = {
     ready: false,
     fatal: null,
@@ -149,7 +160,20 @@ function controllableSession(): ControllableSession {
       return () => availability.delete(listener);
     },
     subscribeReadinessLost: () => () => undefined,
+    getMethodSupport: () => methodSupport,
+    getMethodSchemaVersion: () => methodSchemaVersion,
+    subscribeMethodSupport: (listener) => {
+      methodSupportListeners.add(listener);
+      return () => {
+        methodSupportListeners.delete(listener);
+      };
+    },
     terminalFatal: () => session.fatal,
+    setMethodSupport: (support, schemaVersion) => {
+      methodSupport = support;
+      methodSchemaVersion = schemaVersion;
+      for (const listener of methodSupportListeners) listener();
+    },
     close: () => {
       closeCalls += 1;
     },

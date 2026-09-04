@@ -285,6 +285,17 @@ describe("routing a link code the OS delivered", () => {
     // the attempt in progress. The decision is retaken when it settles.
     expect(decideDeepLinkRouting("signing-in")).toBe("hold");
   });
+
+  it("refuses to claim on the admitted local plane, and does not hold", () => {
+    // `unverified` projects a real user id and email from a stored credential
+    // authn could not be reached to verify, so claiming carries the SAME
+    // identity-swap hazard as `signed-in` - not the `signed-out` freedom.
+    //
+    // And it must not be `hold`: unlike `signing-in`, this state persists for
+    // as long as authn is unreachable, so holding would strand the scan in
+    // silence instead of answering it.
+    expect(decideDeepLinkRouting("unverified")).toBe("already-signed-in");
+  });
 });
 
 describe("link-code entry is gated on the mobile-app PRODUCT signal", () => {
@@ -796,7 +807,51 @@ describe("<SignInButton />", () => {
     result.cleanupClient();
   });
 
-  it("keeps credentials file when a stored session is rejected (UI-only sign-out)", async () => {
+  it("an account-unavailable verdict renders terminal copy AND retargets the CTA at a different account", async () => {
+    // The two halves are one finding. Rendering "This account is no longer
+    // available." above a button that says "Sign in" points the user at the one
+    // path that provably cannot work: the account is gone server-side, so
+    // re-authenticating as it will fail again. The escape is a DIFFERENT
+    // account, and the CTA is where that has to be said.
+    //
+    // Driven end to end rather than by setting the error directly: a 404 on
+    // `/api/v3/user` classifies `refresh-rejected-account`, which HOLDS the
+    // plane at `unverified` (product ruling) and sets
+    // `AUTH_ERROR_ACCOUNT_UNAVAILABLE`. That hold is exactly why both surfaces
+    // needed widening - neither renders under `signed-out` any more for this
+    // arm, so a regression here shows as SILENCE rather than as wrong copy.
+    const host = buildHost();
+    await host.tokenStore.signIn(
+      { token: "gone-account-token", refreshToken: "gone-account-refresh" },
+      { id: "user-1", email: "test@example.com", name: "Test User" },
+    );
+    restoreFetch();
+    // 404 on BOTH `/user` and the refresh spend: the validate stops retrying,
+    // the rotate classifies it `refresh-rejected-account`, and that arm holds.
+    restoreFetch = installFetch(() =>
+      Promise.resolve(new Response(null, { status: 404 })),
+    );
+
+    const result = mountSignInButton(host, "compact");
+
+    await waitFor(() => {
+      expect(useAuthStore.getState().status).toBe("unverified");
+    });
+
+    // The terminal copy reaches the DOM, not merely the service error value.
+    await waitFor(() => {
+      expect(screen.getByTestId("signin-error").textContent).toContain(
+        "This account is no longer available.",
+      );
+    });
+    // ...and the CTA no longer offers the loop that cannot succeed.
+    expect(screen.getByTestId("signin-button").textContent).toContain(
+      "Sign in with a different account",
+    );
+    result.cleanupClient();
+  });
+
+  it("keeps credentials file when a stored session is rejected (local plane held)", async () => {
     // Automatic failure paths never destroy the shared credentials file —
     // only explicit sign-out does (tech plan §5). CLI seeding is gone; the
     // file is the single store.
@@ -816,7 +871,9 @@ describe("<SignInButton />", () => {
         { id: "auth-session:expired", cancel: null },
       );
     });
-    // UI is signed out but the file is kept so a sibling rotation can recover.
+    // The cloud session is over - hence the toast - but the file is kept, so a
+    // sibling rotation can recover it and the identity naming this machine's
+    // local epics survives (the session holds at `unverified`, not signed-out).
     // No `authnBaseUrl`: the stored session carries only the token pair and
     // the cached identity - the origin lives on the host's own config.
     expect(await host.tokenStore.get()).toEqual({
@@ -865,7 +922,13 @@ describe("<SignInButton />", () => {
         { id: "auth-session:expired", cancel: null },
       );
     });
-    expect(useAuthStore.getState().status).toBe("signed-out");
+    // Cold-review P1-4: a live refresh rejection is a verdict about the TOKEN,
+    // so the session is DEMOTED and the local plane survives - it is no longer
+    // torn down out from under whatever the user was editing.
+    expect(useAuthStore.getState().status).toBe("unverified");
+    // The toast has delivered the expiry, so the durable signal is cleared and
+    // no inline copy is left behind. That is the transient path; the TERMINAL
+    // account path deliberately does not clear (see the toast bridge).
     expect(result.getAuthService().getLastError()).toBeNull();
     expect(screen.queryByTestId("signin-error")).toBeNull();
     result.cleanupClient();

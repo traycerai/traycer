@@ -57,6 +57,45 @@ export function reconcileAgentActivityByEpic(
   return changed ? next : previous;
 }
 
+/**
+ * Unions two hosts' views of the SAME epic.
+ *
+ * Two machines can each be running agents on one cloud-homed epic, and each
+ * host's frame is authoritative only about its own agents - so the answer to
+ * "what is running on this epic" is the union, not whichever frame arrived
+ * last. Agent ids are globally unique, so a plain set union is correct and
+ * needs no tie-break.
+ *
+ * Returns the left operand unchanged when the right adds nothing, so the
+ * single-host case (still the common one) keeps object identity and does not
+ * re-render every activity consumer.
+ */
+export function mergeEpicAgentActivity(
+  left: EpicAgentActivity,
+  right: EpicAgentActivity,
+): EpicAgentActivity {
+  const working = unionIdSets(left.working, right.working);
+  const turn = unionIdSets(left.turn, right.turn);
+  return working === left.working && turn === left.turn
+    ? left
+    : { working, turn };
+}
+
+function unionIdSets(
+  left: ReadonlySet<string>,
+  right: ReadonlySet<string>,
+): ReadonlySet<string> {
+  if (right.size === 0) return left;
+  let grew = false;
+  const next = new Set(left);
+  for (const id of right) {
+    if (next.has(id)) continue;
+    next.add(id);
+    grew = true;
+  }
+  return grew ? next : left;
+}
+
 function sameIdSet(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
   if (a.size !== b.size) return false;
   for (const id of a) {

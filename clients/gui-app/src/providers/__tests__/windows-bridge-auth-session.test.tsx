@@ -22,9 +22,10 @@ vi.mock("@/providers/windows-bridge-context", () => ({
   useWindowsBridge: mockUseWindowsBridge,
 }));
 
+const SIGNED_IN_TOKEN = "bearer-token";
 const SIGNED_IN_SNAPSHOT: AuthSessionSnapshot = {
   status: "signed-in",
-  token: "bearer-token",
+  token: SIGNED_IN_TOKEN,
   profile: { userId: "u1", userName: "Ada", email: "ada@example.com" },
   contextMetadata: null,
 };
@@ -35,9 +36,13 @@ const SIGNED_IN_SNAPSHOT: AuthSessionSnapshot = {
  */
 function renderWithFakes(setResult: DesktopAuthSessionSetResult): {
   emitOutbound: (snapshot: AuthSessionSnapshot) => void;
+  emitRevoked: (token: string) => void;
   set: Mock<(snapshot: DesktopAuthSessionSnapshot) => Promise<unknown>>;
+  revoke: Mock<(rejectedToken: string) => Promise<void>>;
 } {
   let outboundListener: ((snapshot: AuthSessionSnapshot) => void) | null = null;
+  let revokedListener: ((revoked: { readonly token: string }) => void) | null =
+    null;
 
   mockUseAuthService.mockReturnValue({
     onSessionSnapshotChange: (
@@ -50,6 +55,16 @@ function renderWithFakes(setResult: DesktopAuthSessionSetResult): {
         },
       };
     },
+    onCloudAuthorizationRevoked: (
+      handler: (revoked: { readonly token: string }) => void,
+    ) => {
+      revokedListener = handler;
+      return {
+        dispose: () => {
+          revokedListener = null;
+        },
+      };
+    },
     getIdentityGeneration: () => 0,
     ingestProjectedSessionSnapshot: vi.fn().mockResolvedValue(undefined),
   });
@@ -57,6 +72,7 @@ function renderWithFakes(setResult: DesktopAuthSessionSetResult): {
   const set = vi.fn((_snapshot: DesktopAuthSessionSnapshot) =>
     Promise.resolve<unknown>(setResult),
   );
+  const revoke = vi.fn((_rejectedToken: string) => Promise.resolve());
   mockUseWindowsBridge.mockReturnValue({
     authSession: {
       get: vi.fn().mockResolvedValue({
@@ -65,6 +81,7 @@ function renderWithFakes(setResult: DesktopAuthSessionSetResult): {
         profile: null,
       }),
       set,
+      revoke,
       onChange: () => ({ dispose: () => undefined }),
     },
   });
@@ -77,9 +94,14 @@ function renderWithFakes(setResult: DesktopAuthSessionSetResult): {
 
   return {
     set,
+    revoke,
     emitOutbound: (snapshot) => {
       if (outboundListener === null) throw new Error("no outbound listener");
       act(() => outboundListener?.(snapshot));
+    },
+    emitRevoked: (token) => {
+      if (revokedListener === null) throw new Error("no revoke listener");
+      act(() => revokedListener?.({ token }));
     },
   };
 }
@@ -88,6 +110,30 @@ describe("<WindowsBridgeAuthSessionBridge />", () => {
   afterEach(() => {
     cleanup();
     toast.warning.mockClear();
+  });
+
+  it("asks main to drop its verification on a terminal verdict loss, without projecting a session transition", async () => {
+    const { emitOutbound, emitRevoked, set, revoke } = renderWithFakes({
+      outcome: "accepted",
+    });
+    await act(async () => {
+      emitOutbound(SIGNED_IN_SNAPSHOT);
+      await Promise.resolve();
+    });
+    expect(set).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      emitRevoked(SIGNED_IN_TOKEN);
+      await Promise.resolve();
+    });
+
+    // The revoke, and ONLY the revoke: no `signed-out` (which siblings apply
+    // unconditionally) and no `unverified` (which main has no shape for).
+    // It names the rejected bearer, which is main's fence against a revoke
+    // that lands after a sibling window's fresh sign-in.
+    expect(revoke).toHaveBeenCalledTimes(1);
+    expect(revoke).toHaveBeenCalledWith(SIGNED_IN_TOKEN);
+    expect(set).toHaveBeenCalledTimes(1);
   });
 
   it("surfaces a toast naming the reason when main refuses the pushed session", async () => {

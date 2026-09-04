@@ -258,6 +258,7 @@ function makeRequestContext(bearer: string): RequestContext {
     connectionId: undefined,
     operationId: undefined,
     externalAbortSignal: undefined,
+    cloudAuthorized: true,
   });
 }
 
@@ -465,7 +466,14 @@ describe("WsStreamClient", () => {
     expect(subscribeFrame).toEqual({
       kind: "subscribe",
       method: "epic.subscribe",
-      schemaVersion: { major: 1, minor: 3, supportedMajors: [1] },
+      // `@1.6` is the newest installed minor (the s5 status pass: a widened
+      // pause-reason enum plus the `localProtection` and `freshness` keys on
+      // `cloudSyncStatus`, over @1.5's promotion state, @1.4's durability,
+      // @1.3's delta-seed reattach and @1.2's snapshot-meta roomId).
+      // This literal is the point of the fixture: it pins the version the
+      // client *declares*, which is a distinct fact from the manifest it
+      // advertises, so a bump has to be stated here too.
+      schemaVersion: { major: 1, minor: 6, supportedMajors: [1] },
       params: { epicId: "epic-1" },
     });
 
@@ -540,7 +548,7 @@ describe("WsStreamClient", () => {
     expect(parseText(stub.textSent[1])).toEqual({
       kind: "subscribe",
       method: "epic.subscribe",
-      schemaVersion: { major: 1, minor: 3, supportedMajors: [1] },
+      schemaVersion: { major: 1, minor: 6, supportedMajors: [1] },
       params: { epicId: "epic-1" },
     });
 
@@ -613,7 +621,7 @@ describe("WsStreamClient", () => {
     expect(parseText(stub.textSent[1])).toEqual({
       kind: "subscribe",
       method: "epic.subscribe",
-      schemaVersion: { major: 1, minor: 3, supportedMajors: [1] },
+      schemaVersion: { major: 1, minor: 6, supportedMajors: [1] },
       params: { epicId: "epic-1" },
     });
 
@@ -1657,7 +1665,60 @@ describe("WsStreamClient", () => {
       GIT_STATUS_VERSION,
     );
     liveGitSession.close();
-    expect(client.getMethodSchemaVersion("git.subscribeStatus")).toBeNull();
+    // Not null: with the last live session gone the client falls back to what
+    // the handshake manifest says a subscribe WOULD negotiate, which is the
+    // same value and is still just as true. The live map is what emptied here
+    // - assert on it through the session that owns routing.
+    expect(client.getMethodSchemaVersion("git.subscribeStatus")).toEqual(
+      GIT_STATUS_VERSION,
+    );
+  });
+
+  it("answers the schema version for a method no session has subscribed to", async () => {
+    // The pre-check half of the capability cache. `getMethodSupport` has
+    // always answered for every method in the peer's manifest; the version
+    // did not, so a caller gating the OPENING of a stream on its minor could
+    // never satisfy the gate - the only evidence it accepted was published by
+    // the session it was deciding whether to open.
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+    const { factory, sockets } = makeFactory();
+    const client = makeClient({
+      factory,
+      authToken: "t",
+      pingIntervalMs: 25_000,
+      pongTimeoutMs: 50_000,
+      initialBackoffMs: 10,
+      maxBackoffMs: 1_000,
+    });
+    const session = client.subscribe("git.subscribeStatus", {
+      hostId: "host-1",
+      runningDir: "/repo-a",
+      ignoreWhitespace: false,
+      freshNonce: null,
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(
+      client.getMethodSchemaVersion("host.notifications.cloudFeed.subscribe"),
+    ).toBeNull();
+    completeHandshake(sockets[0].socket);
+
+    const cloudFeedVersion = client.getMethodSchemaVersion(
+      "host.notifications.cloudFeed.subscribe",
+    );
+    expect(cloudFeedVersion).not.toBeNull();
+    expect(cloudFeedVersion?.major).toBe(1);
+    // A reconnect may be a different host incarnation, so the prediction is
+    // re-probed on the same terms the support cache is.
+    client.reconnectAll("host-endpoint-change", {
+      probeFirst: false,
+      wakeProbe: null,
+    });
+    expect(
+      client.getMethodSchemaVersion("host.notifications.cloudFeed.subscribe"),
+    ).toBeNull();
+
+    session.close();
   });
 
   it("closes the socket after two missed pongs and triggers a reconnect", async () => {
@@ -1751,7 +1812,7 @@ describe("WsStreamClient", () => {
     expect(firstSubscribe).toEqual({
       kind: "subscribe",
       method: "epic.subscribe",
-      schemaVersion: { major: 1, minor: 3, supportedMajors: [1] },
+      schemaVersion: { major: 1, minor: 6, supportedMajors: [1] },
       params: { epicId: "epic-42" },
     });
 
@@ -1771,7 +1832,7 @@ describe("WsStreamClient", () => {
     expect(secondSubscribe).toEqual({
       kind: "subscribe",
       method: "epic.subscribe",
-      schemaVersion: { major: 1, minor: 3, supportedMajors: [1] },
+      schemaVersion: { major: 1, minor: 6, supportedMajors: [1] },
       params: { epicId: "epic-42" },
     });
 
@@ -2040,7 +2101,7 @@ describe("WsStreamClient", () => {
     expect(parseText(sockets[1].socket.textSent[1])).toEqual({
       kind: "subscribe",
       method: "epic.subscribe",
-      schemaVersion: { major: 1, minor: 3, supportedMajors: [1] },
+      schemaVersion: { major: 1, minor: 6, supportedMajors: [1] },
       params: { epicId: "epic-42" },
     });
     expect(statuses.at(-1)).toBe("open");
@@ -2974,6 +3035,97 @@ describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
     if (fatalClose?.kind === "fatalError") {
       expect(fatalClose.details.code).toBe("UNAUTHORIZED");
     }
+  });
+
+  it("reconnects (does not go terminal) on an UNAUTHORIZED rejection when revalidation reports local-plane-retained", async () => {
+    const { factory, sockets } = makeFactory();
+    const revalidator = makeAuthRevalidator(["local-plane-retained"]);
+    const client = makeAuthClient(factory, revalidator.auth, 5);
+    const statuses: StreamConnectionStatus[] = [];
+    const closeReasons: Array<StreamCloseReason | null> = [];
+    const session = client.subscribe("epic.subscribe", { epicId: "e1" });
+    session.onStatusChange((status, reason) => {
+      statuses.push(status);
+      closeReasons.push(reason);
+    });
+
+    await flush();
+    sockets[0].socket.fireOpen();
+    sockets[0].socket.fireText(UNAUTHORIZED_FATAL);
+
+    await wait(50);
+    expect(revalidator.calls.count).toBe(1);
+    // Unlike "rejected", a demoted-but-locally-admitted session must not be
+    // closed - it re-dials so a local host still serving that session gets a
+    // chance to accept it.
+    expect(statuses).not.toContain("closed");
+    expect(sockets).toHaveLength(2);
+    session.close();
+  });
+
+  it("bounds a local-plane-retained no-progress loop and goes terminal after MAX_NO_PROGRESS_UNAUTHORIZED_RECONNECTS (3) consecutive outcomes - even while the bearer keeps changing", async () => {
+    const { factory, sockets } = makeFactory();
+    // No better bearer can ever arrive while the session stays demoted, so
+    // every cycle reports the same outcome - this is what the transport
+    // bounds unconditionally, UNLIKE "rotated"'s same-token comparison.
+    //
+    // The bearer here deliberately returns a FRESH token on every read
+    // (unlike `makeAuthClient`'s fixed one) so this test cannot pass by
+    // accident: if "local-plane-retained" merely fell through to the
+    // "rotated" branch's same-token check, a changing token would make that
+    // check read "progress" on every cycle, reset the streak each time, and
+    // the session would never reach the terminal cap. Only the unconditional
+    // bump this outcome is specified to get can make cycle 3 close it here.
+    let nextTokenId = 0;
+    const rotatingBearerClient = new WsStreamClient({
+      clientIdentity: TEST_CLIENT_IDENTITY,
+      registry: hostStreamRpcRegistry,
+      hostId: mockLocalHostEntry.hostId,
+      clock: null,
+      endpoint: () => mockLocalHostEntry,
+      bearer: () => {
+        nextTokenId += 1;
+        return makeRequestContext(`never-settles-${nextTokenId}`).credentials;
+      },
+      auth: makeAuthRevalidator([
+        "local-plane-retained",
+        "local-plane-retained",
+        "local-plane-retained",
+        "local-plane-retained",
+      ]).auth,
+      hostCredentialMint: null,
+      onHostCredentialState: null,
+      evidence: NO_TRANSPORT_EVIDENCE,
+      webSocketFactory: factory,
+      dialTimeoutMs: 1_000,
+      openAckTimeoutMs: 1_000,
+      pingIntervalMs: 25_000,
+      pongTimeoutMs: 50_000,
+      initialBackoffMs: 5,
+      maxBackoffMs: 1_000,
+    });
+    const statuses: StreamConnectionStatus[] = [];
+    const session = rotatingBearerClient.subscribe("epic.subscribe", {
+      epicId: "e1",
+    });
+    session.onStatusChange((status) => statuses.push(status));
+
+    await flush();
+    for (let cycle = 0; cycle < 4; cycle += 1) {
+      const socket = sockets[sockets.length - 1].socket;
+      socket.fireOpen();
+      socket.fireText(UNAUTHORIZED_FATAL);
+      await wait(50);
+      if (cycle < 2) {
+        // Before the bound (3) is reached, the session is still reconnecting.
+        expect(statuses).not.toContain("closed");
+      }
+    }
+
+    expect(statuses).toContain("closed");
+    // Initial dial + 2 redials (after cycles 1 and 2); the terminal 3rd cycle
+    // does not re-dial.
+    expect(sockets).toHaveLength(3);
   });
 
   it("does not revalidate stream-domain fatal errors", async () => {

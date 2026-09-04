@@ -33,9 +33,11 @@ import {
  * The caller supplies the base URLs (relay + authn) and one `BearerSourceProvider`
  * that serves BOTH the in-channel `open{bearer}` identity (A2) and the user
  * bearer used to mint attach grants at CS (the grant HTTP derives its token from
- * the same source). Returns `null` when the host's published public key is not a
- * valid X25519 key, so a malformed registry row degrades to "unconnectable"
- * rather than crashing the caller.
+ * the same source). Those two uses are one SOURCE but not one PERMISSION - see
+ * {@link CreateRemoteTransportOptions.cloudAuthorized}, which gates the mint
+ * alone. Returns `null` when the host's published public key is not a valid
+ * X25519 key, so a malformed registry row degrades to "unconnectable" rather
+ * than crashing the caller.
  */
 export interface CreateRemoteTransportOptions<
   RpcRegistry extends VersionedRpcRegistry,
@@ -52,6 +54,59 @@ export interface CreateRemoteTransportOptions<
   readonly hostPublicKey: string;
   /** Serves the in-channel bearer AND (derived) the grant-mint user bearer. */
   readonly bearer: BearerSourceProvider;
+  /**
+   * Whether this client currently holds a CLOUD capability - a session the
+   * account's authn has confirmed - read live, per attach.
+   *
+   * Gates the attach-grant mint ONLY, never the in-channel `open{bearer}`.
+   * The two are the same token from the same source, and they are not the same
+   * permission:
+   *
+   *   - Minting an attach grant asks authn to ISSUE a `role:"client"`
+   *     credential against this bearer. That is a capability, and a bearer
+   *     nothing has confirmed must not buy one.
+   *   - The in-channel `open{bearer}` PRESENTS the token to a host that
+   *     validates it and `UNAUTHORIZED`s if it is bad - which is precisely the
+   *     edge {@link RemoteSessionOptions.auth} revalidation exists to catch.
+   *     Refusing it here would duplicate that check while breaking the
+   *     recovery it drives.
+   *
+   * READ PER ATTACH, INSIDE THE MINT CLOSURE, and deliberately not folded into
+   * {@link canProvideBearer}: that probe runs ONCE at build time, and the
+   * session cache is keyed on `authEpochFor(bearerSource)` - an identity of the
+   * SOURCE OBJECT, which a verdict transition does not change. Gating at build
+   * time would therefore cache a session whose mint path is permanently dead,
+   * with no event that ever rebuilds it. Live inside the closure, the next
+   * attach after a verdict lands mints normally.
+   *
+   * No invalidation is needed on the verdict transition, and that is measured
+   * rather than assumed: a refused mint returns `null`, which the grant client
+   * already folds into `unavailable`, whose arm calls `scheduleReconnect()` -
+   * an unbounded retry ladder capped at `RECONNECT_MAX_BACKOFF_MS`, with no
+   * terminal branch. (`noProgressUnauthorizedReconnects`, the one counter that
+   * does go terminal, is incremented only on the UNAUTHORIZED-revalidation
+   * path and never from the mint arm.) So the session self-heals within one
+   * backoff rung of the verdict arriving.
+   *
+   * THIS GATE HAS A DEPENDENCY OUTSIDE ITSELF, and it is written here because
+   * this is the line that would have to change. A refused mint reports
+   * `indeterminate` to the selection authority, and
+   * `selection-authority-engine.ts` returns on that outcome BEFORE the sole
+   * `evidence.refusalStreak += 1`. That is what keeps a refusal from marking the
+   * host confirmed-dead in the directory while the session itself is quietly
+   * retrying - the UI does not disagree with the transport.
+   *
+   * That inertness is not incidental to us: it is a pre-existing protection
+   * against one authn outage failing an entire remote fleet over to local, and
+   * this gate is a NEW producer of `unavailable` riding on it. If anyone ever
+   * makes `indeterminate` count toward the death streak, this gate acquires a
+   * wedge it does not have today - an unverified session would drive its own
+   * hosts to confirmed-dead, and the directory would stay wrong after the
+   * verdict lands, because nothing here clears it. No test will produce that
+   * sentence and no reviewer will re-derive it, so it lives at the gate rather
+   * than in a report.
+   */
+  readonly cloudAuthorized: () => boolean;
   /**
    * Auth recovery for an `UNAUTHORIZED` session fatal (an expired bearer at a
    * wake-time re-attach; see `RemoteSessionOptions.auth`). `null` keeps such
@@ -181,7 +236,13 @@ export function createRemoteHostTransport<
       const grantProvider = createAttachGrantProvider({
         authnBaseUrl: options.authnBaseUrl,
         hostId: options.hostId,
-        getBearerToken: () => deriveBearerToken(options.bearer),
+        // The mint's permission check. `null` is a value the grant client
+        // already handles (it is the signed-out channel), so this refuses
+        // through an existing, tested path rather than inventing a failure
+        // mode. See `cloudAuthorized` for why the check lives in here and not
+        // at build time.
+        getBearerToken: () =>
+          options.cloudAuthorized() ? deriveBearerToken(options.bearer) : null,
       });
       return new RemoteSession<RpcRegistry, StreamRegistry>({
         hostId: options.hostId,

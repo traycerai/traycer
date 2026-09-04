@@ -7,6 +7,7 @@ import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/moc
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { useHostQueries } from "@/hooks/host/use-host-queries";
@@ -54,6 +55,47 @@ describe("useHostQueries enabled handling", () => {
     await waitFor(() => {
       expect(fixture.requestCount.value).toBe(1);
     });
+  });
+
+  it("refuses each dispatch when preflight throws, sending nothing", async () => {
+    const fixture = createHostQueriesFixture();
+    fixture.client.setRequestContext(
+      createRequestContextFixture({
+        origin: "renderer",
+        bearerToken: "tok-1",
+      }),
+    );
+    const client = fixture.client.createRequester(mockLocalHostEntry);
+
+    const { result } = renderHook(
+      () =>
+        useHostQueries({
+          client,
+          cacheKeyIdentity: undefined,
+          requests: [
+            { method: "host.status", params: {} },
+            { method: "host.status", params: {} },
+          ],
+          preflight: () => {
+            throw new Error("verdict withdrawn");
+          },
+          options: null,
+        }),
+      { wrapper: fixture.Wrapper },
+    );
+
+    await waitFor(() => {
+      expect(result.current.every((query) => query.error !== null)).toBe(true);
+    });
+    for (const query of result.current) {
+      expect(query.error).toBeInstanceOf(HostRpcError);
+      expect(query.error).toMatchObject({
+        code: "RPC_ERROR",
+        method: "host.status",
+        message: "verdict withdrawn",
+      });
+    }
+    expect(fixture.requestCount.value).toBe(0);
   });
 
   it("keeps a combined result stable when its query data is unchanged", async () => {

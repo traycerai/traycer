@@ -33,7 +33,14 @@ import { persist, createJSONStorage } from "zustand/middleware";
 import type * as Y from "yjs";
 import type { Awareness } from "y-protocols/awareness";
 import type { PermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
-import type { EpicCloudSyncStatus } from "@traycer/protocol/host/epic/subscribe";
+import type {
+  EpicCloudFreshness,
+  EpicCloudSyncStatus,
+  EpicDurabilityPauseReasonV15,
+  EpicDurabilityStatusV15,
+  EpicLocalProtection,
+  EpicPromotionState,
+} from "@traycer/protocol/host/epic/subscribe";
 import type {
   ChatRecordRemovalReason,
   ChatRecordSummaryV11,
@@ -477,6 +484,51 @@ export interface OpenEpicState {
    * proof.
    */
   readonly cloudSyncStatus: EpicCloudSyncStatus;
+  /**
+   * Where the epic is durable, at `@1.6` width.
+   *
+   * `null` here means the host said NOTHING, and at `@1.6` that reads as
+   * unknown - never as synced. It is not a licence for the calm rendering;
+   * see `deriveEpicDurabilityView`, which requires a POSITIVE statement
+   * before it will resolve a missing durability claim as fine.
+   */
+  readonly durabilityStatus: EpicDurabilityStatusV15 | null;
+  /** Present for a recognised paused reason, at `@1.6` width. */
+  readonly durabilityPauseReason: EpicDurabilityPauseReasonV15 | null;
+  /** Optional @1.5 distinction behind a durable promotion reservation. */
+  readonly durabilityPromotionState: EpicPromotionState | null;
+  /**
+   * Whether this session has local (WAL) protection - `@1.6`.
+   *
+   * `null` means the host did not say, which is `unknown`: an unarmed session
+   * used to be indistinguishable from an armed one, so the ONLY reading that
+   * closes that hole is that silence is not protection.
+   */
+  readonly localProtection: EpicLocalProtection | null;
+  /**
+   * How the served document stands relative to the cloud - `@1.6`,
+   * `s5-mirror-first-serving`. `null` means the host did not say: silence is
+   * UNKNOWN, and unknown is not `current`.
+   */
+  readonly cloudFreshness: EpicCloudFreshness | null;
+  /**
+   * Whether the peer serving this stream negotiated the `@1.6` minor that
+   * carries the three legs above - `s5-status-truthfulness`. Every one of
+   * those legs is optional on the wire, so `null` alone cannot say WHICH
+   * silence it is; this bit is what separates a pre-`@1.6` peer from a
+   * `@1.6` peer that stated UNKNOWN.
+   */
+  readonly durabilityLegsNegotiated: boolean;
+  /** Whether this connection can report `epic.subscribe@1.4` durability. */
+  readonly durabilityStatusNegotiated: boolean;
+  /**
+   * The last durability the host actually STATED, kept across subscription
+   * cycles - unlike {@link durabilityStatus}, which a reconnect clears. See
+   * the projection's field of this name for the full rule.
+   */
+  readonly retainedDurabilityStatus: EpicDurabilityStatusV15 | null;
+  /** The pause reason observed beside {@link retainedDurabilityStatus}. */
+  readonly retainedDurabilityPauseReason: EpicDurabilityPauseReasonV15 | null;
   /** `true` only after a cloud-status frame for this exact open cycle. */
   readonly hasFreshCloudSyncStatus: boolean;
   /**

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { v4 as uuidv4 } from "uuid";
 import { WsStreamClient } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import { DEFAULT_DIAL_TIMEOUT_MS } from "@traycer-clients/shared/host-transport/transport-config";
@@ -27,6 +27,11 @@ import {
   noteHostCredentialState,
 } from "@/lib/auth/host-credential-provisioning";
 import { acquireHostStreamClient } from "@/lib/host/host-stream-client-cache";
+import { useCloudCapabilityRestored } from "@/hooks/host/use-cloud-capability-restored";
+import {
+  authorizesCloudCapability,
+  useAuthStore,
+} from "@/stores/auth/auth-store";
 import { useHostBinding } from "@/lib/host/runtime";
 import { processReconnectEngine } from "@traycer-clients/shared/host-client/host-connection-reconnect-engine";
 import { transportEvidenceRelay } from "@/lib/host/transport-evidence";
@@ -199,6 +204,14 @@ export function buildHostStreamClient(params: {
   readonly target: HostDirectoryEntry;
   readonly endpoint: HostEndpointProvider;
   readonly bearer: BearerSourceProvider;
+  /**
+   * Gates the remote session's attach-grant MINT only - see
+   * `CreateRemoteTransportOptions.cloudAuthorized`. A parameter rather than an
+   * ambient store read for the same reason as the messenger builder's: this is
+   * the seam tests construct through. Only consulted on the
+   * `target.kind === "remote"` branch, so local hosts are unaffected.
+   */
+  readonly cloudAuthorized: () => boolean;
   readonly authnBaseUrl: string;
   readonly auth: StreamAuthRevalidator | null;
   /**
@@ -250,6 +263,7 @@ export function buildHostStreamClient(params: {
       authnBaseUrl: params.authnBaseUrl,
       hostPublicKey: params.target.publicKey,
       bearer: params.bearer,
+      cloudAuthorized: params.cloudAuthorized,
       // Same UNAUTHORIZED recovery the local branch wires below: an expired
       // bearer at a wake-time re-attach revalidates + redials instead of
       // terminally closing the shared session (`RemoteSessionOptions.auth`).
@@ -494,6 +508,10 @@ export function useHostStreamClientBindingFor(
           target: memoizedTarget,
           endpoint: () => endpoint,
           bearer: () => globalClient.getRequestContext()?.credentials ?? null,
+          // Read at mint time, not captured: a session outlives the verdict it
+          // was built under, in both directions.
+          cloudAuthorized: () =>
+            authorizesCloudCapability(useAuthStore.getState().status),
           authnBaseUrl,
           auth,
           userId,
@@ -620,6 +638,33 @@ export function useHostStreamClientBindingFor(
       clearBackoffTimer();
     };
   }, [client, rebuildBackoff]);
+
+  // Wake a binding whose backoff was earned entirely under a cloud capability
+  // that has since come back. Both halves are needed and neither is sufficient:
+  // `clearStreak()` alone leaves nothing to trigger a re-acquire (the transport
+  // key never moved, so the build effect above has no changed dependency), and
+  // the nonce bump alone would be paced by a streak of up to 30s that the
+  // restored capability has already invalidated.
+  //
+  // Not gated on `client.isClosed()`: a remote binding whose client is
+  // healthy has an empty streak and rebuilds instantly, so the bump costs one
+  // re-acquire of an already-cached session; gating on the closed flag would
+  // instead miss the case this is for, where the demotion's rebuild is still
+  // sitting in its `setTimeout` and no client is published to ask.
+  //
+  // REMOTE bindings only. Cloud authorization is consulted by the remote
+  // attach-grant path alone, so a local binding's backoff was never earned
+  // under the capability - and its healthy client would only be released by
+  // the effect cleanup, which for the sole holder closes the local
+  // `WsStreamClient` and reconnects every epic, chat and terminal stream on
+  // it, for a verdict the local plane never asked about.
+  useCloudCapabilityRestored(
+    useCallback(() => {
+      if (endpointKind !== "remote") return;
+      rebuildBackoff.clearStreak();
+      setRebuildNonce((nonce) => nonce + 1);
+    }, [endpointKind, rebuildBackoff]),
+  );
 
   return binding?.client.isClosed() === true ? null : binding;
 }

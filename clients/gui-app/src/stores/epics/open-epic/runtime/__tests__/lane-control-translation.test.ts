@@ -6,6 +6,7 @@
  * wrong in a way nothing downstream would notice, and they get the detail.
  */
 import { describe, expect, it } from "vitest";
+import { NO_CLOUD_SYNC_DURABILITY } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import { isWritablePermissionRole } from "@traycer-clients/shared/epic/permission-role";
 import type { ControlEvent } from "@traycer-clients/shared/replica-runtime";
 import { legacyControlEventOf } from "../lane-control-translation";
@@ -112,7 +113,11 @@ describe("cloud sync status", () => {
           status,
           observedAtMs: 0,
         }),
-      ).toEqual({ kind: "cloud-sync-status", status });
+      ).toEqual({
+        kind: "cloud-sync-status",
+        status,
+        durability: NO_CLOUD_SYNC_DURABILITY,
+      });
     }
   });
 
@@ -125,7 +130,11 @@ describe("cloud sync status", () => {
         status: "a-status-a-newer-host-invented",
         observedAtMs: 0,
       }),
-    ).toEqual({ kind: "cloud-sync-status", status: "disconnected" });
+    ).toEqual({
+      kind: "cloud-sync-status",
+      status: "disconnected",
+      durability: NO_CLOUD_SYNC_DURABILITY,
+    });
   });
 });
 

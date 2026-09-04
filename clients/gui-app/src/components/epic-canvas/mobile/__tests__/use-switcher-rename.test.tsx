@@ -246,7 +246,7 @@ function newSession(): OpenedStoreForTest {
   if (captured.value === null) throw new Error("factory not invoked");
   // Transport must reach "open" BEFORE the root snapshot lands - see the
   // matching comment in `use-rename-canvas-tab.test.tsx`.
-  captured.value.onConnectionStatus("open", null);
+  captured.value.onConnectionStatus("open", null, false);
   captured.value.onSnapshot(makeMeta(), Y.encodeStateAsUpdate(new Y.Doc()));
   return handle;
 }

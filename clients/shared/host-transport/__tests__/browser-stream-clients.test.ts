@@ -102,6 +102,7 @@ function makeClient(
     identity: identityFromAuthenticatedUser(user),
     bearerToken: "token",
     origin: "renderer",
+    cloudAuthorized: true,
     connectionId: undefined,
     operationId: undefined,
     externalAbortSignal: undefined,

@@ -1237,6 +1237,48 @@ describe("RemoteSession UNAUTHORIZED session-fatal recovery", () => {
   );
 
   it(
+    "goes terminal - and fires onClosed - when revalidation reports local-plane-retained",
+    async () => {
+      // A relay session needs an attach grant `cloudAuthorized()` refuses once
+      // the cloud verdict is gone, regardless of local-plane admission - so
+      // unlike the bounded-retry story `WsStreamClient` gives this outcome,
+      // a remote session has no better bearer it could ever redial with and
+      // treats it exactly like "rejected": straight to terminal.
+      const relay = new FakeRelayHost();
+      const lease = new MutableBearerLease("demoted-token", "user-1");
+      relay.decideOpen = () => ({
+        kind: "fatal",
+        details: unauthorizedDetails(),
+      });
+      let revalidateCalls = 0;
+      const auth: StreamAuthRevalidator = {
+        revalidateForReconnect: () => {
+          revalidateCalls += 1;
+          return Promise.resolve("local-plane-retained");
+        },
+      };
+      const session = buildSession(relay, lease, auth);
+      let closedEvents = 0;
+      session.onClosed(() => {
+        closedEvents += 1;
+      });
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isClosed()).toBe(true), WAIT);
+        // Terminal BECAUSE the revalidation said so - the recovery path ran
+        // exactly once and stopped, rather than never being consulted.
+        expect(revalidateCalls).toBe(1);
+        expect(closedEvents).toBe(1);
+        expect(relay.openBearers).toEqual(["demoted-token"]);
+        expect(relay.errors).toEqual([]);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
     "treats a retryable UNAUTHORIZED fatal as a transport drop - reconnects without spending a revalidation",
     async () => {
       const relay = new FakeRelayHost();
@@ -1982,6 +2024,71 @@ describe("RemoteSession host_detached readiness evidence", () => {
 
 describe("RemoteStreamClient dynamic subscribe params", () => {
   it(
+    "publishes manifest-derived stream support and version, then forgets it on disconnect",
+    async () => {
+      const relay = new FakeRelayHost();
+      relay.streamManifest = buildStreamManifest(
+        cursorStreamRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      );
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        streamRegistry: cursorStreamRegistry,
+      });
+      const streamClient = new RemoteStreamClient<
+        VersionedRpcRegistry,
+        typeof cursorStreamRegistry
+      >(session, () => null);
+      const supportChanges: string[] = [];
+      const unsubscribe = streamClient.subscribeMethodSupport(() => {
+        supportChanges.push(streamClient.getMethodSupport("cursor.subscribe"));
+      });
+
+      expect(streamClient.getMethodSupport("cursor.subscribe")).toBe("unknown");
+      expect(streamClient.getMethodSchemaVersion("cursor.subscribe")).toBe(
+        null,
+      );
+
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        expect(streamClient.getMethodSupport("cursor.subscribe")).toBe(
+          "supported",
+        );
+        // `supportedMajors` rides the manifest entry the host published, so
+        // the version this republishes carries it too.
+        expect(streamClient.getMethodSchemaVersion("cursor.subscribe")).toEqual(
+          { major: 1, minor: 0, supportedMajors: [1] },
+        );
+
+        relay.dropCurrentConnection();
+        await vi.waitFor(
+          () =>
+            expect(streamClient.getMethodSupport("cursor.subscribe")).toBe(
+              "unknown",
+            ),
+          WAIT,
+        );
+        await vi.waitFor(
+          () =>
+            expect(supportChanges).toEqual([
+              "supported",
+              "unknown",
+              "supported",
+            ]),
+          WAIT,
+        );
+        expect(relay.errors).toEqual([]);
+      } finally {
+        unsubscribe();
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
     "routes a pinned remote incompatibility through the batch client's unsupported fallback seam",
     async () => {
       const relay = new FakeRelayHost();
@@ -2131,6 +2238,117 @@ describe("RemoteStreamClient dynamic subscribe params", () => {
         expect(relay.errors).toEqual([]);
       } finally {
         stream.close();
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+});
+
+describe("RemoteSession method-support listener isolation", () => {
+  it(
+    "survives a throwing capability observer instead of dropping the connection",
+    async () => {
+      // The `openAck` publish runs inside inbound frame dispatch, whose
+      // rejection handler reads ANY throw as `inbound-decode-failed` and drops
+      // the connection. Removing the per-listener guard does not merely lose
+      // one notification: the redial re-throws on the NEXT openAck, so the
+      // session never reaches ready at all and this `waitFor` times out.
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const relay = new FakeRelayHost();
+      relay.streamManifest = buildStreamManifest(
+        cursorStreamRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      );
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        streamRegistry: cursorStreamRegistry,
+      });
+      const streamClient = new RemoteStreamClient<
+        VersionedRpcRegistry,
+        typeof cursorStreamRegistry
+      >(session, () => null);
+      // Registered FIRST, so the set's insertion order puts the fault ahead of
+      // the healthy observer - which is what makes the second assertion below
+      // evidence that a throw does not silence the rest of the set.
+      const unsubscribeThrowing = streamClient.subscribeMethodSupport(() => {
+        throw new Error("capability observer faulted");
+      });
+      const observed: string[] = [];
+      const unsubscribeHealthy = streamClient.subscribeMethodSupport(() => {
+        observed.push(streamClient.getMethodSupport("cursor.subscribe"));
+      });
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        // One `open` on the wire: the session reached ready on its FIRST
+        // physical connection, so nothing was dropped and redialled behind it.
+        expect(relay.openBearers).toHaveLength(1);
+        expect(observed).toEqual(["supported"]);
+        const errorCalls: ReadonlyArray<ReadonlyArray<unknown>> =
+          errorSpy.mock.calls;
+        expect(
+          errorCalls
+            .map((call) => String(call[0]))
+            .filter(
+              (line) =>
+                line === "[remote-session] method-support listener threw",
+            ),
+        ).toHaveLength(1);
+        expect(relay.errors).toEqual([]);
+      } finally {
+        unsubscribeThrowing();
+        unsubscribeHealthy();
+        session.close();
+        errorSpy.mockRestore();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "delivers the terminal retraction to its observers before retiring them",
+    async () => {
+      // `emitClosed` clears `methodSupportListeners`, and the retirement
+      // itself has no public observation point - an already-closed session
+      // notifies nobody either way, so asserting "not called after close"
+      // would pass with or without the fix. What IS observable, and what the
+      // clear must not preempt, is the last publish: the terminal
+      // `teardownConnection` retracts this connection's manifest evidence, and
+      // an observer that missed it would keep reading a dead session's
+      // capability as `supported`.
+      const relay = new FakeRelayHost();
+      relay.streamManifest = buildStreamManifest(
+        cursorStreamRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      );
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        streamRegistry: cursorStreamRegistry,
+      });
+      const streamClient = new RemoteStreamClient<
+        VersionedRpcRegistry,
+        typeof cursorStreamRegistry
+      >(session, () => null);
+      const observed: string[] = [];
+      const unsubscribe = streamClient.subscribeMethodSupport(() => {
+        observed.push(streamClient.getMethodSupport("cursor.subscribe"));
+      });
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        expect(observed).toEqual(["supported"]);
+
+        session.close();
+        expect(observed).toEqual(["supported", "unknown"]);
+        expect(streamClient.getMethodSupport("cursor.subscribe")).toBe(
+          "unknown",
+        );
+        expect(relay.errors).toEqual([]);
+      } finally {
+        unsubscribe();
         session.close();
       }
     },

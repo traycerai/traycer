@@ -14,17 +14,22 @@ import {
   hostNotificationEntrySchemaV22,
   hostNotificationsCloudFeedSubscribeServerFrameSchemaV10,
   hostNotificationsCloudFeedSubscribeServerFrameSchemaV11,
+  hostNotificationsCloudFeedSubscribeServerFrameSchemaV12,
   hostNotificationsCloudFeedSubscribeV10,
   hostNotificationsCloudFeedSubscribeV11,
+  hostNotificationsCloudFeedSubscribeV12,
   hostNotificationsFeedSubscribeV10,
   hostNotificationsFeedSubscribeV11,
+  hostNotificationsFeedSubscribeV12,
   hostNotificationsListDowngradeV22ToV10,
   hostNotificationsListResponseSchema,
   hostNotificationsListResponseSchemaV10,
   hostNotificationsListResponseSchemaV21,
   hostNotificationsListUpgradeV20ToV21,
+  hostNotificationsListUpgradeV21ToV22,
   hostNotificationsListV20,
   hostNotificationsListV21,
+  hostNotificationsListV22,
   hostNotificationsSubscribeServerFrameSchema,
   hostNotificationsSubscribeServerFrameSchemaV10,
   hostNotificationsSubscribeServerFrameSchemaV11,
@@ -244,8 +249,12 @@ describe("registry wiring", () => {
     expect(line.latestMinor).toBe(2);
     expect(line.versions[0].contract).toBe(hostNotificationsListV20);
     expect(line.versions[1].contract).toBe(hostNotificationsListV21);
+    expect(line.versions[2].contract).toBe(hostNotificationsListV22);
     expect(line.versions[1].upgradeFromPreviousVersion).toBe(
       hostNotificationsListUpgradeV20ToV21,
+    );
+    expect(line.versions[2].upgradeFromPreviousVersion).toBe(
+      hostNotificationsListUpgradeV21ToV22,
     );
     expect(line.downgradePathsFromLatest[1]).toBe(
       hostNotificationsListDowngradeV22ToV10,
@@ -257,6 +266,7 @@ describe("registry wiring", () => {
     expect(line.latestMinor).toBe(2);
     expect(line.versions[0].contract).toBe(hostNotificationsFeedSubscribeV10);
     expect(line.versions[1].contract).toBe(hostNotificationsFeedSubscribeV11);
+    expect(line.versions[2].contract).toBe(hostNotificationsFeedSubscribeV12);
   });
 
   it("keeps the legacy subscribe stream frozen at @1.0", () => {
@@ -265,16 +275,68 @@ describe("registry wiring", () => {
     expect(Object.keys(line.versions)).toEqual(["0"]);
   });
 
-  it("advertises cloud feed @1.1 with @1.0 still installed for older peers", () => {
+  it("advertises cloud feed @1.2 with the prior minors installed for older peers", () => {
     const line =
       hostStreamRpcRegistry["host.notifications.cloudFeed.subscribe"][1];
-    expect(line.latestMinor).toBe(1);
+    expect(line.latestMinor).toBe(2);
     expect(line.versions[0].contract).toBe(
       hostNotificationsCloudFeedSubscribeV10,
     );
     expect(line.versions[1].contract).toBe(
       hostNotificationsCloudFeedSubscribeV11,
     );
+    expect(line.versions[2].contract).toBe(
+      hostNotificationsCloudFeedSubscribeV12,
+    );
+  });
+
+  /**
+   * `@1.2` re-mints this branch's partition snapshot above mainline's own
+   * `@1.1`. The regression it guards: extending the `@1.0` snapshot instead of
+   * the `@1.1` one would hand a LATER minor a NARROWER `entry` union than the
+   * minor below it, so a `host.operation.finished` row that `@1.1` accepts
+   * would be dropped by `@1.2` - a silent downgrade for the newest peers.
+   */
+  it("keeps @1.2 a superset of @1.1, on both of its snapshot arms", () => {
+    const row = {
+      entryId: "0195a1f0-0001-7000-8000-00000000000a",
+      originHostId: "host-a",
+      coalesceKey: "worktree.deletion:wt-1",
+      entry: OPERATION_FINISHED_ENTRY,
+      presentation: { epicTitle: null, chatTitle: null },
+    };
+    const base = {
+      hasBinaryPayload: false,
+      connectionState: "connected",
+      version: 3,
+      rows: [row],
+      summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
+    };
+    // The arm inherited from @1.1 keeps carrying the widened entry union.
+    expect(
+      hostNotificationsCloudFeedSubscribeServerFrameSchemaV12.safeParse({
+        ...base,
+        kind: "snapshot",
+      }).success,
+    ).toBe(true);
+    // ...and so does the arm @1.2 adds, which is the whole point of extending
+    // the @1.1 snapshot rather than the @1.0 one.
+    const partitionSnapshot = {
+      ...base,
+      kind: "partitionSnapshot",
+      partition: { home: "cloud", order: 1, nextCursor: null },
+    };
+    expect(
+      hostNotificationsCloudFeedSubscribeServerFrameSchemaV12.safeParse(
+        partitionSnapshot,
+      ).success,
+    ).toBe(true);
+    // The new arm is genuinely new: @1.1 cannot represent it.
+    expect(
+      hostNotificationsCloudFeedSubscribeServerFrameSchemaV11.safeParse(
+        partitionSnapshot,
+      ).success,
+    ).toBe(false);
   });
 });
 

@@ -70,6 +70,7 @@ import type {
   HistoryWorkspaceRef,
   HistorySortOption,
 } from "@/components/home/data/home-page.data";
+import type { ListTasksCompleteness } from "@traycer/protocol/host/epic/unary-schemas";
 import {
   canDeleteHistoryItem,
   canEditHistoryItemTitle,
@@ -78,14 +79,23 @@ import {
 import { EpicsFilterPopover } from "@/components/epics/epics-filter-popover";
 import {
   EpicsListChatHostFilterUnsupported,
+  EpicsListCloudPagePending,
+  EpicsListCloudPageUnavailable,
   EpicsListEmpty,
   EpicsListError,
   EpicsListFilteredEmpty,
   EpicsListFilteringLoading,
+  EpicsListHostRequiresCloudToList,
   EpicsListLoading,
   EpicsListShowMore,
+  HistoryCompletenessNotice,
   HistoryRowLeadingIcon,
 } from "@/components/epics/epics-list-shared";
+import {
+  historyPinControlLabel,
+  historyPinUnavailableReason,
+  historyPinUnavailableTooltip,
+} from "@/components/epics/history-pin-availability";
 import { historyItemDisplayTitle } from "@/components/epics/history-item-title";
 import { MobileHistoryList } from "@/components/epics/mobile/mobile-history-list";
 import { useHistoryOpenItem } from "@/components/epics/use-history-open-item";
@@ -109,6 +119,10 @@ import {
 import { useRefreshSpinner } from "@/hooks/use-refresh-spinner";
 import { epicDisplayTitle } from "@/lib/display-title";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import {
+  authorizesCloudCapability,
+  useAuthStore,
+} from "@/stores/auth/auth-store";
 import type {
   HistorySearchPatch,
   HistorySearchState,
@@ -128,6 +142,15 @@ const EMPTY_WORKTREES_BY_EPIC: ReadonlyMap<
 const VIEWER_DELETE_TOOLTIP = "Viewers cannot select task for deletion.";
 const NO_DELETE_PERMISSION_TOOLTIP =
   "You don't have permission to delete this task.";
+const PRESERVED_ORPHAN_DELETE_TOOLTIP =
+  "This epic's cloud copy was already deleted. Only this device's edits remain, so there is nothing left to delete.";
+// States the CONDITION rather than predicting a reconnect, for the same reason
+// the pin tooltip does: the session may be unverified because authn refused the
+// credential, which no amount of waiting fixes - only signing in again does.
+// "Once your sign-in is confirmed" covers both the transient recovery and
+// the re-sign-in without promising either.
+const UNVERIFIED_SESSION_DELETE_TOOLTIP =
+  "Your sign-in couldn't be confirmed, so cloud changes are paused. Deleting this task will work again once your sign-in is confirmed.";
 const HISTORY_REFRESH_TIMEOUT_MS = 10_000;
 
 export type EpicsListPanelVariant = "page" | "embedded" | "picker";
@@ -253,6 +276,48 @@ function AmbientEpicsListPanel(props: AmbientEpicsListPanelProps): ReactNode {
   );
 }
 
+interface HistoryPanelView {
+  readonly items: ReadonlyArray<HistoryItem>;
+  readonly worktreesByEpicId: ReadonlyMap<
+    string,
+    readonly WorktreeHostEntryV12[]
+  >;
+  readonly availableRepos: ReadonlyArray<string>;
+  readonly availableWorkspaces: ReadonlyArray<HistoryWorkspaceRef>;
+  readonly facets: HistoryFacets | undefined;
+  readonly completeness: ListTasksCompleteness | null;
+}
+
+/** The panel's read of a possibly-absent fetch result, with the no-settled-page
+ * defaults stated once. */
+function historyPanelView(
+  data: HistoryFetchResult | undefined,
+): HistoryPanelView {
+  if (data === undefined) {
+    return {
+      items: EMPTY_ITEMS,
+      worktreesByEpicId: EMPTY_WORKTREES_BY_EPIC,
+      availableRepos: EMPTY_REPOS,
+      availableWorkspaces: EMPTY_WORKSPACES,
+      facets: undefined,
+      completeness: null,
+    };
+  }
+  return {
+    items: data.items,
+    worktreesByEpicId: data.worktreesByEpicId,
+    availableRepos: data.availableRepos,
+    availableWorkspaces: data.availableWorkspaces,
+    facets: data.facets,
+    // `?? null` rather than a straight read: `completeness` is declared
+    // non-optional but arrives absent from partial fixtures, and the notice
+    // below dereferences it. The previous `data?.completeness ?? null` carried
+    // that same coercion, so dropping it turned an omitted field into a render
+    // crash rather than a missing notice.
+    completeness: data.completeness ?? null,
+  };
+}
+
 function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
   const { variant, onSelectEpic, onOpenItem, historySearch } = props;
   // Destructure the stable `update`/`clear` functions (the hook returns a fresh
@@ -284,6 +349,7 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
     fetchNextPage,
     hasNextPage,
     isFetchingNextPage,
+    cloudPagePending,
   } = useHistoryQuery({
     search,
     nowMs: props.historyNowMs,
@@ -298,8 +364,13 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
   });
   const refreshHistory = useCallback(() => refetchRef.current(), []);
 
-  const items = data?.items ?? EMPTY_ITEMS;
-  const worktreesByEpicId = data?.worktreesByEpicId ?? EMPTY_WORKTREES_BY_EPIC;
+  // One read of the fetch result rather than six independent `data?.x ?? d`
+  // sites: the empty-state defaults belong together (they all describe "no
+  // settled page yet"), and spreading them through the body made the panel
+  // body's branch count grow with every field the query gained.
+  const view = historyPanelView(data);
+  const items = view.items;
+  const worktreesByEpicId = view.worktreesByEpicId;
   const indicatorEpicIds = useMemo(
     () => items.map((item) => item.epicId),
     [items],
@@ -314,9 +385,14 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
   });
   const { chatHostFilterSupported, chatHostFilterUnsupported } =
     useChatHostFilterGate(hostId, data);
-  const availableRepos = data?.availableRepos ?? EMPTY_REPOS;
-  const availableWorkspaces = data?.availableWorkspaces ?? EMPTY_WORKSPACES;
-  const facets = data?.facets;
+  // `=== true` rather than a straight read, for the reason `historyPanelView`
+  // spells out about `completeness`: this field is declared non-optional but
+  // partial fixtures omit it, and an `undefined` must read as "not refused"
+  // rather than being coerced into the branch that suppresses every row.
+  const hostRequiresCloudToList = data?.hostRequiresCloudToList === true;
+  const availableRepos = view.availableRepos;
+  const availableWorkspaces = view.availableWorkspaces;
+  const facets = view.facets;
 
   const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(
     () => new Set(),
@@ -385,6 +461,13 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
   // select/delete/sweep flow, so every entry point into it is gated here
   // rather than in the chrome that merely renders it.
   const selectionEnabled = variant !== "picker";
+  // Deletion of a cloud-backed row is a capability spend on the account, and
+  // History renders under `unverified` where no verdict is held. Read once for
+  // the whole panel and hand it to `canDeleteHistoryItem` at each of the three
+  // admission points below - selection, the row control, and the confirmation.
+  const cloudAuthorized = useAuthStore((state) =>
+    authorizesCloudCapability(state.status),
+  );
 
   // A sweep target is a SET: one id from a row action, the whole selection
   // from the bulk action. The set is load-bearing - a worktree shared between
@@ -410,9 +493,9 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
   const selectableItemIds = useMemo(
     () =>
       items
-        .filter((item) => canDeleteHistoryItem(item))
+        .filter((item) => canDeleteHistoryItem(item, cloudAuthorized))
         .map((item) => item.epicId),
-    [items],
+    [cloudAuthorized, items],
   );
   const selectableIdSet = useMemo(
     () => new Set(selectableItemIds),
@@ -485,14 +568,41 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
   }, []);
 
   const handleConfirmDelete = () => {
+    if (pendingDeleteIds === null) return;
     // The host-wide census is asynchronous. Confirming before it settles lets
     // the Task deletion start with zero approved worktrees; its rows can then
     // arrive during the mutation and flash briefly before success closes the
     // dialog. Hold confirmation until the choices the person is approving are
     // stable. A disabled query (host unavailable) is not fetching, so cleanup
     // remains additive and never blocks Task deletion indefinitely.
-    if (pendingDeleteIds === null || worktreeCandidatesFetching) return;
-    const ids = pendingDeleteIds;
+    if (worktreeCandidatesFetching) return;
+    // The verdict is re-read HERE, from the store, rather than trusted from the
+    // render that opened this dialog. A confirmation is an unbounded pause with
+    // a human in it, and `unverified` arrives asynchronously - a wake, a failed
+    // refresh, an authn outage - so the session that opened the dialog is not
+    // necessarily the session that confirms it. Gating only at selection time
+    // leaves an already-open dialog dispatching `epic.batchDelete` on a bearer
+    // the cloud stopped vouching for a minute ago.
+    //
+    // Re-FILTERED rather than refused wholesale, because the local-home rows in
+    // a mixed selection are still deletable: they reclaim this machine's disk
+    // and spend nothing. A pending id whose row is no longer in `items` cannot
+    // be proven local-home, so it survives only while authorized - the one arm
+    // that has to fail closed, since "unknown row" is exactly what a withdrawn
+    // verdict must not be allowed to wave through.
+    const authorizedNow = authorizesCloudCapability(
+      useAuthStore.getState().status,
+    );
+    const itemsByEpicId = new Map(items.map((item) => [item.epicId, item]));
+    const ids = pendingDeleteIds.filter((id) => {
+      const item = itemsByEpicId.get(id);
+      if (item === undefined) return authorizedNow;
+      return canDeleteHistoryItem(item, authorizedNow);
+    });
+    if (ids.length === 0) {
+      closeDeleteDialog();
+      return;
+    }
     const approvedWorktrees = worktreeCandidates
       .filter((candidate) => isWorktreePathChecked(candidate.worktreePath))
       .map((candidate) => ({
@@ -541,8 +651,11 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
   // row lands back in the query. At most one of the two search placements is
   // ever mounted, so a single ref covers whichever one is live.
   const searchInputRef = useRef<HTMLInputElement>(null);
-  const listRef = useRef<HTMLUListElement>(null);
-  const keyboardNav = useHistoryListKeyboardNav(searchInputRef, listRef);
+  // The SCROLL CONTAINER, not one `<ul>`: preserved-orphan rows render in a
+  // second list above the ordinary results, and arrow traversal has to cover
+  // both. See `rowTargets`.
+  const rowsScopeRef = useRef<HTMLDivElement>(null);
+  const keyboardNav = useHistoryListKeyboardNav(searchInputRef, rowsScopeRef);
 
   return (
     <TooltipProvider>
@@ -637,6 +750,7 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
             isFetching={isFetching}
             hasActiveFilters={hasActiveFilters}
             chatHostFilterUnsupported={chatHostFilterUnsupported}
+            hostRequiresCloudToList={hostRequiresCloudToList}
             items={items}
             onRetry={handleRetry}
             selectionMode={selectionMode}
@@ -657,7 +771,9 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
             worktreesByEpicId={worktreesByEpicId}
             surfaceHostId={hostId}
             openEpicIds={openEpicIdSet}
-            listRef={listRef}
+            completeness={view.completeness}
+            cloudPagePending={cloudPagePending}
+            rowsScopeRef={rowsScopeRef}
             onRowKeyDown={keyboardNav.onRowKeyDown}
             onRefresh={refreshHistory}
           />
@@ -1032,6 +1148,15 @@ function describeDeleteTitle(
 
 interface HistoryListBodyProps extends EpicsListBodyProps {
   readonly variant: EpicsListPanelVariant;
+  /**
+   * The DESKTOP scroll container's ref, and only it. Arrow traversal reads
+   * every `[data-history-row-target]` under this node, so it has to be the
+   * element that contains both the preserved-orphan list and the ordinary
+   * results - not either `<ul>`. The mobile branch deliberately does not take
+   * it: `MobileHistoryList` owns its own scrolling element for pull-to-refresh
+   * and has no keyboard-row contract to anchor.
+   */
+  readonly rowsScopeRef: React.RefObject<HTMLDivElement | null>;
   readonly onRefresh: () => Promise<unknown>;
 }
 
@@ -1062,7 +1187,10 @@ function HistoryListBody(props: HistoryListBodyProps): ReactNode {
         isFetching={props.isFetching}
         hasActiveFilters={props.hasActiveFilters}
         chatHostFilterUnsupported={props.chatHostFilterUnsupported}
+        hostRequiresCloudToList={props.hostRequiresCloudToList}
         items={props.items}
+        completeness={props.completeness}
+        cloudPagePending={props.cloudPagePending}
         onRetry={props.onRetry}
         selectionMode={props.selectionMode}
         selectedIds={props.selectedIds}
@@ -1078,14 +1206,20 @@ function HistoryListBody(props: HistoryListBodyProps): ReactNode {
       />
     );
   }
+  // Destructured rather than read as `props.rowsScopeRef` in the JSX: the
+  // compiler lint treats a ref reached through `props` during render as a ref
+  // ACCESS and rejects it (and then flags every sibling prop in the same
+  // element). The base component did the same thing with its `listRef`.
+  const { rowsScopeRef } = props;
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto pb-10">
+    <div ref={rowsScopeRef} className="min-h-0 flex-1 overflow-y-auto pb-10">
       <EpicsListBody
         error={props.error}
         isPending={props.isPending}
         isFetching={props.isFetching}
         hasActiveFilters={props.hasActiveFilters}
         chatHostFilterUnsupported={props.chatHostFilterUnsupported}
+        hostRequiresCloudToList={props.hostRequiresCloudToList}
         items={props.items}
         onRetry={props.onRetry}
         selectionMode={props.selectionMode}
@@ -1106,7 +1240,8 @@ function HistoryListBody(props: HistoryListBodyProps): ReactNode {
         worktreesByEpicId={props.worktreesByEpicId}
         surfaceHostId={props.surfaceHostId}
         openEpicIds={props.openEpicIds}
-        listRef={props.listRef}
+        completeness={props.completeness}
+        cloudPagePending={props.cloudPagePending}
         onRowKeyDown={props.onRowKeyDown}
       />
     </div>
@@ -1119,6 +1254,12 @@ interface EpicsListBodyProps {
   readonly isFetching: boolean;
   readonly hasActiveFilters: boolean;
   readonly chatHostFilterUnsupported: boolean;
+  /**
+   * Nothing was asked for: no cloud verdict, and a host that cannot list
+   * locally. Rendered ahead of every other empty branch - see
+   * `EpicsListHostRequiresCloudToList` for why each alternative is a lie.
+   */
+  readonly hostRequiresCloudToList: boolean;
   readonly items: ReadonlyArray<HistoryItem>;
   readonly onRetry: () => void;
   readonly selectionMode: boolean;
@@ -1147,8 +1288,10 @@ interface EpicsListBodyProps {
    */
   readonly surfaceHostId: string | null;
   readonly openEpicIds: ReadonlySet<string>;
+  readonly completeness: ListTasksCompleteness | null;
+  /** Local-first cloud revalidation for the first page is still outstanding. */
+  readonly cloudPagePending: boolean;
   /** Anchors the arrow-key traversal: DOM order inside it is row order. */
-  readonly listRef: RefObject<HTMLUListElement | null>;
   readonly onRowKeyDown: (event: React.KeyboardEvent<HTMLElement>) => void;
 }
 
@@ -1159,6 +1302,7 @@ function EpicsListBody(props: EpicsListBodyProps): ReactNode {
     isFetching,
     hasActiveFilters,
     chatHostFilterUnsupported,
+    hostRequiresCloudToList,
     items,
     onRetry,
     selectionMode,
@@ -1179,12 +1323,32 @@ function EpicsListBody(props: EpicsListBodyProps): ReactNode {
     worktreesByEpicId,
     surfaceHostId,
     openEpicIds,
-    listRef,
+    completeness,
+    cloudPagePending,
     onRowKeyDown,
   } = props;
 
+  // Partitioned, not sorted into place. A preserved orphan is not a task with
+  // an unusual status - the server has deleted it and only this device's
+  // never-uploaded edits remain - so mixing it into the ordinary list under
+  // whatever sort happens to be active is how it stayed effectively invisible
+  // even once it was listable.
+  const preservedItems = items.filter(
+    (item) => item.isPreservedOrphan === true,
+  );
+  const ordinaryItems =
+    preservedItems.length === 0
+      ? items
+      : items.filter((item) => item.isPreservedOrphan !== true);
+
   if (error !== null) {
     return <EpicsListError error={error} onRetry={onRetry} />;
+  }
+  // Ahead of the spinner, because this state IS the spinner's false positive:
+  // the underlying query never ran, so it reports `pending` forever and every
+  // downstream branch below would describe a load that is not happening.
+  if (hostRequiresCloudToList) {
+    return <EpicsListHostRequiresCloudToList />;
   }
   if (isPending) {
     return <EpicsListLoading />;
@@ -1194,21 +1358,111 @@ function EpicsListBody(props: EpicsListBodyProps): ReactNode {
   if (chatHostFilterUnsupported) {
     return <EpicsListChatHostFilterUnsupported />;
   }
-  if (items.length === 0 && !hasActiveFilters) {
-    return <EpicsListEmpty />;
+  // Every "there are no rows" reading, grouped under the one test they share.
+  // Ordering inside is load-bearing and unchanged; nesting only stops each arm
+  // from re-asking `items.length === 0`, and lets the last arm drop its
+  // `hasActiveFilters` re-test - the arm above it returns whenever that is
+  // false, so reaching the last one already means it is true.
+  if (items.length === 0) {
+    // A pending local-first page is a renderable device snapshot, not a settled
+    // account result. Keep the distinct state ahead of every empty branch so an
+    // empty mirror never becomes the definitive "No tasks yet" claim.
+    if (cloudPagePending) {
+      return (
+        <>
+          <HistoryCompletenessNotice
+            completeness={completeness}
+            cloudPagePending={cloudPagePending}
+          />
+          <EpicsListCloudPagePending />
+        </>
+      );
+    }
+    if (!hasActiveFilters) {
+      // The notice renders HERE too, and this is the case it matters most for:
+      // an empty History with no explanation is the strongest possible claim of
+      // completeness, and it is the one a suppressed local projection or an
+      // unreachable cloud page produces. With NO cloud page the body must not
+      // make that claim either: zero local rows is not evidence of an empty
+      // account.
+      return (
+        <>
+          <HistoryCompletenessNotice
+            completeness={completeness}
+            cloudPagePending={cloudPagePending}
+          />
+          {completeness?.cloudPage === "unavailable" ? (
+            <EpicsListCloudPageUnavailable />
+          ) : (
+            <EpicsListEmpty />
+          )}
+        </>
+      );
+    }
+    if (isFetching) {
+      return (
+        <>
+          <HistoryCompletenessNotice
+            completeness={completeness}
+            cloudPagePending={cloudPagePending}
+          />
+          <EpicsListFilteringLoading />
+        </>
+      );
+    }
   }
-  if (items.length === 0 && hasActiveFilters && isFetching) {
-    return <EpicsListFilteringLoading />;
-  }
+  const rowProps = {
+    selectionMode,
+    selectionEnabled,
+    selectedIds,
+    onToggleSelection,
+    onRequestDelete,
+    onRequestSweep,
+    onSetPinned,
+    pendingSetPinnedEpicIds,
+    onSelectEpic,
+    onOpenItem,
+    onOpenInNewWindow,
+    openInNewWindowAvailable,
+    worktreesByEpicId,
+    openEpicIds,
+  };
   return (
     <>
-      {items.length > 0 ? (
-        <ul
-          ref={listRef}
-          className="flex flex-col gap-2"
-          data-testid="epics-list-rows"
+      <HistoryCompletenessNotice
+        completeness={completeness}
+        cloudPagePending={cloudPagePending}
+      />
+      {preservedItems.length > 0 ? (
+        <section
+          className="mb-3 flex flex-col gap-2"
+          data-testid="epics-list-preserved-section"
         >
-          {items.map((item) => (
+          <h2 className="text-ui-xs font-medium text-destructive">
+            Deleted in cloud &mdash; local edits kept on this device
+          </h2>
+          <ul className="flex flex-col gap-2">
+            {preservedItems.map((item) => (
+              <EpicsListRow
+                key={item.id}
+                item={item}
+                {...rowProps}
+                surfaceHostId={surfaceHostId}
+                onRowKeyDown={onRowKeyDown}
+                isSelected={selectedIds.has(item.epicId)}
+                isPinPending={pendingSetPinnedEpicIds.has(item.epicId)}
+                worktrees={
+                  worktreesByEpicId.get(item.epicId) ?? EMPTY_WORKTREES
+                }
+                isOpen={openEpicIds.has(item.epicId)}
+              />
+            ))}
+          </ul>
+        </section>
+      ) : null}
+      {ordinaryItems.length > 0 ? (
+        <ul className="flex flex-col gap-2" data-testid="epics-list-rows">
+          {ordinaryItems.map((item) => (
             <EpicsListRow
               key={item.id}
               item={item}
@@ -1231,9 +1485,16 @@ function EpicsListBody(props: EpicsListBodyProps): ReactNode {
             />
           ))}
         </ul>
-      ) : (
+      ) : null}
+      {/*
+        Only when there is genuinely nothing to show. A page whose only rows
+        are preserved orphans is not an empty filter result, and telling the
+        person "no tasks match" over a section they can see would be the same
+        untruth from the other direction.
+      */}
+      {ordinaryItems.length === 0 && preservedItems.length === 0 ? (
         <EpicsListFilteredEmpty />
-      )}
+      ) : null}
       <EpicsListShowMore
         hasNextPage={hasNextPage}
         isFetchingNextPage={isFetchingNextPage}
@@ -1351,13 +1612,23 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
     onRequestSweep,
   });
   const displayTitle = historyItemDisplayTitle(item);
-  const canEditTitle = canEditHistoryItemTitle(item);
-  const canDeleteItem = canDeleteHistoryItem(item);
+  // The same verdict the panel gates selection on, read here too rather than
+  // threaded down as a prop: this row renders for a picker variant that never
+  // computes the panel's copy, and a control that admits on a rule its own
+  // panel does not is how the class reopens at a second surface.
+  const cloudAuthorized = useAuthStore((state) =>
+    authorizesCloudCapability(state.status),
+  );
+  const canEditTitle = canEditHistoryItemTitle(item, cloudAuthorized);
+  const canDeleteItem = canDeleteHistoryItem(item, cloudAuthorized);
   const selectionDisabled = historySelectionDisabled(
     selectionMode,
     canDeleteItem,
   );
-  const deleteDisabledTooltip = historyDeleteDisabledTooltip(item);
+  const deleteDisabledTooltip = historyDeleteDisabledTooltip(
+    item,
+    cloudAuthorized,
+  );
   const { mutate: renameEpicTitle, isPending: isRenamePending } =
     useEpicUpdateTitle();
   const openHistoryItem = useHistoryOpenItem({ onSelectEpic, onOpenItem });
@@ -1373,6 +1644,16 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
   const commitEpicTitle = useCallback(
     (nextTitle: string) => {
       if (isPhase) return;
+      // Re-checked at COMMIT, not only at admission: a rename started before
+      // a demotion would otherwise land on the retained credential after the
+      // verdict was withdrawn. Same exemption as the gate - a local-home row
+      // spends nothing.
+      if (
+        item.isLocalHome !== true &&
+        !authorizesCloudCapability(useAuthStore.getState().status)
+      ) {
+        return;
+      }
       renameEpicTitle({
         epicDelta: {
           id: item.epicId,
@@ -1381,7 +1662,7 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
         },
       });
     },
-    [isPhase, item.epicId, renameEpicTitle],
+    [isPhase, item.epicId, item.isLocalHome, renameEpicTitle],
   );
   const {
     isEditing: isRenaming,
@@ -1637,17 +1918,67 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
   );
 });
 
+/** Three visual states: permanently unavailable, pinned, and the
+ * hover-revealed default. */
+/**
+ * The three states composed rather than concatenated.
+ *
+ * Unavailable is deliberately the arm that gets NEITHER of main's touch
+ * affordances: no `active:press-scrim`, because press feedback tells the user
+ * the tap landed on something that acts, and no `pointer-coarse:opacity-100`,
+ * because permanently revealing a control that only ever refuses is an
+ * invitation to tap it. It reads as muted-and-inert, which is what it is; the
+ * tooltip carries the reason.
+ */
+function historyPinClassName(
+  pinUnavailable: boolean,
+  isPinned: boolean,
+): string {
+  if (pinUnavailable) return "cursor-default text-muted-foreground opacity-40";
+  if (isPinned) return "text-primary opacity-100 active:press-scrim";
+  // Touch has no hover to reveal the control, and tapping the row navigates -
+  // so on coarse pointers an ACTIONABLE pin stays visible.
+  return "text-muted-foreground opacity-0 group-hover/list-row:opacity-100 group-focus-within/list-row:opacity-100 pointer-coarse:opacity-100 active:press-scrim";
+}
+
 function HistoryPinControl(props: {
   readonly item: HistoryItem;
   readonly isPending: boolean;
   readonly selectionMode: boolean;
   readonly onSetPinned: (epicId: string, pinned: boolean) => void;
 }): ReactNode {
+  // Ahead of the early return: this is a hook, and the return below is
+  // conditional on props.
+  const cloudAuthorized = useAuthStore((state) =>
+    authorizesCloudCapability(state.status),
+  );
   if (props.selectionMode || props.item.taskType === "phase") return null;
   const displayTitle = historyItemDisplayTitle(props.item);
-  const label = props.item.isPinned
-    ? `Unpin ${displayTitle} from top`
-    : `Pin ${displayTitle} to top`;
+  const unavailableReason = historyPinUnavailableReason(
+    props.item,
+    cloudAuthorized,
+  );
+  const pinUnavailable = unavailableReason !== null;
+  // "…is available after cloud sync" promised a sync that, for a free-tier
+  // account, never comes - and `s5-status-truthfulness` folds
+  // `s4-promotion-task-list-invalidation` in here for the sharper version of
+  // the same problem: a STALE `home: "local"` row keeps making that promise
+  // about an epic that is already in the cloud, and pin is one of the three
+  // mutations that would have cleared the cache, so it cannot self-heal by
+  // being used. The copy now states the CONDITION (this epic is on this
+  // device) rather than predicting an event, so it is true in both cases.
+  //
+  // The staleness itself is the list-invalidation fix and is not repaired
+  // here; this stops the copy from lying while it lasts.
+  const label = historyPinControlLabel({
+    displayTitle,
+    unavailableReason,
+    isPinned: props.item.isPinned,
+  });
+  const unavailableTooltip =
+    unavailableReason === null
+      ? null
+      : historyPinUnavailableTooltip(unavailableReason);
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -1656,16 +1987,28 @@ function HistoryPinControl(props: {
           aria-label={label}
           aria-pressed={props.item.isPinned}
           data-testid="epics-list-row-pin"
+          data-local-home-pin-unavailable={pinUnavailable || undefined}
+          // `aria-disabled`, NOT `disabled`, for the PERMANENT unavailability:
+          // a natively disabled control is unfocusable and fires no pointer
+          // events, so the tooltip that carries the only explanation of why
+          // pinning is off could be reached with a mouse hover and by nothing
+          // else. `disabled` is kept for the transient in-flight window, where
+          // there is nothing to explain. The mutation stays blocked by the
+          // shared admission guard in `onClick`, which keyboard activation also
+          // routes through.
+          aria-disabled={pinUnavailable || undefined}
           disabled={props.isPending}
           className={cn(
-            "pointer-events-auto flex size-5 shrink-0 items-center justify-center rounded-sm outline-none transition-[color,opacity] hover:bg-foreground/5 active:press-scrim focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-wait",
-            props.item.isPinned
-              ? "text-primary opacity-100"
-              : // Touch has no hover to reveal the control, and tapping the row
-                // navigates - so on coarse pointers it stays visible.
-                "text-muted-foreground opacity-0 group-hover/list-row:opacity-100 group-focus-within/list-row:opacity-100 pointer-coarse:opacity-100",
+            // `active:press-scrim` is NOT here, though main had it in this
+            // static string: press feedback is a promise that the tap does
+            // something, and on the unavailable control it does not. It moves
+            // into the two actionable arms of `historyPinClassName` instead,
+            // which is the composition this merge owes both sides.
+            "pointer-events-auto flex size-5 shrink-0 items-center justify-center rounded-sm outline-none transition-[color,opacity] hover:bg-foreground/5 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-wait",
+            historyPinClassName(pinUnavailable, props.item.isPinned),
           )}
           onClick={() => {
+            if (pinUnavailable) return;
             props.onSetPinned(props.item.epicId, !props.item.isPinned);
           }}
         >
@@ -1677,7 +2020,7 @@ function HistoryPinControl(props: {
           />
         </button>
       </TooltipTrigger>
-      <TooltipContent>{label}</TooltipContent>
+      <TooltipContent>{unavailableTooltip ?? label}</TooltipContent>
     </Tooltip>
   );
 }
@@ -1689,7 +2032,23 @@ function historySelectionDisabled(
   return selectionMode && !canDeleteItem;
 }
 
-function historyDeleteDisabledTooltip(item: HistoryItem): string {
+function historyDeleteDisabledTooltip(
+  item: HistoryItem,
+  cloudAuthorized: boolean,
+): string {
+  // Ahead of the role arms: a preserved orphan can carry an `owner` role and
+  // still be undeletable, so a role-derived reason would read as a permissions
+  // problem the user could fix by asking someone.
+  if (item.isPreservedOrphan === true) return PRESERVED_ORPHAN_DELETE_TOOLTIP;
+  // Also ahead of them, and for the sharper version of that reason: an
+  // unverified session leaves every role on screen exactly as it was, so a
+  // withdrawn verdict reported as "you don't have permission" sends the user to
+  // ask a collaborator for access they already hold. Behind the orphan arm
+  // though - that row could never be deleted, verdict or not, and naming the
+  // recoverable condition for it would be the same misdirection in reverse.
+  if (!cloudAuthorized && item.isLocalHome !== true) {
+    return UNVERIFIED_SESSION_DELETE_TOOLTIP;
+  }
   if (item.permissionRole === "viewer") return VIEWER_DELETE_TOOLTIP;
   return NO_DELETE_PERMISSION_TOOLTIP;
 }

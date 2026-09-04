@@ -162,6 +162,13 @@ export function useStreamMethodSupportFor(
   return useStreamMethodValueForClient(client, method, readMethodSupport);
 }
 
+/**
+ * Negotiated schema version for an EXPLICIT client instance.
+ *
+ * The `Support` sibling above existed already; without this one a caller with
+ * a non-default client had to mix the two and read the minor off the app-wide
+ * context, which is the exact skew the sibling was added to prevent.
+ */
 export function useStreamMethodSchemaVersionFor(
   client: IHostStreamClient<HostStreamRpcRegistry> | null,
   method: keyof HostStreamRpcRegistry & string,

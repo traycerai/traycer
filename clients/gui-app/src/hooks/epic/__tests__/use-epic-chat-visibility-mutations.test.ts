@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import { createElement } from "react";
 
@@ -69,9 +69,11 @@ import {
   resetChatSharingInFlightForTests,
 } from "@/lib/chats/chat-sharing-inflight";
 import {
+  CHAT_SHARING_UNAUTHORIZED_MESSAGE,
   useEpicSetChatSharingDefault,
   useEpicSetCloudChatVisibility,
 } from "@/hooks/epic/use-epic-chat-visibility-mutations";
+import { useAuthStore } from "@/stores/auth/auth-store";
 
 const CHAT: CloudChatSummary = {
   identity: {
@@ -144,6 +146,14 @@ beforeEach(() => {
   for (const method of Object.keys(capturedMutations)) {
     delete capturedMutations[method];
   }
+  // Both writes re-read the cloud verdict at dispatch. The store is
+  // module-scope Zustand defaulting to `signed-out`, so every case that
+  // expects a dispatch stages the verdict first.
+  useAuthStore.setState({ status: "signed-in" });
+});
+
+afterEach(() => {
+  useAuthStore.setState({ status: "signed-out" });
 });
 
 describe("useEpicSetCloudChatVisibility", () => {
@@ -278,6 +288,30 @@ describe("useEpicSetCloudChatVisibility", () => {
     expect(queryClient.getQueryData(activeHostListKey)).toEqual({
       chats: [incumbent, clone],
     });
+  });
+
+  it("refuses to dispatch once the session holds no cloud verdict, without taking the in-flight gate", () => {
+    // The sidebar row menu can be open when a demotion lands; the cached
+    // cloud-chat rows survive it, so the control still exists. RED before
+    // the fix: `onMutate` only checked the in-flight gate, and the write went
+    // out on the retained local-host context.
+    useAuthStore.setState({ status: "unverified" });
+    renderHook(() => useEpicSetCloudChatVisibility(), {
+      wrapper: makeWrapperWithClient().wrapper,
+    });
+    const opts = getCapturedMutation("epic.setCloudChatVisibility").options as {
+      onMutate: (v: typeof VISIBILITY_VARS) => unknown;
+      onError: (e: Error) => void;
+    };
+    expect(() => opts.onMutate(VISIBILITY_VARS)).toThrow(
+      CHAT_SHARING_UNAUTHORIZED_MESSAGE,
+    );
+    // The gate was never taken, so a later authorized write is not blocked.
+    expect(isChatSharingInFlight("task-1", "viewer-1")).toBe(false);
+    opts.onError(new Error(CHAT_SHARING_UNAUTHORIZED_MESSAGE));
+    expect(toast.error).toHaveBeenCalledWith(
+      "Your sign-in couldn't be confirmed, so sharing changes are paused.",
+    );
   });
 
   it("toasts a generic fallback on a real failure", () => {

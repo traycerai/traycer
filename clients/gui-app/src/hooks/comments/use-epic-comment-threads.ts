@@ -81,8 +81,9 @@ export function commentThreadsShouldPoll(
  * TanStack Query backed read of the host's comment thread snapshot for a
  * single artifact. The host `epic.listCommentThreads` resolver wraps
  * `CommentThreadManager.readArtifactCommentThreads`, which is fed by the
- * Tiptap Cloud `TiptapCollabProvider` Y.Doc. Mutations from gui-app + Views
- * land in the same Y.Doc, so this query always returns the union of writers.
+ * artifact room's `TiptapCollabProvider` Y.Doc, cloud-backed or locally
+ * durable. Mutations from gui-app + Views land in the same Y.Doc, so this
+ * query always returns the union of writers.
  *
  * Cross-product writes from Views currently rely on TanStack Query's default
  * stale window plus mutation-driven invalidation; a future iteration should

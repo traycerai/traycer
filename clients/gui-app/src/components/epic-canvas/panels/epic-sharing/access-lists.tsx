@@ -84,6 +84,17 @@ export function PeopleWithAccess(props: PeopleWithAccessProps) {
       />
     );
   }
+  // Ahead of the empty arm, which it would otherwise be mistaken for: an
+  // unauthorized session has a zero-length list because it never asked, and
+  // "No direct collaborators yet." is a claim it has no evidence for.
+  if (props.loadState === "unauthorized") {
+    return (
+      <SharingEmpty
+        icon={<UserPlus className="size-3.5" />}
+        label="Collaborators can't be checked until your sign-in is confirmed."
+      />
+    );
+  }
   if (props.collaborators.length === 0) {
     return (
       <SharingEmpty
@@ -127,6 +138,16 @@ export function TeamsAccess(props: TeamsAccessProps) {
       <SharingError
         label="Couldn't load teams."
         reportContext={TEAMS_LOAD_ERROR_CONTEXT}
+      />
+    );
+  }
+  // Same reason as the people list: zero rows because the grant list was never
+  // fetched is not "no teams available".
+  if (props.loadState === "unauthorized") {
+    return (
+      <SharingEmpty
+        icon={<Users className="size-3.5" />}
+        label="Team access can't be checked until your sign-in is confirmed."
       />
     );
   }

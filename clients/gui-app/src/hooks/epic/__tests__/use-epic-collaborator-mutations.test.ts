@@ -116,6 +116,52 @@ describe("useEpicGrantAccess", () => {
     expect(toast.error).toHaveBeenCalledWith("Couldn't invite collaborators.");
   });
 
+  // ── `s5-status-truthfulness` instance 5 ───────────────────────────────
+  //
+  // Every case below hit one of the two sentences above on the pre-fix code:
+  // a plan limit arrived as 403/`FORBIDDEN` and was reported as a permission
+  // failure - false about the user's OWN account - and every pending state
+  // arrived as a generic 409 and lost both its reason and its retry guidance.
+
+  it("calls a plan limit a plan limit, with the upgrade path", () => {
+    renderHook(() => useEpicGrantAccess());
+    capturedOptions["epic.grantAccess"].onError?.(
+      makeError("E_SHARE_NEEDS_CLOUD_SYNC", "host prose"),
+    );
+    const message = vi.mocked(toast.error).mock.calls[0]?.[0];
+    expect(message).toContain("Upgrade");
+    expect(message).not.toContain("You don't have permission");
+  });
+
+  it("does not blame permissions for a foreign local home either", () => {
+    renderHook(() => useEpicGrantAccess());
+    capturedOptions["epic.grantAccess"].onError?.(
+      makeError("E_SHARE_NOT_OWNED", "host prose"),
+    );
+    const message = vi.mocked(toast.error).mock.calls[0]?.[0];
+    expect(message).toContain("different account");
+    expect(message).not.toContain("You don't have permission");
+  });
+
+  it("renders each promotion-pending reason with its own guidance", () => {
+    // Split rather than sharing one string BECAUSE the advice differs: three
+    // of these mean "wait", and `failed` is the one where it does not.
+    const cases: ReadonlyArray<readonly [RpcErrorCode, string]> = [
+      ["E_SHARE_PENDING_RECENT_ATTEMPT", "still being copied"],
+      ["E_SHARE_PENDING_BUSY", "busy right now"],
+      ["E_SHARE_PENDING_OFFLINE", "Check your connection"],
+      ["E_SHARE_PENDING_FAILED", "Retrying won't help"],
+    ];
+    for (const [code, fragment] of cases) {
+      vi.mocked(toast.error).mockClear();
+      renderHook(() => useEpicGrantAccess());
+      capturedOptions["epic.grantAccess"].onError?.(makeError(code, "prose"));
+      const message = vi.mocked(toast.error).mock.calls[0]?.[0];
+      expect(message).toContain(fragment);
+      expect(message).not.toBe("Couldn't invite collaborators.");
+    }
+  });
+
   it("applies the same-client list update instantly from the grant response", () => {
     renderHook(() => useEpicGrantAccess());
     const data = makeCollabResponse();

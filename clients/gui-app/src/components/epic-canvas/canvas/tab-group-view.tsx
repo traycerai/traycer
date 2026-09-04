@@ -24,6 +24,7 @@ import {
 import { useExistingChatSessionFatalClose } from "@/lib/registries/chat-session-registry";
 import {
   cloudChatListAuthorizesRecordSweep,
+  useCloudChatHasCloudAuthorization,
   useCloudChatList,
 } from "@/hooks/chats/use-cloud-chat-queries";
 import { cloudRowIsViewersOwn } from "@/lib/chats/unified-chat-list";
@@ -797,6 +798,11 @@ function usePublishedChatFallbackRef(args: {
     taskId: epicId,
     enabled: wantsCloudChatFallback,
   });
+  // The verdict the list above was gated on, handed to the absence guard below
+  // so the pair cannot disagree. Without it an `unverified` session - whose
+  // list is DISABLED rather than answered - would read "no cloud row" as proof
+  // that this chat is gone and let the tab be treated as absent.
+  const cloudChatsCloudAuthorized = useCloudChatHasCloudAuthorization();
   const cloudChatRecord = wantsCloudChatFallback
     ? (cloudChats.data?.chats.find(
         // The OWNER is half the identity, not a refinement of the id: `chatId`
@@ -867,8 +873,10 @@ function usePublishedChatFallbackRef(args: {
     ownerHostLabel: reachability.hostLabel,
     reason,
     isCloudKnown: cloudChatRecord !== null,
-    cloudListAuthorizesChatAbsence:
-      cloudChatListAuthorizesRecordSweep(cloudChats),
+    cloudListAuthorizesChatAbsence: cloudChatListAuthorizesRecordSweep(
+      cloudChats,
+      cloudChatsCloudAuthorized,
+    ),
   };
 }
 

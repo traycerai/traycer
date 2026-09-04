@@ -56,6 +56,7 @@ export type HostNotificationFeedEntry = HostNotificationEntryV22;
 export type HostNotificationsFeedFrame = Extract<
   HostNotificationsSubscribeServerFrameV12,
   | { readonly kind: "snapshot" }
+  | { readonly kind: "partitionSnapshot" }
   | { readonly kind: "upserted" }
   | { readonly kind: "readStateChanged" }
   | { readonly kind: "removed" }
@@ -602,6 +603,7 @@ export function openHostNotificationsStream(
       const frame = parsed.data;
       switch (frame.kind) {
         case "snapshot":
+        case "partitionSnapshot":
           useHostNotificationsStore.getState().applySnapshot(frame);
           // A schema-valid snapshot — not the raw transport `open` — is the
           // proof the stream is actually usable; the host resolver's async

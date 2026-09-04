@@ -126,8 +126,10 @@ export function UsageSummaryPanel(props: UsageSummaryPanelProps): ReactNode {
     [hostId],
   );
   // Enabled unconditionally: this panel only mounts once its caller has
-  // already confirmed `host.usage.summary` is supported (see
-  // `UsageSettingsPanelBody`'s early return). No polling here - unlike the
+  // already confirmed `host.usage.summary` is supported AND the session
+  // holds a cloud verdict (see `UsageSettingsPanelBody`'s early returns - the
+  // host picks the reader, so without a verdict the whole panel is withheld
+  // rather than this one fetch). No polling here - unlike the
   // ambient epic cost badge, this is an actively-viewed screen with its own
   // refetch triggers (window/metric change, manual Retry).
   const query = useUsageSummaryForClient(props.client, request, true, false);

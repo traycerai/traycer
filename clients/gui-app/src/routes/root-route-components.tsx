@@ -22,7 +22,7 @@ import { ProviderProfileAddFlowHost } from "@/components/providers/provider-prof
 import { EpicAccessCoordinator } from "@/providers/epic-access-coordinator";
 import { OnboardingPage } from "@/components/onboarding/onboarding-page";
 import { TabDetachOwner } from "@/components/layout/tabs/tab-detach-owner";
-import { useAuthStore } from "@/stores/auth/auth-store";
+import { admitsLocalPlane, useAuthStore } from "@/stores/auth/auth-store";
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 
 export function RootComponent() {
@@ -43,11 +43,18 @@ export function RootComponent() {
       state.location.pathname.startsWith(GATE_BYPASS_PATH_PREFIX),
   });
   // A signed-in user who hasn't finished onboarding sees the tour on any route.
+  // Deliberately `signed-in` and not `admitsLocalPlane`: the tour walks through
+  // account-backed setup, so an unverified session has no business starting it
+  // (and a user with no stored credentials at all is `signed-out`, never
+  // `unverified`, so nobody loses their first-run tour to this).
   const showOnboarding =
     authStatus === "signed-in" && onboardingCompletedAt === null;
-  // Sign-in and the tour render bare, without the app shell.
+  // Sign-in and the tour render bare, without the app shell. This is the
+  // structural half of renderer admission - `RootLandingPage` decides what the
+  // route BODY renders, this decides whether the shell exists around it at all
+  // - so it has to admit `unverified` for the same reason.
   const isStandalone =
-    authStatus !== "signed-in" || showOnboarding || isOnboardingRoute;
+    !admitsLocalPlane(authStatus) || showOnboarding || isOnboardingRoute;
 
   return (
     <>
@@ -83,13 +90,13 @@ export function RootComponent() {
           than it buys: from up there it also sees the transient `/` that a cold
           launch redirects ITSELF to (`requireSignedIn` fires while stored
           tokens are still validating), which is not user intent. */}
-      {authStatus === "signed-in" ? <TabNavigationRouteBridge /> : null}
+      {admitsLocalPlane(authStatus) ? <TabNavigationRouteBridge /> : null}
       {/* The window narrator (D10). It MUST be outside HostReadyGate: the gate
           replaces its children during cold start, so a modal mounted inside it
           could never narrate the cold start it exists for. Signed-in only -
           which is also what resets its "this window has been served" latch,
           since signing out unmounts it. */}
-      {authStatus === "signed-in" ? (
+      {admitsLocalPlane(authStatus) ? (
         <WindowHostModalHost bypassed={isHostIndependentRoute} />
       ) : null}
       <ChatSessionWakeRetryController />

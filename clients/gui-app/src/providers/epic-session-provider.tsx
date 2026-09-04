@@ -47,13 +47,17 @@ import { useReactiveOwnerIdentityKey } from "@/hooks/host/use-reactive-owner-ide
 import {
   cloudEpicTasksQueryKeyMatchesScope,
   epicTaskContextsQueryKeyMatchesScope,
+  setEpicLocalHomeInCloudTaskCaches,
   updateEpicTitleInCloudTaskCaches,
 } from "@/lib/cloud-epic-tasks-query/cache";
+import { setCloudEpicTasksPageLocalHomeForUser } from "@/stores/epics/cloud-epic-tasks-pages-store";
+import { hostQueryKeys } from "@/lib/query-keys";
 import {
   claimDesktopEpicOwnership,
   getDesktopEpicOwnershipBridge,
   releaseDesktopEpicOwnership,
 } from "@/lib/windows/desktop-epic-ownership";
+import type { DesktopWindowsBridge } from "@/lib/windows/types";
 import {
   EpicSessionContext,
   EpicSessionHostClientContext,
@@ -183,6 +187,24 @@ interface SessionPresentationState {
 }
 
 /**
+ * The single-window ownership key a desktop shell claims for this Epic tab.
+ * `"browser"` outside the desktop shell, where there is no second window to
+ * contend with and ownership is therefore granted by construction.
+ *
+ * Module-level rather than inline so the provider body stays under the
+ * complexity ceiling: the merge that brought the mainline tab-detach work
+ * alongside this branch's session changes pushed it one branch over.
+ */
+function epicOwnershipKeyFor(
+  desktopBridge: DesktopWindowsBridge | null,
+  epicId: string,
+  tabId: string,
+): string {
+  if (desktopBridge === null) return "browser";
+  return `${desktopBridge.windowId}\x1f${epicId}\x1f${tabId}`;
+}
+
+/**
  * The handle's construction host stamp, or a throw.
  *
  * ONE copy for the two readers - the acquire arm and `adoptWinner` - which
@@ -277,10 +299,7 @@ export function EpicSessionProvider(
     void authService.revalidateCurrentContext();
   });
 
-  const ownershipKey =
-    desktopBridge === null
-      ? "browser"
-      : `${desktopBridge.windowId}\x1f${epicId}\x1f${tabId}`;
+  const ownershipKey = epicOwnershipKeyFor(desktopBridge, epicId, tabId);
   const [claimedOwnershipKey, setClaimedOwnershipKey] = useState<string | null>(
     () => (desktopBridge === null ? ownershipKey : null),
   );
@@ -1589,6 +1608,13 @@ export function EpicSessionProvider(
     queryClient,
     userId: cloudTasksUserId,
   });
+  useEpicHomeCacheSync({
+    activeHostId: session?.hostId ?? null,
+    epicId,
+    handle,
+    queryClient,
+    userId: cloudTasksUserId,
+  });
 
   return (
     <EpicSessionContext.Provider value={handle}>
@@ -1603,7 +1629,12 @@ export function EpicSessionProvider(
   );
 }
 
-interface CloudTaskTitleCacheSyncArgs {
+interface EpicSessionCacheSyncArgs {
+  /**
+   * The session's host, and `null` before a session exists - the liveness
+   * gate for these syncs, NOT the scope of their cache writes, which reach
+   * every host's caches for the user (see `useEpicHomeCacheSync`).
+   */
   readonly activeHostId: string | null;
   readonly epicId: string;
   readonly handle: OpenEpicStoreHandle | null;
@@ -1611,7 +1642,7 @@ interface CloudTaskTitleCacheSyncArgs {
   readonly userId: string | null;
 }
 
-function useCloudTaskTitleCacheSync(args: CloudTaskTitleCacheSyncArgs): void {
+function useCloudTaskTitleCacheSync(args: EpicSessionCacheSyncArgs): void {
   const { activeHostId, epicId, handle, queryClient, userId } = args;
   useEffect(() => {
     if (activeHostId === null) return;
@@ -1619,7 +1650,10 @@ function useCloudTaskTitleCacheSync(args: CloudTaskTitleCacheSyncArgs): void {
     if (queryClient === undefined) return;
     if (userId === null) return;
 
-    const scope = { hostId: activeHostId, userId };
+    // Any host's caches for this user (`hostId: null`), for the reason given
+    // at `useEpicHomeCacheSync`: the title is the epic's, and the History
+    // list showing it can be served by a host other than the session's.
+    const scope = { hostId: null, userId };
     let lastObservedTitle: string | null = null;
     const currentTitle = (): string | null =>
       normalizeGeneratedTitle(handle.store.getState().epic.title);
@@ -1661,4 +1695,97 @@ function useCloudTaskTitleCacheSync(args: CloudTaskTitleCacheSyncArgs): void {
 function normalizeGeneratedTitle(title: string): string | null {
   const trimmed = title.trim();
   return trimmed.length > 0 ? trimmed : null;
+}
+
+/**
+ * Keeps the History list's `home` marker in step with the OPEN epic's own
+ * durability - `s4-promotion-task-list-invalidation`, folded into
+ * `s5-status-truthfulness`.
+ *
+ * Sibling of {@link useCloudTaskTitleCacheSync}, and here for the same reason:
+ * `epic.listTasks` is manual-refresh-only, the open epic's stream is the only
+ * live source of the fact, and a Zustand store has no query client to push it
+ * from. The two writes this repairs are a local-first `epic.create` (whose
+ * `TaskLight` cache patch cannot carry `home` at all) and a promotion
+ * completing (which previously updated only the open-epic store).
+ *
+ * `getTaskContexts` is INVALIDATED rather than patched: its `localHomedTaskIds`
+ * is a response-level sibling list, so there is no per-row edit to make, and
+ * that query is the tab strip's only source of the marker.
+ */
+function useEpicHomeCacheSync(args: EpicSessionCacheSyncArgs): void {
+  const { activeHostId, epicId, handle, queryClient, userId } = args;
+  useEffect(() => {
+    if (activeHostId === null) return;
+    if (handle === null) return;
+    if (queryClient === undefined) return;
+    if (userId === null) return;
+
+    let lastSyncedLocalHome: boolean | null = null;
+    const syncHome = (): void => {
+      const state = handle.store.getState();
+      // Only a FRESH cloud-status frame for this open cycle is evidence. The
+      // pre-connect default is not a statement about home, and writing it into
+      // the cache would be this window inventing the very fact it is here to
+      // relay.
+      if (!state.hasFreshCloudSyncStatus) return;
+      const status = state.durabilityStatus ?? null;
+      // A fresh frame WITHOUT the datum from a peer that negotiated `@1.4`
+      // or `@1.5` is the cloud answer, not silence: through `@1.5` the enum
+      // has no `cloud` member, so an epic that just finished promotion
+      // against such a host reports its new home by omitting the key - and
+      // returning here left the History row `home: "local"` (Pin withheld)
+      // until a manual refresh. A `@1.6` peer (`durabilityLegsNegotiated`)
+      // says `cloud` positively; its omission means unknown and stays out.
+      // Same version-aware rule as `useEpicCommentRoomAvailability`.
+      const omittedByPre16Peer =
+        status === null &&
+        state.durabilityStatusNegotiated &&
+        !state.durabilityLegsNegotiated;
+      if (status === "unknown" || (status === null && !omittedByPre16Peer)) {
+        return;
+      }
+      // `paused` says nothing about home. An unpromoted epic whose promotion
+      // was blocked (entitlement, access) goes `promoting` -> `paused` and is
+      // still local-homed; a cloud-homed epic paused over orphaned local
+      // edits is not. Writing `false` for both patched History and the
+      // last-known caches as though a cloud task existed for the first kind -
+      // enabling Pin and dropping local-home treatment until a list refresh
+      // corrected it. Keep whatever home the caches already hold.
+      if (status === "paused") return;
+      const localHome = status === "local" || status === "promoting";
+      if (localHome === lastSyncedLocalHome) return;
+      lastSyncedLocalHome = localHome;
+      // EVERY host's caches for this user, not the session host's. Where an
+      // epic is durable is a property of the epic, and the surfaces holding
+      // the marker are app-wide: History and the tab strip's pin batch
+      // (`useEpicTaskPinnedStates`, on `useHostClient()`) key under the
+      // EFFECTIVE host, which need not be the host this Epic's session lives
+      // on. Scoped to the session host, a promotion on host B left host A's
+      // `home: "local"` rows and its infinite-stale `getTaskContexts` batch
+      // untouched, so the tab's Pin action stayed unresolved for the life of
+      // the cache.
+      setEpicLocalHomeInCloudTaskCaches(
+        queryClient,
+        { hostId: null, userId },
+        epicId,
+        localHome,
+      );
+      // The retained "Show more" tails live in the pages store, exactly as
+      // they do for the pin patch - a promoted row loaded through pagination
+      // kept `home: "local"` (and its cloud-only actions disabled) until a
+      // reset or refresh without this half.
+      setCloudEpicTasksPageLocalHomeForUser(userId, epicId, localHome);
+      void queryClient.invalidateQueries({
+        predicate: (query) =>
+          hostQueryKeys.matchesMethodOnAnyHost(
+            query.queryKey,
+            "epic.getTaskContexts",
+          ),
+      });
+    };
+
+    syncHome();
+    return handle.store.subscribe(syncHome);
+  }, [activeHostId, epicId, handle, queryClient, userId]);
 }

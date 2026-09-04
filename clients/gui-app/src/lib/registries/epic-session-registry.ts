@@ -2,7 +2,14 @@ import {
   createEpicRuntimeWorker,
   type RuntimeWorkerLike,
 } from "@/stores/epics/open-epic/runtime/worker/spawn-epic-runtime-worker";
-import { createContext, type Context } from "react";
+import {
+  createContext,
+  useCallback,
+  useMemo,
+  useRef,
+  useSyncExternalStore,
+  type Context,
+} from "react";
 import { getEpicRuntimeWorkerFactoryOverride } from "./epic-runtime-worker-factory-slot";
 import {
   OpenEpicSessionRegistry,
@@ -176,6 +183,23 @@ registry.setReleaseListener((epicId) => {
   void releaseDesktopEpicOwnershipForEpic(epicId);
 });
 
+// `openEpicHostIds()` used to sit here - the per-open-epic producer set for
+// agent activity (`s5-parity-gaps` gap 1), consumed by an
+// `EpicHostActivityStreams` provider. Host-selected activity planes (#906)
+// deleted both: there is now ONE `agent.activity.subscribe` stream on the
+// SERVING transport, the host picks the view behind it, and
+// `notifications-session-provider.tsx` states outright that opening a
+// transport per host would be the renderer rebuilding the cross-host union the
+// subsystem reserves to the host. The function outlived its only caller.
+//
+// Deleted rather than left dead, because its doc comment asserted a design
+// that no longer exists and had already been read as current twice - it is
+// what a review finding asking to "derive the producer set from open tabs'
+// lifetime host bindings" was written against, which at HEAD would rebuild
+// exactly the fan-out #906 removed. A dead function is harmless; a dead
+// function whose comment describes a removed design is a source of false
+// premises. Read `:741-756` of the notifications provider for the live rule.
+
 /**
  * Test / production seam for the runtime WORKER - now the ONLY one.
  *
@@ -209,6 +233,200 @@ export function __getOpenEpicRegistryForTests(): OpenEpicSessionRegistry {
  */
 export function getOpenEpicRegistry(): OpenEpicSessionRegistry {
   return registry;
+}
+
+const EMPTY_LIVE_CHAT_EPIC_IDS: Readonly<Record<string, string>> = {};
+const EMPTY_LOCAL_HOMED_EPIC_IDS: ReadonlySet<string> = new Set();
+
+interface LiveSessionSnapshotCache<T> {
+  readonly signature: string;
+  readonly snapshot: T;
+}
+
+/**
+ * Subscribe to the live sessions for `epicIds` and project a cached snapshot.
+ *
+ * Both public live-session readers share this: canonicalize, bind a store
+ * listener per `registry.peek(epicId)`, rebind on every registry emission,
+ * then cache the projection on a `JSON.stringify` signature. Only the
+ * projection differs.
+ */
+function useEpicReadLiveSessionSnapshot<T>(
+  epicIds: ReadonlyArray<string>,
+  project: (
+    canonicalEpicIds: ReadonlyArray<string>,
+  ) => LiveSessionSnapshotCache<T>,
+  getServerSnapshot: () => T,
+): T {
+  // Keyed on the ids' CONTENTS, not the array's identity. Callers rebuild the
+  // array on every render, and a memo keyed on it produced a new
+  // `canonicalEpicIds` each time - then a new `subscribe`, so
+  // `useSyncExternalStore` tore down and rebound every per-epic store listener
+  // plus the registry listener on every commit. The signature cache below
+  // already kept the renders stable; this keeps the subscriptions stable too.
+  const epicIdsSignature = [...new Set(epicIds)]
+    .sort((left, right) => left.localeCompare(right))
+    .join("\u0000");
+  const canonicalEpicIds = useMemo(
+    (): ReadonlyArray<string> =>
+      epicIdsSignature.length === 0 ? [] : epicIdsSignature.split("\u0000"),
+    [epicIdsSignature],
+  );
+  const snapshotCache = useRef<LiveSessionSnapshotCache<T> | null>(null);
+  const subscribe = useCallback(
+    (listener: () => void): (() => void) => {
+      let storeUnsubscribers: Array<() => void> = [];
+      const bindStores = (): void => {
+        for (const unsubscribe of storeUnsubscribers) unsubscribe();
+        storeUnsubscribers = canonicalEpicIds.flatMap((epicId) => {
+          const handle = registry.peek(epicId);
+          return handle === null ? [] : [handle.store.subscribe(listener)];
+        });
+      };
+      bindStores();
+      // Rebound through the registry as well as each store: a session that is
+      // acquired, re-pointed, or pruned changes the answer without any store
+      // this closure is currently holding ever emitting.
+      const unsubscribeRegistry = registry.subscribe(() => {
+        bindStores();
+        listener();
+      });
+      return () => {
+        unsubscribeRegistry();
+        for (const unsubscribe of storeUnsubscribers) unsubscribe();
+      };
+    },
+    [canonicalEpicIds],
+  );
+  const getSnapshot = useCallback((): T => {
+    const next = project(canonicalEpicIds);
+    const cached = snapshotCache.current;
+    if (cached?.signature === next.signature) return cached.snapshot;
+    snapshotCache.current = next;
+    return next.snapshot;
+  }, [canonicalEpicIds, project]);
+  return useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
+}
+
+function projectLiveChatEpicIds(
+  canonicalEpicIds: ReadonlyArray<string>,
+): LiveSessionSnapshotCache<Readonly<Record<string, string>>> {
+  const entries = canonicalEpicIds.flatMap((epicId) =>
+    (registry.peek(epicId)?.store.getState().chats.allIds ?? []).map(
+      (chatId): readonly [string, string] => [chatId, epicId],
+    ),
+  );
+  entries.sort(([left], [right]) => left.localeCompare(right));
+  const snapshot: Readonly<Record<string, string>> =
+    Object.fromEntries(entries);
+  return { signature: JSON.stringify(entries), snapshot };
+}
+
+/**
+ * The chat ids that still exist in the currently-live sessions for a set of
+ * task tabs, each mapped to its OWNING epic. Notification task rollups use
+ * the key set as a whitelist: deleting a chat removes its id here
+ * immediately, so its historical notification can stay in the bell without
+ * continuing to bubble up to the task tab. The epic mapping rides along
+ * because mixed mode's `home: local` indicator partition can only classify a
+ * chat id by durable home through its parent epic - ids alone are host-minted
+ * and encode nothing.
+ */
+export function useLiveChatEpicIdsForEpics(
+  epicIds: ReadonlyArray<string>,
+): Readonly<Record<string, string>> {
+  return useEpicReadLiveSessionSnapshot(
+    epicIds,
+    projectLiveChatEpicIds,
+    () => EMPTY_LIVE_CHAT_EPIC_IDS,
+  );
+}
+
+/**
+ * Whether a LIVE session says this epic is still local-homed.
+ *
+ * Reads the retained status beside the cycle's own, exactly as the pin gate's
+ * sibling in `tab-strip-context-menu.tsx` reads both pause reasons. The store
+ * documents why: `durabilityStatus` is cleared by a reconnect because last
+ * cycle's answer is no evidence about this one, but where an epic is durable
+ * is a property of the EPIC - a local-homed epic does not acquire a cloud room
+ * by reconnecting - so a gate that fails dangerous on silence needs the
+ * retained fact. This gate fails dangerous on silence: reading a local epic as
+ * cloud offers a Pin the host can only refuse.
+ *
+ * Both fields are written only by a POSITIVE statement from the host, so no
+ * separate `hasFreshCloudSyncStatus` gate is needed here - a non-null value is
+ * already something the host said, never a pre-connect default.
+ *
+ * `promoting` counts as local for the same reason it does in
+ * `useEpicHomeCacheSync`: the epic has no cloud row to carry a preference yet.
+ * Matching that classifier rather than reasoning independently is deliberate -
+ * two answers to "is this epic local-homed" that can disagree is the defect
+ * shape, not the fix.
+ *
+ * FUTURE HOME: `currentOrRetainedDurabilityStatement` in `lib/epic-selectors.ts`
+ * expresses this same current-then-retained ordering for the comment-room and
+ * chat-backup gates. This gate should adopt it rather than stay a fourth
+ * implementation - four copies of one ordering is the next divergence waiting
+ * to happen, and the ordering is exactly what a reconnect exposes. Not adopted
+ * today for two mechanical reasons, both cheap to remove: the helper is
+ * module-private, and it returns a `pauseReason` alongside the status that
+ * this gate has no use for (the pause-reason half is `usePreservedOrphanSession`'s
+ * question, on the adjacent menu item). Whoever exports it should bring this
+ * call site with it.
+ */
+function isLocalHomedLiveEpic(epicId: string): boolean {
+  const state = registry.peek(epicId)?.store.getState();
+  if (state === undefined) return false;
+  const status =
+    state.durabilityStatus ?? state.retainedDurabilityStatus ?? null;
+  return status === "local" || status === "promoting";
+}
+
+function projectLocalHomedEpicIds(
+  canonicalEpicIds: ReadonlyArray<string>,
+): LiveSessionSnapshotCache<ReadonlySet<string>> {
+  const matches = canonicalEpicIds.filter(isLocalHomedLiveEpic);
+  const snapshot: ReadonlySet<string> = new Set(matches);
+  return { signature: JSON.stringify(matches), snapshot };
+}
+
+/**
+ * Which of `epicIds` a live session reports as local-homed.
+ *
+ * The tab strip learns about its epics through `epic.getTaskContexts` alone,
+ * sent to the app-wide host. For `pinned` that is correct at any host - pin is
+ * a cloud-only preference and every host proxies it to the cloud. Local-homed
+ * ness is the one fact the wrong host cannot supply: the resolver overlays
+ * OWNED local-home rows (`getTaskContextsResponseSchema@1.3`), so a host that
+ * does not own the epic does not resolve the row at all, the id never reaches
+ * the pinned-state map, and the Pin item sits disabled behind a spinner
+ * forever instead of explaining that the epic is stored on this device.
+ *
+ * The epic's own session already holds that fact, so this asks it directly
+ * rather than routing the RPC by a per-tab host binding. Same shape as
+ * {@link useLiveChatEpicIdsForEpics} above and the same authority the pin
+ * menu's orphan gate already uses - a live session's own state, not a second
+ * answer derived somewhere else.
+ *
+ * LIVE SESSIONS ONLY, and that bound is real: an open epic tab with no session
+ * (never mounted since reload, or pruned past the five-live MRU cap) is absent
+ * from this set and keeps the spinner. Closing that residual needs a host
+ * binding that outlives the session - a persisted `hostId` on the epic tab
+ * record, the way `EpicNodeRecord.hostId` already binds chat/terminal tiles -
+ * plus per-request clients in `useHostQueries`, which takes exactly one. That
+ * is a deliberate design change against the rule in `stores/tabs/types.ts`
+ * that persisting a host on the tab record creates a second authority, and it
+ * is tracked separately rather than smuggled in here.
+ */
+export function useLocalHomedOpenEpicIds(
+  epicIds: ReadonlyArray<string>,
+): ReadonlySet<string> {
+  return useEpicReadLiveSessionSnapshot(
+    epicIds,
+    projectLocalHomedEpicIds,
+    () => EMPTY_LOCAL_HOMED_EPIC_IDS,
+  );
 }
 
 /**

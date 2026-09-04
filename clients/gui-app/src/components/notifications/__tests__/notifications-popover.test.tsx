@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   act,
   cleanup,
@@ -129,6 +130,18 @@ vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => activeHostIdRef.value,
 }));
 
+// The notification centre reads its host from `useNotificationResolveHost` (the local
+// host that owns the streams), not from the app-wide active host. Projected
+// from this suite's existing host ref so the scenario it was already
+// describing is unchanged.
+vi.mock("@/hooks/notifications/use-notification-host", () => ({
+  useNotificationResolveHostId: () => activeHostIdRef.value,
+  useNotificationResolveHost: () => ({
+    hostId: activeHostIdRef.value,
+    client: hostBindingState.current?.hostClient ?? null,
+  }),
+}));
+
 vi.mock("@/hooks/host/use-host-directory-entry", async (importOriginal) => {
   const actual =
     await importOriginal<
@@ -145,6 +158,7 @@ vi.mock("@/hooks/host/use-host-directory-entry", async (importOriginal) => {
 
 vi.mock("@/lib/notifications/notification-feed-mode", () => ({
   useNotificationFeedMode: () => notificationFeedMode.value,
+  useNotificationFeedModeSettling: () => false,
 }));
 
 /**
@@ -691,6 +705,15 @@ function hostBeforeUpdatedAtCallParams(
 
 describe("NotificationsPopover", () => {
   beforeEach(() => {
+    // The cloud-feed writes this popover dispatches re-read the live verdict;
+    // a `cloud` feed mode stands for a session that holds one.
+    useAuthStore
+      .getState()
+      .setSignedIn(
+        { userId: "user-popover", userName: "U", email: "u@example.com" },
+        { userId: "user-popover", username: "U" },
+        [],
+      );
     __resetTabNavigationControllerForTesting();
     hostRequestMock.mockReset();
     hostRequestMock.mockImplementation(defaultHostRequest);
@@ -723,6 +746,7 @@ describe("NotificationsPopover", () => {
 
   afterEach(() => {
     cleanup();
+    useAuthStore.getState().setSignedOut();
     __resetTabNavigationControllerForTesting();
     hostBindingState.current = null;
     __resetHostNotificationsStoreForTests();
@@ -1090,9 +1114,12 @@ describe("NotificationsPopover", () => {
       "notifications-mark-all-read",
     );
     expect(markAll.disabled).toBe(false);
+    // Live for the same reason mark-all is: the renderer-local lane is client
+    // state, so clearing it needs no relay. This assertion read `true` while
+    // clear-all was a cloud-only call under an all-lanes confirmation.
     expect(
       screen.getByTestId<HTMLButtonElement>("notifications-clear-all").disabled,
-    ).toBe(true);
+    ).toBe(false);
     fireEvent.click(markAll);
 
     await waitFor(() => {
@@ -1193,6 +1220,147 @@ describe("NotificationsPopover", () => {
         { observedVersion: 1 },
       );
     });
+  });
+
+  it("clears every lane the mixed feed renders, not just the cloud one", async () => {
+    // The confirmation promises "every notification currently visible in this
+    // feed". In mixed mode that feed is four lanes, so a cloud-only call left
+    // the host, app-local and collaboration rows sitting there after a
+    // confirmed permanent clear.
+    notificationFeedMode.value = "cloud";
+    bindHostClient();
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [cloudDone("entry-cloud", null)],
+      summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
+      version: 4,
+    });
+    applyHostSnapshot([hostDone("entry-local", 100, null)], {
+      unreadCount: 1,
+      attentionCount: 0,
+    });
+    seedUnreadAppLocal("terminal-mixed-clear");
+    const captured: TargetCapture = {
+      epicId: null,
+      tabId: null,
+      focusArtifactId: null,
+      focusThreadId: null,
+    };
+    const { router } = buildRouterWithCapture(captured, () => undefined);
+    renderRouter(router);
+
+    fireEvent.click(await screen.findByTestId("notifications-clear-all"));
+    fireEvent.click(screen.getByTestId("confirm-action"));
+
+    await waitFor(() => {
+      expect(hostRequestMock).toHaveBeenCalledWith(
+        "host.notifications.cloudFeed.clearAll",
+        { observedVersion: 4 },
+      );
+    });
+    // The host plane is a separate origin store; `cloudFeed.clearAll` cannot
+    // reach its `home: local` partition.
+    await waitFor(() => {
+      expect(
+        hostBeforeUpdatedAtCallParams("host.notifications.clearAll")
+          .beforeUpdatedAt,
+      ).toBeTypeOf("number");
+    });
+    expect(useAppLocalNotificationsStore.getState().orderedIds).toHaveLength(0);
+  });
+
+  it("says which rows survive Clear all while the cloud feed is disconnected", async () => {
+    // The button stays live here ON PURPOSE - the host, app-local and
+    // collaboration lanes are all still clearable - but the cloud leg cannot
+    // run, and an `unavailable` response is neither queued nor retried. The
+    // unconditional copy promised that everything visible would be
+    // permanently cleared while the cloud rows stayed on screen.
+    notificationFeedMode.value = "cloud";
+    bindHostClient();
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [cloudDone("entry-cloud-stranded", null)],
+      summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
+      version: 7,
+    });
+    applyHostSnapshot([hostDone("entry-local", 100, null)], {
+      unreadCount: 1,
+      attentionCount: 0,
+    });
+    useCloudNotificationsStore.getState().setConnectionState("unavailable");
+    const captured: TargetCapture = {
+      epicId: null,
+      tabId: null,
+      focusArtifactId: null,
+      focusThreadId: null,
+    };
+    const { router } = buildRouterWithCapture(captured, () => undefined);
+    renderRouter(router);
+
+    fireEvent.click(await screen.findByTestId("notifications-clear-all"));
+
+    expect(
+      screen.getByText(/except the cloud ones/, { exact: false }),
+    ).toBeDefined();
+  });
+
+  it("keeps the unqualified Clear all promise when the cloud feed is reachable", async () => {
+    // The vacuity guard: copy that always warned would pass the case above
+    // while telling every ordinary user their cloud rows will not be cleared.
+    notificationFeedMode.value = "cloud";
+    bindHostClient();
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [cloudDone("entry-cloud-ok", null)],
+      summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
+      version: 8,
+    });
+    const captured: TargetCapture = {
+      epicId: null,
+      tabId: null,
+      focusArtifactId: null,
+      focusThreadId: null,
+    };
+    const { router } = buildRouterWithCapture(captured, () => undefined);
+    renderRouter(router);
+
+    fireEvent.click(await screen.findByTestId("notifications-clear-all"));
+
+    expect(
+      screen.getByText(
+        "This permanently clears every notification currently visible in this feed.",
+      ),
+    ).toBeDefined();
+  });
+
+  it("names retained host rows that Clear all cannot reach", async () => {
+    notificationFeedMode.value = "cloud";
+    bindHostClient();
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [cloudDone("entry-cloud-connected", null)],
+      summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
+      version: 9,
+    });
+    useCloudNotificationsStore.getState().setConnectionState("connected");
+    applyHostSnapshot([hostDone("entry-retained-host", 100, null)], {
+      unreadCount: 1,
+      attentionCount: 0,
+    });
+    simulateHostDisconnect();
+    const captured: TargetCapture = {
+      epicId: null,
+      tabId: null,
+      focusArtifactId: null,
+      focusThreadId: null,
+    };
+    const { router } = buildRouterWithCapture(captured, () => undefined);
+    renderRouter(router);
+
+    fireEvent.click(await screen.findByTestId("notifications-clear-all"));
+
+    expect(
+      screen.getByText(/retained from an unavailable host/, { exact: false }),
+    ).toBeDefined();
+    expect(
+      screen.queryByText(/except the cloud ones/, { exact: false }),
+    ).toBeNull();
   });
 
   it("uses the same clear-notifications action for the local host feed", async () => {

@@ -1,4 +1,5 @@
 import { useAuthDeviceProgress } from "@/hooks/auth/use-auth-device-progress";
+import { AUTH_ERROR_ACCOUNT_UNAVAILABLE } from "@/lib/auth/auth-service";
 import { useAuthServiceError } from "@/hooks/auth/use-auth-service-error";
 import { useAuthService } from "@/lib/host";
 import { cn } from "@/lib/utils";
@@ -38,6 +39,13 @@ function SignInActions(props: {
    * the user's desktop is prompting them to approve.
    */
   readonly canRetry: boolean;
+  /**
+   * Forwarded to whichever `PrimarySignInButton` this form factor renders: the
+   * "account is gone server-side" label belongs to the button on every one of
+   * them, so it travels with the action set rather than with the desktop
+   * branch that first needed it.
+   */
+  readonly offersDifferentAccount: boolean;
   readonly deviceProgress: DeviceFlowProgress | null;
 }) {
   // Computed here rather than inline: `RetrySignInButton` reads this as "show
@@ -58,6 +66,7 @@ function SignInActions(props: {
         <PrimarySignInButton
           isHero={props.isHero}
           isSigningIn={props.isSigningIn}
+          offersDifferentAccount={props.offersDifferentAccount}
           emphasis="secondary"
         />
         <RetrySignInButton isHero={props.isHero} isSigningIn={showRetry} />
@@ -69,6 +78,7 @@ function SignInActions(props: {
       <PrimarySignInButton
         isHero={props.isHero}
         isSigningIn={props.isSigningIn}
+        offersDifferentAccount={props.offersDifferentAccount}
         emphasis="primary"
       />
       <RetrySignInButton isHero={props.isHero} isSigningIn={showRetry} />
@@ -135,6 +145,7 @@ export function SignInButton(props: SignInButtonProps) {
         isHero={isHero}
         isSigningIn={isSigningIn}
         canRetry={canRetry}
+        offersDifferentAccount={lastError === AUTH_ERROR_ACCOUNT_UNAVAILABLE}
         deviceProgress={deviceProgress}
       />
     </div>

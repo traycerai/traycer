@@ -34,6 +34,10 @@ import {
   useHeaderTabs,
 } from "@/stores/tabs/use-header-tabs";
 import { useTabsStore } from "@/stores/tabs/store";
+import {
+  authorizesCloudCapability,
+  useAuthStore,
+} from "@/stores/auth/auth-store";
 import { tabDuplicate, tabResolveIntent } from "@/stores/tabs/registry";
 import type { HeaderTab } from "@/stores/tabs/types";
 import type { TabRef } from "@/stores/tabs/types";
@@ -48,6 +52,8 @@ import { TabStripNewButton } from "@/components/layout/tabs/tab-strip-new-button
 import { useHorizontalWheelScroll } from "@/hooks/use-horizontal-wheel-scroll";
 import { useNotificationIndicators } from "@/hooks/notifications/use-notification-indicators-query";
 import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
+import { ChatIndicatorHostScopes } from "@/components/notifications/chat-indicator-host-scopes";
+import { chatIndicatorHostScopes } from "@/lib/notifications/chat-indicator-scopes";
 import {
   executeTabSplitCommand,
   preparePairTabsCommand,
@@ -60,7 +66,11 @@ import {
   useEpicSetPinned,
   usePendingSetPinnedEpicIds,
 } from "@/hooks/epic/use-epic-set-pinned-mutation";
-import { useEpicTaskPinnedStates } from "@/hooks/epic/use-epic-task-pinned-states-query";
+import {
+  useEpicTaskPinnedStates,
+  type TaskPinnedState,
+} from "@/hooks/epic/use-epic-task-pinned-states-query";
+import { useLiveChatEpicIdsForEpics } from "@/lib/registries/epic-session-registry";
 
 export function TabStrip() {
   const hasHydrated = useWindowsBridgeHydrated();
@@ -106,11 +116,49 @@ function TabStripBody() {
     () => allTabs.flatMap((tab) => (tab.kind === "epic" ? [tab.epicId] : [])),
     [allTabs],
   );
+  const indicatorChatEpicIds = useLiveChatEpicIdsForEpics(indicatorEpicIds);
+  const indicatorChatIds = useMemo(
+    () => Object.keys(indicatorChatEpicIds),
+    [indicatorChatEpicIds],
+  );
+  const indicatorEpicHostIds = useMemo(() => {
+    const hostIds: Map<string, ReadonlySet<string>> = new Map();
+    for (const tab of allTabs) {
+      if (tab.kind !== "epic" || tab.hostId === null) continue;
+      const epicHostIds = hostIds.get(tab.epicId);
+      hostIds.set(
+        tab.epicId,
+        new Set(
+          epicHostIds === undefined
+            ? [tab.hostId]
+            : [...epicHostIds, tab.hostId],
+        ),
+      );
+    }
+    return hostIds;
+  }, [allTabs]);
+  const indicatorChatScopes = useMemo(
+    () =>
+      chatIndicatorHostScopes(
+        indicatorChatIds.flatMap((chatId) => {
+          const epicId = indicatorChatEpicIds[chatId];
+          const hostIds = indicatorEpicHostIds.get(epicId);
+          return hostIds === undefined
+            ? []
+            : [...hostIds].map((hostId) => ({ hostId, chatId }));
+        }),
+      ),
+    [indicatorChatEpicIds, indicatorChatIds, indicatorEpicHostIds],
+  );
   const notificationIndicators = useNotificationIndicators({
-    // Epic ids only, so the app-wide active host is the right one to ask: an
-    // Epic is a shared cloud entity, not a host-owned record.
+    // Epic ids only, so the notification host is the right one to ask: an
+    // Epic is a shared cloud entity, not a host-owned record, and the strip's
+    // lights should agree with the feed the notification centre renders.
     hostId: null,
     epicIds: indicatorEpicIds,
+    // Chats are host-owned, so a single serving-host request cannot answer for
+    // this strip. `ChatIndicatorHostScopes` below fans them out by each tab's
+    // lifetime host binding instead.
     chatIds: [],
     enabled: indicatorEpicIds.length > 0,
   });
@@ -119,6 +167,13 @@ function TabStripBody() {
   const { mutate: setEpicPinned } = useEpicSetPinned();
   const handleSetTaskPinned = useCallback(
     (epicId: string, pinned: boolean, displayName: string) => {
+      // Fail closed on the CAPABILITY, not just in the menu. This is the one
+      // dispatch site for the whole tab tree, and the Undo action below is a
+      // second entry into it that no menu gate can reach: the toast outlives
+      // the click, so a verdict withdrawn in between would let Undo spend a
+      // cloud capability the session no longer holds. Re-read at the edge
+      // rather than closing over a render-time value for the same reason.
+      if (!authorizesCloudCapability(useAuthStore.getState().status)) return;
       setEpicPinned(
         { epicId, pinned },
         {
@@ -127,6 +182,11 @@ function TabStripBody() {
               action: {
                 label: "Undo",
                 onClick: () => {
+                  if (
+                    !authorizesCloudCapability(useAuthStore.getState().status)
+                  ) {
+                    return;
+                  }
                   setEpicPinned({ epicId, pinned: !pinned });
                 },
               },
@@ -277,22 +337,25 @@ function TabStripBody() {
 
   return (
     <NotificationIndicatorsProvider indicators={notificationIndicators}>
-      <div
-        role="tablist"
-        aria-label="Open tabs"
-        data-testid="tab-strip"
-        className="relative flex min-w-0 flex-1 items-end"
+      <ChatIndicatorHostScopes
+        scopes={indicatorChatScopes}
+        chatEpicIds={indicatorChatEpicIds}
       >
-        <div className="relative flex min-w-0 max-w-full flex-[0_1_auto] items-end">
-          <LayoutGroup id="header-tabs">
-            <div
-              ref={trailingSlotRef}
-              data-testid="header-tab-strip-scroll"
-              onWheel={handleWheel}
-              className="no-scrollbar flex min-w-0 max-w-full flex-[0_1_auto] touch-pan-x items-end overflow-x-auto overscroll-x-contain"
-            >
-              {headerItemIds.map((itemId, index) => {
-                return (
+        <div
+          role="tablist"
+          aria-label="Open tabs"
+          data-testid="tab-strip"
+          className="relative flex min-w-0 flex-1 items-end"
+        >
+          <div className="relative flex min-w-0 max-w-full flex-[0_1_auto] items-end">
+            <LayoutGroup id="header-tabs">
+              <div
+                ref={trailingSlotRef}
+                data-testid="header-tab-strip-scroll"
+                onWheel={handleWheel}
+                className="no-scrollbar flex min-w-0 max-w-full flex-[0_1_auto] touch-pan-x items-end overflow-x-auto overscroll-x-contain"
+              >
+                {headerItemIds.map((itemId, index) => (
                   <HeaderStripItemRenderer
                     key={itemId}
                     itemId={itemId}
@@ -319,15 +382,15 @@ function TabStripBody() {
                     pendingSetPinnedEpicIds={pendingSetPinnedEpicIds}
                     onSetTaskPinned={handleSetTaskPinned}
                   />
-                );
-              })}
-            </div>
-          </LayoutGroup>
-          <TabStripNewButton onNewTab={handleNewTab} />
+                ))}
+              </div>
+            </LayoutGroup>
+            <TabStripNewButton onNewTab={handleNewTab} />
+          </div>
+          {closeTabFlow.unsyncedDialog}
+          <UnsyncedEpicMoveDialog flow={openInNewWindowFlow.epicFlow} />
         </div>
-        {closeTabFlow.unsyncedDialog}
-        <UnsyncedEpicMoveDialog flow={openInNewWindowFlow.epicFlow} />
-      </div>
+      </ChatIndicatorHostScopes>
     </NotificationIndicatorsProvider>
   );
 }
@@ -354,7 +417,7 @@ interface HeaderStripItemRendererProps {
   readonly onOpenInNewWindow: (tab: HeaderTab) => void;
   readonly canOpenInNewWindow: boolean;
   readonly onSplitCommand: (id: TabSplitCommandId, tab: HeaderTab) => void;
-  readonly taskPinnedStates: ReadonlyMap<string, boolean>;
+  readonly taskPinnedStates: ReadonlyMap<string, TaskPinnedState>;
   readonly pendingSetPinnedEpicIds: ReadonlySet<string>;
   readonly onSetTaskPinned: (
     epicId: string,
@@ -449,7 +512,7 @@ const HeaderStripTabItem = memo(function HeaderStripTabItem(props: {
   readonly onOpenInNewWindow: (tab: HeaderTab) => void;
   readonly canOpenInNewWindow: boolean;
   readonly onSplitCommand: (id: TabSplitCommandId, tab: HeaderTab) => void;
-  readonly taskPinnedStates: ReadonlyMap<string, boolean>;
+  readonly taskPinnedStates: ReadonlyMap<string, TaskPinnedState>;
   readonly pendingSetPinnedEpicIds: ReadonlySet<string>;
   readonly onSetTaskPinned: (
     epicId: string,
@@ -484,7 +547,7 @@ const HeaderStripTabItem = memo(function HeaderStripTabItem(props: {
       onOpenInNewWindow={props.onOpenInNewWindow}
       canOpenInNewWindow={props.canOpenInNewWindow}
       onSplitCommand={props.onSplitCommand}
-      taskPinned={
+      taskPinnedState={
         props.tab.kind === "epic"
           ? (props.taskPinnedStates.get(props.tab.epicId) ?? null)
           : null

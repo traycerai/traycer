@@ -315,7 +315,7 @@ describe("<EpicShell />", () => {
 
     renderShell(queryClient);
 
-    controlled.streams()[0].callbacks.onConnectionStatus("open", null);
+    controlled.streams()[0].callbacks.onConnectionStatus("open", null, true);
     controlled
       .streams()[0]
       .callbacks.onSnapshot(
@@ -374,7 +374,7 @@ describe("<EpicShell />", () => {
 
     renderShell(queryClient);
 
-    controlled.streams()[0].callbacks.onConnectionStatus("open", null);
+    controlled.streams()[0].callbacks.onConnectionStatus("open", null, true);
     controlled
       .streams()[0]
       .callbacks.onSnapshot(
@@ -404,7 +404,7 @@ describe("<EpicShell />", () => {
 
     renderShell(queryClient);
 
-    controlled.streams()[0].callbacks.onConnectionStatus("open", null);
+    controlled.streams()[0].callbacks.onConnectionStatus("open", null, true);
     controlled
       .streams()[0]
       .callbacks.onSnapshot(

@@ -8,6 +8,7 @@ import {
 } from "@traycer/protocol/host/epic/unary-schemas";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
+import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
 import { useHostQueries } from "@/hooks/host/use-host-queries";
 
 /**
@@ -24,8 +25,42 @@ export const TASK_CONTEXT_TITLE_STALE_TIME_MS = 5 * 60_000;
 
 export interface EpicTaskContexts {
   readonly tasksById: ReadonlyMap<string, ListTaskLight>;
+  /**
+   * The subset of `tasksById` the host marked local-homed - `@1.1`'s
+   * `localHomedTaskIds` sibling.
+   *
+   * Carried rather than dropped because `tasks` is a `z.record`, so the home
+   * marker could NOT be added to the row itself (the additivity gate treats a
+   * record's value schema as opaque). A consumer that projects only
+   * `response.tasks` therefore loses the one fact the minor was added to
+   * carry, and a context-only search hit - a local epic matched by branch,
+   * path, or PR - reads as cloud-backed.
+   *
+   * Empty means the host said nothing (an older host, or an `@1.0`
+   * negotiation), which reads as cloud-or-unknown and never as local.
+   */
+  readonly localHomedTaskIds: ReadonlySet<string>;
   readonly isFetching: boolean;
   readonly error: Error | null;
+}
+
+export interface UseEpicGetTaskContextsOptions {
+  /**
+   * Whether this caller may SPEND the account's cloud capability on the batch.
+   *
+   * Required, and deliberately not derived here from the auth store: `userId`
+   * below is an ADMISSION fact (`admitsLocalPlane` resolves one for an
+   * `unverified` session, off this device's credentials file), and reading it
+   * as an authorization is exactly the conflation this parameter exists to
+   * break. `epic.getTaskContexts` reaches the account's servers for every id it
+   * cannot answer locally, so a caller that passes a widened identity has to
+   * state the cloud half separately - the value is
+   * `authorizesCloudCapability(status)` at every current call site.
+   *
+   * A caller that has already gated its whole surface on the verdict passes
+   * `true`; what is not available is omitting the question.
+   */
+  readonly enabled: boolean;
 }
 
 /**
@@ -35,10 +70,15 @@ export interface EpicTaskContexts {
  * scoped by `userId` because permission-dependent responses must not leak
  * across account switches; the hook stays disabled until a user is known.
  * An older host without the method degrades to an empty map, not an error.
+ *
+ * `options.enabled` is the cloud-authorization half and is ANDed with the two
+ * intrinsic gates below rather than replacing either - a known user and a
+ * non-empty id list are still required of an authorized caller.
  */
 export function useEpicGetTaskContexts(
   taskIds: readonly string[],
   userId: string | null,
+  options: UseEpicGetTaskContextsOptions,
 ): EpicTaskContexts {
   const client = useHostClient();
   const requests = useMemo(
@@ -57,8 +97,11 @@ export function useEpicGetTaskContexts(
     client,
     requests,
     cacheKeyIdentity: userId === null ? undefined : userId,
+    // `options.enabled` is the verdict at render; this is the verdict at
+    // dispatch, which a retry episode already running at demotion needs.
+    preflight: cloudVerdictPreflight("epic.getTaskContexts"),
     options: {
-      enabled: userId !== null && taskIds.length > 0,
+      enabled: options.enabled && userId !== null && taskIds.length > 0,
       staleTime: TASK_CONTEXT_TITLE_STALE_TIME_MS,
     },
     combine: combineTaskContextResults,
@@ -69,6 +112,7 @@ function combineTaskContextResults(
   results: Array<UseQueryResult<GetTaskContextsResponse, HostRpcError>>,
 ): EpicTaskContexts {
   const tasksById = new Map<string, ListTaskLight>();
+  const localHomedTaskIds = new Set<string>();
   for (const result of results) {
     if (result.data === undefined) continue;
     for (const [taskId, resolution] of Object.entries(result.data.tasks)) {
@@ -76,9 +120,13 @@ function combineTaskContextResults(
         tasksById.set(taskId, resolution.task);
       }
     }
+    for (const taskId of result.data.localHomedTaskIds ?? []) {
+      localHomedTaskIds.add(taskId);
+    }
   }
   return {
     tasksById,
+    localHomedTaskIds,
     isFetching: results.some((result) => result.isFetching),
     // Older host: method unsupported → degrade silently to an empty map.
     error:

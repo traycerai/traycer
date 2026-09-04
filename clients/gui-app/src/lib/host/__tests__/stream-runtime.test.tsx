@@ -32,6 +32,8 @@ import {
   type HostRpcRegistry,
 } from "@traycer/protocol/host/index";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
+import type { SchemaVersion } from "@traycer/protocol/framework/index";
+import type { StreamMethodSupport } from "@traycer-clients/shared/host-transport/ws-stream-client";
 
 const bindingRef = vi.hoisted(() => ({
   value: null as {
@@ -367,6 +369,10 @@ interface FakeRemoteSession extends IRemoteSession<
   HostStreamRpcRegistry
 > {
   readonly closeCalls: number;
+  setMethodSupport(
+    support: StreamMethodSupport,
+    schemaVersion: SchemaVersion | null,
+  ): void;
 }
 
 // A plain `closeCalls` counter - not a `vi.fn()` reference - so assertions
@@ -376,6 +382,9 @@ interface FakeRemoteSession extends IRemoteSession<
 // `fakeSession()`.
 function fakeRemoteSession(): FakeRemoteSession {
   let closeCalls = 0;
+  let methodSupport: StreamMethodSupport = "unknown";
+  let methodSchemaVersion: SchemaVersion | null = null;
+  const methodSupportListeners = new Set<() => void>();
   const session: FakeRemoteSession = {
     get closeCalls() {
       return closeCalls;
@@ -399,8 +408,21 @@ function fakeRemoteSession(): FakeRemoteSession {
     onClosed: () => () => undefined,
     subscribeAvailabilityRecovered: () => () => undefined,
     subscribeReadinessLost: () => () => undefined,
+    getMethodSupport: () => methodSupport,
+    getMethodSchemaVersion: () => methodSchemaVersion,
+    subscribeMethodSupport: (listener) => {
+      methodSupportListeners.add(listener);
+      return () => {
+        methodSupportListeners.delete(listener);
+      };
+    },
     // These provider tests never exercise fatal verdicts.
     terminalFatal: () => null,
+    setMethodSupport: (support, schemaVersion) => {
+      methodSupport = support;
+      methodSchemaVersion = schemaVersion;
+      for (const listener of methodSupportListeners) listener();
+    },
     close: () => {
       closeCalls += 1;
     },

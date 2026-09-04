@@ -292,7 +292,19 @@ function expectedDefaultHistoryRequest(
     extensionPhaseVersion: String(CURRENT_PHASE_VERSION),
     extensionEpicVersion: String(CURRENT_EPIC_VERSION),
   };
-  if (cursor === undefined) return request;
+  // The local-first phase rides the FIRST page only, and this helper serves
+  // both assertions - so stamping it unconditionally would assert the field on
+  // a cursor page that must not carry it, and that version passes on the first
+  // request while never being checked on the second.
+  //
+  // Query dispatch stamps it (`cloudEpicTasksFirstPageQueryOptions` ->
+  // `localFirstPhase: "initial"`), while `fetchCloudEpicTasksCursorPageByHostId`
+  // hardcodes `undefined` and `fetchCloudEpicTasksScopedPageByHostId` then omits
+  // the key entirely rather than sending it as undefined - which is what
+  // `use-cloud-epic-tasks-query.test.ts`'s `not.toHaveProperty` pins.
+  if (cursor === undefined) {
+    return { ...request, localFirstPhase: "initial" };
+  }
   return { ...request, cursor };
 }
 

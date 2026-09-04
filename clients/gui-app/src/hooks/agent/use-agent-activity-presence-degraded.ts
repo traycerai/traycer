@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import type { AgentActivityCloudSyncStatus } from "@traycer/protocol/host/agent/activity";
 import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
 import { useAgentActivityStore } from "@/stores/agent-activity-store";
+import { useNotificationsServingHostId } from "@/hooks/host/use-notifications-serving-host-entry";
+import { useReactiveLocalHostId } from "@/hooks/host/use-reactive-local-host-id";
 
 /**
  * How long a degraded reading may hold before the pill is allowed to say so,
@@ -63,7 +65,47 @@ export type AgentActivityPresenceDegradedReason = "stream-down" | "cloud-down";
  * two restarts the grace rather than inheriting the other's.
  */
 export function useAgentActivityPresenceDegraded(): AgentActivityPresenceDegradedReason | null {
-  const reason = useAgentActivityStore(selectPresenceDegradedReason);
+  // Resolved HERE rather than taken from the caller, and the distinction is
+  // the whole design of this hook.
+  //
+  // Callers want one fact - "may this Epic's agent status be stale?" - and the
+  // answer belongs to the stream CARRYING that activity. On a local-capable
+  // shell that is the durable local host identity, not the live serving entry:
+  // a restart temporarily removes that entry while the provider retains and
+  // marks its activity slice reconnecting. Relay-only shells have no such
+  // identity, so their bound serving host remains the right fallback.
+  //
+  // The single-stream assumption is load-bearing and DORMANT, not gone: the
+  // store stays host-keyed (a bare union read would let an idle host's dead
+  // stream amber a healthy Epic), and exactly one slice is populated today. If
+  // anything ever opens a second activity stream - the local-served gap in
+  // `renderer-unserved-plane-assertions` proposes precisely that - this hook
+  // needs a caller-supplied stream identity again, and the keying it reads
+  // through is deliberately still here for that day.
+  // BOTH read unconditionally, and the fallback chosen afterwards. Written as
+  // `localHostId ?? useNotificationsServingHostId()` this is a conditional hook
+  // call: `??` short-circuits, so the moment a booting local host publishes its
+  // id the second hook stops being called and the hook order changes mid-mount
+  // - which React answers by throwing, on the exact edge (local host arrives)
+  // this hook exists to survive. The `??` below is a choice between two values
+  // already in hand.
+  //
+  // The ID half rather than `useNotificationsServingHostEntry()?.hostId`: that
+  // one resolves the relay fallback through `useHostDirectoryEntry`, which
+  // reads `useHostDirectory()` and THROWS outside a `<HostRuntimeProvider>` -
+  // and subscribes this hook to a directory row it never looks at. The two
+  // agree on the id in every state, including the window before a bound host's
+  // row lands: the entry hook answers `null` there, and so does this one,
+  // because `fallbackHostId` comes from `useAddressableHostId`, which is itself
+  // `null` until that row exists. Their shared suite asserts that agreement.
+  const localHostId = useReactiveLocalHostId();
+  const relayServingHostId = useNotificationsServingHostId();
+  const servingHostId = localHostId ?? relayServingHostId;
+  const reason = useAgentActivityStore((state) =>
+    servingHostId === null
+      ? null
+      : selectPresenceDegradedReason(state.byHost.get(servingHostId) ?? null),
+  );
   const [sustained, setSustained] =
     useState<AgentActivityPresenceDegradedReason | null>(null);
   // Render-phase adjustment rather than an effect: React re-runs the render
@@ -83,14 +125,19 @@ export function useAgentActivityPresenceDegraded(): AgentActivityPresenceDegrade
   return reason !== null && sustained === reason ? reason : null;
 }
 
-function selectPresenceDegradedReason(state: {
-  readonly connectionStatus: StreamConnectionStatus;
-  readonly cloudSyncStatus: AgentActivityCloudSyncStatus | null;
-}): AgentActivityPresenceDegradedReason | null {
-  if (state.connectionStatus !== "open") return "stream-down";
+function selectPresenceDegradedReason(
+  // An absent slice is a host whose stream has never spoken - the same
+  // reading as a non-`open` one, and the state a freshly opened epoch sits in
+  // until its own session reports.
+  host: {
+    readonly connectionStatus: StreamConnectionStatus;
+    readonly cloudSyncStatus: AgentActivityCloudSyncStatus | null;
+  } | null,
+): AgentActivityPresenceDegradedReason | null {
+  if (host === null || host.connectionStatus !== "open") return "stream-down";
   if (
-    state.cloudSyncStatus === "reconnecting" ||
-    state.cloudSyncStatus === "disconnected"
+    host.cloudSyncStatus === "reconnecting" ||
+    host.cloudSyncStatus === "disconnected"
   ) {
     return "cloud-down";
   }

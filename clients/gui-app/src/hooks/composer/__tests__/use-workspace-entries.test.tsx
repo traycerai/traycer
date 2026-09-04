@@ -60,6 +60,7 @@ function createHostClient(): HostClient<HostRpcRegistry> {
       connectionId: undefined,
       operationId: undefined,
       externalAbortSignal: undefined,
+      cloudAuthorized: true,
     }),
   );
   hostClientSpine = spine;

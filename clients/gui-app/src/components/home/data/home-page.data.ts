@@ -58,6 +58,18 @@ export interface HistoryItem {
   ownership: HistoryOwnershipScope;
   permissionRole: PermissionRole | null;
   isPinned: boolean;
+  /** True only for a host-synthesized local-home task row. Missing legacy
+   *  fixtures and callers are cloud-backed. */
+  isLocalHome?: boolean;
+  /**
+   * True for a cloud-homed epic the host re-admitted to discovery because its
+   * delete was refused to protect never-uploaded bytes
+   * (`s5-orphaned-epic-recovery`). The server no longer lists this epic at
+   * all, so without the marker the row would read as an ordinary task and the
+   * one thing the user needs to know about it - that the cloud copy is gone
+   * and only this device's edits remain - would be invisible again.
+   */
+  isPreservedOrphan?: boolean;
 }
 
 export interface HistoryFilters {
@@ -82,10 +94,49 @@ const HISTORY_GROUP_LABELS: Record<HistoryRecencyBucket, string> = {
   earlier: "Earlier",
 };
 
+/** "No host-supplied home markers" - stated once so a call site cannot be
+ * read as having forgotten the argument. */
+export const EMPTY_LOCAL_HOMED_TASK_IDS: ReadonlySet<string> = new Set();
+
+/**
+ * `localHomedTaskIds` is a REQUIRED argument, not an optional one: the two
+ * response shapes that feed this projection carry the home marker in two
+ * different places. `epic.listTasks@1.4` puts `home` on the row; a `z.record`
+ * forced `epic.getTaskContexts@1.2` to put it in a sibling id list instead.
+ * A caller with the sibling in hand and no parameter to pass it through
+ * silently projects every context row as cloud-backed, which is exactly what
+ * happened to worktree/branch/PR search hits. Callers with no id list pass
+ * `EMPTY_LOCAL_HOMED_TASK_IDS` and say so.
+ */
+/**
+ * Local home, from EITHER carrier.
+ *
+ * `epic.listTasks@1.4` puts `home` on the row; `epic.getTaskContexts@1.3` had
+ * to put it in a response-level sibling list, because its `tasks` is a
+ * `z.record` whose value schema the additivity gate treats as opaque. A row
+ * reached through the second path carries no `home` at all, so checking only
+ * the row would read every context-only search hit as cloud-backed.
+ */
+function isLocalHomedRow(
+  task: ListTaskLight,
+  epicId: string,
+  localHomedTaskIds: ReadonlySet<string>,
+): boolean {
+  if ("home" in task && task.home === "local") return true;
+  return localHomedTaskIds.has(epicId);
+}
+
+/** `@1.5`'s row-level preservation marker: the cloud task is already deleted
+ * and the row exists only so this device's edits stay reachable. */
+function isPreservedOrphanRow(task: ListTaskLight): boolean {
+  return "preservation" in task && task.preservation === "orphaned-local-edits";
+}
+
 export function buildHistoryItemsFromTasks(
   tasks: ReadonlyArray<ListTaskLight>,
   nowMs: number,
   userId: string | null,
+  localHomedTaskIds: ReadonlySet<string>,
 ): ReadonlyArray<HistoryItem> {
   return tasks.flatMap((task, index): HistoryItem[] => {
     const epic = task.epic?.light;
@@ -101,6 +152,8 @@ export function buildHistoryItemsFromTasks(
           nowMs,
           role: task.epic?.permission?.role ?? null,
           isPinned: task.pinned ?? false,
+          isLocalHome: isLocalHomedRow(task, epic.id, localHomedTaskIds),
+          isPreservedOrphan: isPreservedOrphanRow(task),
         }),
       ];
     }
@@ -122,6 +175,8 @@ export function buildHistoryItemsFromTasks(
         nowMs,
         role: task.phase?.permission?.role ?? null,
         isPinned: false,
+        isLocalHome: false,
+        isPreservedOrphan: false,
       }),
     ];
   });
@@ -137,6 +192,8 @@ function buildHistoryItem(args: {
   nowMs: number;
   role: PermissionRole | null;
   isPinned: boolean;
+  isLocalHome: boolean;
+  isPreservedOrphan: boolean;
 }): HistoryItem {
   const {
     light,
@@ -148,6 +205,8 @@ function buildHistoryItem(args: {
     nowMs,
     role,
     isPinned,
+    isLocalHome,
+    isPreservedOrphan,
   } = args;
   const ownership = light.createdBy === userId ? "mine" : "shared";
   return {
@@ -174,6 +233,8 @@ function buildHistoryItem(args: {
     ownership,
     permissionRole: historyPermissionRole(ownership, role),
     isPinned,
+    isLocalHome,
+    isPreservedOrphan,
   };
 }
 
@@ -322,11 +383,64 @@ function historyPullRequestNumbers(
   );
 }
 
-export function canEditHistoryItemTitle(item: HistoryItem): boolean {
-  return item.taskType === "epic" && isEditableRole(item.permissionRole);
+/**
+ * Renaming is a CLOUD write for every row but a local-home one -
+ * `epic.updateTitle` carries the CloudData `epic.update` contract - so it is
+ * gated on the same verdict as deletion. A local-home row renames on this
+ * machine's own disk and spends nothing, so it stays editable while the
+ * session is `unverified`.
+ */
+export function canEditHistoryItemTitle(
+  item: HistoryItem,
+  cloudAuthorized: boolean,
+): boolean {
+  if (item.taskType !== "epic") return false;
+  if (item.isLocalHome !== true && !cloudAuthorized) return false;
+  return isEditableRole(item.permissionRole);
 }
 
-export function canDeleteHistoryItem(item: HistoryItem): boolean {
+/**
+ * Deletion is a CLOUD-backed action, so a preserved orphan is excluded however
+ * editable its role looks.
+ *
+ * `@1.5`'s `orphaned-local-edits` row exists precisely because its cloud task
+ * is already gone; the row is a pointer to this device's surviving edits.
+ * `epic.batchDelete` mirrors the delete to the cloud arm and then asks the
+ * preservation guard before reclaiming locally, and that guard refuses while
+ * branch rows survive - so confirming the dialog on one of these rows can only
+ * ever produce a failed deletion. Refusing it up front is the honest answer;
+ * discarding the local edits is a genuinely destructive operation and needs its
+ * own explicit affordance, not a fallback through the cloud delete.
+ *
+ * Deliberately in this ONE helper rather than at the controls: the desktop row
+ * action, desktop bulk selection, and the mobile tray all admit through here,
+ * so a rule added at a control would be a rule two surfaces do not have.
+ *
+ * ## `cloudAuthorized`, and why a LOCAL-HOME row is exempt from it
+ *
+ * `authorizesCloudCapability(status)`, required for the same reason
+ * {@link historyPinUnavailableReason} takes it: History stays readable under
+ * `unverified`, so every settled cloud row is still on screen with a role that
+ * still reads `owner`, and a role test alone would let a session with no
+ * `/api/v3/user` verdict dispatch `epic.batchDelete` against the account.
+ *
+ * The exemption is not a softening of that rule, it is the rule applied
+ * honestly. A `isLocalHome` row IS this machine's disk: `epic.batchDelete`
+ * reclaims it locally without a cloud arm to mirror to, so refusing it would
+ * withhold an operation that spends nothing and lock the user out of deleting
+ * their own local epics for the whole of an authn outage - which is precisely
+ * the local plane `admitsLocalPlane` exists to keep serving.
+ *
+ * Required rather than defaulted: a permissive default is how a second surface
+ * inherits an answer nobody made for it, and this predicate is the only thing
+ * standing between three delete controls and a destructive dispatch.
+ */
+export function canDeleteHistoryItem(
+  item: HistoryItem,
+  cloudAuthorized: boolean,
+): boolean {
+  if (item.isPreservedOrphan === true) return false;
+  if (item.isLocalHome !== true && !cloudAuthorized) return false;
   return isEditableRole(item.permissionRole);
 }
 

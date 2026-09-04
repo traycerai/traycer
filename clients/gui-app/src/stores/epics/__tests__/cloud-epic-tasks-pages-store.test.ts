@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import { hashKey } from "@tanstack/react-query";
 import type {
   ListTaskLight,
   ListTasksResponse,
@@ -6,11 +7,16 @@ import type {
 import {
   useCloudEpicTasksPagesStore,
   cloudEpicTasksPageGeneration,
+  cloudEpicTasksPageIdentity,
   registerCloudEpicTasksPageIdentity,
+  resetCloudEpicTasksPageIdentity,
   resetCloudEpicTasksPagesForScope,
   resetLastViewedCloudEpicTasksPagesForScope,
   setCloudEpicTasksPagePinned,
+  setCloudEpicTasksPageLocalHome,
+  setCloudEpicTasksPageLocalHomeForUser,
 } from "@/stores/epics/cloud-epic-tasks-pages-store";
+import { cloudEpicTasksQueryKey } from "@/lib/cloud-epic-tasks-query";
 
 const IDENTITY = "host-a|user-a|{}";
 
@@ -54,6 +60,7 @@ describe("useCloudEpicTasksPagesStore", () => {
     useCloudEpicTasksPagesStore.setState({
       pagesByIdentity: {},
       generationByIdentity: {},
+      deletedEpicIdsByScope: {},
     });
   });
 
@@ -105,6 +112,57 @@ describe("useCloudEpicTasksPagesStore", () => {
     expect(cloudEpicTasksPageGeneration("other-identity")).toBe(
       otherGeneration,
     );
+  });
+
+  it("resets the same retained-tail bucket TanStack uses for reordered request keys", () => {
+    const forwardRequest = {
+      limit: 20,
+      filters: { query: "local" },
+      sort: "recent" as const,
+      extensionPhaseVersion: "1",
+      extensionEpicVersion: "1",
+    };
+    const reorderedRequest = {
+      sort: "recent" as const,
+      filters: { query: "local" },
+      limit: 20,
+      extensionEpicVersion: "1",
+      extensionPhaseVersion: "1",
+    };
+    const forwardIdentity = cloudEpicTasksPageIdentity(
+      "host-a",
+      "user-a",
+      forwardRequest,
+    );
+    const reorderedIdentity = cloudEpicTasksPageIdentity(
+      "host-a",
+      "user-a",
+      reorderedRequest,
+    );
+
+    // This is not just equal objects: TanStack gives these insertion-order
+    // variants one actual query cache slot. Their retained tails must use the
+    // exact same canonical request identity, or first-page refresh resets a
+    // different bucket and leaves the old tail renderable.
+    expect(
+      hashKey(cloudEpicTasksQueryKey("host-a", "user-a", forwardRequest)),
+    ).toBe(
+      hashKey(cloudEpicTasksQueryKey("host-a", "user-a", reorderedRequest)),
+    );
+    expect(forwardIdentity).toBe(
+      `host-a|user-a|${hashKey(
+        cloudEpicTasksQueryKey("host-a", "user-a", forwardRequest),
+      )}`,
+    );
+    expect(reorderedIdentity).toBe(forwardIdentity);
+
+    useCloudEpicTasksPagesStore
+      .getState()
+      .appendPage(forwardIdentity, 0, page("old-tail"));
+    resetCloudEpicTasksPageIdentity(reorderedIdentity);
+
+    expect(pagesFor(forwardIdentity)).toBeUndefined();
+    expect(cloudEpicTasksPageGeneration(forwardIdentity)).toBe(1);
   });
 
   it("rejects a stale first-tail response when a scope reset lands while it is still in flight", () => {
@@ -178,6 +236,38 @@ describe("useCloudEpicTasksPagesStore", () => {
     expect(pagesFor(otherUser)).toHaveLength(1);
   });
 
+  it("keeps a host id containing the separator inside its own scope", () => {
+    // `a|b` is a valid host id (`git-rich-slot-ordering.test.ts` uses it).
+    // Unencoded, the parsers read host `a` / user `b`: a scope reset for
+    // (`a|b`, `user-a`) matched nothing, and a delete tombstone recorded for
+    // that scope was looked up under the wrong one.
+    const identity = cloudEpicTasksPageIdentity("a|b", "user-a", {
+      limit: 20,
+      filters: {},
+      sort: "recent" as const,
+      extensionPhaseVersion: "1",
+      extensionEpicVersion: "1",
+    });
+    const state = useCloudEpicTasksPagesStore.getState();
+    state.registerIdentity(identity);
+    state.recordDeletedEpicIdsForScope("a|b", "user-a", ["epic-1"]);
+
+    // The tombstone reaches this identity's scope, not host `a` / user `b`.
+    state.appendPage(identity, 0, {
+      tasks: [epicTask("epic-1", false), epicTask("epic-2", false)],
+      hasMore: false,
+    });
+    expect(
+      pagesFor(identity)?.flatMap((p) =>
+        p.tasks.map((t) => t.epic?.light?.id ?? null),
+      ),
+    ).toEqual(["epic-2"]);
+
+    resetCloudEpicTasksPagesForScope("a|b", "user-a");
+    expect(pagesFor(identity)).toBeUndefined();
+    expect(cloudEpicTasksPageGeneration(identity)).toBe(1);
+  });
+
   it("patches one epic's pin bit across a scope's tails without resetting them", () => {
     const scopedIdentity = "host-a|user-a|recent";
     const otherUserIdentity = "host-a|user-b|recent";
@@ -219,5 +309,61 @@ describe("useCloudEpicTasksPagesStore", () => {
     setCloudEpicTasksPagePinned("host-a", "user-a", "epic-missing", true);
 
     expect(pagesFor(scopedIdentity)).toBe(before);
+  });
+
+  it("patches one epic's home marker across a scope's tails when promotion completes", () => {
+    // The home-marker twin of the pin patch. Promotion completion used to
+    // patch only the TanStack first page, so a row loaded through "Show
+    // more" kept `home: "local"` here and its cloud-only actions stayed
+    // disabled until a reset or refresh.
+    const scopedIdentity = "host-a|user-a|recent";
+    const state = useCloudEpicTasksPagesStore.getState();
+    state.appendPage(scopedIdentity, 0, {
+      tasks: [{ ...epicTask("epic-1", false), home: "local" }],
+      hasMore: true,
+      nextCursor: "next",
+    });
+
+    setCloudEpicTasksPageLocalHome("host-a", "user-a", "epic-1", false);
+
+    const scopedPage = pagesFor(scopedIdentity)?.[0];
+    // Promoted rows DROP the key rather than carrying `home: "cloud"`,
+    // matching what a refetched page would hold.
+    expect(scopedPage?.tasks[0]).not.toHaveProperty("home");
+    expect(scopedPage?.nextCursor).toBe("next");
+
+    setCloudEpicTasksPageLocalHome("host-a", "user-a", "epic-1", true);
+    expect(pagesFor(scopedIdentity)?.[0]?.tasks[0]).toMatchObject({
+      home: "local",
+    });
+  });
+
+  it("patches one epic's home marker across every host's tails for the user, and no other user's", () => {
+    // The open epic's session lives on one host; the History list showing
+    // the row can be served by another (the app-wide effective host). The
+    // fact is the epic's, so the user-scoped patch reaches both - and stops
+    // at the user boundary, where the same epic id names another account's
+    // view.
+    const state = useCloudEpicTasksPagesStore.getState();
+    const localRow = { ...epicTask("epic-1", false), home: "local" as const };
+    for (const identity of [
+      "host-a|user-a|recent",
+      "host-b|user-a|recent",
+      "host-a|user-b|recent",
+    ]) {
+      state.appendPage(identity, 0, { tasks: [localRow], hasMore: false });
+    }
+
+    setCloudEpicTasksPageLocalHomeForUser("user-a", "epic-1", false);
+
+    expect(pagesFor("host-a|user-a|recent")?.[0]?.tasks[0]).not.toHaveProperty(
+      "home",
+    );
+    expect(pagesFor("host-b|user-a|recent")?.[0]?.tasks[0]).not.toHaveProperty(
+      "home",
+    );
+    expect(pagesFor("host-a|user-b|recent")?.[0]?.tasks[0]).toMatchObject({
+      home: "local",
+    });
   });
 });

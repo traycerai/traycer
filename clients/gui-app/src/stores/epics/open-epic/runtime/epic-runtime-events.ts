@@ -47,6 +47,7 @@ import type {
 } from "@traycer/protocol/host/epic/snapshot-meta";
 import type {
   EpicArtifactRoomDirtySnapshot,
+  EpicCloudSyncDurability,
   EpicDeletedAttribution,
 } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import type {
@@ -259,7 +260,17 @@ export type EpicControlEvent =
       readonly kind: "control-snapshot";
       readonly role: PermissionRole | null;
     }
-  | { readonly kind: "cloud-sync-status"; readonly status: EpicCloudSyncStatus }
+  | {
+      readonly kind: "cloud-sync-status";
+      readonly status: EpicCloudSyncStatus;
+      /**
+       * The `@1.4`-`@1.6` durability legs delivered ON the same frame as the
+       * status, so the reading "this peer omitted a leg it speaks" is made
+       * against the peer that actually omitted it. The lane arm cannot carry
+       * these yet and sends {@link NO_CLOUD_SYNC_DURABILITY}.
+       */
+      readonly durability: EpicCloudSyncDurability;
+    }
   /**
    * The atomic `@1.1` baseline for this subscription cycle. Its ARRIVAL, not
    * the order of individual deltas, is what makes host dirtiness known:
@@ -292,6 +303,18 @@ export type EpicControlEvent =
       readonly kind: "transport-status";
       readonly status: StreamConnectionStatus;
       readonly reason: StreamCloseReason | null;
+      /**
+       * Whether this connection can report `epic.subscribe@1.4` durability -
+       * delivered with the transport transition rather than probed later,
+       * because the `open` transition atomically establishes the new
+       * subscription cycle and whether its selected schema can report
+       * durability; a later read could race the first status frame. Unlike
+       * the `@1.6` legs, this capability controls the PRE-STATUS branch: a
+       * peer that negotiated `@1.4` or `@1.5` can still report durability and
+       * its initial silence is therefore not legacy reassurance. The lane arm
+       * answers `false` until the lanes grow durability legs of their own.
+       */
+      readonly durabilityStatusNegotiated: boolean;
       /**
        * Whether this transition opens and closes the CONTROL SNAPSHOT CYCLE -
        * true for every socket that carries the control snapshot itself, false
