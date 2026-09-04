@@ -1081,6 +1081,45 @@ describe("adoptListedProviderLoginSessions", () => {
     ]);
   });
 
+  it("adopts only the NEWEST exited sign-in per provider when none is running - rapid retries leave several in the grace listing", () => {
+    const adopted = adoptListedProviderLoginSessions({
+      tabs: [],
+      activeHostId: HOST_A,
+      sessions: [
+        {
+          ...session({ sessionId: "signin-old", status: "exited" }),
+          createdAt: 1,
+        },
+        {
+          ...session({ sessionId: "signin-newest", status: "exited" }),
+          createdAt: 3,
+        },
+        {
+          ...session({ sessionId: "signin-mid", status: "exited" }),
+          createdAt: 2,
+        },
+        // Another provider's exited sign-in is its own newest.
+        {
+          ...session({ sessionId: "copilot-old", status: "exited" }),
+          createdAt: 1,
+        },
+      ],
+      excludedSessionKeys: new Set(),
+      mintInstanceId: () => "adopted",
+      providerLoginProviderFor: (sessionId) => {
+        if (sessionId.startsWith("signin-")) return "reasonix";
+        if (sessionId.startsWith("copilot-")) return "copilot";
+        return null;
+      },
+    });
+    // One "Start again" surface per provider, never a stale duplicate whose
+    // restart would retire only itself.
+    expect(adopted.map((entry) => entry.sessionId).sort()).toEqual([
+      "copilot-old",
+      "signin-newest",
+    ]);
+  });
+
   it("does not let another host's tab for the same session id stand in", () => {
     const adopted = adoptListedProviderLoginSessions({
       tabs: [

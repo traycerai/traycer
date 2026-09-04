@@ -294,20 +294,36 @@ export function adoptListedProviderLoginSessions(
         terminalSessionKey(input.activeHostId, session.sessionId),
       ),
   );
-  const providersWithRunningSignIn = new Set(
-    listed.flatMap((session) => {
-      if (session.status !== "running") return [];
-      const providerId = input.providerLoginProviderFor(session.sessionId);
-      return providerId === null ? [] : [providerId];
-    }),
-  );
+  // Per provider: is a sign-in running, and which exited one is newest.
+  // Rapid retries can leave several exited sign-ins for one provider in the
+  // grace listing; only the newest is the one a "Start again" should stand
+  // for, the rest are the predecessors those retries killed.
+  const providersWithRunningSignIn = new Set<ProviderId>();
+  const newestExitedSessionIdByProvider = new Map<
+    ProviderId,
+    Pick<CanonicalTerminalSessionInfo, "sessionId" | "createdAt">
+  >();
+  for (const session of listed) {
+    const providerId = input.providerLoginProviderFor(session.sessionId);
+    if (providerId === null) continue;
+    if (session.status === "running") {
+      providersWithRunningSignIn.add(providerId);
+      continue;
+    }
+    const newest = newestExitedSessionIdByProvider.get(providerId);
+    if (newest === undefined || session.createdAt > newest.createdAt) {
+      newestExitedSessionIdByProvider.set(providerId, session);
+    }
+  }
   return listed.flatMap((session) => {
     if (tabbedSessionIds.has(session.sessionId)) return [];
     const providerId = input.providerLoginProviderFor(session.sessionId);
     if (providerId === null) return [];
     if (
       session.status !== "running" &&
-      providersWithRunningSignIn.has(providerId)
+      (providersWithRunningSignIn.has(providerId) ||
+        newestExitedSessionIdByProvider.get(providerId)?.sessionId !==
+          session.sessionId)
     ) {
       return [];
     }

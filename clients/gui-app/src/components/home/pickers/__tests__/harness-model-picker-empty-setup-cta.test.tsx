@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ProviderTerminalLoginScopeSupport } from "@/hooks/providers/use-provider-terminal-login-scope-support";
 import {
   act,
   cleanup,
@@ -19,15 +20,21 @@ import { ModelRowsState } from "../harness-model-picker-empty";
 const mocks = vi.hoisted(() => ({
   start: vi.fn(),
   // The host's negotiated `providers.startTerminalLogin` major, which decides
-  // whether the LANDING action can be sent at all. `true` here is the modern
-  // host; the gate's own rules live in
+  // whether the LANDING action can be sent at all. `"supported"` here is the
+  // modern host; the gate's own rules live in
   // `use-provider-terminal-login-scope-support.test.tsx`.
-  scopeSupported: { current: true },
+  scopeSupported: {
+    current: "supported",
+  },
 }));
 
 vi.mock("@/hooks/providers/use-provider-terminal-login-scope-support", () => ({
   useProviderTerminalLoginScopeSupported: () => mocks.scopeSupported.current,
 }));
+
+function setScopeSupport(value: ProviderTerminalLoginScopeSupport): void {
+  mocks.scopeSupported.current = value;
+}
 
 vi.mock("@/hooks/providers/use-landing-provider-terminal-login", () => ({
   useLandingProviderStartTerminalLogin: () => ({
@@ -123,7 +130,7 @@ describe("<ModelRowsState /> provider setup CTA (reasonix)", () => {
       reportIssueDraftId: 0,
     });
     mocks.start.mockClear();
-    mocks.scopeSupported.current = true;
+    setScopeSupport("supported");
   });
 
   it("renders the setup CTA for a reasonix entry with the signed-out modelsError: steps + manual command, no button, no report-issue action", () => {
@@ -457,7 +464,7 @@ describe("<ModelRowsState /> provider setup CTA (reasonix)", () => {
   });
 
   it("hides the copilot CTA on a host that cannot carry the landing scope, leaving no always-failing button", () => {
-    mocks.scopeSupported.current = false;
+    setScopeSupport("unsupported");
     const provider = harnessEntry({
       id: "copilot",
       label: "Copilot",
