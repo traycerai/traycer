@@ -1,6 +1,7 @@
 import { URL } from "node:url";
 import { shell, session, type Session, type WebContents } from "electron";
 import { log } from "./logger";
+import { confirmDestructiveInMain } from "./confirm-destructive";
 import { CONTENT_SECURITY_POLICY } from "../../shared/content-security-policy";
 import { isDevBuild } from "../../config";
 import { devRendererOriginFromEnv } from "../../ipc-contracts/dev-renderer-origin";
@@ -60,6 +61,96 @@ export async function safelyOpenExternal(url: string): Promise<boolean> {
     log.error("[security] openExternal failed", { url, err });
     return false;
   }
+}
+
+/**
+ * Fire-and-forget hand-off of a browser GUEST's non-web navigation to the OS
+ * default handler (Chrome's "open in <app>?" behaviour for `mailto:`, `tel:`,
+ * `zoommtg://`, `slack://`, ...). The OS presents its own confirmation, so a
+ * real external scheme is never a silent no-op.
+ *
+ * Deliberately DISTINCT from {@link safelyOpenExternal}, which gates the
+ * renderer's user-initiated in-app link egress against the fixed
+ * {@link ALLOWED_EXTERNAL_SCHEMES} allow-list. The guest hand-off is instead
+ * denylist-gated by its caller (`handleExternalGuestScheme` in
+ * `browser-guest-navigation.ts`), so this helper only performs the launch and
+ * reports failure - it must NOT be reached for a renderer link, and the two
+ * policies stay separate on purpose. The scheme (never the URL) is logged: a
+ * guest URL can carry attacker-chosen bytes.
+ */
+export async function launchExternalFromGuest(url: string): Promise<boolean> {
+  let scheme = "<unparseable>";
+  try {
+    scheme = new URL(url).protocol;
+  } catch {
+    log.warn("[security] guest external open rejected: unparseable");
+    return false;
+  }
+  try {
+    await shell.openExternal(url);
+    return true;
+  } catch (err) {
+    log.error("[security] guest external open failed", { scheme, err });
+    return false;
+  }
+}
+
+/**
+ * Schemes a guest hand-off has confirmed this app run. An arbitrary app deep
+ * link (`zoommtg:`, `slack:`, ...) prompts once; a later hand-off to the SAME
+ * scheme opens without re-prompting - "one-time per app". Cleared only by
+ * restarting the app.
+ *
+ * ponytail: process-wide, not per browser session. Thread a session key
+ * through {@link confirmAndLaunchExternalScheme} if we ever want the grant to
+ * reset per session.
+ */
+const confirmedGuestExternalSchemes = new Set<string>();
+
+/**
+ * The "middle path" hand-off for an ARBITRARY app scheme a guest tries to open
+ * (not the always-safe `mailto:`/`tel:` set, not the dangerous denylist - those
+ * are decided by the caller). Prompts the user with a native dialog the first
+ * time a given scheme is seen this app run; on "Open" it launches AND remembers
+ * the scheme so it never re-prompts, on "Cancel" it does nothing. Awaited only
+ * internally - callers fire-and-forget so a `setWindowOpenHandler` can still
+ * return synchronously.
+ */
+export async function confirmAndLaunchExternalScheme(
+  url: string,
+): Promise<boolean> {
+  let scheme: string;
+  try {
+    scheme = new URL(url).protocol;
+  } catch {
+    log.warn("[security] guest external confirm rejected: unparseable");
+    return false;
+  }
+  if (!confirmedGuestExternalSchemes.has(scheme)) {
+    const approved = await confirmDestructiveInMain({
+      title: "Open in another app?",
+      message: `This page wants to open “${scheme.replace(
+        /:$/,
+        "",
+      )}” in another app.`,
+      detail: "Open it only if you trust this page.",
+      confirmLabel: "Open",
+    });
+    if (!approved) {
+      log.info("[security] guest external open declined", { scheme });
+      return false;
+    }
+    confirmedGuestExternalSchemes.add(scheme);
+  }
+  return launchExternalFromGuest(url);
+}
+
+/**
+ * Test-only reset for the per-app-run confirmed-scheme set, so a suite's
+ * "prompts once" and "prompts again" cases don't leak grants into each other.
+ */
+export function resetConfirmedGuestExternalSchemesForTest(): void {
+  confirmedGuestExternalSchemes.clear();
 }
 
 /**

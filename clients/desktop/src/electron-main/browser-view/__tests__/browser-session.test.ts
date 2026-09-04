@@ -182,6 +182,12 @@ class FakePolicySession {
     this.downloadListeners.push(listener);
   }
 
+  userAgent: string | null = null;
+
+  setUserAgent(userAgent: string): void {
+    this.userAgent = userAgent;
+  }
+
   clearStorageDataCalls = 0;
 
   clearStorageData(): Promise<void> {
@@ -384,6 +390,21 @@ describe("browser view session policy", () => {
     expect(electronState.defaultSession?.permissionRequestHandler).toBeNull();
     expect(electronState.defaultSession?.permissionCheckHandler).toBeNull();
     expect(electronState.defaultSession?.downloadListeners).toEqual([]);
+  });
+
+  it("gives the guest partition a clean desktop Chrome UA (no Electron, no product token)", async () => {
+    const mod = await import("../browser-session");
+
+    mod.ensureBrowserViewSession(PRIMARY);
+
+    const ua = electronState.browserSession?.userAgent;
+    if (ua === null || ua === undefined) {
+      throw new Error("expected a guest user agent");
+    }
+    expect(ua).not.toMatch(/Electron/i);
+    expect(ua).not.toMatch(/Traycer/i);
+    expect(ua).toContain(`Chrome/${process.versions.chrome}`);
+    expect(ua).toContain("Safari/537.36");
   });
 
   it("uses the ephemeral partition when saved logins is turned off", async () => {

@@ -1,5 +1,9 @@
 import { URL } from "node:url";
 import { log } from "../app/logger";
+import {
+  confirmAndLaunchExternalScheme,
+  launchExternalFromGuest,
+} from "../app/security";
 import type { BrowserViewListenerMap } from "./manager/browser-view-entry";
 
 /**
@@ -88,6 +92,109 @@ function navigationScheme(url: string): string {
 }
 
 /**
+ * Schemes safe to hand STRAIGHT to the OS with no extra confirmation - the OS
+ * handler (mail client, dialer) is itself the gate and these carry no local-app
+ * launch risk. Everything not here and not dangerous is an arbitrary app deep
+ * link that gets a native confirm first.
+ */
+const SAFE_EXTERNAL_SCHEMES: ReadonlySet<string> = new Set([
+  "mailto:",
+  "tel:",
+  "sms:",
+  "facetime:",
+  "facetime-audio:",
+]);
+
+/**
+ * Schemes that must NEVER be handed to `shell.openExternal`. Unlike the guest
+ * scheme allow-list (which is a policy about what a browser TAB may load), this
+ * is a hard deny of the schemes that turn an OS hand-off into a local-code or
+ * credential-exfiltration primitive. `file:` is here AND stays blocked by
+ * {@link isAllowedGuestNavigationUrl}, so an http(s) page still cannot reach it
+ * by any door. `about:` is dangerous for every value except exactly
+ * `about:blank`, which is handled before this set is consulted.
+ */
+const DANGEROUS_EXTERNAL_SCHEMES: ReadonlySet<string> = new Set([
+  "javascript:",
+  "data:",
+  "blob:",
+  "file:",
+  "filesystem:",
+  "chrome:",
+  "chrome-extension:",
+  "devtools:",
+  "vbscript:",
+  "ws:",
+  "wss:",
+]);
+
+/**
+ * The navigation sources whose refusal is Chrome-like: hand the non-web scheme
+ * to the OS instead of a silent no-op. A hidden subframe (`will-frame-navigate`)
+ * is excluded on purpose - a page must not be able to silently launch an app
+ * from an off-screen `<iframe>` - and our own automation (`cdp-navigate`) is
+ * excluded because a script-driven navigate is not a user gesture.
+ */
+const EXTERNAL_ROUTABLE_SOURCES: ReadonlySet<BrowserGuestNavigationSource> =
+  new Set([
+    "window-open",
+    "popup-window-open",
+    "will-navigate",
+    "will-redirect",
+  ]);
+
+/**
+ * Chrome-like hand-off for a guest navigation the tab may not load itself,
+ * across three classes so a real external scheme is never a silent no-op:
+ *
+ * 1. {@link SAFE_EXTERNAL_SCHEMES} (`mailto:`, `tel:`, ...) - straight to the
+ *    OS handler, no extra confirm.
+ * 2. {@link DANGEROUS_EXTERNAL_SCHEMES} (and any `about:` but `about:blank`) -
+ *    stays refused and traced; never reaches `shell.openExternal`.
+ * 3. Everything else (arbitrary app deep links like `zoommtg:`, `slack:`) -
+ *    a native confirm before opening, remembered per-scheme for the app run.
+ *
+ * Returns `true` when the target was handled (opened, or a confirm dialog is in
+ * flight), `false` when it was refused or is not this helper's job
+ * (`http`/`https`/`about:blank`). The class-3 confirm is async and deliberately
+ * NOT awaited here, so a `setWindowOpenHandler` can still return synchronously.
+ */
+export function handleExternalGuestScheme(
+  url: string,
+  source: BrowserGuestNavigationSource,
+): boolean {
+  if (url === "about:blank") return false;
+  let scheme: string;
+  try {
+    scheme = new URL(url).protocol;
+  } catch {
+    traceRefusedGuestNavigation(url, source);
+    return false;
+  }
+  if (scheme === "http:" || scheme === "https:") return false;
+  if (scheme === "about:" || DANGEROUS_EXTERNAL_SCHEMES.has(scheme)) {
+    traceRefusedGuestNavigation(url, source);
+    return false;
+  }
+  log.info("[browser-view] handed a guest navigation to the OS", {
+    source,
+    scheme,
+  });
+  if (SAFE_EXTERNAL_SCHEMES.has(scheme)) {
+    void launchExternalFromGuest(url);
+    return true;
+  }
+  void confirmAndLaunchExternalScheme(url);
+  return true;
+}
+
+function isExternalRoutableSource(
+  source: BrowserGuestNavigationSource,
+): boolean {
+  return EXTERNAL_ROUTABLE_SOURCES.has(source);
+}
+
+/**
  * Every event a PAGE can start a navigation from, guarded identically.
  *
  * Three rather than one, because `will-navigate` is narrower than it reads:
@@ -144,6 +251,12 @@ function refuseUnlessAllowed(
   source: BrowserGuestNavigationSource,
 ): void {
   if (isAllowedGuestNavigationUrl(url)) return;
+  // Chromium must not load the target either way; a page-driven source (but not
+  // a hidden subframe) additionally hands a real external scheme to the OS.
   event.preventDefault();
+  if (isExternalRoutableSource(source)) {
+    handleExternalGuestScheme(url, source);
+    return;
+  }
   traceRefusedGuestNavigation(url, source);
 }

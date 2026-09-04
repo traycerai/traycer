@@ -41,8 +41,16 @@ import type {
 const safelyOpenExternalMock = vi.hoisted(() =>
   vi.fn((_url: string) => Promise.resolve(true)),
 );
+const launchExternalFromGuestMock = vi.hoisted(() =>
+  vi.fn((_url: string) => Promise.resolve(true)),
+);
+const confirmAndLaunchExternalSchemeMock = vi.hoisted(() =>
+  vi.fn((_url: string) => Promise.resolve(true)),
+);
 vi.mock("../../app/security", () => ({
   safelyOpenExternal: safelyOpenExternalMock,
+  launchExternalFromGuest: launchExternalFromGuestMock,
+  confirmAndLaunchExternalScheme: confirmAndLaunchExternalSchemeMock,
 }));
 
 type BrowserViewManagerOptions = ConstructorParameters<
@@ -3078,6 +3086,8 @@ describe("BrowserViewManager in-page window.open (Decision #22)", () => {
 
   beforeEach(() => {
     safelyOpenExternalMock.mockClear();
+    launchExternalFromGuestMock.mockClear();
+    confirmAndLaunchExternalSchemeMock.mockClear();
   });
 
   it("maps Chromium's background-tab disposition onto the tile request", async () => {
@@ -3105,11 +3115,25 @@ describe("BrowserViewManager in-page window.open (Decision #22)", () => {
     expect(opened.openTileRequests[0]?.disposition).toBe("foreground");
   });
 
-  it("rejects a non-http(s) target and sends no tile request", async () => {
+  it("denies a non-http(s) target as a tile but hands a safe scheme to the OS", async () => {
     const opened = await openWindow("foreground-tab", "mailto:a@b.example", "");
+    // Chromium never opens it and it never becomes a tile; the OS gets it.
     expect(opened.result.action).toBe("deny");
     expect(opened.openTileRequests).toEqual([]);
+    expect(launchExternalFromGuestMock).toHaveBeenCalledWith(
+      "mailto:a@b.example",
+    );
     expect(safelyOpenExternalMock).not.toHaveBeenCalled();
+  });
+
+  it("denies an app deep link as a tile and routes it through the confirm hand-off", async () => {
+    const opened = await openWindow("foreground-tab", "zoommtg://join", "");
+    expect(opened.result.action).toBe("deny");
+    expect(opened.openTileRequests).toEqual([]);
+    expect(confirmAndLaunchExternalSchemeMock).toHaveBeenCalledWith(
+      "zoommtg://join",
+    );
+    expect(launchExternalFromGuestMock).not.toHaveBeenCalled();
   });
 
   it("keeps an about:blank open in the session as a tile", async () => {

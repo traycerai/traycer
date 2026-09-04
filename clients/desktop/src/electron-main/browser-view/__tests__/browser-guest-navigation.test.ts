@@ -1,5 +1,21 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const securityMock = vi.hoisted(() => ({
+  launchExternalFromGuest: vi.fn((_url: string) => Promise.resolve(true)),
+  confirmAndLaunchExternalScheme: vi.fn((_url: string) =>
+    Promise.resolve(true),
+  ),
+}));
+
+vi.mock("../../app/security", () => securityMock);
+
+vi.mock("../../app/logger", () => ({
+  log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+}));
+
 import {
+  guestNavigationGuards,
+  handleExternalGuestScheme,
   isAllowedGuestNavigationUrl,
   isAllowedHostInitiatedNavigationUrl,
 } from "../browser-guest-navigation";
@@ -40,5 +56,96 @@ describe("isAllowedHostInitiatedNavigationUrl", () => {
     "not a url",
   ])("refuses %s", (url) => {
     expect(isAllowedHostInitiatedNavigationUrl(url)).toBe(false);
+  });
+});
+
+describe("handleExternalGuestScheme", () => {
+  beforeEach(() => {
+    securityMock.launchExternalFromGuest.mockClear();
+    securityMock.confirmAndLaunchExternalScheme.mockClear();
+  });
+
+  it.each(["mailto:a@b.example", "tel:+1", "sms:+1", "facetime:a@b.example"])(
+    "hands a safe scheme (%s) straight to the OS, no confirm",
+    (url) => {
+      expect(handleExternalGuestScheme(url, "will-navigate")).toBe(true);
+      expect(securityMock.launchExternalFromGuest).toHaveBeenCalledWith(url);
+      expect(
+        securityMock.confirmAndLaunchExternalScheme,
+      ).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["zoommtg://join", "slack://open", "msteams://chat"])(
+    "confirms before opening an arbitrary app deep link (%s)",
+    (url) => {
+      expect(handleExternalGuestScheme(url, "window-open")).toBe(true);
+      expect(securityMock.confirmAndLaunchExternalScheme).toHaveBeenCalledWith(
+        url,
+      );
+      expect(securityMock.launchExternalFromGuest).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    "javascript:alert(1)",
+    "data:text/html,x",
+    "blob:https://x/1",
+    "file:///etc/passwd",
+    "filesystem:https://x/temporary/1",
+    "about:settings",
+    "chrome://settings",
+    "chrome-extension://id/x",
+    "devtools://devtools/bundled/x",
+    "vbscript:msgbox",
+    "ws://x/socket",
+    "wss://x/socket",
+  ])("refuses a dangerous scheme (%s) - never openExternal", (url) => {
+    expect(handleExternalGuestScheme(url, "will-navigate")).toBe(false);
+    expect(securityMock.launchExternalFromGuest).not.toHaveBeenCalled();
+    expect(securityMock.confirmAndLaunchExternalScheme).not.toHaveBeenCalled();
+  });
+
+  it.each(["http://x.example/", "https://x.example/", "about:blank"])(
+    "leaves web schemes (%s) to the caller's own policy",
+    (url) => {
+      expect(handleExternalGuestScheme(url, "will-navigate")).toBe(false);
+      expect(securityMock.launchExternalFromGuest).not.toHaveBeenCalled();
+      expect(
+        securityMock.confirmAndLaunchExternalScheme,
+      ).not.toHaveBeenCalled();
+    },
+  );
+});
+
+describe("guestNavigationGuards external routing", () => {
+  beforeEach(() => {
+    securityMock.launchExternalFromGuest.mockClear();
+    securityMock.confirmAndLaunchExternalScheme.mockClear();
+  });
+
+  it("routes a page-driven will-navigate to a real external scheme", () => {
+    const guards = guestNavigationGuards();
+    let prevented = 0;
+    guards["will-navigate"](
+      { url: "mailto:a@b.example", preventDefault: () => (prevented += 1) },
+      "mailto:a@b.example",
+    );
+    expect(prevented).toBe(1);
+    expect(securityMock.launchExternalFromGuest).toHaveBeenCalledWith(
+      "mailto:a@b.example",
+    );
+  });
+
+  it("does NOT route a hidden subframe (will-frame-navigate) externally", () => {
+    const guards = guestNavigationGuards();
+    let prevented = 0;
+    guards["will-frame-navigate"]({
+      url: "mailto:a@b.example",
+      preventDefault: () => (prevented += 1),
+    });
+    expect(prevented).toBe(1);
+    expect(securityMock.launchExternalFromGuest).not.toHaveBeenCalled();
+    expect(securityMock.confirmAndLaunchExternalScheme).not.toHaveBeenCalled();
   });
 });

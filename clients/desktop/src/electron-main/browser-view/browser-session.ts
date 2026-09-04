@@ -214,6 +214,28 @@ export function ensureBrowserViewSession(
   );
 }
 
+/**
+ * A plain desktop Chrome User-Agent for guest partitions, carrying NO
+ * `Electron/<ver>` token and NO Traycer product token - exactly the shape a
+ * real Chrome sends. Guests are browser tabs, and providers (Google's
+ * `disallowed_useragent`, others) refuse sign-in for any UA containing
+ * "Electron", which broke OAuth completing inside a guest/popup. The Chrome
+ * version tracks the runtime; the platform token is the standard per-OS string
+ * a real Chrome reports (macOS reports Intel even on Apple Silicon, matching
+ * Chrome). Traycer's own host/renderer comms keep their branded UA via
+ * `configureUserAgent()` on the default session - only guests change here.
+ */
+function guestBrowserUserAgent(): string {
+  const platformToken = guestBrowserPlatformToken();
+  return `Mozilla/5.0 (${platformToken}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${process.versions.chrome} Safari/537.36`;
+}
+
+function guestBrowserPlatformToken(): string {
+  if (process.platform === "darwin") return "Macintosh; Intel Mac OS X 10_15_7";
+  if (process.platform === "win32") return "Windows NT 10.0; Win64; x64";
+  return "X11; Linux x86_64";
+}
+
 /** The named jar, bypassing the saved-logins pref. */
 export function ensureBrowserViewSessionForPartition(
   partition: string,
@@ -221,6 +243,10 @@ export function ensureBrowserViewSessionForPartition(
   const existing = sessionsByPartition.get(partition);
   if (existing !== undefined) return existing;
   const browserSession = session.fromPartition(partition, { cache: true });
+  // Session-level, so it covers every guest on this partition AND every popup
+  // (popups share the opener's partition session), sparing the OAuth popup the
+  // "Electron" UA that providers reject.
+  browserSession.setUserAgent(guestBrowserUserAgent());
   installBrowserViewSessionPolicy(browserSession);
   sessionsByPartition.set(partition, browserSession);
   observePrimaryProfileCookieChanges(partition, browserSession);

@@ -2,9 +2,9 @@ import type { BrowserWindowConstructorOptions } from "electron";
 import { RunnerHostEvent } from "../../../ipc-contracts/ipc-channels";
 import { log } from "../../app/logger";
 import {
+  handleExternalGuestScheme,
   installGuestNavigationGuard,
   isAllowedGuestNavigationUrl,
-  traceRefusedGuestNavigation,
 } from "../browser-guest-navigation";
 import {
   toTileKey,
@@ -76,7 +76,10 @@ export class BrowserViewPopups {
     // check on the raw string would be checking the wrong string.
     const target = normalizeOpenedUrl(details.url, entry.currentUrl);
     if (!isAllowedGuestNavigationUrl(target)) {
-      traceRefusedGuestNavigation(target, "window-open");
+      // Chromium must never open a non-web scheme, but a real external one
+      // (mailto:, an app deep link) is handed to the OS rather than dropped;
+      // handleExternalGuestScheme traces the refusal for a dangerous scheme.
+      handleExternalGuestScheme(target, "window-open");
       return { action: "deny" };
     }
     // Electron exposes featureless scripted window.open the same as _blank
