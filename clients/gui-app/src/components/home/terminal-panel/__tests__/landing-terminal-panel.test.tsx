@@ -383,11 +383,13 @@ vi.mock("@/components/home/terminal-panel/landing-browser-tile", () => ({
     readonly tab: { readonly instanceId: string };
     readonly active: boolean;
     readonly panelOpen: boolean;
+    readonly watched: boolean;
   }) => (
     <div
       data-testid={`landing-browser-tile-${props.tab.instanceId}`}
       data-active={String(props.active)}
       data-panel-open={String(props.panelOpen)}
+      data-watched={String(props.watched)}
     >
       Browser
     </div>
@@ -399,6 +401,7 @@ vi.mock("@/components/epic-canvas/renderers/xterm-host-registry", () => ({
 }));
 
 import { LandingTerminalPanel } from "@/components/home/terminal-panel/landing-terminal-panel";
+import { LANDING_BROWSER_WATCHED_HOST_CAP } from "@/components/home/terminal-panel/landing-browser-presentation";
 import { LandingTerminalGestureProvider } from "@/components/home/terminal-panel/landing-terminal-gesture-provider";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -643,6 +646,19 @@ function browserSessionsState(
     attachTab: () => Promise.reject(new Error("not used in this test")),
     ...overrides,
   };
+}
+
+/** One browser tab on `hostId`, added to the store in strip order. */
+function addBrowserTab(hostId: string, instanceId: string): void {
+  useLandingPanelStore.getState().addTab({
+    kind: "browser",
+    instanceId,
+    hostId,
+    sessionId: `session-${instanceId}`,
+    tabId: `tab-${instanceId}`,
+    name: `${hostId}.example`,
+    titleSource: "default",
+  });
 }
 
 /**
@@ -2169,6 +2185,232 @@ describe("<LandingTerminalPanel />", () => {
     expect(
       screen.queryByTestId("landing-new-tab-card-browser-reason"),
     ).toBeNull();
+  });
+
+  // The chooser's cap count and `app.browser.new` both read the TARGET host's
+  // coordinator, which the panel pins unconditionally - so both must still
+  // work while the panel itself is collapsed and showing nothing.
+  it("opens a browser tab via app.browser.new with the panel collapsed", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    const openTab = vi.fn(() =>
+      Promise.resolve({ sessionId: "device-session", tabId: "device-tab" }),
+    );
+    mocks.browserSessionsByHost = {
+      "host-a": browserSessionsState({ openTab }),
+    };
+    render(panelUi());
+    const router = fakeKeybindingRouter();
+
+    expect(testLayout().panelOpen).toBe(false);
+    await waitFor(() => {
+      expect(mocks.browserStreamHostIds).toEqual(["host-a"]);
+    });
+
+    act(() => {
+      dispatchAction("app.browser.new", router);
+    });
+
+    await waitFor(() => {
+      expect(testLayout().panelOpen).toBe(true);
+    });
+    // Redden: if the target host were not mounted while collapsed, its
+    // sessions state would still be `null` here and the open would never
+    // reach the device's `openTab`.
+    await waitFor(() => {
+      expect(openTab).toHaveBeenCalledWith(null, "about:blank");
+    });
+  });
+
+  // A browser stream is a socket, a relay attach, an identity attestation and
+  // a contributed-set replay, and the desktop refuses whichever window stream
+  // is asked for LAST past its cap - so a strip with tabs on many devices must
+  // not exhaust it with rows nobody is looking at.
+  it("mounts at most LANDING_BROWSER_WATCHED_HOST_CAP hosts, with the target and the active tab's host always among them, across tabs on six devices", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    for (const hostId of [
+      "host-a",
+      "host-b",
+      "host-c",
+      "host-d",
+      "host-e",
+      "host-f",
+    ]) {
+      addBrowserTab(hostId, `browser-${hostId}`);
+    }
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+
+    // Redden: without the bound, all six tab hosts would be mounted.
+    await waitFor(() => {
+      expect(mocks.browserStreamHostIds).toHaveLength(
+        LANDING_BROWSER_WATCHED_HOST_CAP,
+      );
+    });
+    expect(mocks.browserStreamHostIds).toContain("host-a");
+    // `host-f` is the last tab added, so `addTab` left it active.
+    expect(mocks.browserStreamHostIds).toContain("host-f");
+  });
+
+  // The other half of the LRU: an activation past the bound brings its device
+  // in and must make room by evicting the least recently activated one that
+  // is not pinned - never the target, never the newly active host.
+  it("activating a row of an unwatched host mounts it and evicts the least recently activated non-pinned host", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    // Strip order e, a, b, c, d; `d` ends active (last added). With the
+    // target (a) and active (d) pinned, the two-slot budget fills from strip
+    // order and lands on e and b - c is left unwatched.
+    for (const [hostId, instanceId] of [
+      ["host-e", "browser-e"],
+      ["host-a", "browser-a"],
+      ["host-b", "browser-b"],
+      ["host-c", "browser-c"],
+      ["host-d", "browser-d"],
+    ] as const) {
+      addBrowserTab(hostId, instanceId);
+    }
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+
+    await waitFor(() => {
+      expect(mocks.browserStreamHostIds).toHaveLength(
+        LANDING_BROWSER_WATCHED_HOST_CAP,
+      );
+    });
+    expect(mocks.browserStreamHostIds).not.toContain("host-c");
+
+    fireEvent.click(screen.getByTestId("landing-terminal-tab-browser-c"));
+
+    await waitFor(() => {
+      expect(mocks.browserStreamHostIds).toContain("host-c");
+    });
+    // Redden: without eviction the set would grow to five instead of holding
+    // at the cap, and the previously-idle `host-b` (recency's tiebreak loser
+    // against untouched `host-c`) would survive alongside it.
+    expect(mocks.browserStreamHostIds).toHaveLength(
+      LANDING_BROWSER_WATCHED_HOST_CAP,
+    );
+    expect(mocks.browserStreamHostIds).not.toContain("host-b");
+    // The target and the newly active host both survive the eviction.
+    expect(mocks.browserStreamHostIds).toContain("host-a");
+  });
+
+  // A row past the bound is rendered from the store alone: no dormancy claim
+  // and no outage claim, even when the store already has (or would have) an
+  // answer for that device - this window just isn't watching it.
+  it("shows `· not watched` on an unwatched row and neither `dormant` nor `status unavailable`, even where the store would otherwise report unavailable", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    for (const [hostId, instanceId] of [
+      ["host-e", "browser-e"],
+      ["host-a", "browser-a"],
+      ["host-b", "browser-b"],
+      ["host-c", "browser-c"],
+      ["host-d", "browser-d"],
+    ] as const) {
+      addBrowserTab(hostId, instanceId);
+    }
+    // What the store would report for the unwatched host if it were watched -
+    // still no inventory, the same shape a healthy-but-quiet device leaves.
+    mocks.browserSessionsByHost = {
+      "host-c": browserSessionsState({ inventoryReady: false }),
+    };
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+
+    await waitFor(() => {
+      expect(mocks.browserStreamHostIds).not.toContain("host-c");
+    });
+    // Redden: without the unwatched branch this row would read `sessions` as
+    // absent and render `status unavailable` instead.
+    expect(
+      screen.getByTestId("landing-terminal-unwatched-browser-c"),
+    ).toBeTruthy();
+    expect(
+      screen.queryByTestId("landing-terminal-dormant-browser-c"),
+    ).toBeNull();
+    expect(
+      screen.queryByTestId("landing-terminal-unavailable-browser-c"),
+    ).toBeNull();
+  });
+
+  // The bound is on DEVICES, not tabs - a device costs one stream however
+  // many rows it holds in the strip.
+  it("counts hosts, not tabs: eight tabs on two devices mount exactly two streams", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    for (let index = 0; index < 4; index += 1) {
+      addBrowserTab("host-a", `browser-a-${index}`);
+      addBrowserTab("host-b", `browser-b-${index}`);
+    }
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+
+    // Redden: counting by tab rather than by host would either exceed two
+    // streams or under/over-count relative to the eight rows in the strip.
+    await waitFor(() => {
+      expect([...mocks.browserStreamHostIds].sort()).toEqual([
+        "host-a",
+        "host-b",
+      ]);
+    });
+  });
+
+  // Two provider seams acquire the SAME refcounted coordinator - the fleet's
+  // arm above, and each tile's own `BrowserSessionsHostProvider`. If the
+  // panel computed the bound but never handed it to the tile, the tile would
+  // mount every tab host's stream on its own and the bound would hold nothing
+  // back.
+  it("hands each tile a watched prop matching the bound", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    for (const [hostId, instanceId] of [
+      ["host-e", "browser-e"],
+      ["host-a", "browser-a"],
+      ["host-b", "browser-b"],
+      ["host-c", "browser-c"],
+      ["host-d", "browser-d"],
+    ] as const) {
+      addBrowserTab(hostId, instanceId);
+    }
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+
+    await waitFor(() => {
+      expect(mocks.browserStreamHostIds).not.toContain("host-c");
+    });
+    // Redden: a tile that always reports itself watched (or whose `watched`
+    // prop was never threaded through) would read "true" here too.
+    expect(
+      screen
+        .getByTestId("landing-browser-tile-browser-c")
+        .getAttribute("data-watched"),
+    ).toBe("false");
+    expect(
+      screen
+        .getByTestId("landing-browser-tile-browser-a")
+        .getAttribute("data-watched"),
+    ).toBe("true");
   });
 
   // A shell with no native browser capability can only WATCH a browser tab -

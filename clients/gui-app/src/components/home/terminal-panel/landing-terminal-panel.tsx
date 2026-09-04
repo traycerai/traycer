@@ -5,6 +5,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type CSSProperties,
   type ReactNode,
   type TransitionEvent as ReactTransitionEvent,
@@ -86,6 +87,8 @@ import { LandingTerminalDirectoryPicker } from "./landing-terminal-directory-pic
 import { LandingTerminalTile } from "./landing-terminal-tile";
 import { LandingBrowserTile } from "./landing-browser-tile";
 import {
+  isLandingBrowserHostWatched,
+  landingBrowserWatchedHostIds,
   selectLandingBrowserViewModel,
   type LandingBrowserViewModel,
 } from "./landing-browser-presentation";
@@ -311,6 +314,56 @@ function landingTargetVerdictGoverns(
   return landingBrowserTabs(rows).length === 0;
 }
 
+/**
+ * The panel's recency order over browser tab hosts - which device's tab was
+ * activated last, second-last, and so on. It is what fills the watched budget
+ * `landingBrowserWatchedHostIds` has left after the two pinned devices, and it
+ * decides which device an activation past the cap evicts.
+ *
+ * An EXTERNAL store rather than a ref or a piece of state, and neither is an
+ * accident. The order has to be read during render (the mount list is a
+ * `useMemo`), which rules out a ref - `react-hooks/refs` bans reading
+ * `.current` there, and the ban is right: a ref mutation schedules nothing, so
+ * the mount list would keep whatever order the last unrelated render happened
+ * to see. And it has to be written from an EFFECT, because activation reaches
+ * the panel by more routes than the panel's own handlers - `fulfillPlaceholder`
+ * activates, a close promotes a neighbour, and reconciliation can drop the
+ * active row - so `activeInstanceId` moving is the only signal that catches
+ * every one of them; `react-hooks/set-state-in-effect` rules out `useState`
+ * there. `useSyncExternalStore` is the seam that is legal on both sides.
+ *
+ * Not persisted: a reload starts from the active tab and fills from the strip
+ * order, which is what `landingBrowserWatchedHostIds` does with an empty one.
+ */
+interface LandingBrowserHostRecency {
+  readonly subscribe: (listener: () => void) => () => void;
+  readonly getSnapshot: () => ReadonlyArray<string>;
+  /** Moves `hostId` to the front. A no-op when it is already there. */
+  readonly touch: (hostId: string) => void;
+}
+
+function createLandingBrowserHostRecency(): LandingBrowserHostRecency {
+  let order: ReadonlyArray<string> = [];
+  const listeners = new Set<() => void>();
+  return {
+    subscribe: (listener: () => void) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    // Same array identity until `touch` actually reorders, which is what
+    // `useSyncExternalStore` requires of a snapshot: a fresh array per read
+    // would re-render forever.
+    getSnapshot: () => order,
+    touch: (hostId: string) => {
+      if (order[0] === hostId) return;
+      order = [hostId, ...order.filter((entry) => entry !== hostId)];
+      listeners.forEach((listener) => listener());
+    },
+  };
+}
+
 function directoryRequestFor(
   target: LandingTerminalTarget,
   mode: LandingTerminalDirectoryRequestMode,
@@ -516,10 +569,10 @@ export function LandingTerminalPanel(): ReactNode {
   // for LAST. So a panel holding streams for hosts it is showing nothing of
   // can cost the reader the tab they are actually looking at.
   //
-  // The target host is unconditional, and only it: creating a browser tab goes
-  // through that device's coordinator, so `app.browser.new` and the chooser's
-  // tab-cap count both need one mounted before the first tab exists - and both
-  // work while the panel is collapsed.
+  // The target host is unconditional: creating a browser tab goes through that
+  // device's coordinator, so `app.browser.new` and the chooser's tab-cap count
+  // both need one mounted before the first tab exists - and both work while
+  // the panel is collapsed.
   //
   // The tab hosts follow the PANEL, not the individual tab. A collapsed panel
   // and a backgrounded Start Page render nothing, so nothing needs a tab
@@ -528,17 +581,51 @@ export function LandingTerminalPanel(): ReactNode {
   // per tab instead - only the active one's host - would leave every other
   // browser row reading "status unavailable" against a device that is fine and
   // freeze its title, which is a worse lie than the cost it saves.
+  //
+  // That reasoning stands, which is why the fix for the cap is a BOUND on the
+  // set rather than a gate on each row: at most
+  // `LANDING_BROWSER_WATCHED_HOST_CAP` devices, the target and the active
+  // tab's device always among them, the rest going to the most recently
+  // activated. A row past the bound is rendered from the store alone and says
+  // `· not watched` in place of the two claims this window can no longer make
+  // about its device - an admission rather than the lie a per-tab gate told -
+  // and activating it brings its device back into the set.
+  //
+  // `browserTabs` is deliberately still the whole slice, unfiltered by the
+  // bound: the ORDER it contributes is the strip's own, which is what fills
+  // the budget for devices this session has never activated.
+  const [browserHostRecency] = useState(createLandingBrowserHostRecency);
+  const recentlyActivatedHostIds = useSyncExternalStore(
+    browserHostRecency.subscribe,
+    browserHostRecency.getSnapshot,
+  );
+  const activeBrowserHostId = useMemo(
+    () =>
+      browserTabs.find((tab) => tab.instanceId === activeInstanceId)?.hostId ??
+      null,
+    [activeInstanceId, browserTabs],
+  );
+  useEffect(() => {
+    if (activeBrowserHostId === null) return;
+    browserHostRecency.touch(activeBrowserHostId);
+  }, [activeBrowserHostId, browserHostRecency]);
   const browserHostIds = useMemo(
     () =>
-      [
-        ...new Set([
-          target.hostId,
-          ...(panelOpen && paneVisible
-            ? browserTabs.map((tab) => tab.hostId)
-            : []),
-        ]),
-      ].filter((hostId): hostId is string => hostId !== null),
-    [browserTabs, panelOpen, paneVisible, target.hostId],
+      landingBrowserWatchedHostIds({
+        targetHostId: target.hostId,
+        activeBrowserHostId,
+        recentlyActivatedHostIds,
+        tabHostIds: browserTabs.map((tab) => tab.hostId),
+        panelWatching: panelOpen && paneVisible,
+      }),
+    [
+      activeBrowserHostId,
+      browserTabs,
+      panelOpen,
+      paneVisible,
+      recentlyActivatedHostIds,
+      target.hostId,
+    ],
   );
   const targetPanelOpen = useLandingPanelStore(
     (state) => landingPanelLayoutFor(state, targetLandingPageId).panelOpen,
@@ -1366,10 +1453,15 @@ export function LandingTerminalPanel(): ReactNode {
       viewModels[tab.instanceId] = selectLandingBrowserViewModel({
         tab,
         sessions: browserSessions[tab.hostId] ?? null,
+        // The SAME list the fleet is mounted from, so a row can never report a
+        // dormancy or an outage for a device this window stopped watching -
+        // which is exactly what it would report, since an unmounted device
+        // publishes no sessions state and absence reads as "unavailable".
+        watchedHostIds: browserHostIds,
       });
     }
     return viewModels;
-  }, [browserSessions, browserTabs]);
+  }, [browserHostIds, browserSessions, browserTabs]);
 
   // Several remote hosts can exist without a default selection. This is a
   // real page state, not an unsupported/unknown verdict: leave persistence
@@ -1435,6 +1527,7 @@ export function LandingTerminalPanel(): ReactNode {
           activeInstanceId={activeInstanceId}
           availability={target.availability}
           panelOpen={panelOpen}
+          watchedBrowserHostIds={browserHostIds}
           panelWidthFraction={panelWidthFraction}
           primaryWorkspacePath={target.primaryWorkspacePath}
           activeHostId={target.hostId}
@@ -1478,6 +1571,14 @@ interface LandingTerminalPanelContentsProps {
   readonly activeInstanceId: string | null;
   readonly availability: LandingTerminalAvailability;
   readonly panelOpen: boolean;
+  /**
+   * The devices this panel holds a browser stream for, from
+   * `landingBrowserWatchedHostIds`. A tile's own provider acquires the same
+   * refcounted coordinator, so it has to read the bound too - otherwise every
+   * tab host would be mounted by its tile whatever this list says, and the
+   * bound would be inert.
+   */
+  readonly watchedBrowserHostIds: ReadonlyArray<string>;
   readonly panelWidthFraction: number;
   readonly primaryWorkspacePath: string | null;
   readonly activeHostId: string | null;
@@ -1701,6 +1802,7 @@ function LandingTerminalPanelContents(
           activeInstanceId={props.activeInstanceId}
           availability={props.availability}
           panelOpen={props.panelOpen}
+          watchedBrowserHostIds={props.watchedBrowserHostIds}
           activeHostId={props.activeHostId}
           createEnabled={props.createEnabled}
           createDisabledReason={props.createDisabledReason}
@@ -2230,6 +2332,8 @@ function LandingTerminalPanelBody(props: {
   readonly activeInstanceId: string | null;
   readonly availability: LandingTerminalAvailability;
   readonly panelOpen: boolean;
+  /** The bound, so each tile's own provider honours the same set. */
+  readonly watchedBrowserHostIds: ReadonlyArray<string>;
   readonly activeHostId: string | null;
   readonly createEnabled: boolean;
   readonly createDisabledReason: string | null;
@@ -2344,6 +2448,13 @@ function LandingTerminalPanelBody(props: {
                   tab={tab}
                   active={tab.instanceId === visibleInstanceId}
                   panelOpen={props.panelOpen}
+                  // The tile's provider and the fleet's arm acquire the SAME
+                  // refcounted coordinator, so both have to read the bound or
+                  // neither bounds anything.
+                  watched={isLandingBrowserHostWatched(
+                    props.watchedBrowserHostIds,
+                    tab.hostId,
+                  )}
                   onRequestClose={() => props.onCloseTab(tab)}
                   onOpenLinkInNewTile={(url, disposition) => {
                     props.onOpenBrowserLink(tab, url, disposition);
