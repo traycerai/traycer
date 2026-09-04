@@ -1,5 +1,8 @@
 import { useLayoutEffect, useRef } from "react";
-import { subscribeStatusAnimation } from "@/lib/animation/status-animation-clock";
+import {
+  STATUS_ANIMATION_SMOOTH_CADENCE_MS,
+  subscribeStatusAnimation,
+} from "@/lib/animation/status-animation-clock";
 import { cn } from "@/lib/utils";
 import type { AgentSpinnerVariant } from "@/components/ui/agent-spinner-variant";
 import { WorkingDots } from "@/components/ui/working-dots";
@@ -630,8 +633,8 @@ export function AgentSpinningDots(props: AgentSpinningDotsProps) {
   //   mutation does none of that: one text run relayouts.
   // - Every spinner advances from the shared status animation clock, so N
   //   spinners on screen are one timer task and one style/layout/paint pass
-  //   per tick, not N. Presets slower than the clock keep their cadence; the
-  //   60-70 ms presets run at the clock's 80 ms.
+  //   per tick, not N. Presets keep their own cadence, quantized to the
+  //   clock's 40 ms tick.
   useLayoutEffect(() => {
     if (presetFrames === null || presetIntervalMs === null) return;
     const node = frameRef.current;
@@ -646,7 +649,7 @@ export function AgentSpinningDots(props: AgentSpinningDotsProps) {
       if (frameIndex === shownIndex) return;
       shownIndex = frameIndex;
       text.data = presetFrames[frameIndex] ?? "";
-    });
+    }, STATUS_ANIMATION_SMOOTH_CADENCE_MS);
   }, [presetFrames, presetIntervalMs]);
 
   if (preset === null) {

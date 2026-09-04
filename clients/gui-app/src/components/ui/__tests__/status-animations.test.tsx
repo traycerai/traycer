@@ -23,6 +23,47 @@ function stubReducedMotion(reduced: boolean): void {
   }));
 }
 
+interface ReducedMotionListenerStub {
+  /** Flips what the stubbed MediaQueryList reports as `matches`. */
+  readonly setMatches: (matches: boolean) => void;
+  /** Invokes every `change` listener the clock registered on the stub. */
+  readonly fireChange: () => void;
+}
+
+/**
+ * Like `stubReducedMotion`, but the returned MediaQueryList actually records
+ * `change` listeners and reports a mutable `matches`, so a test can flip the
+ * preference mid-run and drive the clock's own `handleReducedMotionChange`.
+ */
+function stubReducedMotionWithListener(
+  initialMatches: boolean,
+): ReducedMotionListenerStub {
+  let matches = initialMatches;
+  const listeners = new Set<() => void>();
+  vi.stubGlobal("matchMedia", (query: string) => ({
+    get matches(): boolean {
+      return query === "(prefers-reduced-motion: reduce)" ? matches : false;
+    },
+    media: query,
+    onchange: null,
+    addEventListener: (type: string, listener: () => void) => {
+      if (type === "change") listeners.add(listener);
+    },
+    removeEventListener: (type: string, listener: () => void) => {
+      if (type === "change") listeners.delete(listener);
+    },
+    dispatchEvent: () => false,
+  }));
+  return {
+    setMatches: (next) => {
+      matches = next;
+    },
+    fireChange: () => {
+      for (const listener of listeners) listener();
+    },
+  };
+}
+
 function queryStatusPing(): HTMLElement | null {
   return document.querySelector<HTMLElement>(".status-ping");
 }
@@ -68,6 +109,54 @@ describe("WorkingDots", () => {
       expect(dot.style.transform).toBe("");
     });
   });
+
+  it("clears every dot's inline opacity and transform when reduced motion turns on mid-run", () => {
+    // Install the listener-recording stub BEFORE the first render: the
+    // module attaches its change listener only once, on the first
+    // subscribe/render after a reset.
+    const stub = stubReducedMotionWithListener(false);
+    render(<WorkingDots className={undefined} testId="working-dots" />);
+    const container = screen.getByTestId("working-dots");
+    const dots = container.querySelectorAll<HTMLSpanElement>(":scope > span");
+
+    act(() => {
+      vi.advanceTimersByTime(80);
+    });
+    dots.forEach((dot) => {
+      expect(dot.style.opacity).not.toBe("");
+    });
+
+    stub.setMatches(true);
+    act(() => {
+      stub.fireChange();
+    });
+
+    dots.forEach((dot) => {
+      expect(dot.style.opacity).toBe("");
+      expect(dot.style.transform).toBe("");
+    });
+  });
+
+  it("holds steady through the first 40ms tick and only changes once the pulse cadence (80ms) elapses", () => {
+    render(<WorkingDots className={undefined} testId="working-dots" />);
+    const container = screen.getByTestId("working-dots");
+    const dots = container.querySelectorAll<HTMLSpanElement>(":scope > span");
+    const initialOpacities = Array.from(dots).map((dot) => dot.style.opacity);
+
+    // WorkingDots subscribes at STATUS_ANIMATION_PULSE_CADENCE_MS (80ms,
+    // every second 40ms tick): the first tick alone must not move it.
+    act(() => {
+      vi.advanceTimersByTime(40);
+    });
+    const afterOneTick = Array.from(dots).map((dot) => dot.style.opacity);
+    expect(afterOneTick).toEqual(initialOpacities);
+
+    act(() => {
+      vi.advanceTimersByTime(40);
+    });
+    const afterPulseCadence = Array.from(dots).map((dot) => dot.style.opacity);
+    expect(afterPulseCadence).not.toEqual(initialOpacities);
+  });
 });
 
 describe("WorkingShimmerText", () => {
@@ -93,6 +182,23 @@ describe("WorkingShimmerText", () => {
     );
     const node = screen.getByText("Pondering");
     expect(node.style.backgroundPosition).toBe("");
+  });
+
+  it("moves the backgroundPosition after a single smooth tick (40ms)", () => {
+    render(
+      <WorkingShimmerText className={undefined}>Pondering</WorkingShimmerText>,
+    );
+    const node = screen.getByText("Pondering");
+    expect(node.style.backgroundPosition).toBe("150% center");
+
+    // WorkingShimmerText subscribes at STATUS_ANIMATION_SMOOTH_CADENCE_MS
+    // (every 40ms tick), so a single tick alone must already move it.
+    act(() => {
+      vi.advanceTimersByTime(40);
+    });
+    const next = node.style.backgroundPosition;
+    expect(next).not.toBe("150% center");
+    expect(parseFloat(next)).toBeLessThan(150);
   });
 });
 
@@ -130,6 +236,35 @@ describe("Shimmer", () => {
     });
     const wrapped = parseFloat(node.style.backgroundPosition);
     expect(wrapped).toBeGreaterThan(late);
+  });
+
+  it("re-reads the ref on each tick, so swapping 'as' keeps ticking the new host element", () => {
+    const { rerender } = render(
+      <Shimmer as="p" duration={1}>
+        Loading
+      </Shimmer>,
+    );
+    act(() => {
+      vi.advanceTimersByTime(80);
+    });
+
+    rerender(
+      <Shimmer as="span" duration={1}>
+        Loading
+      </Shimmer>,
+    );
+    const node = screen.getByText("Loading");
+    expect(node.tagName).toBe("SPAN");
+    // The new host element mounts at the parked rest position, not
+    // wherever the old <p> had swept to.
+    expect(node.style.backgroundPosition).toBe("100% center");
+
+    act(() => {
+      vi.advanceTimersByTime(80);
+    });
+    // The next tick wrote onto the NEW element, proving the clock re-read
+    // `ref.current` instead of holding the stale <p>.
+    expect(parseFloat(node.style.backgroundPosition)).toBeLessThan(100);
   });
 });
 

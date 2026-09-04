@@ -1,8 +1,14 @@
-import { useStatusAnimation } from "@/lib/animation/status-animation-clock";
+import {
+  STATUS_ANIMATION_SMOOTH_CADENCE_MS,
+  useStatusAnimation,
+} from "@/lib/animation/status-animation-clock";
 import { cn } from "@/lib/utils";
 import { memo, useCallback, useRef, type CSSProperties } from "react";
 
 type ShimmerElement = "div" | "p" | "span";
+
+/** Where the highlight band parks: off the right edge, before the first sweep. */
+const SHIMMER_REST_POSITION = "100% center";
 
 type ShimmerStyle = CSSProperties & {
   "--spread": string;
@@ -38,11 +44,17 @@ const ShimmerComponent = (props: TextShimmerProps) => {
     },
     [duration],
   );
-  useStatusAnimation(ref, write);
+  // Back to the parked position the element mounts with (below).
+  const clear = useCallback((element: HTMLElement) => {
+    element.style.backgroundPosition = SHIMMER_REST_POSITION;
+  }, []);
+  useStatusAnimation(ref, write, clear, STATUS_ANIMATION_SMOOTH_CADENCE_MS);
 
   // A callback ref rather than the ref object itself: the tag is a union of
   // intrinsic elements, and a `RefObject<HTMLElement>` is not assignable to
   // any one of their `ref` props while a callback taking `HTMLElement` is.
+  // When `as` swaps the element, the clock's next tick writes the new one -
+  // `useStatusAnimation` re-reads the ref on every tick.
   const attachRef = useCallback((element: HTMLElement | null) => {
     ref.current = element;
   }, []);
@@ -51,7 +63,7 @@ const ShimmerComponent = (props: TextShimmerProps) => {
     "--spread": `${children.length * spread}px`,
     backgroundImage:
       "var(--bg), linear-gradient(var(--shimmer-text-color, var(--color-muted-foreground)), var(--shimmer-text-color, var(--color-muted-foreground)))",
-    backgroundPosition: "100% center",
+    backgroundPosition: SHIMMER_REST_POSITION,
   };
   const Tag = props.as ?? "p";
   return (

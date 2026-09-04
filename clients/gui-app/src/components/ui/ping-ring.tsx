@@ -1,5 +1,8 @@
 import { useCallback, useRef } from "react";
-import { useStatusAnimation } from "@/lib/animation/status-animation-clock";
+import {
+  STATUS_ANIMATION_PULSE_CADENCE_MS,
+  useStatusAnimation,
+} from "@/lib/animation/status-animation-clock";
 import { cn } from "@/lib/utils";
 
 const CYCLE_MS = 1000;
@@ -35,7 +38,11 @@ export function PingRing(props: {
     },
     [peakOpacity],
   );
-  useStatusAnimation(ref, write);
+  const clear = useCallback((element: HTMLSpanElement) => {
+    element.style.transform = "";
+    element.style.opacity = "";
+  }, []);
+  useStatusAnimation(ref, write, clear, STATUS_ANIMATION_PULSE_CADENCE_MS);
   return (
     <span
       ref={ref}

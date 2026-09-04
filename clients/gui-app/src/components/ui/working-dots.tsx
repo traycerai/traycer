@@ -1,5 +1,8 @@
 import { useCallback, useRef } from "react";
-import { useStatusAnimation } from "@/lib/animation/status-animation-clock";
+import {
+  STATUS_ANIMATION_PULSE_CADENCE_MS,
+  useStatusAnimation,
+} from "@/lib/animation/status-animation-clock";
 import { cn } from "@/lib/utils";
 
 const CYCLE_MS = 1400;
@@ -44,7 +47,14 @@ export function WorkingDots(props: {
       dot.style.transform = `translateY(${(-lift).toFixed(3)}px)`;
     }
   }, []);
-  useStatusAnimation(ref, write);
+  const clear = useCallback((element: HTMLSpanElement) => {
+    for (const dot of element.children) {
+      if (!(dot instanceof HTMLElement)) continue;
+      dot.style.opacity = "";
+      dot.style.transform = "";
+    }
+  }, []);
+  useStatusAnimation(ref, write, clear, STATUS_ANIMATION_PULSE_CADENCE_MS);
   return (
     <span
       ref={ref}

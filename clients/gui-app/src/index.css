@@ -24,7 +24,7 @@
    and against this stylesheet that costs a few KB of Blink-heap garbage per
    element per frame - one always-on indicator at 120 Hz measured ~2.5 MB/s
    and ratcheted the renderer to 1.5 GB. `WorkingShimmerText` / `WorkingDots`
-   write the sweep and the bounce as inline styles at 12.5 Hz from
+   write the sweep (25 Hz) and the bounce (12.5 Hz) as inline styles from
    `lib/animation/status-animation-clock.ts` instead. Do not add
    `animation:` back to these rules. */
 

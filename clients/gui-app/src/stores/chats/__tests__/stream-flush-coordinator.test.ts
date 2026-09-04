@@ -232,7 +232,17 @@ describe("stream flush coordinator", () => {
 
     fake.advance(VISIBLE_FLUSH_MIN_INTERVAL_MS - deltaAt - 1);
     expect(store.flushCount()).toBe(1);
+    expect(fake.frameCount()).toBe(0);
+
     fake.advance(1);
+    // The deadline elapsed, but a visible store is never flushed by the
+    // timer itself - it hands off to a frame (see `tick`'s
+    // `source === "deadline" && entry.visible` skip).
+    expect(store.flushCount()).toBe(1);
+    expect(fake.frameCount()).toBe(1);
+    expect(fake.timerCount()).toBe(1);
+
+    fake.fireFrame();
     expect(store.flushCount()).toBe(2);
   });
 
@@ -272,7 +282,135 @@ describe("stream flush coordinator", () => {
 
     fake.advance(VISIBLE_FLUSH_MIN_INTERVAL_MS - 10 - 1);
     expect(store.flushCount()).toBe(1);
+    expect(fake.frameCount()).toBe(0);
+
     fake.advance(1);
+    // The deadline elapsed, but hands off to a frame instead of flushing
+    // the now-visible store directly.
+    expect(store.flushCount()).toBe(1);
+    expect(fake.frameCount()).toBe(1);
+    expect(fake.timerCount()).toBe(1);
+
+    fake.fireFrame();
     expect(store.flushCount()).toBe(2);
+  });
+
+  it("keeps a starved rAF's visible store at the fallback cadence, never flushing directly on a bare timer inside the floor (Codex P1 regression: a minimized visible chat must stay near 2Hz, not 30Hz)", () => {
+    const fake = createFakeTimers();
+    const coordinator = createStreamFlushCoordinator(fake.timers);
+    const store = registerFakeStore(coordinator);
+
+    store.bufferDelta();
+    expect(fake.frameCount()).toBe(1);
+    expect(fake.timerCount()).toBe(1);
+
+    // rAF never fires: the fallback drains the first flush.
+    fake.advance(FRAME_TIMEOUT_FALLBACK_MS);
+    expect(store.flushCount()).toBe(1);
+    expect(fake.frameCount()).toBe(0);
+    expect(fake.timerCount()).toBe(0);
+
+    // A delta inside the floor arms a deadline timer, not a frame.
+    fake.advance(10);
+    store.bufferDelta();
+    expect(fake.frameCount()).toBe(0);
+    expect(fake.timerCount()).toBe(1);
+
+    // The floor elapses: the deadline hands off to a frame instead of
+    // flushing directly - a starved rAF must not turn this into a bare
+    // 32ms-cadence timer flush.
+    fake.advance(VISIBLE_FLUSH_MIN_INTERVAL_MS - 10);
+    expect(store.flushCount()).toBe(1);
+    expect(fake.frameCount()).toBe(1);
+    expect(fake.timerCount()).toBe(1);
+
+    // rAF is still starved: the fallback armed alongside that frame is what
+    // finally drains it, 500ms after the handoff.
+    fake.advance(FRAME_TIMEOUT_FALLBACK_MS);
+    // Exactly two flushes over the whole span - never a direct timer flush
+    // inside the floor.
+    expect(store.flushCount()).toBe(2);
+  });
+
+  it("arms a hidden store's first-flush deadline from its registration time, not from when the first delta arrives", () => {
+    // Scenario 1: registered at t=0. A delta arriving well after registration
+    // must still be due at registeredAt + interval, not at (delta time) +
+    // interval and not immediately.
+    const fakeA = createFakeTimers();
+    const coordinatorA = createStreamFlushCoordinator(fakeA.timers);
+    const storeA = registerFakeStore(coordinatorA);
+    storeA.setVisible(false);
+
+    fakeA.advance(100);
+    storeA.bufferDelta();
+    expect(fakeA.frameCount()).toBe(0);
+    expect(fakeA.timerCount()).toBe(1);
+
+    fakeA.advance(HIDDEN_FLUSH_INTERVAL_MS - 100 - 1);
+    expect(storeA.flushCount()).toBe(0);
+    fakeA.advance(1);
+    // Due at registeredAt (0) + HIDDEN_FLUSH_INTERVAL_MS = 500 - not at the
+    // delta's own arrival (100) and not at delta + interval (600).
+    expect(storeA.flushCount()).toBe(1);
+
+    // Scenario 2: registration itself happens after time has already passed
+    // on the clock. Using `0` instead of `registeredAt` would put the
+    // deadline in the past the instant the delta arrives, flushing far too
+    // early; the fix is due = registeredAt (1000) + interval.
+    const fakeB = createFakeTimers();
+    fakeB.advance(1000);
+    const coordinatorB = createStreamFlushCoordinator(fakeB.timers);
+    const storeB = registerFakeStore(coordinatorB);
+    storeB.setVisible(false);
+
+    fakeB.advance(100);
+    storeB.bufferDelta();
+    expect(fakeB.timerCount()).toBe(1);
+
+    fakeB.advance(HIDDEN_FLUSH_INTERVAL_MS - 100 - 1);
+    expect(storeB.flushCount()).toBe(0);
+    fakeB.advance(1);
+    // Due at registeredAt (1000) + HIDDEN_FLUSH_INTERVAL_MS = 1500, not at
+    // the delta's own arrival (1100).
+    expect(storeB.flushCount()).toBe(1);
+  });
+
+  it("arms a hidden store's own deadline beside an already-armed frame for a different store, replacing a later timer with the earlier one", () => {
+    const fake = createFakeTimers();
+    const coordinator = createStreamFlushCoordinator(fake.timers);
+
+    // B flushes once via a frame at t=0, then goes hidden.
+    const storeB = registerFakeStore(coordinator);
+    storeB.bufferDelta();
+    fake.fireFrame();
+    expect(storeB.flushCount()).toBe(1); // B.lastFlushAt = 0
+    storeB.setVisible(false);
+
+    // A (visible) buffers at t=300: arms a frame plus a fallback due at
+    // 300 + FRAME_TIMEOUT_FALLBACK_MS = 800.
+    const storeA = registerFakeStore(coordinator);
+    fake.advance(300);
+    storeA.bufferDelta();
+    expect(fake.frameCount()).toBe(1);
+    expect(fake.timerCount()).toBe(1);
+
+    // B (hidden) buffers at t=310. B's own deadline - its last flush (0)
+    // plus HIDDEN_FLUSH_INTERVAL_MS = 500 - is earlier than A's armed
+    // fallback (800), so the single shared timer must be replaced with B's
+    // earlier deadline rather than staying parked on A's later one.
+    fake.advance(10);
+    storeB.bufferDelta();
+    expect(fake.frameCount()).toBe(1); // A's frame is untouched
+    expect(fake.timerCount()).toBe(1); // replaced: now due at 500, not 800
+
+    // Advancing to B's deadline (500) without ever firing a frame still
+    // flushes B - proving the shared timer really moved to 500 instead of
+    // staying parked at A's later fallback.
+    fake.advance(500 - 310);
+    expect(storeB.flushCount()).toBe(2);
+    // A is visible: the deadline tick must not flush it directly, only
+    // hand it back off to a (re-armed) frame.
+    expect(storeA.flushCount()).toBe(0);
+    expect(fake.frameCount()).toBe(1);
   });
 });
