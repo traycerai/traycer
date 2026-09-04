@@ -2761,6 +2761,18 @@ describe("<NotificationsSessionProvider />", () => {
     await waitFor(() => expect(markReadCalls).toHaveLength(1));
     markReadCalls.splice(0);
 
+    useAppLocalNotificationsStore.getState().upsert({
+      id: "sibling-local-error",
+      originHostId: mockLocalHostEntry.hostId,
+      updatedAt: 2,
+      readAt: null,
+      kind: "stream.transport.error",
+      sourceRef: "chat-b",
+      payload: { kind: "chat", epicId: "epic-a", chatId: "chat-b" },
+      message: "Sibling local error",
+      detail: null,
+    });
+
     act(() => {
       streamClient.session.emitServerFrame({
         kind: "upserted",
@@ -2781,6 +2793,10 @@ describe("<NotificationsSessionProvider />", () => {
         { kind: "entity", entity: { epicId: "epic-a" } },
       ]);
     });
+    expect(
+      useAppLocalNotificationsStore.getState().byId["sibling-local-error"]
+        .readAt,
+    ).toBeNull();
   });
 
   it("does not consume chat rows for an epic-only presence", async () => {

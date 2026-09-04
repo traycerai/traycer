@@ -285,27 +285,45 @@ export function NotificationsSessionProvider(
     [],
   );
   const consumeEntity = useCallback(
-    (scope: FocusedNotificationScope): void => {
+    (
+      acknowledgementScope: FocusedNotificationScope,
+      presenceEntity: HostNotificationsEntityRef,
+    ): void => {
       // App-local rows are client-side state owned by neither feed, so this
-      // half runs identically in both modes.
+      // half runs identically in both modes. Match them against the focused
+      // presence, which can be narrower than an arriving Task-level row's
+      // acknowledgement target.
       useAppLocalNotificationsStore
         .getState()
-        .markEntityAsRead(scope.originHostId, scope.entity, Date.now());
+        .markEntityAsRead(
+          acknowledgementScope.originHostId,
+          presenceEntity,
+          Date.now(),
+        );
       if (notificationFeedMode === "cloud") {
         // The v1 entity RPC consumes ONE host's SQLite; in cloud mode the
         // rows in view can belong to any host, so consumption has to address
         // the entries themselves.
-        markCloudEntityRead(scope);
+        markCloudEntityRead(acknowledgementScope);
         return;
       }
       // The v1 entity RPC consumes ONE host's SQLite - the serving host's.
       // A tile bound to another host must not acknowledge the same entity
       // there.
-      if (scope.originHostId === null || scope.originHostId === servingHostId) {
-        markEntityRead(scope.entity);
+      if (
+        acknowledgementScope.originHostId === null ||
+        acknowledgementScope.originHostId === servingHostId
+      ) {
+        markEntityRead(acknowledgementScope.entity);
       }
     },
     [servingHostId, markEntityRead, markCloudEntityRead, notificationFeedMode],
+  );
+  const consumeFocusedEntity = useCallback(
+    (scope: FocusedNotificationScope): void => {
+      consumeEntity(scope, scope.entity);
+    },
+    [consumeEntity],
   );
   const onPresenceChanged = useCallback(
     (frame: HostNotificationPresenceFrame, hostId: string): void => {
@@ -322,9 +340,9 @@ export function NotificationsSessionProvider(
       )
         return;
       activeEntityRef.current = nextEntity;
-      if (nextEntity !== null) consumeEntity(nextEntity);
+      if (nextEntity !== null) consumeFocusedEntity(nextEntity);
     },
-    [servingHostId, consumeEntity],
+    [servingHostId, consumeFocusedEntity],
   );
   const onFeedFrame = useCallback(
     (frame: HostNotificationsFeedFrame, hostId: string): void => {
@@ -397,7 +415,7 @@ export function NotificationsSessionProvider(
       )
         return;
       if (!isTerminalSeverity) return;
-      consumeEntity({ originHostId: hostId, entity });
+      consumeEntity({ originHostId: hostId, entity }, activeEntity.entity);
     },
     [
       servingHostId,
@@ -529,10 +547,10 @@ export function NotificationsSessionProvider(
         },
       );
       if (hasUnreadArrivalForActiveEntity) {
-        consumeEntity(activeEntity);
+        consumeFocusedEntity(activeEntity);
       }
     });
-  }, [consumeEntity]);
+  }, [consumeFocusedEntity]);
 
   // TRIGGER 1 (cloud) - presence change.
   //
@@ -559,11 +577,11 @@ export function NotificationsSessionProvider(
       )
         return;
       activeEntityRef.current = nextEntity;
-      if (nextEntity !== null) consumeEntity(nextEntity);
+      if (nextEntity !== null) consumeFocusedEntity(nextEntity);
     };
     evaluate();
     return subscribeHostNotificationPresence(evaluate);
-  }, [notificationFeedMode, consumeEntity]);
+  }, [notificationFeedMode, consumeFocusedEntity]);
 
   // TRIGGER 2 (cloud) - a row arriving for the entity already in view.
   //
@@ -880,7 +898,7 @@ export function NotificationsSessionProvider(
   }, [tearDown]);
 
   return (
-    <NotificationConsumptionContext.Provider value={consumeEntity}>
+    <NotificationConsumptionContext.Provider value={consumeFocusedEntity}>
       {props.children}
     </NotificationConsumptionContext.Provider>
   );
