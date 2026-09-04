@@ -128,6 +128,24 @@ function clientWithPolicy(
   return spine.createRequester(mockLocalHostEntry);
 }
 
+function sectionForHost(
+  client: HostClient<HostRpcRegistry> | null,
+  host: { readonly hostId: string; readonly name: string },
+): ReactNode {
+  return (
+    <WorktreeAutoCleanupSection
+      scope={hostScopeFixture({
+        host: hostScopeOptionFixture(host),
+        client,
+      })}
+      onOpenHistory={() => undefined}
+    />
+  );
+}
+
+const HOST_A = { hostId: "host-a", name: "Host A" };
+const HOST_B = { hostId: "host-b", name: "Host B" };
+
 function renderSection(
   client: HostClient<HostRpcRegistry> | null,
 ): RenderResult {
@@ -139,17 +157,7 @@ function renderSection(
       <TooltipProvider>{props.children}</TooltipProvider>
     </QueryClientProvider>
   );
-  return render(
-    <Wrapper>
-      <WorktreeAutoCleanupSection
-        scope={hostScopeFixture({
-          host: hostScopeOptionFixture({ hostId: "host-a", name: "Host A" }),
-          client,
-        })}
-        onOpenHistory={() => undefined}
-      />
-    </Wrapper>,
-  );
+  return render(sectionForHost(client, HOST_A), { wrapper: Wrapper });
 }
 
 beforeEach(() => {
@@ -295,6 +303,26 @@ describe("WorktreeAutoCleanupSection", () => {
     // Disclosure state is component-local and never persisted, so re-entering
     // Settings - or switching hosts - starts from the summary again.
     renderSection(client);
+    await screen.findByRole("button", { name: "Configure automatic cleanup" });
+    expect(
+      screen.queryByRole("textbox", { name: "Custom inactivity days" }),
+    ).toBeNull();
+  });
+
+  it("starts collapsed again when the scoped host changes in place", async () => {
+    const client = clientWithPolicy({
+      get: () => policyFixture({ enabled: true }),
+      set: (r) => policyFixture(r),
+    });
+    const { rerender } = renderSection(client);
+    await openThresholdEditor();
+
+    // The sidebar can switch straight from one usable host to another, which
+    // keeps the section at the same tree position and only swaps its scope.
+    // An open disclosure must not follow the panel across that switch: the
+    // new host starts from the summary like any first visit.
+    rerender(sectionForHost(client, HOST_B));
+
     await screen.findByRole("button", { name: "Configure automatic cleanup" });
     expect(
       screen.queryByRole("textbox", { name: "Custom inactivity days" }),

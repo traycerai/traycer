@@ -77,8 +77,13 @@ export function WorktreeAutoCleanupSection(props: {
   if (gate !== "ready") {
     return <AutoCleanupNotice gate={gate} hostLabel={scope.hostLabel} />;
   }
+  // Keyed by host: switching the sidebar straight from one usable host to
+  // another keeps this position in the tree, and the disclosure state inside
+  // the controls is per host, not per panel visit. Remounting is what makes
+  // "every host starts collapsed" true rather than merely intended.
   return (
     <AutoCleanupControls
+      key={hostId}
       client={scope.client}
       hostLabel={scope.hostLabel}
       onOpenHistory={onOpenHistory}
