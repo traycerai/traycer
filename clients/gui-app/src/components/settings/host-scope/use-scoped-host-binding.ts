@@ -53,7 +53,7 @@ import type { HostScope } from "@/components/settings/host-scope/use-host-scope"
  * diff panel, the HOST OVERVIEW (`host-settings-panel.tsx`, whose
  * `StreamRuntimeContext.Provider` carries `useScopedStreamBinding`) and the
  * onboarding TOUR are now four more. The Overview joined the list for its
- * Import & migration group: both rows move ONE machine's local data over a
+ * Data & migration group: both rows move ONE machine's local data over a
  * stream, so the stream has to be the named host's. The tour joined it for
  * the same reason one act down — the session scan and the run it starts are
  * that machine's. Both are safe for the same positional reason as the other

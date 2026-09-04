@@ -78,7 +78,7 @@ import { useSessionImportRunStore } from "@/stores/session-import/session-import
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 
 /**
- * Import & migration moved off General and onto the Overview of the host it
+ * Data & migration moved off General and onto the Overview of the host it
  * acts on, because both rows move ONE MACHINE'S local data and General names no
  * machine.
  *
@@ -235,7 +235,7 @@ afterEach(() => {
   scopedStreamMock.current = null;
 });
 
-describe("Host Overview · Import & migration", () => {
+describe("Host Overview · Data & migration", () => {
   it("renders both rows in a group sitting after Installation", () => {
     renderPanel();
 

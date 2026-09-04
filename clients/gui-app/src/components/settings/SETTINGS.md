@@ -2320,7 +2320,7 @@ aria-live="polite"` carrying the equivalent text for
   - **Installation** reads `host.getInstallationInfo`. `unmanaged` is a real
     state, not an error - a host run from a checkout has no install record - and
     it says so rather than claiming nothing is installed.
-  - **Import & migration** (`panels/host-import-migration-section.tsx`), between
+  - **Data & migration** (`panels/host-import-migration-section.tsx`), between
     Installation and the danger zone: **Import your work** (opens the session
     import wizard for the sessions on THIS host's disk) and **Data migration**
     (retry moving this host's local SQLite tasks and epics to cloud). Both came

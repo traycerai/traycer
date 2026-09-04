@@ -57,7 +57,7 @@ export function HostImportMigrationSection(props: {
   if (streamHostId !== props.hostId) return null;
   return (
     <SettingsGroup
-      title="Import & migration"
+      title="Data & migration"
       tone="default"
       dataTestId="host-import-migration"
       fill={false}
