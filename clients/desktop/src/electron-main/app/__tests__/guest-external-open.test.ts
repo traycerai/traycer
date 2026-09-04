@@ -99,6 +99,18 @@ describe("confirmAndLaunchExternalScheme (arbitrary app deep link)", () => {
     ]);
   });
 
+  it("tracks the grant per scheme, not globally - a different scheme re-prompts", async () => {
+    await confirmAndLaunchExternalScheme("zoommtg://join");
+    expect(electronState.messageBoxCalls).toBe(1);
+    // A DIFFERENT scheme is not covered by the first grant: it prompts again.
+    expect(await confirmAndLaunchExternalScheme("slack://open")).toBe(true);
+    expect(electronState.messageBoxCalls).toBe(2);
+    expect(electronState.openExternalCalls).toEqual([
+      "zoommtg://join",
+      "slack://open",
+    ]);
+  });
+
   it("opens nothing on Cancel", async () => {
     electronState.messageBoxResponse = 0;
     expect(await confirmAndLaunchExternalScheme("msteams://chat")).toBe(false);
