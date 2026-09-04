@@ -70,6 +70,7 @@ import {
 import {
   notificationEntitiesMatch,
   notificationEntityFromHostEntry,
+  notificationEntityMatchesPresence,
   notificationPayloadBelongsToEntity,
   type NotificationNavigate,
 } from "@/lib/notifications";
@@ -391,7 +392,7 @@ export function NotificationsSessionProvider(
         activeEntity === null ||
         (activeEntity.originHostId !== null &&
           activeEntity.originHostId !== hostId) ||
-        !notificationEntitiesMatch(activeEntity.entity, entity)
+        !notificationEntityMatchesPresence(entity, activeEntity.entity)
       )
         return;
       if (!isTerminalSeverity) return;

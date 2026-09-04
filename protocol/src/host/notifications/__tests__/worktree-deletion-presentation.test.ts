@@ -47,4 +47,40 @@ describe("worktree deletion host-operation presentation", () => {
       ),
     ).toEqual({ title: payload.title, body: payload.message });
   });
+
+  it("names the Task for a Task-scoped sweep while retaining the operation result", () => {
+    const payload = {
+      kind: "worktree_deletion" as const,
+      operation: "worktree.deletion" as const,
+      title: "Worktree deletion failed",
+      message: "The worktree could not be deleted.",
+      commandId: "2f1d0a2c-0000-4000-8000-000000000001",
+      source: "task_sweep",
+      epicId: "epic-1",
+      taskTitle: "Notification cleanup",
+      requestedCount: 1,
+      deletedCount: 0,
+      failedCount: 1,
+    };
+
+    expect(
+      formatHostNotificationPresentation(
+        hostNotificationEntrySchemaV21.parse({
+          id: "worktree.deletion:2f1d0a2c-0000-4000-8000-000000000001",
+          updatedAt: 1_700_000_000_000,
+          readAt: null,
+          sourceRef: payload.commandId,
+          severity: "failure",
+          epicId: payload.epicId,
+          chatId: null,
+          kind: "host.operation.finished",
+          outcome: "errored",
+          payload,
+        }),
+      ),
+    ).toEqual({
+      title: "Notification cleanup",
+      body: "Worktree deletion failed • The worktree could not be deleted.",
+    });
+  });
 });

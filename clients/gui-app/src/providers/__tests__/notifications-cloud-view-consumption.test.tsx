@@ -491,6 +491,36 @@ describe("cloud-mode view consumption", () => {
     expect(readAtFor("entry-chat")).toBeNull();
   });
 
+  it("marks a Task-level row read when a child chat is visited, without reading a sibling chat", async () => {
+    // Model activation of an existing Task tab whose selected tile is already
+    // a child chat. There is no intermediate Task-only presence in that path.
+    focusChat(EPIC_ID, CHAT_ID, OTHER_HOST_ID);
+    renderProvider();
+    applyCloudSnapshot(
+      [
+        cloudRow({
+          entryId: "entry-task",
+          originHostId: OTHER_HOST_ID,
+          severity: "failure",
+          chatId: null,
+        }),
+        cloudRow({
+          entryId: "entry-sibling",
+          originHostId: OTHER_HOST_ID,
+          severity: "done",
+          chatId: SIBLING_CHAT_ID,
+        }),
+      ],
+      1,
+    );
+
+    await waitFor(() => {
+      expect(calls.cloudMarkRead).toEqual(["entry-task"]);
+    });
+    expect(readAtFor("entry-task")).not.toBeNull();
+    expect(readAtFor("entry-sibling")).toBeNull();
+  });
+
   it("consumes a row that arrives while the chat is already in view", async () => {
     applyCloudSnapshot([], 1);
     renderProvider();
