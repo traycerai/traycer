@@ -332,7 +332,10 @@ function DioramaScene(props: {
           <OnboardingHostPickerBar
             picker={hostPicker}
             trafficLights
-            className="z-30"
+            // Above the modal's own full-window container (`z-30`), which is
+            // a later sibling and would otherwise paint over this bar and
+            // take its clicks.
+            className="z-40"
           />
         ) : (
           <MiniAppHeader activeIndex={activeTaskIndex} className="" />

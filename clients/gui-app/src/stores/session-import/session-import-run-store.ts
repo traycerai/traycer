@@ -130,11 +130,6 @@ export function sessionImportRunFor(
   return state.runs.get(hostId) ?? SESSION_IMPORT_RUN_IDLE;
 }
 
-export interface SessionImportRunEntry {
-  readonly hostId: string;
-  readonly run: SessionImportRunState;
-}
-
 /** Sessions the run has reported on, however they turned out. */
 export function sessionImportDoneCount(state: SessionImportRunState): number {
   return state.outcomes.size;
@@ -191,30 +186,13 @@ function foldRun(
   };
 }
 
-/**
- * Same fold, but for the two frames that BEGIN a run: the host's key is
- * re-inserted so it lands last and start order stays the map's order.
- */
-function beginRun(
-  hostId: string,
-  fold: (prev: SessionImportRunState) => SessionImportRunState,
-): (state: SessionImportRunsState) => SessionImportRunsState {
-  return (state) => {
-    const prev = state.runs.get(hostId) ?? SESSION_IMPORT_RUN_IDLE;
-    const runs = new Map(state.runs);
-    runs.delete(hostId);
-    runs.set(hostId, fold(prev));
-    return { runs };
-  };
-}
-
 export const useSessionImportRunStore = create<
   SessionImportRunsState & SessionImportRunActions
 >((set) => ({
   runs: new Map(),
   markStarting: (hostId, titles) =>
     set(
-      beginRun(hostId, () => ({
+      foldRun(hostId, () => ({
         ...SESSION_IMPORT_RUN_IDLE,
         status: "starting",
         titles,
@@ -243,7 +221,7 @@ export const useSessionImportRunStore = create<
       // are about other sessions. Only here does `attached` decide ownership -
       // the host put us on a run already in flight, so our selections were
       // never started and the titles we captured caption nothing in it.
-      return beginRun(hostId, () => ({
+      return foldRun(hostId, () => ({
         ...SESSION_IMPORT_RUN_IDLE,
         status: "running",
         runId,

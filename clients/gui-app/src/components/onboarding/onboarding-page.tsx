@@ -1009,6 +1009,9 @@ function useOnboardingHostPicker(input: {
       // Naming the host already being read changes nothing to carry over; it
       // only pins the tour to it.
       if (hostId === scopedHostId || hostId === scope.hostId) {
+        // Latest pick wins here too: a destination an earlier pick recorded
+        // must not land after the user came back to this host.
+        pendingHostPickRef.current = null;
         setScopedHostId(hostId);
         return;
       }
@@ -1251,6 +1254,13 @@ function OnboardingTour(props: {
 
   const saveAgentGuideDraft = useCallback(async (): Promise<boolean> => {
     if (agentGuideSaving) return false;
+    // A picked host that cannot be reached has nothing to save to. The
+    // providers above fall back to the ambient binding in that state, so a
+    // write here would land the picked host's draft on the ambient host's
+    // guide. Report success so Skip and Finish can still leave the tour.
+    if (scopedHostId !== null && !isHostScopeUsable(scope.status)) {
+      return true;
+    }
     // The guide is optional. When it has not loaded, or still reflects an
     // in-flight generated default with no saved content yet, there is no
     // stable draft to persist. Report success so Skip/Escape and the final
@@ -1286,6 +1296,8 @@ function OnboardingTour(props: {
     agentGuideQueryData,
     agentGuideSaving,
     agentGuideWaitingForProviderSettlement,
+    scope.status,
+    scopedHostId,
     setAgentGuideGlobal,
   ]);
 
