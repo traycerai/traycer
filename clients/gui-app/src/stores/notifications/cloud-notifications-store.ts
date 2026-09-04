@@ -111,10 +111,10 @@ export interface CloudEntityReadRetry {
  *   acknowledges its notification rows without resolving the underlying
  *   approval or interview workflow.
  * - `read_at IS NULL` - set-once markers never re-fire.
- * - entity clause: a chat visit matches `chat_id = ?`; an epic visit matches
- *   `epic_id = ? AND chat_id IS NULL`, i.e. epic-level rows ONLY. This is
- *   deliberately NARROWER than the indicator rollup, which does aggregate an
- *   epic's chats - visiting an epic must not mark its chats' rows read.
+ * - entity clause: a chat visit matches that chat plus its Task-level rows;
+ *   an epic visit matches `epic_id = ? AND chat_id IS NULL`, i.e. epic-level
+ *   rows ONLY. A focused child is inside its Task and therefore covers the
+ *   Task row, while visiting a Task must not mark sibling chats read.
  *
  * Visibility needs no clause here: a cloud snapshot is already the visible set.
  * Entries already accepted, in flight, or waiting out a backoff are excluded -
@@ -146,9 +146,8 @@ export function selectCloudEntityReadTargets(
     if (state.entityReadSucceeded.has(row.entryId)) continue;
     if (Object.hasOwn(state.entityReadRetries, row.entryId)) continue;
     const matchesEntity =
-      entity.chatId === undefined
-        ? entry.epicId === entity.epicId && entry.chatId === null
-        : entry.chatId === entity.chatId;
+      entry.epicId === entity.epicId &&
+      (entry.chatId === null || entry.chatId === entity.chatId);
     if (!matchesEntity) continue;
     targets.push(row.entryId);
   }

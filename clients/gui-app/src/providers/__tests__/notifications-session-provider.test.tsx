@@ -2748,6 +2748,57 @@ describe("<NotificationsSessionProvider />", () => {
     expect(markReadCalls).toEqual([]);
   });
 
+  it("consumes a Task-level completion while a child chat stays focused", async () => {
+    const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(false);
+    const { markReadCalls, streamClient } =
+      await renderHostNotificationsProvider();
+
+    act(() => {
+      setFocusedChat("epic-a", "chat-a");
+      hasFocus.mockReturnValue(true);
+      sendPresence();
+    });
+    await waitFor(() => expect(markReadCalls).toHaveLength(1));
+    markReadCalls.splice(0);
+
+    useAppLocalNotificationsStore.getState().upsert({
+      id: "sibling-local-error",
+      originHostId: mockLocalHostEntry.hostId,
+      updatedAt: 2,
+      readAt: null,
+      kind: "stream.transport.error",
+      sourceRef: "chat-b",
+      payload: { kind: "chat", epicId: "epic-a", chatId: "chat-b" },
+      message: "Sibling local error",
+      detail: null,
+    });
+
+    act(() => {
+      streamClient.session.emitServerFrame({
+        kind: "upserted",
+        hasBinaryPayload: false,
+        entry: hostEntry({
+          id: "task-sweep-failed",
+          epicId: "epic-a",
+          chatId: null,
+          severity: "failure",
+        }),
+        removedIds: [],
+        summary: { unreadCount: 1, attentionCount: 1 },
+      });
+    });
+
+    await waitFor(() => {
+      expect(markReadCalls).toEqual([
+        { kind: "entity", entity: { epicId: "epic-a" } },
+      ]);
+    });
+    expect(
+      useAppLocalNotificationsStore.getState().byId["sibling-local-error"]
+        .readAt,
+    ).toBeNull();
+  });
+
   it("does not consume chat rows for an epic-only presence", async () => {
     const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(false);
     const { markReadCalls, streamClient } =

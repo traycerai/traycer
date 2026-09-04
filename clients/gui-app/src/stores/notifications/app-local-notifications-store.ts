@@ -7,6 +7,7 @@ import type { NotificationPayload } from "@/lib/notifications";
 import {
   notificationEntitiesMatch,
   notificationEntityFromPayload,
+  notificationEntityMatchesPresence,
   notificationPayloadBelongsToEntity,
   parseNotificationPayload,
 } from "@/lib/notifications";
@@ -553,13 +554,18 @@ export function createAppLocalNotificationsStore(initialName: string) {
         markEntityAsRead: (originHostId, entity, readAt) => {
           if (get().activeUserId === null) return;
           set((state) => {
-            const unreadEntries = Object.values(state.byId).filter(
-              (entry) =>
+            const unreadEntries = Object.values(state.byId).filter((entry) => {
+              const notificationEntity = notificationEntityFromPayload(
+                entry.payload,
+              );
+              return (
                 entry.readAt === null &&
                 (originHostId === null ||
                   (entry.originHostId ?? null) === originHostId) &&
-                notificationPayloadBelongsToEntity(entry.payload, entity),
-            );
+                notificationEntity !== null &&
+                notificationEntityMatchesPresence(notificationEntity, entity)
+              );
+            });
             if (unreadEntries.length === 0) return state;
             const byId = {
               ...state.byId,

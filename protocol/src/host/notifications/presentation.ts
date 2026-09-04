@@ -102,7 +102,7 @@ function browserHumanNeededReason(
  * per-FIELD fallback chain rather than a first-match-wins branch:
  *
  *  1. a KNOWN operation payload's own copy, when that arm supplies any
- *     (`hostOperationKnownCopy` - no arm supplies copy yet);
+ *     (`hostOperationKnownCopy`);
  *  2. the common `operation`/`title`/`message` convention read leniently off
  *     the open record, so an operation newer than this build still shows
  *     host-composed copy;
@@ -142,12 +142,10 @@ function hostOperationFinishedPresentation(
  * Per-operation copy for a payload arm this build fully understands, or
  * `null` to inherit the common-field/generic copy below it.
  *
- * Exhaustive over the known payload union so the first operation arm gets a
- * compile-visible slot here. Every arm that exists today is chat-scoped and
- * belongs to a different notification kind, so none of them may supply copy
- * for a host-wide row: their titles come from `taskTitle`/`chatTitle` fields
- * a host-wide operation payload does not have, and letting them answer would
- * render "Task" over the host's own composed title.
+ * Exhaustive over the known payload union so every operation arm gets a
+ * compile-visible slot here. A Task-scoped operation may replace the title
+ * with its Task name, but must retain the host-composed operation result in
+ * the body. Host-wide rows inherit the common payload copy unchanged.
  */
 export function hostOperationKnownCopy(
   payload: HostNotificationKnownPayload,
@@ -163,14 +161,20 @@ export function hostOperationKnownCopy(
     // from the payload arm: `reason` is the body's context, never a title.
     case "browser_human_needed":
       return null;
-    // Worktree deletion supplies no copy of its own on purpose: the host
-    // already composed `title`/`message` into the payload's common fields, and
-    // that exact wording is what reached email and notification hooks at mint
-    // time. Re-deriving it here would make the in-app row and the email
-    // disagree about the same command for no gain - the arm's value is the
-    // structured counts and the navigation target, not the prose.
-    case "worktree_deletion":
-      return null;
+    case "worktree_deletion": {
+      const taskTitle = nonEmptyTitle(payload.taskTitle ?? null);
+      if (
+        payload.source !== "task_sweep" ||
+        payload.epicId === undefined ||
+        taskTitle === null
+      ) {
+        return null;
+      }
+      return {
+        title: taskTitle,
+        body: `${payload.title} • ${payload.message}`,
+      };
+    }
   }
 }
 
@@ -233,6 +237,7 @@ function knownTaskTitle(payload: HostNotificationKnownPayload): string | null {
     case "workspace_operation_failed":
       return payload.taskTitle;
     case "worktree_deletion":
+      return payload.taskTitle ?? null;
     case "browser_human_needed":
       return null;
   }
