@@ -506,6 +506,40 @@ describe("useMergedNotificationsActions markAllAsRead composition", () => {
     });
   });
 
+  it("withholds the host mark-read in cloud mode too once the verdict is withdrawn: the RPC has no home selector", async () => {
+    bindHostClient();
+    notificationFeedMode.value = "cloud";
+    applyHostSnapshot([hostPrompt("prompt-a", 200, null)], {
+      unreadCount: 1,
+      attentionCount: 1,
+    });
+    const { result } = renderHook(() => useMergedNotificationsActions(), {
+      wrapper: createWrapper(),
+    });
+
+    demoteToUnverified();
+    act(() => {
+      result.current.markAsRead("host:prompt-a");
+    });
+    expect(
+      hostRequestMock.mock.calls.some(
+        (call) => call[0] === "host.notifications.markRead",
+      ),
+    ).toBe(false);
+
+    signInForActions();
+    act(() => {
+      result.current.markAsRead("host:prompt-a");
+    });
+    await waitFor(() => {
+      expect(
+        hostRequestMock.mock.calls.some(
+          (call) => call[0] === "host.notifications.markRead",
+        ),
+      ).toBe(true);
+    });
+  });
+
   it("holds mark-all and pagination while a held cloud mode's host is re-negotiating, then dispatches", async () => {
     bindHostClient();
     notificationFeedMode.value = "cloud";

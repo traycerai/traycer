@@ -728,19 +728,23 @@ function cloudAuthorizedNow(): boolean {
 /**
  * Whether a host-plane write may go out now.
  *
- * A PARTITIONED call carries `home: "local"` (cloud mode's `markRead` and
- * `markAllRead`) and touches local-home rows only, which need no cloud
- * verdict. A WHOLE-ORIGIN call - every host mutation in `local` mode, where
- * the host is below the partition floors and its feed carries cloud-home
- * replicas beside the local rows, and `clearAll@1.0` in either mode, which
- * has no selector - reaches those replicas. A session whose verdict was
- * withdrawn (`unverified`) is still admitted to the host lane, so without
- * this gate a marker it set there became a cloud write deferred past the
- * authorization that withheld it, once the origin replicated. Same rule as
- * the Notifications-room lanes, same dispatch-time read.
+ * Every host write that takes this gate is WHOLE-ORIGIN: it reaches the
+ * cloud-home replicas the host's origin store holds beside its local rows.
+ * That is `markRead` (its request is `{ kind: "ids" | "entity" }` with no
+ * `home` selector at any negotiated version, in every mode), `clearAll@1.0`
+ * (no selector either), and `markAllRead` in `local` mode, where the host is
+ * below the partition floors. A session whose verdict was withdrawn
+ * (`unverified`) is still admitted to the host lane, so without this gate a
+ * marker it set there became a cloud write deferred past the authorization
+ * that withheld it, once the origin replicated. Same rule as the
+ * Notifications-room lanes, same dispatch-time read.
+ *
+ * Exactly ONE host write is exempt and does not call this: `markAllRead` in
+ * `cloud` mode, whose request carries `home: "local"` (`@1.1`) and touches
+ * local-home rows only - rows that need no cloud verdict.
  */
-function hostOriginWriteAuthorized(partitioned: boolean): boolean {
-  return partitioned || cloudAuthorizedNow();
+function hostOriginWriteAuthorized(): boolean {
+  return cloudAuthorizedNow();
 }
 
 export function useMergedNotificationsActions(): MergedNotificationsActions {
@@ -1207,9 +1211,10 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
           // unbound mutation whose only visible effect is an error toast on a
           // row that was never going to update.
           if (client === null || notificationHostId === null) return;
-          // Partitioned only in cloud mode (`home: "local"` above); in local
-          // mode this reaches the host's whole origin store.
-          if (!hostOriginWriteAuthorized(feedMode === "cloud")) return;
+          // Whole-origin in EVERY mode: `markRead` has no `home` selector, and
+          // a retained `host:` row in cloud mode can name an epic that is
+          // cloud-homed by the time the click lands.
+          if (!hostOriginWriteAuthorized()) return;
           markHostRead.mutate({
             feedId,
             sourceId: parsed.sourceId,
@@ -1323,7 +1328,7 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
         if (
           client !== null &&
           notificationHostId !== null &&
-          hostOriginWriteAuthorized(false)
+          hostOriginWriteAuthorized()
         ) {
           markHostAllRead.mutate({ beforeUpdatedAt: Date.now() });
         }
@@ -1404,7 +1409,7 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
         if (
           client !== null &&
           notificationHostId !== null &&
-          hostOriginWriteAuthorized(false)
+          hostOriginWriteAuthorized()
         ) {
           clearHostAll.mutate({ beforeUpdatedAt: Date.now() });
         }

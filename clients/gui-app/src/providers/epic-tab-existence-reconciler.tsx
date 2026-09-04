@@ -37,6 +37,7 @@ import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readine
 import { registerCloudEpicTasksClient } from "@/lib/cloud-epic-tasks-query";
 import { epicTabLocalHomeListQueryOptions } from "@/lib/cloud-epic-tasks-query/reconciler-local-home-query";
 import { wasEpicCreatedThisSession } from "@/lib/epics/session-created-epics";
+import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
 import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
 import { useWindowsBridgeHydrated } from "@/providers/windows-bridge-context";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -207,6 +208,12 @@ function EpicTabExistenceProbe(props: { readonly run: ReconcileSeed }) {
     client,
     requests,
     cacheKeyIdentity: props.run.identity,
+    // The verified-session gate above is render-time; a batch created under
+    // it can still have a retry in flight when the session is demoted, and
+    // the retained credential would carry that retry to the cloud `absent`
+    // arm this reconciler acts on destructively. Same dispatch-time verdict
+    // read as the other `epic.getTaskContexts` readers.
+    preflight: cloudVerdictPreflight(RECONCILE_METHOD),
     options: { enabled: true, staleTime: EXISTENCE_STALE_TIME_MS },
     combine: combineConfirmedAbsentEpicIds,
   });

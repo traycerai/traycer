@@ -2169,6 +2169,86 @@ describe("<EpicSessionProvider />", () => {
     expect(__getOpenEpicRegistryForTests().size()).toBe(1);
   });
 
+  it("clears a cached local home when a pre-1.6 peer omits the durability key, and keeps it when a 1.6 peer does", async () => {
+    // Through `epic.subscribe@1.5` the durability enum has no `cloud`
+    // member: a host that just finished promoting an epic reports the new
+    // home by OMITTING the key. Reading that omission as silence left the
+    // History row `home: "local"` (Pin withheld) until a manual refresh. A
+    // `@1.6` peer says `cloud` positively, so ITS omission is unknown and
+    // must not touch the cache - the two arms below pin both halves.
+    const queryClient = new QueryClient();
+    const cloudTasksUserId = "cloud-user-1";
+    useAuthStore.setState({
+      contextMetadata: { userId: cloudTasksUserId, username: "alice" },
+    });
+    const queryKey = cloudEpicTasksQueryKey(
+      "host-a",
+      cloudTasksUserId,
+      LIST_CLOUD_TASKS_REQUEST,
+    );
+    queryClient.setQueryData<ListTasksResponse>(queryKey, {
+      tasks: [
+        {
+          ...makeHistoryTask(
+            "epic-session-test",
+            "Local epic",
+            cloudTasksUserId,
+          ),
+          home: "local",
+        },
+      ],
+      hasMore: false,
+    });
+    const cachedHome = (): "local" | "cloud" | undefined =>
+      queryClient.getQueryData<ListTasksResponse>(queryKey)?.tasks[0]?.home;
+    const seenHandles: OpenEpicStoreHandle[] = [];
+    installStreamFactory(() => ({
+      applyUpdate: () => undefined,
+      awareness: () => undefined,
+      applyArtifactRoomUpdate: () => undefined,
+      artifactRoomAwareness: () => undefined,
+      retryMigration: () => undefined,
+      close: () => undefined,
+    }));
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <EpicSessionProvider
+          epicId="epic-session-test"
+          tabId="epic-session-test"
+        >
+          <HandleProbe
+            onHandle={(handle) => {
+              seenHandles.push(handle);
+            }}
+          />
+        </EpicSessionProvider>
+      </QueryClientProvider>,
+    );
+    await waitFor(() => {
+      expect(seenHandles).toHaveLength(1);
+    });
+    const store = seenHandles[0].store;
+
+    // A `@1.6` peer's omission is unknown: the cached local home survives.
+    act(() => {
+      store.setState({
+        hasFreshCloudSyncStatus: true,
+        durabilityStatusNegotiated: true,
+        durabilityLegsNegotiated: true,
+        durabilityStatus: null,
+      });
+    });
+    expect(cachedHome()).toBe("local");
+
+    // A `@1.4`/`@1.5` peer's omission is the cloud answer: the key is
+    // dropped, which is the shape a normal cloud-backed row carries.
+    act(() => {
+      store.setState({ durabilityLegsNegotiated: false });
+    });
+    expect(cachedHome()).toBeUndefined();
+  });
+
   it("patches cached history titles when a generated epic title lands", async () => {
     const queryClient = new QueryClient();
     const sessionUserId = "alice@example.com";

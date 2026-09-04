@@ -1722,7 +1722,21 @@ function useEpicHomeCacheSync(args: EpicSessionCacheSyncArgs): void {
       // relay.
       if (!state.hasFreshCloudSyncStatus) return;
       const status = state.durabilityStatus ?? null;
-      if (status === null || status === "unknown") return;
+      // A fresh frame WITHOUT the datum from a peer that negotiated `@1.4`
+      // or `@1.5` is the cloud answer, not silence: through `@1.5` the enum
+      // has no `cloud` member, so an epic that just finished promotion
+      // against such a host reports its new home by omitting the key - and
+      // returning here left the History row `home: "local"` (Pin withheld)
+      // until a manual refresh. A `@1.6` peer (`durabilityLegsNegotiated`)
+      // says `cloud` positively; its omission means unknown and stays out.
+      // Same version-aware rule as `useEpicCommentRoomAvailability`.
+      const omittedByPre16Peer =
+        status === null &&
+        state.durabilityStatusNegotiated &&
+        !state.durabilityLegsNegotiated;
+      if (status === "unknown" || (status === null && !omittedByPre16Peer)) {
+        return;
+      }
       // `paused` says nothing about home. An unpromoted epic whose promotion
       // was blocked (entitlement, access) goes `promoting` -> `paused` and is
       // still local-homed; a cloud-homed epic paused over orphaned local
