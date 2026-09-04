@@ -3,7 +3,8 @@ import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import {
   cleanup,
   fireEvent,
-  render,
+  render as renderUi,
+  type RenderResult,
   screen,
   waitFor,
 } from "@testing-library/react";
@@ -34,6 +35,16 @@ import {
   recordNegotiatedHostManifest,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import type { ReactNode } from "react";
+import { WithTestQueryClient } from "@/__tests__/with-test-query-client";
+
+/**
+ * Every link surface below reaches the external-link bridge mutation, which
+ * needs a `QueryClientProvider` above it.
+ */
+function render(ui: ReactNode): RenderResult {
+  return renderUi(ui, { wrapper: WithTestQueryClient });
+}
 
 type Disposable = {
   readonly dispose: () => void;

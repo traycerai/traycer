@@ -1,4 +1,4 @@
-import { useCallback, useMemo, type ReactNode } from "react";
+import { useCallback, useMemo, type MouseEvent, type ReactNode } from "react";
 import { FileDiff } from "lucide-react";
 import type {
   PrChangedFile,
@@ -6,9 +6,9 @@ import type {
   PrFilesSection,
 } from "@traycer/protocol/host/pr-schemas";
 import { Button } from "@/components/ui/button";
-import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
+import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
+import { modifiersFromMouseEvent } from "@/lib/canvas/tile-open/intent";
 import { makePrDiffTile } from "@/lib/pr/pr-diff-tile";
-import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { PrDetailFilesChanged } from "@/components/epic-canvas/pr/pr-detail-sections";
 import { PrExternalGitHubLink } from "@/components/epic-canvas/pr/pr-external-github-link";
 
@@ -31,7 +31,6 @@ import { PrExternalGitHubLink } from "@/components/epic-canvas/pr/pr-external-gi
 export function PrDetailFilesTab(props: {
   readonly core: PrDetailCore;
   readonly files: PrFilesSection;
-  readonly epicId: string;
   readonly viewTabId: string;
   readonly hostId: string;
   /** `null` when no chat is selected to send to, which disables the row action. */
@@ -47,7 +46,6 @@ export function PrDetailFilesTab(props: {
       headerAction={
         <PrOpenDiffButton
           core={props.core}
-          epicId={props.epicId}
           viewTabId={props.viewTabId}
           hostId={props.hostId}
         />
@@ -74,14 +72,10 @@ export function PrDetailFilesTab(props: {
  */
 function PrOpenDiffButton(props: {
   readonly core: PrDetailCore;
-  readonly epicId: string;
   readonly viewTabId: string;
   readonly hostId: string;
 }): ReactNode {
-  const navigateNested = useEpicNestedFocusNavigation();
-  const prepareOpenTileInTabFocusTarget = useEpicCanvasStore(
-    (state) => state.prepareOpenTileInTabFocusTarget,
-  );
+  const { openTile } = useEpicTileNavigation();
   const { core, hostId } = props;
   const tile = useMemo(
     () =>
@@ -95,18 +89,21 @@ function PrOpenDiffButton(props: {
     [core.base, core.githubHost, hostId],
   );
 
-  const { epicId, viewTabId } = props;
-  const openDiff = useCallback((): void => {
-    navigateNested(epicId, viewTabId, () =>
-      prepareOpenTileInTabFocusTarget(viewTabId, tile),
-    );
-  }, [
-    epicId,
-    navigateNested,
-    prepareOpenTileInTabFocusTarget,
-    tile,
-    viewTabId,
-  ]);
+  const { viewTabId } = props;
+  const openDiff = useCallback(
+    (event: MouseEvent<HTMLButtonElement>): void => {
+      openTile({
+        node: tile,
+        target: { tabId: viewTabId },
+        gesture: "explicit",
+        modifiers: modifiersFromMouseEvent(event),
+        placement: null,
+        dedupe: true,
+        source: "direct_ui",
+      });
+    },
+    [openTile, tile, viewTabId],
+  );
 
   return (
     <Button

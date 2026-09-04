@@ -15,7 +15,7 @@
  * relocation - the stream-factory override did not, because a factory built on
  * MAIN cannot cross `postMessage` to a runtime that lives in the worker.
  *
- * One helper, three users, no third wiring. The rule
+ * One bridge harness, two explicit composition modes, no second wiring. The rule
  * `open-store-for-test.ts`'s header states - "a second wiring is a second
  * harness to keep honest, and the two would drift in exactly the places that
  * matter" - is why this file exists rather than a copy in the provider suite.
@@ -24,8 +24,14 @@ import { createFakeBridgePair } from "@traycer-clients/shared/replica-runtime/wo
 import type { FakeBridgeDelivery } from "@traycer-clients/shared/replica-runtime/worker/test-support/fake-bridge-pair";
 import { createFakeWorkerTarget } from "@traycer-clients/shared/replica-runtime/worker/test-support/fake-worker-target";
 import type { RuntimeWorkerLike } from "../runtime/worker/spawn-epic-runtime-worker";
-import { startEpicRuntimeWorkerHost } from "../runtime/worker/epic-runtime-worker-host";
-import { installEpicRuntimeCore } from "../runtime/worker/install-epic-runtime-core";
+import {
+  startEpicRuntimeWorkerHost,
+  type EpicRuntimeWorkerHost,
+} from "../runtime/worker/epic-runtime-worker-host";
+import {
+  buildProxiedRuntimeFactories,
+  installEpicRuntimeCore,
+} from "../runtime/worker/install-epic-runtime-core";
 import type { EpicRuntimeStreamFactories } from "../runtime/worker/epic-runtime-composition";
 import type { EpicReplicaRuntime } from "../runtime/epic-replica-runtime";
 
@@ -68,17 +74,36 @@ export interface InProcessEpicRuntimeWorker {
 export function createInProcessEpicRuntimeWorker(
   factories: EpicRuntimeStreamFactories,
 ): InProcessEpicRuntimeWorker {
+  return createInProcessWorker(() => factories);
+}
+
+/**
+ * The same in-process bridge, with the production worker's factory builder.
+ *
+ * Provider tests use this entry point when their claim begins at negotiated
+ * method support: the main-side spawner emits `stream/manifest`,
+ * {@link buildProxiedRuntimeFactories} reads that replicated manifest, and the
+ * runtime selects its arm from the resulting live support source. Supplying a
+ * pre-composed `laneSelection` here would bypass the very bootstrap path those
+ * tests exist to cover.
+ */
+export function createProxiedInProcessEpicRuntimeWorker(): InProcessEpicRuntimeWorker {
+  return createInProcessWorker(buildProxiedRuntimeFactories);
+}
+
+function createInProcessWorker(
+  buildFactories: (host: EpicRuntimeWorkerHost) => EpicRuntimeStreamFactories,
+): InProcessEpicRuntimeWorker {
   // ALWAYS `"sync"` here: composition happens inside the caller's
   // `spawnEpicRuntimeWorker`, over this pipe, so a pair queued from birth
   // cannot construct a runtime at all. A suite that needs queued delivery gets
   // it by flipping AFTER composition - see `setDelivery`.
   const pair = createFakeBridgePair("sync");
-  // The worker side, in this thread: the real host, given the caller's
-  // factories in place of the proxy-built ones. That injection is the seam
-  // `epic-runtime-composition.ts` documents - production passes the
-  // proxy-built factories, a caller supplying its own stream passes those.
+  // The worker side, in this thread: the real host, given either production's
+  // proxy builder or the caller's explicit factories through the one seam
+  // `epic-runtime-composition.ts` documents.
   const host = startEpicRuntimeWorkerHost(pair.worker);
-  const composed = installEpicRuntimeCore(host, () => factories);
+  const composed = installEpicRuntimeCore(host, buildFactories);
   return {
     createWorker: () => ({
       ...createFakeWorkerTarget(pair),

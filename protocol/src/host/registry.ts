@@ -303,11 +303,17 @@ import {
   diagnosticsLogsTailV10,
 } from "@traycer/protocol/host/diagnostics/contracts";
 import {
+  managedCommandConfigureV10,
   managedCommandDeleteV10,
   managedCommandDeliverHeldV10,
+  managedCommandStartUpgradeV10ToV11,
   managedCommandStartV10,
+  managedCommandStartV11,
+  managedCommandStopUpgradeV10ToV11,
   managedCommandStopV10,
+  managedCommandStopV11,
   managedCommandSubscribeOutputV10,
+  managedCommandSubscribeOutputV11,
 } from "@traycer/protocol/host/managed-command/contracts";
 import { hostGetRuntimeCapabilitiesV10 } from "@traycer/protocol/host/runtime-capabilities/contracts";
 import { chatForkGetV10 } from "@traycer/protocol/host/chat-fork/contracts";
@@ -460,8 +466,14 @@ import {
   workspaceSearchTextV10,
 } from "@traycer/protocol/host/workspace/contracts";
 import { workspaceSubscribeFileListV10 } from "@traycer/protocol/host/workspace/subscribe";
-import { workspaceStreamAssetV10 } from "@traycer/protocol/host/workspace/asset-stream";
-import { gitStreamFileAssetV10 } from "@traycer/protocol/host/git-asset-stream";
+import {
+  workspaceStreamAssetV10,
+  workspaceStreamAssetV11,
+} from "@traycer/protocol/host/workspace/asset-stream";
+import {
+  gitStreamFileAssetV10,
+  gitStreamFileAssetV11,
+} from "@traycer/protocol/host/git-asset-stream";
 import {
   terminalCreateDowngradeV21ToV10,
   terminalCreateV10,
@@ -567,6 +579,7 @@ import {
   resourcesSubscribeV12,
   resourcesSubscribeV13,
   resourcesSubscribeV14,
+  resourcesSubscribeV15,
   resourcesKillV10,
   resourcesListLocalServersV10,
 } from "@traycer/protocol/host/resources/subscribe";
@@ -582,7 +595,10 @@ import {
 import { sessionImportScanV10 } from "@traycer/protocol/host/session-import/scan";
 import { sessionImportRunV10 } from "@traycer/protocol/host/session-import/run";
 import { sessionImportStatusV10 } from "@traycer/protocol/host/session-import/contracts";
-import { worktreeDeleteBatchByPathStreamV10 } from "@traycer/protocol/host/worktree-delete-batch-stream";
+import {
+  worktreeDeleteBatchByPathStreamV10,
+  worktreeDeleteBatchByPathStreamV11,
+} from "@traycer/protocol/host/worktree-delete-batch-stream";
 import {
   worktreeDeleteByPathStreamV10,
   worktreeDeleteByPathStreamV11,
@@ -599,7 +615,11 @@ import {
   hostChatRecordsSubscribeV11,
   hostChatRecordsSubscribeV12,
 } from "@traycer/protocol/host/epic/chat-records";
-import { editorOpenPathsV10 } from "@traycer/protocol/host/editor/contracts";
+import {
+  editorOpenPathsUpgradeV10ToV11,
+  editorOpenPathsV10,
+  editorOpenPathsV11,
+} from "@traycer/protocol/host/editor/contracts";
 import {
   gitListChangedFilesV10,
   gitListChangedFilesV11,
@@ -737,6 +757,7 @@ import {
   providersTouchLoginRequestSchema,
   providersTouchLoginResponseSchema,
   providersStartTerminalLoginRequestSchema,
+  providersStartTerminalLoginRequestSchemaV20,
   providersStartTerminalLoginResponseSchema,
   providersEnsurePackRequestSchema,
   providersEnsurePackResponseSchema,
@@ -777,6 +798,8 @@ import {
   providersUsePackVersionResponseSchema,
   providersSetPackPolicyRequestSchema,
   providersSetPackPolicyResponseSchema,
+  providersRefreshPackDiscoveryRequestSchema,
+  providersRefreshPackDiscoveryResponseSchema,
   upgradeProviderCliStateV10ToV20,
   upgradeProviderCliStateListToV70Preimage,
   upgradeProviderCliStateV10ToMutationV20,
@@ -3031,9 +3054,9 @@ export const providersNativeMutateV10 = defineRpcContract({
   responseSchema: providersNativeMutateResponseSchema,
 });
 
-// ── The per-pack version-manager methods (v8.0's mutation surface) ─────────
+// ── Per-pack version-manager methods + the on-demand discovery refresh ─────
 //
-// Four BRAND-NEW method names, each at `@1.0`, all registered below with
+// BRAND-NEW method names, each at `@1.0`, all registered below with
 // `degrade: { kind: "unsupported" }` - none is in
 // `RELEASED_FLOOR_METHOD_NAMES`, so a host that predates them refuses these
 // calls per-call with upgrade guidance rather than failing the handshake, the
@@ -3079,6 +3102,20 @@ export const providersSetPackPolicyV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: providersSetPackPolicyRequestSchema,
   responseSchema: providersSetPackPolicyResponseSchema,
+});
+
+/**
+ * Run the pack-discovery poll for one pack now, instead of waiting out the
+ * jittered ticker period. Another new name at `@1.0` on the same
+ * optional-capability channel as the four above, and registered below the same
+ * way - it reads a head rather than mutating the store, which is why it is not
+ * one of them.
+ */
+export const providersRefreshPackDiscoveryV10 = defineRpcContract({
+  method: "providers.refreshPackDiscovery",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: providersRefreshPackDiscoveryRequestSchema,
+  responseSchema: providersRefreshPackDiscoveryResponseSchema,
 });
 
 /**
@@ -3174,6 +3211,59 @@ export const providersStartTerminalLoginV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: providersStartTerminalLoginRequestSchema,
   responseSchema: providersStartTerminalLoginResponseSchema,
+});
+
+/**
+ * `scope` replaces the v1.0 request's `epicId` so a sign-in terminal can be
+ * minted in the landing page's independent scope. A field rename is not
+ * additive (the minor-additivity checker rejects it inside a line), so this
+ * is a new major on the `terminal.create@2.0` pattern: the upgrade folds an
+ * old client's `epicId` into `{ kind: "epic" }`, the downgrade folds an epic
+ * scope back and REFUSES an independent one - an old host has no surface to
+ * put it in, and that typed refusal is the feature gate. The response is
+ * byte-identical across the majors.
+ */
+export const providersStartTerminalLoginV20 = defineRpcContract({
+  method: "providers.startTerminalLogin",
+  schemaVersion: { major: 2, minor: 0 } as const,
+  requestSchema: providersStartTerminalLoginRequestSchemaV20,
+  responseSchema: providersStartTerminalLoginResponseSchema,
+});
+
+export const providersStartTerminalLoginUpgradeV10ToV20 = defineUpgradePath<
+  typeof providersStartTerminalLoginV10,
+  typeof providersStartTerminalLoginV20
+>({
+  from: providersStartTerminalLoginV10.schemaVersion,
+  to: providersStartTerminalLoginV20.schemaVersion,
+  upgradeRequest: (request) => {
+    const { epicId, ...rest } = request;
+    return { ...rest, scope: { kind: "epic", epicId } };
+  },
+  upgradeResponse: (response) => response,
+});
+
+export const providersStartTerminalLoginDowngradeV20ToV10 = defineDowngradePath<
+  typeof providersStartTerminalLoginV20,
+  typeof providersStartTerminalLoginV10
+>({
+  from: providersStartTerminalLoginV20.schemaVersion,
+  to: providersStartTerminalLoginV10.schemaVersion,
+  downgradeRequest: (request) => {
+    const { scope, ...rest } = request;
+    if (scope.kind === "independent") {
+      return {
+        ok: false,
+        error: {
+          code: "DOWNGRADE_UNSUPPORTED",
+          message:
+            "Independent-scope sign-in terminals have no representation in providers.startTerminalLogin@1.0",
+        },
+      };
+    }
+    return { ok: true, value: { ...rest, epicId: scope.epicId } };
+  },
+  downgradeResponse: (response) => ({ ok: true, value: response }),
 });
 
 /**
@@ -6875,11 +6965,15 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   },
   "editor.openPaths": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: editorOpenPathsV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: editorOpenPathsV11,
+          upgradeFromPreviousVersion: editorOpenPathsUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -7010,14 +7104,21 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   // The human lifecycle controls for monitors and shells. Brand-new v1.0
   // methods on the same `degrade: unsupported` channel as `resources.kill`
   // above: a host without the managed-command subsystem simply lacks them.
+  // `1.1` on start/stop returns the command with `relaunchOnHostRestart`;
+  // the shipped `1.0` stays pinned to the pre-relaunch command shape (see
+  // `managedCommandSchemaPreRelaunch`).
   "managedCommand.start": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: managedCommandStartV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: managedCommandStartV11,
+          upgradeFromPreviousVersion: managedCommandStartUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -7026,11 +7127,15 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   "managedCommand.stop": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: managedCommandStopV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: managedCommandStopV11,
+          upgradeFromPreviousVersion: managedCommandStopUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -7043,6 +7148,25 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       versions: {
         0: {
           contract: managedCommandDeleteV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  // The one human-editable setting: relaunch after a host restart. Same
+  // channel as the lifecycle three; a host too old to have the flag lacks the
+  // method, so the GUI hides the switch (`useHostSupportsMethod`), and its
+  // commands read `relaunchOnHostRestart: true` by default - which is what
+  // such a host does (it respawns every survivor; it never offered the
+  // choice).
+  "managedCommand.configure": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: managedCommandConfigureV10,
           upgradeFromPreviousVersion: null,
         },
       },
@@ -8311,6 +8435,22 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
+  // The on-demand discovery poll the version popover's check button drives.
+  // Not one of the four above - it reads a head instead of writing the store -
+  // but a new name outside the floor all the same, so it degrades identically.
+  "providers.refreshPackDiscovery": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersRefreshPackDiscoveryV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
   "providers.submitLoginCode": {
     degrade: { kind: "unsupported" },
     1: {
@@ -8348,6 +8488,19 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
         },
       },
       downgradePathsFromLatest: {},
+    },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersStartTerminalLoginV20,
+          upgradeFromPreviousVersion:
+            providersStartTerminalLoginUpgradeV10ToV20,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: providersStartTerminalLoginDowngradeV20ToV10,
+      },
     },
   },
   "providers.ensurePack": {
@@ -8890,10 +9043,15 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   // `host/managed-command/subscribe.ts` for what a global panel would re-add).
   "managedCommand.subscribeOutput": {
     1: {
-      latestMinor: 0,
+      // `1.1` adds `relaunchOnHostRestart` to the snapshot/status headers;
+      // `1.0` is pinned to the shipped pre-relaunch command shape.
+      latestMinor: 1,
       versions: {
         0: {
           contract: managedCommandSubscribeOutputV10,
+        },
+        1: {
+          contract: managedCommandSubscribeOutputV11,
         },
       },
     },
@@ -8967,31 +9125,37 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
       },
     },
   },
-  // Image preview stream for the workspace file tile - no-degrade rationale in `asset-stream.ts`'s file-level doc.
+  // Asset preview stream for the workspace file tile - no-degrade rationale in `asset-stream.ts`'s file-level doc. 1.1 adds PDF.
   "workspace.streamAsset": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: workspaceStreamAssetV10,
         },
+        1: {
+          contract: workspaceStreamAssetV11,
+        },
       },
     },
   },
-  // Sibling of `workspace.streamAsset` for the git diff tile's old/new image sides - same no-degrade rationale.
+  // Sibling of `workspace.streamAsset` for the git diff tile's old/new sides - same no-degrade rationale. 1.1 adds PDF.
   "git.streamFileAsset": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: gitStreamFileAssetV10,
+        },
+        1: {
+          contract: gitStreamFileAssetV11,
         },
       },
     },
   },
   "resources.subscribe": {
     1: {
-      latestMinor: 4,
+      latestMinor: 5,
       versions: {
         0: {
           contract: resourcesSubscribeV10,
@@ -9011,6 +9175,11 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
         // for every minor before this one.
         4: {
           contract: resourcesSubscribeV14,
+        },
+        // @1.5 lets a mounted stream remain on the background cadence while
+        // only a visible resource monitor asks for interactive refresh.
+        5: {
+          contract: resourcesSubscribeV15,
         },
       },
     },
@@ -9192,10 +9361,13 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   // which is what makes fallback safe for a destructive operation.
   "worktree.deleteBatchByPath": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: worktreeDeleteBatchByPathStreamV10,
+        },
+        1: {
+          contract: worktreeDeleteBatchByPathStreamV11,
         },
       },
     },

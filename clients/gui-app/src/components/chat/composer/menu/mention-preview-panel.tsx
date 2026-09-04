@@ -146,7 +146,6 @@ export function MentionPreviewPanel(props: MentionPreviewPanelProps) {
     <div
       ref={panelRef}
       data-slot="mention-preview-panel"
-      data-browser-overlay="mention-preview-panel"
       role="presentation"
       aria-hidden
       className={cn(

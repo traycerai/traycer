@@ -16,9 +16,9 @@ import {
 } from "@testing-library/react";
 import type { GitChangedFile } from "@traycer/protocol/host";
 import type {
-  ImageAssetRequest,
-  ImageAssetState,
-} from "@/hooks/assets/use-image-asset";
+  FileAssetRequest,
+  FileAssetState,
+} from "@/hooks/assets/use-file-asset";
 import type { DiffViewerPreferences } from "@/lib/diff/diff-viewer-preferences";
 import { makeGitBundleDiffTile } from "@/lib/git/git-diff-tile";
 import type { GitBundleDiffTileRef } from "../git-diff-tile-shared";
@@ -33,14 +33,14 @@ const PREFERENCES: DiffViewerPreferences = {
 };
 
 const state = vi.hoisted(() => ({
-  requests: [] as Array<ImageAssetRequest | null>,
+  requests: [] as Array<FileAssetRequest | null>,
   coverage: vi.fn(),
   mounted: vi.fn(),
-  asset: null as ImageAssetState | null,
+  asset: null as FileAssetState | null,
 }));
 
-vi.mock("@/hooks/assets/use-image-asset", () => ({
-  useImageAsset: (request: ImageAssetRequest | null): ImageAssetState => {
+vi.mock("@/hooks/assets/use-file-asset", () => ({
+  useFileAsset: (request: FileAssetRequest | null): FileAssetState => {
     state.requests.push(request);
     if (state.asset === null) throw new Error("missing image state");
     return state.asset;

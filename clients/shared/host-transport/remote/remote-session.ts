@@ -395,6 +395,11 @@ export interface IRemoteSession<
     method: Method,
     params: ParamsOf<StreamRegistry, Method>,
   ): IStreamSession;
+  subscribeAtVersion<Method extends keyof StreamRegistry & string>(
+    method: Method,
+    schemaVersion: SchemaVersion,
+    params: ParamsOf<StreamRegistry, Method>,
+  ): IStreamSession;
   subscribeWithParamsProvider<Method extends keyof StreamRegistry & string>(
     method: Method,
     paramsProvider: () => ParamsOf<StreamRegistry, Method>,
@@ -703,6 +708,14 @@ export class RemoteSession<
 
   private readonly subscriptions = new Map<number, LogicalStream>();
   private readonly pendingUnary = new Map<number, PendingUnary>();
+  /**
+   * Next outbound `seq` per stream. The host gates every unchunked frame on
+   * this progression (`SESSION_FRAME_SEQUENCE_MISMATCH` closes the SESSION,
+   * not the stream), and frames draw their `seq` lazily at scheduler pull -
+   * so a path that ends a stream with a CLOSE must retire the counter
+   * through {@link retireOutboundSeq} and hand the CLOSE the retired
+   * closure. A bare `delete` before the enqueue sends the CLOSE at seq 0.
+   */
   private readonly outboundSeq = new Map<number, number>();
   private readonly restoredStreamIds = new Set<number>();
   /**
@@ -1347,6 +1360,8 @@ export class RemoteSession<
           });
         } catch (cause) {
           this.clearPendingUnary(streamId);
+          // Nothing was enqueued, so nothing follows on this stream.
+          this.retireOutboundSeq(streamId);
           reject(asHostRpcError(cause, requestId, method));
         }
       }
@@ -1361,7 +1376,19 @@ export class RemoteSession<
     method: Method,
     params: ParamsOf<StreamRegistry, Method>,
   ): IStreamSession {
-    return this.subscribeWithParamsProvider(method, () => params);
+    return this.subscribeWithParamsProviderInternal(method, () => params, null);
+  }
+
+  subscribeAtVersion<Method extends keyof StreamRegistry & string>(
+    method: Method,
+    schemaVersion: SchemaVersion,
+    params: ParamsOf<StreamRegistry, Method>,
+  ): IStreamSession {
+    return this.subscribeWithParamsProviderInternal(
+      method,
+      () => params,
+      schemaVersion,
+    );
   }
 
   /**
@@ -1374,6 +1401,20 @@ export class RemoteSession<
     method: Method,
     paramsProvider: () => ParamsOf<StreamRegistry, Method>,
   ): IStreamSession {
+    return this.subscribeWithParamsProviderInternal(
+      method,
+      paramsProvider,
+      null,
+    );
+  }
+
+  private subscribeWithParamsProviderInternal<
+    Method extends keyof StreamRegistry & string,
+  >(
+    method: Method,
+    paramsProvider: () => ParamsOf<StreamRegistry, Method>,
+    requiredSchemaVersion: SchemaVersion | null,
+  ): IStreamSession {
     this.start();
     const streamId = this.allocateStreamId();
     const stream = new LogicalStream({
@@ -1383,6 +1424,7 @@ export class RemoteSession<
       // Recomputed against the host manifest at (re)subscribe; a provisional
       // client-canonical version is fine until then.
       schemaVersion: this.clientStreamCanonical(method),
+      requiredSchemaVersion,
       qos: qosForStreamMethod(method),
       port: this,
     });
@@ -1595,7 +1637,7 @@ export class RemoteSession<
       this.markStreamTerminal(streamId);
       this.subscriptions.delete(streamId);
       this.restoredStreamIds.delete(streamId);
-      this.outboundSeq.delete(streamId);
+      const nextSeq = this.retireOutboundSeq(streamId);
       // Terminal end: same retry-state cleanup as the FATAL/CLOSE branches.
       this.clearStreamReopen(streamId);
       stream.goFatal({
@@ -1604,13 +1646,17 @@ export class RemoteSession<
         incompatibleMethods: null,
         upgradeGuidance: null,
       });
-      this.enqueueMessage(connection, {
-        type: MuxFrameType.CLOSE,
-        streamId,
-        qos: QosClass.INTERACTIVE,
-        json: { reason: "outbound frame exceeded the message cap" },
-        binary: null,
-      });
+      this.enqueueMessageWithSeq(
+        connection,
+        {
+          type: MuxFrameType.CLOSE,
+          streamId,
+          qos: QosClass.INTERACTIVE,
+          json: { reason: "outbound frame exceeded the message cap" },
+          binary: null,
+        },
+        nextSeq,
+      );
       this.maybeReachReadyBoundary();
     }
   }
@@ -1644,7 +1690,7 @@ export class RemoteSession<
     const connection = this.connection;
     this.subscriptions.delete(streamId);
     this.restoredStreamIds.delete(streamId);
-    this.outboundSeq.delete(streamId);
+    const nextSeq = this.retireOutboundSeq(streamId);
     // A caller close outranks a pending retryable re-open: without this the
     // timer would re-subscribe a stream the consumer has already abandoned.
     this.clearStreamReopen(streamId);
@@ -1659,13 +1705,17 @@ export class RemoteSession<
       // FIFO would park this CLOSE behind a transfer nobody wants anymore
       // (the peer's reassembler accepts a CLOSE mid-sequence as an abort).
       connection.scheduler.dropStreamOutbound(streamId);
-      this.enqueueMessage(connection, {
-        type: MuxFrameType.CLOSE,
-        streamId,
-        qos: QosClass.INTERACTIVE,
-        json: { reason },
-        binary: null,
-      });
+      this.enqueueMessageWithSeq(
+        connection,
+        {
+          type: MuxFrameType.CLOSE,
+          streamId,
+          qos: QosClass.INTERACTIVE,
+          json: { reason },
+          binary: null,
+        },
+        nextSeq,
+      );
     }
     this.maybeReachReadyBoundary();
   }
@@ -2049,21 +2099,29 @@ export class RemoteSession<
       connection.reassembler.forget(frame.streamId);
     }
     this.markStreamTerminal(frame.streamId);
+    // Retired BEFORE the enqueue even though the delete used to sit below
+    // it: the CLOSE draws its seq when the scheduler pulls, which is after
+    // every synchronous line of this method, so a delete anywhere in here
+    // sent it at seq 0.
+    const nextSeq = this.retireOutboundSeq(frame.streamId);
     if (this.phase === "ready" && connection !== null) {
-      this.enqueueMessage(connection, {
-        type: MuxFrameType.CLOSE,
-        streamId: frame.streamId,
-        qos: QosClass.INTERACTIVE,
-        json: { reason: `inbound stream failed: ${details.code}` },
-        binary: null,
-      });
+      this.enqueueMessageWithSeq(
+        connection,
+        {
+          type: MuxFrameType.CLOSE,
+          streamId: frame.streamId,
+          qos: QosClass.INTERACTIVE,
+          json: { reason: `inbound stream failed: ${details.code}` },
+          binary: null,
+        },
+        nextSeq,
+      );
     }
     const stream = this.subscriptions.get(frame.streamId);
     if (stream !== undefined) {
       stream.goFatal(details);
       this.subscriptions.delete(frame.streamId);
       this.restoredStreamIds.delete(frame.streamId);
-      this.outboundSeq.delete(frame.streamId);
       this.stallReopenedStreamIds.delete(frame.streamId);
       this.maybeReachReadyBoundary();
     }
@@ -2577,18 +2635,22 @@ export class RemoteSession<
     connection.reassembler.forget(streamId);
     this.markStreamTerminal(streamId);
     this.restoredStreamIds.delete(streamId);
-    this.outboundSeq.delete(streamId);
+    const nextSeq = this.retireOutboundSeq(streamId);
     this.subscriptions.delete(streamId);
     // Drop queued outbound first so per-stream FIFO cannot park the CLOSE
     // behind a transfer nobody wants anymore (mirrors `closeStream`).
     connection.scheduler.dropStreamOutbound(streamId);
-    this.enqueueMessage(connection, {
-      type: MuxFrameType.CLOSE,
-      streamId,
-      qos: QosClass.INTERACTIVE,
-      json: { reason: "reassembly-stalled" },
-      binary: null,
-    });
+    this.enqueueMessageWithSeq(
+      connection,
+      {
+        type: MuxFrameType.CLOSE,
+        streamId,
+        qos: QosClass.INTERACTIVE,
+        json: { reason: "reassembly-stalled" },
+        binary: null,
+      },
+      nextSeq,
+    );
     const reopenAttempts = this.streamReopenAttempts.get(streamId);
     this.streamReopenAttempts.delete(streamId);
     const freshStreamId = this.allocateStreamId();
@@ -2634,22 +2696,41 @@ export class RemoteSession<
       this.clientManifests.stream,
       hostManifest.stream,
     );
+    const requiredVersion = stream.requiredSchemaVersion;
     const clientCanonical = selectedClientManifest[stream.method];
     const hostCanonical = hostManifest.stream[stream.method];
-    const compat = checkStreamMethodCompatibility(
-      this.options.streamRegistry,
-      selectedClientManifest,
-      hostManifest.stream,
-      "client",
-      stream.method,
-    );
+    const pinnedVersionSupported =
+      requiredVersion === null ||
+      (hostCanonical !== undefined &&
+        hostCanonical.major === requiredVersion.major &&
+        hostCanonical.minor >= requiredVersion.minor);
+    const compat = pinnedVersionSupported
+      ? checkStreamMethodCompatibility(
+          this.options.streamRegistry,
+          selectedClientManifest,
+          hostManifest.stream,
+          "client",
+          stream.method,
+        )
+      : {
+          ok: false as const,
+          details: incompatibleStreamDetails(
+            stream.method,
+            clientCanonical,
+            hostCanonical,
+          ),
+        };
     if (
       !compat.ok ||
       clientCanonical === undefined ||
       hostCanonical === undefined
     ) {
       const details: FatalErrorDetails = compat.ok
-        ? incompatibleStreamDetails(stream.method)
+        ? incompatibleStreamDetails(
+            stream.method,
+            clientCanonical,
+            hostCanonical,
+          )
         : compat.details;
       stream.goFatal(details);
       this.subscriptions.delete(stream.streamId);
@@ -2714,6 +2795,8 @@ export class RemoteSession<
     }
     const { streamId, entry } = pending;
     this.clearPendingUnary(streamId);
+    // The response ends the exchange; the client sends nothing further here.
+    this.retireOutboundSeq(streamId);
     if (parsed.data.error !== null) {
       entry.reject(
         HostRpcError.fromWireEnvelope(
@@ -3834,12 +3917,47 @@ export class RemoteSession<
     connection: ActiveConnection,
     message: OutboundMessage,
   ): void {
+    this.enqueueMessageWithSeq(connection, message, () =>
+      this.nextSeq(message.streamId),
+    );
+  }
+
+  /**
+   * {@link enqueueMessage} with the `seq` source supplied by the caller - for
+   * the CLOSE that ends a stream whose counter {@link retireOutboundSeq} has
+   * already taken out of {@link outboundSeq}.
+   */
+  private enqueueMessageWithSeq(
+    connection: ActiveConnection,
+    message: OutboundMessage,
+    nextSeq: () => number,
+  ): void {
     const source = new OutboundChunkSource(
       message,
-      () => this.nextSeq(message.streamId),
+      nextSeq,
       connection.bodyCompressionSupported,
     );
     connection.scheduler.enqueue(source);
+  }
+
+  /**
+   * Takes a stream's counter out of {@link outboundSeq} and returns a source
+   * that continues its progression. Frames draw `seq` only when the
+   * scheduler pulls them, so a path that deletes the entry and THEN enqueues
+   * the stream's CLOSE would send that CLOSE at seq 0 - on a stream whose
+   * SUBSCRIBE or REQUEST already drew 0, the host's sequence gate reads that
+   * as a reordered or dropped frame and closes the whole session
+   * (`SESSION_FRAME_SEQUENCE_MISMATCH`). The closure keeps the map bounded
+   * exactly as the delete did, and keeps the CLOSE contiguous.
+   */
+  private retireOutboundSeq(streamId: number): () => number {
+    let next = this.outboundSeq.get(streamId) ?? 0;
+    this.outboundSeq.delete(streamId);
+    return () => {
+      const seq = next;
+      next += 1;
+      return seq;
+    };
   }
 
   private async writeFrame(
@@ -3897,7 +4015,8 @@ export class RemoteSession<
       clearTimeout(entry.timer);
     }
     this.pendingUnary.delete(streamId);
-    this.outboundSeq.delete(streamId);
+    // The stream's `outboundSeq` entry is NOT cleared here: `rejectUnary`
+    // still has a CLOSE to send on it. Each caller retires the counter itself.
   }
 
   private rejectUnary(streamId: number, error: HostRpcError): void {
@@ -3906,6 +4025,7 @@ export class RemoteSession<
       return;
     }
     this.clearPendingUnary(streamId);
+    const nextSeq = this.retireOutboundSeq(streamId);
     // A rejected unary's stream is terminal. Drop any still-queued request
     // upload, clear any partial response accumulator, tombstone the id so a
     // late response chunk (e.g. one landing after the 30s timeout) can't
@@ -3918,13 +4038,17 @@ export class RemoteSession<
     }
     this.markStreamTerminal(streamId);
     if (this.phase === "ready" && connection !== null) {
-      this.enqueueMessage(connection, {
-        type: MuxFrameType.CLOSE,
-        streamId,
-        qos: QosClass.INTERACTIVE,
-        json: { reason: "unary request rejected" },
-        binary: null,
-      });
+      this.enqueueMessageWithSeq(
+        connection,
+        {
+          type: MuxFrameType.CLOSE,
+          streamId,
+          qos: QosClass.INTERACTIVE,
+          json: { reason: "unary request rejected" },
+          binary: null,
+        },
+        nextSeq,
+      );
     }
     entry.reject(error);
   }
@@ -4568,11 +4692,27 @@ function planRestrictedFatalDetails(): FatalErrorDetails {
   };
 }
 
-function incompatibleStreamDetails(method: string): FatalErrorDetails {
+function incompatibleStreamDetails(
+  method: string,
+  clientCanonical: SchemaVersion | undefined,
+  hostCanonical: SchemaVersion | undefined,
+): FatalErrorDetails {
   return {
     code: "INCOMPATIBLE",
     reason: `Stream method '${method}' is not compatible with the host`,
-    incompatibleMethods: null,
+    incompatibleMethods: [
+      {
+        method,
+        clientCanonical: clientCanonical ?? null,
+        hostCanonical: hostCanonical ?? null,
+        blocking:
+          clientCanonical === undefined
+            ? "client-missing-method"
+            : hostCanonical === undefined
+              ? "host-missing-method"
+              : "no-bridge",
+      },
+    ],
     upgradeGuidance: null,
   };
 }

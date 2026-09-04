@@ -1526,4 +1526,64 @@ describe("hot-growth accounting survives a transport that TRANSFERS the update",
     expect(charges).toHaveLength(1);
     expect(charges[0]).toBeGreaterThan(0);
   });
+
+  it("copies before transfer so a later Yjs observer can still read the shared update", () => {
+    let transferred = false;
+    let transferredUpdate: Uint8Array | null = null;
+    let laterObserverUpdate: Uint8Array | null = null;
+    const tier = createArtifactRoomTier({
+      environment: createFakeEnvironment(),
+      session: createFakeSession(),
+      send: (request) => {
+        if (request.kind === "room-update") {
+          transferredUpdate = request.update;
+          const buffer = request.update.buffer;
+          if (
+            buffer instanceof ArrayBuffer &&
+            request.update.byteOffset === 0 &&
+            request.update.byteLength === buffer.byteLength
+          ) {
+            structuredClone(request.update, { transfer: [buffer] });
+            transferred = true;
+          }
+        }
+        return { kind: "sent" };
+      },
+      onDivergenceChanged: () => undefined,
+      isDisposed: () => false,
+      budget: null,
+    });
+    trackTierDisposal(tier);
+
+    const { bytes, hostStateVectorBase64 } = makeSnapshotBytes("hello");
+    tier.applySnapshot({
+      artifactRoomId: "room-two-holders",
+      snapshotBytes: bytes,
+      hostStateVectorBase64,
+      seed: "full",
+      docGuid: null,
+    });
+    tier.acquireSync("room-two-holders");
+    const entry = requireHotEntry(tier, "room-two-holders");
+
+    // This observer is attached AFTER the tier's outbound observer. It sees
+    // the same Yjs-owned update, not a second synthetic callback invocation.
+    entry.doc.on("update", (update) => {
+      expect(transferred).toBe(true);
+      laterObserverUpdate = update;
+      const readableUpdate = update.slice();
+      const replay = new Y.Doc();
+      Y.applyUpdate(replay, readableUpdate);
+      expect(replay.getMap("body").get("local-edit")).toBe("1");
+      replay.destroy();
+    });
+    entry.doc.getMap("body").set("local-edit", "1");
+
+    expect(transferredUpdate).not.toBeNull();
+    expect(laterObserverUpdate).not.toBeNull();
+    // Compare identity as a boolean. Passing the detached outbound view into a
+    // matcher makes Vitest's failure-message formatter iterate its bytes,
+    // which throws before the identity result can be reported.
+    expect(Object.is(laterObserverUpdate, transferredUpdate)).toBe(false);
+  });
 });

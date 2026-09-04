@@ -6,10 +6,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 
 const tileNavigationMocks = vi.hoisted(() => ({
-  openTileInEpic: vi.fn(),
-  openTileInTab: vi.fn(),
-  openTilePreviewInEpic: vi.fn(),
-  openTilePreviewInTab: vi.fn(),
+  openTile: vi.fn(),
 }));
 vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
   useEpicTileNavigation: () => tileNavigationMocks,
@@ -20,12 +17,13 @@ import {
   CommGraphOpenMenuItem,
 } from "@/components/epic-canvas/comm-graph/comm-graph-open-button";
 import { makeCommGraphTileRef } from "@/stores/epics/canvas/tile-schema/comm-graph-tile";
+import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 
 const EPIC_ID = "epic-open-button";
 
 afterEach(() => {
   cleanup();
-  tileNavigationMocks.openTileInEpic.mockClear();
+  tileNavigationMocks.openTile.mockClear();
 });
 
 describe("CommGraphOpenButton", () => {
@@ -38,14 +36,20 @@ describe("CommGraphOpenButton", () => {
       screen.getByRole("button", { name: "Open communication graph" }),
     );
 
-    expect(tileNavigationMocks.openTileInEpic).toHaveBeenCalledWith(
-      EPIC_ID,
-      // `instanceId` is a fresh uuid per ref by design; the CONTENT id is what
-      // identifies the tile and what the opener dedupes on.
+    expect(tileNavigationMocks.openTile).toHaveBeenCalledWith(
       expect.objectContaining({
-        id: makeCommGraphTileRef(EPIC_ID).id,
-        type: "comm-graph",
-        epicId: EPIC_ID,
+        target: { epicId: EPIC_ID },
+        gesture: "explicit",
+        modifiers: null,
+        placement: null,
+        dedupe: true,
+        // `instanceId` is a fresh uuid per ref by design; the CONTENT id is what
+        // identifies the tile and what the opener dedupes on.
+        node: expect.objectContaining({
+          id: makeCommGraphTileRef(EPIC_ID).id,
+          type: "comm-graph",
+          epicId: EPIC_ID,
+        }) as EpicCanvasTileRef,
       }),
     );
   });
@@ -67,19 +71,25 @@ describe("CommGraphOpenButton", () => {
     fireEvent.click(button);
     fireEvent.click(button);
 
-    expect(tileNavigationMocks.openTileInEpic).toHaveBeenCalledTimes(2);
+    expect(tileNavigationMocks.openTile).toHaveBeenCalledTimes(2);
     // Same content id both times - that, not the per-call `instanceId`, is what
     // makes the second press focus the open graph instead of minting a rival.
     const contentId = makeCommGraphTileRef(EPIC_ID).id;
-    expect(tileNavigationMocks.openTileInEpic).toHaveBeenNthCalledWith(
+    expect(tileNavigationMocks.openTile).toHaveBeenNthCalledWith(
       1,
-      EPIC_ID,
-      expect.objectContaining({ id: contentId }),
+      expect.objectContaining({
+        target: { epicId: EPIC_ID },
+        dedupe: true,
+        node: expect.objectContaining({ id: contentId }) as EpicCanvasTileRef,
+      }),
     );
-    expect(tileNavigationMocks.openTileInEpic).toHaveBeenNthCalledWith(
+    expect(tileNavigationMocks.openTile).toHaveBeenNthCalledWith(
       2,
-      EPIC_ID,
-      expect.objectContaining({ id: contentId }),
+      expect.objectContaining({
+        target: { epicId: EPIC_ID },
+        dedupe: true,
+        node: expect.objectContaining({ id: contentId }) as EpicCanvasTileRef,
+      }),
     );
   });
 
@@ -90,7 +100,7 @@ describe("CommGraphOpenButton", () => {
       screen.getByRole("button", { name: "Open communication graph" }),
     );
 
-    expect(tileNavigationMocks.openTileInEpic).not.toHaveBeenCalled();
+    expect(tileNavigationMocks.openTile).not.toHaveBeenCalled();
   });
 });
 
@@ -108,12 +118,18 @@ describe("CommGraphOpenMenuItem", () => {
       screen.getByRole("menuitem", { name: "Open communication graph" }),
     );
 
-    expect(tileNavigationMocks.openTileInEpic).toHaveBeenCalledWith(
-      EPIC_ID,
+    expect(tileNavigationMocks.openTile).toHaveBeenCalledWith(
       expect.objectContaining({
-        id: makeCommGraphTileRef(EPIC_ID).id,
-        type: "comm-graph",
-        epicId: EPIC_ID,
+        target: { epicId: EPIC_ID },
+        gesture: "explicit",
+        modifiers: null,
+        placement: null,
+        dedupe: true,
+        node: expect.objectContaining({
+          id: makeCommGraphTileRef(EPIC_ID).id,
+          type: "comm-graph",
+          epicId: EPIC_ID,
+        }) as EpicCanvasTileRef,
       }),
     );
   });

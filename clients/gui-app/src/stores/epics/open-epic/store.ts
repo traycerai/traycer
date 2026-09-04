@@ -148,6 +148,11 @@ export interface EpicRuntimeBinding {
 export interface OpenEpicStoreOptions {
   readonly epicId: string;
   /**
+   * The host this session is established against. Carried straight onto the
+   * returned handle - see {@link OpenEpicStoreHandle.hostId}.
+   */
+  readonly hostId: string;
+  /**
    * What to do when the host's plan-denial deadline says this session's
    * transport is worth probing again.
    *
@@ -941,6 +946,17 @@ export interface OpenEpicStoreHandle {
   readonly epicId: string;
   readonly userId: string | null;
   /**
+   * The host this session was established against - fixed for the handle's
+   * whole life. A host change is clone-not-migrate (this file's AGENTS.md):
+   * the provider tears the session down and acquires a new handle, it never
+   * repoints this one, so nothing here needs to observe it changing.
+   *
+   * Read by the registry's cap-eviction guard (`epicIsBusy`) to tell whether
+   * the activity plane's union - built by ONE serving host - can speak for
+   * THIS session at all.
+   */
+  readonly hostId: string;
+  /**
    * Transfer this session's root state into another, and take one in.
    *
    * The PORT the two merge sites use instead of reaching for `.doc`. It exists
@@ -1040,11 +1056,132 @@ export function isProjectionPatch(
 export function createOpenEpicStore(
   options: OpenEpicStoreOptions,
 ): OpenEpicStoreHandle {
-  const { epicId, userId } = options;
+  const { epicId, userId, hostId } = options;
   const mintedIngestFenceIdentity = nextIngestFenceIdentity;
   nextIngestFenceIdentity += 1;
 
   let storeApi: StoreApi<OpenEpicState> | null = null;
+  /**
+   * The worker's own dirty verdict, before main-only body refusals are folded
+   * into it.
+   *
+   * A rejected/dropped `body/update` for the still-resident lineage leaves the
+   * live main-thread doc as the only proven holder of that edit. The worker
+   * cannot publish dirtiness for bytes it never accepted, so main latches the
+   * doc key below and ORs that fact into every later projection until the doc
+   * is retired after a full demote/replacement. Keeping the worker verdict
+   * separately is what lets that retirement restore the honest projected
+   * value instead of guessing that the rest of the replica is clean.
+   */
+  let workerReplicaIsDirty = false;
+  const refusedBodyUpdateDocKeys = new Set<string>();
+  /**
+   * Current main-doc lineage per key. Replacement and retirement reuse the
+   * docKey, so an async refusal must prove it still belongs to the resident
+   * lineage before it can latch that key dirty. Retirement deletes the token:
+   * this bounds the map to live lineages and guarantees a same-key replacement
+   * mints an identity no predecessor callback can match.
+   */
+  const bodyDocGenerationByDocKey = new Map<string, symbol>();
+
+  function bodyDocGenerationForDispatch(docKey: string): symbol {
+    const currentGeneration = bodyDocGenerationByDocKey.get(docKey);
+    if (currentGeneration !== undefined) return currentGeneration;
+    const nextGeneration = Symbol();
+    bodyDocGenerationByDocKey.set(docKey, nextGeneration);
+    return nextGeneration;
+  }
+
+  function markBodyUpdateRefused(
+    docKey: string,
+    dispatchedGeneration: symbol,
+  ): void {
+    if (bodyDocGenerationByDocKey.get(docKey) !== dispatchedGeneration) return;
+    if (refusedBodyUpdateDocKeys.has(docKey)) return;
+    refusedBodyUpdateDocKeys.add(docKey);
+    storeApi?.setState({ isDirty: true });
+  }
+
+  /**
+   * Count of `body/update` calls posted but not yet settled, per DISPATCH
+   * GENERATION (`bodyDocGenerationForDispatch`'s own token) rather than per
+   * `docKey` string.
+   *
+   * This is the window `refusedBodyUpdateDocKeys` does not cover: that set
+   * starts only once the ANSWER is known (`dropped`, or a rejection), but the
+   * edit is already live in main's doc - and the worker has not yet had a
+   * chance to prove otherwise - from the instant the call is POSTED. A
+   * synchronous cap-eviction check racing the round trip must see this window
+   * too, or it reads a session mid-edit as `isDirty: false` and disposes it,
+   * discarding an edit that was never durably held anywhere else (the
+   * previous `isClean()` transport clause covered this by accident, by
+   * refusing to evict ANY session with a non-`open` transport; the data-loss
+   * gate that replaced it does not, so this has to cover it directly).
+   *
+   * Keyed by the GENERATION, not the `docKey` string, because a `docKey` is
+   * reused across a replacement: a string-keyed count would let a stale
+   * settle from a RETIRED lineage's call decrement - or, worse, silently
+   * delete - a bucket that by then belongs to a fresh dispatch under the same
+   * key. A generation token is unique for the lineage's whole life and never
+   * reused, so a stale settle can only ever touch its OWN bucket, and needs no
+   * generation check of its own to stay correct. `retireBodyDoc` deletes the
+   * retired generation's bucket outright - not merely lets it drain to zero -
+   * so an in-flight call for a lineage that no longer exists stops counting
+   * toward "something is pending" the moment it stops being true, rather than
+   * forcing the REPLACEMENT body's next clean projection to read dirty.
+   */
+  const pendingBodyUpdateCallCountByGeneration = new Map<symbol, number>();
+
+  function notePendingBodyUpdate(generation: symbol): void {
+    pendingBodyUpdateCallCountByGeneration.set(
+      generation,
+      (pendingBodyUpdateCallCountByGeneration.get(generation) ?? 0) + 1,
+    );
+  }
+
+  function clearPendingBodyUpdate(generation: symbol): void {
+    const count = pendingBodyUpdateCallCountByGeneration.get(generation);
+    if (count === undefined) return;
+    if (count > 1) {
+      // Another call for this SAME generation is still outstanding - the
+      // latch stays forced, and there is nothing new to publish.
+      pendingBodyUpdateCallCountByGeneration.set(generation, count - 1);
+      return;
+    }
+    pendingBodyUpdateCallCountByGeneration.delete(generation);
+    // The write `notePendingBodyUpdate`'s caller made is the only thing that
+    // forced `isDirty` true for this reason, and nothing else re-asserts it
+    // once the last count clears - unlike `retireBodyDoc`, this settle is the
+    // ORDINARY case (a success, not a lineage ending), so it has to publish
+    // the recomputed verdict itself rather than leaving the store holding
+    // whatever the LAST write happened to be.
+    if (
+      refusedBodyUpdateDocKeys.size > 0 ||
+      pendingBodyUpdateCallCountByGeneration.size > 0
+    ) {
+      return;
+    }
+    storeApi?.setState({ isDirty: workerReplicaIsDirty });
+  }
+
+  function retireBodyDoc(docKey: string): void {
+    const retiredGeneration = bodyDocGenerationByDocKey.get(docKey);
+    bodyDocGenerationByDocKey.delete(docKey);
+    const hadRefusal = refusedBodyUpdateDocKeys.delete(docKey);
+    // Deletes the bucket outright, not a decrement - see the field's own doc
+    // on why a stale settle must find nothing left to touch.
+    const hadPending =
+      retiredGeneration !== undefined &&
+      pendingBodyUpdateCallCountByGeneration.delete(retiredGeneration);
+    if (!hadRefusal && !hadPending) return;
+    if (
+      refusedBodyUpdateDocKeys.size > 0 ||
+      pendingBodyUpdateCallCountByGeneration.size > 0
+    ) {
+      return;
+    }
+    storeApi?.setState({ isDirty: workerReplicaIsDirty });
+  }
   /**
    * Ids for pending attachment WAITS, unique per store.
    *
@@ -1365,7 +1502,17 @@ export function createOpenEpicStore(
         "[open-epic] projection applied before the store attached",
       );
     }
-    const { bindingEpoch, ...projected } = patch;
+    const { bindingEpoch, ...workerProjected } = patch;
+    let projected = workerProjected;
+    if (projected.isDirty !== undefined) {
+      workerReplicaIsDirty = projected.isDirty;
+      if (
+        refusedBodyUpdateDocKeys.size > 0 ||
+        pendingBodyUpdateCallCountByGeneration.size > 0
+      ) {
+        projected = { ...projected, isDirty: true };
+      }
+    }
     // ── Re-stabilise nested identity, at the grain the projector owns it ──
     //
     // The worker's projector re-allocates ONLY what changed - a rename mints a
@@ -1537,20 +1684,54 @@ export function createOpenEpicStore(
         bodyResidencyVersion: state.bodyResidencyVersion + 1,
       }));
     },
+    onDocRetired: (docKey) => {
+      // A lane body retires only after its full main-side state was accepted
+      // by the worker's demote, or after an authoritative replacement/drop.
+      // Either way main is no longer the sole holder of the refused edit, so
+      // this doc-local latch has reached its proof-based clearing point.
+      retireBodyDoc(docKey);
+    },
     onLocalDocUpdate: (docKey, update) => {
-      // The lane's verdict is deliberately DISCARDED here. A refused body
-      // update is not a failed user action: the edit is already in main's
-      // live doc, and the bytes reach the host on the next materialize or
-      // demote cycle regardless. Surfacing it would put an error in front of
-      // someone whose typing worked.
+      // A lane-level transport refusal does NOT reach this caller as loss.
+      // The worker first applies the update to its tier; that tier marks the
+      // room dirty and either sends or queues the bytes, then answers `sent`
+      // because it accepted ownership. That is the lane-arm proof the old
+      // "next cycle regardless" comment was missing.
+      //
+      // `dropped` is different: the worker held no replica, so main's live doc
+      // is the only proven holder. A non-teardown handler rejection is the
+      // same ownership fact with no parsed outcome. While the dispatch still
+      // belongs to this resident doc lineage, both latch it into `isDirty`
+      // until its full state crosses on demote or an authoritative replacement
+      // retires it. The edit remains visually successful; state and the log
+      // make the recovery obligation observable without turning typing into a
+      // rejected user action.
+      const dispatchedGeneration = bodyDocGenerationForDispatch(docKey);
+      // Latched BEFORE the call, synchronously - see
+      // `pendingBodyUpdateCallCountByGeneration`'s own doc for the window
+      // this closes. Cleared in `finally` regardless of outcome: by settle
+      // time ownership has resolved one way or the other, through the paths
+      // below.
+      notePendingBodyUpdate(dispatchedGeneration);
+      storeApi?.setState({ isDirty: true });
       void runtime.port
         .call("body/update", { docKey, update }, NO_TRANSFER)
+        .then((answer) => {
+          if (answer.outcome.kind !== "dropped") return;
+          markBodyUpdateRefused(docKey, dispatchedGeneration);
+          appLogger.error(
+            "[open-epic] body update refused by the runtime worker",
+            { docKey },
+            new Error(answer.outcome.reason),
+          );
+        })
         .catch((cause: unknown) => {
           // Teardown, not a failure: the session is going away and this edit
           // is already in main's live doc. Narrowed on the error type so a
           // real fault is still reported rather than being swallowed as "the
           // session closed".
           if (cause instanceof BridgeDisposedError) return;
+          markBodyUpdateRefused(docKey, dispatchedGeneration);
           // LOGGED, not rethrown. Rethrowing from inside a `.catch` returns a
           // freshly rejected promise, and this chain is `void`ed - so the
           // rethrow did not reach the console the comment above promised, it
@@ -1564,6 +1745,9 @@ export function createOpenEpicStore(
             { docKey },
             cause,
           );
+        })
+        .finally(() => {
+          clearPendingBodyUpdate(dispatchedGeneration);
         });
     },
     onLocalAwareness: (docKey, frame, localClientId) => {
@@ -1661,14 +1845,15 @@ export function createOpenEpicStore(
             // F10 data loss.
             //
             // Gated on `isDirty` + pending writes rather than on `isClean()`,
-            // deliberately, and for the reason the registry gives at its own
-            // re-point gate: `isClean()` ALSO requires an open transport,
+            // deliberately: `isClean()` ALSO requires an open transport,
             // which a plan-denied one has by definition lost - so it reads
             // false for every session this can ever be called about and the
             // rebuild would never once fire. `snapshotLoaded` is excluded for
             // the same shape of reason: a session that never loaded has
             // nothing to lose, and requiring it would block exactly the
-            // sessions this exists to recover.
+            // sessions this exists to recover. The registry's cap predicate
+            // (`holdsNothingToLose`) and its re-point gate read the same
+            // three work fields for the same reason.
             if (state.isDirty || state.writeCommands.length > 0) return;
             options.onRetryTransport();
           },
@@ -2175,6 +2360,7 @@ export function createOpenEpicStore(
   return {
     epicId,
     userId,
+    hostId,
     body: {
       applyDocUpdate: (docKey, update) => {
         bodyDocs.applyRemote(docKey, update);

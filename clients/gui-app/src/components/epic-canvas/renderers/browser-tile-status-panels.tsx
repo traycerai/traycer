@@ -13,10 +13,7 @@ export function BrowserTileDownloadStrip(props: {
   const visibleDownloads = props.downloads.slice(-3);
   if (visibleDownloads.length === 0) return null;
   return (
-    <div
-      data-browser-overlay="browser-downloads"
-      className="pointer-events-auto absolute bottom-3 left-3 z-20 flex w-[min(92%,30rem)] flex-col gap-2"
-    >
+    <div className="pointer-events-auto absolute bottom-3 left-3 z-20 flex w-[min(92%,30rem)] flex-col gap-2">
       {visibleDownloads.map((download) => (
         <BrowserDownloadRow
           key={download.downloadId}
@@ -36,10 +33,7 @@ export function BrowserTileCertificateInterstitial(props: {
   const certificateError = props.certificateError;
   if (certificateError === null) return null;
   return (
-    <div
-      data-browser-overlay="browser-certificate-error"
-      className="absolute inset-0 z-20 flex items-center justify-center bg-background/95 px-4 text-foreground"
-    >
+    <div className="absolute inset-0 z-20 flex items-center justify-center bg-background/95 px-4 text-foreground">
       <div className="flex w-[min(92vw,34rem)] flex-col gap-4 rounded-md border border-destructive/30 bg-popover p-5 shadow-lg">
         <div className="flex items-start gap-3">
           <ShieldAlert className="mt-0.5 size-5 shrink-0 text-destructive" />

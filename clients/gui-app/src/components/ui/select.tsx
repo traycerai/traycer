@@ -112,6 +112,7 @@ function SelectTrigger({
 }
 
 function SelectContent({
+  ref,
   className,
   children,
   position = "popper",
@@ -139,12 +140,14 @@ function SelectContent({
   // Radix's side - an `item-aligned` list positions itself over the trigger and
   // ignores collision geometry - so the width cap is what carries that case.
   const safeAreaInsets = useSafeAreaCollisionPadding();
+  // Read above the early return, like the hooks above it: hook order must
+  // not depend on concealment.
   if (concealed) return null;
   return (
     <SelectPrimitive.Portal>
       <SelectPrimitive.Content
+        ref={ref}
         data-slot="select-content"
-        data-browser-overlay="select"
         data-align-trigger={position === "item-aligned"}
         collisionPadding={collisionPadding ?? safeAreaInsets}
         className={cn(

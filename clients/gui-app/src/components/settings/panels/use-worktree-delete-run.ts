@@ -19,7 +19,6 @@ import {
   AnalyticsEvent,
   analyticsBlockerFromError,
 } from "@/lib/analytics";
-import { sanitizeHoldersRevision } from "@/lib/worktree/teardown-holder-copy";
 
 export interface LogSegment {
   /** Monotonic per-run id (append-only), so React keys are stable. */
@@ -42,12 +41,6 @@ export interface WorktreeDeleteRunState {
    * `null` is the old-host path (prose reason only).
    */
   readonly pendingBusyHolders: readonly WorktreeBusyHolder[] | null;
-  /**
-   * Digest from the refusal that populated `pendingBusyHolders`. Echoed as
-   * `expectedHoldersRevision` on the confirmed retry so the host stops the
-   * consented inventory, not whatever exists now.
-   */
-  readonly pendingHoldersRevision: string | undefined;
 }
 
 const INITIAL_RUN: WorktreeDeleteRunState = {
@@ -58,7 +51,6 @@ const INITIAL_RUN: WorktreeDeleteRunState = {
   deleted: false,
   error: null,
   pendingBusyHolders: null,
-  pendingHoldersRevision: undefined,
 };
 
 const QUEUED_RUN: WorktreeDeleteRunState = {
@@ -77,7 +69,7 @@ const CONNECTION_LOST_MESSAGE =
 // genuinely unknown here - the refreshed list is the authority, and inventing
 // "deleted" or "failed" for it would be a guess presented as a result.
 const REATTACHED_MESSAGE =
-  "Reconnected after this delete finished. Check the refreshed list to see whether this worktree was removed.";
+  "Reconnected without confirming this delete. Check the refreshed list to see whether this worktree was removed.";
 
 export interface WorktreeDeleteRunRecord {
   readonly key: string;
@@ -127,7 +119,6 @@ interface WorktreeDeleteRunStore {
   readonly setPendingBusyHolders: (
     key: string,
     holders: readonly WorktreeBusyHolder[],
-    holdersRevision: string | undefined,
   ) => void;
 }
 
@@ -172,7 +163,6 @@ const useWorktreeDeleteRunStore = create<WorktreeDeleteRunStore>((set) => ({
           deleted,
           activePhase: null,
           pendingBusyHolders: null,
-          pendingHoldersRevision: undefined,
         },
       };
       return {
@@ -218,7 +208,6 @@ const useWorktreeDeleteRunStore = create<WorktreeDeleteRunStore>((set) => ({
                   status: "failed",
                   error,
                   pendingBusyHolders: null,
-                  pendingHoldersRevision: undefined,
                 },
               }
             : candidate,
@@ -353,7 +342,7 @@ const useWorktreeDeleteRunStore = create<WorktreeDeleteRunStore>((set) => ({
       foregroundKey: state.foregroundKey === key ? null : state.foregroundKey,
     })),
   clearAll: () => set({ runs: [], foregroundKey: null }),
-  setPendingBusyHolders: (key, holders, holdersRevision) =>
+  setPendingBusyHolders: (key, holders) =>
     set((state) => {
       const record = state.runs.find((candidate) => candidate.key === key);
       if (record === undefined) return state;
@@ -366,7 +355,6 @@ const useWorktreeDeleteRunStore = create<WorktreeDeleteRunStore>((set) => ({
                   ...candidate.run,
                   status: "failed",
                   pendingBusyHolders: holders,
-                  pendingHoldersRevision: holdersRevision,
                   error: null,
                   activePhase: null,
                 },
@@ -411,7 +399,6 @@ interface QueuedWorktreeDelete {
   readonly target: WorktreeHostEntry;
   readonly scripts: WorktreeEntryScripts | null;
   readonly stopOwners: boolean;
-  readonly expectedHoldersRevision: string | undefined;
   readonly openStreamTransport: (hostId: string) => DurableStreamTransport;
   readonly onSettled: () => void;
 }
@@ -444,7 +431,6 @@ export function useWorktreeDeleteRun(
     target: WorktreeHostEntry,
     scripts: WorktreeEntryScripts | null,
     stopOwners: boolean,
-    expectedHoldersRevision: string | undefined,
   ) => void;
   readonly startBatchBackgrounded: (
     targets: ReadonlyArray<WorktreeHostEntry>,
@@ -530,13 +516,8 @@ export function useWorktreeDeleteRun(
       target: WorktreeHostEntry,
       scripts: WorktreeEntryScripts | null,
       stopOwners: boolean,
-      expectedHoldersRevision: string | undefined,
     ) => {
-      startDelete(
-        [{ target, scripts, stopOwners, expectedHoldersRevision }],
-        false,
-        null,
-      );
+      startDelete([{ target, scripts, stopOwners }], false, null);
     },
     [startDelete],
   );
@@ -550,7 +531,6 @@ export function useWorktreeDeleteRun(
           target,
           scripts: scriptsByPath.get(target.worktreePath) ?? null,
           stopOwners: false,
-          expectedHoldersRevision: undefined,
         })),
         true,
         nextWorktreeDeleteBatchKey(hostId),
@@ -600,7 +580,6 @@ interface WorktreeDeleteRequestTarget {
   readonly target: WorktreeHostEntry;
   readonly scripts: WorktreeEntryScripts | null;
   readonly stopOwners: boolean;
-  readonly expectedHoldersRevision: string | undefined;
 }
 
 interface StartWorktreeDeleteCommandInput {
@@ -618,6 +597,19 @@ interface StartWorktreeDeleteCommandInput {
   }) => void;
   readonly openStreamTransport: (hostId: string) => DurableStreamTransport;
   readonly onSettled: () => void;
+}
+
+function shouldOfferForceDelete(
+  stopOwners: boolean,
+  holders: readonly WorktreeBusyHolder[] | undefined,
+  code: "WORKTREE_BUSY" | "WORKTREE_HOLDERS_CHANGED" | undefined,
+): holders is readonly WorktreeBusyHolder[] {
+  return (
+    !stopOwners &&
+    holders !== undefined &&
+    holders.length > 0 &&
+    code !== "WORKTREE_HOLDERS_CHANGED"
+  );
 }
 
 /**
@@ -658,20 +650,15 @@ function startWorktreeDeleteCommand(
     });
   });
 
-  const forceTargets = accepted.filter((item) => item.stopOwners);
-  const batchTargets = accepted.filter((item) => !item.stopOwners);
-  // `stopOwners` is a deleteByPath@1.1 open-request field; the batch
-  // command has no equivalent, so force-delete retries ride the per-target
-  // stream.
-  if (forceTargets.length > 0) {
-    enqueueFallbackDeletes(input, forceTargets);
-    drainDeleteQueue();
-  }
-  if (batchTargets.length === 0) {
-    flushSettledCallbacksIfIdle();
-    return;
-  }
+  startBatchDeleteCommand(input, accepted);
+}
 
+/** Opens a batch over already-reserved targets. */
+function startBatchDeleteCommand(
+  input: StartWorktreeDeleteCommandInput,
+  batchTargets: ReadonlyArray<WorktreeDeleteRequestTarget>,
+): void {
+  const hasForceTargets = batchTargets.some((item) => item.stopOwners);
   const commandId = crypto.randomUUID();
   const keyFor = (worktreePath: string): string =>
     worktreeDeleteRunKey(input.hostId, worktreePath);
@@ -683,7 +670,7 @@ function startWorktreeDeleteCommand(
   // A holder rather than a plain `let`: the settle happens inside callbacks the
   // stream client owns, and the post-build guard below has to read the value as
   // of THEN, not as of the last assignment the compiler can see.
-  const command = { settled: false };
+  const command = { settled: false, reachedHost: false };
   /**
    * Ends the command and drives every target that never reported a terminal
    * frame into `unsettledReason`.
@@ -735,6 +722,10 @@ function startWorktreeDeleteCommand(
    */
   const handOffToFallback = (): void => {
     if (command.settled) return;
+    if (command.reachedHost) {
+      settleCommand(REATTACHED_MESSAGE);
+      return;
+    }
     command.settled = true;
     activeCommandCount = Math.max(0, activeCommandCount - 1);
     closeCommandClient(commandId);
@@ -742,11 +733,12 @@ function startWorktreeDeleteCommand(
       unsettled.has(keyFor(item.target.worktreePath)),
     );
     if (remaining.length === 0) {
-      // A replacement host can report unsupported after every target already
-      // settled. There is then no fallback item that can add this callback,
-      // but the completed command still changed the worktree list and needs
-      // its usual invalidation once the system is idle.
       pendingSettledCallbacks.add(input.onSettled);
+    } else if (hasForceTargets) {
+      const force = remaining.filter((item) => item.stopOwners);
+      const normal = remaining.filter((item) => !item.stopOwners);
+      if (force.length > 0) enqueueFallbackDeletes(input, force);
+      if (normal.length > 0) startBatchDeleteCommand(input, normal);
     } else {
       enqueueFallbackDeletes(input, remaining);
     }
@@ -767,6 +759,7 @@ function startWorktreeDeleteCommand(
           targets: batchTargets.map((item) => ({
             worktreePath: item.target.worktreePath,
             scripts: item.scripts,
+            stopOwners: item.stopOwners,
           })),
           callbacks: {
             onTargetStarted: (worktreePath, hasTeardown) =>
@@ -800,9 +793,18 @@ function startWorktreeDeleteCommand(
               unsettled.delete(key);
               releaseTargetKey(key);
             },
-            onTargetFailed: (worktreePath, reason, holders) => {
+            onTargetFailed: (worktreePath, reason, holders, code) => {
               const key = keyFor(worktreePath);
-              if (takePendingBusyHolders(key, holders, undefined)) {
+              const item = batchTargets.find(
+                (candidate) => candidate.target.worktreePath === worktreePath,
+              );
+              if (
+                item !== undefined &&
+                shouldOfferForceDelete(item.stopOwners, holders, code)
+              ) {
+                useWorktreeDeleteRunStore
+                  .getState()
+                  .setPendingBusyHolders(key, holders);
                 unsettled.delete(key);
                 releaseTargetKey(key);
                 return;
@@ -817,6 +819,10 @@ function startWorktreeDeleteCommand(
             onCommandFailed: (reason) => settleCommand(reason),
             onUnsupported: () => handOffToFallback(),
             onConnectionStatus: (status, reason) => {
+              if (status === "open") {
+                command.reachedHost = true;
+                return;
+              }
               // Only a terminal stream close BEFORE the command's terminal
               // frame is an error. A recoverable drop surfaces as
               // "reconnecting", and the batch client answers it by re-opening
@@ -859,7 +865,6 @@ function enqueueFallbackDeletes(
       target: item.target,
       scripts: item.scripts,
       stopOwners: item.stopOwners,
-      expectedHoldersRevision: item.expectedHoldersRevision,
       openStreamTransport: input.openStreamTransport,
       onSettled: input.onSettled,
     });
@@ -1007,9 +1012,6 @@ function startQueuedDelete(item: QueuedWorktreeDelete): void {
           worktreePath: item.target.worktreePath,
           scripts: item.scripts,
           stopOwners: item.stopOwners,
-          expectedHoldersRevision: item.stopOwners
-            ? sanitizeHoldersRevision(item.expectedHoldersRevision)
-            : undefined,
           callbacks: {
             onStarted: (hasTeardown) =>
               useWorktreeDeleteRunStore
@@ -1036,8 +1038,11 @@ function startQueuedDelete(item: QueuedWorktreeDelete): void {
               closeDeleteClient(item.key);
               settle();
             },
-            onFailed: (reason, holders, _code, holdersRevision) => {
-              if (takePendingBusyHolders(item.key, holders, holdersRevision)) {
+            onFailed: (reason, holders, code) => {
+              if (shouldOfferForceDelete(item.stopOwners, holders, code)) {
+                useWorktreeDeleteRunStore
+                  .getState()
+                  .setPendingBusyHolders(item.key, holders);
                 closeDeleteClient(item.key);
                 settle();
                 return;
@@ -1195,22 +1200,6 @@ function shouldShowProgress(record: WorktreeDeleteRunRecord): boolean {
     record.run.status === "failed" ||
     (record.run.status === "complete" && !record.run.deleted)
   );
-}
-
-function takePendingBusyHolders(
-  key: string,
-  holders: readonly WorktreeBusyHolder[] | undefined,
-  holdersRevision: string | undefined,
-): boolean {
-  if (holders === undefined || holders.length === 0) return false;
-  useWorktreeDeleteRunStore
-    .getState()
-    .setPendingBusyHolders(
-      key,
-      holders,
-      sanitizeHoldersRevision(holdersRevision),
-    );
-  return true;
 }
 
 function worktreeDeleteRunKey(hostId: string, worktreePath: string): string {

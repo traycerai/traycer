@@ -281,7 +281,6 @@ export function ThreadAnchorHoverPopover(props: ThreadAnchorHoverPopoverProps) {
       type="button"
       aria-label="Open thread"
       data-slot="thread-hover-popover"
-      data-browser-overlay="thread-hover-popover"
       onPointerEnter={cancelTimers}
       onPointerLeave={scheduleHide}
       onClick={() => {

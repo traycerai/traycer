@@ -65,6 +65,7 @@ import {
   activateHostedTopLevelSurface,
   refIsFocused,
   refsMatch,
+  registerHostedTopLevelActivationClaims,
 } from "@/components/epic-canvas/surface-host/hosted-top-level-activation";
 
 export { MAX_RETAINED_TOP_LEVEL_SURFACES } from "@/stores/tabs/top-level-surface-retention";
@@ -158,7 +159,11 @@ export function TopLevelTabHost() {
   return (
     <div
       ref={hostBoundsRef}
-      className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden"
+      // `overflow-clip`, not `overflow-hidden`: see the content viewport in
+      // `app-shell.tsx`. Every box between the header and a surface must be
+      // unscrollable, or a stray `focus()` / `scrollIntoView` can park it at a
+      // non-zero offset and push the surface's top row under the header.
+      className="relative flex min-h-0 min-w-0 flex-1 overflow-clip"
       data-testid="top-level-tab-host"
     >
       <PhaseMigrationControllerHost />
@@ -212,9 +217,9 @@ function HostedTileSurfaceHostMount(props: {
     claimPointerDown: claimActivationPointerDown,
   } = activation;
 
-  const claimFocus = useCallback(
-    (event: FocusEvent<HTMLDivElement>): void => {
-      activateHostedTopLevelSurface(event.target, event.defaultPrevented, {
+  const claimFocusFromTarget = useCallback(
+    (target: EventTarget | null, defaultPrevented: boolean): void => {
+      activateHostedTopLevelSurface(target, defaultPrevented, {
         tabsByRefKey,
         activeItem,
         activate:
@@ -224,17 +229,17 @@ function HostedTileSurfaceHostMount(props: {
                 pendingTabRef.current = tab;
                 claimActivationFocus({
                   defaultPrevented: false,
-                  scope: event.target,
-                  target: event.target,
+                  scope: target,
+                  target,
                 });
               },
       });
     },
     [activeItem, activateSurface, claimActivationFocus, tabsByRefKey],
   );
-  const claimPointerDown = useCallback(
-    (event: PointerEvent<HTMLDivElement>): void => {
-      activateHostedTopLevelSurface(event.target, event.defaultPrevented, {
+  const claimPointerDownFromTarget = useCallback(
+    (target: EventTarget | null, defaultPrevented: boolean): void => {
+      activateHostedTopLevelSurface(target, defaultPrevented, {
         tabsByRefKey,
         activeItem,
         activate:
@@ -244,13 +249,34 @@ function HostedTileSurfaceHostMount(props: {
                 pendingTabRef.current = tab;
                 claimActivationPointerDown({
                   defaultPrevented: false,
-                  scope: event.target,
-                  target: event.target,
+                  scope: target,
+                  target,
                 });
               },
       });
     },
     [activeItem, activateSurface, claimActivationPointerDown, tabsByRefKey],
+  );
+  const claimFocus = useCallback(
+    (event: FocusEvent<HTMLDivElement>): void => {
+      claimFocusFromTarget(event.target, event.defaultPrevented);
+    },
+    [claimFocusFromTarget],
+  );
+  const claimPointerDown = useCallback(
+    (event: PointerEvent<HTMLDivElement>): void => {
+      claimPointerDownFromTarget(event.target, event.defaultPrevented);
+    },
+    [claimPointerDownFromTarget],
+  );
+
+  useLayoutEffect(
+    () =>
+      registerHostedTopLevelActivationClaims({
+        claimFocus: claimFocusFromTarget,
+        claimPointerDown: claimPointerDownFromTarget,
+      }),
+    [claimFocusFromTarget, claimPointerDownFromTarget],
   );
 
   return (
@@ -540,7 +566,9 @@ function surfacePlacementKey(
 
 function surfaceClassName(placement: SurfacePlacement): string {
   return cn(
-    "absolute inset-y-0 flex h-full min-h-0 min-w-0 flex-col overflow-hidden",
+    // `overflow-clip`, not `overflow-hidden` - same reason as the host above:
+    // a surface mount that can scroll programmatically never scrolls back.
+    "absolute inset-y-0 flex h-full min-h-0 min-w-0 flex-col overflow-clip",
     placement.kind === "single" && "inset-x-0",
     placement.kind === "hidden" && "hidden pointer-events-none",
   );

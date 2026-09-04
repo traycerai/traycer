@@ -3,14 +3,18 @@ import { X } from "lucide-react";
 import type { BrowserSessionInfo } from "@traycer/protocol/host/browser/contracts";
 import type { HostUnavailability } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { ElectronTabSurface } from "./agent-browser-tile";
-import { BrowserPeekTile, type BrowserPeekNode } from "./browser-peek-tile";
+import {
+  BrowserPeekTile,
+  type BrowserPeekCompleteMeaning,
+  type BrowserPeekNode,
+} from "./browser-peek-tile";
 import { useBrowserSessionsContext } from "./browser-sessions-context";
 import { useCloseCanvasTileWithNestedFocus } from "./use-close-canvas-tile-with-nested-focus";
 import { Button } from "@/components/ui/button";
 import {
   useElectronTabBindingOnHost,
   type ElectronTabBinding,
-} from "@/lib/browser-view/sessions/electron-tabs";
+} from "@/lib/browser-view/sessions/electron-tab-directory";
 import {
   browserPeekFrameKey,
   clearLastBrowserPeekFrame,
@@ -31,9 +35,32 @@ interface BrowserSessionTileBodyProps extends BrowserSessionTileProps {
   readonly tab: BrowserSessionInfo["tabs"][number] | undefined;
   readonly binding: ElectronTabBinding | null;
   readonly inventoryReady: boolean;
+  /**
+   * Whether THIS client could place a native tab on the session's host
+   * (`BrowserSessionsState.canMaterializeElectron`). Every other input here is
+   * a host-side fact that describes some other client's window, and reading
+   * only those is what stranded a viewer-only client on an Electron session:
+   * `kind === "electron"` with no binding read as "my native tab is
+   * reconnecting" on a client that has no native tabs to reconnect.
+   */
+  readonly canMaterializeElectron: boolean;
   readonly wakeRequested: boolean;
   readonly wakeExpired: boolean;
   readonly onRequestWake: () => void;
+}
+
+/**
+ * What the host's `complete` frame means for a peek standing in for this
+ * session, which is entirely a question about the client reading it: the frame
+ * says "this tab is Electron-placed and has no viewer plane here", and only
+ * the client knows whether that Electron tab is its own.
+ */
+function browserPeekCompleteMeaning(
+  runtimeKind: BrowserSessionInfo["runtime"]["kind"],
+  canMaterializeElectron: boolean,
+): BrowserPeekCompleteMeaning {
+  if (runtimeKind !== "electron") return "ended";
+  return canMaterializeElectron ? "native-handoff" : "native-elsewhere";
 }
 
 function BrowserSessionTileBody(props: BrowserSessionTileBodyProps) {
@@ -61,8 +88,13 @@ function BrowserSessionTileBody(props: BrowserSessionTileBodyProps) {
   // into an already-electron session and publishes its native binding. Take
   // that branch only while there is no binding: a bound tab's pixels are
   // native, whatever the host has published for its status.
+  //
+  // A client that cannot place a native tab on this host takes it
+  // unconditionally: every branch below waits on a binding this client can
+  // never be handed, so the viewer is the only one that can ever resolve.
   if (
     props.session.runtime.kind !== "electron" ||
+    !props.canMaterializeElectron ||
     (props.binding === null &&
       (props.tab.status === "dormant" || props.wakeRequested))
   ) {
@@ -81,7 +113,10 @@ function BrowserSessionTileBody(props: BrowserSessionTileBodyProps) {
         node={peek}
         viewTabId={props.viewTabId}
         paneId={props.paneId}
-        isElectronWake={props.session.runtime.kind === "electron"}
+        completeMeans={browserPeekCompleteMeaning(
+          props.session.runtime.kind,
+          props.canMaterializeElectron,
+        )}
       />
     );
   }
@@ -452,6 +487,7 @@ export function BrowserSessionTile(props: BrowserSessionTileProps) {
           tab={tab}
           binding={binding}
           inventoryReady={sessions.inventoryReady}
+          canMaterializeElectron={sessions.canMaterializeElectron}
           wakeRequested={wakeActive}
           wakeExpired={wakeExpired}
           onRequestWake={requestWake}

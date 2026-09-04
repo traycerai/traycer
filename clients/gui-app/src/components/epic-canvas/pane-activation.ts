@@ -196,24 +196,29 @@ export interface PaneActivationClaimEvent {
 
 type HostedPaneActivationClaim = (event: PaneActivationClaimEvent) => void;
 
+interface HostedPaneActivationClaims {
+  readonly claimFocus: HostedPaneActivationClaim;
+  readonly claimPointerDown: HostedPaneActivationClaim;
+}
+
 const hostedPaneActivationClaims = new Map<
   string,
-  Map<string, HostedPaneActivationClaim>
+  Map<string, HostedPaneActivationClaims>
 >();
 
 export function registerHostedPaneActivationClaim(
   viewTabId: string,
   paneId: string,
-  claim: HostedPaneActivationClaim,
+  claims: HostedPaneActivationClaims,
 ): () => void {
   let claimsByPane = hostedPaneActivationClaims.get(viewTabId);
   if (claimsByPane === undefined) {
     claimsByPane = new Map();
     hostedPaneActivationClaims.set(viewTabId, claimsByPane);
   }
-  claimsByPane.set(paneId, claim);
+  claimsByPane.set(paneId, claims);
   return () => {
-    if (claimsByPane.get(paneId) !== claim) return;
+    if (claimsByPane.get(paneId) !== claims) return;
     claimsByPane.delete(paneId);
     if (claimsByPane.size === 0) hostedPaneActivationClaims.delete(viewTabId);
   };
@@ -224,7 +229,18 @@ export function claimHostedPaneActivation(
   paneId: string,
   event: PaneActivationClaimEvent,
 ): void {
-  hostedPaneActivationClaims.get(viewTabId)?.get(paneId)?.(event);
+  hostedPaneActivationClaims
+    .get(viewTabId)
+    ?.get(paneId)
+    ?.claimPointerDown(event);
+}
+
+export function claimHostedPaneActivationFocus(
+  viewTabId: string,
+  paneId: string,
+  event: PaneActivationClaimEvent,
+): void {
+  hostedPaneActivationClaims.get(viewTabId)?.get(paneId)?.claimFocus(event);
 }
 
 interface PaneGestureSubscriber {

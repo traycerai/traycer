@@ -1,5 +1,5 @@
 import { useLayoutEffect, useMemo, useState, type ReactElement } from "react";
-import { AlertTriangle, Pause, Radio, WifiOff } from "lucide-react";
+import { AlertTriangle, Monitor, Pause, Radio, WifiOff } from "lucide-react";
 import { toast } from "sonner";
 import { useTileBodyVisible } from "@/components/epic-canvas/hooks/use-tile-body-visible";
 import {
@@ -39,12 +39,22 @@ import {
   useScreencastSession,
   type ScreencastDialog,
   type ScreencastLifecycle,
+  type ScreencastSession,
 } from "@/lib/browser-view/sessions/use-screencast-session";
 import { useStreamAuthRevalidator } from "@/lib/host/stream-auth-revalidator";
 import { cn } from "@/lib/utils";
 import { useScreencastArmedStore } from "@/stores/screencast-armed-store";
 import type { BrowserSessionTileRef } from "@/stores/epics/canvas/types";
 import { DEFAULT_BROWSER_TILE_URL } from "@/stores/epics/canvas/tile-schema/browser-tile";
+
+/**
+ * `touch-none`: the controller translates a finger drag into wheel frames
+ * itself, and it can only see the moves the browser does not consume for its
+ * own panning and pinch-zoom. Touch-action governs touch and pen alone, so a
+ * mouse is unaffected.
+ */
+const SCREENCAST_SURFACE_CLASS =
+  "absolute inset-0 h-full w-full cursor-default touch-none overflow-hidden bg-background p-0 text-left outline-none";
 
 interface BrowserPeekStatus {
   readonly label: string;
@@ -60,19 +70,31 @@ export type BrowserPeekNode = Pick<
   readonly initialUrl: string;
 };
 
+/**
+ * What the host's `complete` frame means for this tile. The host answers it for
+ * every Electron-placed tab (`browser-screencast-plane.ts`'s
+ * `subscribeScreencast`), because such a tab has no viewer plane there - so the
+ * frame alone cannot say whether pixels are about to appear somewhere else on
+ * this screen or will never appear here at all.
+ *
+ * - `ended` - an ordinary cast that stopped.
+ * - `native-handoff` - this client is the one placing the native tab, so its
+ *   own window is a beat away from showing the page.
+ * - `native-elsewhere` - the tab is live in the desktop app on that host and no
+ *   surface here can ever show it. Terminal, and said as such rather than
+ *   dressed as a handoff that is not coming.
+ */
+export type BrowserPeekCompleteMeaning =
+  | "ended"
+  | "native-handoff"
+  | "native-elsewhere";
+
 interface BrowserPeekTileProps {
   readonly epicId: string;
   readonly node: BrowserPeekNode;
   readonly viewTabId: string;
   readonly paneId: string;
-  /**
-   * Set only by `BrowserSessionTile` while this peek is standing in for a
-   * durable Electron session's dormant/wake branch (`runtime.kind ===
-   * "electron"`). There the host's `complete` frame means "attached, going
-   * native" (`browser-screencast-plane.ts`'s `subscribeScreencast`), not a
-   * dead cast - so the lifecycle chip must not read as a failure mid-handoff.
-   */
-  readonly isElectronWake: boolean;
+  readonly completeMeans: BrowserPeekCompleteMeaning;
 }
 
 /**
@@ -120,8 +142,8 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
   const sessionProfile =
     browserSessions?.items.find((item) => item.sessionId === node.sessionId)
       ?.profile ?? "primary";
-  const { image, frameSize, navState, armedEpoch, dialog } = session;
-  const { tileRef, viewportRef, overlayButtonRef, imeInputRef } = session.refs;
+  const { image, navState, armedEpoch, dialog, readOnly } = session;
+  const { tileRef, viewportRef } = session.refs;
   useRetainLastBrowserPeekFrame(frameCacheKey, image);
   const inputOwnerId =
     armedEpoch === null
@@ -143,16 +165,19 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
         session.lifecycle,
         visible,
         session.details,
-        props.isElectronWake,
+        props.completeMeans,
       ),
-    [session.details, session.lifecycle, visible, props.isElectronWake],
+    [session.details, session.lifecycle, visible, props.completeMeans],
   );
 
   const chrome = useScreencastTileChrome({
     profile: sessionProfile,
     navState,
     initialUrl: node.initialUrl,
-    disabled: client === null,
+    // A `viewer` subscription is refused every nav frame too (H07's
+    // `viewer-passive` list is the whole client-frame set), so the toolbar
+    // reads as the read-only chrome it is instead of silently dropping clicks.
+    disabled: readOnly || client === null,
     onNavigateUrl: (url) => {
       session.requestNav({ kind: "navigate", url });
     },
@@ -176,7 +201,9 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
       chrome.onAddressFocusChange(focused);
     },
   };
-  const showStartPage = chrome.controller.url === DEFAULT_BROWSER_TILE_URL;
+  // The start page is a launcher - pure navigation, which a viewer cannot do.
+  const showStartPage =
+    !readOnly && chrome.controller.url === DEFAULT_BROWSER_TILE_URL;
 
   return (
     <div
@@ -188,6 +215,7 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
         <BrowserTileToolbarCompact
           controller={controller}
           loading={navState.loading}
+          readOnly={readOnly}
         />
       ) : (
         <ScreencastPeekChromeBar
@@ -208,6 +236,7 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
           }}
           loading={navState.loading}
           armed={armedEpoch !== null}
+          readOnly={readOnly}
           status={status}
           onRelease={session.disarm}
         />
@@ -227,46 +256,11 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
             onNavigate={chrome.navigateToUrl}
           />
         ) : null}
-        <button
-          ref={overlayButtonRef}
-          type="button"
-          hidden={showStartPage}
-          // `touch-none`: the controller translates a finger drag into wheel
-          // frames itself, and it can only see the moves the browser does not
-          // consume for its own panning and pinch-zoom. Touch-action governs
-          // touch and pen alone, so a mouse is unaffected.
-          className="absolute inset-0 h-full w-full cursor-default touch-none overflow-hidden bg-background p-0 text-left outline-none"
-          aria-label="Browser screencast controls"
-          {...session.overlayHandlers}
-        >
-          <ScreencastSurface session={session} />
-          {status.overlay === null ? null : (
-            <div className="pointer-events-none absolute inset-x-3 bottom-3 rounded border border-border bg-popover/95 px-3 py-2 text-ui-sm text-popover-foreground shadow-sm">
-              {status.overlay}
-            </div>
-          )}
-          {import.meta.env.DEV && frameSize !== null ? (
-            <div className="pointer-events-none absolute left-3 top-3 rounded-sm bg-background/80 px-2 py-1 font-mono text-ui-xs text-muted-foreground">
-              {frameSize.width} x {frameSize.height}
-            </div>
-          ) : null}
-        </button>
-        <input
-          ref={imeInputRef}
-          aria-label="Browser IME input"
-          autoComplete="off"
-          disabled={showStartPage}
-          className="pointer-events-none absolute left-0 top-0 size-px opacity-0"
-          {...session.imeHandlers}
+        <ScreencastPeekSurface
+          session={session}
+          overlay={status.overlay}
+          showStartPage={showStartPage}
         />
-        {!showStartPage && session.composing ? (
-          <div
-            aria-live="polite"
-            className="pointer-events-none absolute right-3 top-3 rounded-sm bg-background/90 px-2 py-1 text-ui-xs text-muted-foreground"
-          >
-            Composing text…
-          </div>
-        ) : null}
         {showStartPage || dialog === null ? null : (
           <BrowserDialogOverlay
             key={dialog.generation}
@@ -280,11 +274,88 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
   );
 }
 
+/**
+ * The pixels and everything that reaches them. A `viewer` subscription gets
+ * the pixels alone (H12): the host refuses its every claim and input frame,
+ * so an overlay button and an IME input here would be controls that start a
+ * gesture nothing finishes - which is what reads as a broken tab.
+ */
+function ScreencastPeekSurface(props: {
+  readonly session: ScreencastSession;
+  readonly overlay: string | null;
+  readonly showStartPage: boolean;
+}) {
+  const session = props.session;
+  const { overlayButtonRef, imeInputRef } = session.refs;
+  const frameSize = session.frameSize;
+  const pixels = (
+    <>
+      <ScreencastSurface session={session} />
+      {props.overlay === null ? null : (
+        <div className="pointer-events-none absolute inset-x-3 bottom-3 rounded border border-border bg-popover/95 px-3 py-2 text-ui-sm text-popover-foreground shadow-sm">
+          {props.overlay}
+        </div>
+      )}
+      {import.meta.env.DEV && frameSize !== null ? (
+        <div className="pointer-events-none absolute left-3 top-3 rounded-sm bg-background/80 px-2 py-1 font-mono text-ui-xs text-muted-foreground">
+          {frameSize.width} x {frameSize.height}
+        </div>
+      ) : null}
+    </>
+  );
+
+  if (session.readOnly) {
+    return (
+      // `role="img"`: the `<img alt>` underneath is hidden while the video
+      // plane paints, so the surface itself has to carry the label.
+      <div
+        role="img"
+        aria-label="Browser screencast, view only"
+        data-testid="browser-screencast-view"
+        className={SCREENCAST_SURFACE_CLASS}
+      >
+        {pixels}
+      </div>
+    );
+  }
+  return (
+    <>
+      <button
+        ref={overlayButtonRef}
+        type="button"
+        hidden={props.showStartPage}
+        className={SCREENCAST_SURFACE_CLASS}
+        aria-label="Browser screencast controls"
+        {...session.overlayHandlers}
+      >
+        {pixels}
+      </button>
+      <input
+        ref={imeInputRef}
+        aria-label="Browser IME input"
+        autoComplete="off"
+        disabled={props.showStartPage}
+        className="pointer-events-none absolute left-0 top-0 size-px opacity-0"
+        {...session.imeHandlers}
+      />
+      {!props.showStartPage && session.composing ? (
+        <div
+          aria-live="polite"
+          className="pointer-events-none absolute right-3 top-3 rounded-sm bg-background/90 px-2 py-1 text-ui-xs text-muted-foreground"
+        >
+          Composing text…
+        </div>
+      ) : null}
+    </>
+  );
+}
+
 function ScreencastPeekChromeBar(props: {
   readonly controller: TileController;
   readonly pictureInPicture: BrowserPictureInPictureControl;
   readonly loading: boolean;
   readonly armed: boolean;
+  readonly readOnly: boolean;
   readonly status: BrowserPeekStatus;
   readonly onRelease: () => void;
 }) {
@@ -307,6 +378,7 @@ function ScreencastPeekChromeBar(props: {
               />
             </span>
           ) : null}
+          {props.readOnly ? <Badge variant="outline">View only</Badge> : null}
           {props.armed ? (
             <div className="flex shrink-0 items-center gap-1">
               <Badge variant="outline">Controlling</Badge>
@@ -451,7 +523,7 @@ function browserPeekStatus(
   lifecycle: ScreencastLifecycle,
   visible: boolean,
   details: string | null,
-  isElectronWake: boolean,
+  completeMeans: BrowserPeekCompleteMeaning,
 ): BrowserPeekStatus {
   if (!visible) {
     return {
@@ -485,12 +557,24 @@ function browserPeekStatus(
     // a dead cast (`browser-screencast-plane.ts`'s `subscribeScreencast`) -
     // WifiOff/"Ended" would read as a failure at the exact moment the tab is
     // succeeding.
-    if (isElectronWake) {
+    if (completeMeans === "native-handoff") {
       return {
         label: "Going native",
         overlay: "Handing off to the native tab.",
         tone: "muted",
         Icon: Radio,
+      };
+    }
+    // The same frame, read from a client with no native window of its own to
+    // hand off to. Nothing is in flight and nothing will arrive, so it says so
+    // rather than spinning on a handoff that is happening on another machine.
+    if (completeMeans === "native-elsewhere") {
+      return {
+        label: "Open natively",
+        overlay:
+          "This tab is open in the desktop app on that host, so it can't be streamed here.",
+        tone: "muted",
+        Icon: Monitor,
       };
     }
     return {

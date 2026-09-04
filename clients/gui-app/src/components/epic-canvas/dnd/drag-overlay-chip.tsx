@@ -112,17 +112,12 @@ export function EpicRootDragOverlayContent() {
     activeSource?.kind === WORKSPACE_FOLDER_DND_TYPE ? activeSource : null;
 
   return (
-    // One native-view occlusion marker for every chip. The coordinator scans
-    // `[data-browser-overlay]` elements and takes each one's own bounding rect
-    // (`collectBrowserOverlaySurfaces`), so an ancestor is read exactly like a
-    // chip root as long as it hugs the chip - hence `w-max`. Marking here
-    // rather than per chip is what stops the next chip variant from being born
-    // invisible over a live browser tile, the way the published-chat one was.
-    // dnd-kit's `<DragOverlay>` takes no data attributes, so this is the
-    // outermost element we own; it exists only while a drag is active.
+    // One wrapper for every chip variant. dnd-kit's `<DragOverlay>` takes no
+    // ref of its own, so this is the outermost element we own; it exists only
+    // while a drag is active. `w-max` keeps the wrapper hugging the chip.
     <div
+      data-testid="drag-overlay-marker"
       className="pointer-events-none w-max"
-      data-browser-overlay="drag-overlay"
     >
       <AnimatePresence initial={false}>
         {overlayTile === null || openableSource === null ? null : (

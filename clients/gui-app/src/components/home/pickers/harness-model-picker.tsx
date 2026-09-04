@@ -14,6 +14,7 @@ import {
 } from "@/components/home/data/landing-options";
 import { useSurfaceActivity } from "@/components/home/composer/surface-activity-hooks";
 import type { ComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
+import type { ProviderTerminalLoginSurface } from "@/lib/providers/provider-terminal-login-surface";
 import {
   commitProfileSelection,
   commitSelection,
@@ -174,6 +175,16 @@ interface HarnessModelPickerProps {
    * renderer-default host while the composer is bound elsewhere.
    */
   runTargetHostId: string | null;
+  /**
+   * Where a provider's setup terminal lands when the picker's setup CTA
+   * starts one - the epic (and view) this picker's composer lives in, or the
+   * landing page whose terminal panel should open. Named by the composer,
+   * never inferred: the same session is visible on exactly one surface.
+   * `null` for a surface with no terminal to open into (fork dialogs, the
+   * add-node menu, the in-epic new-conversation modal); the CTA then shows
+   * the steps without the button. See the type's doc for the modal case.
+   */
+  terminalLoginSurface: ProviderTerminalLoginSurface | null;
   /** Forwarded to `HarnessModelTrigger`; see its `labelDisplay`. */
   labelDisplay: "responsive" | "model-only";
   /**
@@ -196,6 +207,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     registerActivation,
     createProfileHostId,
     runTargetHostId,
+    terminalLoginSurface,
     profileAdmission,
   } = props;
   const activityEnabled = useSurfaceActivity();
@@ -1013,6 +1025,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         serviceTierFooter={serviceTierFooter}
         createProfileHostId={createProfileHostId}
         runTargetHostId={runTargetHostId}
+        terminalLoginSurface={terminalLoginSurface}
         createProfileDisabled={createProfileGate.disabled}
         createProfileDisabledReason={createProfileGate.reason}
         profileAdmission={profileAdmission}

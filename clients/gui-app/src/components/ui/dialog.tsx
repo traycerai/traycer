@@ -48,6 +48,7 @@ function DialogOverlay({
 }
 
 function DialogContent({
+  ref,
   className,
   children,
   showCloseButton = true,
@@ -74,8 +75,8 @@ function DialogContent({
     <DialogPortal>
       <DialogOverlay />
       <DialogPrimitive.Content
+        ref={ref}
         data-slot="dialog-content"
-        data-browser-overlay="dialog"
         className={cn(
           // `top-safe-center-y` / `left-safe-center-x`, not `top-1/2` /
           // `left-1/2`: a fixed element centres on the viewport, which on a

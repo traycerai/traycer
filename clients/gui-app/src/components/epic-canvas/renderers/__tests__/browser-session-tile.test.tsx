@@ -10,7 +10,8 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrowserSessionInfo } from "@traycer/protocol/host/browser/contracts";
 import { BrowserSessionTile } from "@/components/epic-canvas/renderers/browser-session-tile";
-import type { ElectronTabBinding } from "@/lib/browser-view/sessions/electron-tabs";
+import type { BrowserPeekCompleteMeaning } from "@/components/epic-canvas/renderers/browser-peek-tile";
+import type { ElectronTabBinding } from "@/lib/browser-view/sessions/electron-tab-directory";
 import type { BrowserSessionTileRef } from "@/stores/epics/canvas/types";
 
 const harness = vi.hoisted(() => ({
@@ -18,6 +19,10 @@ const harness = vi.hoisted(() => ({
   items: [] as BrowserSessionInfo[],
   lifecycle: "live",
   inventoryReady: true,
+  // Defaults to the Electron-capable client these cases were written for: a
+  // desktop co-located with the tile's host. A viewer-only client sets it
+  // false, and then never reaches the native or rebind branches at all.
+  canMaterializeElectron: true,
   closeCanvasTile: vi.fn(),
 }));
 
@@ -55,6 +60,7 @@ vi.mock("@/components/epic-canvas/renderers/browser-sessions-context", () => ({
     hostId: "host-test",
     lifecycle: harness.lifecycle,
     inventoryReady: harness.inventoryReady,
+    canMaterializeElectron: harness.canMaterializeElectron,
     items: harness.items,
     errorMessage: null,
     retry: vi.fn(),
@@ -62,7 +68,7 @@ vi.mock("@/components/epic-canvas/renderers/browser-sessions-context", () => ({
     closeTab: vi.fn(),
   }),
 }));
-vi.mock("@/lib/browser-view/sessions/electron-tabs", () => ({
+vi.mock("@/lib/browser-view/sessions/electron-tab-directory", () => ({
   useElectronTabBindingOnHost: (
     sessionId: string,
     tabId: string,
@@ -99,6 +105,7 @@ vi.mock("@/components/epic-canvas/renderers/agent-browser-tile", () => ({
 vi.mock("@/components/epic-canvas/renderers/browser-peek-tile", () => ({
   BrowserPeekTile: (props: {
     readonly node: { readonly sessionId: string; readonly tabId: string };
+    readonly completeMeans: BrowserPeekCompleteMeaning;
   }) => (
     <button
       type="button"
@@ -106,6 +113,7 @@ vi.mock("@/components/epic-canvas/renderers/browser-peek-tile", () => ({
       data-testid="headless-browser-tab"
       data-session={props.node.sessionId}
       data-tab={props.node.tabId}
+      data-complete-means={props.completeMeans}
     />
   ),
 }));
@@ -196,6 +204,7 @@ describe("BrowserSessionTile lifecycle projection", () => {
     harness.items = [session("dormant", "dormant")];
     harness.lifecycle = "live";
     harness.inventoryReady = true;
+    harness.canMaterializeElectron = true;
     harness.closeCanvasTile.mockClear();
     reachabilityHarness.status = "reachable";
     reachabilityHarness.hostLabel = "host-test";
@@ -227,6 +236,11 @@ describe("BrowserSessionTile lifecycle projection", () => {
     expect(screen.getByTestId("headless-browser-tab").dataset.tab).toBe(
       "tab-1",
     );
+    // A plain headless viewer: the host's `complete` frame is an ordinary
+    // dead cast here, never a native handoff or an unreachable native tab.
+    expect(
+      screen.getByTestId("headless-browser-tab").dataset.completeMeans,
+    ).toBe("ended");
     expect(screen.queryByTestId("managed-electron-tab")).toBeNull();
   });
 
@@ -239,6 +253,9 @@ describe("BrowserSessionTile lifecycle projection", () => {
     expect(screen.getByTestId("headless-browser-tab").dataset.tab).toBe(
       "tab-1",
     );
+    expect(
+      screen.getByTestId("headless-browser-tab").dataset.completeMeans,
+    ).toBe("ended");
   });
 
   it("closes a pointer only after a previously visible tab disappears from live state", async () => {
@@ -299,6 +316,74 @@ describe("BrowserSessionTile lifecycle projection", () => {
     expect(screen.queryByTestId("headless-browser-tab")).toBeNull();
   });
 
+  it("takes the viewer branch for a non-capable client on a ready electron session, never the rebind alert", () => {
+    // A viewer-only client (no co-located browserView, or a browserView bound
+    // to a different host than the session's) can never place a native tab
+    // for this session. `kind === "electron"` + `binding === null` alone would
+    // fall into `BrowserTabRebindWait`, which waits on a desktop-side
+    // re-publish that structurally cannot come for this client.
+    harness.canMaterializeElectron = false;
+    harness.items = [session("ready", "electron")];
+
+    renderTile();
+
+    expect(screen.getByTestId("headless-browser-tab").dataset.tab).toBe(
+      "tab-1",
+    );
+    // The non-capable client's own view of the same `complete` frame: this
+    // tab is live in the desktop's window on that host, unreachable from
+    // here - never the "my own tab is arriving" handoff spinner.
+    expect(
+      screen.getByTestId("headless-browser-tab").dataset.completeMeans,
+    ).toBe("native-elsewhere");
+    expect(screen.queryByText("Reconnecting browser tab…")).toBeNull();
+    expect(screen.queryByTestId("browser-tab-rebind-timeout")).toBeNull();
+    expect(screen.queryByTestId("managed-electron-tab")).toBeNull();
+  });
+
+  it("takes the viewer branch for a non-capable client even once the reconnect wait would have expired", () => {
+    // Same non-capable client, but proving the bounded-wait/rebind-timeout
+    // machinery never engages at all for it - not merely that it starts in the
+    // viewer branch. An electron-capable client (default harness) reaches the
+    // timeout alert at this point (see "bounds the reconnect wait..." above);
+    // this client must not.
+    vi.useFakeTimers();
+    try {
+      harness.canMaterializeElectron = false;
+      harness.items = [session("ready", "electron")];
+
+      renderTile();
+
+      act(() => {
+        vi.advanceTimersByTime(10_000);
+      });
+
+      expect(screen.getByTestId("headless-browser-tab").dataset.tab).toBe(
+        "tab-1",
+      );
+      expect(
+        screen.getByTestId("headless-browser-tab").dataset.completeMeans,
+      ).toBe("native-elsewhere");
+      expect(screen.queryByTestId("browser-tab-rebind-timeout")).toBeNull();
+      expect(screen.queryByText("Reconnecting browser tab…")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the electron-capable default meaningful: the same session still reaches the reconnect wait and rebind alert", () => {
+    // Pins that the harness's `canMaterializeElectron: true` default (used by
+    // every other case in this suite) is not accidentally masking the branch
+    // this file exists to cover - the capable path still resolves to the
+    // native-binding-reconnect machinery, not the viewer branch.
+    harness.items = [session("ready", "electron")];
+
+    renderTile();
+
+    expect(screen.getByText("Reconnecting browser tab…")).toBeTruthy();
+    expect(screen.queryByTestId("headless-browser-tab")).toBeNull();
+  });
+
   it("takes the wake path for a dormant tab of an Electron session", () => {
     // `materialize` provisions only the tab it was asked for, so a live
     // Electron session routinely publishes dormant siblings. A sibling that
@@ -313,6 +398,13 @@ describe("BrowserSessionTile lifecycle projection", () => {
       screen.getByRole("button", { name: "Browser screencast controls" })
         .dataset.tab,
     ).toBe("tab-1");
+    // The capable client's own wake/peek path: the desktop is about to
+    // publish a native binding for this tab, so the frame reads as a
+    // handoff in progress, not an unreachable native tab.
+    expect(
+      screen.getByRole("button", { name: "Browser screencast controls" })
+        .dataset.completeMeans,
+    ).toBe("native-handoff");
     expect(
       screen.queryByRole("status", { name: "Reconnecting browser tab" }),
     ).toBeNull();

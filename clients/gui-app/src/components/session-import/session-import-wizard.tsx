@@ -36,7 +36,7 @@ import {
   SessionImportGroupItem,
 } from "@/components/session-import/session-import-group";
 import { SessionImportProgress } from "@/components/session-import/session-import-progress";
-import { useSessionImportScan } from "@/components/session-import/use-session-import-scan";
+import type { SessionImportScanHandle } from "@/components/session-import/use-session-import-scan";
 import { startSessionImportRun } from "@/components/session-import/session-import-run-handle";
 import {
   sessionImportTone,
@@ -52,27 +52,26 @@ export interface SessionImportSecondaryAction {
 
 /**
  * The one import surface, used by the onboarding act and the Settings dialog
- * alike (spec D3). It scans while it is open, never before (D13), and hands the
- * user's selection to the app-wide run controller rather than owning the run
- * itself - which is what lets it be closed mid-import.
+ * alike (spec D3). It hands the user's selection to the app-wide run
+ * controller rather than owning the run itself - which is what lets it be
+ * closed mid-import.
  *
- * The two surfaces differ in who presses go. The dialog owns its own "Import"
- * button; the tour has exactly one forward control, so the act's Continue
- * submits through `registerSubmit` and a second button beside it would be a
- * second way to do the same thing.
+ * The scan is the caller's (`useSessionImportScan`), because the two surfaces
+ * start it at different moments: the dialog when it opens, the tour when it
+ * begins - several acts before this wizard is on screen (D13, revised).
+ *
+ * Both surfaces submit through the wizard's own Import button. The tour used
+ * to submit through its Continue instead, which imported the default selection
+ * without an explicit ask; an import now starts only when Import is pressed.
  */
 export function SessionImportWizard(props: {
   readonly surface: SessionImportSurface;
+  readonly scan: SessionImportScanHandle;
   /** Called once a run has been submitted, so the caller can move on. */
   readonly onImportStarted: () => void;
   readonly secondaryAction: SessionImportSecondaryAction | null;
-  /**
-   * Hands the caller the wizard's submit, for a surface whose go-button lives
-   * outside it. Null on a surface that submits itself.
-   */
-  readonly registerSubmit: ((submit: () => void) => void) | null;
 }) {
-  const { surface, onImportStarted, secondaryAction, registerSubmit } = props;
+  const { surface, scan, onImportStarted, secondaryAction } = props;
   const tone = sessionImportTone(surface);
   const runStatus = useSessionImportRunStore((state) => state.status);
   const runIdle = runStatus === "idle";
@@ -86,7 +85,7 @@ export function SessionImportWizard(props: {
     if (run.status === "complete" || run.status === "error") run.reset();
   }, []);
 
-  const { state, dispatch } = useSessionImportScan(runIdle);
+  const { state, dispatch } = scan;
   const view = useMemo(() => buildSessionImportView(state), [state]);
   // The master checkbox reads the VISIBLE slice: it heads the list exactly as
   // the search and pills have narrowed it, so what it shows and what it moves
@@ -97,8 +96,8 @@ export function SessionImportWizard(props: {
   );
 
   const submit = (): void => {
-    // A run already under way owns the screen; Continue during one is the user
-    // moving on, not a second import.
+    // A run already under way owns the screen, and the button is not rendered
+    // then - this guards a click that raced the store.
     if (!runIdle) return;
     const submission = buildSessionImportSubmission(state);
     if (submission.selections.length === 0) return;
@@ -110,14 +109,6 @@ export function SessionImportWizard(props: {
     startSessionImportRun(submission);
     onImportStarted();
   };
-
-  // Re-registered on every render, deliberately: the caller presses Continue
-  // long after this runs, and it has to submit the selection as it stands then,
-  // not the one this mount opened with.
-  useEffect(() => {
-    if (registerSubmit === null) return;
-    registerSubmit(submit);
-  });
 
   if (!runIdle) {
     return (
@@ -280,9 +271,7 @@ export function SessionImportWizard(props: {
         tone={tone}
         view={view}
         secondaryAction={secondaryAction}
-        // The surface that hands its submit to a caller has no button of its
-        // own; the one that keeps it renders it here.
-        onSubmit={registerSubmit === null ? submit : null}
+        onSubmit={submit}
       />
     </div>
   );
@@ -425,18 +414,15 @@ function ScanWindowSelect(props: {
 
 /**
  * The pinned footer: just the actions that end the conversation. The selection
- * count and the master checkbox live at the head of the list they describe, so
- * a surface with no button of its own (the tour, whose Continue lives outside)
- * has no footer at all.
+ * count and the master checkbox live at the head of the list they describe.
  */
 function SessionImportFooter(props: {
   readonly tone: SessionImportTone;
   readonly view: SessionImportWizardView;
   readonly secondaryAction: SessionImportSecondaryAction | null;
-  readonly onSubmit: (() => void) | null;
+  readonly onSubmit: () => void;
 }) {
   const { tone, view, secondaryAction, onSubmit } = props;
-  if (secondaryAction === null && onSubmit === null) return null;
   return (
     <div
       className={cn(
@@ -454,18 +440,16 @@ function SessionImportFooter(props: {
           {secondaryAction.label}
         </Button>
       ) : null}
-      {onSubmit !== null ? (
-        <Button
-          type="button"
-          size="sm"
-          data-testid="session-import-submit"
-          disabled={view.selectedCount === 0}
-          onClick={onSubmit}
-        >
-          Import {view.selectedCount}{" "}
-          {view.selectedCount === 1 ? "session" : "sessions"}
-        </Button>
-      ) : null}
+      <Button
+        type="button"
+        size="sm"
+        data-testid="session-import-submit"
+        disabled={view.selectedCount === 0}
+        onClick={onSubmit}
+      >
+        Import {view.selectedCount}{" "}
+        {view.selectedCount === 1 ? "session" : "sessions"}
+      </Button>
     </div>
   );
 }

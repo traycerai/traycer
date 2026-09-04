@@ -51,6 +51,7 @@ function DrawerOverlay({
  * handle renders only for the bottom direction.
  */
 function DrawerContent({
+  ref,
   className,
   children,
   ...props
@@ -59,6 +60,7 @@ function DrawerContent({
     <DrawerPortal data-slot="drawer-portal">
       <DrawerOverlay />
       <DrawerPrimitive.Content
+        ref={ref}
         data-slot="drawer-content"
         className={cn(
           "group/drawer-content fixed z-50 flex h-auto flex-col bg-popover bg-clip-padding text-popover-foreground shadow-lg",

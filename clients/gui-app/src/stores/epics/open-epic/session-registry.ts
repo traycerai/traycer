@@ -5,25 +5,31 @@ import type {
 import {
   createSessionRegistry,
   type SessionRegistry,
+  type SessionDisposeCause,
 } from "@traycer-clients/shared/replica-runtime";
 import { createRendererRuntimeEnvironment } from "@/stores/epics/open-epic/runtime/runtime-environment";
 import { appLogger } from "@/lib/logger";
 import { useSyncExternalStore } from "react";
 import {
+  agentActivityPlaneAnswers,
+  agentActivityPlaneCoversHost,
   getEpicAgentActivity,
   subscribeAgentActivity,
+  subscribeAgentActivityPlaneHealth,
 } from "@/stores/agent-activity-store";
 
 /**
- * MRU registry for live Epic sessions. Keeps up to 5 open in the background
- * so tab-switching is instant; evicts the oldest **clean / synced / inactive**
- * handle once the cap is exceeded.
+ * MRU registry for live Epic sessions. Keeps up to `maxLive` open in the
+ * background so tab-switching is instant; evicts the oldest **synced /
+ * inactive** handle once the cap is exceeded.
  *
- * Soft-cap rule: if every entry is dirty (unsynced edits pending, or still
- * reconnecting with unflushed writes) or has active agent work, the registry
- * temporarily stays above the cap until at least one entry becomes clean and
- * inactive, at which point it prunes down to the cap. Closing an Epic tab
- * forcibly disposes that session regardless of the cap.
+ * Soft-cap rule: if every entry is dirty (unsynced edits pending, or
+ * unflushed writes) or has active agent work - or the activity plane cannot
+ * say whether it has - the registry temporarily stays above the cap until at
+ * least one entry becomes clean and inactive, at which point it prunes down
+ * to the cap. Whether the entry's transport is open is NOT part of the rule
+ * (see `holdsNothingToLose`). Closing an Epic tab forcibly disposes that
+ * session regardless of the cap.
  *
  * The warm-pool CORE - the entry map, the mounted-reference count, the MRU
  * ordering, the cap walk, the one teardown path, the listener set - is the
@@ -81,6 +87,61 @@ const handleWorkerLiveness = new WeakMap<
   { dead: boolean }
 >();
 
+/**
+ * Why the Epic SESSION owner deliberately ended its durable transport.
+ *
+ * This is deliberately narrower than the shared registry's disposal causes:
+ * staging needs the product-level churn source (prune, tab close, rebuild or
+ * re-point), not the registry mechanism that happened to carry it.
+ */
+export type EpicSessionTransportCloseTrigger =
+  | "prune"
+  | "tab-close"
+  | "retry-rebuild"
+  | "repoint"
+  | "sign-out"
+  | "construction-failed";
+
+const handleTransportCloseAttribution = new WeakMap<
+  OpenEpicStoreHandle,
+  (trigger: EpicSessionTransportCloseTrigger) => void
+>();
+
+/** Binds a provider-owned transport to the registry that decides its fate. */
+export function trackEpicSessionTransportCloseAttribution(
+  handle: OpenEpicStoreHandle,
+  attribute: (trigger: EpicSessionTransportCloseTrigger) => void,
+): void {
+  handleTransportCloseAttribution.set(handle, attribute);
+}
+
+/** Records the next close trigger without widening the store-handle API. */
+export function attributeEpicSessionTransportClose(
+  handle: OpenEpicStoreHandle,
+  trigger: EpicSessionTransportCloseTrigger,
+): void {
+  handleTransportCloseAttribution.get(handle)?.(trigger);
+}
+
+function transportCloseTriggerForCause(
+  cause: SessionDisposeCause,
+): EpicSessionTransportCloseTrigger {
+  switch (cause) {
+    case "idle-expired":
+    case "warm-overflow":
+      return "prune";
+    case "released":
+      return "tab-close";
+    case "scope-mismatch":
+    case "unusable":
+      return "retry-rebuild";
+    case "replaced":
+      return "repoint";
+    case "dispose-all":
+      return "sign-out";
+  }
+}
+
 /** Binds a handle to the liveness cell its own fatal relay writes. */
 export function trackEpicSessionHandleLiveness(
   handle: OpenEpicStoreHandle,
@@ -110,7 +171,12 @@ export function isEpicSessionHandleDead(handle: OpenEpicStoreHandle): boolean {
 const EPIC_SESSION_SCOPE = "epic";
 
 export interface OpenEpicSessionRegistryOptions {
-  readonly maxLive: number;
+  /**
+   * The resident cap. A function is resolved on every cap walk, which is how
+   * the production singleton follows the shell's retention profile without
+   * having to be constructed after the shell selected it.
+   */
+  readonly maxLive: number | (() => number);
 }
 
 /**
@@ -168,7 +234,88 @@ function eligibilityKeyFor(
   // bare epicId while an imperative `getUnsyncedEdits()` call already sees
   // the real title. Reading it here too keeps the two in lockstep.
   const liveTitle = readLiveTitle(handle);
-  return `${handle.isClean() ? 1 : 0}:${hasActiveAgentWork(epicId) ? 1 : 0}:${state.isDirty ? 1 : 0}:${state.unsyncedQueueSize}:${metaTitle}:${liveTitle}`;
+  // Every LIVE input of the two cap predicates is in the key, or a session
+  // that just became evictable would not trigger a prune until an unrelated
+  // field moved: `holdsNothingToLose` reads the three work fields below,
+  // `epicIsBusy` reads the activity plane's health and reach plus the epic's
+  // working set - all three keyed to the SUBSCRIPTION this session already
+  // holds (`unsubscribeActivity`), so no separate key term is needed for
+  // them. `handle.hostId` is fixed for the handle's whole life (see its own
+  // doc) and is not a live input, so it is not in the key either - it only
+  // needs to be read at the moment `epicIsBusy` runs, not watched.
+  return `${holdsNothingToLose(state) ? 1 : 0}:${epicIsBusy(epicId, handle.hostId) ? 1 : 0}:${state.isDirty ? 1 : 0}:${state.unsyncedQueueSize}:${state.writeCommands.length}:${metaTitle}:${liveTitle}`;
+}
+
+/**
+ * THE cap's data-loss gate: nothing this session holds would be lost by
+ * disposing it. `isDirty` is latched on every local doc update before the
+ * transport branch runs and clears only when the host's state vector covers
+ * the local watermark, so it covers edits queued while offline AND edits sent
+ * but never acknowledged; `writeCommands` are the pending / unacknowledged
+ * write commands; `unsyncedQueueSize` is redundant with `isDirty` but is the
+ * field the access coordinator's `holdsUnsyncedWork` reads, and the two
+ * "holds unsynced work" readers must agree.
+ *
+ * Deliberately NOT `handle.isClean()`. That predicate also requires
+ * `snapshotLoaded` and an OPEN transport, and an offline host never reads
+ * `closed` - the stream client reports `reconnecting` and keeps redialing -
+ * so an unmounted epic whose host went away failed the transport clause
+ * forever and nothing else could dispose it (no idle TTL on this plane,
+ * `retireIfDead` only runs from a mounted acquire). On the phone every
+ * backgrounding kills every socket, so all five resident sessions were
+ * un-evictable for the whole background period: the cap was inert exactly
+ * when memory pressure was highest (2026-09-03 field report: 8 resident, iOS
+ * jetsam at 2 GB). The transport says nothing about what would be LOST; the
+ * three fields above do. `retryTransport` and `replaceMounted` made the same
+ * call for their own gates, with the same reasoning. A never-loaded session
+ * has nothing to lose either, which is why `snapshotLoaded` is not read.
+ */
+function holdsNothingToLose(state: OpenEpicState): boolean {
+  return (
+    !state.isDirty &&
+    state.writeCommands.length === 0 &&
+    state.unsyncedQueueSize === 0
+  );
+}
+
+/**
+ * The cap's "something is in progress" gate: an agent is working in the epic,
+ * OR the activity plane cannot currently say that none is.
+ *
+ * The second arm is what the transport clause used to cover by accident: an
+ * outage that closes the activity stream also puts every epic transport into
+ * `reconnecting`, and `openAgentActivityStream` empties `byEpic` on close -
+ * so during an outage every epic reads idle. With the transport no longer in
+ * the gate, a blind plane must fail CLOSED: treat every epic as busy until the
+ * stream is open again and has delivered a state frame. Under the epic
+ * plane's `"all-entries"` cap scope a busy entry still counts toward the cap
+ * but is never a candidate, so a blind window leaves the registry exactly
+ * where it was - the pre-change behaviour - rather than evicting an epic
+ * whose agent is mid-turn.
+ *
+ * The third arm bounds WHICH epics an answering plane can speak for. The union
+ * is built by the serving host, so it can prove an epic idle only for a
+ * session bound to THAT host, or when the union is known to span the fleet
+ * (a cloud link, or the cloud itself serving it) - a host with no cloud claim
+ * reports the agents IT can see, and this registry can hold sessions bound to
+ * other hosts entirely. `agentActivityPlaneCoversHost` is the exact question:
+ * does the current union reach `hostId`. A session it does not reach reads
+ * busy, regardless of that session's own transport - the transport is a fact
+ * about THIS renderer's socket to that host, not about whether the ACTIVITY
+ * union (a separate stream, to whichever host is currently serving it) can
+ * see it, so it is not read here at all.
+ *
+ * This is the real fix for the gap an earlier revision of this gate left
+ * open and documented: an OPEN-transport session on another host used to be
+ * evicted on a narrow union's silence, because `hasActiveAgentWork` has
+ * always read the plane's map with no per-session host to check it against.
+ * `OpenEpicStoreHandle.hostId` closes that - every session's own host is now
+ * checked, open transport or not.
+ */
+function epicIsBusy(epicId: string, hostId: string): boolean {
+  if (!agentActivityPlaneAnswers()) return true;
+  if (hasActiveAgentWork(epicId)) return true;
+  return !agentActivityPlaneCoversHost(hostId);
 }
 
 /**
@@ -410,7 +557,12 @@ export class OpenEpicSessionRegistry {
         // No clock: this plane prunes on acquire and on an eligibility change,
         // never on elapsed time.
         idleTtlMs: null,
-        maxWarm: options.maxLive,
+        // A getter, read on every cap walk - see `maxLive`.
+        get maxWarm(): number {
+          return typeof options.maxLive === "function"
+            ? options.maxLive()
+            : options.maxLive;
+        },
         // `DEFAULT_MAX_LIVE_EPICS` bounds the RESIDENT set, so a mounted epic
         // counts against the cap even though it can never be the entry the
         // walk evicts.
@@ -423,10 +575,26 @@ export class OpenEpicSessionRegistry {
         // released.
         refreshOrderOnRelease: false,
         retainWhenIdle: () => true,
-        hasActiveWork: (session) => hasActiveAgentWork(session.epicId),
+        // Agent working, plane blind, or a union that does not reach this
+        // session's host - see `epicIsBusy`.
+        hasActiveWork: (session) =>
+          epicIsBusy(session.epicId, session.handle.hostId),
         // Never evict a session holding unsynced edits or unflushed writes.
-        isEvictable: (session) => session.handle.isClean(),
+        // The transport is NOT consulted - see `holdsNothingToLose`.
+        isEvictable: (session) =>
+          holdsNothingToLose(session.handle.store.getState()),
         onBeforeDispose: (session, cause) => {
+          // Attribute BEFORE either teardown arm. A dirty outgoing handle is
+          // retained by calling detachTransport below rather than by the
+          // registry's dispose callback, but both routes end the same durable
+          // session transport and must carry the same cause. Provider-side
+          // attribution is first-wins, so a more specific retry override
+          // recorded immediately before a generic `released` discard survives
+          // this fallback mapping.
+          attributeEpicSessionTransportClose(
+            session.handle,
+            transportCloseTriggerForCause(cause),
+          );
           // Same teardown for every route out of the registry, retention
           // included: the entry's subscriptions close over it and call
           // `prune()`/`emit()`, and it is no longer registered for either to be
@@ -572,6 +740,7 @@ export class OpenEpicSessionRegistry {
     // NO retention, stated rather than defaulted - see above for why the dirty
     // test would answer "the only copy" about a document nothing can read.
     entry.session.pendingRetention = null;
+    attributeEpicSessionTransportClose(entry.session.handle, "retry-rebuild");
     this.sessions.discard(epicId, "released");
   }
 
@@ -612,7 +781,9 @@ export class OpenEpicSessionRegistry {
       // (F10). Gated on `isDirty` rather than `isClean()` deliberately -
       // `isClean()` also requires an open transport, which a re-point has by
       // definition taken away, so it would retain every failover including
-      // fully-synced ones and nothing would ever retire them.
+      // fully-synced ones and nothing would ever retire them. The cap's own
+      // predicate (`holdsNothingToLose`) stopped reading the transport for
+      // the mirror-image reason: it could never EVICT a failover.
       //
       // `editsTransferredToReplacement` is the second half of that rule and has
       // to be checked FIRST: a transferred handle is still `isDirty` (its own
@@ -884,9 +1055,19 @@ export class OpenEpicSessionRegistry {
     // guard re-evaluates off the per-user room instead. Same contract as
     // before: an epic whose agents just started working must stop being
     // prunable without waiting for an unrelated store write.
-    session.unsubscribeActivity = subscribeAgentActivity(
+    const unsubscribeWorkingSet = subscribeAgentActivity(
       handleEligibilityChange,
     );
+    // The plane's HEALTH moves on different fields than its working set (a
+    // re-open with an empty union keeps the same empty map), and `epicIsBusy`
+    // reads both, so both must wake the eligibility check.
+    const unsubscribePlaneHealth = subscribeAgentActivityPlaneHealth(
+      handleEligibilityChange,
+    );
+    session.unsubscribeActivity = () => {
+      unsubscribeWorkingSet();
+      unsubscribePlaneHealth();
+    };
     return session;
   }
 
@@ -942,6 +1123,48 @@ export class OpenEpicSessionRegistry {
     retainedBuffers: "discard" | "keep",
     dirtyLiveHandle: RetainedHandleIdentity | null,
   ): void {
+    this.releaseWithTransportTrigger(
+      epicId,
+      retainedBuffers,
+      dirtyLiveHandle,
+      "tab-close",
+    );
+  }
+
+  /** Rebuilds the session without mislabelling the teardown as a tab close. */
+  releaseForRetryRebuild(
+    epicId: string,
+    retainedBuffers: "discard" | "keep",
+    dirtyLiveHandle: RetainedHandleIdentity | null,
+  ): void {
+    this.releaseWithTransportTrigger(
+      epicId,
+      retainedBuffers,
+      dirtyLiveHandle,
+      "retry-rebuild",
+    );
+  }
+
+  /** Applies the auth boundary while preserving its close attribution. */
+  releaseForSignOut(
+    epicId: string,
+    retainedBuffers: "discard" | "keep",
+    dirtyLiveHandle: RetainedHandleIdentity | null,
+  ): void {
+    this.releaseWithTransportTrigger(
+      epicId,
+      retainedBuffers,
+      dirtyLiveHandle,
+      "sign-out",
+    );
+  }
+
+  private releaseWithTransportTrigger(
+    epicId: string,
+    retainedBuffers: "discard" | "keep",
+    dirtyLiveHandle: RetainedHandleIdentity | null,
+    trigger: EpicSessionTransportCloseTrigger,
+  ): void {
     this.sessions.transact(() => {
       if (retainedBuffers === "discard") {
         // Ordered before the early return: a retention must not outlive the tab
@@ -953,6 +1176,10 @@ export class OpenEpicSessionRegistry {
         this.sessions.notify();
         return;
       }
+      // Must precede `discard`: `onBeforeDispose` sees only the shared
+      // `released` cause. The provider stores the first attribution, so its
+      // generic tab-close fallback cannot overwrite this call-site verdict.
+      attributeEpicSessionTransportClose(entry.session.handle, trigger);
       const retainsLiveEdits =
         retainedBuffers === "keep" &&
         dirtyLiveHandle !== null &&

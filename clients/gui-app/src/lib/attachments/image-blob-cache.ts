@@ -7,9 +7,9 @@
  * URL. Every message generation, React fiber, and surface that renders the
  * same image within that subject shares that one URL instead of carrying its
  * own base64 copy, so a given image occupies the heap exactly once regardless
- * of how many places reference it. Workspace/git image assets
- * (`useImageAsset`) key on a composite `hostId + source + path +
- * contentIdentity` string built by `buildImageAssetCacheKey` instead - the
+ * of how many places reference it. Workspace/git file assets
+ * (`useFileAsset`) key on a composite `hostId + source + path +
+ * contentIdentity` string built by `buildFileAssetCacheKey` instead - the
  * cache itself is agnostic to what the key encodes, so both callers share the
  * same lifecycle unchanged.
  *

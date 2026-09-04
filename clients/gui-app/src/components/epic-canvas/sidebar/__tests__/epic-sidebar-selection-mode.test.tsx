@@ -22,7 +22,10 @@ import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversatio
 import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
 import { useAppDialogStore } from "@/stores/dialogs/app-dialog-store";
 import { useAppLocalNotificationsStore } from "@/stores/notifications/app-local-notifications-store";
-import { usePanelHeaderSearchStore } from "@/stores/epics/panel-header-search-store";
+import {
+  panelHeaderSearchSurfaceKey,
+  usePanelHeaderSearchStore,
+} from "@/stores/epics/panel-header-search-store";
 import {
   ChatTreeSurfaceContext,
   type ChatTreeSurface,
@@ -668,43 +671,50 @@ vi.mock("@/providers/use-open-epic-handle", () => ({
   },
 }));
 
+/** Records what the tile-open executor prepared, for the routing assertions. */
+function recordPreparedOpen(
+  _tabId: string,
+  ref: { type: string; id: string; hostId: string },
+): null {
+  testState.preparedOpenRefs.push({
+    type: ref.type,
+    id: ref.id,
+    hostId: ref.hostId,
+  });
+  return null;
+}
+
 vi.mock("@/stores/epics/canvas/store", () => ({
   findOpenArtifactInTab: () => null,
   useActiveEpicArtifactId: () => testState.activeArtifactId,
-  useEpicCanvasStore: (selector: (state: unknown) => unknown) =>
-    selector({
-      closeCanvasTab: testState.closeCanvasTab,
-      markArtifactSelfDeleted: testState.markArtifactSelfDeleted,
-      openTileInTab: vi.fn(),
-      openTilePreviewInTab: vi.fn(),
-      prepareOpenTilePreviewInTabFocusTarget: (
-        _tabId: string,
-        ref: { type: string; id: string; hostId: string },
-      ) => {
-        testState.preparedOpenRefs.push({
-          type: ref.type,
-          id: ref.id,
-          hostId: ref.hostId,
-        });
-        return null;
-      },
-      prepareOpenTileInTabFocusTarget: (
-        _tabId: string,
-        ref: { type: string; id: string; hostId: string },
-      ) => {
-        testState.preparedOpenRefs.push({
-          type: ref.type,
-          id: ref.id,
-          hostId: ref.hostId,
-        });
-        return null;
-      },
-      pendingRootCreatesByEpic: {},
-      preAckRootCreatesByEpic: {},
-      promotePreviewInTab: vi.fn(),
-      renameArtifactInTab: vi.fn(),
-      unmarkArtifactSelfDeleted: testState.unmarkArtifactSelfDeleted,
-    }),
+  useEpicCanvasStore: Object.assign(
+    (selector: (state: unknown) => unknown) =>
+      selector({
+        closeCanvasTab: testState.closeCanvasTab,
+        markArtifactSelfDeleted: testState.markArtifactSelfDeleted,
+        openTilePreviewInTab: vi.fn(),
+        pendingRootCreatesByEpic: {},
+        preAckRootCreatesByEpic: {},
+        promotePreviewInTab: vi.fn(),
+        renameArtifactInTab: vi.fn(),
+        unmarkArtifactSelfDeleted: testState.unmarkArtifactSelfDeleted,
+      }),
+    {
+      // `openTileWithNavigation` reads the store imperatively: `canvasByTabId`
+      // for the resolver, `tabsById[tabId].epicId` to decide whether to wrap
+      // the prepare in `navigateNested`, and the `*FromSource` actions the
+      // executor dispatches into. Only the boundary functions are exposed -
+      // never a raw `openTileInTab` - so a regression to a direct canvas
+      // mutation throws instead of silently passing.
+      getState: () => ({
+        canvasByTabId: {},
+        tabsById: { [TAB_ID]: { epicId: EPIC_ID } },
+        prepareOpenTileInTabFocusTargetFromSource: recordPreparedOpen,
+        prepareOpenTilePreviewInTabFocusTargetFromSource: recordPreparedOpen,
+        prepareOpenTileInBackgroundTabFocusTargetFromSource: recordPreparedOpen,
+      }),
+    },
+  ),
   useIsActiveEpicArtifact: () => false,
   useOpenTileContentIds: () => testState.openTileContentIds,
 }));
@@ -1005,20 +1015,31 @@ vi.mock("@/stores/epics/artifact-read-state-store", () => ({
   useArtifactReadStateStore: useArtifactReadStateStoreMock,
 }));
 
-vi.mock("@/stores/settings/settings-store", () => ({
-  useSettingsStore: (selector: (state: unknown) => unknown) =>
-    selector({
-      artifactIconColorMode: "none",
-      artifactIconColors: {
-        chat: undefined,
-        review: undefined,
-        spec: undefined,
-        story: undefined,
-        ticket: undefined,
-        "terminal-agent": undefined,
-      },
-    }),
-}));
+// `importOriginal` keeps the real `tilePlacement` defaults: a row click runs
+// the real `openTile` seam, which reads placement off `getState()`.
+vi.mock("@/stores/settings/settings-store", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/stores/settings/settings-store")>();
+  const state = {
+    artifactIconColorMode: "none",
+    artifactIconColors: {
+      chat: undefined,
+      review: undefined,
+      spec: undefined,
+      story: undefined,
+      ticket: undefined,
+      "terminal-agent": undefined,
+    },
+    tilePlacement: actual.DEFAULT_TILE_PLACEMENT_SETTINGS,
+  };
+  return {
+    ...actual,
+    useSettingsStore: Object.assign(
+      (selector: (settingsState: typeof state) => unknown) => selector(state),
+      { getState: () => state },
+    ),
+  };
+});
 
 import {
   EpicLeftPanelHost,
@@ -1121,7 +1142,10 @@ describe("epic sidebar selection mode", () => {
       usePanelHeaderSearchStore.getInitialState(),
       true,
     );
-    useSidebarNodeRevealStore.setState({ requestsByViewTabId: {} }, true);
+    useSidebarNodeRevealStore.setState(
+      { requestsByViewTabId: {}, visibleByViewTabId: {} },
+      true,
+    );
   });
 
   it("scrolls a requested agent row into view and consumes the request", async () => {
@@ -1141,9 +1165,71 @@ describe("epic sidebar selection mode", () => {
       });
     });
     expect(scrollIntoView.mock.instances).toContain(row);
+    expect(row.dataset.sidebarRevealHighlighted).toBe("true");
     expect(
       useSidebarNodeRevealStore.getState().requestsByViewTabId[TAB_ID],
     ).toBeUndefined();
+  });
+
+  it("scrolls to and flash-highlights a requested artifact row", async () => {
+    seedArtifactTree();
+    testState.activePanelId = "artifacts";
+    testState.artifactFilterKinds = ["review"];
+    usePanelHeaderSearchStore
+      .getState()
+      .openSearch(TAB_ID, "artifacts", "no match");
+    const scrollIntoView = vi
+      .spyOn(Element.prototype, "scrollIntoView")
+      .mockImplementation(() => undefined);
+    requestSidebarNodeReveal(TAB_ID, "ticket-child");
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    const row = screen.getByRole("button", { name: /^Child ticket/ });
+    await waitFor(() => {
+      expect(scrollIntoView.mock.instances).toContain(row);
+    });
+    expect(row.dataset.sidebarRevealHighlighted).toBe("true");
+    expect(screen.getByRole("button", { name: /^Child ticket/ })).toBe(row);
+    expect(
+      usePanelHeaderSearchStore.getState().openBySurfaceKey[
+        panelHeaderSearchSurfaceKey(TAB_ID, "artifacts")
+      ],
+    ).toBeUndefined();
+    expect(
+      useSidebarNodeRevealStore.getState().requestsByViewTabId[TAB_ID],
+    ).toBeUndefined();
+  });
+
+  it("flash-highlights an artifact row while it is being renamed", async () => {
+    seedArtifactTree();
+    testState.activePanelId = "artifacts";
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+    fireEvent.click(screen.getByTestId("epic-sidebar-rename-ticket-child"));
+
+    act(() => requestSidebarNodeReveal(TAB_ID, "ticket-child"));
+
+    const row = document.querySelector<HTMLElement>(
+      '[data-sidebar-node-id="ticket-child"]',
+    );
+    await waitFor(() => {
+      expect(row?.dataset.sidebarRevealHighlighted).toBe("true");
+    });
+  });
+
+  it("flash-highlights a chat row while it is being renamed", async () => {
+    seedChatTree();
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+    fireEvent.click(screen.getByTestId("epic-sidebar-rename-chat-child"));
+
+    act(() => requestSidebarNodeReveal(TAB_ID, "chat-child"));
+
+    const row = document.querySelector<HTMLElement>(
+      '[data-sidebar-node-id="chat-child"]',
+    );
+    await waitFor(() => {
+      expect(row?.dataset.sidebarRevealHighlighted).toBe("true");
+    });
   });
 
   it("selects chat rows explicitly and bulk-deletes topmost selected chat roots", async () => {
@@ -3202,6 +3288,7 @@ function runningShell(chatId: string): ManagedCommand {
     cadence: { debounceMs: 500, maxWaitMs: 15_000, throttleMs: 5_000 },
     status: { state: "running", pid: 4242, startedAtMs: 1 },
     chatId,
+    relaunchOnHostRestart: false,
     createdAtMs: 1,
     updatedAtMs: 1,
   };

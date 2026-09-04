@@ -29,6 +29,7 @@ type PopoverContentProps = React.ComponentProps<
 };
 
 function PopoverContent({
+  ref,
   className,
   align = "center",
   sideOffset = 4,
@@ -56,8 +57,8 @@ function PopoverContent({
   return (
     <PopoverPrimitive.Portal container={container}>
       <PopoverPrimitive.Content
+        ref={ref}
         data-slot="popover-content"
-        data-browser-overlay="popover"
         align={align}
         sideOffset={sideOffset}
         collisionPadding={collisionPadding ?? safeAreaInsets}

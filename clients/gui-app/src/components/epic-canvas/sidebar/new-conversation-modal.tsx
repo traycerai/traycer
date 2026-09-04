@@ -41,11 +41,9 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
-import {
-  useCreateTuiAgentForClient,
-  type TuiAgentPlacement,
-} from "@/hooks/agent/use-create-tui-agent";
+import { useCreateTuiAgentForClient } from "@/hooks/agent/use-create-tui-agent";
 import { useComposerDictation } from "@/hooks/composer/use-composer-dictation";
+import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { useLeaderScopeAbsorber } from "@/hooks/keybindings/use-leader-scope-absorber";
 import { usePrimaryActionShortcut } from "@/hooks/use-primary-action-shortcut";
 import {
@@ -123,10 +121,7 @@ import {
   type NewConversationModalSeed,
 } from "@/stores/epics/new-conversation-modal-store";
 import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
-import {
-  ACTIVE_TILE_PLACEMENT,
-  type ConversationTilePlacement,
-} from "@/lib/canvas/conversation-tile-placement";
+import type { ExplicitTilePlacement } from "@/lib/canvas/tile-open/intent";
 import type { LandingDraftWorkspaceSnapshot } from "@/stores/home/landing-draft-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import {
@@ -212,7 +207,7 @@ export function NewConversationModalAction(
     openModal({
       epicId,
       tabId,
-      placement: ACTIVE_TILE_PLACEMENT,
+      placement: null,
       parentId,
       // Names no host: the modal resolves its own per-EPIC placement (this
       // Epic's last created chat's host, else the host the Epic is served
@@ -302,7 +297,7 @@ export function NewConversationModalHost(props: {
     <NewConversationModalDialog
       epicId={props.epicId}
       tabId={props.tabId}
-      placement={isOpen ? request.placement : ACTIVE_TILE_PLACEMENT}
+      placement={isOpen ? request.placement : null}
       parentId={isOpen ? request.parentId : null}
       hostId={isOpen ? request.hostId : null}
       open={isOpen}
@@ -316,7 +311,7 @@ export function NewConversationModalHost(props: {
 function NewConversationModalDialog(props: {
   readonly epicId: string;
   readonly tabId: string;
-  readonly placement: ConversationTilePlacement;
+  readonly placement: ExplicitTilePlacement | null;
   readonly parentId: string | null;
   readonly hostId: string | null;
   readonly open: boolean;
@@ -373,7 +368,17 @@ function NewConversationModalDialog(props: {
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
       <DialogContent
         ref={setOverlayBoundaryEl}
-        className="w-[min(92vw,48rem)] max-w-[min(92vw,48rem)] gap-3 p-4 sm:max-w-[min(92vw,48rem)]"
+        // Capped to the band `top-safe-center-y` centres it in - that token and
+        // `--spacing-safe-dvh` measure the same region, so the two agree by
+        // construction - less a 1rem gutter at each end. Without a cap the card
+        // grew with the draft and, being `-translate-y-1/2`, spilled off BOTH
+        // edges of the screen with nothing to scroll: on a phone the first
+        // typed lines simply left the box. The scroll lives on the body
+        // wrapper below rather than here, because the workspace controls'
+        // popovers portal into THIS node (see `DialogOverlayBoundaryContext`)
+        // and an overflow container that is also their containing block - this
+        // one is, it carries a transform - would clip them.
+        className="flex max-h-[calc(var(--spacing-safe-dvh)-2rem)] w-[min(92vw,48rem)] max-w-[min(92vw,48rem)] flex-col gap-3 p-4 sm:max-w-[min(92vw,48rem)]"
         data-testid="epic-sidebar-new-conversation-modal"
         data-leader-scope={LEADER_SCOPE_NEW_CONVERSATION_MODAL}
         // Same portal rule as the worktree pickers: the host switcher's list
@@ -405,21 +410,26 @@ function NewConversationModalDialog(props: {
         </DialogClose>
         <DialogTitle className="sr-only">New agent</DialogTitle>
         {props.open ? (
-          <DialogOverlayBoundaryContext.Provider value={overlayBoundaryEl}>
-            <SurfaceActivityProvider active>
-              <NewConversationTransientContext.Provider value={transient}>
-                <NewConversationModalBody
-                  epicId={props.epicId}
-                  tabId={props.tabId}
-                  placement={props.placement}
-                  parentId={props.parentId}
-                  hostId={props.hostId}
-                  dismissPickerRef={dismissPickerRef}
-                  onSubmitted={() => props.onOpenChange(false)}
-                />
-              </NewConversationTransientContext.Provider>
-            </SurfaceActivityProvider>
-          </DialogOverlayBoundaryContext.Provider>
+          <div
+            className="min-h-0 flex-1 overflow-y-auto"
+            data-testid="epic-sidebar-new-conversation-modal-body"
+          >
+            <DialogOverlayBoundaryContext.Provider value={overlayBoundaryEl}>
+              <SurfaceActivityProvider active>
+                <NewConversationTransientContext.Provider value={transient}>
+                  <NewConversationModalBody
+                    epicId={props.epicId}
+                    tabId={props.tabId}
+                    placement={props.placement}
+                    parentId={props.parentId}
+                    hostId={props.hostId}
+                    dismissPickerRef={dismissPickerRef}
+                    onSubmitted={() => props.onOpenChange(false)}
+                  />
+                </NewConversationTransientContext.Provider>
+              </SurfaceActivityProvider>
+            </DialogOverlayBoundaryContext.Provider>
+          </div>
         ) : null}
       </DialogContent>
     </Dialog>
@@ -442,7 +452,7 @@ export function NewConversationModalHeader(props: {
 export function NewConversationModalBody(props: {
   readonly epicId: string;
   readonly tabId: string;
-  readonly placement: ConversationTilePlacement;
+  readonly placement: ExplicitTilePlacement | null;
   readonly parentId: string | null;
   /** Caller-named host to create on; `null` lets this Epic own placement. */
   readonly hostId: string | null;
@@ -458,6 +468,7 @@ export function NewConversationModalBody(props: {
     dismissPickerRef,
     onSubmitted,
   } = props;
+  const isMobile = useIsMobileViewport();
   const permissionRole = useEpicPermissionRole();
   const connectionStatus = useEpicConnectionStatus();
   const isDisconnected = connectionStatus === "closed";
@@ -1030,7 +1041,7 @@ export function NewConversationModalBody(props: {
           tabId,
           parentId,
           title: "",
-          placement: toTuiPlacement(placement),
+          placement,
           harnessId: launch.harnessId,
           model: launch.model,
           reasoningEffort: launch.reasoningEffort,
@@ -1100,9 +1111,12 @@ export function NewConversationModalBody(props: {
       topBanner={
         <ComposerHostNotice notice={hostNotice} onDismiss={dismissHostNotice} />
       }
-      // The modal is desktop-shaped and never collapses; the phone-width
-      // toolbar is the landing composer's alone for now.
-      toolbarLayout="full"
+      // Same rule as the landing composer's row (`landing-composer.tsx`): six
+      // pills do not fit a phone-width row, so below `md` the agent-mode pill
+      // moves into the options sheet behind the permission pill. This modal
+      // used to opt out and render the desktop row at any width, which made
+      // one composer look like two depending on where it was opened from.
+      toolbarLayout={isMobile ? "collapsed" : "full"}
       stashControl={
         <PromptStashControl
           controller={promptStash}
@@ -1123,6 +1137,12 @@ export function NewConversationModalBody(props: {
       hasPastedImageBytes={hasPastedImageBytes}
       ingestPastedComposerImages={null}
       onEditorReady={null}
+      // No terminal surface: a sign-in terminal tile is bound to the TAB's
+      // host, while this composer creates on a placement-resolved host that
+      // may be another machine, and this modal sits above the canvas the tile
+      // would open on. The picker's setup CTA shows its steps and names the
+      // chat picker instead.
+      terminalLoginSurface={null}
       // The pinned host, else this composer's surface-pin resolution - the
       // same id `hostClient` above resolves, so the toolbar's and terminal
       // launcher's pickers offer this host's harnesses/models/profiles and
@@ -1328,19 +1348,4 @@ function promptStashDisabled(args: {
   return (
     args.isSubmitting || args.attachmentPending || !args.chatComposerActive
   );
-}
-
-function toTuiPlacement(
-  placement: ConversationTilePlacement,
-): TuiAgentPlacement {
-  if (placement.kind === "target-group") {
-    return { kind: "target-group", groupId: placement.groupId };
-  }
-  if (placement.kind === "split") {
-    // Terminal agents can't occupy a split. Open into the group the split was
-    // anchored on (a valid TUI placement) rather than discarding the location
-    // and falling all the way back to the active tile.
-    return { kind: "target-group", groupId: placement.groupId };
-  }
-  return { kind: "active-tile" };
 }

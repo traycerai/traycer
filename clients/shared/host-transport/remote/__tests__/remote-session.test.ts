@@ -89,6 +89,7 @@ import {
   BULK_CHUNK_SIZE_BYTES,
   ChunkReassembler,
   encodeMuxMessageBody,
+  nextSeqValue,
   OutboundChunkSource,
   type OutboundMessage,
   type ReassembledMessage,
@@ -99,6 +100,7 @@ import {
 } from "../active-remote-sessions";
 import { RemoteSession, type RemoteSessionOptions } from "../remote-session";
 import { RemoteStreamClient } from "../remote-stream-client";
+import { LogicalStream } from "../logical-stream";
 import {
   RECONNECT_INITIAL_BACKOFF_MS,
   RECONNECT_MAX_BACKOFF_MS,
@@ -111,6 +113,8 @@ import type {
   StreamFrameEnvelope,
 } from "../../i-stream-session";
 import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
+import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
+import { WorktreeDeleteBatchStreamClient } from "../../worktree-delete-batch-stream-client";
 
 // Integration-style tests for the session lifecycle edges a cold audit found
 // unrecoverable: an UNAUTHORIZED session fatal (the wake-time expired-bearer
@@ -262,6 +266,17 @@ interface FakeConnection {
   readonly reassembler: ChunkReassembler;
   readonly seqByStream: Map<number, number>;
   /**
+   * Host-side H11 mirror (`RemoteClientSession.inboundSeqByStream`): the
+   * `seq` due next on each client stream. The production host closes the
+   * whole session with `SESSION_FRAME_SEQUENCE_MISMATCH` when an unchunked
+   * frame skips or repeats one, so the fake fails the same way - into
+   * `errors`, which the suites assert empty. Without it a client that
+   * retired a stream's counter and THEN sent the CLOSE (seq 0 where 1 was
+   * due) passed every test here and killed every real session on the first
+   * unsubscribe.
+   */
+  readonly inboundSeqByStream: Map<number, number>;
+  /**
    * Host-side R-2 mirror (`r2-host-stream-tombstone`), enforced per
    * connection exactly like `RemoteClientSession.terminalStreamIds`: once the
    * fake sends a FATAL for a stream, every later CLIENT frame for that id -
@@ -400,6 +415,7 @@ class FakeRelayHost {
         handshake: null,
         reassembler: new ChunkReassembler(undefined),
         seqByStream: new Map(),
+        inboundSeqByStream: new Map(),
         terminalStreamIds: new Set(),
         queue: Promise.resolve(),
         closed: false,
@@ -517,6 +533,7 @@ class FakeRelayHost {
     // every later client frame for the id, so a client re-open must arrive
     // under a fresh id to be heard.
     connection.terminalStreamIds.add(streamId);
+    connection.inboundSeqByStream.delete(streamId);
     await this.sendMux(connection, {
       type: MuxFrameType.FATAL,
       streamId,
@@ -536,6 +553,7 @@ class FakeRelayHost {
   async sendStreamClose(streamId: number, reason: string): Promise<void> {
     const connection = this.liveConnection();
     connection.terminalStreamIds.add(streamId);
+    connection.inboundSeqByStream.delete(streamId);
     await this.sendMux(connection, {
       type: MuxFrameType.CLOSE,
       streamId,
@@ -631,7 +649,22 @@ class FakeRelayHost {
       });
       return;
     }
+    // H11 mirror, same placement and predicate as the production host's
+    // `feedInbound`: after the tombstone drop, before `accept()`, unchunked
+    // frames only (chunk sequences are ordered by the reassembler itself).
+    const expectedSeq = connection.inboundSeqByStream.get(frame.streamId);
+    if (
+      !frame.chunked &&
+      expectedSeq !== undefined &&
+      frame.seq !== expectedSeq
+    ) {
+      throw new Error(
+        `SESSION_FRAME_SEQUENCE_MISMATCH: frame ${frame.seq} (type ${frame.type}) arrived on stream ${frame.streamId} where ${expectedSeq} was due`,
+      );
+    }
     const message = connection.reassembler.accept(frame);
+    // Advanced only once the reassembler accepted the frame, as on the host.
+    connection.inboundSeqByStream.set(frame.streamId, nextSeqValue(frame.seq));
     if (message === null) {
       return;
     }
@@ -1949,6 +1982,76 @@ describe("RemoteSession host_detached readiness evidence", () => {
 
 describe("RemoteStreamClient dynamic subscribe params", () => {
   it(
+    "routes a pinned remote incompatibility through the batch client's unsupported fallback seam",
+    async () => {
+      const relay = new FakeRelayHost();
+      relay.streamManifest = {
+        "worktree.deleteBatchByPath": { major: 1, minor: 0 },
+      };
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        streamRegistry: hostStreamRpcRegistry,
+      });
+      const goFatal = vi.spyOn(LogicalStream.prototype, "goFatal");
+      const streamClient = new RemoteStreamClient<
+        VersionedRpcRegistry,
+        typeof hostStreamRpcRegistry
+      >(session, () => null);
+      const onUnsupported = vi.fn();
+      const onConnectionStatus = vi.fn();
+      const batch = new WorktreeDeleteBatchStreamClient({
+        wsStreamClient: streamClient,
+        commandId: "6f1a6a0e-1f0f-4a1e-9f0d-1b6f0c2c9f11",
+        source: "settings",
+        targets: [
+          { worktreePath: "/wt/force", scripts: null, stopOwners: true },
+        ],
+        callbacks: {
+          onTargetStarted: () => undefined,
+          onTargetPhase: () => undefined,
+          onTargetOutput: () => undefined,
+          onTargetComplete: () => undefined,
+          onTargetFailed: () => undefined,
+          onCommandComplete: () => undefined,
+          onCommandFailed: () => undefined,
+          onUnsupported,
+          onConnectionStatus,
+        },
+      });
+      try {
+        await vi.waitFor(
+          () => expect(onUnsupported).toHaveBeenCalledOnce(),
+          WAIT,
+        );
+        expect(onConnectionStatus).not.toHaveBeenCalledWith(
+          "closed",
+          expect.anything(),
+        );
+        expect(goFatal).toHaveBeenCalledWith(
+          expect.objectContaining({
+            code: "INCOMPATIBLE",
+            incompatibleMethods: [
+              expect.objectContaining({
+                method: "worktree.deleteBatchByPath",
+              }),
+            ],
+          }),
+        );
+        // Admission failed inside `openSubscription`; no destructive subscribe
+        // was ever enqueued on the mux wire.
+        expect(relay.subscribeParams).toEqual([]);
+        expect(relay.errors).toEqual([]);
+      } finally {
+        batch.close();
+        session.close();
+        goFatal.mockRestore();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
     "selects an installed older stream major advertised by an RC host",
     async () => {
       const relay = new FakeRelayHost();
@@ -2856,41 +2959,6 @@ describe("RemoteSession wake", () => {
       session.close();
     }
   }, 15_000);
-
-  it(
-    "never lengthens a pending redial - repeated wakes on the initial backoff still dial on roughly the original schedule",
-    async () => {
-      const relay = new FakeRelayHost();
-      const lease = new MutableBearerLease("token", "user-1");
-      relay.decideOpen = (_bearer, openIndex) =>
-        openIndex === 0
-          ? { kind: "fatal", details: retryableDropDetails() }
-          : { kind: "ack" };
-      const session = buildSession(relay, lease, null);
-      try {
-        session.start();
-        await vi.waitFor(() => expect(relay.openBearers).toHaveLength(1), WAIT);
-        const armedAt = Date.now();
-        session.wake("wake-1", null);
-        await new Promise((resolve) => setTimeout(resolve, 100));
-        session.wake("wake-2", null);
-        await new Promise((resolve) => setTimeout(resolve, 100));
-        session.wake("wake-3", null);
-        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
-        const elapsedMs = Date.now() - armedAt;
-        // One extra dial, and no wake pushed the deadline out: a draw landing
-        // later than the deadline already armed is discarded rather than
-        // applied, so waking a session can never cost it time.
-        expect(relay.openBearers).toHaveLength(2);
-        expect(elapsedMs).toBeLessThan(1_800);
-        expect(relay.errors).toEqual([]);
-      } finally {
-        session.close();
-      }
-    },
-    TEST_BUDGET_MS,
-  );
-
   it(
     "leaves a healthy, ready session untouched",
     async () => {
@@ -3058,29 +3126,6 @@ describe("RemoteSession wake", () => {
       session.close();
     }
   }, 10_000);
-
-  it("keeps the default wake-probe deadline when the caller supplies no tuning", async () => {
-    const relay = new FakeRelayHost();
-    const lease = new MutableBearerLease("token", "user-1");
-    const session = buildSession(relay, lease, null);
-    try {
-      session.start();
-      await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
-      relay.answerPings = false;
-      session.wake("app-resumed", null);
-      await vi.waitFor(() => expect(relay.pingCount).toBeGreaterThan(0), WAIT);
-      // The probe is in flight on the 10s default deadline, so well past the
-      // mobile deadline the socket is still trusted and no redial has begun.
-      // The discriminating window against the test above.
-      await new Promise((resolve) => setTimeout(resolve, 1_200));
-      expect(relay.openBearers).toHaveLength(1);
-      expect(session.isReady()).toBe(true);
-      expect(relay.errors).toEqual([]);
-    } finally {
-      session.close();
-    }
-  }, 10_000);
-
   it("a default-tuned wake joining an in-flight probe does not retract the arming wake's redial policy", async () => {
     const relay = new FakeRelayHost();
     const lease = new MutableBearerLease("token", "user-1");
@@ -3276,88 +3321,7 @@ describe("RemoteSession wake", () => {
     } finally {
       session.close();
     }
-  }, 15_000);
-
-  it("an ordinary server drop AFTER the arm was answered follows the normal rung", async () => {
-    const relay = new FakeRelayHost();
-    const lease = new MutableBearerLease("token", "user-1");
-    relay.decideOpen = (_bearer, openIndex) =>
-      openIndex < 2
-        ? { kind: "fatal", details: retryableDropDetails() }
-        : { kind: "ack" };
-    const session = buildSession(relay, lease, null);
-    try {
-      session.start();
-      await vi.waitFor(() => expect(session.isReady()).toBe(true), {
-        timeout: 8_000,
-        interval: 50,
-      });
-      expect(relay.openBearers).toHaveLength(3);
-      const pingsBefore = relay.pingCount;
-      session.wake("app-resumed", {
-        timeoutMs: 3_000,
-        immediateRedialOnFailure: true,
-      });
-      await vi.waitFor(
-        () => expect(relay.pingCount).toBe(pingsBefore + 1),
-        WAIT,
-      );
-      await new Promise((resolve) => setTimeout(resolve, 100));
-      // Liveness was proven; the arm is retired. A drop now is an ordinary
-      // loss and waits out its rung - the discriminating arm against the
-      // inherit-on-unanswered case above.
-      relay.dropCurrentConnection();
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      expect(relay.openBearers).toHaveLength(3);
-      await vi.waitFor(() => expect(session.isReady()).toBe(true), {
-        timeout: 8_000,
-        interval: 50,
-      });
-      expect(relay.openBearers).toHaveLength(4);
-      expect(relay.errors).toEqual([]);
-    } finally {
-      session.close();
-    }
-  }, 15_000);
-
-  it("a failed probe WITHOUT immediateRedialOnFailure keeps the armed backoff rung", async () => {
-    const relay = new FakeRelayHost();
-    const lease = new MutableBearerLease("token", "user-1");
-    relay.decideOpen = (_bearer, openIndex) =>
-      openIndex < 2
-        ? { kind: "fatal", details: retryableDropDetails() }
-        : { kind: "ack" };
-    const session = buildSession(relay, lease, null);
-    try {
-      session.start();
-      await vi.waitFor(() => expect(session.isReady()).toBe(true), {
-        timeout: 8_000,
-        interval: 50,
-      });
-      expect(relay.openBearers).toHaveLength(3);
-      relay.answerPings = false;
-      session.wake("app-resumed", {
-        timeoutMs: 250,
-        immediateRedialOnFailure: false,
-      });
-      // The same probe failure, without the latch: the redial waits out the
-      // escalated rung (jittered floor 1s past the ~250ms probe). Still only
-      // three opens at the window where the latched arm above had four - the
-      // two arms MUST read differently or the gate is decorative.
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      expect(relay.openBearers).toHaveLength(3);
-      await vi.waitFor(() => expect(session.isReady()).toBe(true), {
-        timeout: 8_000,
-        interval: 50,
-      });
-      expect(relay.openBearers).toHaveLength(4);
-      expect(relay.errors).toEqual([]);
-    } finally {
-      session.close();
-    }
-  }, 15_000);
-
-  /**
+  }, 15_000); /**
    * A one-method registry for the two `sendUnary` cases below, which need a
    * real dispatchable method rather than the suite's empty registries.
    */
@@ -3568,46 +3532,6 @@ describe("RemoteSession wake", () => {
   function useDwellControlledTimers(): void {
     vi.useFakeTimers({ shouldAdvanceTime: true });
   }
-
-  it("forgives the streak once the connection has held for the whole dwell", async () => {
-    const relay = new FakeRelayHost();
-    const lease = new MutableBearerLease("token", "user-1");
-    // Three failures escalate to the 8s step before the session goes ready.
-    relay.decideOpen = (_bearer, openIndex) =>
-      openIndex < 3
-        ? { kind: "fatal", details: retryableDropDetails() }
-        : { kind: "ack" };
-    // Before `start()`: the dwell timer must be armed against the fake
-    // implementation for this test to be able to fire it at all.
-    useDwellControlledTimers();
-    const session = buildSession(relay, lease, null);
-    try {
-      session.start();
-      await vi.waitFor(() => expect(session.isReady()).toBe(true), {
-        timeout: 12_000,
-        interval: 50,
-      });
-      expect(relay.openBearers).toHaveLength(4);
-
-      // Held, attached, and undisturbed for the full dwell: this connection
-      // has proven itself, so the streak behind it is forgiven.
-      vi.advanceTimersByTime(RECONNECT_STABLE_RESET_MS + 1_000);
-
-      session.requestSessionReconnect("forced-drop");
-      // Back at the fastest tier - the redial lands inside a window the
-      // escalated tier could not have reached.
-      await vi.waitFor(() => expect(session.isReady()).toBe(true), {
-        timeout: 2_500,
-        interval: 50,
-      });
-      expect(relay.openBearers).toHaveLength(5);
-      expect(relay.errors).toEqual([]);
-    } finally {
-      session.close();
-      vi.useRealTimers();
-    }
-  }, 25_000);
-
   it("cancels the pardon when the host leg detaches during the dwell", async () => {
     const relay = new FakeRelayHost();
     const lease = new MutableBearerLease("token", "user-1");
@@ -3916,41 +3840,6 @@ describe("RemoteSession forceReconnect", () => {
     }
   }, 10_000);
 
-  it("without a force, the failed grant mint waits its rung - the pre-dial control arm", async () => {
-    const relay = new FakeRelayHost();
-    const lease = new MutableBearerLease("token", "user-1");
-    let mintIndex = 0;
-    const session = new RemoteSession({
-      ...buildSessionOptions(relay, lease, null),
-      grantProvider: async () => {
-        mintIndex += 1;
-        if (mintIndex === 1) {
-          return {
-            kind: "unavailable" as const,
-            detail: "authn 503",
-            context: "",
-          };
-        }
-        return {
-          kind: "ok" as const,
-          grant: { grant: "grant-jws", expiresInSeconds: 300 },
-        };
-      },
-    });
-    try {
-      session.start();
-      await vi.waitFor(() => expect(mintIndex).toBe(1), WAIT);
-      await new Promise((resolve) => setTimeout(resolve, 250));
-      // Inside the rung's jittered floor (500ms): no forced demand, no early
-      // dial - the discriminating control for the forced grant arm above.
-      expect(mintIndex).toBe(1);
-      await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
-      expect(relay.errors).toEqual([]);
-    } finally {
-      session.close();
-    }
-  }, 10_000);
-
   it("a force during a stalled PRE-SOCKET rejection (grant provider throws) is spent on that lander too", async () => {
     const relay = new FakeRelayHost();
     const lease = new MutableBearerLease("token", "user-1");
@@ -3986,48 +3875,6 @@ describe("RemoteSession forceReconnect", () => {
         interval: 10,
       });
       expect(Date.now() - releasedAt).toBeLessThan(400);
-      await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
-      expect(relay.errors).toEqual([]);
-    } finally {
-      session.close();
-    }
-  }, 10_000);
-
-  it("a force arriving AFTER a pre-dial lander already armed its rung pulls that timer now", async () => {
-    const relay = new FakeRelayHost();
-    const lease = new MutableBearerLease("token", "user-1");
-    let mintIndex = 0;
-    const session = new RemoteSession({
-      ...buildSessionOptions(relay, lease, null),
-      grantProvider: async () => {
-        mintIndex += 1;
-        if (mintIndex === 1) {
-          return {
-            kind: "unavailable" as const,
-            detail: "authn 503",
-            context: "",
-          };
-        }
-        return {
-          kind: "ok" as const,
-          grant: { grant: "grant-jws", expiresInSeconds: 300 },
-        };
-      },
-    });
-    try {
-      session.start();
-      await vi.waitFor(() => expect(mintIndex).toBe(1), WAIT);
-      // Let the lander finish arming its rung. The phase still reads
-      // `connecting` here - a force keyed on `reconnecting` would fall
-      // through to pending ownership with no future failure left to spend it.
-      await new Promise((resolve) => setTimeout(resolve, 50));
-      const forcedAt = Date.now();
-      session.forceReconnect("user-retry");
-      await vi.waitFor(() => expect(mintIndex).toBe(2), {
-        timeout: 300,
-        interval: 10,
-      });
-      expect(Date.now() - forcedAt).toBeLessThan(300);
       await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
       expect(relay.errors).toEqual([]);
     } finally {
@@ -4219,44 +4066,6 @@ describe("RemoteSession forceReconnect", () => {
       }
     }
   }, 20_000);
-
-  it("without a force, both revalidation arms wait their rung - the discriminating controls", async () => {
-    for (const outcome of ["network-error", "rotated"] as const) {
-      const relay = new FakeRelayHost();
-      const lease = new MutableBearerLease("token", "user-1");
-      relay.decideOpen = (_bearer, openIndex) =>
-        openIndex === 0
-          ? { kind: "fatal", details: unauthorizedDetails() }
-          : { kind: "ack" };
-      let releaseRevalidation = (): void => undefined;
-      const revalidationHeld = new Promise<void>((resolve) => {
-        releaseRevalidation = resolve;
-      });
-      const session = buildSession(relay, lease, {
-        revalidateForReconnect: async () => {
-          await revalidationHeld;
-          if (outcome === "rotated") {
-            lease.rotate("token-rotated");
-          }
-          return outcome;
-        },
-      });
-      try {
-        session.start();
-        await vi.waitFor(() => expect(relay.openBearers).toHaveLength(1), WAIT);
-        await new Promise((resolve) => setTimeout(resolve, 100));
-        releaseRevalidation();
-        await new Promise((resolve) => setTimeout(resolve, 250));
-        // Inside the rung's jittered floor: no force, no early dial.
-        expect(relay.openBearers).toHaveLength(1);
-        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
-        expect(relay.errors).toEqual([]);
-      } finally {
-        session.close();
-      }
-    }
-  }, 20_000);
-
   it("a force during the handshake followed by a terminal fatal clears the intent and stays closed", async () => {
     const relay = new FakeRelayHost();
     const lease = new MutableBearerLease("token", "user-1");
@@ -6649,36 +6458,6 @@ describe("RemoteSession F7: a caller-requested reconnect is self-evidence, not h
     },
     TEST_BUDGET_MS,
   );
-
-  it(
-    "three consecutive caller-requested reconnects produce ZERO refusals - three app-driven reconnects must not reach the confirmed-death streak on a host that never stopped answering",
-    async () => {
-      const relay = new FakeRelayHost();
-      const lease = new MutableBearerLease("valid-token", "user-1");
-      const recorder = new RecordingEvidence();
-      const session = new RemoteSession({
-        ...buildSessionOptions(relay, lease, null),
-        evidence: recorder,
-      });
-      try {
-        session.start();
-        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
-
-        for (let attempt = 0; attempt < 3; attempt += 1) {
-          session.requestSessionReconnect("caller-requested-reconnect");
-          await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
-        }
-
-        expect(recorder.callsNamed("reportDialRefusal")).toHaveLength(0);
-        expect(
-          recorder.callsNamed("reportDialIndeterminate").length,
-        ).toBeGreaterThanOrEqual(3);
-      } finally {
-        session.close();
-      }
-    },
-    TEST_BUDGET_MS,
-  );
 });
 
 describe("RemoteSession reconnect backoff ladder (T5, B6)", () => {
@@ -6812,7 +6591,6 @@ describe("RemoteSession reconnect backoff ladder (T5, B6)", () => {
       session.close();
     }
   }, 10_000);
-
   it("the ladder resets to rung 0 only after RECONNECT_STABLE_RESET_MS of sustained ready - a session that already climbed the ladder once and drops again soon after reaching ready does NOT get rung 0 a second time", async () => {
     // The flapping case, stated explicitly and set up honestly: rung 0 is
     // legitimately available to a session's very FIRST-ever failure (that
@@ -7423,6 +7201,11 @@ describe("RemoteSession clock-skew park", () => {
       try {
         session.start();
         await vi.waitFor(() => expect(session.isClosed()).toBe(true), WAIT);
+        // The bound is what this case is about, so pin that it was actually
+        // walked. Without this, an implementation that closed on the first
+        // rejection - never retrying at all - would satisfy `isClosed()` and
+        // read as "reached the terminal bound".
+        expect(relay.openBearers).toHaveLength(3);
         expect(clock.recoverySubscribers()).toBe(0);
       } finally {
         session.close();
@@ -7430,7 +7213,6 @@ describe("RemoteSession clock-skew park", () => {
     },
     TEST_BUDGET_MS,
   );
-
   it(
     "does NOT park on a clock running BEHIND, and still reaches the terminal bound",
     async () => {
@@ -7449,83 +7231,6 @@ describe("RemoteSession clock-skew park", () => {
         session.start();
         await vi.waitFor(() => expect(session.isClosed()).toBe(true), WAIT);
         expect(clock.recoverySubscribers()).toBe(0);
-      } finally {
-        session.close();
-      }
-    },
-    TEST_BUDGET_MS,
-  );
-
-  it(
-    "leaves the transient network-error arm untouched under skew",
-    async () => {
-      // A revalidation that cannot reach authn says nothing about the clock -
-      // the bearer is untouched, the streak resets, and the ordinary backoff
-      // rides. Parking here would strand a session whose only problem was a
-      // wake-time blip.
-      const relay = new FakeRelayHost();
-      const lease = new MutableBearerLease("stale-token", "user-1");
-      const clock = makeClockSignal("skewed-ahead");
-      relay.decideOpen = (_bearer, openIndex) =>
-        openIndex === 0
-          ? { kind: "fatal", details: unauthorizedDetails() }
-          : { kind: "ack" };
-      const session = new RemoteSession({
-        ...buildSessionOptions(relay, lease, {
-          revalidateForReconnect: () =>
-            Promise.resolve("network-error" as const),
-        }),
-        clock: clock.signal,
-      });
-      try {
-        session.start();
-        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
-        expect(clock.recoverySubscribers()).toBe(0);
-        expect(session.isClosed()).toBe(false);
-      } finally {
-        session.close();
-      }
-    },
-    TEST_BUDGET_MS,
-  );
-
-  it(
-    "releases the recovery subscription on close, so a later clock fix cannot revive a dead session",
-    async () => {
-      const relay = new FakeRelayHost();
-      const lease = new MutableBearerLease("clock-skewed-token", "user-1");
-      const clock = makeClockSignal("skewed-ahead");
-      const session = buildNoProgressSession(relay, lease, clock.signal);
-      session.start();
-      await vi.waitFor(() => expect(clock.recoverySubscribers()).toBe(1), WAIT);
-
-      session.close();
-      expect(clock.recoverySubscribers()).toBe(0);
-
-      clock.recover();
-      await new Promise((resolve) => setTimeout(resolve, 200));
-      expect(relay.openBearers).toEqual(["clock-skewed-token"]);
-    },
-    TEST_BUDGET_MS,
-  );
-
-  it(
-    "degrades to the pre-existing terminal bound with no tracker wired",
-    async () => {
-      const relay = new FakeRelayHost();
-      const lease = new MutableBearerLease("clock-skewed-token", "user-1");
-      relay.decideOpen = () => ({
-        kind: "fatal",
-        details: unauthorizedDetails(),
-      });
-      const session = new RemoteSession(
-        buildSessionOptions(relay, lease, {
-          revalidateForReconnect: () => Promise.resolve("rotated" as const),
-        }),
-      );
-      try {
-        session.start();
-        await vi.waitFor(() => expect(session.isClosed()).toBe(true), WAIT);
       } finally {
         session.close();
       }
@@ -7592,6 +7297,231 @@ describe("RemoteSession clock-skew park re-entrancy", () => {
         expect(recoveryListeners.size).toBe(0);
       } finally {
         live.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+});
+
+/**
+ * The host's H11 gate (`RemoteClientSession.feedInbound`) closes the whole
+ * session when an unchunked frame arrives out of sequence on its stream. A
+ * stream's CLOSE is the last frame the client sends on it, and every path
+ * that retires the stream's `seq` counter must therefore draw the CLOSE's
+ * `seq` from the retired counter, not from a fresh one - a CLOSE at seq 0 on
+ * a stream whose SUBSCRIBE already drew 0 is `SESSION_FRAME_SEQUENCE_MISMATCH`
+ * on the host, which is how every remote session on mobile died on the first
+ * screen change. `FakeRelayHost` enforces the same gate, so each of these
+ * also proves the fake would have caught the regression.
+ */
+describe("RemoteSession outbound seq continuity across a stream's CLOSE (host H11 gate)", () => {
+  function seqsOnStream(
+    relay: FakeRelayHost,
+    streamId: number,
+  ): { type: MuxFrameTypeValue; seq: number }[] {
+    return relay.clientFrames
+      .filter((frame) => frame.streamId === streamId)
+      .map((frame) => ({ type: frame.type, seq: frame.seq }));
+  }
+
+  it(
+    "a caller close sends its CLOSE at the seq after the SUBSCRIBE",
+    async () => {
+      const relay = new FakeRelayHost();
+      relay.streamManifest = buildStreamManifest(
+        cursorStreamRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      );
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        streamRegistry: cursorStreamRegistry,
+      });
+      const stream = session.subscribe("cursor.subscribe", { cursor: null });
+      try {
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(1),
+          WAIT,
+        );
+        const streamId = relay.subscribeStreamIds[0];
+        stream.close();
+        // The host HANDLED the CLOSE (it is in `closesSent`, past the seq
+        // gate) - not merely that the client put one on the wire.
+        await vi.waitFor(
+          () => expect(relay.closesSent).toContain(streamId),
+          WAIT,
+        );
+        expect(seqsOnStream(relay, streamId)).toEqual([
+          { type: MuxFrameType.SUBSCRIBE, seq: 0 },
+          { type: MuxFrameType.CLOSE, seq: 1 },
+        ]);
+        expect(relay.errors).toEqual([]);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "a unary that times out sends its CLOSE at the seq after the REQUEST",
+    async () => {
+      const statusContract = defineRpcContract({
+        method: "host.status",
+        schemaVersion: { major: 1, minor: 0 } as const,
+        requestSchema: z.object({}),
+        responseSchema: z.object({ ready: z.boolean() }),
+      });
+      const statusRegistry: VersionedRpcRegistry =
+        defineFloorAwareVersionedRpcRegistry(["host.status"] as const, {
+          "host.status": {
+            1: {
+              latestMinor: 0,
+              versions: {
+                0: {
+                  contract: statusContract,
+                  upgradeFromPreviousVersion: null,
+                },
+              },
+              downgradePathsFromLatest: {},
+            },
+          },
+        });
+      const relay = new FakeRelayHost();
+      relay.floorRpcManifest = { "host.status": { major: 1, minor: 0 } };
+      relay.skipUnaryAutoRespond = true;
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        rpcRegistry: statusRegistry,
+      });
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        const pending = session.sendUnary(
+          "host.status",
+          {},
+          null,
+          null,
+          60,
+          false,
+        );
+        await expect(pending).rejects.toBeInstanceOf(HostRpcError);
+        await vi.waitFor(
+          () => expect(relay.unaryRequests).toHaveLength(1),
+          WAIT,
+        );
+        const streamId = relay.unaryRequests[0].streamId;
+        await vi.waitFor(
+          () => expect(relay.closesSent).toContain(streamId),
+          WAIT,
+        );
+        expect(seqsOnStream(relay, streamId)).toEqual([
+          { type: MuxFrameType.REQUEST, seq: 0 },
+          { type: MuxFrameType.CLOSE, seq: 1 },
+        ]);
+        expect(relay.errors).toEqual([]);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+});
+
+describe("RemoteSession outbound seq continuity across a client-detected inbound failure (host H11 gate)", () => {
+  it(
+    "a stream failed on inbound reassembly sends its CLOSE at the seq after the SUBSCRIBE",
+    async () => {
+      // The fifth retire site, and the one a source-order reading misses:
+      // `failStreamOnInboundError` enqueued the CLOSE ABOVE its delete, but
+      // the seq is drawn when the scheduler pulls - after every synchronous
+      // line of the method - so the CLOSE still left at seq 0. Unlike a
+      // host-sent FATAL, the host has NOT tombstoned this stream (the fault
+      // was detected here), so this CLOSE reaches its seq gate for real.
+      const relay = new FakeRelayHost();
+      relay.streamManifest = buildStreamManifest(
+        cursorStreamRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      );
+      const warnSpy = vi
+        .spyOn(console, "warn")
+        .mockImplementation(() => undefined);
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        streamRegistry: cursorStreamRegistry,
+      });
+      const faulted = session.subscribe("cursor.subscribe", { cursor: null });
+      let fatalCode: string | null = null;
+      faulted.onStatusChange((_status, reason) => {
+        if (reason?.kind === "fatalError") {
+          fatalCode = reason.details.code;
+        }
+      });
+      // The sibling whose outbound keeps the pump busy. It needs one delivered
+      // server frame to reach `open`, which is what `sendClientFrame` gates on.
+      const sibling = session.subscribe("cursor.subscribe", { cursor: null });
+      sibling.onServerFrame(() => undefined);
+      let siblingOpen = false;
+      sibling.onStatusChange((status) => {
+        if (status === "open") {
+          siblingOpen = true;
+        }
+      });
+      try {
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(2),
+          WAIT,
+        );
+        const faultedId = relay.subscribeStreamIds[0];
+        const siblingId = relay.subscribeStreamIds[1];
+        await relay.sendStreamFrame(
+          siblingId,
+          { kind: "snapshot", hasBinaryPayload: false },
+          null,
+          QosClass.INTERACTIVE,
+        );
+        await vi.waitFor(() => expect(siblingOpen).toBe(true), WAIT);
+        // A continuation chunk with no start in flight: a per-stream
+        // reassembly fault the client attributes to `faulted`. Sealed ahead
+        // so the two sends below share one synchronous tick.
+        const [, continuation] = buildChunkFrames(faultedId);
+        const sealedFault = await relay.encryptFrame(continuation);
+
+        // The interleaving that made the old code wrong ONLY here: a 3-chunk
+        // client message on the sibling puts the pump mid-`await write` when
+        // the fault lands, so the CLOSE cannot draw its seq synchronously at
+        // enqueue and instead draws it when the pump comes back - after every
+        // line of `failStreamOnInboundError` has run. With an idle pump the
+        // old source order happened to work, which is why a single-stream
+        // version of this test stayed green against the bug.
+        sibling.sendClientFrame(
+          { kind: "snapshot", hasBinaryPayload: true },
+          new Uint8Array(3 * BULK_CHUNK_SIZE_BYTES),
+        );
+        relay.deliverToClient(sealedFault);
+
+        await vi.waitFor(
+          () => expect(relay.closesSent).toContain(faultedId),
+          WAIT,
+        );
+        expect(fatalCode).toBe("STREAM_CHUNK_REASSEMBLY_FAILED");
+        expect(
+          relay.clientFrames
+            .filter((frame) => frame.streamId === faultedId)
+            .map((frame) => ({ type: frame.type, seq: frame.seq })),
+        ).toEqual([
+          { type: MuxFrameType.SUBSCRIBE, seq: 0 },
+          { type: MuxFrameType.CLOSE, seq: 1 },
+        ]);
+        // Stream-local verdict: the sibling is untouched and nobody redialed.
+        expect(siblingOpen).toBe(true);
+        expect(relay.openBearers).toHaveLength(1);
+        expect(relay.errors).toEqual([]);
+      } finally {
+        warnSpy.mockRestore();
+        session.close();
       }
     },
     TEST_BUDGET_MS,

@@ -68,14 +68,6 @@ export type BrowserViewElementBoundingBox = z.infer<
   typeof browserViewElementBoundingBoxSchema
 >;
 
-export const browserViewElementAttributeSchema = z.object({
-  name: z.string(),
-  value: z.string(),
-});
-export type BrowserViewElementAttribute = z.infer<
-  typeof browserViewElementAttributeSchema
->;
-
 export const browserViewElementStyleSchema = z.object({
   property: z.string(),
   value: z.string(),
@@ -84,14 +76,23 @@ export type BrowserViewElementStyle = z.infer<
   typeof browserViewElementStyleSchema
 >;
 
+/**
+ * One annotated element as PERSISTED: how to find it, what it says, where it
+ * sits - never the markup.
+ *
+ * `outerHtml` and a verbatim `attributes` list used to ride here too, which
+ * put page content (a filled-in form, a `value=` on an input, a token in a
+ * `data-` attribute) into collaborator-readable chat persistence and into the
+ * model prompt. `textPreview` is the bounded, markup-free snippet that
+ * replaces both; the picker no longer captures either field, and a record
+ * written before this change still parses because Zod strips the keys it no
+ * longer declares.
+ */
 export const browserViewElementCaptureSchema = z.object({
   selector: z.string(),
   tagName: z.string(),
   elementId: z.string().nullable(),
   classNames: z.array(z.string()),
-  attributes: z.array(browserViewElementAttributeSchema),
-  outerHtml: z.string(),
-  outerHtmlTruncated: z.boolean(),
   textPreview: z.string().nullable(),
   ariaRole: z.string().nullable(),
   accessibleName: z.string().nullable(),

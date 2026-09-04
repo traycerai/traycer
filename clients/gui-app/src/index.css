@@ -16,36 +16,23 @@
 @plugin "tailwindcss-animate";
 @plugin "@tailwindcss/typography";
 
-/* In-progress "thinking" indicator. Plain CSS (no motion runtime) so it
-   animates reliably regardless of the LazyMotion provider: a foreground
-   highlight sweeps across the muted verb text, alongside a 3-dot typing
-   loader. */
-@keyframes working-text-shimmer {
-  from {
-    background-position: 150% center;
-  }
-  to {
-    background-position: -50% center;
-  }
-}
-
-@keyframes working-dot {
-  0%,
-  80%,
-  100% {
-    opacity: 0.3;
-    transform: translateY(0);
-  }
-  40% {
-    opacity: 1;
-    transform: translateY(-1px);
-  }
-}
+/* In-progress "thinking" indicator: a foreground highlight sweeps across the
+   muted verb text, alongside a 3-dot typing loader. The STATIC half lives
+   here (`.working-text-shimmer` / `.working-dots` below); the motion is
+   deliberately NOT a CSS animation. Blink samples every running CSS animation
+   on the main thread once per display frame and recalcs the element's style,
+   and against this stylesheet that costs a few KB of Blink-heap garbage per
+   element per frame - one always-on indicator at 120 Hz measured ~2.5 MB/s
+   and ratcheted the renderer to 1.5 GB. `WorkingShimmerText` / `WorkingDots`
+   write the sweep (25 Hz) and the bounce (12.5 Hz) as inline styles from
+   `lib/animation/status-animation-clock.ts` instead. Do not add
+   `animation:` back to these rules. */
 
 /* Indeterminate host-progress bar: a segment sweeping across the track, for a
    stage that is RUNNING but reports no percentage (verify, extract, swap,
-   service-start). Plain CSS for the same reason as the shimmer above - no motion
-   runtime, so it animates regardless of the LazyMotion provider.
+   service-start). Plain CSS - no motion runtime, so it animates regardless of
+   the LazyMotion provider - and a short-lived surface (one install), unlike the
+   run indicator above.
 
    It must MOVE. A static full-width fill was the previous behaviour here and it
    was a lie: the progress carry-forward used to leak a completed download's 100%
@@ -119,6 +106,33 @@
   }
 }
 
+/* A graph find result keeps its static ring after this finite attention cue.
+   Box-shadow is intentionally the only animated property: timeline playback
+   may be pulsing the same node's opacity at the same time. */
+@keyframes comm-graph-search-match {
+  0%,
+  100% {
+    box-shadow: 0 0 0 2px
+      color-mix(in srgb, var(--color-primary) 60%, transparent);
+  }
+  35%,
+  70% {
+    box-shadow:
+      0 0 0 4px color-mix(in srgb, var(--color-primary) 85%, transparent),
+      0 0 18px color-mix(in srgb, var(--color-primary) 55%, transparent);
+  }
+}
+
+.comm-graph-search-match {
+  animation: comm-graph-search-match 900ms ease-out both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .comm-graph-search-match {
+    animation: none;
+  }
+}
+
 .prompt-stash-count-flash {
   animation: prompt-stash-count-flash 700ms ease-out both;
 }
@@ -165,10 +179,12 @@
     var(--color-muted-foreground) 100%
   );
   background-size: 200% auto;
+  /* Off to one side until the clock's first write lands; the sweep runs
+     150% -> -50%. */
+  background-position: 150% center;
   background-clip: text;
   -webkit-background-clip: text;
   color: transparent;
-  animation: working-text-shimmer 2.2s linear infinite;
 }
 
 .working-dots {
@@ -182,20 +198,13 @@
   height: 0.1875rem;
   border-radius: 9999px;
   background-color: currentColor;
-  animation: working-dot 1.4s ease-in-out infinite;
+  /* The bounce's rest state; the clock writes `opacity` / `transform` inline. */
+  opacity: 0.3;
 }
 
-.working-dots > span:nth-child(2) {
-  animation-delay: 0.2s;
-}
-
-.working-dots > span:nth-child(3) {
-  animation-delay: 0.4s;
-}
-
+/* Under reduced motion the clock never writes, so these are the whole look. */
 @media (prefers-reduced-motion: reduce) {
   .working-text-shimmer {
-    animation: none;
     background: none;
     background-clip: initial;
     -webkit-background-clip: initial;
@@ -203,7 +212,6 @@
   }
 
   .working-dots > span {
-    animation: none;
     opacity: 0.6;
   }
 }
@@ -1156,6 +1164,19 @@
     min-height 250ms cubic-bezier(0.38, 0.7, 0.125, 1);
 }
 
+/*
+ * The same glide for the surfaces POSITIONED against the keyboard rather than
+ * sized against it. `--spacing-safe-center-y` subtracts the keyboard inset, so
+ * a centred overlay re-centres in the band above the keyboard the moment the
+ * bridge reports one - and would teleport there while the keyboard slid, which
+ * is the abrupt feel overlay mode was chosen to avoid (capacitor.config.ts).
+ * `top` alone: the dialog's entrance animation owns transform and opacity, so
+ * the two never contend, and a transition never runs on first paint.
+ */
+.traycer-native-keyboard .top-safe-center-y {
+  transition: top 250ms cubic-bezier(0.38, 0.7, 0.125, 1);
+}
+
 @theme inline {
   /*
    * Safe-area spacing scale: `pt-safe-top`, `pb-safe-bottom`, `top-safe-top`,
@@ -1227,8 +1248,20 @@
    * viewport rather than `#root`'s padding box, so a centred overlay would
    * centre on the status bar too; `top-safe-center-y` with the usual
    * `-translate-y-1/2` centres it on the part of the screen the app owns.
+   *
+   * The soft keyboard bounds that region from below exactly as the status bar
+   * bounds it from above, so it comes off here too - HALF of it, because
+   * moving a midpoint is half of what you did to the edge. Subtracting the
+   * whole height would overshoot and push a centred dialog up under the status
+   * bar. Without this term a dialog stayed centred on the FULL screen while
+   * the keyboard covered the bottom of it, which on a phone buried the
+   * composer and the submit button of every dialog someone types into.
+   * Both terms are 0 off-device, where this collapses to the plain `50%` it
+   * replaced.
    */
-  --spacing-safe-center-y: calc(50% + var(--safe-area-inset-top) / 2);
+  --spacing-safe-center-y: calc(
+    50% + var(--safe-area-inset-top) / 2 - var(--keyboard-inset) / 2
+  );
 
   /*
    * The horizontal counterpart, and NOT a mirror of the vertical one. The two

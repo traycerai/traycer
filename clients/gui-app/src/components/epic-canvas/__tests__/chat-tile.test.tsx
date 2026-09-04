@@ -53,6 +53,7 @@ const EMPTY_BROWSER_SESSIONS_STATE: BrowserSessionsState = {
   hostId: HOST_ID,
   lifecycle: "live",
   inventoryReady: true,
+  canMaterializeElectron: false,
   items: [],
   errorMessage: null,
   retry: () => undefined,
@@ -131,6 +132,14 @@ vi.mock("@/hooks/host/use-tab-host-client", () => ({
 // ThemeProvider. Same stub as plan-segment's own suite.
 vi.mock("@/providers/use-resolved-theme", () => ({
   useResolvedTheme: () => ({ resolvedTheme: "dark", themePreset: "neutral" }),
+}));
+
+// The composer's send button places Stop beside Send on a phone-width
+// viewport; jsdom is desktop-width, so the phone case flips this explicitly.
+const viewport = vi.hoisted(() => ({ mobile: false }));
+vi.mock("@/hooks/ui/use-mobile-viewport", async (importActual) => ({
+  ...(await importActual<typeof import("@/hooks/ui/use-mobile-viewport")>()),
+  useIsMobileViewport: () => viewport.mobile,
 }));
 
 // The tile subscribes to the command catalog itself, because its next-step /
@@ -1189,7 +1198,7 @@ function registerWaitingChatHandoff(): void {
     content: INITIAL_HANDOFF_CONTENT,
     settings: INITIAL_HANDOFF_SETTINGS,
     worktreeIntent: null,
-    placement: { kind: "active-tile" },
+    placement: null,
     messageId: "msg-test",
     clientActionId: "cai-test",
     createdAt: 1,
@@ -1249,6 +1258,7 @@ describe("<ChatTile />", () => {
 
   afterEach(() => {
     cleanup();
+    viewport.mobile = false;
     restoreLegendListTestClock();
     vi.restoreAllMocks();
     resetFocusedComposerControlsForTests();
@@ -1485,6 +1495,47 @@ describe("<ChatTile />", () => {
     const frame = chatHarness.sent[0];
     if (frame.kind !== "stop") throw new Error("expected stop frame");
     expect(frame.turnId).toBe("turn-1");
+  });
+
+  it("on a phone keeps a Queue button beside Stop and queues through it", async () => {
+    // Return is a newline on a phone-width viewport, so this button is the
+    // only way to queue a message while a turn runs.
+    viewport.mobile = true;
+    renderChatTile();
+
+    await waitForChatTileLoaded();
+
+    act(() => {
+      chatHarness.callbacks().onTurnStateChanged({
+        kind: "turnStateChanged",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ARTIFACT.id,
+        runStatus: "running",
+        activeTurn: {
+          agentMode: "regular",
+          sameTurnSteeringSupported: false,
+          turnId: "turn-1",
+          status: "running",
+          harnessId: "claude",
+          model: "haiku",
+          profileId: null,
+          userMessageId: "message-1",
+          startedAt: 2,
+          updatedAt: 2,
+          reasoningEffort: null,
+          serviceTier: null,
+        },
+      });
+    });
+
+    expect(screen.getByRole("button", { name: "Stop" })).not.toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Queue" }));
+
+    expect(chatHarness.sent).toHaveLength(1);
+    const frame = chatHarness.sent[0];
+    if (frame.kind !== "send") throw new Error("expected send frame");
+    expect(frame.deliveryPolicy).toBe("auto");
   });
 
   it("sends delete-message-suffix after inline confirmation", async () => {
@@ -3619,6 +3670,7 @@ describe("<ChatTile />", () => {
       cadence: null,
       status: { state: "running", pid: 42, startedAtMs: 1 },
       chatId: CHAT_ARTIFACT.id,
+      relaunchOnHostRestart: false,
       createdAtMs: 1,
       updatedAtMs: 1,
     };

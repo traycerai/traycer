@@ -3,6 +3,10 @@ import {
   type SessionRegistry,
 } from "@traycer-clients/shared/replica-runtime";
 import { createRendererRuntimeEnvironment } from "@/stores/epics/open-epic/runtime/runtime-environment";
+import {
+  DESKTOP_RETENTION_PROFILE,
+  getRetentionProfile,
+} from "@/stores/replica-memory/retention-profile";
 import type { TerminalSessionStoreHandle } from "@/stores/terminals/terminal-session-store";
 
 /**
@@ -31,7 +35,8 @@ export const PLAIN_TERMINAL_RELEASE_LINGER_MS = 10 * 60 * 1000;
  * running agents flush every lingering shell immediately). Mirrors
  * `DEFAULT_MAX_WARM_CHAT_SESSIONS`.
  */
-export const MAX_LINGERING_PLAIN_TERMINALS = 6;
+export const MAX_LINGERING_PLAIN_TERMINALS =
+  DESKTOP_RETENTION_PROFILE.maxLingeringPlainTerminals;
 
 /**
  * Owner-scoped identity for warm-presentation lookup. Terminal sessions
@@ -113,7 +118,11 @@ export class TerminalSessionRegistry {
       environment: createRendererRuntimeEnvironment(),
       policy: {
         idleTtlMs: PLAIN_TERMINAL_RELEASE_LINGER_MS,
-        maxWarm: MAX_LINGERING_PLAIN_TERMINALS,
+        // The shell's retention profile (desktop:
+        // `MAX_LINGERING_PLAIN_TERMINALS`), read on every cap walk.
+        get maxWarm(): number {
+          return getRetentionProfile().maxLingeringPlainTerminals;
+        },
         warmCapScope: "demand-free",
         // "The count-bounded pool is the lingering plain terminals only ...
         // counting them would let N running agents flush every lingering shell

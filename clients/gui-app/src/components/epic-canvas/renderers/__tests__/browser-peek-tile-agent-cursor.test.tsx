@@ -1,14 +1,11 @@
 import "../../../../../__tests__/test-browser-apis";
-import {
-  act,
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-} from "@testing-library/react";
+import { act, cleanup, fireEvent, screen } from "@testing-library/react";
+import { renderPeekTile } from "@/components/epic-canvas/renderers/__tests__/browser-peek-tile-render";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   FakeStreamClient,
+  runnerOpenExternalLinkModule,
+  tileRoleRunnerHostModule,
   type FakeStreamSession,
   epicNestedFocusNavigationModule,
   fakeMediaPeerModule,
@@ -36,6 +33,12 @@ import type { AgentCursorPosition } from "@/lib/browser-view/sessions/screencast
  */
 const peers = vi.hoisted(
   () => [] as Array<{ readonly handlers: MediaPeerHandlers; closed: boolean }>,
+);
+
+vi.mock("@/providers/use-runner-host", () => tileRoleRunnerHostModule());
+
+vi.mock("@/hooks/runner/use-open-external-link-mutation", () =>
+  runnerOpenExternalLinkModule(),
 );
 
 vi.mock("@/lib/browser-view/tiles/webrtc-media-registry", (original) =>
@@ -88,13 +91,13 @@ function liveStream(): FakeStreamSession {
 const PAST_ANY_LINGER_MS = 30_000;
 
 function renderTile(): void {
-  render(
+  renderPeekTile(
     <BrowserPeekTile
       viewTabId="view-tab-1"
       paneId="pane-1"
       epicId="epic-1"
       node={peekNode}
-      isElectronWake={false}
+      completeMeans="ended"
     />,
   );
   act(() => {
@@ -327,7 +330,7 @@ describe("AgentCursorOverlay", () => {
     // `cursor === null` reset of `pressedId` - the retained 1 then matches the
     // NEXT selection's first cursor, and a plain move draws a phantom ripple
     // for a press that never happened.
-    const { rerender } = render(
+    const { rerender } = renderPeekTile(
       <AgentCursorOverlay
         cursor={cursorAt({ type: "down", id: 1 })}
         frameSize={FRAME_SIZE}

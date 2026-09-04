@@ -51,7 +51,7 @@ export type SessionImportScanPhase = "scanning" | "complete" | "failed";
  * before reading anything - so it is part of the scan request, never a
  * client-side filter over a full scan.
  */
-export type SessionImportScanWindow = 7 | 14 | 30 | null;
+export type SessionImportScanWindow = 1 | 7 | 14 | 30 | null;
 
 /** A week: recent enough to be "what I'm working on", the act's premise. */
 export const SESSION_IMPORT_DEFAULT_SCAN_WINDOW: SessionImportScanWindow = 7;
@@ -60,6 +60,7 @@ export const SESSION_IMPORT_SCAN_WINDOW_OPTIONS: ReadonlyArray<{
   readonly window: SessionImportScanWindow;
   readonly label: string;
 }> = [
+  { window: 1, label: "Last 24 hours" },
   { window: 7, label: "Last 7 days" },
   { window: 14, label: "Last 2 weeks" },
   { window: 30, label: "Last 30 days" },
@@ -495,27 +496,88 @@ export function folderDisplayName(path: string): string {
   return last.length > 0 ? last : path;
 }
 
-const FAILURE_REASON_LABELS: Record<SessionImportFailureReason, string> = {
-  source_unreadable: "Could not be read",
-  source_empty: "Nothing to import",
-  workspace_bind_failed: "No workspace could be resolved",
-  creation_failed: "Task could not be created",
-  internal_error: "Unexpected error",
-};
+/** The order failure groups render in: what the user can act on first. */
+const FAILURE_REASON_ORDER: ReadonlyArray<SessionImportFailureReason> = [
+  "source_unreadable",
+  "workspace_bind_failed",
+  "creation_failed",
+  "internal_error",
+  "source_empty",
+];
 
 /**
- * Failure groups render in the order the labels above are declared, read off
- * that record rather than restated so a new reason cannot be given a label in
- * one place and left out of the order in another.
+ * The cause as a short heading: what the summary's sections are titled, and
+ * what a greyed row's tooltip leads with.
  */
-const FAILURE_REASON_ORDER: ReadonlyArray<string> = Object.keys(
-  FAILURE_REASON_LABELS,
-);
-
 export function sessionImportFailureLabel(
   reason: SessionImportFailureReason,
 ): string {
-  return FAILURE_REASON_LABELS[reason];
+  switch (reason) {
+    case "source_unreadable":
+      return "Could not be read";
+    case "source_empty":
+      return "No messages";
+    case "workspace_bind_failed":
+      return "No matching folder on this machine";
+    case "creation_failed":
+      return "Task could not be created";
+    case "internal_error":
+      return "Unexpected error";
+  }
+}
+
+/**
+ * Whether the host's per-session detail says more than the reason does. For
+ * an unreadable file it is the actual error, worth a glance; for an empty
+ * session it restates the heading, and a list that repeats one sentence per
+ * row is what buried the summary under a wall of text.
+ */
+export function sessionImportFailureDetailVaries(
+  reason: SessionImportFailureReason,
+): boolean {
+  switch (reason) {
+    case "source_unreadable":
+    case "creation_failed":
+    case "internal_error":
+      return true;
+    case "source_empty":
+    case "workspace_bind_failed":
+      return false;
+  }
+}
+
+/**
+ * The one line the summary shows above the details: an outcome first, then
+ * the cause when there is exactly one - "Not imported: 6 sessions with no
+ * messages". Mixed causes keep the line plain and leave the reasons to the
+ * sections underneath.
+ */
+export function sessionImportNotImportedLine(
+  groups: ReadonlyArray<SessionImportFailureGroupView>,
+): string {
+  const count = groups.reduce(
+    (total, group) => total + group.entries.length,
+    0,
+  );
+  const noun = count === 1 ? "session" : "sessions";
+  const only = groups.length === 1 ? groups[0] : undefined;
+  if (only === undefined) return `Not imported: ${count} ${noun}`;
+  return `Not imported: ${count} ${noun} ${failureCause(only.reason)}`;
+}
+
+function failureCause(reason: SessionImportFailureReason): string {
+  switch (reason) {
+    case "source_unreadable":
+      return "that could not be read";
+    case "source_empty":
+      return "with no messages";
+    case "workspace_bind_failed":
+      return "with no matching folder on this machine";
+    case "creation_failed":
+      return "whose task could not be created";
+    case "internal_error":
+      return "that hit an unexpected error";
+  }
 }
 
 function rowView(
@@ -723,6 +785,7 @@ export interface SessionImportFailureEntryView {
 
 export interface SessionImportFailureGroupView {
   readonly reason: SessionImportFailureReason;
+  /** The cause as the section's heading. */
   readonly label: string;
   readonly entries: ReadonlyArray<SessionImportFailureEntryView>;
 }
@@ -731,7 +794,8 @@ export interface SessionImportFailureGroupView {
  * Groups a finished run's failures by cause, because that is how a person acts
  * on them: "four sessions could not be read" is one problem with four
  * instances, not four problems. The closed reason enum is what makes the
- * grouping meaningful; `detail` is the per-session half and stays on the row.
+ * grouping meaningful; `detail` is the per-session half and stays on the row,
+ * behind the group's expand toggle.
  */
 export interface SessionImportOutcomeEntry {
   readonly selectionKey: string;

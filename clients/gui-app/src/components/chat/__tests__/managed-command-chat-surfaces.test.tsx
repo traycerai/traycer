@@ -82,6 +82,12 @@ vi.mock(
     }),
     useManagedCommandStopAllIsPending: () => stopAllSharedFlight.isPending,
     useManagedCommandDelete: () => ({ mutate: vi.fn(), isPending: false }),
+    useManagedCommandConfigureIsPending: () => false,
+    useManagedCommandRelaunchOnHostRestart: (
+      _target: unknown,
+      streamed: { relaunchOnHostRestart: boolean },
+    ) => streamed.relaunchOnHostRestart,
+    useManagedCommandConfigure: () => ({ mutate: vi.fn(), isPending: false }),
     useManagedCommandDeliverHeld: () => ({
       mutate: deliverHeldMutate,
       isPending: deliverHeldOwnFlight.isPending,
@@ -134,6 +140,7 @@ function command(over: Partial<ManagedCommand>): ManagedCommand {
     cadence: { debounceMs: 500, maxWaitMs: 15_000, throttleMs: 5_000 },
     status: { state: "running", pid: 4410, startedAtMs: 10 },
     chatId: CHAT_ID,
+    relaunchOnHostRestart: false,
     createdAtMs: 10,
     updatedAtMs: 10,
     ...over,
@@ -912,12 +919,17 @@ describe("held shells in the Background panel", () => {
     });
     expandPanel();
 
-    expect(
-      screen.getByTestId("held-managed-command-row-quiet-watcher"),
-    ).not.toBeNull();
+    const heldRow = screen.getByTestId(
+      "held-managed-command-row-quiet-watcher",
+    );
+    expect(heldRow).not.toBeNull();
     expect(
       screen.queryByTestId("managed-command-background-row-quiet-watcher"),
     ).toBeNull();
+    // Held does not imply stopped: the glyph follows the LIVE state, so a
+    // held shell that is still running wears the running row's monitor glyph,
+    // not the pause glyph a finished one gets.
+    expect(heldRow.querySelector("[data-monitor-icon]")).not.toBeNull();
     // The shell that is only running keeps its ordinary row.
     expect(
       screen.getByTestId("managed-command-background-row-busy-shell"),
@@ -970,12 +982,15 @@ describe("held shells in the Background panel", () => {
     });
     expandPanel();
 
-    expect(
-      screen.getByTestId("held-managed-command-row-finished-shell"),
-    ).not.toBeNull();
+    const heldRow = screen.getByTestId(
+      "held-managed-command-row-finished-shell",
+    );
+    expect(heldRow).not.toBeNull();
     expect(
       screen.queryByTestId("managed-command-stop-finished-shell"),
     ).toBeNull();
+    // Not running, so no running glyph: this is the pause-glyph case.
+    expect(heldRow.querySelector("[data-monitor-icon]")).toBeNull();
     expect(screen.getByTestId("background-header-summary").textContent).toBe(
       "1 held",
     );

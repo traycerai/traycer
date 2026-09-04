@@ -4,7 +4,7 @@ import type {
   TileController,
 } from "@/components/epic-canvas/renderers/tile-controller";
 import type { BrowserAnnotationSessionController } from "@/hooks/browser/use-browser-annotation-session";
-import { normalizeBrowserAddressInput } from "@/lib/browser-view/link-routing/browser-link-routing-core";
+import { normalizeBrowserAddressInput } from "@/lib/browser-view/browser-tab-display";
 import { ignoreError } from "@/lib/browser-view/ignore-error";
 import { isSameBrowserViewTile } from "@/lib/browser-view/tiles/browser-view-keys";
 import { useAddressDraft } from "@/components/epic-canvas/renderers/use-address-draft";
@@ -147,9 +147,6 @@ export function useElectronTabChrome(
   const applyViewportPreset = (preset: BrowserViewViewportPresetId): void => {
     setViewportPreset(preset);
     persistViewportPreset(preset);
-    void control({ kind: "setViewportPreset", viewportPreset: preset }).catch(
-      ignoreError,
-    );
   };
 
   const cancelDownload = (downloadId: string): void => {
@@ -181,6 +178,8 @@ export function useElectronTabChrome(
     profile,
     url: liveUrl,
     addressValue,
+    setAddressInput: draft.setAddressInput,
+    focusAddress: draft.focusAddress,
     canGoBack,
     canGoForward,
     zoomPercent,
