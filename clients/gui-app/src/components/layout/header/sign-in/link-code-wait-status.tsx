@@ -62,13 +62,33 @@ function WaitStatusLine(props: { readonly progress: LinkLoginProgress }) {
 export function LinkCodeWaitStatus() {
   const auth = useAuthService();
   const progress = useAuthLinkLoginProgress(auth);
+  const matchCode = progress === null ? null : progress.matchCode;
   return (
     <div
       className="flex flex-col items-center gap-0.5"
       data-testid="link-code-signin-waiting"
     >
+      {matchCode !== null ? (
+        // The claim's match code, large: the desktop's prompt asks "Does your
+        // phone show NN?", and this is the NN. It is shown for the whole wait
+        // — the human may still be walking over to the desktop — and it is
+        // an attention proof, not something to type anywhere.
+        <p
+          className="text-center text-ui-sm"
+          data-testid="link-code-signin-match-code"
+          role="status"
+          aria-live="polite"
+        >
+          Your code:{" "}
+          <span className="font-mono text-title-lg tabular-nums">
+            {matchCode}
+          </span>
+        </p>
+      ) : null}
       <p className="text-center text-ui-sm opacity-80">
-        Waiting for approval on your computer…
+        {matchCode !== null
+          ? "Approve it on your computer if the code matches."
+          : "Waiting for approval on your computer…"}
       </p>
       {progress !== null ? (
         <p

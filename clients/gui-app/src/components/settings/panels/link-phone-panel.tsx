@@ -81,6 +81,47 @@ function pendingRespondVerdict(
   return variables.approve ? "approve" : "reject";
 }
 
+/**
+ * The question the approver is actually asked. With a match code, the
+ * question is the code: the phone in the user's hand shows the same two
+ * digits, and agreement between the two screens proves the prompt belongs to
+ * that phone — which the self-reported device description cannot, since the
+ * claimant chooses it. The description then drops to secondary context.
+ *
+ * Without one (a server that predates the code) the description IS the
+ * prompt, exactly as before.
+ */
+function ConfirmClaimHeadline(props: { readonly claim: LiveClaim }) {
+  const device = claimantDeviceLabel(props.claim.userAgent);
+  if (props.claim.matchCode === null) {
+    return (
+      <p className="text-ui-sm font-medium text-foreground">
+        Approve sign-in from {device}?
+      </p>
+    );
+  }
+  return (
+    <>
+      <p className="text-ui-sm font-medium text-foreground">
+        Does your phone show{" "}
+        {/* Digits read out as a number ("forty-seven"), which is how a
+            person will say them to themselves while comparing screens;
+            the tabular figures keep "11" and "77" the same width. */}
+        <span
+          className="font-mono text-title-md tabular-nums"
+          data-testid="link-phone-match-code"
+        >
+          {props.claim.matchCode}
+        </span>
+        ?
+      </p>
+      <p className="text-ui-xs text-muted-foreground">
+        Sign-in request from {device}.
+      </p>
+    </>
+  );
+}
+
 function ConfirmClaimCard(props: {
   readonly claim: LiveClaim;
   readonly pendingVerdict: PendingVerdict;
@@ -99,10 +140,16 @@ function ConfirmClaimCard(props: {
       data-testid="link-phone-confirm"
     >
       <QrCode aria-hidden="true" className="text-muted-foreground" />
-      <div className="flex flex-col items-center gap-1 text-center">
-        <p className="text-ui-sm font-medium text-foreground">
-          Approve sign-in from {claimantDeviceLabel(props.claim.userAgent)}?
-        </p>
+      {/* The QR is swapped for this prompt with no user action on this
+          surface, and it is only answerable inside the claim window — a
+          screen-reader user has to hear about it, code included, or the
+          window expires undiscovered. */}
+      <div
+        className="flex flex-col items-center gap-1 text-center"
+        role="status"
+        aria-live="polite"
+      >
+        <ConfirmClaimHeadline claim={props.claim} />
         <p
           className="text-ui-xs text-muted-foreground"
           data-testid="link-phone-claimant"
@@ -110,8 +157,9 @@ function ConfirmClaimCard(props: {
           {detailLine}
         </p>
         <p className="text-ui-xs text-muted-foreground">
-          These details are approximate. Approve only if you just scanned this
-          code yourself.
+          {props.claim.matchCode === null
+            ? "These details are approximate. Approve only if you just scanned this code yourself."
+            : "Approve only if the code matches and you just scanned this code yourself."}
         </p>
       </div>
       {props.respondFailed ? (

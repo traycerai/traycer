@@ -87,6 +87,16 @@ function claimedStatus(claimedAtMs: number, userAgent: string) {
   };
 }
 
+/** The same claim from a server that mints match codes. */
+function claimedStatusWithCode(
+  claimedAtMs: number,
+  userAgent: string,
+  matchCode: string,
+) {
+  const status = claimedStatus(claimedAtMs, userAgent);
+  return { ...status, claimant: { ...status.claimant, matchCode } };
+}
+
 beforeEach(() => {
   vi.useFakeTimers();
   mocks.useAuthLinkLoginStatus.mockReturnValue(statusResult(null));
@@ -637,6 +647,51 @@ describe("LinkPhonePanel", () => {
     render(<LinkPhonePanel />);
     expect(screen.getByTestId("link-phone-confirm").textContent).toContain(
       "Approve sign-in from iPhone 16 Pro?",
+    );
+  });
+
+  it("asks about the match code when the claim carries one, with the device as context", () => {
+    // The question is the code: the phone shows the same two digits, and
+    // agreement between the screens is what the self-reported description
+    // cannot prove. The description stays, demoted to context.
+    mocks.useAuthLinkLoginCode.mockReturnValue(queryResultWithCode(Date.now()));
+    mocks.useAuthLinkLoginStatus.mockReturnValue(
+      statusResult(claimedStatusWithCode(Date.now(), "iPhone 16 Pro", "47")),
+    );
+    const respond = respondIdle();
+    mocks.useRespondLinkLoginMutation.mockReturnValue(respond);
+    render(<LinkPhonePanel />);
+    const card = screen.getByTestId("link-phone-confirm");
+    expect(screen.getByTestId("link-phone-match-code").textContent).toBe("47");
+    expect(card.textContent).toContain("Does your phone show 47?");
+    expect(card.textContent).toContain("Sign-in request from iPhone 16 Pro.");
+    expect(card.textContent).not.toContain("Approve sign-in from");
+    expect(card.textContent).toContain("Approve only if the code matches");
+    // The code is announced with the prompt: a screen-reader user hears the
+    // number they are asked to compare, not only that a prompt appeared.
+    expect(screen.getByRole("status").textContent).toContain("47");
+    // The decision is unchanged by the code: Approve still sends only the
+    // code being decided — the match code is never an input.
+    act(() => {
+      screen.getByTestId("link-phone-approve").click();
+    });
+    expect(respond.mutate).toHaveBeenCalledWith(
+      { code: "ABCDE-FGHJK", approve: true },
+      expect.anything(),
+    );
+  });
+
+  it("falls back to the description prompt when the server sends no match code", () => {
+    // A server that predates the code: today's prompt, unchanged, and no
+    // empty code slot on the card.
+    mocks.useAuthLinkLoginCode.mockReturnValue(queryResultWithCode(Date.now()));
+    mocks.useAuthLinkLoginStatus.mockReturnValue(
+      statusResult(claimedStatus(Date.now(), "iPhone 16 Pro")),
+    );
+    render(<LinkPhonePanel />);
+    expect(screen.queryByTestId("link-phone-match-code")).toBeNull();
+    expect(screen.getByTestId("link-phone-confirm").textContent).not.toContain(
+      "Does your phone show",
     );
   });
 

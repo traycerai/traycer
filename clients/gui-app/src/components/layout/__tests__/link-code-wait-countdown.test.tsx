@@ -47,6 +47,7 @@ describe("link-login approval countdown", () => {
     progressHolder.current = {
       nextPollAtMs: START_MS + 3_000,
       phase: "waiting",
+      matchCode: null,
     };
     const view = render(<LinkCodeWaitStatus />);
     expect(statusText()).toBe("Checking again in 3s");
@@ -60,6 +61,7 @@ describe("link-login approval countdown", () => {
     progressHolder.current = {
       nextPollAtMs: START_MS + 800 + 3_000,
       phase: "waiting",
+      matchCode: null,
     };
     view.rerender(<LinkCodeWaitStatus />);
 
@@ -67,10 +69,53 @@ describe("link-login approval countdown", () => {
     expect(statusText()).toBe("Checking again in 3s");
   });
 
+  it("shows the claim's match code large, for the whole wait", () => {
+    // The desktop asks "Does your phone show NN?"; this is the NN. It has
+    // to be there from the first countdown to the finalizing beat — the
+    // human may still be walking over to the desktop.
+    progressHolder.current = {
+      nextPollAtMs: START_MS + 3_000,
+      phase: "waiting",
+      matchCode: "47",
+    };
+    const view = render(<LinkCodeWaitStatus />);
+    expect(screen.getByTestId("link-code-signin-match-code").textContent).toBe(
+      "Your code: 47",
+    );
+    expect(screen.getByRole("status").textContent).toContain("47");
+    expect(
+      screen.getByTestId("link-code-signin-waiting").textContent,
+    ).toContain("Approve it on your computer if the code matches.");
+
+    progressHolder.current = {
+      nextPollAtMs: START_MS + 3_000,
+      phase: "finalizing",
+      matchCode: "47",
+    };
+    view.rerender(<LinkCodeWaitStatus />);
+    expect(screen.getByTestId("link-code-signin-match-code").textContent).toBe(
+      "Your code: 47",
+    );
+  });
+
+  it("shows no code slot at all against a server that sent none", () => {
+    progressHolder.current = {
+      nextPollAtMs: START_MS + 3_000,
+      phase: "waiting",
+      matchCode: null,
+    };
+    render(<LinkCodeWaitStatus />);
+    expect(screen.queryByTestId("link-code-signin-match-code")).toBeNull();
+    expect(
+      screen.getByTestId("link-code-signin-waiting").textContent,
+    ).toContain("Waiting for approval on your computer…");
+  });
+
   it("reads the checking beat once the target has passed", () => {
     progressHolder.current = {
       nextPollAtMs: START_MS + 1_000,
       phase: "waiting",
+      matchCode: null,
     };
     render(<LinkCodeWaitStatus />);
     act(() => {

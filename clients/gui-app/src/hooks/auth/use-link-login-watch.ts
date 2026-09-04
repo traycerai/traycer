@@ -24,6 +24,12 @@ export interface LiveClaim {
   readonly address: string | null;
   readonly userAgent: string | null;
   readonly location: string | null;
+  /**
+   * The two digits the phone is showing for this claim, or `null` from a
+   * server that predates the match code — the card then falls back to the
+   * description-only prompt.
+   */
+  readonly matchCode: string | null;
 }
 
 /**
@@ -81,6 +87,7 @@ function claimFromStatus(
     address: claimant.address,
     userAgent: claimant.userAgent,
     location: claimant.location,
+    matchCode: claimant.matchCode ?? null,
   };
 }
 

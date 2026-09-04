@@ -34,6 +34,15 @@ export type ClaimLinkLoginCodeResponse = {
   secret: string;
   /** Server-directed minimum spacing between result polls, seconds. */
   interval: number;
+  /**
+   * The claim's MATCH CODE: two server-chosen digits the approver's prompt
+   * shows as well, so the human can confirm the prompt on their desktop is
+   * for the phone in their hand. An attention proof, not a credential — it
+   * gates nothing, and the poll below is bound to `secret` alone. Present
+   * only when the request opted in AND the server is new enough to mint one;
+   * a surface without it falls back to the description-only prompt.
+   */
+  matchCode?: string;
 };
 
 export type LinkLoginTokenResponse = {
@@ -55,6 +64,13 @@ export type LinkLoginStatusResponse = {
     userAgent: string | null;
     location: string | null;
     claimedAt: number | null;
+    /**
+     * The claim's match code — the two digits the phone is showing — while
+     * the record is `claimed` and the request opted in; `null` once decided.
+     * Absent altogether from a server that predates it, which the desktop
+     * renders as the description-only prompt.
+     */
+    matchCode?: string | null;
   } | null;
 };
 
@@ -71,12 +87,20 @@ export const mintLinkLoginCodeResponseSchema: z.ZodType<MintLinkLoginCodeRespons
     })
     .strict();
 
+/**
+ * The match code's exact wire shape. Anything else is a contract drift and
+ * fails the parse like any other, rather than putting an unreadable "code"
+ * in front of the human who is asked to compare it.
+ */
+const linkLoginMatchCodeSchema = z.string().regex(/^[0-9]{2}$/);
+
 export const claimLinkLoginCodeResponseSchema: z.ZodType<ClaimLinkLoginCodeResponse> =
   z
     .object({
       status: z.literal("claimed"),
       secret: z.string().min(1),
       interval: z.number().int().positive(),
+      matchCode: linkLoginMatchCodeSchema.optional(),
     })
     .strict();
 
@@ -98,6 +122,7 @@ export const linkLoginStatusResponseSchema: z.ZodType<LinkLoginStatusResponse> =
           userAgent: z.string().nullable(),
           location: z.string().nullable(),
           claimedAt: z.number().nullable(),
+          matchCode: linkLoginMatchCodeSchema.nullable().optional(),
         })
         .strict()
         .nullable(),

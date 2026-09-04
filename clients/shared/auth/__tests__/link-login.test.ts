@@ -8,6 +8,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   buildLinkLoginQrPayload,
   claimantDeviceLabel,
+  claimLinkLoginCodeViaHttp,
+  linkLoginStatusViaHttp,
   linkLoginTokenViaHttp,
   normalizeLinkLoginCodeInput,
   parseLinkLoginInput,
@@ -157,6 +159,138 @@ describe("token poll: 429 back-off directive", () => {
       kind: "slow-down",
       retryAfterSeconds: null,
     });
+  });
+});
+
+/**
+ * The match code is OPT-IN on the wire: the server sends it only to a request
+ * that declared it understands the field, because these response schemas are
+ * strict and an older client would otherwise fail to parse today's flow. So
+ * this client must (a) always ask, (b) read the code when it comes, and (c)
+ * keep working against a server that predates it and sends nothing.
+ */
+describe("match code on the wire", () => {
+  const AUTHN_BASE_URL = "https://authn.example.test";
+  let originalFetch: typeof globalThis.fetch;
+  let lastBody: unknown = null;
+
+  function installFetch(body: object): void {
+    globalThis.fetch = (async (
+      _input: RequestInfo | URL,
+      init: RequestInit | undefined,
+    ): Promise<Response> => {
+      lastBody =
+        typeof init?.body === "string" ? JSON.parse(init.body) : init?.body;
+      return new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+  }
+
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+    lastBody = null;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it("claim asks for the code and reads it back", async () => {
+    installFetch({
+      status: "claimed",
+      secret: "S".repeat(43),
+      interval: 5,
+      matchCode: "47",
+    });
+    const result = await claimLinkLoginCodeViaHttp(
+      AUTHN_BASE_URL,
+      NORMALIZED,
+      "iPhone",
+    );
+    expect(lastBody).toEqual({
+      code: NORMALIZED,
+      device: "iPhone",
+      acceptMatchCode: true,
+    });
+    expect(result).toEqual({
+      kind: "claimed",
+      secret: "S".repeat(43),
+      pollIntervalSeconds: 5,
+      matchCode: "47",
+    });
+  });
+
+  it("claim still succeeds against a server that sends no code", async () => {
+    // The pre-match-code response shape, byte for byte: the phone must sign
+    // in exactly as before, with nothing to show.
+    installFetch({ status: "claimed", secret: "S".repeat(43), interval: 5 });
+    const result = await claimLinkLoginCodeViaHttp(
+      AUTHN_BASE_URL,
+      NORMALIZED,
+      null,
+    );
+    expect(lastBody).toEqual({ code: NORMALIZED, acceptMatchCode: true });
+    expect(result).toMatchObject({ kind: "claimed", matchCode: null });
+  });
+
+  it("claim refuses a code that is not two digits", async () => {
+    // A contract drift, not a display nit: the human is asked to COMPARE
+    // this against the desktop, so an unreadable value must not be shown.
+    installFetch({
+      status: "claimed",
+      secret: "S".repeat(43),
+      interval: 5,
+      matchCode: "4",
+    });
+    expect(
+      await claimLinkLoginCodeViaHttp(AUTHN_BASE_URL, NORMALIZED, null),
+    ).toEqual({ kind: "network-error" });
+  });
+
+  it("status asks for the code and reads it back, or its absence", async () => {
+    installFetch({
+      status: "claimed",
+      claimant: {
+        address: null,
+        userAgent: "iPhone",
+        location: null,
+        claimedAt: 1_760_000_000_000,
+        matchCode: "47",
+      },
+    });
+    const withCode = await linkLoginStatusViaHttp(
+      AUTHN_BASE_URL,
+      "bearer",
+      NORMALIZED,
+      null,
+    );
+    expect(lastBody).toEqual({ code: NORMALIZED, acceptMatchCode: true });
+    expect(withCode).toMatchObject({
+      kind: "ok",
+      response: { claimant: { matchCode: "47" } },
+    });
+
+    // An older server: today's exact claimant shape parses unchanged.
+    installFetch({
+      status: "claimed",
+      claimant: {
+        address: null,
+        userAgent: "iPhone",
+        location: null,
+        claimedAt: 1_760_000_000_000,
+      },
+    });
+    const withoutCode = await linkLoginStatusViaHttp(
+      AUTHN_BASE_URL,
+      "bearer",
+      NORMALIZED,
+      null,
+    );
+    expect(withoutCode.kind).toBe("ok");
+    if (withoutCode.kind !== "ok") throw new Error("unreachable");
+    expect(withoutCode.response.claimant?.matchCode).toBeUndefined();
   });
 });
 
