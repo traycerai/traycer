@@ -20,6 +20,7 @@ import { isMobileApp } from "@/lib/mobile-app";
 import { focusTerminalInstance } from "@/lib/terminals/terminal-focus-registry";
 import {
   landingTerminalLayoutFor,
+  UNBOUND_LANDING_PAGE_ID,
   useLandingTerminalStore,
 } from "@/stores/home/landing-terminal-store";
 import { usePaneActivationFocusIntent } from "@/components/epic-canvas/pane-activation";
@@ -230,7 +231,7 @@ function restoreLandingSurfaceFocus(
   const terminalState = useLandingTerminalStore.getState();
   const layout = landingTerminalLayoutFor(
     terminalState,
-    draftId ?? "unbound-landing-page",
+    draftId ?? UNBOUND_LANDING_PAGE_ID,
   );
   if (layout.panelOpen && layout.maximized) {
     const instanceId = terminalState.activeInstanceId;

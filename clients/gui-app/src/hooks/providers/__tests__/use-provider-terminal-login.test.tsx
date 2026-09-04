@@ -152,6 +152,18 @@ describe("useProviderTerminalLogin", () => {
     });
     await waitFor(() => expect(result.current.isPending).toBe(false));
 
+    // The request rides an epic-scoped `TerminalScope`, not the retired bare
+    // `epicId` field - this is what `providers.startTerminalLogin@2.0` requires.
+    expect(mocks.startTerminalLoginRequest).toHaveBeenCalledWith(
+      "providers.startTerminalLogin",
+      {
+        providerId: "copilot",
+        scope: { kind: "epic", epicId: EPIC_ID },
+        cols: 80,
+        rows: 24,
+      },
+    );
+
     const canvas = useEpicCanvasStore.getState().canvasByTabId[viewTabId];
     if (canvas === undefined) throw new Error("expected view tab canvas");
     const pane = collectPanes(canvas.root)[0];

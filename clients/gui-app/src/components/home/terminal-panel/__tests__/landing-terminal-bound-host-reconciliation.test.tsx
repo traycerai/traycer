@@ -18,6 +18,10 @@ import {
   useLandingTerminalStore,
 } from "@/stores/home/landing-terminal-store";
 import {
+  recordProviderLoginTerminal,
+  useProviderLoginTerminalsStore,
+} from "@/stores/providers/provider-login-terminals";
+import {
   LandingTerminalBoundHostReconciliationFleet,
   type LandingTerminalBoundHostAuthorityEntry,
 } from "@/components/home/terminal-panel/landing-terminal-bound-host-reconciliation";
@@ -102,12 +106,82 @@ describe("<LandingTerminalBoundHostReconciliationFleet />", () => {
     queryClient = new QueryClient();
     window.localStorage.clear();
     useLandingTerminalStore.getState().resetForTests();
+    useProviderLoginTerminalsStore.setState(
+      useProviderLoginTerminalsStore.getInitialState(),
+      true,
+    );
   });
 
   afterEach(() => {
     cleanup();
     queryClient.clear();
     useLandingTerminalStore.getState().resetForTests();
+  });
+
+  it("re-runs the pass when sign-in provenance arrives AFTER it ran, reclassifying the tab it had left plain", async () => {
+    // The tab a peer window's session was adopted as before this window was
+    // told what it is: unmarked, unacknowledged, and - on a capable host -
+    // unprojected, which is exactly the shape the pass treats as legacy
+    // evidence.
+    useLandingTerminalStore.getState().addTab({
+      instanceId: "plain-instance",
+      sessionId: "signin-session",
+      hostId: "host-b",
+      cwd: "/legacy/b",
+      name: "b · New Terminal",
+      titleSource: "default",
+    });
+    const collection = freshCollection([], undefined);
+    queryClient.setQueryData(
+      hostQueryKeys.plainTerminals("host-b", SCOPE),
+      collection,
+    );
+    // Never resolves: the pass MUST NOT import this session once the record
+    // lands, and a resolving mock would let a stray import look like success.
+    const importB = vi.fn(() => new Promise<never>(() => undefined));
+    const entries = {
+      "host-b": authorityEntry({
+        collection,
+        importLegacy: importB,
+        close: () => Promise.resolve(),
+      }),
+    };
+    render(
+      <QueryClientProvider client={queryClient}>
+        <LandingTerminalBoundHostReconciliationFleet
+          landingPageId="landing-a"
+          selectedHostId="host-a"
+          entries={entries}
+        />
+      </QueryClientProvider>,
+    );
+    // First pass: nothing says this is a sign-in, so it is imported.
+    await waitFor(() => expect(importB).toHaveBeenCalledTimes(1));
+
+    // The peer's record arrives. Nothing about the host, the collection or the
+    // tabs changed - only the registry - so this is the one signal that can
+    // re-run the pass.
+    act(() => {
+      recordProviderLoginTerminal({
+        hostId: "host-b",
+        sessionId: "signin-session",
+        providerId: "reasonix",
+      });
+    });
+
+    await waitFor(() => {
+      expect(
+        useLandingTerminalStore
+          .getState()
+          .tabs.find((tab) => tab.instanceId === "plain-instance"),
+      ).toMatchObject({
+        origin: "provider-login",
+        originProviderId: "reasonix",
+        name: "Reasonix sign-in",
+      });
+    });
+    // And not imported a second time under a manager-owned id.
+    expect(importB).toHaveBeenCalledTimes(1);
   });
 
   it("converges an inactive bound host without moving another host's presentation", async () => {

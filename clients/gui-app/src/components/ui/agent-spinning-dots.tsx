@@ -1,4 +1,11 @@
-import { useLayoutEffect, useRef } from "react";
+import { useCallback, useLayoutEffect, useRef } from "react";
+import { usePaneVisible } from "@/components/epic-tabs/pane-visibility-context";
+import {
+  STATUS_ANIMATION_PULSE_CADENCE_MS,
+  STATUS_ANIMATION_SMOOTH_CADENCE_MS,
+  subscribeStatusAnimation,
+  useStatusAnimation,
+} from "@/lib/animation/status-animation-clock";
 import { cn } from "@/lib/utils";
 import type { AgentSpinnerVariant } from "@/components/ui/agent-spinner-variant";
 
@@ -602,6 +609,74 @@ export interface AgentSpinningDotsProps {
   readonly variant: AgentSpinnerVariant | undefined;
 }
 
+const WORKING_DOTS_CYCLE_MS = 1400;
+const WORKING_DOTS_STAGGER_MS = 200;
+/** Fraction of the cycle spent rising and falling; the rest is rest. */
+const WORKING_DOTS_ACTIVE_FRACTION = 0.8;
+const WORKING_DOTS_REST_OPACITY = 0.3;
+
+function easeInOut(t: number): number {
+  return t < 0.5 ? 2 * t * t : 1 - ((-2 * t + 2) * (-2 * t + 2)) / 2;
+}
+
+/** 0 at rest, 1 at the top of the bounce, eased, per dot. */
+function dotLift(elapsedMs: number, index: number): number {
+  const shifted = elapsedMs - index * WORKING_DOTS_STAGGER_MS;
+  const phase = (((shifted / WORKING_DOTS_CYCLE_MS) % 1) + 1) % 1;
+  if (phase >= WORKING_DOTS_ACTIVE_FRACTION) return 0;
+  const half = WORKING_DOTS_ACTIVE_FRACTION / 2;
+  const linear = phase < half ? phase / half : 1 - (phase - half) / half;
+  return easeInOut(linear);
+}
+
+/**
+ * The `typing` variant: three steadily, sequentially pulsing dots. Private
+ * to this module - `AgentSpinningDots` is the only spinner seam, so cadence,
+ * reduced-motion and pane-visibility behaviour cannot diverge between
+ * spinner APIs. Static layout comes from the `.working-dots` rules in
+ * index.css; the bounce is written as inline styles from the shared status
+ * animation clock (see `status-animation-clock.ts` for why it is not a CSS
+ * animation).
+ */
+function WorkingDots(props: {
+  readonly className: string | undefined;
+  readonly testId: string | undefined;
+}) {
+  const ref = useRef<HTMLSpanElement | null>(null);
+  const write = useCallback((element: HTMLSpanElement, elapsedMs: number) => {
+    const dots = element.children;
+    for (let index = 0; index < dots.length; index++) {
+      const dot = dots[index];
+      if (!(dot instanceof HTMLElement)) continue;
+      const lift = dotLift(elapsedMs, index);
+      dot.style.opacity = String(
+        WORKING_DOTS_REST_OPACITY + (1 - WORKING_DOTS_REST_OPACITY) * lift,
+      );
+      dot.style.transform = `translateY(${(-lift).toFixed(3)}px)`;
+    }
+  }, []);
+  const clear = useCallback((element: HTMLSpanElement) => {
+    for (const dot of element.children) {
+      if (!(dot instanceof HTMLElement)) continue;
+      dot.style.opacity = "";
+      dot.style.transform = "";
+    }
+  }, []);
+  useStatusAnimation(ref, write, clear, STATUS_ANIMATION_PULSE_CADENCE_MS);
+  return (
+    <span
+      ref={ref}
+      className={cn("working-dots text-current", props.className)}
+      aria-hidden="true"
+      data-testid={props.testId}
+    >
+      <span />
+      <span />
+      <span />
+    </span>
+  );
+}
+
 export function AgentSpinningDots(props: AgentSpinningDotsProps) {
   const frameRef = useRef<HTMLSpanElement | null>(null);
   const variant = props.variant ?? "dots";
@@ -613,39 +688,45 @@ export function AgentSpinningDots(props: AgentSpinningDotsProps) {
   // `useState(frameIndex)` re-rendered this component every `intervalMs` (up to
   // 12.5Hz per spinner); on a busy loading surface like the providers settings
   // panel - which mounts several spinners at once - that flickered the whole
-  // subtree on every frame. Writing `textContent` straight to the node is a
-  // pure DOM mutation: zero React re-render, zero reconciliation, byte-for-byte
-  // the same glyphs/cadence/width as before. The span renders NO JSX children,
-  // so a parent re-render never resets the glyph; the layout effect (runs
-  // pre-paint, so the first frame shows immediately like the old version) is the
-  // sole owner of `textContent`.
+  // subtree on every frame. The span renders NO JSX children, so a parent
+  // re-render never resets the glyph; the layout effect (runs pre-paint, so
+  // the first frame shows immediately) is the sole owner of the text.
+  //
+  // Two details are load-bearing for the renderer's memory, not just its CPU:
+  //
+  // - The glyph is written to ONE text node's `data`, never via `textContent`.
+  //   `textContent =` removes the old text node and inserts a new one, and a
+  //   child-list mutation inside a `:has()` subject (the tab strip's
+  //   `.group/tab:has(:focus-visible)`) invalidates the whole tab's style,
+  //   destroys and recreates the spinner's layout object, and wakes every
+  //   `childList` MutationObserver on `document.body`. A character-data
+  //   mutation does none of that: one text run relayouts.
+  // - Every spinner advances from the shared status animation clock, so N
+  //   spinners on screen are one timer task and one style/layout/paint pass
+  //   per tick, not N. Presets keep their own cadence, quantized to the
+  //   clock's 40 ms tick.
+  const paneVisible = usePaneVisible();
   useLayoutEffect(() => {
+    // The `typing` variant renders `WorkingDots` below, which has no frames.
     if (presetFrames === null || presetIntervalMs === null) return;
     const node = frameRef.current;
     if (node === null) return;
-    let frameIndex = 0;
-    node.textContent = presetFrames[0];
-    if (presetFrames.length === 1) return;
-    const intervalId = window.setInterval(() => {
-      frameIndex = (frameIndex + 1) % presetFrames.length;
-      node.textContent = presetFrames[frameIndex];
-    }, presetIntervalMs);
-
-    return () => window.clearInterval(intervalId);
-  }, [presetFrames, presetIntervalMs]);
+    const text = document.createTextNode(presetFrames[0] ?? "");
+    node.replaceChildren(text);
+    // A hidden keep-alive pane cannot paint: hold the first frame, no ticks.
+    if (presetFrames.length === 1 || !paneVisible) return;
+    let shownIndex = 0;
+    return subscribeStatusAnimation((elapsedMs) => {
+      const frameIndex =
+        Math.floor(elapsedMs / presetIntervalMs) % presetFrames.length;
+      if (frameIndex === shownIndex) return;
+      shownIndex = frameIndex;
+      text.data = presetFrames[frameIndex] ?? "";
+    }, STATUS_ANIMATION_SMOOTH_CADENCE_MS);
+  }, [presetFrames, presetIntervalMs, paneVisible]);
 
   if (preset === null) {
-    return (
-      <span
-        data-testid={props.testId}
-        aria-hidden="true"
-        className={cn("working-dots text-current", props.className)}
-      >
-        <span />
-        <span />
-        <span />
-      </span>
-    );
+    return <WorkingDots className={props.className} testId={props.testId} />;
   }
 
   return (
