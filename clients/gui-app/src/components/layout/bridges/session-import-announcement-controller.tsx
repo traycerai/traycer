@@ -9,7 +9,10 @@ import {
 } from "@/components/layout/host-readiness-controller-context";
 import { SessionImportDialog } from "@/components/session-import/session-import-dialog";
 import { useSessionImportAvailable } from "@/hooks/session-import/use-session-import-available";
-import { useWsStreamClient } from "@/lib/host/stream-runtime-context";
+import {
+  useStreamMethodSupport,
+  useWsStreamClient,
+} from "@/lib/host/stream-runtime-context";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 import { useOnboardingTourOpenStore } from "@/stores/onboarding/onboarding-tour-open-store";
@@ -60,6 +63,15 @@ const SESSION_IMPORT_ANNOUNCEMENT_TOAST_ID =
  */
 export function SessionImportAnnouncementController(): ReactNode {
   const available = useSessionImportAvailable();
+  // The CLAIM needs a firmer answer than `available`. That predicate treats
+  // the pre-handshake "unknown" as available on purpose, so a Settings row
+  // does not blink away during a reconnect - but a claim is permanent, and
+  // one made against an older host during that window shows a toast the
+  // next render dismisses while the install's record stays "announced".
+  // Nothing then ever announces the feature, however capable a later host
+  // is. So the toast is held until negotiation has said "supported".
+  const supported =
+    useStreamMethodSupport("sessionImport.scan") === "supported";
   const streamLive = useWsStreamClient() !== null;
   const signedIn = useAuthStore((state) => state.status === "signed-in");
   const onboardingComplete = useOnboardingStore(
@@ -101,7 +113,7 @@ export function SessionImportAnnouncementController(): ReactNode {
       return;
     }
     if (consumed || !available || !signedIn || !onboardingComplete) return;
-    if (tourOpen || narrated || !streamLive) return;
+    if (tourOpen || narrated || !streamLive || !supported) return;
     // A claim, not a consume: `consumed` above is this window's copy, and a
     // second window restored alongside this one holds its own. The claim
     // re-reads the install's record, so of two windows that both get here
@@ -136,6 +148,7 @@ export function SessionImportAnnouncementController(): ReactNode {
     signedIn,
     streamLive,
     tourOpen,
+    supported,
   ]);
 
   if (!dialogOpen) return null;

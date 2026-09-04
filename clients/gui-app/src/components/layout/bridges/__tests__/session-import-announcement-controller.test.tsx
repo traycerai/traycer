@@ -41,8 +41,14 @@ vi.mock("@/hooks/session-import/use-session-import-available", () => ({
 // The controller only asks whether a stream client is live; the dialog it
 // opens is stubbed below, so nothing else in the tree reads the transport.
 const streamLiveMock = vi.hoisted(() => ({ value: true }));
+// What negotiation has said about `sessionImport.scan`; "unknown" is the
+// pre-handshake window the claim must wait out.
+const scanSupportMock = vi.hoisted(() => ({
+  value: "supported" as "unknown" | "supported" | "unsupported",
+}));
 vi.mock("@/lib/host/stream-runtime-context", () => ({
   useWsStreamClient: () => (streamLiveMock.value ? {} : null),
+  useStreamMethodSupport: () => scanSupportMock.value,
 }));
 
 vi.mock("@/components/session-import/session-import-dialog", () => ({
@@ -138,6 +144,7 @@ describe("<SessionImportAnnouncementController />", () => {
   beforeEach(() => {
     sessionImportAvailableMock.value = true;
     streamLiveMock.value = true;
+    scanSupportMock.value = "supported";
     toastMock.mockClear();
     toastMock.dismiss.mockClear();
     resetStores();
@@ -238,6 +245,25 @@ describe("<SessionImportAnnouncementController />", () => {
     ).toBeUndefined();
 
     streamLiveMock.value = true;
+    rerender(<SessionImportAnnouncementController />);
+
+    expect(toastMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("holds while support is still unknown, then shows once negotiated, without claiming early", () => {
+    // Before the handshake `available` already reads true (unknown is not
+    // unsupported), which is exactly the window a permanent claim must not
+    // fire in: against an older host the toast would be dismissed a render
+    // later and the install would never be announced to again.
+    scanSupportMock.value = "unknown";
+    const { rerender } = render(<SessionImportAnnouncementController />);
+
+    expect(toastMock).not.toHaveBeenCalled();
+    expect(
+      useFeatureAnnouncementsStore.getState().consumed["session-import"],
+    ).toBeUndefined();
+
+    scanSupportMock.value = "supported";
     rerender(<SessionImportAnnouncementController />);
 
     expect(toastMock).toHaveBeenCalledTimes(1);
