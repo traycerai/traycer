@@ -65,7 +65,9 @@ import {
   DEFAULT_LANDING_PANEL_WIDTH_FRACTION,
   MAX_LANDING_PANEL_WIDTH_FRACTION,
   MIN_LANDING_PANEL_WIDTH_FRACTION,
+  UNBOUND_LANDING_PAGE_ID,
   isLandingTerminalTab,
+  isProviderLoginLandingTab,
   landingBrowserTabs,
   landingPanelLayoutFor,
   landingTerminalTabs,
@@ -226,7 +228,17 @@ function dispatchLandingTerminalClose(args: {
 }): void {
   const { entry, closed, killTerminal } = args;
   if (!landingTerminalAuthorityReady(entry)) return;
-  if (entry.authority.capability.status !== "capable") {
+  // A provider-login session is MANAGER-owned on every host capability - the
+  // host made it for `providers.startTerminalLogin`, never through
+  // `terminal.plain.create` - so it has no plain-terminal row. The capable arm
+  // below requires one (`requireOwnerRow`) and would reject before sending,
+  // raising "Couldn't close the terminal." over a sign-in shell that is still
+  // running, with a tombstone the plain reconciliation cannot drain. Session
+  // level is the only level this session exists at.
+  if (
+    isProviderLoginLandingTab(closed) ||
+    entry.authority.capability.status !== "capable"
+  ) {
     // Same boundary as the capable arm below, for the same reason. `terminal.kill`
     // is scheduled `fifo`, and `selectJob` returns null for fifo rather than
     // joining an identical queued job - so an unmediated duplicate is two real
@@ -496,8 +508,8 @@ export function LandingTerminalPanel(): ReactNode {
   // Layout belongs to the focused start page. This is deliberately independent
   // of `target`: a pending gesture may retain an earlier page's host/folder
   // routing while focus has already moved to another page.
-  const landingPageId = focusedLandingPageId ?? "unbound-landing-page";
-  const targetLandingPageId = target.draftId ?? "unbound-landing-page";
+  const landingPageId = focusedLandingPageId ?? UNBOUND_LANDING_PAGE_ID;
+  const targetLandingPageId = target.draftId ?? UNBOUND_LANDING_PAGE_ID;
   // The strip and the body render the MIXED list; the panel's terminal
   // machinery - the authority fleet, reconciliation, the kill drain, the plain
   // terminal view models - is terminal-only and reads the slice. Memoized
@@ -1182,7 +1194,13 @@ export function LandingTerminalPanel(): ReactNode {
       // `manual` and nothing on the host has to agree - so it renames whatever
       // the device is doing.
       tab.kind === "browser" ||
-      landingTerminalAuthorityReady(authorityEntries[tab.hostId]),
+      // A provider-login tab is never renameable: `terminal.plain.rename` is
+      // the only rename there is here, and it rejects for a manager-owned
+      // session that has no plain-terminal row - so the action could only ever
+      // raise an error and change nothing. Its title is `manual` and host-set
+      // ("<Provider> sign-in") for the same reason.
+      (!isProviderLoginLandingTab(tab) &&
+        landingTerminalAuthorityReady(authorityEntries[tab.hostId])),
     [authorityEntries],
   );
 

@@ -1,4 +1,5 @@
 import {
+  UNBOUND_LANDING_PAGE_ID,
   activeLandingTerminalInstanceId,
   landingPanelLayoutFor,
   useLandingPanelStore,
@@ -27,7 +28,7 @@ export function restoreLandingSurfaceFocus(
   const panelState = useLandingPanelStore.getState();
   const layout = landingPanelLayoutFor(
     panelState,
-    draftId ?? "unbound-landing-page",
+    draftId ?? UNBOUND_LANDING_PAGE_ID,
   );
   if (layout.panelOpen && layout.maximized) {
     // The maximized panel's active row is not necessarily a terminal - the

@@ -175,7 +175,7 @@ describe("<EpicConnectionPill />", () => {
       "bg-emerald-500",
     );
     expect(screen.getByTestId("epic-connection-pill").innerHTML).toContain(
-      "animate-ping",
+      "status-ping",
     );
     expect(
       screen.getByTestId("epic-connection-pill").getAttribute("data-status"),
@@ -381,7 +381,7 @@ describe("<EpicConnectionPill />", () => {
     expect(screen.getByTestId("epic-connection-pill").textContent).toBe("");
     expect(pillClaimsSynced()).toBe(false);
     expect(screen.getByTestId("epic-connection-pill").innerHTML).not.toContain(
-      "animate-ping",
+      "status-ping",
     );
     expect(screen.getByTestId("epic-connection-pill").innerHTML).not.toContain(
       "bg-emerald-500",
@@ -711,7 +711,7 @@ describe("<EpicConnectionPill />", () => {
       screen.getByTestId("epic-connection-pill").textContent,
     ).not.toContain("saved locally");
     expect(screen.getByTestId("epic-connection-pill").innerHTML).not.toContain(
-      "animate-ping",
+      "status-ping",
     );
     expect(
       screen.getByTestId("epic-connection-pill").getAttribute("data-status"),
