@@ -530,6 +530,90 @@ describe("link-code entry is gated on the mobile-app PRODUCT signal", () => {
     mobile.cleanupClient();
   });
 
+  it("shows the claim's match code through manual entry until the desktop decides", async () => {
+    // Composed, not the leaf: the code travels claim response → AuthService
+    // poll progress → subscription → wait block, and every hop is real here;
+    // only the HTTP boundary is scripted. Settled by a rejection so the
+    // whole wait is observed end to end without the token-application
+    // machinery, which is exercised elsewhere.
+    setMobileApp(true);
+    const tokenPolls = { count: 0 };
+    const scripted = installFetch((url) => {
+      if (url.includes("/link/claim")) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              status: "claimed",
+              secret: "S".repeat(43),
+              interval: 1,
+              matchCode: "47",
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
+        );
+      }
+      if (url.includes("/link/token")) {
+        tokenPolls.count += 1;
+        return Promise.resolve(
+          new Response(
+            JSON.stringify(
+              tokenPolls.count < 2
+                ? { error: "authorization_pending" }
+                : { error: "access_denied" },
+            ),
+            {
+              status: tokenPolls.count < 2 ? 428 : 400,
+              headers: { "Content-Type": "application/json" },
+            },
+          ),
+        );
+      }
+      return Promise.resolve(new Response(null, { status: 401 }));
+    });
+    const mobile = mountSignInButton(buildHost(), "hero");
+    await mobile.waitForAuthService();
+
+    fireEvent.click(screen.getByTestId("link-code-signin-manual"));
+    fireEvent.change(screen.getByTestId("link-code-signin-input"), {
+      target: { value: "abcde-fghjk" },
+    });
+    fireEvent.click(screen.getByTestId("link-code-signin-submit"));
+
+    // The code is up from the first countdown, with the standing instruction
+    // beside it — an older desktop shows no code, so the instruction never
+    // conditions approval on a match.
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("link-code-signin-match-code").textContent,
+      ).toBe("Your code: 47");
+    });
+    const waiting = screen.getByTestId("link-code-signin-waiting").textContent;
+    expect(waiting).toContain("Waiting for approval on your computer…");
+    expect(waiting).toContain("If your computer asks, it should show this code.");
+
+    // Still up across a pending poll (the loop republishes progress every
+    // interval), then gone with the decision — nothing retains it.
+    await waitFor(
+      () => {
+        expect(tokenPolls.count).toBeGreaterThanOrEqual(1);
+      },
+      { timeout: 3_000 },
+    );
+    expect(screen.getByTestId("link-code-signin-match-code")).toBeTruthy();
+    await waitFor(
+      () => {
+        expect(
+          screen.getByTestId("link-code-signin-notice").textContent,
+        ).toContain("rejected on your computer");
+      },
+      { timeout: 4_000 },
+    );
+    expect(screen.queryByTestId("link-code-signin-match-code")).toBeNull();
+    expect(screen.queryByTestId("link-code-signin-waiting")).toBeNull();
+    scripted();
+    mobile.cleanupClient();
+  });
+
   it("mobile hero leads with a primary Scan CTA above a secondary Sign in", async () => {
     setMobileApp(true);
     const mobile = mountSignInButton(buildHost(), "hero");

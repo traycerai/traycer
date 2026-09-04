@@ -715,6 +715,51 @@ describe("LinkPhonePanel", () => {
     expect(screen.getByRole("button", { name: "Reject" })).toBeTruthy();
   });
 
+  it("drops the code the moment the status stops carrying it, and with the decision", () => {
+    // The code is read off the CURRENT status, never retained: a status that
+    // stops carrying it (a server that rolled back, or a re-mint watched
+    // onto a code the phone declined on) must lose the code prompt on the
+    // next render, and a decided record — which omits the key — must not
+    // keep a confirm card with a number on it at all.
+    mocks.useAuthLinkLoginCode.mockReturnValue(queryResultWithCode(Date.now()));
+    mocks.useAuthLinkLoginStatus.mockReturnValue(
+      statusResult(claimedStatusWithCode(Date.now(), "iPhone 16 Pro", "47")),
+    );
+    const view = render(<LinkPhonePanel />);
+    expect(screen.getByTestId("link-phone-match-code").textContent).toBe("47");
+
+    mocks.useAuthLinkLoginStatus.mockReturnValue(
+      statusResult(claimedStatus(Date.now(), "iPhone 16 Pro")),
+    );
+    view.rerender(<LinkPhonePanel />);
+    expect(screen.queryByTestId("link-phone-match-code")).toBeNull();
+    expect(screen.getByTestId("link-phone-confirm").textContent).toContain(
+      "Approve sign-in from iPhone 16 Pro?",
+    );
+
+    mocks.useAuthLinkLoginStatus.mockReturnValue(
+      statusResult(claimedStatusWithCode(Date.now(), "iPhone 16 Pro", null)),
+    );
+    view.rerender(<LinkPhonePanel />);
+    expect(screen.getByTestId("link-phone-no-match-code")).toBeTruthy();
+    expect(screen.queryByTestId("link-phone-match-code")).toBeNull();
+
+    mocks.useAuthLinkLoginStatus.mockReturnValue(
+      statusResult(claimedStatusWithCode(Date.now(), "iPhone 16 Pro", "47")),
+    );
+    view.rerender(<LinkPhonePanel />);
+    expect(screen.getByTestId("link-phone-match-code").textContent).toBe("47");
+
+    // Decided elsewhere: the key is gone with the claim. No card, no code.
+    mocks.useAuthLinkLoginStatus.mockReturnValue(
+      statusResult({ status: "denied", claimant: null }),
+    );
+    view.rerender(<LinkPhonePanel />);
+    expect(screen.queryByTestId("link-phone-confirm")).toBeNull();
+    expect(screen.queryByTestId("link-phone-match-code")).toBeNull();
+    expect(screen.getByTestId("link-phone-rejected-elsewhere")).toBeTruthy();
+  });
+
   it("falls back to the description prompt when the server sends no match code", () => {
     // A server that predates the code: today's prompt, unchanged, and no
     // empty code slot on the card.
