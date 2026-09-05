@@ -6,42 +6,35 @@ import {
   terminalFocusOwnsInstance,
 } from "@/lib/terminals/terminal-focus-registry";
 import {
-  activeLandingTerminalInstanceId,
-  landingPanelLayoutFor,
-  useLandingPanelStore,
-} from "@/stores/home/landing-panel-store";
+  landingTerminalLayoutFor,
+  useLandingTerminalStore,
+} from "@/stores/home/landing-terminal-store";
 
 /**
  * Retires a tab whose session ended on its own (no kill owed), and moves the
- * keyboard somewhere sensible if that tab had it: to the panel's next TERMINAL
- * tab when there is one, else back to the composer. Shared by the legacy
+ * keyboard somewhere sensible if that tab had it: to the panel's next tab
+ * when there is one, else back to the composer. Shared by the legacy
  * bootstrap and the sign-in tile's Close, so the two cannot drift.
- *
- * The promoted neighbour need not be a terminal: the strip is mixed, and a
- * browser tab or the chooser can be what the exit promotes. Only a terminal
- * claims a terminal focus request, so anything else falls through to the
- * composer.
  */
 export function useRemoveExitedLandingTab(
   landingPageId: string,
 ): (instanceId: string) => void {
-  const removeExitedTab = useLandingPanelStore(
+  const removeExitedTab = useLandingTerminalStore(
     (state) => state.removeExitedTab,
   );
   return useCallback(
     (instanceId: string): void => {
       const ownsFocus = terminalFocusOwnsInstance(instanceId);
       const wasActive =
-        useLandingPanelStore.getState().activeInstanceId === instanceId;
+        useLandingTerminalStore.getState().activeInstanceId === instanceId;
       removeExitedTab(landingPageId, instanceId);
       if (!wasActive || !ownsFocus) return;
-      const state = useLandingPanelStore.getState();
-      const nextTerminal = activeLandingTerminalInstanceId(state);
+      const state = useLandingTerminalStore.getState();
       if (
-        landingPanelLayoutFor(state, landingPageId).panelOpen &&
-        nextTerminal !== null
+        landingTerminalLayoutFor(state, landingPageId).panelOpen &&
+        state.activeInstanceId !== null
       ) {
-        focusTerminalInstance(nextTerminal);
+        focusTerminalInstance(state.activeInstanceId);
         return;
       }
       clearPendingTerminalFocus(instanceId);

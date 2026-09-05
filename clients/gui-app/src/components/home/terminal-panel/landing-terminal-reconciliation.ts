@@ -12,13 +12,13 @@ import { selectPlainTerminalViewModel } from "@/lib/terminals/plain-terminal-aut
 import {
   hostAcknowledgedTab,
   isProviderLoginLandingTab,
-  landingTabRefKey,
+  terminalSessionKey,
   type LandingTerminalTabRef,
-} from "@/stores/home/landing-panel-store";
+} from "@/stores/home/landing-terminal-store";
 
 export interface LandingTerminalReconciliationInput {
-  /** The `(activeHostId, "terminal")` slice, not the whole panel list. */
   readonly tabs: ReadonlyArray<LandingTerminalTabRef>;
+  readonly activeInstanceId: string | null;
   readonly activeHostId: string;
   readonly sessions: ReadonlyArray<
     CanonicalTerminalSessionInfo | CanonicalTerminalSessionInfoWithCurrentCwd
@@ -64,29 +64,17 @@ function classifyLandingTab(
   };
 }
 
-/**
- * One `(device, terminal)` slice, ready for `applyReconciliationSlice`.
- *
- * `tabs` is the REPLACEMENT for that slice alone - never the whole panel list.
- * The store splices it back in place, which is what lets a terminal pass and a
- * browser pass run against one list without wiping each other. For the same
- * reason there is no `activeInstanceId` here: activation is a property of the
- * whole list, so only the store can resolve it.
- *
- * `collapseWhenEmpty` is this pass's own evidence - "I removed something" - not
- * a verdict about the panel. The store decides emptiness, because a slice
- * cannot see the other slices or the placeholder.
- */
 export interface LandingTerminalReconciliationResult {
   readonly tabs: ReadonlyArray<LandingTerminalTabRef>;
+  readonly activeInstanceId: string | null;
   readonly adoptedTabs: ReadonlyArray<LandingTerminalTabRef>;
   readonly exitedInstanceIds: ReadonlyArray<string>;
   readonly collapseWhenEmpty: boolean;
 }
 
 export interface HostAuthoritativeLandingTerminalReconciliationInput {
-  /** The `(hostId, "terminal")` slice, not the whole panel list. */
   readonly tabs: ReadonlyArray<LandingTerminalTabRef>;
+  readonly activeInstanceId: string | null;
   readonly hostId: string;
   readonly terminals: readonly PlainTerminalProjection[];
   readonly excludedTerminalKeys: ReadonlySet<string>;
@@ -129,28 +117,25 @@ export function resolveLandingTerminalSyncedTitle(input: {
 }
 
 /**
- * Reconciles only the selected host's terminal slice. Every other slice - other
- * hosts, and this host's browser tabs - is untouched because it is not in the
- * input at all: their own reconcilers and bound tile bootstraps own their
- * reattach/dead/recreate lifecycles, and an active-host terminal list cannot
- * authoritatively classify any of them.
+ * Reconciles only the selected host. Other-host references deliberately stay
+ * intact: their own bound tile bootstrap owns their reattach/dead/recreate
+ * lifecycle, and an active-host list cannot authoritatively classify them.
  */
 export function reconcileLandingTerminalTabs(
   input: LandingTerminalReconciliationInput,
 ): LandingTerminalReconciliationResult {
   const survivingTabs = input.tabs.filter(
-    (tab) => !input.excludedSessionKeys.has(landingTabRefKey(tab)),
+    (tab) =>
+      !input.excludedSessionKeys.has(
+        terminalSessionKey(tab.hostId, tab.sessionId),
+      ),
   );
   const sessions = input.sessions.filter(
     (session) =>
       session.scope.kind === "independent" &&
       session.sessionKind === "terminal" &&
       !input.excludedSessionKeys.has(
-        landingTabRefKey({
-          kind: "terminal",
-          hostId: input.activeHostId,
-          sessionId: session.sessionId,
-        }),
+        terminalSessionKey(input.activeHostId, session.sessionId),
       ),
   );
   const sessionById = new Map(
@@ -160,9 +145,6 @@ export function reconcileLandingTerminalTabs(
   const exitedInstanceIds: string[] = [];
 
   const tabs = survivingTabs.flatMap((tab) => {
-    // The caller hands this pass one device's slice, but the rule is stated
-    // here too: a session id is only meaningful on the host that listed it, so
-    // another host's tab is never matched, classified or retitled from it.
     if (tab.hostId !== input.activeHostId) return [tab];
     const session = sessionById.get(tab.sessionId);
     if (session === undefined) {
@@ -205,7 +187,6 @@ export function reconcileLandingTerminalTabs(
       return [];
     }
     const tab: LandingTerminalTabRef = {
-      kind: "terminal",
       instanceId: input.mintInstanceId(),
       sessionId: session.sessionId,
       hostId: input.activeHostId,
@@ -229,19 +210,21 @@ export function reconcileLandingTerminalTabs(
     ...adoptedTabs,
   ];
   const retiredAny = retired.size > 0;
+  const activeInstanceId = resolveActiveInstanceId(
+    input.activeInstanceId,
+    nextTabs,
+  );
 
   return {
     tabs: nextTabs,
+    activeInstanceId,
     adoptedTabs,
     exitedInstanceIds,
-    // This slice's own evidence of a removal, never a verdict on the panel:
-    // the store decides emptiness across every slice and the placeholder. A
-    // retired predecessor counts as a removal for the same reason an exit
-    // does - a pass that retires the last row must be allowed to collapse.
     collapseWhenEmpty:
-      exitedInstanceIds.length > 0 ||
-      retiredAny ||
-      survivingTabs.length !== input.tabs.length,
+      nextTabs.length === 0 &&
+      (exitedInstanceIds.length > 0 ||
+        retiredAny ||
+        survivingTabs.length !== input.tabs.length),
   };
 }
 
@@ -260,7 +243,6 @@ function providerLoginLandingTab(input: {
   readonly providerId: ProviderId;
 }): LandingTerminalTabRef {
   return {
-    kind: "terminal",
     instanceId: input.instanceId,
     sessionId: input.session.sessionId,
     hostId: input.hostId,
@@ -385,11 +367,7 @@ export function adoptListedProviderLoginSessions(
       session.status !== "running" ||
       tabbedSessionIds.has(session.sessionId) ||
       input.excludedSessionKeys.has(
-        landingTabRefKey({
-          kind: "terminal",
-          hostId: input.activeHostId,
-          sessionId: session.sessionId,
-        }),
+        terminalSessionKey(input.activeHostId, session.sessionId),
       )
     ) {
       return [];
@@ -477,7 +455,9 @@ export function reconcileHostAuthoritativeLandingTerminalTabs(
   const removedInstanceIds: string[] = [];
 
   const tabs = input.tabs.flatMap((rawTab) => {
-    if (input.excludedTerminalKeys.has(landingTabRefKey(rawTab))) {
+    if (rawTab.hostId !== input.hostId) return [rawTab];
+    const terminalKey = terminalSessionKey(rawTab.hostId, rawTab.sessionId);
+    if (input.excludedTerminalKeys.has(terminalKey)) {
       removedInstanceIds.push(rawTab.instanceId);
       return [];
     }
@@ -505,18 +485,13 @@ export function reconcileHostAuthoritativeLandingTerminalTabs(
     if (
       matchedTerminalIds.has(terminalId) ||
       input.excludedTerminalKeys.has(
-        landingTabRefKey({
-          kind: "terminal",
-          hostId: input.hostId,
-          sessionId: terminalId,
-        }),
+        terminalSessionKey(input.hostId, terminalId),
       )
     ) {
       return [];
     }
     const view = selectPlainTerminalViewModel(terminal);
     const tab: LandingTerminalTabRef = {
-      kind: "terminal",
       instanceId: input.mintInstanceId(),
       sessionId: terminalId,
       hostId: terminal.record.hostId,
@@ -528,11 +503,14 @@ export function reconcileHostAuthoritativeLandingTerminalTabs(
     };
     return [tab];
   });
+  const nextTabs = [...tabs, ...adoptedTabs];
+
   return {
-    tabs: [...tabs, ...adoptedTabs],
+    tabs: nextTabs,
+    activeInstanceId: resolveActiveInstanceId(input.activeInstanceId, nextTabs),
     adoptedTabs,
     exitedInstanceIds: removedInstanceIds,
-    collapseWhenEmpty: removedInstanceIds.length > 0,
+    collapseWhenEmpty: nextTabs.length === 0 && removedInstanceIds.length > 0,
   };
 }
 
@@ -578,4 +556,17 @@ function defaultLandingTerminalTitle(
     activeProcessName: session.activeProcessName,
     currentCwd: liveCwd,
   });
+}
+
+function resolveActiveInstanceId(
+  activeInstanceId: string | null,
+  tabs: ReadonlyArray<LandingTerminalTabRef>,
+): string | null {
+  if (
+    activeInstanceId !== null &&
+    tabs.some((tab) => tab.instanceId === activeInstanceId)
+  ) {
+    return activeInstanceId;
+  }
+  return tabs[0]?.instanceId ?? null;
 }

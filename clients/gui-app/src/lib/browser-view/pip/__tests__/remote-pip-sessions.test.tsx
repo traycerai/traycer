@@ -133,7 +133,7 @@ describe("useRemotePipSessions", () => {
     expect(sessions[0]).toMatchObject({
       hostId: "host-b",
       method: "browser.sessions",
-      params: { scope: { kind: "epic", epicId: EPIC } },
+      params: { epicId: EPIC },
     });
     expect(transportFactory.transports.every((item) => !item.closed)).toBe(
       true,

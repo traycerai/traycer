@@ -31,8 +31,7 @@ export function openPipHeadlessStream(input: {
 }): PipHeadlessStreamHandle {
   const stream = new BrowserScreencastStreamClient({
     wsStreamClient: input.client,
-    // Epic-scoped like the fleet that opens it - see `pip-epic-sessions`.
-    scope: { kind: "epic", epicId: input.epicId },
+    epicId: input.epicId,
     sessionId: input.sessionId,
     tabId: input.tabId,
     maxWidth: input.maxWidth,
