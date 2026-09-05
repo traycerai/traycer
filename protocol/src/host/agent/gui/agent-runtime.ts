@@ -1209,6 +1209,14 @@ export const reasonixUserMessageAnchorResolvedSchema = z.object({
   reasonixSessionId: z.string().nullable(),
 });
 
+// No second session-id field, unlike its ACP siblings: `agy_acp_server`'s
+// `session/new` id IS the anchor's `sessionId`, so a vendor-named copy of the
+// same string would be a field that can never disagree with the one beside it.
+export const antigravityUserMessageAnchorResolvedSchema = z.object({
+  harnessId: z.literal("antigravity"),
+  sessionId: z.string(),
+});
+
 export const userMessageAnchorResolvedEventSchema = z.object({
   ...baseRuntimeEventFields,
   type: z.literal("user_message.anchor_resolved"),
@@ -1234,6 +1242,7 @@ export const userMessageAnchorResolvedEventSchema = z.object({
     ompUserMessageAnchorResolvedSchema,
     huggingFaceUserMessageAnchorResolvedSchema,
     reasonixUserMessageAnchorResolvedSchema,
+    antigravityUserMessageAnchorResolvedSchema,
   ]),
 });
 export type UserMessageAnchorResolvedEvent = z.infer<
@@ -1241,9 +1250,9 @@ export type UserMessageAnchorResolvedEvent = z.infer<
 >;
 
 // Wire-freeze copy for released `chat.subscribe@1.0–1.6` blockDelta frames.
-// Reasonix first rides the unreleased 1.7 line; keeping its discriminant out of
-// this union prevents a newer host from sending an anchor an installed older
-// client cannot decode.
+// Reasonix and Antigravity both first ride the unreleased 1.7 line; keeping
+// their discriminants out of this union prevents a newer host from sending an
+// anchor an installed older client cannot decode.
 const userMessageAnchorResolvedEventSchemaPreReasonix = z.object({
   ...baseRuntimeEventFields,
   type: z.literal("user_message.anchor_resolved"),

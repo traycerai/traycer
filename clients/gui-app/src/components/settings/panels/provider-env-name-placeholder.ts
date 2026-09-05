@@ -37,6 +37,11 @@ const ENV_NAME_PLACEHOLDER: Record<ProviderId, string> = {
   // `.env`, not in the shell. There is no single well-known variable to show,
   // so this is the default provider preset's name and is illustrative only.
   reasonix: "DEEPSEEK_API_KEY",
+  // Antigravity is subscription/credential-store class (a Google account), so
+  // Traycer offers it no API-key method at all. `GEMINI_API_KEY` is the name
+  // the server itself reads when a user configures a Gemini key outside
+  // Traycer, and is illustrative only - same as Hermes and omp above.
+  antigravity: "GEMINI_API_KEY",
 };
 
 export function envNamePlaceholder(providerId: ProviderId): string {

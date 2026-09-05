@@ -2380,6 +2380,61 @@ describe("chat.subscribe Reasonix anchor versioning", () => {
   });
 });
 
+describe("chat.subscribe Antigravity anchor versioning", () => {
+  // No vendor-named second session-id field, unlike its ACP siblings
+  // (`reasonixSessionId`, `ompSessionId`, ...): `agy_acp_server`'s
+  // `session/new` id IS the anchor's `sessionId`.
+  const antigravityAnchorResolvedFrame = {
+    kind: "blockDelta" as const,
+    hasBinaryPayload: false,
+    epicId: "epic-1",
+    chatId: "chat-1",
+    event: {
+      type: "user_message.anchor_resolved" as const,
+      blockId: "message-1",
+      timestamp: 1000,
+      messageId: "message-1",
+      anchor: {
+        harnessId: "antigravity" as const,
+        sessionId: "antigravity-session-1",
+      },
+    },
+  };
+
+  it.each([
+    ["1.0", chatSubscribeV10],
+    ["1.1", chatSubscribeV11],
+    ["1.2", chatSubscribeV12],
+    ["1.3", chatSubscribeV13],
+    ["1.4", chatSubscribeV14],
+    ["1.5", chatSubscribeV15],
+    ["1.6", chatSubscribeV16],
+  ])(
+    "keeps an Antigravity anchor-resolved event off released %s frames",
+    (_version, contract) => {
+      expect(
+        contract.serverFrameSchema.safeParse(antigravityAnchorResolvedFrame)
+          .success,
+      ).toBe(false);
+    },
+  );
+
+  it("carries an Antigravity anchor-resolved event on the unreleased 1.7 line", () => {
+    expect(
+      chatSubscribeV17.serverFrameSchema.parse(antigravityAnchorResolvedFrame),
+    ).toMatchObject({
+      kind: "blockDelta",
+      event: {
+        type: "user_message.anchor_resolved",
+        anchor: {
+          harnessId: "antigravity",
+          sessionId: "antigravity-session-1",
+        },
+      },
+    });
+  });
+});
+
 // The anchor freezes above cover `user_message.anchor_resolved` only. A harness
 // id also reaches a released server frame through the runtime session/plan
 // events, the active turn, and every settings tuple (queue items + the chat
