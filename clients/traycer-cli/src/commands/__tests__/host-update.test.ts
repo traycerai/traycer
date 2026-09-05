@@ -39,6 +39,7 @@ const mocks = vi.hoisted(() => ({
   // TCP probe against a host that isn't running.
   writeUpdateProgressMarkerMock: vi.fn(),
   deleteUpdateProgressMarkerMock: vi.fn(),
+  readUpdateProgressMarkerMock: vi.fn(),
   probeHostHealthMock: vi.fn(),
   readHostPidMetadataMock: vi.fn(),
   isProcessAliveMock: vi.fn(),
@@ -50,6 +51,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../../host/update-progress-marker", () => ({
   writeUpdateProgressMarker: mocks.writeUpdateProgressMarkerMock,
   deleteUpdateProgressMarker: mocks.deleteUpdateProgressMarkerMock,
+  readUpdateProgressMarker: mocks.readUpdateProgressMarkerMock,
 }));
 
 vi.mock("../../service/health-probe", () => ({
@@ -288,6 +290,7 @@ function fakeCtx(): CommandContext {
 // exercise activation opt in with an explicit pid record. Re-armed per test
 // because `resetAllMocks` wipes return values.
 function armActivationDefaults(): void {
+  mocks.readUpdateProgressMarkerMock.mockResolvedValue(null);
   mocks.readHostPidMetadataMock.mockResolvedValue(null);
   mocks.isProcessAliveMock.mockReturnValue(true);
   mocks.assertHostNotBusyMock.mockResolvedValue(undefined);
@@ -1118,6 +1121,112 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
     expect(projected.previousVersion).toBe("1.0.0");
     expect(projected.version).toBe("2.1.0");
     expect(result.human).toContain("updated host 1.0.0 → 2.1.0");
+  });
+
+  it("the running host VANISHES under the lock (pid gone, not replaced): relaunched through the stop → relaunch pair, busy gate not asked, health probed, reported as the update", async () => {
+    // Pre-lock: 1.0.0 serving behind a 2.0.0 record. Under the lock: no pid
+    // metadata at all - the old host exited, crashed, or is mid-relaunch and
+    // has not republished. That is not cleared debt; reporting the no-op
+    // would skip the probe, clear the marker and exit 0 over a host that may
+    // never come back.
+    mocks.downloadAndStageHostMock.mockResolvedValue(upToDate("2.0.0"));
+    mocks.readHostInstallRecordMock.mockResolvedValue(sampleRecord("2.0.0"));
+    mocks.readHostPidMetadataMock
+      .mockResolvedValueOnce(pidRecord("1.0.0", 4242))
+      .mockResolvedValue(null);
+    mocks.isProcessAliveMock.mockReturnValue(true);
+
+    const result = await buildHostUpdateCommand({
+      force: false,
+      allowDowngrade: false,
+      ackNonce: null,
+    })(fakeCtx());
+
+    expect(mocks.assertHostNotBusyMock).not.toHaveBeenCalled();
+    expect(mocks.stopHostForRestartWithAttemptMock).toHaveBeenCalledTimes(1);
+    expect(mocks.relaunchHostAfterRestartWithAttemptMock).toHaveBeenCalledTimes(
+      1,
+    );
+    expect(mocks.probeHostHealthMock).toHaveBeenCalledTimes(1);
+    expect(mocks.deleteUpdateProgressMarkerMock).toHaveBeenCalledWith(
+      "production",
+    );
+    const projected = projectInstallResultLikeDesktop(result.data);
+    expect(projected.previousVersion).toBe("1.0.0");
+    expect(projected.version).toBe("2.0.0");
+    expect(projected.serviceLifecycle.postSwapAction).toBe("restart");
+  });
+
+  it("no work owed and the running host is OBSERVED at the installed version: a stale `failed` marker is cleared", async () => {
+    // A prior update's health probe timed out on a host that finished
+    // starting a moment later; the marker still says `failed` and every
+    // @1.3 host renders it. The retry has nothing to do, so this is the only
+    // place that can reconcile it - and only against an observed match.
+    mocks.downloadAndStageHostMock.mockResolvedValue(upToDate("2.0.0"));
+    mocks.readHostInstallRecordMock.mockResolvedValue(sampleRecord("2.0.0"));
+    mocks.readHostPidMetadataMock.mockResolvedValue(pidRecord("2.0.0", 4242));
+    mocks.isProcessAliveMock.mockReturnValue(true);
+    mocks.readUpdateProgressMarkerMock.mockResolvedValue({
+      state: "failed",
+      error: "host did not become healthy: tcp refused",
+      targetVersion: "2.0.0",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    const result = await buildHostUpdateCommand({
+      force: false,
+      allowDowngrade: false,
+      ackNonce: null,
+    })(fakeCtx());
+
+    expect(mocks.stopHostForRestartWithAttemptMock).not.toHaveBeenCalled();
+    expect(mocks.writeUpdateProgressMarkerMock).not.toHaveBeenCalled();
+    expect(mocks.deleteUpdateProgressMarkerMock).toHaveBeenCalledWith(
+      "production",
+    );
+    expect(result.human).toContain("no-op");
+  });
+
+  it("no work owed but the host is DOWN: a `failed` marker is left alone - it may still be exactly true", async () => {
+    mocks.downloadAndStageHostMock.mockResolvedValue(upToDate("2.0.0"));
+    mocks.readHostInstallRecordMock.mockResolvedValue(sampleRecord("2.0.0"));
+    mocks.readHostPidMetadataMock.mockResolvedValue(null);
+    mocks.readUpdateProgressMarkerMock.mockResolvedValue({
+      state: "failed",
+      error: "host did not become healthy: tcp refused",
+      targetVersion: "2.0.0",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    await buildHostUpdateCommand({
+      force: false,
+      allowDowngrade: false,
+      ackNonce: null,
+    })(fakeCtx());
+
+    expect(mocks.deleteUpdateProgressMarkerMock).not.toHaveBeenCalled();
+    expect(mocks.stopHostForRestartWithAttemptMock).not.toHaveBeenCalled();
+  });
+
+  it("no work owed and an `updating` marker (another updater in flight): left alone", async () => {
+    mocks.downloadAndStageHostMock.mockResolvedValue(upToDate("2.0.0"));
+    mocks.readHostInstallRecordMock.mockResolvedValue(sampleRecord("2.0.0"));
+    mocks.readHostPidMetadataMock.mockResolvedValue(pidRecord("2.0.0", 4242));
+    mocks.isProcessAliveMock.mockReturnValue(true);
+    mocks.readUpdateProgressMarkerMock.mockResolvedValue({
+      state: "updating",
+      error: null,
+      targetVersion: "2.1.0",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    await buildHostUpdateCommand({
+      force: false,
+      allowDowngrade: false,
+      ackNonce: null,
+    })(fakeCtx());
+
+    expect(mocks.deleteUpdateProgressMarkerMock).not.toHaveBeenCalled();
   });
 
   it("debt cleared under the lock on a BUSY host: still the no-op - the busy gate is never consulted and no failed marker is written", async () => {

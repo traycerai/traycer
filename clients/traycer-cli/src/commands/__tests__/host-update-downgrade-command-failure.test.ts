@@ -22,6 +22,7 @@ vi.mock("../../manifest/host-install", () => ({
 vi.mock("../../host/update-progress-marker", () => ({
   writeUpdateProgressMarker: mocks.writeUpdateProgressMarkerMock,
   deleteUpdateProgressMarker: mocks.deleteUpdateProgressMarkerMock,
+  readUpdateProgressMarker: async () => null,
 }));
 
 vi.mock("../../service/health-probe", () => ({

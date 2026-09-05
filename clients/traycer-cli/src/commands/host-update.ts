@@ -10,6 +10,7 @@ import {
 } from "../installer/download-stage";
 import {
   deleteUpdateProgressMarker,
+  readUpdateProgressMarker,
   writeUpdateProgressMarker,
 } from "../host/update-progress-marker";
 import { probeHostHealth } from "../service/health-probe";
@@ -61,7 +62,7 @@ import { createServiceController, serviceLabelFor } from "../service";
 //     target short-circuits before the probe and re-checks nothing. When the
 //     running host is NOT at the target (bytes committed by `host apply
 //     --no-service` and never activated), this command owes the activation
-//     and performs it - restart, marker, probe - see `detectActivationDebt`;
+//     and performs it - restart, marker, probe - see `readActivationState`;
 //   - `probeHostHealth` asks "is the recorded pid alive and its port
 //     accepting?" - it does not compare versions. On the Desktop-managed macOS
 //     degraded path a surviving OLD host can answer it, so a healthy probe is
@@ -192,9 +193,13 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
     // live version was behind, exited 0 having changed nothing, and the GUI
     // toasted "Updating…" over a host that never moved. Activation debt is
     // therefore an update this command owes, not a no-op it may report.
-    const activationDebt = installedUpToDate
-      ? await detectActivationDebt(environment)
+    const activationReading = installedUpToDate
+      ? await readActivationState(environment)
       : null;
+    const activationDebt =
+      activationReading !== null && activationReading.kind === "debt"
+        ? activationReading
+        : null;
     if (activationDebt !== null) {
       ctx.runtime.logger.info(
         "Host update found the install record ahead of the running host; activating",
@@ -207,6 +212,23 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
     }
     const needsActivate = activationDebt !== null;
     const needsWork = needsApply || needsActivate;
+
+    // A `failed` marker outlives the failure it reported: the post-swap
+    // health probe can time out on a host that finishes starting a moment
+    // later, and nothing on the legacy path ever revisits the file. Every
+    // @1.3 host then renders that stale failure indefinitely, and a retry
+    // cannot clear it because a retry with nothing to do returns before the
+    // marker is touched. So the no-work path reconciles it here - and ONLY
+    // when the running host has been OBSERVED at the installed version. A
+    // host that is down, or a dev build, leaves the marker alone: for those
+    // the failure may still be exactly true.
+    if (
+      !needsWork &&
+      activationReading !== null &&
+      activationReading.kind === "activated"
+    ) {
+      await clearStaleFailedMarker(ctx.runtime.logger, environment);
+    }
 
     // Remote Host Support T16: the daemon polls `update-progress.json` and
     // folds it into `host.status@1.1` / the drain gate, so an update that is
@@ -250,6 +272,7 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
         const activation = await activateInstalledAndProjectLegacy(
           environment,
           args.force,
+          activationDebt.runningVersion,
           async (installedVersion) => {
             if (installedVersion === markerTargetVersion) return;
             markerTargetVersion = installedVersion;
@@ -363,25 +386,39 @@ type HostUpdatePreparation =
 
 /** The install record and the live process disagree about the version. */
 interface ActivationDebt {
+  readonly kind: "debt";
   readonly installedVersion: string;
   readonly runningVersion: string;
 }
 
 /**
- * Whether the committed install is waiting for a process that runs it.
+ * What the install record and the live process say about each other. Every
+ * reading is named rather than collapsed to "debt or not", because the two
+ * places that consult it need different things from the non-debt cases:
+ * before the lock, only `debt` is a reason to act; under the lock, `debt`
+ * and `no-live-host` both are, while `activated` is the reason NOT to.
  *
- * Three readings, all required, and each absence answers `null` (no debt) on
- * purpose - this decides whether to restart a host, and the safe error is to
- * leave one alone:
- *
- * - no install record: nothing to activate (the caller throws later anyway);
- * - no pid metadata, or a pid that is not alive: no process to replace. A
- *   host that is DOWN is the service manager's problem, not this command's -
- *   `host start` re-resolves the install record on every spawn, so the next
- *   launch already runs the committed bytes;
- * - a running version that is not a release version: a `local-*` dev build
- *   is not a host this command reasons about, whatever the record says;
- * - a match: the committed archive is what is running.
+ * - `no-install`: nothing to activate (the caller throws later anyway);
+ * - `no-live-host`: no pid metadata, or a pid that is not alive. Before the
+ *   lock this is left alone - a host that is DOWN is the service manager's
+ *   problem, and `host start` re-resolves the install record on every spawn.
+ *   Under the lock, after a debt was seen, it means the host this command
+ *   was about to replace is gone, which is not the same as replaced;
+ * - `foreign-runtime`: a running version that is not a release version. A
+ *   `local-*` dev build is not a host this command reasons about, whatever
+ *   the record says;
+ * - `activated`: the committed archive is what is running;
+ * - `debt`: the record and the process disagree.
+ */
+type ActivationReading =
+  | { readonly kind: "no-install" }
+  | { readonly kind: "no-live-host"; readonly installedVersion: string }
+  | { readonly kind: "foreign-runtime" }
+  | { readonly kind: "activated" }
+  | ActivationDebt;
+
+/**
+ * Read the activation state of the committed install.
  *
  * "Match" is decided in the RUNTIME identity domain when the record has one.
  * `pid.json` publishes the version the host binary reports about itself,
@@ -406,24 +443,58 @@ interface ActivationDebt {
  * never activated leaves the running host AHEAD of the record, and the record
  * is what the operator asked for.
  */
-async function detectActivationDebt(
+async function readActivationState(
   environment: Environment,
-): Promise<ActivationDebt | null> {
+): Promise<ActivationReading> {
   const installed = await readHostInstallRecord(environment);
-  if (installed === null) return null;
+  if (installed === null) return { kind: "no-install" };
   const running = await readHostPidMetadata(environment);
-  if (running === null || !isProcessAlive(running.pid)) return null;
-  if (!isValidHostVersion(running.version)) return null;
+  if (running === null || !isProcessAlive(running.pid)) {
+    return { kind: "no-live-host", installedVersion: installed.version };
+  }
+  if (!isValidHostVersion(running.version)) return { kind: "foreign-runtime" };
   if (installed.runtimeVersion !== null) {
-    if (running.version === installed.runtimeVersion) return null;
+    if (running.version === installed.runtimeVersion) {
+      return { kind: "activated" };
+    }
   } else {
     const comparison = compareHostVersions(running.version, installed.version);
-    if (!comparison.comparable || comparison.ordering === "equal") return null;
+    if (!comparison.comparable || comparison.ordering === "equal") {
+      return { kind: "activated" };
+    }
   }
   return {
+    kind: "debt",
     installedVersion: installed.version,
     runningVersion: running.version,
   };
+}
+
+/**
+ * Remove a `failed` progress marker that the observed state contradicts.
+ * Read-then-delete outside any lock: the only writer that could interleave
+ * is another updater stamping `updating`, and that window is the width of
+ * one file read. Marker I/O never fails the command (same rule as the
+ * writes).
+ */
+async function clearStaleFailedMarker(
+  logger: ILogger,
+  environment: Environment,
+): Promise<void> {
+  const marker = await readUpdateProgressMarker(environment);
+  if (marker === null || marker.state !== "failed") return;
+  try {
+    await deleteUpdateProgressMarker(environment);
+    logger.info(
+      "Host update cleared a stale failed progress marker - the running host is at the installed version",
+      { environment, staleTargetVersion: marker.targetVersion },
+    );
+  } catch (err) {
+    logger.warn("Host update failed to clear a stale progress marker", {
+      environment,
+      errorMessage: err instanceof Error ? err.message : String(err),
+    });
+  }
 }
 
 /**
@@ -456,10 +527,22 @@ async function detectActivationDebt(
  * under the lock, before anything is restarted, so the caller can re-point a
  * progress marker it wrote from the pre-lock record if another actor
  * installed a different version in between.
+ *
+ * A debt is CLEARED only by observing the running host at the installed
+ * version. A host that is simply gone under the lock - it exited, crashed,
+ * or is mid-relaunch and has not republished `pid.json` - is not cleared
+ * debt: reporting the no-op there would skip the health probe, delete the
+ * marker and exit 0 over a host that may never come back. That case is
+ * relaunched through the same stop → relaunch pair (the stop half treats an
+ * absent host as a recycle, not an error), so the caller's probe verifies
+ * that the committed bytes are actually serving. `lastSeenRunningVersion`
+ * is what was serving when the debt was detected, and is the best available
+ * fact about "before" for that report.
  */
 async function activateInstalledAndProjectLegacy(
   environment: Environment,
   force: boolean,
+  lastSeenRunningVersion: string,
   onInstalledVersionUnderLock: (installedVersion: string) => Promise<void>,
 ): Promise<{
   readonly legacy: LegacyHostUpdateResult;
@@ -480,14 +563,17 @@ async function activateInstalledAndProjectLegacy(
     // nothing, so its live work is no reason to fail the command (and stamp
     // a failed marker) - it is the no-op, busy or not.
     const installed = await requireInstalled(environment);
-    const debt = await detectActivationDebt(environment);
-    if (debt === null) {
+    const reading = await readActivationState(environment);
+    if (reading.kind !== "debt" && reading.kind !== "no-live-host") {
       return { legacy: projectNoOp(installed), activated: false };
     }
+    const previousVersion =
+      reading.kind === "debt" ? reading.runningVersion : lastSeenRunningVersion;
     await onInstalledVersionUnderLock(installed.version);
     // Same gate `applyHost` runs before it touches anything: a host with
     // live work is not restarted under it unless the caller said `--force`.
-    if (!force) {
+    // A host that is gone has no work to protect, so the gate is not asked.
+    if (!force && reading.kind === "debt") {
       await assertHostNotBusy(environment);
     }
     // The stop → relaunch pair `host restart` drives, with `force` threaded
@@ -517,7 +603,7 @@ async function activateInstalledAndProjectLegacy(
     return {
       legacy: {
         ...projectNoOp(installed),
-        previousVersion: debt.runningVersion,
+        previousVersion,
         serviceLifecycle: {
           priorServiceState: "running",
           stoppedBeforeSwap: false,
