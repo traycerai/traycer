@@ -287,9 +287,11 @@ function DrawerTaskList(props: DrawerTaskListProps): ReactNode {
   // list panel each put around their own rows - so it provides its own, for
   // exactly the ids on screen. Same call as the list panel's: epic ids only,
   // so the app-wide active host is the right one to ask (an Epic is a shared
-  // cloud entity, not a host-owned record).
+  // cloud entity, not a host-owned record). A phase row's `epicId` is a phase
+  // id and names no epic, so it is left out of the question.
   const indicatorEpicIds = useMemo(
-    () => items.map((item) => item.epicId),
+    () =>
+      items.flatMap((item) => (item.taskType === "epic" ? [item.epicId] : [])),
     [items],
   );
   const notificationIndicators = useNotificationIndicators({

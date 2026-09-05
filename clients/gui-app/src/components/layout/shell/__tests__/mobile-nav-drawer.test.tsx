@@ -862,9 +862,11 @@ describe("MobileNavDrawer", () => {
       expect(rows[1]?.querySelector('[role="status"]')).toBeNull();
     });
 
-    it("never looks a phase up for live activity", async () => {
-      // A phase is not an epic; the activity source is asked with `null` for
-      // it, so even an id that happens to be marked busy renders no status.
+    it("never looks a phase up for live activity or notifications", async () => {
+      // A phase is not an epic: its `epicId` is a phase id. The activity
+      // source is asked with `null` for it, so even an id that happens to be
+      // marked busy renders no status, and the notification query is asked
+      // about the epics beside it only.
       testState.items = [
         {
           ...historyItem({
@@ -874,12 +876,14 @@ describe("MobileNavDrawer", () => {
           }),
           taskType: "phase",
         },
+        historyItem({ id: "a", title: "epic", updatedAtMs: NOW_MS - DAY_MS }),
       ];
       testState.activity = { p: "turn" };
       renderDrawer();
       const rows = await screen.findAllByTestId("mobile-nav-task-row");
 
       expect(rows[0]?.querySelector('[role="status"]')).toBeNull();
+      expect(testState.indicatorEpicIdCalls.at(-1)).toEqual(["a"]);
     });
   });
 });
