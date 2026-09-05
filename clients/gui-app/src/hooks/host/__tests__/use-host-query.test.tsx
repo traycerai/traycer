@@ -9,7 +9,10 @@ import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
-import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import {
+  mockLocalHostEntry,
+  mockRemoteHostEntry,
+} from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import {
   installHostConnectionRegistrySource,
@@ -300,6 +303,112 @@ describe("useHostQuery auth readiness", () => {
     });
 
     expect(order).toEqual(["response", "success"]);
+  });
+
+  it("dispatches through the requester resolved from mutation variables", async () => {
+    const remoteEntry = mockRemoteHostEntry;
+    const requestHosts: string[] = [];
+    const messenger = new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => "req-fn-client",
+      handlers: {
+        "host.status": () => {
+          if (messenger.calls.length === 0) {
+            throw new Error("expected a host.status messenger call");
+          }
+          const call = messenger.calls[messenger.calls.length - 1];
+          requestHosts.push(call.authority.endpoint.hostId);
+          return {
+            ready: true,
+            hostVersion: "1.2.3",
+            protocolVersion: { major: 1, minor: 0 },
+            busy: false,
+            busySessionCount: 0,
+            updateProgress: null,
+            busyBreakdown: null,
+            updateOperation: null,
+            updateTransaction: null,
+          };
+        },
+      },
+    });
+    const queryClient = new QueryClient({
+      defaultOptions: { mutations: { retry: false } },
+    });
+    const spine = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      invalidator: createHostQueryInvalidator(queryClient),
+      findHostById: (hostId) => {
+        if (hostId === mockLocalHostEntry.hostId) return mockLocalHostEntry;
+        if (hostId === remoteEntry.hostId) return remoteEntry;
+        return null;
+      },
+      messenger,
+    });
+    spine.setRequestContext(
+      createRequestContextFixture({
+        origin: "renderer",
+        bearerToken: "tok-1",
+      }),
+    );
+    const localClient = spine.createRequester(mockLocalHostEntry);
+    const remoteClient = spine.createRequester(remoteEntry);
+    const Wrapper = (props: { readonly children: ReactNode }): ReactNode => (
+      <QueryClientProvider client={queryClient}>
+        {props.children}
+      </QueryClientProvider>
+    );
+
+    const rendered = renderHook(
+      () =>
+        useHostMutation({
+          client: (variables: { readonly hostId: string }) =>
+            variables.hostId === remoteEntry.hostId
+              ? remoteClient
+              : localClient,
+          method: "host.status",
+          options: null,
+          mapVariables: () => ({}),
+        }),
+      { wrapper: Wrapper },
+    );
+
+    await act(async () => {
+      await rendered.result.current.mutateAsync({ hostId: remoteEntry.hostId });
+    });
+
+    expect(requestHosts).toEqual([remoteEntry.hostId]);
+    spine.dispose();
+  });
+
+  it("fails closed when the client resolver returns null, without dispatching", async () => {
+    const fixture = createHostQueryFixture();
+    const rendered = renderHook(
+      () =>
+        useHostMutation({
+          client: () => null,
+          method: "host.status",
+          options: null,
+          mapVariables: () => ({}),
+        }),
+      { wrapper: fixture.Wrapper },
+    );
+
+    let caught: unknown;
+    await act(async () => {
+      try {
+        await rendered.result.current.mutateAsync({});
+      } catch (error) {
+        caught = error;
+      }
+    });
+
+    expect(caught).toMatchObject({
+      code: "RPC_ERROR",
+      requestId: "client-unavailable",
+      method: "host.status",
+    });
+    expect(fixture.requestCount.value).toBe(0);
   });
 });
 

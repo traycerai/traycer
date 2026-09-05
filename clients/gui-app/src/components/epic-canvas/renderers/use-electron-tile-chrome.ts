@@ -178,6 +178,7 @@ export function useElectronTabChrome(
     profile,
     url: liveUrl,
     addressValue,
+    selectAddressOnFocus: false,
     setAddressInput: draft.setAddressInput,
     focusAddress: draft.focusAddress,
     canGoBack,

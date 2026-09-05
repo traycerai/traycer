@@ -11,6 +11,8 @@ export {
   hostUpdateCheckV11,
   hostUpdateInstallV10,
   hostUpdateInstallV11,
+  hostUpdateInstallV12,
+  hostUpdateInstallUpgradeV11ToV12,
   hostUpdateInstallUpgradeV10ToV11,
 } from "./contracts";
 

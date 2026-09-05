@@ -588,6 +588,15 @@ vi.mock("@/lib/epic-selectors", () => ({
     testState.tree.nodeById[artifactId]?.status ?? null,
   useEpicConnectionStatus: () => "open",
   useEpicNodeHostId: () => "host-1",
+  // Archive/delete bulk actions pair this array with selected ids. Chat tile
+  // teardown stays hook-owned; this suite's navigateNested assertions cover
+  // artifact closes only.
+  useEpicNodeHostIds: (nodeIds: ReadonlyArray<string>) =>
+    nodeIds.map(
+      (nodeId) =>
+        testState.records.find((record) => record.id === nodeId)?.hostId ??
+        "host-1",
+    ),
   useEpicNodeOwnerKind: () => "chat",
   useEpicNodeWorkspaceFolders: () => [],
   useEpicPermissionRole: () => testState.permissionRole,
