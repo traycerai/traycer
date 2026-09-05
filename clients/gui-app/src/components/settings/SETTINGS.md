@@ -898,8 +898,8 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
   Appearance because its controls answer "where does this live", not "what does
   it look like" - and because a per-provider, per-window rate-limit list needs
   room Appearance does not have. Group order is fixed so a control keeps its
-  place as groups arrive: **Status bar** · Composer (nothing yet, so no
-  heading) · **Chat** · **Sidebar**.
+  place as groups arrive: **Status bar** · **Composer** · **Chat** ·
+  **Sidebar**.
   - **Ownership.** This page is where a layout control belongs from now on, and
     three rows were relocated onto it from General and one from Appearance.
     Store keys and setters are unchanged (`settings-store`), so there is no
@@ -943,6 +943,44 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     provider, doubling a menu's length for the rarer of the two flips. The
     quick menu stays the visibility menu; both live one item away under
     `Status bar settings…`.
+  - **Composer** (`panels/layout/composer-layout-group.tsx`, its own file - the
+    page mounts it with one line, so groups landing beside each other do not
+    contend for the panel). Seven elements, a closed list rather than a
+    registry, because the modes differ per element: three rows above the input
+    (Files changed, Active agents, Background) and four toolbar controls
+    (Attach image, Access, Microphone, Compact conversation), split by an `h3`
+    band each - "Below the input" and "Toolbar". Defaults are today's
+    behaviour, so an untouched install sees nothing new.
+  - **Two option sets, and they are not interchangeable.** `Visible / Compact`
+    for anything that carries a verb with no other home - the three dock rows
+    own Stop all / Review all / Undo all, and the Access pill reports the
+    permission the next send runs under. `Compact` is their floor: a row folds
+    to a chip in the composer's bottom strip (beside the host and workspace
+    chips) that opens it again, and the pill folds to its icon with the name on
+    hover. `Visible / Hidden` only for a control whose job has a second route:
+    paste and drag-drop attach images, the dictation chord starts voice input
+    (`Hidden` here is NOT `voiceInputEnabled` off), and the palette and
+    `/compact` compact a conversation. The row's own description names that
+    route, so the user can see what they keep.
+  - **Expanding a chip is per tile, and is never written back.** `compact` says
+    how a chat OPENS; one glance at a folded row must not redefine that for
+    every chat, so the reveal is component state in
+    `chat-tile-lower-surfaces.tsx` and dies with the tile - and with its own
+    chip, so a section that empties and later refills comes back folded rather
+    than carrying a reveal the user asked for about different content. A
+    revealed row
+    arrives OPEN - the click asked for the panel, not for a second click - and
+    each panel reads that for itself off the strip's context
+    (`useChatDockSectionRevealed`) as the initial state of its own collapsible,
+    rather than taking a prop every component in between would have to carry.
+    The chip stays on screen while its row is showing (`aria-pressed`) because
+    it is the only way back. A chip pulses once - a CSS ring keyed off
+    `data-pulse`, cleared on `animationend` - when the thing it stands for
+    starts, which is the same instant the chip appears; it never auto-expands.
+  - **Received A2A queue rows follow the Active agents mode**, and fold into
+    the same chip with their own count. That is also why the chip exists
+    whenever those rows do, even with no sub-agent running: without it, folding
+    would put them out of reach.
   - **The provider list reads the WATCHED host**, not the app-wide one: the
     page re-provides `HostRuntimeContext` from the scoped binding with the same
     `scopedToOwnHost` gate `RateLimitIconButton` uses, and an unresolved pick

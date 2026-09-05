@@ -1,4 +1,10 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import type { JsonContent } from "@traycer/protocol/common/registry";
@@ -9,6 +15,7 @@ import type {
   ChatRunSettings,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import { ChatLowerDock } from "@/components/chat/chat-lower-dock";
+import type { ChatDockSection } from "@/components/chat/chat-dock-compact-strip";
 import type { AccumulatedChangeRow } from "@/lib/chat/accumulated-change-rows";
 import type { ChatRestoreContextValue } from "@/components/chat/chat-restore-context-core";
 import type { PinnedTodoSnapshot } from "@/components/chat/chat-pinned-todos";
@@ -101,6 +108,7 @@ describe("<ChatLowerDock />", () => {
 
   it("renders queue, todo, and file changes in a stable top-down order", () => {
     renderDock({
+      folded: undefined,
       queue: queueState([queuedItem("queue-1", "Queued prompt")]),
       todo: todoSnapshot([todoItem("Current task")]),
       changes: [fileChange()],
@@ -131,6 +139,7 @@ describe("<ChatLowerDock />", () => {
 
   it("keeps the first visible section flush to the rounded top frame", () => {
     renderDock({
+      folded: undefined,
       queue: queueState([]),
       todo: null,
       changes: [fileChange()],
@@ -166,6 +175,7 @@ describe("<ChatLowerDock />", () => {
     };
 
     renderDock({
+      folded: undefined,
       queue: queueState([]),
       todo: null,
       changes: [],
@@ -205,6 +215,7 @@ describe("<ChatLowerDock />", () => {
   // what this pins is that the dock opens the section on it.
   it("opens the Background section on the held count alone", () => {
     renderDock({
+      folded: undefined,
       queue: queueState([]),
       todo: null,
       changes: [],
@@ -223,6 +234,7 @@ describe("<ChatLowerDock />", () => {
 
   it("stays closed when nothing is held, running, or queued", () => {
     renderDock({
+      folded: undefined,
       queue: queueState([]),
       todo: null,
       changes: [],
@@ -240,6 +252,7 @@ describe("<ChatLowerDock />", () => {
 
   it("mounts the parent Active agents bar when awareness reports an active child", () => {
     renderDock({
+      folded: undefined,
       queue: queueState([]),
       todo: null,
       changes: [],
@@ -257,6 +270,146 @@ describe("<ChatLowerDock />", () => {
       screen.getByRole("button", { name: /Active agents.*1 running/i }),
     ).toBeDefined();
   });
+
+  // Layout ▸ Composer folding: a folded section's row is not rendered, but a
+  // fold never suppresses a NEIGHBOURING section - each predicate keeps its
+  // own answer and `folded` only subtracts from it.
+  describe("folded sections", () => {
+    it("drops the changes panel but keeps the todo panel when filesChanged is folded", () => {
+      renderDock({
+        folded: new Set(["filesChanged"]),
+        queue: queueState([]),
+        todo: todoSnapshot([todoItem("Current task")]),
+        changes: [fileChange()],
+        backgroundItems: undefined,
+        heldManagedCommandCount: 0,
+        selfAgent: null,
+        activeAgents: [],
+        onBackgroundItemClick: () => undefined,
+        onBackgroundItemStop: () => null,
+        onBackgroundItemsStopAll: () => null,
+      });
+
+      expect(screen.getByTestId("pinned-todo-panel")).not.toBeNull();
+      expect(screen.queryByTestId("accumulated-changes-panel")).toBeNull();
+    });
+
+    it("renders nothing when every foldable section is folded and there is no todo", () => {
+      const backgroundItem: BackgroundItem = {
+        taskId: "task-1",
+        kind: "command",
+        title: "bun test",
+        blockId: "tool-1",
+        parentTaskId: null,
+        scheduledFor: null,
+        individualStopUnavailable: null,
+      };
+
+      renderDock({
+        folded: new Set(["filesChanged", "activeAgents", "background"]),
+        queue: queueState([]),
+        todo: null,
+        changes: [fileChange()],
+        backgroundItems: [backgroundItem],
+        heldManagedCommandCount: 0,
+        selfAgent: agentRow("parent", "Parent agent", true),
+        activeAgents: [agentRow("child", "Unopened child", true)],
+        onBackgroundItemClick: () => undefined,
+        onBackgroundItemStop: () => null,
+        onBackgroundItemsStopAll: () => null,
+      });
+
+      expect(screen.queryByTestId("chat-lower-dock")).toBeNull();
+    });
+
+    it("hides the active agents panel when activeAgents is folded", () => {
+      renderDock({
+        folded: new Set(["activeAgents"]),
+        queue: queueState([]),
+        todo: todoSnapshot([todoItem("Keep the dock open")]),
+        changes: [],
+        backgroundItems: undefined,
+        heldManagedCommandCount: 0,
+        selfAgent: agentRow("parent", "Parent agent", true),
+        activeAgents: [agentRow("child", "Unopened child", true)],
+        onBackgroundItemClick: () => undefined,
+        onBackgroundItemStop: () => null,
+        onBackgroundItemsStopAll: () => null,
+      });
+
+      expect(screen.getByTestId("chat-lower-dock")).not.toBeNull();
+      expect(screen.getByTestId("pinned-todo-panel")).not.toBeNull();
+      expect(screen.queryByTestId("active-agents-panel")).toBeNull();
+    });
+
+    it("hides the background panel when background is folded", () => {
+      const backgroundItem: BackgroundItem = {
+        taskId: "task-1",
+        kind: "command",
+        title: "bun test",
+        blockId: "tool-1",
+        parentTaskId: null,
+        scheduledFor: null,
+        individualStopUnavailable: null,
+      };
+
+      renderDock({
+        folded: new Set(["background"]),
+        queue: queueState([]),
+        todo: todoSnapshot([todoItem("Keep the dock open")]),
+        changes: [],
+        backgroundItems: [backgroundItem],
+        heldManagedCommandCount: 0,
+        selfAgent: null,
+        activeAgents: [],
+        onBackgroundItemClick: () => undefined,
+        onBackgroundItemStop: () => null,
+        onBackgroundItemsStopAll: () => null,
+      });
+
+      expect(screen.getByTestId("chat-lower-dock")).not.toBeNull();
+      expect(screen.getByTestId("pinned-todo-panel")).not.toBeNull();
+      expect(screen.queryByTestId("background-items-panel")).toBeNull();
+    });
+  });
+
+  // The Active agents chip stands in for received A2A responses too, so
+  // dropping them from the queue when that chip is folded is the CALLER's job
+  // (`useChatDockChrome`'s `foldedQueue`, upstream of this component) - this
+  // dock does no A2A filtering of its own. Handing it a queue that still
+  // carries a received response, even while "activeAgents" is folded, proves
+  // the dock renders exactly the array it is given rather than re-deriving
+  // the fold itself, which is the boundary the caller's filtering depends on.
+  it("renders every row in the queue it is handed, including a received A2A item, regardless of the activeAgents fold", () => {
+    const receivedItem = receivedAgentQueueItem(
+      "received-1",
+      "From another agent",
+    );
+    const userSentItem = queuedItem("queue-1", "From me");
+
+    renderDock({
+      folded: new Set(["activeAgents"]),
+      queue: queueState([receivedItem, userSentItem]),
+      todo: null,
+      changes: [],
+      backgroundItems: undefined,
+      heldManagedCommandCount: 0,
+      selfAgent: null,
+      activeAgents: [],
+      onBackgroundItemClick: () => undefined,
+      onBackgroundItemStop: () => null,
+      onBackgroundItemsStopAll: () => null,
+    });
+
+    const queueRows = screen.getByTestId("queued-message-rows");
+    const previews = within(queueRows).getAllByTestId(
+      "queued-message-content-preview",
+    );
+    const text = previews.map((preview) => preview.textContent).join(" | ");
+
+    expect(text).toContain("From another agent");
+    expect(text).toContain("From me");
+  });
 });
 
 interface DockInput {
@@ -267,6 +420,7 @@ interface DockInput {
   readonly heldManagedCommandCount: number;
   readonly selfAgent: AgentRow | null;
   readonly activeAgents: ReadonlyArray<AgentRow>;
+  readonly folded: ReadonlySet<ChatDockSection> | undefined;
   readonly onBackgroundItemClick: (item: BackgroundItem) => void;
   readonly onBackgroundItemStop: (taskId: string) => string | null;
   readonly onBackgroundItemsStopAll: () => string | null;
@@ -288,6 +442,7 @@ function renderDock(input: DockInput) {
           todo={input.todo}
           restore={baseRestore(input.changes)}
           queue={input.queue}
+          folded={input.folded ?? new Set()}
           queueResumeRequested={false}
           queueKeepPausedRequested={false}
           backgroundItems={input.backgroundItems}
@@ -374,6 +529,23 @@ function queuedItem(queueItemId: string, text: string): ChatQueuedPromptItem {
     fallbackReason: null,
     createdAt: 1,
     updatedAt: 1,
+  };
+}
+
+function receivedAgentQueueItem(
+  queueItemId: string,
+  text: string,
+): ChatQueuedPromptItem {
+  return {
+    ...queuedItem(queueItemId, text),
+    sender: {
+      type: "agent",
+      harnessId: "codex",
+      agentId: "sender-agent-1",
+      displayName: "Sender agent",
+      reply: { expectsReply: false },
+      inReplyTo: null,
+    },
   };
 }
 

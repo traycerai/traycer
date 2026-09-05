@@ -6,6 +6,7 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { LivePulse } from "@/components/ui/live-pulse";
+import { useChatDockSectionRevealed } from "@/components/chat/chat-dock-compact-context";
 import { AgentStopList } from "@/components/chat/chat-agent-stop-list";
 import { AgentStopButton } from "@/components/chat/agent-stop-button";
 import type { AgentRow } from "@/hooks/agent/use-agent-stop-controls";
@@ -29,7 +30,9 @@ export function ActiveAgentsPanel(props: {
   readonly scrollRegionMaxHeightClass: string;
   readonly separated: boolean;
 }) {
-  const [open, setOpen] = useState(false);
+  // Open on arrival when a chip click is what put this row back in the dock.
+  const revealedByChip = useChatDockSectionRevealed("activeAgents");
+  const [open, setOpen] = useState(revealedByChip);
   // The root agent counts as running too when it is itself active (not just
   // idling while its sub-agents work).
   const runningCount =

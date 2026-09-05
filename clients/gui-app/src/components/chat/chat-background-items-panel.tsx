@@ -22,6 +22,7 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import { LivePulse } from "@/components/ui/live-pulse";
 import { LiveElapsed } from "@/components/chat/segments/segment-elapsed";
+import { useChatDockSectionRevealed } from "@/components/chat/chat-dock-compact-context";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { ManagedCommandMonitorIcon } from "@/components/managed-commands/managed-command-monitor-icon";
 import { ManagedCommandStopAction } from "@/components/managed-commands/managed-command-lifecycle-actions";
@@ -55,33 +56,17 @@ import {
   INDENT_PX,
 } from "@/components/epic-canvas/sidebar/epic-sidebar-tree-shared";
 import { TreeGroupGuide } from "@/components/epic-canvas/sidebar/epic-sidebar-tree-guide";
-import { buildTreeFromFlatRecords } from "@/lib/tree-utils";
-import type { TreeNodeNested } from "@/lib/tree-types";
+import {
+  backgroundHeaderSummary,
+  buildBackgroundTree,
+  buildRememberedBackgroundNodes,
+  dedupeByTaskId,
+  treeHasRunningTask,
+  type BackgroundTreeNode,
+  type RememberedBackgroundNode,
+} from "@/lib/chat/background-item-tree";
 
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
-interface RememberedBackgroundNode {
-  readonly kind: BackgroundItem["kind"];
-  readonly title: string;
-  readonly parentTaskId: string | null;
-}
-
-interface BackgroundTreeRecord {
-  readonly taskId: string;
-  readonly item: BackgroundItem | null;
-  readonly kind: BackgroundItem["kind"];
-  readonly title: string;
-  readonly parentTaskId: string | null;
-  readonly order: number;
-}
-
-interface BackgroundTreeNode {
-  readonly taskId: string;
-  readonly item: BackgroundItem | null;
-  readonly kind: BackgroundItem["kind"];
-  readonly title: string;
-  readonly children: ReadonlyArray<BackgroundTreeNode>;
-}
-
 function backgroundKindLabel(kind: BackgroundItem["kind"]): string {
   switch (kind) {
     // A nested execution inside this turn, NOT a durable Agent in the Task.
@@ -138,10 +123,6 @@ function BackgroundKindIcon(props: { readonly kind: BackgroundItem["kind"] }) {
   return unreachableKind;
 }
 
-function itemParentTaskId(item: BackgroundItem): string | null {
-  return item.parentTaskId ?? null;
-}
-
 function itemScheduledFor(item: BackgroundItem): number | null {
   return item.kind === "wakeup" ? item.scheduledFor : null;
 }
@@ -161,24 +142,6 @@ function workflowRowSummary(
     (part): part is string => part !== null,
   );
   return parts.length === 0 ? null : parts.join(" · ");
-}
-
-function rememberBackgroundItem(
-  item: BackgroundItem,
-): RememberedBackgroundNode {
-  return {
-    kind: item.kind,
-    title: item.title,
-    parentTaskId: itemParentTaskId(item),
-  };
-}
-
-function rememberMissingParent(taskId: string): RememberedBackgroundNode {
-  return {
-    kind: "subagent",
-    title: taskId,
-    parentTaskId: null,
-  };
 }
 
 function formatWakeupTime(scheduledFor: number): string {
@@ -259,182 +222,6 @@ function BackgroundStopButton(props: {
       </span>
     </TooltipWrapper>
   );
-}
-
-// Collapse the host list to one row per task id. The host broadcasts a
-// running-only list and removes an item atomically at its terminal, so this is
-// a defensive guard: a transient duplicate (same `taskId`) must not render two
-// rows with the same React key or two stop affordances for one task.
-function dedupeByTaskId(
-  items: ReadonlyArray<BackgroundItem>,
-): ReadonlyArray<BackgroundItem> {
-  const seen = new Set<string>();
-  return items.filter((item) => {
-    if (seen.has(item.taskId)) return false;
-    seen.add(item.taskId);
-    return true;
-  });
-}
-
-function parentChainContains(
-  startTaskId: string,
-  targetTaskId: string,
-  recordByTaskId: ReadonlyMap<string, BackgroundTreeRecord>,
-): boolean {
-  let cursor: string | null = startTaskId;
-  const seen = new Set<string>();
-  while (cursor !== null) {
-    if (cursor === targetTaskId) return true;
-    if (seen.has(cursor)) return false;
-    seen.add(cursor);
-    cursor = recordByTaskId.get(cursor)?.parentTaskId ?? null;
-  }
-  return false;
-}
-
-function buildRememberedBackgroundNodes(
-  items: ReadonlyArray<BackgroundItem>,
-  previous: ReadonlyMap<string, RememberedBackgroundNode>,
-): ReadonlyMap<string, RememberedBackgroundNode> {
-  const next = new Map(
-    items.map((item) => [item.taskId, rememberBackgroundItem(item)]),
-  );
-  const pendingParentIds: string[] = [];
-  const queuedParentIds = new Set<string>();
-  const enqueueParent = (taskId: string): void => {
-    if (next.has(taskId) || queuedParentIds.has(taskId)) return;
-    queuedParentIds.add(taskId);
-    pendingParentIds.push(taskId);
-  };
-  items.forEach((item) => {
-    const parentTaskId = itemParentTaskId(item);
-    if (parentTaskId !== null) enqueueParent(parentTaskId);
-  });
-  let pendingIndex = 0;
-  while (pendingIndex < pendingParentIds.length) {
-    const taskId = pendingParentIds[pendingIndex];
-    pendingIndex += 1;
-    const remembered = previous.get(taskId) ?? rememberMissingParent(taskId);
-    next.set(taskId, remembered);
-    if (remembered.parentTaskId !== null) {
-      enqueueParent(remembered.parentTaskId);
-    }
-  }
-  return next;
-}
-
-function backgroundTreeNodeFromNested(
-  node: TreeNodeNested<BackgroundTreeRecord>,
-): BackgroundTreeNode {
-  const data = node.data;
-  return {
-    taskId: data.taskId,
-    item: data.item,
-    kind: data.kind,
-    title: data.title,
-    children: Array.from(node.children ?? [])
-      .sort(compareBackgroundTreeRecords)
-      .map((child) => backgroundTreeNodeFromNested(child)),
-  };
-}
-
-function compareBackgroundTreeRecords(
-  left: TreeNodeNested<BackgroundTreeRecord>,
-  right: TreeNodeNested<BackgroundTreeRecord>,
-): number {
-  return left.data.order - right.data.order;
-}
-
-function buildBackgroundTree(
-  items: ReadonlyArray<BackgroundItem>,
-  rememberedByTaskId: ReadonlyMap<string, RememberedBackgroundNode>,
-): ReadonlyArray<BackgroundTreeNode> {
-  const itemByTaskId = new Map(items.map((item) => [item.taskId, item]));
-  const itemOrderByTaskId = new Map(
-    items.map((item, index) => [item.taskId, index]),
-  );
-  const records = Array.from(rememberedByTaskId.entries()).map(
-    ([taskId, remembered], index): BackgroundTreeRecord => {
-      const item = itemByTaskId.get(taskId) ?? null;
-      const order = itemOrderByTaskId.get(taskId) ?? items.length + index;
-      if (item === null) {
-        return {
-          taskId,
-          item,
-          kind: remembered.kind,
-          title: remembered.title,
-          parentTaskId: remembered.parentTaskId,
-          order,
-        };
-      }
-      return {
-        taskId,
-        item,
-        kind: item.kind,
-        title: item.title,
-        parentTaskId: itemParentTaskId(item),
-        order,
-      };
-    },
-  );
-  const recordByTaskId = new Map(
-    records.map((record) => [record.taskId, record]),
-  );
-
-  return buildTreeFromFlatRecords(records, {
-    getId: (record) => record.taskId,
-    getParentId: (record) => {
-      const parentTaskId = record.parentTaskId;
-      if (parentTaskId === null) return null;
-      if (parentChainContains(parentTaskId, record.taskId, recordByTaskId)) {
-        return null;
-      }
-      return parentTaskId;
-    },
-    getData: (record) => record,
-  })
-    .sort(compareBackgroundTreeRecords)
-    .map((node) => backgroundTreeNodeFromNested(node));
-}
-
-function treeHasRunningTask(node: BackgroundTreeNode): boolean {
-  if (node.item !== null && node.item.kind !== "wakeup") return true;
-  return node.children.some((child) => treeHasRunningTask(child));
-}
-
-/**
- * What "Background" actually holds, counted the way the rows below render.
- * Managed commands join the running total rather than standing apart: "Stop
- * all" reaches them, and the rows below say which is which.
- *
- * Held shells get their own part instead of joining that total, and NOT because
- * nothing is running - a shell can be held and still running. It is because the
- * panel renders such a shell ONCE, as held, so counting it as running would
- * name a row that is not on screen. Every number here counts a group of rows a
- * person can see, which is the only version of this summary that stays true
- * however the two sets overlap.
- *
- * That does leave the running total narrower than "Stop all"'s reach, which
- * still covers every running shell including a held one. A superset is the safe
- * direction: the button never leaves a process alive that the header implied it
- * would stop.
- */
-function backgroundHeaderSummary(input: {
-  readonly runningCount: number;
-  readonly heldCount: number;
-  readonly waitingWakeCount: number;
-}): string {
-  const parts: string[] = [];
-  if (input.runningCount > 0) {
-    parts.push(`${input.runningCount} running`);
-  }
-  if (input.heldCount > 0) {
-    parts.push(`${input.heldCount} held`);
-  }
-  if (input.waitingWakeCount > 0) {
-    parts.push(`${input.waitingWakeCount} waiting`);
-  }
-  return parts.length === 0 ? "0 running" : parts.join(" · ");
 }
 
 /**
@@ -783,7 +570,9 @@ export function BackgroundItemsPanel(props: {
   readonly onStopAll: () => string | null;
   readonly onStopSession: () => string | null;
 }) {
-  const [open, setOpen] = useState(false);
+  // Open on arrival when a chip click is what put this row back in the dock.
+  const revealedByChip = useChatDockSectionRevealed("background");
+  const [open, setOpen] = useState(revealedByChip);
   const [committedRememberedByTaskId, setCommittedRememberedByTaskId] =
     useState<ReadonlyMap<string, RememberedBackgroundNode>>(() => new Map());
   // A harness background item is stopped over the chat's own stream, so it

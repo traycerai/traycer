@@ -3,6 +3,7 @@ import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { SettingsRow } from "@/components/settings/settings-row";
 import { SettingsSegmentedControl } from "@/components/settings/controls/settings-segmented-control";
+import { ComposerLayoutGroup } from "@/components/settings/panels/layout/composer-layout-group";
 import { SidebarLayoutGroup } from "@/components/settings/panels/layout/sidebar-layout-group";
 import { isHostScopeUsable } from "@/components/settings/host-scope/host-scope-status";
 import { useScopedHostBinding } from "@/components/settings/host-scope/use-scoped-host-binding";
@@ -83,6 +84,7 @@ export function LayoutSettingsPanel(): ReactNode {
     >
       <div className={cn("flex flex-col", compact ? "gap-3.5" : "gap-5")}>
         <StatusBarLayoutGroup />
+        <ComposerLayoutGroup />
         <ChatLayoutGroup />
         <SidebarLayoutGroup />
       </div>

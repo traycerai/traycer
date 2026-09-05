@@ -150,6 +150,31 @@
   animation: prompt-stash-count-flash 700ms ease-out both;
 }
 
+/* A compact dock chip acknowledging the thing it stands for changing - the
+   first agent starting, the line counts moving. A ring radiating out of the
+   chip and nothing else: `box-shadow` alone, so the chip's own background
+   survives the animation (see the note on `prompt-stash-count-flash` above for
+   what a `both` background frame does to it), and the end frame is transparent
+   so a finished pulse leaves no residue.
+
+   Deliberately no reduced-motion override. The base layer already collapses
+   every animation to 0.01ms, which still fires `animationend` - and that event
+   is what takes `data-pulse` back off. `animation: none` would suppress it and
+   leave the attribute set for good, so the chip could never pulse again. */
+@keyframes chat-dock-chip-pulse {
+  from {
+    box-shadow: 0 0 0 0
+      color-mix(in srgb, var(--color-primary) 55%, transparent);
+  }
+  to {
+    box-shadow: 0 0 0 5px transparent;
+  }
+}
+
+[data-chat-dock-chip][data-pulse="true"] {
+  animation: chat-dock-chip-pulse 620ms ease-out forwards;
+}
+
 /* A label-only tooltip must never win hit-testing from what it covers.
    `TooltipContent`'s own `pointer-events-none` is NOT enough: Radix Popper
    renders the content inside a positioning wrapper of exactly the same size,

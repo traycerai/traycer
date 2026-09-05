@@ -270,6 +270,13 @@ export type AnalyticsSetting =
   | "layout.statusBar.resources.enabled"
   | "layout.statusBar.resources.metric"
   | "layout.statusBar.resources.scope"
+  | "layout.composer.filesChanged"
+  | "layout.composer.activeAgents"
+  | "layout.composer.background"
+  | "layout.composer.attachImage"
+  | "layout.composer.access"
+  | "layout.composer.mic"
+  | "layout.composer.compactButton"
   | "linkOpen"
   | "pinContextUsageBreakdown"
   | "pointerCursors"
@@ -1158,6 +1165,13 @@ const ANALYTICS_SETTINGS = new Set<string>([
   "layout.statusBar.resources.enabled",
   "layout.statusBar.resources.metric",
   "layout.statusBar.resources.scope",
+  "layout.composer.filesChanged",
+  "layout.composer.activeAgents",
+  "layout.composer.background",
+  "layout.composer.attachImage",
+  "layout.composer.access",
+  "layout.composer.mic",
+  "layout.composer.compactButton",
   "linkOpen",
   "pinContextUsageBreakdown",
   "pointerCursors",

@@ -58,6 +58,7 @@ import {
   pickWorkingVerb,
 } from "@/components/chat/working-verb";
 import { ContextUsageChip } from "@/components/chat/context-usage-chip";
+import { ChatDockCompactStrip } from "@/components/chat/chat-dock-compact-strip";
 import { ChatRestoreProvider } from "@/components/chat/chat-restore-context";
 import { RevertOnEditDialog } from "@/components/chat/segments/revert-on-edit-dialog";
 import { SteerSettingsConflictDialog } from "@/components/chat/segments/steer-settings-conflict-dialog";
@@ -2838,10 +2839,15 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
   // its output, the Background strip lists what is running, and the output
   // window is where a shell is stopped, started or deleted. A second index
   // over the same shells crowded the composer without adding a capability.
+  // The compact chips lead the strip: they describe what this chat is DOING,
+  // and the host / workspace chips beside them describe where it runs. Rendered
+  // here rather than handed in, so this node's identity does not move when a
+  // count does - the strip reads its own contents from the dock's context.
   const workspaceControls = useMemo(
     () => (
       <>
         <div className="flex min-w-0 items-center gap-2 overflow-hidden">
+          <ChatDockCompactStrip />
           {hostWorkspaceSelector}
         </div>
         {usageChip}
