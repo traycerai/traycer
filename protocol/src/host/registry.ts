@@ -263,6 +263,7 @@ import {
 import {
   chatFallbackCancelV10,
   chatFallbackChooseTargetV10,
+  chatFallbackReturnToPreferredV10,
   chatFallbackRunManualRungV10,
 } from "@traycer/protocol/host/chat-fallback";
 import {
@@ -5089,6 +5090,19 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       versions: {
         0: {
           contract: chatFallbackRunManualRungV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "chat.fallback.returnToPreferred": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: chatFallbackReturnToPreferredV10,
           upgradeFromPreviousVersion: null,
         },
       },

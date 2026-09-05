@@ -5,15 +5,21 @@ import {
   chatSubscribeV19,
   chatWindowedSnapshotSchema,
   pendingFallbackSchema,
+  pendingReturnSchema,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 
 /**
- * Tolerance proof for the additive-optional `pendingFallback` field
- * (`chat.subscribe@1.9`): the live windowed line CARRIES it, and every
- * released `chat.subscribe@1.0-1.8` line TOLERATES it - parses a frame
- * carrying it without failing, and does not surface the key on the parsed
- * result, because each of those lines is a hand-frozen literal pre-image
- * rather than a reference to the live schema.
+ * Tolerance proof for the additive-optional `pendingFallback` and
+ * `pendingReturn` fields (`chat.subscribe@1.9`): the live windowed line
+ * CARRIES them, and every released `chat.subscribe@1.0-1.8` line TOLERATES
+ * them - parses a frame carrying either without failing, and does not
+ * surface the key on the parsed result, because each of those lines is a
+ * hand-frozen literal pre-image rather than a reference to the live schema.
+ *
+ * Not a host-ablation target. Gutting the host projectors cannot redden
+ * these tests (no causal connection): they pin frozen pre-images. What they
+ * would catch is a frozen line growing an optional `pendingReturn` /
+ * `pendingFallback` that `.optional()` preserves on parse.
  */
 
 // ─── Shared fixtures ────────────────────────────────────────────────────────
@@ -259,6 +265,151 @@ describe("every released chat.subscribe line tolerates pendingFallback without g
         }
 
         expect(Object.hasOwn(parsed as object, "pendingFallback")).toBe(false);
+      });
+    });
+  }
+});
+
+function pendingReturnFixture() {
+  return {
+    traversalId: "traversal-return-1",
+    revision: 4,
+    preferredTuple: chatRunSettingsFixture("gpt-5"),
+    fallbackTuple: chatRunSettingsFixture("claude-opus-5"),
+    queuedItemsMoving: 2,
+    offeredAt: 1_700_000_000_000,
+  };
+}
+
+function assertReturnFixtureMatchesSchema() {
+  expect(Object.keys(pendingReturnFixture()).sort()).toEqual(
+    Object.keys(pendingReturnSchema.shape).sort(),
+  );
+}
+
+describe("chat.subscribe@1.9 carries a fully-populated pendingReturn", () => {
+  it("the fixture covers every pendingReturnSchema field", () => {
+    assertReturnFixtureMatchesSchema();
+  });
+
+  it("round-trips pendingReturn intact on a snapshot frame", () => {
+    const pendingReturn = pendingReturnFixture();
+    const parsed = chatSubscribeV19.serverFrameSchema.parse(
+      frame("snapshot", {
+        snapshot: { ...baseWindowedSnapshot(), pendingReturn },
+      }),
+    );
+    if (parsed.kind !== "snapshot") throw new Error("expected snapshot");
+    expect(parsed.snapshot.pendingReturn).toEqual(pendingReturn);
+  });
+
+  it("round-trips pendingReturn intact on a turnStateChanged frame", () => {
+    const pendingReturn = pendingReturnFixture();
+    const parsed = chatSubscribeV19.serverFrameSchema.parse(
+      frame("turnStateChanged", {
+        runStatus: "running",
+        activeTurn: null,
+        pendingReturn,
+      }),
+    );
+    if (parsed.kind !== "turnStateChanged") {
+      throw new Error("expected turnStateChanged");
+    }
+    expect(parsed.pendingReturn).toEqual(pendingReturn);
+  });
+
+  it("chatWindowedSnapshotSchema retains pendingReturn intact", () => {
+    const pendingReturn = pendingReturnFixture();
+    const parsed = chatWindowedSnapshotSchema.parse({
+      ...baseWindowedSnapshot(),
+      pendingReturn,
+    });
+    expect(parsed.pendingReturn).toEqual(pendingReturn);
+  });
+
+  it("chatSnapshotSchema retains pendingReturn intact", () => {
+    const pendingReturn = pendingReturnFixture();
+    const parsed = chatSnapshotSchema.parse({
+      chat: baseChat(),
+      ...baseAux(),
+      accumulatedFileChanges: [],
+      pendingReturn,
+    });
+    expect(parsed.pendingReturn).toEqual(pendingReturn);
+  });
+});
+
+describe("every released chat.subscribe line tolerates pendingReturn without gaining it", () => {
+  it("covers chat.subscribe@1.0 through @1.8 (nothing added later silently drops out)", () => {
+    expect(RELEASED_MINORS).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8]);
+  });
+
+  for (const minor of RELEASED_MINORS) {
+    const version = `1.${minor}`;
+
+    describe(`chat.subscribe@${version}`, () => {
+      const { contract } = chatSubscribeLine.versions[minor];
+      const isWindowed = minor === 8;
+
+      it("parses a snapshot frame carrying pendingReturn, and strips the key", () => {
+        const pendingReturn = pendingReturnFixture();
+        const snapshot = isWindowed
+          ? { ...baseWindowedSnapshot(), pendingReturn }
+          : {
+              chat: baseChat(),
+              ...baseAux(),
+              accumulatedFileChanges: [],
+              pendingReturn,
+            };
+        const result = contract.serverFrameSchema.safeParse(
+          frame("snapshot", { snapshot }),
+        );
+        expect(result.success).toBe(true);
+        if (!result.success) return;
+        const parsed = result.data as { kind: string; snapshot?: unknown };
+        if (parsed.kind !== "snapshot") throw new Error("expected snapshot");
+        expect(Object.hasOwn(parsed.snapshot as object, "pendingReturn")).toBe(
+          false,
+        );
+      });
+
+      it("parses a turnStateChanged frame carrying pendingReturn, and strips the key", () => {
+        const pendingReturn = pendingReturnFixture();
+        const result = contract.serverFrameSchema.safeParse(
+          frame("turnStateChanged", {
+            runStatus: "running",
+            activeTurn: null,
+            pendingReturn,
+          }),
+        );
+        expect(result.success).toBe(true);
+        if (!result.success) return;
+        const parsed = result.data as { kind: string };
+        if (parsed.kind !== "turnStateChanged") {
+          throw new Error("expected turnStateChanged");
+        }
+        expect(Object.hasOwn(parsed as object, "pendingReturn")).toBe(false);
+      });
+
+      it("parses a card-clearing snapshot (pendingReturn own key undefined) and strips the key", () => {
+        const snapshot = isWindowed
+          ? { ...baseWindowedSnapshot(), pendingReturn: undefined }
+          : {
+              chat: baseChat(),
+              ...baseAux(),
+              accumulatedFileChanges: [],
+              pendingReturn: undefined,
+            };
+        const result = contract.serverFrameSchema.safeParse(
+          frame("snapshot", { snapshot }),
+        );
+        expect(result.success).toBe(true);
+        if (!result.success) return;
+        const parsed = result.data as { kind: string; snapshot?: unknown };
+        if (parsed.kind !== "snapshot") throw new Error("expected snapshot");
+        expect(Object.hasOwn(parsed.snapshot as object, "pendingReturn")).toBe(
+          false,
+        );
       });
     });
   }

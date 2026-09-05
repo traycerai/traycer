@@ -894,6 +894,61 @@ export const pendingFallbackSchema = z.object({
 });
 export type PendingFallback = z.infer<typeof pendingFallbackSchema>;
 
+/**
+ * The offer to move this chat back to the provider it started on
+ * (`chat.subscribe@1.9`).
+ *
+ * A separate key from {@link pendingFallbackSchema} rather than a sixth state
+ * on it, because the two describe opposite situations. A pending fallback is a
+ * chat whose dispatch is HELD while the host tries to rescue a failed turn; a
+ * pending return is a chat that was already rescued, is running normally, and
+ * is being asked one question. Folding them together would put the waiting
+ * card's "N queued messages will move" and its cancel actions on a chat with
+ * nothing to cancel.
+ *
+ * Present only once the offer has actually SURFACED - the traversal's return
+ * deadline is the preferred provider's own reset boundary, and before it there
+ * is nothing to ask. Absent for the `auto` policy, which acts instead of
+ * asking, and for `stay`, which never arms a return at all.
+ *
+ * DERIVED per frame from the durable record, never accumulated: like the
+ * pending fallback, this outlives the session that produced it, so a client
+ * that reconnects re-reads it rather than remembering it.
+ */
+export const pendingReturnSchema = z.object({
+  traversalId: z.string(),
+  /**
+   * The expected-state handle the banner's action carries back. A mismatch is
+   * `traversal_advanced` - a new failure armed on this chat while the banner
+   * was on screen, and the offer it describes no longer exists.
+   */
+  revision: z.number().int().nonnegative(),
+  /** Where the chat would go back TO - the tuple the user last chose. */
+  preferredTuple: chatRunSettingsSchema,
+  /** Where the chat is NOW - the traversal's final committed target. */
+  fallbackTuple: chatRunSettingsSchema,
+  /**
+   * How many queued messages the switch-back would move with it.
+   *
+   * Counted at frame time from the live queue rather than replayed from the
+   * forward switch, because a message queued after the switch is stamped with
+   * the fallback tuple too and moves as well. Rendered as the concrete half of
+   * the one-sentence rule: switching back moves queued messages too.
+   *
+   * An UPPER bound, not a guarantee, and for one reason: the switch-back
+   * re-validates each item's tuple as it moves it (the item keeps its own
+   * permission mode, which the preferred harness may not support) and leaves a
+   * failing item where it is rather than failing the whole return. Counting
+   * that here would mean a model-catalog read per queued item on every frame,
+   * which is not what a derived DTO may cost. The forward `pendingFallback`
+   * count has the identical property, so the two agree.
+   */
+  queuedItemsMoving: z.number().int().nonnegative(),
+  /** When the offer surfaced, epoch ms. */
+  offeredAt: z.number(),
+});
+export type PendingReturn = z.infer<typeof pendingReturnSchema>;
+
 export const chatSnapshotSchema = z.object({
   chat: chatSchema,
   access: chatAccessSchema,
@@ -975,6 +1030,10 @@ export const chatSnapshotSchema = z.object({
   // silence and a newer host's "no traversal" are the same value to a
   // renderer - see `pendingFallbackSchema`.
   pendingFallback: pendingFallbackSchema.optional(),
+  // The switch-back offer, or absent when none has surfaced
+  // (`chat.subscribe@1.9`). Same optionality contract as `pendingFallback`, and
+  // stripped by the same pre-1.9 projection.
+  pendingReturn: pendingReturnSchema.optional(),
 });
 export type ChatSnapshot = z.infer<typeof chatSnapshotSchema>;
 
@@ -1015,6 +1074,9 @@ const chatSubscribeTurnStateChangedServerFrameSchema = z.object({
   // and unlike `backgroundItems` the renderer must NOT keep its last value -
   // that is how a settled traversal's card would outlive it.
   pendingFallback: pendingFallbackSchema.optional(),
+  // Same rule, same reason: the banner must vanish when the offer is answered,
+  // so an absent key CLEARS rather than preserving the last value.
+  pendingReturn: pendingReturnSchema.optional(),
 });
 
 /**
@@ -3007,6 +3069,8 @@ export const chatWindowedSnapshotSchema = z.object({
    * never reaches a windowed subscriber - which today is every up-to-date peer.
    */
   pendingFallback: pendingFallbackSchema.optional(),
+  /** The switch-back offer, on both snapshot shapes for the same reason. */
+  pendingReturn: pendingReturnSchema.optional(),
   /**
    * The epoch every ordinal in this session is relative to. The host advances
    * it only when an ordinal no longer names the row it named before; appends
@@ -3299,7 +3363,11 @@ export const chatSubscribeV18 = defineStreamRpcContract({
 //   - the `fallback_applied` / `fallback_wait_resumed` provider-notice kinds,
 //     which `chat-frame-projection.ts` strips for any peer whose negotiated
 //     minor does not bind them - on live upserts, on persisted snapshot
-//     bodies, and on the windowed tail/range bodies.
+//     bodies, and on the windowed tail/range bodies;
+//   - the `pendingFallback` and `pendingReturn` DTOs on both snapshot shapes
+//     and on `turnStateChanged`, stripped as whole KEYS by the same
+//     projection - both funnels, since the windowed snapshot has its own
+//     producer.
 //
 // The typed `failure` payload on `error` / `turn.interrupted` and the
 // persisted `error` block is deliberately NOT part of what this line gates: it

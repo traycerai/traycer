@@ -49,6 +49,21 @@ export const FALLBACK_ACTION_OUTCOMES = [
    * `chat.fallback.runManualRung`.
    */
   "rung_unavailable",
+  /**
+   * The return offer is closed, and the chat did NOT move.
+   *
+   * `switch_back` accepted, but the preferred tuple could not be committed -
+   * its profile was deleted, its model left the catalog, or the settings commit
+   * itself threw. The record goes terminal (re-arming would poll a dead
+   * account) and a durable notice says so in the transcript.
+   *
+   * Distinct from `applied` because the two are opposite outcomes for the user:
+   * `applied` means the chat is back on the preferred provider, this means it
+   * is still on the fallback. Answering `applied` here closed the banner over a
+   * chat that had not moved, with nothing anywhere saying why - which is what
+   * this arm exists to stop. Only `chat.fallback.returnToPreferred`.
+   */
+  "return_unavailable",
 ] as const;
 
 export const fallbackActionOutcomeSchema = z.enum(FALLBACK_ACTION_OUTCOMES);
@@ -125,8 +140,8 @@ export type ChatFallbackChooseTargetResponse = z.infer<
 >;
 
 /**
- * The `retry` and `switch` rungs of the error card's manual affordances. The
- * `wait_once` arm is ticket 06's.
+ * The `retry`, `switch` and `wait_once` rungs of the error card's manual
+ * affordances.
  *
  * Outcomes: `applied`, `rung_unavailable`.
  *
@@ -144,11 +159,20 @@ export type ChatFallbackChooseTargetResponse = z.infer<
  * `switch`. An accepted rung SUPERSEDES a pending return in the same serialized
  * transition - the chat has one record slot, and a user asking for something
  * new has answered the return prompt by implication.
+ *
+ * `wait_once` ("Wait until 3:00 PM" on the error card) is the one rung that
+ * starts nothing immediately: it ARMS a fresh one-rung traversal parked on the
+ * failed tuple's verified reset boundary, which then behaves exactly like a
+ * ladder wait - a waiting card, a background item, a durable timer, and a
+ * re-dispatch at the boundary. It carries no `target` (the tuple is the one
+ * that failed, which is what the wait is for) and is refused when the host
+ * cannot re-read a verified reset: a card offering a wait whose boundary has
+ * since passed is stale, and honouring it would park the chat on nothing.
  */
 export const chatFallbackRunManualRungRequestSchema = z.object({
   epicId: z.string().trim().min(1),
   chatId: z.string().trim().min(1),
-  rung: z.enum(["retry", "switch"]),
+  rung: z.enum(["retry", "switch", "wait_once"]),
   target: chatRunSettingsSchema.nullable(),
   /** The failed attempt's identity. Both fields, for the reason above. */
   userMessageId: z.string().trim().min(1),
@@ -161,6 +185,51 @@ export const chatFallbackRunManualRungResponseSchema =
   fallbackActionResponseSchema;
 export type ChatFallbackRunManualRungResponse = z.infer<
   typeof chatFallbackRunManualRungResponseSchema
+>;
+
+/**
+ * The switch-back banner's three answers - `chat.fallback.returnToPreferred`.
+ *
+ * Outcomes: `applied`, `traversal_advanced`, `no_active_traversal`,
+ * `return_unavailable`.
+ *
+ * `return_unavailable` answers `switch_back` alone, and only when the offer
+ * closed with the chat NOT moved - the preferred tuple stopped validating, or
+ * its settings commit threw. It is the opposite outcome to `applied` for the
+ * user, which is why it is not folded into it: `applied` means the chat is back
+ * on the preferred provider, this means it is still on the fallback and a
+ * durable notice says why.
+ *
+ * A {@link fallbackTraversalRefSchema} like `cancel` and `chooseTarget`,
+ * because the record it acts on is still live: a successful traversal whose
+ * policy is `prompt` or `auto` sits in `completed_awaiting_return` until the
+ * return is resolved. It is NOT dispatch-holding - the queue resumed when the
+ * replacement succeeded - so this verb never competes with a running turn.
+ *
+ *   - `switch_back` - move the chat back to the preferred tuple now, AND move
+ *     the queued messages currently stamped with the fallback tuple with it.
+ *     That second half is the one-sentence rule the banner's copy has to state:
+ *     switching back moves queued messages too. Leaving the queue behind would
+ *     interleave two providers in one chat with nobody told.
+ *   - `stay` - keep the fallback tuple. The offer is answered and does not
+ *     return.
+ *   - `dismiss_for_chat` - close the banner without answering. Recorded
+ *     durably, so it does not come back after a restart.
+ *
+ * All three END the traversal. A dismissal that left the record live would
+ * leave an index row with no deadline, which nothing ever prunes.
+ */
+export const chatFallbackReturnToPreferredRequestSchema =
+  fallbackTraversalRefSchema.extend({
+    action: z.enum(["switch_back", "stay", "dismiss_for_chat"]),
+  });
+export type ChatFallbackReturnToPreferredRequest = z.infer<
+  typeof chatFallbackReturnToPreferredRequestSchema
+>;
+export const chatFallbackReturnToPreferredResponseSchema =
+  fallbackActionResponseSchema;
+export type ChatFallbackReturnToPreferredResponse = z.infer<
+  typeof chatFallbackReturnToPreferredResponseSchema
 >;
 
 // New optional methods, off the released floor. A client meeting an older host
@@ -188,4 +257,11 @@ export const chatFallbackRunManualRungV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: chatFallbackRunManualRungRequestSchema,
   responseSchema: chatFallbackRunManualRungResponseSchema,
+});
+
+export const chatFallbackReturnToPreferredV10 = defineRpcContract({
+  method: "chat.fallback.returnToPreferred",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: chatFallbackReturnToPreferredRequestSchema,
+  responseSchema: chatFallbackReturnToPreferredResponseSchema,
 });

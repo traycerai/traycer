@@ -540,7 +540,7 @@ export const HOST_METHOD_POLL_TABLE = {
   // supersedes an older one - and never polled: the answer is a position in a
   // transcript the live subscription is already reporting changes to.
   "chat.locateRow": { ...LATEST_SCHEDULING, poll: null },
-  // The three external fallback actions. All `fifo`, and none polled.
+  // The external fallback actions. All `fifo`, and none polled.
   //
   // `fifo` because each carries the traversal revision it expects, so two rapid
   // sends are not the same request twice - the second names a revision the
@@ -563,6 +563,14 @@ export const HOST_METHOD_POLL_TABLE = {
     poll: null,
   },
   "chat.fallback.runManualRung": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // The switch-back banner's answer, on the same terms as the other three: it
+  // names the revision it expects, so two rapid answers are two different
+  // requests rather than one sent twice.
+  "chat.fallback.returnToPreferred": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
     poll: null,
