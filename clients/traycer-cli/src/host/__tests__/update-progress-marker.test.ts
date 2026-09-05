@@ -337,6 +337,75 @@ describe("update-progress-marker", () => {
         vi.doUnmock("node:fs/promises");
       }
     });
+
+    it("retains the displaced marker in its scratch when neither restore route can land it", async () => {
+      vi.doMock("node:fs/promises", async (importOriginal) => {
+        const actual =
+          await importOriginal<typeof import("node:fs/promises")>();
+        return {
+          ...actual,
+          link: async () => {
+            throw Object.assign(new Error("EPERM"), { code: "EPERM" });
+          },
+          writeFile: async (
+            path: Parameters<typeof actual.writeFile>[0],
+            data: Parameters<typeof actual.writeFile>[1],
+            options: Parameters<typeof actual.writeFile>[2],
+          ) => {
+            if (
+              typeof options === "object" &&
+              options !== null &&
+              "flag" in options &&
+              options.flag === "wx"
+            ) {
+              throw Object.assign(new Error("ENOSPC"), { code: "ENOSPC" });
+            }
+            return actual.writeFile(path, data, options);
+          },
+        };
+      });
+      try {
+        const {
+          writeUpdateProgressMarker,
+          readUpdateProgressMarker,
+          deleteUpdateProgressMarkerIfUnchanged,
+        } = await import("../update-progress-marker");
+        const a = {
+          state: "updating" as const,
+          error: null,
+          targetVersion: "1.4.0",
+          updatedAt: "2026-07-03T00:00:00.000Z",
+          writerId: "writer-a",
+        };
+        const b = {
+          state: "updating" as const,
+          error: null,
+          targetVersion: "1.5.0",
+          updatedAt: "2026-07-03T00:00:01.000Z",
+          writerId: "writer-b",
+        };
+        await writeUpdateProgressMarker("production", a);
+        await writeUpdateProgressMarker("production", b);
+        expect(
+          await deleteUpdateProgressMarkerIfUnchanged("production", a),
+        ).toBe("changed");
+        // Neither `link` nor the `wx` fallback could land the displaced
+        // marker back at the live path - it stays retained in its scratch
+        // rather than being dropped, and the live path is left empty.
+        expect(await readUpdateProgressMarker("production")).toBeNull();
+        const scratchFiles = scratchAndStagingFiles().filter((name) =>
+          name.includes(".reconcile-"),
+        );
+        expect(scratchFiles).toHaveLength(1);
+        const scratchContents = readFileSync(
+          join(workHome, ".traycer", "host", scratchFiles[0]),
+          "utf8",
+        );
+        expect(JSON.parse(scratchContents)).toEqual(b);
+      } finally {
+        vi.doUnmock("node:fs/promises");
+      }
+    });
   });
 
   // The conditional replace backs `host update`'s failure stamp: it computes

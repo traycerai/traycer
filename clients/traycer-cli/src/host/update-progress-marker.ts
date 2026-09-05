@@ -274,15 +274,27 @@ async function swapMarkerIfUnchanged(
         await dropFile(from, `${step}-unlink-source`);
         return true;
       } catch (createErr) {
-        if (errnoCode(createErr) !== "EEXIST") {
-          logger.warn("Host update progress marker conditional swap failed", {
+        if (errnoCode(createErr) === "EEXIST") {
+          await dropFile(from, `${step}-newer-exists`);
+          return false;
+        }
+        // Neither route could land `from` (no hard links AND the create
+        // failed - ENOSPC, EIO). `from` may be the only complete copy of
+        // another updater's live marker, taken out of the live path in step
+        // 1; deleting it here would erase that marker while reporting
+        // `changed`. It is RETAINED and named in the log so an operator can
+        // find it. For a stamp the leftover is this run's own staged record -
+        // harmless garbage next to the marker.
+        logger.warn(
+          "Host update progress marker conditional swap failed - displaced file retained",
+          {
             environment,
             step,
+            retainedPath: from,
             errorName: errorFromUnknown(createErr).name,
             errorMessage: errorFromUnknown(createErr).message,
-          });
-        }
-        await dropFile(from, `${step}-create-failed`);
+          },
+        );
         return false;
       }
     }

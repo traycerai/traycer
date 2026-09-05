@@ -2244,12 +2244,15 @@ export class HostController {
   }
 
   private async applyPendingLoginItemRevisionIfIdleUncoalesced(): Promise<MutationOutcome<ConvergeReadyOk> | null> {
+    // First, before any I/O: a quarantined session has nothing to learn from
+    // the reachability probe, and the monitor ticks this every 30s for the
+    // life of the process.
+    if (this.pendingRevisionRefreshQuarantined) return null;
     const currentVersion = await readRunningRuntimeVersion(
       this.layout,
       this.reachabilityProbe,
     );
     if (currentVersion === null) return null;
-    if (this.pendingRevisionRefreshQuarantined) return null;
     if (!(await hasUnappliedPendingLoginItemRevision(this.environment)))
       return null;
     if ((await probeHostBusyVerdict(this.layout)) !== "idle") {

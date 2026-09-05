@@ -4945,7 +4945,11 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
   // park is not transient, so it still quarantines for the session.
   it("registerHostLoginItem returning parked post-cycle returns null (healthy converge), quarantines the refresh for the session, and a second attempt never re-runs the cycle", async () => {
     vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
-    const controller = newController("production");
+    const reachabilityProbe = vi.fn(async () => true);
+    const controller = newControllerWithReachability(
+      "production",
+      reachabilityProbe,
+    );
     writeInstallRecord("production", {
       version: "1.7.0",
       runtimeVersion: "1.7.0",
@@ -4964,11 +4968,18 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
     expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
 
     // Quarantined for the rest of the session - a second attempt (e.g. the
-    // monitor's next tick) never re-runs the disruptive cycle.
+    // monitor's next tick) never re-runs the disruptive cycle, including the
+    // reachability probe: the quarantine check now runs before
+    // `readRunningRuntimeVersion`, so a quarantined tick performs no probe.
+    const reachabilityCallsBeforeSecondAttempt =
+      reachabilityProbe.mock.calls.length;
     const second =
       await controller.applyPendingLoginItemRevisionIfIdle("outside-lane");
     expect(second).toBeNull();
     expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
+    expect(reachabilityProbe.mock.calls.length).toBe(
+      reachabilityCallsBeforeSecondAttempt,
+    );
   });
 
   // Field RCA 2026-07-28: this cycle's leading bootout had just torn down a
