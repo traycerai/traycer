@@ -125,6 +125,7 @@ const CHROME_CONTROLLER: TileController = {
   profile: "primary",
   url: "https://example.com/",
   addressValue: "https://example.com/",
+  selectAddressOnFocus: false,
   setAddressInput: () => undefined,
   focusAddress: state.focusAddress,
   canGoBack: false,
