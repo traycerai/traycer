@@ -75,7 +75,6 @@ export function WorkspaceHostSwitcher(
       intent={props.intent}
       action={{
         kind: "manage-hosts",
-        disabled: false,
         onSelect: () => {
           if (props.activeHostId !== null) {
             useSettingsHostScopeStore

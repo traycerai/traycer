@@ -23,7 +23,7 @@ import type { HostScope } from "@/components/settings/host-scope/use-host-scope"
  * NINE surfaces re-provide `HostRuntimeContext` in total: the seven panels
  * through this hook (`rate-limit-icon`, `shell`, `diagnostics`, `providers`,
  * `host`, `app-status-bar` — the bottom strip, which re-provides for the host
- * its chip names — and `layout`, whose per-provider status-bar toggles read the
+ * it watches — and `layout`, whose per-provider status-bar toggles read the
  * same watch pick the strip does) plus those two. Anything reading
  * `useHostClient()` / `useAddressableHostId()` beneath any of them gets that
  * surface's host.
@@ -36,8 +36,8 @@ import type { HostScope } from "@/components/settings/host-scope/use-host-scope"
  * happens to sit above a composer — a positional fact, not an invariant, which
  * is why it is written down here where the tenth re-provider gets added. The
  * two most recent are the bottom strip and Layout's status-bar group, and both
- * are safe for that same positional reason: a 24px strip holds a host chip and
- * a readout, a Settings group holds toggles, and no composer will ever be a
+ * are safe for that same positional reason: a 24px strip holds usage segments
+ * and a readout, a Settings group holds toggles, and no composer will ever be a
  * child of either.
  *
  * ⚠ AND THE RULE BINDS `StreamRuntimeContext` AT LEAST AS HARD, which this
@@ -50,11 +50,11 @@ import type { HostScope } from "@/components/settings/host-scope/use-host-scope"
  * That population is no longer a single surface: `resource-monitor-popover`
  * was the only stream re-provider, the epic sidebar's file tree and git diff
  * panel are two more, and `app-status-bar` is the FOURTH — it re-provides both
- * contexts for the host its chip names, since the strip's readout rides
- * `resources.subscribe` while its chip's reads are unary. None of the four
- * contains a composer — three are file/diff/process browsers and the fourth is
- * a 24px strip — which is what keeps this safe, again positionally, not
- * structurally.
+ * contexts for the host it watches, since the strip's readout rides
+ * `resources.subscribe` while its usage segments' reads are unary. None of the
+ * four contains a composer — three are file/diff/process browsers and the
+ * fourth is a 24px strip — which is what keeps this safe, again positionally,
+ * not structurally.
  *
  * Three arms, and which one you are in is the whole question:
  *

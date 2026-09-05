@@ -142,7 +142,7 @@ export function statusBarResourceMetricViews(input: {
   readonly metrics: ReadonlyArray<ResourceMetric>;
   /** Straight from the registry — attributed here, before a number is read. */
   readonly projection: GlobalResourceProjection;
-  /** The host the strip's chip is NAMING, and `hasExplicitPick` beside it. */
+  /** The host the strip is WATCHING, and `hasExplicitPick` beside it. */
   readonly watchedHostId: string | null;
   readonly hasExplicitPick: boolean;
   readonly desktopApp: DesktopAppResourceUsage | null;
@@ -150,15 +150,17 @@ export function statusBarResourceMetricViews(input: {
   readonly globalStreamUnsupported: boolean;
   readonly hostLabel: string;
 }): ReadonlyArray<StatusBarResourceMetricView> {
-  // The strip names a host at ALL times — the chip is unconditional — so it
-  // owes the same proof the resource panel does, and owes it harder. The global
-  // projection is a module singleton that outlives any one transport: a host
-  // that cannot serve a global stream has no entry at all, and the registry
-  // then falls through to the per-epic aggregate, which rides the AMBIENT
-  // transport. Read raw, that publishes the active host's cpu/mem/procs under
-  // the picked host's name — and, because a reason is only consulted for a null
-  // value, it also swallows the "this host is too old" sentence by supplying
-  // numbers in exactly the state that sentence was written for.
+  // The strip prints numbers ABOUT a watched host with nothing on screen naming
+  // it, so attribution is the only thing between the reader and another
+  // machine's figures — it owes the same proof the resource panel does, and
+  // owes it harder. The global projection is a module singleton that outlives
+  // any one transport: a host that cannot serve a global stream has no entry at
+  // all, and the registry then falls through to the per-epic aggregate, which
+  // rides the AMBIENT transport. Read raw, that publishes the active host's
+  // cpu/mem/procs under a pick the reader cannot see — and, because a reason is
+  // only consulted for a null value, it also swallows the "this host is too
+  // old" sentence by supplying numbers in exactly the state that sentence was
+  // written for.
   const projection = attributedProjection({
     scopeHostId: input.watchedHostId,
     hasExplicitPick: input.hasExplicitPick,

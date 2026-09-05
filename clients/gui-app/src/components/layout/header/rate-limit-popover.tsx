@@ -957,7 +957,6 @@ function RateLimitHostPickerRow({
         // than a second copy of one verb from it.
         action={{
           kind: "manage-hosts",
-          disabled: false,
           onSelect: () => {
             onClose();
             // The displayed host travels with the jump - one rule, one

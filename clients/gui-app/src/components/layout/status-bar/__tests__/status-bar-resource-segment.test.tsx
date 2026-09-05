@@ -13,8 +13,8 @@ import {
 
 /**
  * What the segment does with the data it is handed — attribution above all,
- * since the strip's chip names a host at all times and the registry publishes
- * ONE projection for the window. `status-bar-resource-reading.test.ts` owns the
+ * since the strip watches a host at all times and the registry publishes ONE
+ * projection for the window. `status-bar-resource-reading.test.ts` owns the
  * rule; this owns the wiring, which is the half a prop rename would break
  * silently.
  */

@@ -15,8 +15,8 @@ import { useLayoutStore } from "@/stores/settings/layout-store";
 /**
  * Marks a subtree the status bar's own right-click menu must not claim. The bar
  * is one strip of small controls that own their own menus and pointer
- * behaviour - the host switcher chip most of all - and a menu anchored on the
- * whole bar would otherwise swallow theirs.
+ * behaviour - the two panel triggers and the host notice's way out - and a menu
+ * anchored on the whole bar would otherwise swallow theirs.
  */
 export const STATUS_BAR_MENU_EXEMPT_ATTRIBUTE = "data-status-bar-menu-exempt";
 

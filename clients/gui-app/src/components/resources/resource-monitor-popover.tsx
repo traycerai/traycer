@@ -952,7 +952,6 @@ function ResourceMonitorHostPickerRow(props: {
         // lives, rather than a second copy of one verb from it.
         action={{
           kind: "manage-hosts",
-          disabled: false,
           onSelect: () => {
             props.onClose();
             carryViewedHostIntoSettingsScope(scope.hostId);

@@ -337,11 +337,12 @@ describe("statusBarResourceMetricViews", () => {
 
 describe("statusBarResourceMetricViews · host attribution", () => {
   it("publishes nothing from a projection belonging to another machine", () => {
-    // The strip's chip names a host at all times, so it owes positive proof.
-    // The registry's global projection is one per WINDOW: a picked host that
-    // cannot serve a global stream has no entry, and the fallback per-epic
-    // aggregate rides the AMBIENT transport - the active host's numbers, one
-    // frame from being drawn under the picked host's name.
+    // Nothing in the strip names the host these numbers are about, so this
+    // proof is the only thing standing between the reader and another
+    // machine's figures. The registry's global projection is one per WINDOW: a
+    // picked host that cannot serve a global stream has no entry, and the
+    // fallback per-epic aggregate rides the AMBIENT transport - the active
+    // host's numbers, one frame from being drawn for a pick nobody can see.
     const rendered = views({
       scope: "host-tree",
       projection: liveProjection("host-a"),

@@ -56,7 +56,7 @@ export function StatusBarResourceSegment(props: StatusBarResourceSegmentProps) {
   const metrics = useLayoutStore((state) => state.statusBar.resources.metrics);
   // Raw, and handed over raw: `statusBarResourceMetricViews` attributes it to
   // the watched host before reading a number out of it. The registry publishes
-  // one projection for the window, which is not necessarily this chip's host.
+  // one projection for the window, which is not necessarily the watched host's.
   const projection = useGlobalResourceProjection();
   // Only the desktop-app scope reads this, and subscribing is what starts a
   // once-a-second IPC poll of the shell. The strip is on screen for the life of

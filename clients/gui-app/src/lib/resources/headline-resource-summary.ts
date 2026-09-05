@@ -134,12 +134,14 @@ export function resolveResourceMonitorHostReading(input: {
  * exists for — which is the bug this comment used to describe as fixed.
  *
  * Exported because the rule belongs to every surface that reads the global
- * projection while NAMING a host, not to the panel that happened to need it
- * first. The bottom strip names one unconditionally — its host chip is always
- * on screen — so it runs its projection through this before reading a single
- * number. It takes the host id rather than the whole `HostScope`: that is all
- * the rule consults, and a caller that holds only the id should not have to
- * invent a scope to ask.
+ * projection while ATTRIBUTING it to a host, not to the panel that happened to
+ * need it first. The bottom strip is the harder case rather than the lighter
+ * one: it prints its numbers with nothing on screen naming the host they are
+ * about, so this rule is the only thing standing between the reader and another
+ * machine's figures, and it runs its projection through here before reading a
+ * single number. It takes the host id rather than the whole `HostScope`: that
+ * is all the rule consults, and a caller that holds only the id should not have
+ * to invent a scope to ask.
  */
 export function attributedProjection(input: {
   readonly scopeHostId: string | null;
