@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   isCanonicalReleaseCandidate,
   isCanonicalStagingVersion,
+  isHiddenFromDefaultCatalog,
   isMatchingStableRelease,
   isPreReleaseVersion,
   isSameReleaseLine,
@@ -166,9 +167,29 @@ describe("isPreReleaseVersion", () => {
     }
   });
 
-  it("keeps canonical staging versions in the stable-default catalog", () => {
+  it("reports a canonical staging version as a pre-release BY SHAPE", () => {
+    // The exemption moved to `isHiddenFromDefaultCatalog` and this predicate
+    // no longer carries it. A staging version IS a pre-release by shape, and
+    // an explicit `--no-include-pre-releases` is entitled to that answer;
+    // while the exemption lived here it applied to that user too, who kept
+    // receiving every `-staging.*` row alongside output reporting that
+    // pre-releases had been excluded.
     expect(isCanonicalStagingVersion("1.2.3-staging.4.gabcdef1")).toBe(true);
-    expect(isPreReleaseVersion("1.2.3-staging.4.gabcdef1")).toBe(false);
+    expect(isPreReleaseVersion("1.2.3-staging.4.gabcdef1")).toBe(true);
+  });
+
+  it("keeps canonical staging versions in the DEFAULT catalog", () => {
+    // The exemption itself, now scoped to the question it belongs to: a
+    // staging client reads only the staging feeds, where every row has this
+    // shape, so hiding them would leave its unstated-default listing empty
+    // and make Desktop purge every staged staging host as yanked.
+    expect(isHiddenFromDefaultCatalog("1.2.3-staging.4.gabcdef1")).toBe(false);
+    // Every other pre-release shape is still hidden by default.
+    for (const version of ["2.0.0-rc.1", "2.0.0-beta.1", "2.0.0-nightly.3"]) {
+      expect(isHiddenFromDefaultCatalog(version)).toBe(true);
+    }
+    // ...and a stable release is never hidden by either question.
+    expect(isHiddenFromDefaultCatalog("2.0.0")).toBe(false);
   });
 
   it("rejects non-canonical staging versions", () => {
