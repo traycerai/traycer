@@ -5,6 +5,7 @@ import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { SettingsRow } from "@/components/settings/settings-row";
 import { SettingsSegmentedControl } from "@/components/settings/controls/settings-segmented-control";
+import { SidebarLayoutGroup } from "@/components/settings/panels/layout/sidebar-layout-group";
 import { isHostScopeUsable } from "@/components/settings/host-scope/host-scope-status";
 import { useScopedHostBinding } from "@/components/settings/host-scope/use-scoped-host-binding";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
@@ -639,7 +640,7 @@ function profileLabelFor(
   );
 }
 
-// ── chat & sidebar ──────────────────────────────────────────────────────────
+// ── chat ────────────────────────────────────────────────────────────────────
 
 /**
  * The message pane's own layout. Both controls describe the pane rather than
@@ -707,80 +708,5 @@ function ChatLayoutGroup(): ReactNode {
         }
       />
     </SettingsGroup>
-  );
-}
-
-/**
- * The sidebar's own layout. One row today; panel visibility and order join it
- * from the same store the rail's right-click menu writes.
- */
-function SidebarLayoutGroup(): ReactNode {
-  const showNavigatorResourceStats = useSettingsStore(
-    (state) => state.showNavigatorResourceStats,
-  );
-  const setShowNavigatorResourceStats = useSettingsStore(
-    (state) => state.setShowNavigatorResourceStats,
-  );
-  return (
-    <SettingsGroup
-      group={LAYOUT.definitions.sidebar}
-      showTitle
-      tone="default"
-      dataTestId="layout-sidebar-group"
-      fill={false}
-    >
-      <SettingsRow
-        row={LAYOUT.definitions.sidebarResourceChips}
-        control={
-          <Switch
-            checked={showNavigatorResourceStats}
-            onCheckedChange={(value) => {
-              trackLayoutSetting("showNavigatorResourceStats");
-              setShowNavigatorResourceStats(value);
-            }}
-            aria-label="Show resource chips on sidebar rows"
-          />
-        }
-      />
-    </SettingsGroup>
-  );
-}
-
-/**
- * A row whose LABEL is live - one provider, one of its windows - rendered
- * without `SettingsRow`.
- *
- * `SettingsRow` takes everything it says from a definition, which is what
- * makes a row and its search entry the same object. These have no definition
- * and cannot have one: the set exists only for providers the watched host has
- * reported, so there is nothing static to index. They are reached through the
- * `Providers` entry above them instead, and this draws them in the shape the
- * primitive would.
- */
-function LiveToggleRow(props: {
-  readonly label: string;
-  readonly description: string | null;
-  readonly control: ReactNode;
-}): ReactNode {
-  const compact = useSettingsDensity() === "compact";
-  return (
-    <div
-      className={cn(
-        "flex flex-wrap items-start justify-between gap-x-6 gap-y-2 border-b border-border/40 last:border-b-0",
-        compact ? "px-4 py-2.5" : "px-5 py-4",
-      )}
-    >
-      <div className="min-w-[50%] flex-1 space-y-1">
-        <div className="font-medium text-foreground">{props.label}</div>
-        {props.description === null ? null : (
-          <p className="max-w-[72ch] break-words text-pretty text-ui-sm text-muted-foreground">
-            {props.description}
-          </p>
-        )}
-      </div>
-      <div className="ml-auto flex max-w-full shrink-0 justify-end">
-        {props.control}
-      </div>
-    </div>
   );
 }

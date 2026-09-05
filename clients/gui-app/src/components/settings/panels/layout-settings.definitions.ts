@@ -245,6 +245,51 @@ export const LAYOUT = defineSettingsSection("layout", {
     availableWhen: alwaysAvailable,
     keywords: ["navigator", "rail", "left panel"],
   },
+  // Both the panel list and the narrow-window note that stands in for it carry
+  // this anchor, so the result lands on whichever the window draws. The gate is
+  // the VIEWPORT, which no shell-level predicate can answer and which a resize
+  // changes, so the entry is always offered. The per-panel rows inside it are
+  // the rail's own registry rendered as rows; their names ride here.
+  sidebarPanels: {
+    kind: "group",
+    search: { anchor: "layout-sidebar-panels" },
+    label: "Panels",
+    description:
+      "Drag to reorder, or drop a panel onto another to stack them into one tabbed panel. Uncheck a panel to keep it out of the rail.",
+    breadcrumb: "Sidebar",
+    availableWhen: alwaysAvailable,
+    keywords: [
+      "reorder",
+      "order",
+      "drag",
+      "tabbed",
+      "stack",
+      "hide panel",
+      "visibility",
+      "agents",
+      "terminals",
+      "browsers",
+      "artifacts",
+      "git diff",
+      "pull requests",
+      "file tree",
+      "sharing",
+      "comments",
+    ],
+  },
+  // The note that stands in for the panel list below `md`. It contributes to
+  // the group rather than owning an anchor, so a "Panels" result lands on the
+  // card either way and never on a row only one width draws.
+  sidebarPanelsNote: {
+    kind: "row",
+    group: "sidebar",
+    search: { contributesTo: "sidebarPanels" },
+    label: "Panel layout needs the sidebar",
+    description:
+      "The epic sidebar and its panel rail are only drawn on wider windows, so there is nothing to arrange here.",
+    availableWhen: alwaysAvailable,
+    keywords: ["narrow", "mobile", "width"],
+  },
   sidebarResourceChips: {
     kind: "row",
     group: "sidebar",
