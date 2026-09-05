@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   buildLinkLoginQrPayload,
   claimantDeviceLabel,
+  claimantDeviceName,
   claimLinkLoginCodeViaHttp,
   linkLoginStatusViaHttp,
   linkLoginTokenViaHttp,
@@ -266,7 +267,11 @@ describe("match code on the wire", () => {
       NORMALIZED,
       null,
     );
-    expect(lastBody).toEqual({ code: NORMALIZED, acceptMatchCode: true });
+    expect(lastBody).toEqual({
+      code: NORMALIZED,
+      acceptMatchCode: true,
+      acceptClaimExpiry: true,
+    });
     expect(withCode).toMatchObject({
       kind: "ok",
       response: { claimant: { matchCode: "47" } },
@@ -291,6 +296,54 @@ describe("match code on the wire", () => {
     expect(withoutCode.kind).toBe("ok");
     if (withoutCode.kind !== "ok") throw new Error("unreachable");
     expect(withoutCode.response.claimant?.matchCode).toBeUndefined();
+  });
+
+  it("status asks for the claim's deadline and reads it back, or its absence", async () => {
+    installFetch({
+      status: "claimed",
+      claimant: {
+        address: null,
+        userAgent: "iPhone",
+        location: null,
+        claimedAt: 1_760_000_000_000,
+        claimExpiresAt: 1_760_000_120_000,
+      },
+    });
+    const withDeadline = await linkLoginStatusViaHttp(
+      AUTHN_BASE_URL,
+      "bearer",
+      NORMALIZED,
+      null,
+    );
+    expect(lastBody).toEqual({
+      code: NORMALIZED,
+      acceptMatchCode: true,
+      acceptClaimExpiry: true,
+    });
+    expect(withDeadline).toMatchObject({
+      kind: "ok",
+      response: { claimant: { claimExpiresAt: 1_760_000_120_000 } },
+    });
+
+    // An older server: today's exact claimant shape still parses.
+    installFetch({
+      status: "claimed",
+      claimant: {
+        address: null,
+        userAgent: "iPhone",
+        location: null,
+        claimedAt: 1_760_000_000_000,
+      },
+    });
+    const without = await linkLoginStatusViaHttp(
+      AUTHN_BASE_URL,
+      "bearer",
+      NORMALIZED,
+      null,
+    );
+    expect(without.kind).toBe("ok");
+    if (without.kind !== "ok") throw new Error("unreachable");
+    expect(without.response.claimant?.claimExpiresAt).toBeUndefined();
   });
 
   it("status keeps an explicit null as its own property — the phone presented no code", async () => {
@@ -367,5 +420,51 @@ describe("claimant device label", () => {
     expect(claimantDeviceLabel("")).toBe("a device");
     // Long enough to be UA-shaped, with no family to bucket into.
     expect(claimantDeviceLabel("x".repeat(41))).toBe("a device");
+  });
+
+  it("names the device bare for labels, the same bucket without the article", () => {
+    expect(claimantDeviceName("iPhone")).toBe("iPhone");
+    expect(
+      claimantDeviceName(
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)",
+      ),
+    ).toBe("iPhone");
+    expect(claimantDeviceName("Mozilla/5.0 (Linux; Android 15; Pixel 8)")).toBe(
+      "Android device",
+    );
+    expect(claimantDeviceName("Pixel 8")).toBe("Pixel 8");
+    expect(claimantDeviceName(null)).toBe("device");
+    // A self-reported name that happens to BE a generic kind is still that
+    // kind - "device" typed by a phone does not become a proper name.
+    expect(claimantDeviceLabel("device")).toBe("a device");
+  });
+
+  it("treats an inherited property name as a proper name, not a kind", () => {
+    // The claim is unauthenticated: a phone can call itself anything. A name
+    // that is also an Object.prototype key must not read the prototype's
+    // function as its article.
+    for (const name of [
+      "constructor",
+      "toString",
+      "__proto__",
+      "hasOwnProperty",
+    ]) {
+      expect(claimantDeviceName(name)).toBe(name);
+      expect(claimantDeviceLabel(name)).toBe(name);
+    }
+  });
+
+  it("refuses a self-reported name carrying terminal control characters", () => {
+    // Short, UA-free, and aimed at the CLI's prompt: an escape sequence is
+    // not a device name, and it buckets like any other unusable value.
+    expect(claimantDeviceName("\u001b[2Jevil")).toBe("device");
+    expect(claimantDeviceLabel("\u001b[31mPixel\u001b[0m")).toBe("a device");
+    expect(claimantDeviceName("Pixel\u0007")).toBe("device");
+    expect(claimantDeviceName("Pixel\u007f")).toBe("device");
+    expect(claimantDeviceName("Pixel\u009b")).toBe("device");
+    // A family survives its own control characters, on the bucket path.
+    expect(claimantDeviceName("\u001bc iPhone")).toBe("iPhone");
+    // Ordinary non-ASCII is a name.
+    expect(claimantDeviceName("Téléphone de Léa")).toBe("Téléphone de Léa");
   });
 });
