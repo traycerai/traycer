@@ -22,8 +22,8 @@ import type { HostScope } from "@/components/settings/host-scope/use-host-scope"
  *
  * TEN surfaces re-provide `HostRuntimeContext` in total: the eight through
  * this hook (`rate-limit-icon`, `shell`, `diagnostics`, `providers`, `host`,
- * `app-status-bar` — the bottom strip, which re-provides for the host its chip
- * names — `layout`, whose per-provider status-bar toggles read the same watch
+ * `app-status-bar` — the bottom strip, which re-provides for the host it
+ * watches — `layout`, whose per-provider status-bar toggles read the same watch
  * pick the strip does, and the onboarding TOUR) plus those two. Anything
  * reading `useHostClient()` / `useAddressableHostId()` beneath any of them
  * gets that surface's host.
@@ -49,8 +49,8 @@ import type { HostScope } from "@/components/settings/host-scope/use-host-scope"
  * happens to sit above a composer — a positional fact, not an invariant, which
  * is why it is written down here where the tenth re-provider gets added. The
  * two most recent are the bottom strip and Layout's status-bar group, and both
- * are safe for that same positional reason: a 24px strip holds a host chip and
- * a readout, a Settings group holds toggles, and no composer will ever be a
+ * are safe for that same positional reason: a 24px strip holds usage segments
+ * and a readout, a Settings group holds toggles, and no composer will ever be a
  * child of either.
  *
  * ⚠ AND THE RULE BINDS `StreamRuntimeContext` AT LEAST AS HARD, which this
@@ -70,8 +70,8 @@ import type { HostScope } from "@/components/settings/host-scope/use-host-scope"
  * the stream has to be the named host's. The tour joined it for the same
  * reason one act down — the session scan and the run it starts are that
  * machine's — and the dialog for exactly that scan and run. The strip joined
- * it because its readout rides `resources.subscribe` for the host its chip
- * names, while that chip's own reads are unary. All are safe for the same
+ * it because its readout rides `resources.subscribe` for the host it watches,
+ * while its usage segments' reads are unary. All are safe for the same
  * positional reason as the other three — they contain no composer, a 24px
  * strip least of all, and so no path to the microphone.
  *

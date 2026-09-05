@@ -119,9 +119,8 @@ vi.mock(
 );
 
 // Both re-providers resolve real transports. This suite is about WHICH
-// children mount and what the chip does, so they stand down to the ambient
-// binding — the same value production falls back to when a pick has not
-// resolved its own client.
+// children mount, so they stand down to the ambient binding — the same value
+// production falls back to when a pick has not resolved its own client.
 vi.mock("@/components/settings/host-scope/use-scoped-host-binding", () => ({
   useScopedHostBinding: () => null,
 }));
@@ -148,10 +147,6 @@ vi.mock("@/components/resources/resource-monitor-popover", () => ({
       {props.triggerNode}
     </div>
   ),
-}));
-
-vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
-  useSystemTabModalActions: () => ({ openSettings: () => undefined }),
 }));
 
 // A projection and a desktop reading are the segment's data sources. Empty by
@@ -326,8 +321,11 @@ describe("<AppStatusBar />", () => {
     expect(screen.getByText("Can't reach Office Linux")).not.toBeNull();
     expect(screen.getByTestId("resource-monitor-popover")).not.toBeNull();
     expect(screen.getByTestId("status-bar-resource-segment")).not.toBeNull();
-    // The chip stays: a notice whose only way out is hidden strands the user.
-    expect(screen.getByTestId("settings-host-switcher")).not.toBeNull();
+    // The notice keeps its own way out: nothing else in the strip can drop the
+    // pick, so hiding that button would strand the user here.
+    expect(
+      screen.getByTestId("status-bar-host-return-to-active"),
+    ).not.toBeNull();
   });
 
   it("draws no numbers from the ambient projection under an unresolved pick", () => {
@@ -435,7 +433,9 @@ describe("<AppStatusBar />", () => {
     // The popover goes with it: it is the stream owner, so leaving it mounted
     // would keep sampling a host for a readout nobody asked for.
     expect(screen.queryByTestId("resource-monitor-popover")).toBeNull();
-    expect(screen.getByTestId("settings-host-switcher")).not.toBeNull();
+    // And the strip keeps its reserved usage slot rather than collapsing: the
+    // segment is the only thing this preference governs.
+    expect(screen.getByTestId("status-bar-rate-limit-slot")).not.toBeNull();
   });
 
   it("hides the rate-limit cluster when the preference is off, while the reserved slot stays", () => {
@@ -581,7 +581,7 @@ describe("<AppStatusBar /> usage panel chord", () => {
   });
 });
 
-describe("<AppStatusBar /> host chip", () => {
+describe("<AppStatusBar /> host controls", () => {
   beforeEach(() => {
     scope = hostScopeFixture({});
     useWatchHostStore.setState({ scopedHostId: null });
@@ -598,12 +598,11 @@ describe("<AppStatusBar /> host chip", () => {
     resourceProjection.value = null;
   });
 
-  function openHostList(): void {
-    fireEvent.click(screen.getByTestId("settings-host-switcher"));
-  }
-
-  it("offers Activate for a watched host that is not the active one", () => {
-    const makeActive = vi.fn();
+  it("carries no host switcher and names no host while the pick is resolved", () => {
+    // The two panels the strip opens each end their list in a `HostSwitcher`
+    // over this same pick, so a third control here would be a third writer of
+    // one value - and a read-only name beside them would be a fourth reader of
+    // it with no way to act on what it says.
     useWatchHostStore.setState({ scopedHostId: "host-b" });
     scope = hostScopeFixture({
       hosts: [HOST_A, HOST_B],
@@ -612,66 +611,16 @@ describe("<AppStatusBar /> host chip", () => {
       activeHost: HOST_A,
       isViewingActive: false,
       status: "ready",
-      makeActive,
     });
-
-    render(<AppStatusBar />);
-    openHostList();
-
-    fireEvent.click(screen.getByTestId("settings-host-switcher-activate"));
-    expect(makeActive).toHaveBeenCalledWith("host-b");
-  });
-
-  it("points at Settings instead when the watched host is already active", () => {
-    // Activating the host you are already on is a control whose only outcome
-    // is the state you are in.
-    render(<AppStatusBar />);
-    openHostList();
-
-    expect(screen.getByTestId("settings-host-switcher-manage")).not.toBeNull();
-    expect(screen.queryByTestId("settings-host-switcher-activate")).toBeNull();
-  });
-
-  it("withholds Activate while one is already in flight", () => {
-    const makeActive = vi.fn();
-    useWatchHostStore.setState({ scopedHostId: "host-b" });
-    scope = hostScopeFixture({
-      hosts: [HOST_A, HOST_B],
-      host: HOST_B,
-      activeHostId: "host-a",
-      activeHost: HOST_A,
-      isViewingActive: false,
-      status: "ready",
-      isActivating: true,
-      makeActive,
-    });
-
-    render(<AppStatusBar />);
-    openHostList();
-
-    const row = screen.getByTestId("settings-host-switcher-activate");
-    expect(row.getAttribute("aria-disabled")).toBe("true");
-    fireEvent.click(row);
-    expect(makeActive).not.toHaveBeenCalled();
-  });
-
-  it("falls back to Settings when no host resolved at all", () => {
-    // The switcher's zero-host branch renders the trailing action as a plain
-    // button with no pending state, and there is no host to activate anyway.
-    scope = hostScopeFixture({
-      hosts: [],
-      host: null,
-      activeHostId: null,
-      activeHost: null,
-      isViewingActive: false,
-      status: "unreachable",
-    });
+    resourceProjection.value = liveHostTreeProjection("host-b");
 
     render(<AppStatusBar />);
 
-    expect(
-      screen.getByTestId("settings-host-switcher-empty-manage"),
-    ).not.toBeNull();
+    // The readings prove the strip IS watching Office Linux - so the absent
+    // name below is a deliberate omission rather than an unresolved pick.
+    expect(screen.getByText("12%")).not.toBeNull();
+    expect(screen.queryByTestId("settings-host-switcher")).toBeNull();
+    expect(screen.queryByText("Office Linux")).toBeNull();
   });
 });
 
@@ -722,15 +671,6 @@ describe("<AppStatusBar /> right-click visibility menu", () => {
     expect(
       screen.getByRole("menuitemcheckbox", { name: "Claude Code" }),
     ).not.toBeNull();
-  });
-
-  it("does not open from a right-click on the host chip", () => {
-    windowedProviders = twoWindowedProviders();
-    render(<AppStatusBar />);
-
-    fireEvent.contextMenu(screen.getByTestId("settings-host-switcher"));
-
-    expect(screen.queryByRole("menu")).toBeNull();
   });
 
   it("does not open from a right-click on the rate-limit trigger", () => {
@@ -813,9 +753,9 @@ describe("<AppStatusBar /> right-click visibility menu", () => {
   });
 
   it("does not open from a right-click on the notice's return-to-active button", () => {
-    // Mirrors the chip / trigger / resource-segment exemptions above: the
-    // notice's own button is the one way out of this state, so the bar's menu
-    // stands down over it too.
+    // Mirrors the two trigger exemptions above, and it is the last of the
+    // three: the notice's own button is the one way out of this state, so the
+    // bar's menu stands down over it too.
     useWatchHostStore.setState({ scopedHostId: "host-b" });
     scope = hostScopeFixture({
       hosts: [HOST_A, HOST_B],

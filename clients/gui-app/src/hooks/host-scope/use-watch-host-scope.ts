@@ -10,10 +10,10 @@ import { useWatchHostStore } from "@/stores/host-scope/watch-host-store";
  * placement moves there.
  *
  * One pick, one resolution, one hook. They are not three surfaces that happen
- * to agree: the strip's chip and the popover it opens are the same choice seen
- * twice, so a second derivation of the same store is a way for them to disagree
- * for a commit — which is the whole failure the host-scope contract exists to
- * prevent, arrived at from inside.
+ * to agree: the strip's segments and the popover they open are the same choice
+ * seen twice, so a second derivation of the same store is a way for them to
+ * disagree for a commit — which is the whole failure the host-scope contract
+ * exists to prevent, arrived at from inside.
  *
  * The queries underneath (`useHostDirectoryList`, `useRegisteredHosts`) are the
  * shared, already-cached ones every other host surface reads, so a watcher

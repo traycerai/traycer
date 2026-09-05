@@ -38,7 +38,7 @@ import {
  * that refreshes them, and the trigger for the usage panel.
  *
  * Mounted only inside the bar's `scopedToOwnHost` gate and only while the
- * preference is on, so every query below is bound to the host the chip names.
+ * preference is on, so every query below is bound to the host the strip watches.
  * Two things it deliberately does NOT own: the providers, resolved above it
  * because the right-click menu lists the same set and two resolutions could
  * name two different ones; and the panel itself, which outlives every state

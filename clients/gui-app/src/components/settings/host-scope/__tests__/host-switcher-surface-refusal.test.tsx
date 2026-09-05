@@ -32,11 +32,7 @@ function renderSwitcher(refusalByHostId: ReadonlyMap<string, string>): void {
       selected={UNKNOWN}
       activeHostId={UNKNOWN.hostId}
       onSelect={() => undefined}
-      action={{
-        kind: "manage-hosts",
-        disabled: false,
-        onSelect: () => undefined,
-      }}
+      action={{ kind: "manage-hosts", onSelect: () => undefined }}
       surface="field"
       intent="bind"
       disabled={false}
@@ -103,11 +99,7 @@ describe("<HostSwitcher /> surface refusals for a fork target", () => {
         selected={tab}
         activeHostId={tab.hostId}
         onSelect={() => undefined}
-        action={{
-          kind: "manage-hosts",
-          disabled: false,
-          onSelect: () => undefined,
-        }}
+        action={{ kind: "manage-hosts", onSelect: () => undefined }}
         surface="field"
         intent="bind"
         disabled={false}
@@ -147,11 +139,7 @@ describe("<HostSwitcher /> surface refusals for a fork target", () => {
         selected={tab}
         activeHostId={tab.hostId}
         onSelect={() => undefined}
-        action={{
-          kind: "manage-hosts",
-          disabled: false,
-          onSelect: () => undefined,
-        }}
+        action={{ kind: "manage-hosts", onSelect: () => undefined }}
         surface="field"
         intent="bind"
         disabled={false}
@@ -198,11 +186,7 @@ describe("<HostSwitcher /> surface refusals for a fork target", () => {
         selected={tab}
         activeHostId={tab.hostId}
         onSelect={() => undefined}
-        action={{
-          kind: "manage-hosts",
-          disabled: false,
-          onSelect: () => undefined,
-        }}
+        action={{ kind: "manage-hosts", onSelect: () => undefined }}
         surface="field"
         intent="bind"
         disabled={false}

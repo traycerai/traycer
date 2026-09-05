@@ -1,10 +1,4 @@
 import { use, useEffect, useRef, useState, type ReactNode } from "react";
-import { NO_HOST_OPTION_REFUSALS } from "@/components/settings/host-scope/host-option-model";
-import { carryViewedHostIntoSettingsScope } from "@/components/settings/host-scope/carry-viewed-host-into-settings";
-import {
-  HostSwitcher,
-  type HostSwitcherAction,
-} from "@/components/settings/host-scope/host-switcher";
 import { isHostScopeUsable } from "@/components/settings/host-scope/host-scope-status";
 import { useScopedHostBinding } from "@/components/settings/host-scope/use-scoped-host-binding";
 import { useScopedStreamBinding } from "@/components/settings/host-scope/use-scoped-stream-binding";
@@ -36,14 +30,18 @@ import { registerDynamicActionHandler } from "@/lib/keybindings/dispatch";
 import { providerDisplayName } from "@/lib/provider-ordering";
 import { useTitleBarDragSuppression } from "@/stores/layout/title-bar-drag-store";
 import { useLayoutStore } from "@/stores/settings/layout-store";
-import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 
 /** Stable identity, so a strip with no list to offer never re-renders on one. */
 const NO_MENU_PROVIDERS: ReadonlyArray<StatusBarMenuProvider> = [];
 
 /**
- * The app's bottom strip: provider usage on the left, the watched host and its
+ * The app's bottom strip: provider usage on the left, the watched host's
  * resource readout on the right.
+ *
+ * It carries no host control of its own. Both panels it opens already end their
+ * list in a `HostSwitcher` over this same watch pick, so a third one in the
+ * strip would be a third way to write one value — and the strip is the one
+ * surface with no room to say what picking does.
  *
  * The watch host is resolved ONCE, here, above every segment — and re-provided
  * as this subtree's `HostRuntimeContext` and `StreamRuntimeContext`. That pair
@@ -57,7 +55,7 @@ const NO_MENU_PROVIDERS: ReadonlyArray<StatusBarMenuProvider> = [];
  * than tidiness — the same reason `RateLimitIconButton` states. Mounting one
  * only when a scoped binding exists changes the element type at this position
  * the moment a pick resolves, so React unmounts the whole subtree and mounts a
- * fresh one, taking the open state of anything inside it (the host list, the
+ * fresh one, taking the open state of anything inside it (the usage panel, the
  * resource panel) with it. The fallback re-provides the ambient binding
  * VERBATIM, never a copy, so an unscoped strip still sees ambient updates.
  */
@@ -124,9 +122,9 @@ function ScopedAppStatusBar(props: {
   const scope = props.scope;
   // A PICK that has not resolved to its own client leaves this subtree on the
   // AMBIENT binding, so mounting the live segments would draw one host's
-  // numbers beside a chip naming another - and keeping the hooks out of the
-  // tree, rather than discarding their output, also stops them opening a
-  // stream against the host the user did not choose.
+  // numbers under the name of the host the user picked - and keeping the hooks
+  // out of the tree, rather than discarding their output, also stops them
+  // opening a stream against the host the user did not choose.
   //
   // Without a pick there is no second host to confuse this one with: the
   // ambient binding is the only thing the strip has ever meant, and an
@@ -145,10 +143,10 @@ function ScopedAppStatusBar(props: {
       providers={
         // Only what this strip can actually show, on both counts. An unresolved
         // pick leaves the subtree on the ambient binding, whose providers belong
-        // to a host the chip is not naming - so the menu offers nothing rather
-        // than a list borrowed from the wrong machine. And with usage switched
-        // off entirely there is no segment for a per-provider checkbox to
-        // govern: it would toggle a preference with no visible effect and no
+        // to a host the strip is not watching - so the menu offers nothing
+        // rather than a list borrowed from the wrong machine. And with usage
+        // switched off entirely there is no segment for a per-provider checkbox
+        // to govern: it would toggle a preference with no visible effect and no
         // item beside it explaining why. Settings, one item down, is where that
         // switch lives.
         scopedToOwnHost && rateLimitsEnabled
@@ -214,17 +212,6 @@ function ScopedAppStatusBar(props: {
             />
           </Popover>
           <span className="flex-1" />
-          {/*
-            The chip is a bare `HostSwitcher` with no pass-through for a
-            `data-*`, and it owns a list of its own that a menu over it would
-            swallow - so the exemption goes on a wrapper around it.
-          */}
-          <span
-            {...{ [STATUS_BAR_MENU_EXEMPT_ATTRIBUTE]: "" }}
-            className="flex min-w-0 items-center"
-          >
-            <StatusBarHostChip scope={scope} />
-          </span>
           {/*
             Gated on the PREFERENCE only, never on the pick - the mirror of the
             usage panel above, and for the same reason. This component is the
@@ -301,74 +288,6 @@ function menuProviders(
 }
 
 /**
- * The watched host, and the one action the strip owes it.
- *
- * `HostSwitcher` carries selection and exactly one trailing action, and the
- * caller owns what that action DOES — so the strip ends its list in Activate
- * when it is watching a machine that is not the active one, and in the same
- * link to Settings the two header popovers use when it is not.
- *
- * `scope.isActivating` gates the row rather than only `makeActive`'s own latch:
- * that latch is silent, and a live-looking row that does nothing is a different
- * defect from the double write it prevents.
- *
- * Deliberately NOT calling `useRegisteredHostsPollLiveness`. The popovers do,
- * because they are the only host-list surface mounted while they are OPEN; this
- * chip is mounted for the life of the window, and opting the whole session into
- * the liveness poll to keep a dot fresh inside a list nobody has opened is a
- * cost with no reader. `HostSwitcher` refreshes the directory on open, which is
- * when the rows are actually looked at.
- */
-function StatusBarHostChip(props: { readonly scope: HostScope }): ReactNode {
-  const { openSettings } = useSystemTabModalActions();
-  const scope = props.scope;
-  const resolvedHostId = scope.hostId;
-  const manageHosts: HostSwitcherAction = {
-    kind: "manage-hosts",
-    disabled: false,
-    onSelect: () => {
-      // The displayed host travels with the jump - one rule, one
-      // implementation, shared with the popovers' CTAs.
-      carryViewedHostIntoSettingsScope(scope.hostId);
-      openSettings({ section: "host", resetToGeneral: false });
-    },
-  };
-  const action: HostSwitcherAction =
-    // No resolved host is no host to activate — and it is also the state the
-    // switcher's zero-host branch renders, which offers the trailing action as
-    // a plain button with no pending state of its own. Falling back to Manage
-    // hosts is what keeps `activate-host` out of a branch that cannot express
-    // it.
-    resolvedHostId === null || scope.isViewingActive
-      ? manageHosts
-      : {
-          kind: "activate-host",
-          disabled: scope.isActivating,
-          onSelect: () => scope.makeActive(resolvedHostId),
-        };
-  return (
-    <HostSwitcher
-      hosts={scope.hosts}
-      selected={scope.host}
-      activeHostId={scope.activeHostId}
-      onSelect={scope.setHostId}
-      refusalByHostId={NO_HOST_OPTION_REFUSALS}
-      inertExceptHostId={null}
-      action={action}
-      surface="status-bar"
-      intent="view"
-      disabled={false}
-      isLoading={scope.isLoading}
-      listsFailed={scope.listsFailed}
-      onRetryLists={scope.retryLists}
-      // Fleet update badges are Settings' business - the same `null` the two
-      // header popovers and the landing selector pass.
-      updateViewForHost={null}
-    />
-  );
-}
-
-/**
  * Why the strip is showing no numbers rather than showing the ACTIVE host's
  * numbers under the picked host's name.
  *
@@ -405,8 +324,8 @@ function StatusBarHostNotice(props: { readonly scope: HostScope }): ReactNode {
         type="button"
         onClick={scope.returnToActive}
         // The one way out of this state, so the strip's own menu stands down
-        // over it and leaves the platform's alone - the same exemption the
-        // chip and the two panel triggers carry.
+        // over it and leaves the platform's alone - the same exemption the two
+        // panel triggers carry.
         {...{ [STATUS_BAR_MENU_EXEMPT_ATTRIBUTE]: "" }}
         className="shrink-0 rounded-md px-1 text-primary transition-colors hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
         data-testid="status-bar-host-return-to-active"
