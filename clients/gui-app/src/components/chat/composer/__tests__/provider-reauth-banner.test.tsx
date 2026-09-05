@@ -448,6 +448,59 @@ describe("<ProviderReauthBanner />", () => {
     expect(screen.getByRole("button", { name: /Authenticate/ })).toBeDefined();
   });
 
+  // An ACP-authenticate provider (antigravity) declares no `terminalLogin` and
+  // an EMPTY `oauthArgs`: its headless sign-in needs no login subcommand,
+  // because the host spawns the server and drives the ACP `authenticate`
+  // method. `canOauth` required `oauthArgs.length > 0`, so the banner offered
+  // this provider the API-key paste form and no reconnect button at all - the
+  // one affordance that actually signs it back in.
+  it("offers the OAuth button when oauthArgs is empty but non-null", () => {
+    render(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="claude-code"
+        state={claudeState({
+          oauthArgs: [],
+          token: null,
+          codePaste: null,
+          terminalLogin: null,
+        })}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: /Authenticate/ })).toBeDefined();
+  });
+
+  it("still withholds the OAuth button on a remote host when oauthArgs is empty but non-null", () => {
+    // The loopback constraint is orthogonal to the argv relaxation and must
+    // survive it: an empty argv is still a browser sign-in the HOST performs.
+    mocks.hostKind = "remote";
+    render(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="claude-code"
+        state={claudeState({
+          oauthArgs: [],
+          token: null,
+          codePaste: null,
+          terminalLogin: null,
+        })}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: /Authenticate/ })).toBeNull();
+  });
+
   // Row 1 of the terminal-login contract table: the banner is one of three
   // consumers of `providerSupportsTerminalLogin` - see
   // `provider-signin-availability.test.ts` for the other two
@@ -605,9 +658,12 @@ describe("<ProviderReauthBanner />", () => {
   // (never the headless one) - the same answer `providerSupportsTerminalLogin`
   // and `resolveCreateProfileGate` give, so this surface cannot fall through
   // to the CLI stub for a provider Traycer can open the CLI for.
-  // Both spellings of "no headless command" are covered: this suite's previous
-  // `[]` case asserted the OPPOSITE (neither button), so leaving it out would
-  // drop that boundary from the suite entirely.
+  // `[]` is covered beside `null` to prove `canTerminalLogin` decides this
+  // BEFORE the argv is read. The two no longer mean the same thing past that
+  // point - an empty argv is a real headless sign-in for an ACP-authenticate
+  // provider (see the empty-argv tests above) - so a regression that dropped
+  // the `!canTerminalLogin` guard would change this row's answer for `[]`
+  // alone, and only this parameterisation catches that.
   it.each([{ oauthArgs: null }, { oauthArgs: [] }])(
     "offers the terminal button, not the headless one, when terminalLogin is present and there is no oauthArgs (%o)",
     ({ oauthArgs }) => {
