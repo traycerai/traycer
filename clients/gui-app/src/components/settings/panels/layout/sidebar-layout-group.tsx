@@ -43,6 +43,7 @@ import {
   type LeftPanelAvailabilityContext,
 } from "@/components/epic-canvas/sidebar/left-panel-registry";
 import { LAYOUT } from "@/components/settings/panels/layout-settings.definitions";
+import { trackLayoutSetting } from "@/components/settings/panels/layout/track-layout-setting";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { SettingsRow } from "@/components/settings/settings-row";
 import {
@@ -65,7 +66,6 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Switch } from "@/components/ui/switch";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
-import { trackSettingChanged, type AnalyticsSetting } from "@/lib/analytics";
 import { mergeRefs } from "@/lib/merge-refs";
 import { cn } from "@/lib/utils";
 import { useSettingsDensity } from "@/providers/settings-density-context";
@@ -80,10 +80,6 @@ import {
   type LeftPanelGroup,
   type LeftPanelId,
 } from "@/stores/epics/left-panel-store";
-
-function trackLayoutSetting(setting: AnalyticsSetting): void {
-  trackSettingChanged("layout", setting);
-}
 
 /**
  * The presence facts the rail reads from the epic under the pointer, answered

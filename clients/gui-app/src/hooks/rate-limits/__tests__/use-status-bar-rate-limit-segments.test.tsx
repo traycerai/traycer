@@ -126,6 +126,7 @@ function renderSegments(providers: ReadonlyArray<ConfiguredRateLimitProvider>) {
     return useStatusBarRateLimitSegments({
       providers,
       profileSelection: PROFILE_SELECTION,
+      mode: "live",
     });
   });
 }

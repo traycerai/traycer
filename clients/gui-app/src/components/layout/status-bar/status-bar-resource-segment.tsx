@@ -1,20 +1,11 @@
 import { Fragment, type ComponentPropsWithoutRef, type Ref } from "react";
 import { Cpu } from "lucide-react";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
-import { useDesktopAppResourceUsage } from "@/hooks/resources/use-desktop-app-resource-usage";
-import { useGlobalResourcesUnsupported } from "@/hooks/resources/use-global-resources-unsupported";
 import { UNAVAILABLE_DASH } from "@/lib/resources/memory-metric";
-import {
-  statusBarResourceMetricViews,
-  type StatusBarResourceMetricView,
-} from "@/lib/resources/status-bar-resource-reading";
+import type { StatusBarResourceMetricView } from "@/lib/resources/status-bar-resource-reading";
 import { cn } from "@/lib/utils";
-import { useGlobalResourceProjection } from "@/stores/resources/resources-registry";
-import {
-  useLayoutStore,
-  type ResourceMetric,
-} from "@/stores/settings/layout-store";
 import type { StatusBarDensity } from "@/components/layout/status-bar/status-bar-density";
+import { useStatusBarResourceMetricViews } from "@/components/layout/status-bar/use-status-bar-resource-views";
 
 interface StatusBarResourceSegmentProps extends ComponentPropsWithoutRef<"button"> {
   readonly density: StatusBarDensity;
@@ -52,31 +43,11 @@ export function StatusBarResourceSegment(props: StatusBarResourceSegmentProps) {
     className,
     ...buttonProps
   } = props;
-  const scope = useLayoutStore((state) => state.statusBar.resources.scope);
-  const metrics = useLayoutStore((state) => state.statusBar.resources.metrics);
-  // Raw, and handed over raw: `statusBarResourceMetricViews` attributes it to
-  // the watched host before reading a number out of it. The registry publishes
-  // one projection for the window, which is not necessarily the watched host's.
-  const projection = useGlobalResourceProjection();
-  // Only the desktop-app scope reads this, and subscribing is what starts a
-  // once-a-second IPC poll of the shell. The strip is on screen for the life of
-  // the window, so asking for it under the default host-tree scope would run
-  // that poll all session for a number nothing renders.
-  const desktopApp = useDesktopAppResourceUsage(scope === "desktop-app");
-  // Asked unconditionally, and answered against this subtree's stream binding
-  // — which the bar re-provided for the watched host. It is only ever CONSULTED
-  // for the host-tree scope (see the reason resolver); the desktop-app scope
-  // reads a local IPC bridge and has no stream to be incompatible with.
-  const globalStreamUnsupported = useGlobalResourcesUnsupported(hostId);
-  const views = statusBarResourceMetricViews({
-    scope,
-    metrics: visibleMetrics(metrics, density),
-    projection,
-    watchedHostId: hostId,
-    hasExplicitPick,
-    desktopApp,
-    globalStreamUnsupported,
+  const views = useStatusBarResourceMetricViews({
+    density,
+    hostId,
     hostLabel,
+    hasExplicitPick,
   });
   const icon = <Cpu className="size-3 shrink-0" aria-hidden />;
   const noMetrics = views.length === 0;
@@ -137,25 +108,6 @@ export function StatusBarResourceSegment(props: StatusBarResourceSegmentProps) {
       )}
     </button>
   );
-}
-
-/**
- * `icon-only` keeps memory because it is the reading a glance is usually for,
- * and it is the one metric whose absence would make the segment read as broken
- * rather than as compact.
- *
- * A user who turned memory OFF keeps their first selected metric instead of an
- * empty segment: the density is the app narrowing its own chrome, and it has no
- * business emptying a control the user configured. `compact` drops labels, not
- * metrics, so it takes the selection whole.
- */
-function visibleMetrics(
-  metrics: ReadonlyArray<ResourceMetric>,
-  density: StatusBarDensity,
-): ReadonlyArray<ResourceMetric> {
-  if (density !== "icon-only") return metrics;
-  if (metrics.includes("memory")) return ["memory"];
-  return metrics.slice(0, 1);
 }
 
 /**

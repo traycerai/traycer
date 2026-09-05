@@ -81,18 +81,9 @@ export const LAYOUT = defineSettingsSection("layout", {
     availableWhen: isStatusBarControlsAvailable,
     keywords: ["header", "footer", "bottom", "position", "move"],
   },
-  rateLimitsEnabled: {
-    kind: "row",
-    group: "statusBar",
-    search: { anchor: "layout-status-bar-rate-limits" },
-    label: "Show rate limits",
-    description: "Show one segment per provider with a window still reporting.",
-    availableWhen: isStatusBarControlsAvailable,
-    keywords: ["usage", "quota", "limits", "providers", "segments"],
-  },
   percentMode: {
     kind: "row",
-    group: "statusBar",
+    group: "usageDisplay",
     search: { anchor: "layout-status-bar-percent-mode" },
     label: "Percentage",
     description: "Show how much is used, or how much remains.",
@@ -101,7 +92,7 @@ export const LAYOUT = defineSettingsSection("layout", {
   },
   modeWord: {
     kind: "row",
-    group: "statusBar",
+    group: "usageDisplay",
     search: { anchor: "layout-status-bar-mode-word" },
     label: "Show used / remaining label",
     description:
@@ -111,7 +102,7 @@ export const LAYOUT = defineSettingsSection("layout", {
   },
   resetTimer: {
     kind: "row",
-    group: "statusBar",
+    group: "usageDisplay",
     search: { anchor: "layout-status-bar-reset-timer" },
     label: "Show reset timer",
     description:
@@ -119,74 +110,15 @@ export const LAYOUT = defineSettingsSection("layout", {
     availableWhen: isStatusBarControlsAvailable,
     keywords: ["countdown", "resets", "window name", "5h", "weekly"],
   },
-  usageBar: {
-    kind: "row",
-    group: "statusBar",
-    search: { anchor: "layout-status-bar-usage-bar" },
-    label: "Show usage bar",
-    description: "Draw a small fill bar ahead of each provider's windows.",
-    availableWhen: isStatusBarControlsAvailable,
-    keywords: ["fill bar", "gauge", "meter", "progress"],
-  },
-  // The provider rows below it exist only for providers the watched host has
-  // reported - DATA, which no shell-level predicate can promise - so their
-  // vocabulary rides here.
-  resourcesEnabled: {
-    kind: "row",
-    group: "statusBar",
-    search: { anchor: "layout-status-bar-resources" },
-    label: "Show resource monitor",
-    description: "Show the watched host's CPU, memory and process numbers.",
-    availableWhen: isStatusBarControlsAvailable,
-    keywords: ["cpu", "memory", "ram", "processes", "ram share", "metrics"],
-  },
   resourceScope: {
     kind: "row",
-    group: "statusBar",
+    group: "resourceMonitor",
     search: { anchor: "layout-status-bar-resource-scope" },
     label: "Scope",
     description:
       "Traycer's processes on the watched host, or this desktop app. RAM share is only available for the host scope.",
     availableWhen: isStatusBarControlsAvailable,
     keywords: ["host", "desktop app", "processes", "measured"],
-  },
-  // One row per metric, each drawn from a table in the panel. They are their
-  // own rows, so each owns an entry rather than folding into the switch above.
-  metricCpu: {
-    kind: "row",
-    group: "statusBar",
-    search: { anchor: "layout-status-bar-metric-cpu" },
-    label: "CPU",
-    description: "Processor share across the measured processes.",
-    availableWhen: isStatusBarControlsAvailable,
-    keywords: ["processor", "load"],
-  },
-  metricMemory: {
-    kind: "row",
-    group: "statusBar",
-    search: { anchor: "layout-status-bar-metric-memory" },
-    label: "Memory",
-    description: "Resident memory across the measured processes.",
-    availableWhen: isStatusBarControlsAvailable,
-    keywords: ["ram", "resident"],
-  },
-  metricProcesses: {
-    kind: "row",
-    group: "statusBar",
-    search: { anchor: "layout-status-bar-metric-processes" },
-    label: "Processes",
-    description: "How many processes are being measured.",
-    availableWhen: isStatusBarControlsAvailable,
-    keywords: ["count", "measured"],
-  },
-  metricRamShare: {
-    kind: "row",
-    group: "statusBar",
-    search: { anchor: "layout-status-bar-metric-ram-share" },
-    label: "RAM share of host",
-    description: "Measured memory as a share of the host machine's total.",
-    availableWhen: isStatusBarControlsAvailable,
-    keywords: ["ram", "share", "total", "machine"],
   },
   // The per-provider list is DATA: it exists only for providers the watched
   // host has reported. This row is the list's stand-in - the notice when the
@@ -195,7 +127,7 @@ export const LAYOUT = defineSettingsSection("layout", {
   providers: {
     kind: "row",
     group: "statusBar",
-    search: { contributesTo: "rateLimitsEnabled" },
+    search: { contributesTo: "usageLimits" },
     label: "Providers",
     description: "No provider on the watched host reports a usage window yet.",
     availableWhen: isStatusBarControlsAvailable,
@@ -279,6 +211,62 @@ export const LAYOUT = defineSettingsSection("layout", {
       "Hidden removes the button beside the context reading. The command palette and /compact still compact a conversation.",
     availableWhen: alwaysAvailable,
     keywords: ["compact", "context", "summarize", "button", "hidden"],
+  },
+  usageLimits: {
+    kind: "group",
+    search: { anchor: "layout-status-bar-usage-limits" },
+    label: "Usage limits",
+    description: "One segment per provider with a window still reporting.",
+    breadcrumb: "Status bar",
+    availableWhen: isStatusBarControlsAvailable,
+    keywords: ["rate limits", "quota", "providers", "segments"],
+  },
+  // A band inside the subgroup rather than a card of its own: the rows under
+  // it are the ones a closed parent hides, so they reach search through it.
+  usageDisplay: {
+    kind: "group",
+    search: { contributesTo: "usageLimits" },
+    label: "Display",
+    description:
+      "What each reading spells out, before the strip runs out of room.",
+    breadcrumb: "Usage limits",
+    availableWhen: isStatusBarControlsAvailable,
+    keywords: ["percentage", "label", "timer", "bar"],
+  },
+  miniBar: {
+    kind: "row",
+    group: "usageLimits",
+    search: { anchor: "layout-status-bar-mini-bar" },
+    label: "Show mini bar",
+    description: "Draw a small fill bar ahead of each provider's windows.",
+    availableWhen: isStatusBarControlsAvailable,
+    keywords: ["fill bar", "gauge", "meter", "progress"],
+  },
+  resourceMonitor: {
+    kind: "group",
+    search: { anchor: "layout-status-bar-resource-monitor" },
+    label: "Resource monitor",
+    description: "The watched host's CPU, memory and process numbers.",
+    breadcrumb: "Status bar",
+    availableWhen: isStatusBarControlsAvailable,
+    keywords: [
+      "cpu",
+      "memory",
+      "ram",
+      "processes",
+      "ram share",
+      "metrics",
+      "scope",
+    ],
+  },
+  metrics: {
+    kind: "row",
+    group: "resourceMonitor",
+    search: { anchor: "layout-status-bar-metrics" },
+    label: "Metrics",
+    description: "Which numbers the segment prints, in this order.",
+    availableWhen: isStatusBarControlsAvailable,
+    keywords: ["cpu", "memory", "processes", "ram share", "chips"],
   },
   chat: {
     kind: "group",

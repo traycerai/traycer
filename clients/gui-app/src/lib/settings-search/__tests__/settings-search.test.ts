@@ -213,11 +213,7 @@ describe("settings search", () => {
     });
 
     it("offers the footer controls on desktop and withholds them in the mobile app", () => {
-      for (const label of [
-        "Placement",
-        "Show rate limits",
-        "Show resource monitor",
-      ]) {
+      for (const label of ["Placement", "Usage limits", "Resource monitor"]) {
         expect(labelsFor(label, DESKTOP), label).toContain(label);
         expect(labelsFor(label, MOBILE), label).not.toContain(label);
       }

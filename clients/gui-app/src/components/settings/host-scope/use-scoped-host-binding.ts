@@ -23,10 +23,12 @@ import type { HostScope } from "@/components/settings/host-scope/use-host-scope"
  * TEN surfaces re-provide `HostRuntimeContext` in total: the eight through
  * this hook (`rate-limit-icon`, `shell`, `diagnostics`, `providers`, `host`,
  * `app-status-bar` — the bottom strip, which re-provides for the host it
- * watches — `layout`, whose per-provider status-bar toggles read the same watch
- * pick the strip does, and the onboarding TOUR) plus those two. Anything
- * reading `useHostClient()` / `useAddressableHostId()` beneath any of them
- * gets that surface's host.
+ * watches — `layout`, which re-provides around its WHOLE Status bar group: the
+ * live preview at the top of it and the per-provider toggles below describe one
+ * machine, and resolving the watch pick twice is how they would come to
+ * describe two, and the onboarding TOUR) plus those two. Anything reading
+ * `useHostClient()` / `useAddressableHostId()` beneath any of them gets that
+ * surface's host.
  *
  * The tour (`onboarding-page.tsx`) is the eighth, and the first outside
  * Settings-shaped surfaces: its two host-dependent acts read one machine -

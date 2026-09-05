@@ -1,6 +1,7 @@
 import { Fragment, type ReactNode } from "react";
 import { TriangleAlert } from "lucide-react";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
+import { statusBarSegmentTooltip } from "@/components/layout/status-bar/status-bar-usage-display";
 import {
   statusBarUsageDetailParts,
   type StatusBarUsageDetail,
@@ -10,11 +11,7 @@ import type {
   StatusBarRateLimitWindow,
 } from "@/hooks/rate-limits/use-status-bar-rate-limit-segments";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
-import {
-  providerDisplayName,
-  providerIdToGuiHarnessId,
-} from "@/lib/provider-ordering";
-import { formatUnavailableReason } from "@/lib/provider-rate-limit-content";
+import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
 import {
   rateLimitWindowFillPercent,
   rateLimitWindowSeverityBarClassName,
@@ -64,7 +61,6 @@ export function StatusBarProviderSegment(
   props: StatusBarProviderSegmentProps,
 ): ReactNode {
   const segment = props.segment;
-  const providerName = providerDisplayName(segment.providerId);
   const icon = (
     <HarnessIcon
       harnessId={providerIdToGuiHarnessId(segment.providerId)}
@@ -81,7 +77,7 @@ export function StatusBarProviderSegment(
       data-state={segment.state}
     >
       <TooltipWrapper
-        label={tooltipFor(segment, providerName)}
+        label={statusBarSegmentTooltip(segment)}
         side="top"
         sideOffset={6}
         align={undefined}
@@ -273,20 +269,4 @@ function windowLabel(
 ): string {
   if (countdown === null) return window.label;
   return window.labelIsDuration ? countdown : `${window.label} ${countdown}`;
-}
-
-function tooltipFor(
-  segment: StatusBarProviderSegmentModel,
-  providerName: string,
-): string {
-  if (segment.state === "degraded") {
-    return segment.reason === null
-      ? `${providerName} · couldn't refresh usage, showing the last reading`
-      : `${providerName} · ${formatUnavailableReason(segment.reason)} · showing the last reading`;
-  }
-  if (segment.state === "unavailable" && segment.reason !== null) {
-    return `${providerName} · ${formatUnavailableReason(segment.reason)}`;
-  }
-  if (segment.state === "cold") return `${providerName} · no reading yet`;
-  return providerName;
 }

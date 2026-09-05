@@ -1,10 +1,5 @@
 import type { ReactNode } from "react";
 import { PopoverTrigger } from "@/components/ui/popover";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
 import { RefreshIconButton } from "@/components/refresh-icon-button";
 import type { StatusBarDensity } from "@/components/layout/status-bar/status-bar-density";
 import {
@@ -12,7 +7,12 @@ import {
   statusBarUsageLadderLevels,
   useStatusBarUsageLadder,
 } from "@/components/layout/status-bar/status-bar-usage-ladder";
-import { StatusBarProviderSegment } from "@/components/layout/status-bar/status-bar-provider-segment";
+import {
+  statusBarClusterSegments,
+  statusBarUsageContentClass,
+  useStatusBarUsageDisplay,
+} from "@/components/layout/status-bar/status-bar-usage-display";
+import { StatusBarUsageReadings } from "@/components/layout/status-bar/status-bar-usage-readings";
 import { STATUS_BAR_MENU_EXEMPT_ATTRIBUTE } from "@/components/layout/status-bar/status-bar-visibility-menu";
 import { useRefreshProviderRateLimitsOnMount } from "@/hooks/host/use-refresh-provider-rate-limits-on-mount";
 import type { ConfiguredRateLimitProvider } from "@/hooks/rate-limits/use-configured-rate-limit-providers";
@@ -21,7 +21,6 @@ import { useRateLimitQueueScope } from "@/hooks/rate-limits/use-rate-limit-queue
 import { useAnyRateLimitQueueTargetFetching } from "@/hooks/rate-limits/use-rate-limit-queue-target-phase";
 import {
   useStatusBarRateLimitSegments,
-  type StatusBarProviderSegmentModel,
   type StatusBarRateLimitCluster as StatusBarRateLimitClusterModel,
   type StatusBarRateLimitMountTarget,
   type StatusBarRateLimitRefreshModel,
@@ -30,14 +29,7 @@ import { DEFAULT_ACCOUNT_CONTEXT } from "@traycer/protocol/common/schemas";
 import { providerDisplayName } from "@/lib/provider-ordering";
 import { enqueueRateLimitFetchBatchForScope } from "@/lib/rate-limits/ephemeral-fetch-queue";
 import { windowPercentText } from "@/lib/rate-limits/status-bar-window-text";
-import { cn } from "@/lib/utils";
-import {
-  useLayoutStore,
-  type PercentMode,
-} from "@/stores/settings/layout-store";
-
-/** One empty list for the three cluster states that draw no segments. */
-const NO_SEGMENTS: ReadonlyArray<StatusBarProviderSegmentModel> = [];
+import type { PercentMode } from "@/stores/settings/layout-store";
 
 /**
  * The strip's left cluster: every visible provider's usage, the one control
@@ -63,27 +55,19 @@ export function StatusBarRateLimitCluster(props: {
   readonly density: StatusBarDensity;
   readonly profileSelection: RateLimitProfileSelection;
 }): ReactNode {
-  const percentMode = useLayoutStore(
-    (state) => state.statusBar.rateLimits.percentMode,
-  );
-  const showTimer = useLayoutStore(
-    (state) => state.statusBar.rateLimits.showTimer,
-  );
-  const showBar = useLayoutStore((state) => state.statusBar.rateLimits.showBar);
-  const showModeWord = useLayoutStore(
-    (state) => state.statusBar.rateLimits.showModeWord,
-  );
-  const expandedProviders = useLayoutStore(
-    (state) => state.statusBar.rateLimits.expandedProviders,
-  );
+  const display = useStatusBarUsageDisplay();
   const { cluster, mountTargets, refresh } = useStatusBarRateLimitSegments({
     providers: props.providers,
     profileSelection: props.profileSelection,
+    // The strip is the surface that OWNS the fetching for these keys: the http
+    // lane polls here, the queue lane takes its cold start here, and the `↻`
+    // below fans out from here. Every other reader observes what this one wrote.
+    mode: "live",
   });
-  const segments = cluster.kind === "segments" ? cluster.segments : NO_SEGMENTS;
+  const segments = statusBarClusterSegments(cluster);
   const { stop, roomRef, reservedRef, contentRef } = useStatusBarUsageLadder({
     ceiling: statusBarUsageDetailCeiling(props.density),
-    levels: statusBarUsageLadderLevels({ showModeWord, showBar, showTimer }),
+    levels: statusBarUsageLadderLevels(display),
     segmentCount: segments.length,
     // The three cluster states below draw one sentence that no rung changes.
     // Measuring them would record widths against steps that free nothing, and
@@ -91,7 +75,6 @@ export function StatusBarRateLimitCluster(props: {
     // drawn - a hide-all/unhide round trip repainting at `icon-only`.
     enabled: segments.length > 0,
   });
-  const shownCount = segments.length - stop.foldedCount;
 
   return (
     <>
@@ -120,7 +103,7 @@ export function StatusBarRateLimitCluster(props: {
             // the whole window list is what the panel this opens is for. It is
             // also the one thing the ladder never shortens - what a screen
             // reader hears cannot depend on how wide the window is.
-            aria-label={triggerAccessibleName(cluster, percentMode)}
+            aria-label={triggerAccessibleName(cluster, display.percentMode)}
             data-testid="status-bar-rate-limit-trigger"
             data-density={props.density}
             data-usage-detail={stop.detail}
@@ -150,41 +133,13 @@ export function StatusBarRateLimitCluster(props: {
             <span
               ref={contentRef}
               data-testid="status-bar-rate-limit-content"
-              className={cn(
-                "inline-flex items-center gap-2 px-1.5",
-                cluster.kind === "segments" ? "shrink-0" : "min-w-0",
-              )}
+              className={statusBarUsageContentClass(cluster)}
             >
-              {cluster.kind === "segments" ? (
-                <>
-                  {segments.slice(0, shownCount).map((segment) => (
-                    <StatusBarProviderSegment
-                      key={segment.providerId}
-                      segment={segment}
-                      detail={stop.detail}
-                      expanded={expandedProviders.includes(segment.providerId)}
-                      percentMode={percentMode}
-                      showModeWord={showModeWord}
-                      showTimer={showTimer}
-                      showBar={showBar}
-                    />
-                  ))}
-                  {stop.foldedCount === 0 ? null : (
-                    <FoldedProvidersChip
-                      segments={segments.slice(shownCount)}
-                      percentMode={percentMode}
-                    />
-                  )}
-                </>
-              ) : (
-                <span className="truncate">
-                  {cluster.kind === "no-providers"
-                    ? // The popover's own zero state says this at length; the
-                      // strip says it once and opens that panel.
-                      "Connect a supported provider to see usage here."
-                    : "Usage hidden"}
-                </span>
-              )}
+              <StatusBarUsageReadings
+                cluster={cluster}
+                stop={stop}
+                display={display}
+              />
             </span>
           </button>
         </PopoverTrigger>
@@ -223,55 +178,6 @@ export function StatusBarRateLimitCluster(props: {
       ))}
     </>
   );
-}
-
-/**
- * The providers the strip ran out of room for, as one chip.
- *
- * Folding from the right rather than dropping: the last thing a strip should do
- * with a limit it cannot fit is pretend the provider is not configured. The
- * chip sits inside the trigger, so clicking it opens the panel that lists every
- * one of them in full — the tooltip is the glance, the panel is the answer.
- *
- * A provider with no reading yet is named without one. `+2` promising two
- * numbers and delivering one would be a worse chip than one that says which
- * providers are behind it.
- */
-function FoldedProvidersChip(props: {
-  readonly segments: ReadonlyArray<StatusBarProviderSegmentModel>;
-  readonly percentMode: PercentMode;
-}): ReactNode {
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <span
-          data-testid="status-bar-folded-providers"
-          className="shrink-0 rounded-[3px] border border-border/70 px-1 leading-none"
-        >
-          {`+${props.segments.length}`}
-        </span>
-      </TooltipTrigger>
-      <TooltipContent side="top" sideOffset={6}>
-        <span className="flex flex-col">
-          {props.segments.map((segment) => (
-            <span key={segment.providerId}>
-              {providerReadingText(segment, props.percentMode)}
-            </span>
-          ))}
-        </span>
-      </TooltipContent>
-    </Tooltip>
-  );
-}
-
-/** One provider and its tightest reading, or the provider alone when it has none. */
-function providerReadingText(
-  segment: StatusBarProviderSegmentModel,
-  percentMode: PercentMode,
-): string {
-  const name = providerDisplayName(segment.providerId);
-  if (segment.tightest === null) return name;
-  return `${name} ${windowPercentText(segment.tightest.usedPercent, percentMode)}`;
 }
 
 /**
