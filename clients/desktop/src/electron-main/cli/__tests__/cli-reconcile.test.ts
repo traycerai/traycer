@@ -192,7 +192,7 @@ describe("reconcileCli - newest-wins", () => {
       source: "npm",
       installedVersion: "1.3.0-rc.1",
       bundledVersion: "1.3.0-rc.2",
-      upgradeHint: "npm install -g @traycerai/cli@latest",
+      upgradeHint: "npm install -g @traycerai/cli@1.3.0-rc.2",
     });
     expect(writeState).toHaveBeenCalledWith({
       packageManagerUpgrade: expect.objectContaining({
@@ -335,7 +335,7 @@ describe("reconcileCli - newest-wins", () => {
     expect(result.kind).toBe("package-manager-older");
     if (result.kind === "package-manager-older") {
       expect(result.source).toBe("npm");
-      expect(result.upgradeHint).toBe("npm install -g @traycerai/cli@latest");
+      expect(result.upgradeHint).toBe("npm install -g @traycerai/cli@1.4.2");
     }
   });
 
@@ -746,12 +746,45 @@ describe("reconcileCli - newest-wins", () => {
       expect(result.source).toBe("npm");
       expect(result.installedVersion).toBe("1.0.0");
       expect(result.bundledVersion).toBe("1.4.2");
-      expect(result.upgradeHint).toBe("npm install -g @traycerai/cli@latest");
+      expect(result.upgradeHint).toBe("npm install -g @traycerai/cli@1.4.2");
     }
     const [state] = writeState.mock.calls[0];
     expect(state.packageManagerUpgrade).toMatchObject({
       source: "npm",
-      upgradeCommand: "npm install -g @traycerai/cli@latest",
+      upgradeCommand: "npm install -g @traycerai/cli@1.4.2",
+    });
+  });
+
+  it("preserves an npm-owned PATH RC and persists an exact bundled RC upgrade hint", async () => {
+    const { deps, install, writeState } = makeDeps({
+      manifest: null,
+      bundledPath: "/bundled/traycer",
+      bundledVersion: "1.3.0-rc.2",
+      discovery: {
+        kind: "path",
+        binaryPath: "/usr/local/bin/traycer",
+        version: "1.3.0-rc.1",
+        source: "npm",
+      } as const,
+    });
+
+    const result = await reconcileCli(deps);
+
+    expect(install).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      kind: "package-manager-older",
+      source: "npm",
+      installedVersion: "1.3.0-rc.1",
+      bundledVersion: "1.3.0-rc.2",
+      upgradeHint: "npm install -g @traycerai/cli@1.3.0-rc.2",
+    });
+    expect(writeState).toHaveBeenCalledWith({
+      packageManagerUpgrade: expect.objectContaining({
+        source: "npm",
+        installedVersion: "1.3.0-rc.1",
+        bundledVersion: "1.3.0-rc.2",
+        upgradeCommand: "npm install -g @traycerai/cli@1.3.0-rc.2",
+      }),
     });
   });
 
