@@ -201,6 +201,7 @@ describe("LinkPhonePanel presentation", () => {
         userAgent: "TraycerMobile/1.0 (iPhone)",
         location: "Bengaluru, IN",
         matchCode: { kind: "unavailable" },
+        claimExpiresAt: null,
       },
       deadKind: null,
       code: codeQuery({ data: null, isError: false, error: null }),
@@ -223,6 +224,7 @@ describe("LinkPhonePanel presentation", () => {
       userAgent: "TraycerMobile/1.0 (iPhone)",
       location: "Bengaluru, IN",
       matchCode: { kind: "unavailable" },
+      claimExpiresAt: null,
     };
     mocks.useLinkLoginWatch.mockReturnValue({
       claim,
@@ -329,6 +331,7 @@ describe("LinkPhonePanel presentation", () => {
         userAgent: null,
         location: null,
         matchCode: { kind: "unavailable" },
+        claimExpiresAt: null,
       },
       deadKind: null,
       code: codeQuery({ data: null, isError: false, error: null }),

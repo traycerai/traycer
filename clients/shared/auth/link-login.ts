@@ -450,7 +450,10 @@ export async function linkLoginStatusViaHttp(
     authnBaseUrl,
     "api/v3/auth/link/status",
     bearerToken,
-    { code, ...ACCEPT_MATCH_CODE },
+    // `acceptClaimExpiry` declares the same understanding for the claim's
+    // deadline as `acceptMatchCode` does for the code: strict schemas, so the
+    // server sends each field only to callers that asked.
+    { code, ...ACCEPT_MATCH_CODE, acceptClaimExpiry: true },
     signal,
   );
   if (response === null) {

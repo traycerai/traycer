@@ -769,6 +769,45 @@ describe("LinkPhonePanel", () => {
     expect(screen.getByTestId("link-phone-rejected-elsewhere")).toBeTruthy();
   });
 
+  it("counts the claim's server-stated deadline down once a second, and shows none without it", () => {
+    // The deadline is the server's (`claimExpiresAt`), never a local copy of
+    // the claim window: what the card shows is what the server honours.
+    mocks.useAuthLinkLoginCode.mockReturnValue(queryResultWithCode(Date.now()));
+    const status = claimedStatus(Date.now(), "iPhone 16 Pro");
+    mocks.useAuthLinkLoginStatus.mockReturnValue(
+      statusResult({
+        ...status,
+        claimant: { ...status.claimant, claimExpiresAt: Date.now() + 119_000 },
+      }),
+    );
+    const view = render(<LinkPhonePanel />);
+    const countdown = () =>
+      screen.getByTestId("link-phone-claim-countdown").textContent;
+    expect(countdown()).toBe("Expires in 1:59");
+    // Inside the status live region, so it is announced with the prompt.
+    expect(screen.getByRole("status").textContent).toContain("Expires in 1:59");
+    act(() => {
+      vi.advanceTimersByTime(60_000);
+    });
+    expect(countdown()).toBe("Expires in 0:59");
+    act(() => {
+      vi.advanceTimersByTime(58_000);
+    });
+    expect(countdown()).toBe("Expires in 0:01");
+    // Clamped at zero: the card's retirement is the status poll's (or the
+    // local guard's) job, never a clock that counts up.
+    act(() => {
+      vi.advanceTimersByTime(5_000);
+    });
+    expect(countdown()).toBe("Expires in 0:00");
+
+    // An older server states no deadline: no countdown, nothing else changes.
+    mocks.useAuthLinkLoginStatus.mockReturnValue(statusResult(status));
+    view.rerender(<LinkPhonePanel />);
+    expect(screen.queryByTestId("link-phone-claim-countdown")).toBeNull();
+    expect(screen.getByTestId("link-phone-confirm")).toBeTruthy();
+  });
+
   it("falls back to the description prompt when the server sends no match code", () => {
     // A server that predates the code: today's prompt, unchanged, and no
     // empty code slot on the card.

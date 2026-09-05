@@ -337,6 +337,57 @@ describe("runLinkPhoneFlow", () => {
     expect(result.status).toBe("fulfilled");
   });
 
+  it("counts the claim's server-stated deadline down beside the prompt, and not without one", async () => {
+    // The deadline is the server's; the terminal only ticks it. Quiet runs
+    // skip the transient stderr line like they skip the code countdown.
+    const stderrWrite = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation(() => true);
+    try {
+      statusMock.mockResolvedValue({
+        kind: "ok" as const,
+        response: {
+          status: "claimed" as const,
+          claimant: {
+            ...CLAIMED.response.claimant,
+            claimExpiresAt: Date.now() + 90_000,
+          },
+        },
+      });
+      answer.current = "y";
+      const ctx = makeCtx({ json: false, quiet: false, nonInteractive: false });
+
+      await runWithPolls(ctx, 1);
+
+      // The prompt goes up one poll interval (2 s) after the claim was
+      // stated 90 s out, so the first tick reads 1:28 - the server's deadline
+      // minus the terminal's own clock, not a copy of the claim window.
+      const lines = stderrWrite.mock.calls.map((call) => String(call[0]));
+      expect(lines.some((line) => line.includes("Approve within 1:28"))).toBe(
+        true,
+      );
+      // The line is cleared once the question is answered.
+      expect(lines.at(-1)).toBe(`\r${" ".repeat(40)}\r`);
+
+      stderrWrite.mockClear();
+      vi.clearAllMocks();
+      mintMock.mockResolvedValue(mintedCode("ABCDE-FGHJK"));
+      statusMock.mockResolvedValue(CLAIMED);
+      respondMock.mockResolvedValue({ kind: "ok" });
+      await runWithPolls(
+        makeCtx({ json: false, quiet: false, nonInteractive: false }),
+        1,
+      );
+      expect(
+        stderrWrite.mock.calls.some((call) =>
+          String(call[0]).includes("Approve within"),
+        ),
+      ).toBe(false);
+    } finally {
+      stderrWrite.mockRestore();
+    }
+  });
+
   it("asks about the match code when the claim carries one, with the device as context", async () => {
     // The phone in the user's hand shows the same two digits; agreement
     // between the two screens is what the self-reported description cannot

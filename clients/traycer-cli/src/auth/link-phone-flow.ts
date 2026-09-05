@@ -100,6 +100,30 @@ function startExpiryCountdown(expiresAtEpochSeconds: number): () => void {
 }
 
 /**
+ * The approval prompt's own countdown: how long the pending claim is still
+ * answerable, on the SERVER's deadline. Same transient stderr line as the code
+ * countdown, for the same reasons; clamped at zero, since the poll that
+ * follows an expired claim reports it gone.
+ */
+function startClaimCountdown(expiresAtMs: number): () => void {
+  const tick = (): void => {
+    const secondsLeft = Math.max(
+      0,
+      Math.ceil((expiresAtMs - Date.now()) / 1_000),
+    );
+    const minutes = Math.floor(secondsLeft / 60);
+    const seconds = String(secondsLeft % 60).padStart(2, "0");
+    process.stderr.write(`\r  Approve within ${minutes}:${seconds}   `);
+  };
+  tick();
+  const timer = setInterval(tick, 1_000);
+  return () => {
+    clearInterval(timer);
+    process.stderr.write(`\r${" ".repeat(40)}\r`);
+  };
+}
+
+/**
  * Asks the human at this terminal. Defaults to NO on anything but an explicit
  * yes, including a bare newline: the confirm gate exists to make an unwanted
  * sign-in take a deliberate keystroke. Prompt and echo go to stderr so a piped
@@ -460,13 +484,26 @@ export async function runLinkPhoneFlow(
     );
   }
 
-  const approve = await askApproval(
-    matchCode === undefined
-      ? `Approve sign-in from ${device} · ${claim.claimant.address ?? "address unknown"}? [y/N] `
-      : matchCode === null
-        ? `No code shown by the phone. Approve sign-in from ${device} anyway? [y/N] `
-        : `Does your phone show ${matchCode}? Approve sign-in from ${device}? [y/N] `,
-  );
+  // The claim's deadline, when the server states one: the prompt below is
+  // answerable only until then, so the terminal counts it down while the
+  // question is open. An older server states none and the prompt stands alone.
+  const claimExpiresAt = claim.claimant.claimExpiresAt;
+  const stopClaimCountdown =
+    claimExpiresAt === undefined || ctx.runtime.quiet
+      ? () => {}
+      : startClaimCountdown(claimExpiresAt);
+  let approve: boolean;
+  try {
+    approve = await askApproval(
+      matchCode === undefined
+        ? `Approve sign-in from ${device} · ${claim.claimant.address ?? "address unknown"}? [y/N] `
+        : matchCode === null
+          ? `No code shown by the phone. Approve sign-in from ${device} anyway? [y/N] `
+          : `Does your phone show ${matchCode}? Approve sign-in from ${device}? [y/N] `,
+    );
+  } finally {
+    stopClaimCountdown();
+  }
 
   const responded = await respondLinkLoginViaHttp(
     config.authnBaseUrl,

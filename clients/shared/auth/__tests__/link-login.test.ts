@@ -266,7 +266,11 @@ describe("match code on the wire", () => {
       NORMALIZED,
       null,
     );
-    expect(lastBody).toEqual({ code: NORMALIZED, acceptMatchCode: true });
+    expect(lastBody).toEqual({
+      code: NORMALIZED,
+      acceptMatchCode: true,
+      acceptClaimExpiry: true,
+    });
     expect(withCode).toMatchObject({
       kind: "ok",
       response: { claimant: { matchCode: "47" } },
@@ -291,6 +295,54 @@ describe("match code on the wire", () => {
     expect(withoutCode.kind).toBe("ok");
     if (withoutCode.kind !== "ok") throw new Error("unreachable");
     expect(withoutCode.response.claimant?.matchCode).toBeUndefined();
+  });
+
+  it("status asks for the claim's deadline and reads it back, or its absence", async () => {
+    installFetch({
+      status: "claimed",
+      claimant: {
+        address: null,
+        userAgent: "iPhone",
+        location: null,
+        claimedAt: 1_760_000_000_000,
+        claimExpiresAt: 1_760_000_120_000,
+      },
+    });
+    const withDeadline = await linkLoginStatusViaHttp(
+      AUTHN_BASE_URL,
+      "bearer",
+      NORMALIZED,
+      null,
+    );
+    expect(lastBody).toEqual({
+      code: NORMALIZED,
+      acceptMatchCode: true,
+      acceptClaimExpiry: true,
+    });
+    expect(withDeadline).toMatchObject({
+      kind: "ok",
+      response: { claimant: { claimExpiresAt: 1_760_000_120_000 } },
+    });
+
+    // An older server: today's exact claimant shape still parses.
+    installFetch({
+      status: "claimed",
+      claimant: {
+        address: null,
+        userAgent: "iPhone",
+        location: null,
+        claimedAt: 1_760_000_000_000,
+      },
+    });
+    const without = await linkLoginStatusViaHttp(
+      AUTHN_BASE_URL,
+      "bearer",
+      NORMALIZED,
+      null,
+    );
+    expect(without.kind).toBe("ok");
+    if (without.kind !== "ok") throw new Error("unreachable");
+    expect(without.response.claimant?.claimExpiresAt).toBeUndefined();
   });
 
   it("status keeps an explicit null as its own property — the phone presented no code", async () => {
