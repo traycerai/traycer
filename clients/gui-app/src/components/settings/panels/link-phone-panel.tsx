@@ -46,6 +46,46 @@ function useRotationCountdown(props: {
   return Math.max(0, Math.ceil((nextCodeAtMs - nowMs) / 1_000));
 }
 
+/** `m:ss` from a millisecond remainder, clamped at zero. */
+function formatRemaining(remainingMs: number): string {
+  const totalSeconds = Math.max(0, Math.ceil(remainingMs / 1_000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
+
+/**
+ * Seconds left before the pending claim expires unanswered, ticking once a
+ * second against the SERVER's deadline (`claimExpiresAt`) — the panel holds
+ * no copy of the claim window, so what it shows is what the server honours.
+ * Clamped at zero: the moment it hits zero the status poll's `gone` (or the
+ * hook's own local guard) retires the card; the clock never counts up.
+ */
+function useClaimCountdown(expiresAtMs: number): string {
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setNowMs(Date.now());
+    }, 1_000);
+    return () => {
+      clearInterval(timer);
+    };
+  }, []);
+  return formatRemaining(expiresAtMs - nowMs);
+}
+
+function ClaimCountdown(props: { readonly expiresAtMs: number }) {
+  const remaining = useClaimCountdown(props.expiresAtMs);
+  return (
+    <p
+      className="text-ui-xs text-muted-foreground tabular-nums"
+      data-testid="link-phone-claim-countdown"
+    >
+      Expires in {remaining}
+    </p>
+  );
+}
+
 /** The verdict whose respond round-trip is in flight, if any. */
 type PendingVerdict = "approve" | "reject" | null;
 
@@ -148,28 +188,38 @@ function ConfirmClaimCard(props: {
       data-testid="link-phone-confirm"
     >
       <QrCode aria-hidden="true" className="text-muted-foreground" />
-      {/* The QR is swapped for this prompt with no user action on this
-          surface, and it is only answerable inside the claim window — a
-          screen-reader user has to hear about it, code included, or the
-          window expires undiscovered. */}
-      <div
-        className="flex flex-col items-center gap-1 text-center"
-        role="status"
-        aria-live="polite"
-      >
-        <ConfirmClaimHeadline claim={props.claim} />
-        <p
-          className="text-ui-xs text-muted-foreground"
-          data-testid="link-phone-claimant"
+      <div className="flex flex-col items-center gap-1 text-center">
+        {/* The QR is swapped for this prompt with no user action on this
+            surface, and it is only answerable inside the claim window — a
+            screen-reader user has to hear about it, code included, or the
+            window expires undiscovered. */}
+        <div
+          className="flex flex-col items-center gap-1"
+          role="status"
+          aria-live="polite"
         >
-          {detailLine}
-        </p>
-        {props.claim.matchCode.kind === "not-presented" ? null : (
-          <p className="text-ui-xs text-muted-foreground">
-            {props.claim.matchCode.kind === "shown"
-              ? "Approve only if the code matches and you just scanned this code yourself."
-              : "These details are approximate. Approve only if you just scanned this code yourself."}
+          <ConfirmClaimHeadline claim={props.claim} />
+          <p
+            className="text-ui-xs text-muted-foreground"
+            data-testid="link-phone-claimant"
+          >
+            {detailLine}
           </p>
+          {props.claim.matchCode.kind === "not-presented" ? null : (
+            <p className="text-ui-xs text-muted-foreground">
+              {props.claim.matchCode.kind === "shown"
+                ? "Approve only if the code matches and you just scanned this code yourself."
+                : "These details are approximate. Approve only if you just scanned this code yourself."}
+            </p>
+          )}
+        </div>
+        {/* Outside the live region: a status region announces every change
+            beneath it, and a clock that changes once a second would have a
+            screen reader repeating it over the code and the instructions the
+            person is trying to hear. The countdown is still in the reading
+            order right under the prompt, just never announced on its own. */}
+        {props.claim.claimExpiresAt === null ? null : (
+          <ClaimCountdown expiresAtMs={props.claim.claimExpiresAt} />
         )}
       </div>
       {props.respondFailed ? (
