@@ -1076,7 +1076,13 @@ function SweepAutoCleanupDiscoveryPolicy(props: {
   readonly client: HostClient<HostRpcRegistry>;
   readonly onCloseDialog: () => void;
 }): ReactNode {
-  const policy = useWorktreeAutoCleanupPolicy(props.client, true).data ?? null;
+  const query = useWorktreeAutoCleanupPolicy(props.client, true);
+  // A failed read renders nothing even when a stale cached policy is still
+  // attached to it: TanStack keeps `data` through a failed background refetch,
+  // and an offer to set up cleanup must not stand on a policy the host cannot
+  // currently confirm.
+  if (query.isError) return null;
+  const policy = query.data ?? null;
   if (policy === null || policy.enabled) return null;
   return (
     <SweepAutoCleanupDiscoveryLine
