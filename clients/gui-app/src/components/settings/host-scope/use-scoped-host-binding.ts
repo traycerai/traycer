@@ -64,18 +64,19 @@ import type { HostScope } from "@/components/settings/host-scope/use-host-scope"
  * voice-to-the-wrong-machine outcome directly rather than by implication.
  * That population is no longer a single surface: `resource-monitor-popover`
  * was the only stream re-provider, and the epic sidebar's file tree, the git
- * diff panel, the HOST OVERVIEW (`host-settings-panel.tsx`, whose
+ * diff PANEL and the git diff TILE (two surfaces, not one - a pinned panel body
+ * and a canvas tile), the HOST OVERVIEW (`host-settings-panel.tsx`, whose
  * `StreamRuntimeContext.Provider` carries `useScopedStreamBinding`), the
- * onboarding TOUR and `app-status-bar` are now five more, and the
- * session-import DIALOG a sixth. The Overview joined the list for its Data &
- * migration group: both rows move ONE machine's local data over a stream, so
- * the stream has to be the named host's. The tour joined it for the same
- * reason one act down — the session scan and the run it starts are that
- * machine's — and the dialog for exactly that scan and run. The strip joined
- * it because its readout rides `resources.subscribe` for the host it watches,
- * while its usage segments' reads are unary. All are safe for the same
- * positional reason as the other three — they contain no composer, a 24px
- * strip least of all, and so no path to the microphone.
+ * onboarding TOUR and `app-status-bar` are now six more, and the session-import
+ * DIALOG a seventh. The Overview joined the list for its Data & migration
+ * group: both rows move ONE machine's local data over a stream, so the stream
+ * has to be the named host's. The tour joined it for the same reason one act
+ * down — the session scan and the run it starts are that machine's — and the
+ * dialog for exactly that scan and run. The strip joined it because its readout
+ * rides `resources.subscribe` for the host it watches, while its usage
+ * segments' reads are unary. All are safe for the same positional reason as the
+ * file and diff browsers — they contain no composer, a 24px strip least of all,
+ * and so no path to the microphone.
  *
  * Three consumers of a re-provided stream now also CHECK it before acting,
  * because this hook's binding lands in an effect: `host-import-migration-

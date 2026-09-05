@@ -175,12 +175,55 @@ Object.defineProperty(globalThis, "ResizeObserver", {
   value: ControllableResizeObserver,
 });
 
+/**
+ * The same treatment for `IntersectionObserver`: the harness's global mock
+ * never calls back, and the sticky block's `data-stuck` is written from exactly
+ * one of those callbacks.
+ */
+class ControllableIntersectionObserver implements IntersectionObserver {
+  readonly root: Element | Document | null = null;
+  readonly rootMargin: string = "";
+  readonly scrollMargin: string = "";
+  readonly thresholds: ReadonlyArray<number> = [];
+  readonly callback: IntersectionObserverCallback;
+  readonly observed = new Set<Element>();
+
+  constructor(callback: IntersectionObserverCallback) {
+    this.callback = callback;
+    intersectionObserverInstances.push(this);
+  }
+
+  observe(target: Element): void {
+    this.observed.add(target);
+  }
+
+  unobserve(target: Element): void {
+    this.observed.delete(target);
+  }
+
+  disconnect(): void {
+    this.observed.clear();
+  }
+
+  takeRecords(): IntersectionObserverEntry[] {
+    return [];
+  }
+}
+
+let intersectionObserverInstances: ControllableIntersectionObserver[] = [];
+
+Object.defineProperty(globalThis, "IntersectionObserver", {
+  configurable: true,
+  writable: true,
+  value: ControllableIntersectionObserver,
+});
+
 // ── fixtures ─────────────────────────────────────────────────────────────
 
 const NO_PROFILES: ReadonlyArray<ProviderProfile> = [];
 
 function configuredProvider(
-  providerId: "codex" | "opencode",
+  providerId: "codex" | "opencode" | "claude-code",
   lane: RateLimitFetchLane,
 ): ConfiguredRateLimitProvider {
   return {
@@ -212,6 +255,22 @@ function codexRateLimits(primary: {
   };
 }
 
+function claudeRateLimits(
+  usedPercent: number,
+): Extract<ProviderRateLimits, { provider: "claude-code" }> {
+  return {
+    provider: "claude-code",
+    available: true,
+    subscriptionType: "max",
+    fiveHour: { usedPercent, resetsAt: null, durationMinutes: 300 },
+    sevenDay: null,
+    sevenDayOpus: null,
+    sevenDaySonnet: null,
+    modelScoped: [],
+    extraUsage: null,
+  };
+}
+
 function envelopeFor(
   rateLimits: ProviderRateLimits,
 ): ProviderRateLimitEnvelope {
@@ -239,7 +298,22 @@ function resetAll(): void {
   mocks.recordedEnabled = [];
   mocks.desktopSamplerSubscriptions = 0;
   resizeObserverInstances = [];
+  intersectionObserverInstances = [];
   vi.mocked(registerDynamicActionHandler).mockClear();
+}
+
+/** Deliver one measurement to the ladder's own observer over the room. */
+function fireRoomResize(): void {
+  const room = screen.getByTestId("status-bar-preview-usage");
+  const instance = resizeObserverInstances.find((candidate) =>
+    candidate.observed.has(room),
+  );
+  if (instance === undefined) {
+    throw new Error("no ResizeObserver is currently observing the room");
+  }
+  act(() => {
+    instance.callback([], instance);
+  });
 }
 
 beforeEach(resetAll);
@@ -641,6 +715,219 @@ describe("<StatusBarPreview />", () => {
       expect(screen.getByText(/Live data from My Mac/)).toBeTruthy();
     });
   });
+
+  describe("narrow viewport", () => {
+    // `useIsMobileViewport` reads `window.innerWidth` directly (the global
+    // `matchMedia` shim always reports `false`), so setting it before render is
+    // enough to put a desktop build below `md` - a split screen, a dragged-in
+    // edge - where `AppShell` declines to mount the strip whatever the
+    // placement says.
+    beforeEach(() => {
+      Object.defineProperty(window, "innerWidth", {
+        configurable: true,
+        value: 400,
+      });
+    });
+
+    afterEach(() => {
+      Object.defineProperty(window, "innerWidth", {
+        configurable: true,
+        value: 1024,
+      });
+    });
+
+    it("dims the frame under status-bar placement and says the WIDTH is why, not the placement", () => {
+      mocks.providers = [];
+      useLayoutStore.setState({
+        statusBar: { ...DEFAULT_STATUS_BAR_LAYOUT, placement: "status-bar" },
+      });
+
+      renderPreview(false);
+
+      expect(
+        screen.getByTestId("status-bar-preview-frame").className,
+      ).toContain("opacity-50");
+      expect(
+        screen.getByTestId("status-bar-preview-resource-note").className,
+      ).toContain("opacity-50");
+      expect(
+        screen.getByText(
+          "The strip is not shown at this window width; the header keeps its controls.",
+        ),
+      ).toBeTruthy();
+      // The placement sentence would be a false promise here: flipping
+      // placement changes nothing at this width.
+      expect(
+        screen.queryByText("Shown when placement is Status bar."),
+      ).toBeNull();
+    });
+
+    it("does not pin the block, which here is a dimmed picture of a strip that is not drawn", () => {
+      // Class-level rather than computed, because jsdom has no layout engine:
+      // what can be asserted is that nothing pins UNCONDITIONALLY. A block
+      // this tall - header row, frame, notes, two captions, all wrapping -
+      // pinned to a landscape phone's scrollport would take most of it, and a
+      // sticky box taller than its scrollport pins its top, so its own last
+      // caption becomes unreachable.
+      mocks.providers = [];
+      useLayoutStore.setState({
+        statusBar: { ...DEFAULT_STATUS_BAR_LAYOUT, placement: "status-bar" },
+      });
+
+      renderPreview(false);
+      const classes = screen
+        .getByTestId("status-bar-preview-block")
+        .className.split(" ");
+
+      expect(classes).not.toContain("sticky");
+      expect(classes).not.toContain("top-0");
+      expect(classes).toContain("md:sticky");
+    });
+  });
+
+  describe("sticky within the group", () => {
+    it("pins the block from md up and flips data-stuck from the sentinel, never from a render", () => {
+      mocks.providers = [];
+
+      renderPreview(false);
+      const block = screen.getByTestId("status-bar-preview-block");
+
+      // Every pin class carries the breakpoint, and so does everything the
+      // stuck attribute drives: below `md` the block never leaves flow, so a
+      // sentinel that has scrolled away must not repaint it mid-card.
+      expect(block.className).toContain("md:sticky");
+      expect(block.className).toContain("md:top-0");
+      expect(block.className).toContain("md:data-[stuck=true]:bg-background");
+      expect(
+        block.className
+          .split(" ")
+          .filter((name) => name.startsWith("data-[stuck")),
+      ).toEqual([]);
+      expect(block.getAttribute("data-stuck")).toBe("false");
+
+      // The sentinel sits where the block sits unpinned, so it leaving the
+      // scroll container IS the block pinning.
+      fireSentinelIntersection(false);
+      expect(block.getAttribute("data-stuck")).toBe("true");
+
+      fireSentinelIntersection(true);
+      expect(block.getAttribute("data-stuck")).toBe("false");
+    });
+  });
+});
+
+/** One delivery to the sentinel's observer, as the scroll container would. */
+function fireSentinelIntersection(isIntersecting: boolean): void {
+  const instance = intersectionObserverInstances.find(
+    (candidate) => candidate.observed.size > 0,
+  );
+  if (instance === undefined) {
+    throw new Error("no IntersectionObserver is currently observing anything");
+  }
+  const entries = [...instance.observed].map((target) => {
+    const rect = target.getBoundingClientRect();
+    return {
+      boundingClientRect: rect,
+      intersectionRatio: isIntersecting ? 1 : 0,
+      intersectionRect: rect,
+      isIntersecting,
+      rootBounds: null,
+      target,
+      time: 0,
+    };
+  });
+  act(() => {
+    instance.callback(entries, instance);
+  });
+}
+
+/**
+ * The `+N` chip's tooltip, said outside the frame.
+ *
+ * Its own room stubs rather than the coupled block's: folding only starts once
+ * the readings overflow at the LAST rung, which is a room narrower than any of
+ * the three width options can produce against that block's content table.
+ */
+describe("<StatusBarPreview /> folded providers", () => {
+  const originalScrollWidth = Object.getOwnPropertyDescriptor(
+    HTMLElement.prototype,
+    "scrollWidth",
+  );
+  const originalClientWidth = Object.getOwnPropertyDescriptor(
+    HTMLElement.prototype,
+    "clientWidth",
+  );
+
+  beforeEach(() => {
+    // A room nothing fits in, at any rung: the ladder walks to its last stop,
+    // which is one folded provider (the last one never folds - a chip alone
+    // would name no reading at all).
+    Object.defineProperty(HTMLElement.prototype, "clientWidth", {
+      configurable: true,
+      get(this: HTMLElement) {
+        return this.getAttribute("data-testid") === "status-bar-preview-usage"
+          ? 80
+          : 0;
+      },
+    });
+    Object.defineProperty(HTMLElement.prototype, "scrollWidth", {
+      configurable: true,
+      get(this: HTMLElement) {
+        return this.getAttribute("data-testid") === "status-bar-preview-content"
+          ? 400
+          : 0;
+      },
+    });
+  });
+
+  afterEach(() => {
+    if (originalScrollWidth !== undefined) {
+      Object.defineProperty(
+        HTMLElement.prototype,
+        "scrollWidth",
+        originalScrollWidth,
+      );
+    }
+    if (originalClientWidth !== undefined) {
+      Object.defineProperty(
+        HTMLElement.prototype,
+        "clientWidth",
+        originalClientWidth,
+      );
+    }
+  });
+
+  it("names the folded provider and its reading in the notes, outside the inert frame", () => {
+    mocks.providers = [
+      configuredProvider("codex", "ephemeralProcess"),
+      configuredProvider("claude-code", "ephemeralProcess"),
+    ];
+    mocks.envelopes = {
+      codex: envelopeFor(
+        codexRateLimits({
+          usedPercent: 40,
+          resetsAt: null,
+          durationMinutes: 300,
+        }),
+      ),
+      "claude-code": envelopeFor(claudeRateLimits(22)),
+    };
+
+    renderPreview(false);
+    // One rung per delivery, by design - walk the cascade out.
+    for (let index = 0; index < 8; index += 1) {
+      fireRoomResize();
+    }
+
+    expect(screen.getByTestId("status-bar-folded-providers").textContent).toBe(
+      "+1",
+    );
+    const notes = screen.getByTestId("status-bar-preview-notes");
+    expect(notes.textContent).toContain("Folded: Claude Code 22% used");
+    expect(screen.getByTestId("status-bar-preview-frame").contains(notes)).toBe(
+      false,
+    );
+  });
 });
 
 /**
@@ -660,6 +947,14 @@ describe("<StatusBarPreview />", () => {
 describe("<StatusBarPreview /> ladder - coupled layout", () => {
   const ROOM_TESTID = "status-bar-preview-usage";
   const CONTENT_TESTID = "status-bar-preview-content";
+  const RESERVED_TESTID = "status-bar-preview-reserved";
+
+  /**
+   * The refresh control's box, which the preview reserves without drawing and
+   * the ladder subtracts from the room - `pl-1` plus the button's `size-5`,
+   * the two numbers the strip composes it from.
+   */
+  const RESERVED_WIDTH_PX = 24;
 
   const originalScrollWidth = Object.getOwnPropertyDescriptor(
     HTMLElement.prototype,
@@ -668,6 +963,10 @@ describe("<StatusBarPreview /> ladder - coupled layout", () => {
   const originalClientWidth = Object.getOwnPropertyDescriptor(
     HTMLElement.prototype,
     "clientWidth",
+  );
+  const originalOffsetWidth = Object.getOwnPropertyDescriptor(
+    HTMLElement.prototype,
+    "offsetWidth",
   );
   function readOriginalWidth(
     descriptor: PropertyDescriptor | undefined,
@@ -686,14 +985,19 @@ describe("<StatusBarPreview /> ladder - coupled layout", () => {
 
   /**
    * A stand-in for real text metrics: how wide one provider's reading is at
-   * each rung. Not calibrated to any font - only the ORDERING is load-bearing.
+   * each rung. Not calibrated to any font - only the ORDERING is load-bearing,
+   * with one exception. `percent-only` sits between the Narrow room (478) and
+   * what the ladder actually measures against it (478 − 24), so it is the rung
+   * that can tell the reserved box apart from nothing at all: drop the
+   * placeholder and this width fits, and the preview keeps a rung the strip has
+   * already given up.
    */
   const DETAIL_CONTENT_WIDTH: Record<string, number> = {
     full: 900,
     "no-mode-word": 800,
     "no-bars": 700,
     "no-timers": 600,
-    "percent-only": 400,
+    "percent-only": 470,
     "icon-only": 200,
   };
 
@@ -723,6 +1027,15 @@ describe("<StatusBarPreview /> ladder - coupled layout", () => {
   }
 
   beforeEach(() => {
+    Object.defineProperty(HTMLElement.prototype, "offsetWidth", {
+      configurable: true,
+      get(this: HTMLElement) {
+        if (this.getAttribute("data-testid") === RESERVED_TESTID) {
+          return RESERVED_WIDTH_PX;
+        }
+        return readOriginalWidth(originalOffsetWidth, this);
+      },
+    });
     Object.defineProperty(HTMLElement.prototype, "clientWidth", {
       configurable: true,
       get(this: HTMLElement) {
@@ -743,6 +1056,13 @@ describe("<StatusBarPreview /> ladder - coupled layout", () => {
   });
 
   afterEach(() => {
+    if (originalOffsetWidth !== undefined) {
+      Object.defineProperty(
+        HTMLElement.prototype,
+        "offsetWidth",
+        originalOffsetWidth,
+      );
+    }
     if (originalScrollWidth !== undefined) {
       Object.defineProperty(
         HTMLElement.prototype,
@@ -758,19 +1078,6 @@ describe("<StatusBarPreview /> ladder - coupled layout", () => {
       );
     }
   });
-
-  function fireRoomResize(): void {
-    const room = screen.getByTestId(ROOM_TESTID);
-    const instance = resizeObserverInstances.find((candidate) =>
-      candidate.observed.has(room),
-    );
-    if (instance === undefined) {
-      throw new Error("no ResizeObserver is currently observing the room");
-    }
-    act(() => {
-      instance.callback([], instance);
-    });
-  }
 
   function pickWidth(label: string): void {
     fireEvent.click(screen.getByRole("button", { name: label }));
@@ -795,8 +1102,13 @@ describe("<StatusBarPreview /> ladder - coupled layout", () => {
     renderPreview(false);
     expect(currentDetail()).toBe("full");
 
+    // `icon-only` rather than `percent-only`, and the 24px reserved box is the
+    // whole difference: 470 fits the Narrow room and does not fit the room less
+    // the box the strip's `↻` occupies. A preview that reserved nothing would
+    // stop a rung above the strip, at the one width the control exists to show
+    // what collapses first.
     pickWidth("Narrow");
-    expect(currentDetail()).toBe("percent-only");
+    expect(currentDetail()).toBe("icon-only");
 
     // The return leg, and the whole point of measuring the room rather than
     // the readings. Against a content-sized room this stays where it is: once

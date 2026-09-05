@@ -6,6 +6,7 @@ import {
 } from "@/components/ui/tooltip";
 import { StatusBarProviderSegment } from "@/components/layout/status-bar/status-bar-provider-segment";
 import {
+  providerReadingText,
   statusBarClusterSegments,
   type StatusBarUsageDisplay,
 } from "@/components/layout/status-bar/status-bar-usage-display";
@@ -14,8 +15,6 @@ import type {
   StatusBarProviderSegmentModel,
   StatusBarRateLimitCluster,
 } from "@/hooks/rate-limits/use-status-bar-rate-limit-segments";
-import { providerDisplayName } from "@/lib/provider-ordering";
-import { windowPercentText } from "@/lib/rate-limits/status-bar-window-text";
 import type { PercentMode } from "@/stores/settings/layout-store";
 
 /**
@@ -114,14 +113,4 @@ function FoldedProvidersChip(props: {
       </TooltipContent>
     </Tooltip>
   );
-}
-
-/** One provider and its tightest reading, or the provider alone when it has none. */
-function providerReadingText(
-  segment: StatusBarProviderSegmentModel,
-  percentMode: PercentMode,
-): string {
-  const name = providerDisplayName(segment.providerId);
-  if (segment.tightest === null) return name;
-  return `${name} ${windowPercentText(segment.tightest.usedPercent, percentMode)}`;
 }
