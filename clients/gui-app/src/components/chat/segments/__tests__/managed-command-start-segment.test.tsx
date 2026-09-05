@@ -123,6 +123,7 @@ function startCallElement(input: {
             }
           : null
       }
+      agentMessageReceipt={null}
       isStreaming={false}
       endState={null}
       stopped={false}
@@ -468,6 +469,7 @@ describe("the run_shell start card", () => {
             monitoring: true,
             cwd: "/work/repo",
           }}
+          agentMessageReceipt={null}
           isStreaming={false}
           endState={null}
           stopped={false}
