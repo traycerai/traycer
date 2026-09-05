@@ -47,8 +47,8 @@ describe("resolveSidebarPanelDrop", () => {
     ]);
   });
 
-  it("un-nests the source and places it as its own group before a group's first row", () => {
-    // "git-diff" is the first row of its group, so the boundary above it is a
+  it("un-nests the source and places it as its own group before a pill's first tile", () => {
+    // "git-diff" is the first tile of its pill, so the boundary before it is a
     // GROUP boundary - "terminals" leaves its own group instead of nesting.
     expect(
       resolveSidebarPanelDrop(GROUPS, "terminals", "git-diff", "before"),
@@ -63,8 +63,8 @@ describe("resolveSidebarPanelDrop", () => {
     ]);
   });
 
-  it("un-nests the source and places it as its own group after a group's last row", () => {
-    // "pull-requests" is the last row of its group, so the boundary below it
+  it("un-nests the source and places it as its own group after a pill's last tile", () => {
+    // "pull-requests" is the last tile of its pill, so the boundary after it
     // is a GROUP boundary too - "chats" leaves its own group.
     expect(
       resolveSidebarPanelDrop(GROUPS, "chats", "pull-requests", "after"),
@@ -79,9 +79,9 @@ describe("resolveSidebarPanelDrop", () => {
     ]);
   });
 
-  it("nests the source into an interior row's group at that index", () => {
-    // "artifacts" sits between two other rows in its group, so the boundary
-    // beside it is an IN-GROUP one - "sharing" nests in at that index.
+  it("nests the source into an interior tile's pill at that index", () => {
+    // "artifacts" sits between two other tiles in its pill, so the boundary
+    // beside it is an IN-PILL one - "sharing" nests in at that index.
     expect(
       resolveSidebarPanelDrop(GROUPS, "sharing", "artifacts", "before"),
     ).toEqual([
@@ -94,7 +94,7 @@ describe("resolveSidebarPanelDrop", () => {
   });
 
   it("returns groups structurally equal to the input for a drop that changes nothing", () => {
-    // "artifacts" is already directly after "chats" in its group.
+    // "artifacts" is already directly after "chats" in its pill.
     const result = resolveSidebarPanelDrop(
       GROUPS,
       "artifacts",
@@ -102,6 +102,23 @@ describe("resolveSidebarPanelDrop", () => {
       "after",
     );
     expect(areLeftPanelGroupsEqual(result, GROUPS)).toBe(true);
+  });
+
+  it("un-nests a member of a two-tile pill onto a group boundary elsewhere, leaving the other member alone", () => {
+    // "git-diff" and "pull-requests" only ever pill together; taking
+    // "git-diff" out onto the group boundary after solo "browsers" leaves
+    // "pull-requests" with nothing left to share a pill with.
+    expect(
+      resolveSidebarPanelDrop(GROUPS, "git-diff", "browsers", "after"),
+    ).toEqual([
+      { panelIds: ["chats", "artifacts", "terminals"] },
+      { panelIds: ["browsers"] },
+      { panelIds: ["git-diff"] },
+      { panelIds: ["pull-requests"] },
+      { panelIds: ["file-tree"] },
+      { panelIds: ["sharing"] },
+      { panelIds: ["comments"] },
+    ]);
   });
 });
 
@@ -269,7 +286,7 @@ describe("resolveSidebarPanelDrop edge cases", () => {
     );
   });
 
-  it("is a no-op to combine onto a row already in the source's own group", () => {
+  it("is a no-op to combine onto a tile already in the source's own pill", () => {
     const result = resolveSidebarPanelDrop(
       GROUPS,
       "chats",
@@ -279,9 +296,9 @@ describe("resolveSidebarPanelDrop edge cases", () => {
     expect(areLeftPanelGroupsEqual(result, GROUPS)).toBe(true);
   });
 
-  it("lands the panel as its own group at the very start, before the first group's first row", () => {
-    // "chats" is the first row of the first group, so the boundary above it is
-    // the outermost one there is.
+  it("lands the panel as its own group at the very start, before the first pill's first tile", () => {
+    // "chats" is the first tile of the first pill, so the boundary before it
+    // is the outermost one there is.
     expect(
       resolveSidebarPanelDrop(GROUPS, "comments", "chats", "before"),
     ).toEqual([
@@ -294,8 +311,8 @@ describe("resolveSidebarPanelDrop edge cases", () => {
     ]);
   });
 
-  it("lands the panel as its own group at the very end, after the last group's last row", () => {
-    // "comments" is alone in the last group, so the boundary below it is the
+  it("lands the panel as its own group at the very end, after the last group's last tile", () => {
+    // "comments" is alone in the last group, so the boundary after it is the
     // outermost one there is.
     expect(
       resolveSidebarPanelDrop(GROUPS, "chats", "comments", "after"),
@@ -331,10 +348,10 @@ describe("ungroupSidebarPanel on a two-member card", () => {
 describe("isSidebarPanelGroupBoundary agrees with resolveSidebarPanelDrop", () => {
   // The drop indicator is drawn from `isSidebarPanelGroupBoundary`; the actual
   // drop resolves through `resolveSidebarPanelDrop`. Both read the SAME
-  // boundary for a given (row, position), so what the indicator promises and
+  // boundary for a given (tile, position), so what the indicator promises and
   // what the drop does cannot drift apart. Same source throughout, dropped
-  // against an interior row (both directions) and both edges of the
-  // "git-diff"/"pull-requests" card.
+  // against an interior tile (both directions) and both edges of the
+  // "git-diff"/"pull-requests" pill.
   const source = "sharing";
   const cases: ReadonlyArray<{
     readonly target: LeftPanelGroup["panelIds"][number];
@@ -344,22 +361,22 @@ describe("isSidebarPanelGroupBoundary agrees with resolveSidebarPanelDrop", () =
     {
       target: "artifacts",
       position: "before",
-      description: "interior row, before",
+      description: "interior tile, before",
     },
     {
       target: "artifacts",
       position: "after",
-      description: "interior row, after",
+      description: "interior tile, after",
     },
     {
       target: "git-diff",
       position: "before",
-      description: "card's own top edge",
+      description: "pill's own leading edge",
     },
     {
       target: "pull-requests",
       position: "after",
-      description: "card's own bottom edge",
+      description: "pill's own trailing edge",
     },
   ];
 
@@ -374,10 +391,10 @@ describe("isSidebarPanelGroupBoundary agrees with resolveSidebarPanelDrop", () =
       const sourcePanelIds = sourceGroup?.panelIds ?? [];
 
       if (isBoundary) {
-        // A group boundary lands the panel in a card of its own.
+        // A group boundary lands the panel as a tile of its own.
         expect(sourcePanelIds).toEqual([source]);
       } else {
-        // An in-group boundary nests the panel into the target's card.
+        // An in-pill boundary nests the panel into the target's pill.
         expect(sourcePanelIds.length).toBeGreaterThan(1);
         expect(sourcePanelIds).toContain(target);
       }

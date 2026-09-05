@@ -6,6 +6,7 @@ import {
   getEpicCanvasDropPreview,
   getLeftPanelGroupDropPreview,
   getLeftPanelRailDropPositionFromPoint,
+  getLeftPanelRailDropPositionOnAxis,
   getSidebarReparentPanelDropId,
   getSidebarReparentRowDropId,
   readEpicCanvasDragSourceData,
@@ -625,6 +626,58 @@ describe("getLeftPanelRailDropPositionFromPoint", () => {
     expect(getLeftPanelRailDropPositionFromPoint({ x: 10, y: 25 }, null)).toBe(
       "combine",
     );
+  });
+});
+
+describe("getLeftPanelRailDropPositionOnAxis", () => {
+  // Width (36) and height (30) deliberately differ, so a call site that reads
+  // the wrong extent for its axis lands in a different band instead of
+  // silently agreeing.
+  const rect = {
+    left: 0,
+    top: 10,
+    width: 36,
+    height: 30,
+  };
+
+  it("bands the x axis across the rect's WIDTH, not its height", () => {
+    // 30% of the 36px width is 10.8, but 30% of the 30px height is only 9 -
+    // offset 10 clears the height threshold already, so this only reads
+    // "before" when the width is what gets consulted.
+    expect(
+      getLeftPanelRailDropPositionOnAxis({ x: 10, y: 25 }, rect, "x"),
+    ).toBe("before");
+    // 70% of the width is 25.2, 70% of the height is 21 - offset 23 clears
+    // the height threshold but not the width one, so reading height for x
+    // would answer "after" here instead of "combine".
+    expect(
+      getLeftPanelRailDropPositionOnAxis({ x: 23, y: 25 }, rect, "x"),
+    ).toBe("combine");
+    expect(
+      getLeftPanelRailDropPositionOnAxis({ x: 30, y: 25 }, rect, "x"),
+    ).toBe("after");
+  });
+
+  it("agrees with getLeftPanelRailDropPositionFromPoint on the y axis, for the same point and rect", () => {
+    const points = [
+      { x: 10, y: 11 },
+      { x: 10, y: 39 },
+      { x: 10, y: 25 },
+    ];
+    for (const point of points) {
+      expect(getLeftPanelRailDropPositionOnAxis(point, rect, "y")).toBe(
+        getLeftPanelRailDropPositionFromPoint(point, rect),
+      );
+    }
+  });
+
+  it("returns combine for a null rect on both axes", () => {
+    expect(
+      getLeftPanelRailDropPositionOnAxis({ x: 10, y: 25 }, null, "x"),
+    ).toBe("combine");
+    expect(
+      getLeftPanelRailDropPositionOnAxis({ x: 10, y: 25 }, null, "y"),
+    ).toBe("combine");
   });
 });
 

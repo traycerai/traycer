@@ -44,6 +44,28 @@ afterEach(() => {
   resetLeftPanelStore();
 });
 
+function stripTileTestIds(strip: HTMLElement): ReadonlyArray<string | null> {
+  return Array.from(
+    strip.querySelectorAll('[data-testid^="layout-sidebar-panel-tile-"]'),
+  ).map((el) => el.getAttribute("data-testid"));
+}
+
+/** The cards, without the headers that share their testid prefix. */
+function cardElements(panels: HTMLElement): ReadonlyArray<Element> {
+  return Array.from(
+    panels.querySelectorAll(
+      "[data-testid^='layout-sidebar-panel-group-']:not([data-testid^='layout-sidebar-panel-group-header-'])",
+    ),
+  );
+}
+
+function isTileIconDimmed(panelId: string): boolean {
+  const icon = screen
+    .getByTestId(`layout-sidebar-panel-tile-${panelId}`)
+    .querySelector("svg");
+  return icon !== null && icon.classList.contains("opacity-40");
+}
+
 describe("<SidebarLayoutGroup /> rendering", () => {
   it("renders rows in panelGroups order, with grouped rows sharing a group card", () => {
     const groups: ReadonlyArray<LeftPanelGroup> = [
@@ -60,11 +82,7 @@ describe("<SidebarLayoutGroup /> rendering", () => {
     render(<SidebarLayoutGroup />);
 
     const panelsList = screen.getByTestId("layout-sidebar-panels");
-    const groupEls = Array.from(
-      panelsList.querySelectorAll(
-        "[data-testid^='layout-sidebar-panel-group-']",
-      ),
-    );
+    const groupEls = cardElements(panelsList);
     expect(groupEls.map((el) => el.getAttribute("data-testid"))).toEqual([
       "layout-sidebar-panel-group-terminals",
       "layout-sidebar-panel-group-chats",
@@ -77,14 +95,154 @@ describe("<SidebarLayoutGroup /> rendering", () => {
     ]);
 
     const chatsGroup = screen.getByTestId("layout-sidebar-panel-group-chats");
-    expect(
-      within(chatsGroup).getByTestId("layout-sidebar-panel-chats"),
-    ).toBeTruthy();
+    const chatsRow = within(chatsGroup).getByTestId(
+      "layout-sidebar-panel-chats",
+    );
+    expect(chatsRow).toBeTruthy();
     expect(
       within(chatsGroup).getByTestId("layout-sidebar-panel-artifacts"),
     ).toBeTruthy();
-    // Labels come from the registry, not the panel id.
-    expect(within(chatsGroup).getByText("Agents")).toBeTruthy();
+    // Labels come from the registry, not the panel id. Scoped to the row
+    // itself, since the card's tabbed-group header repeats the same title.
+    expect(within(chatsRow).getByText("Agents")).toBeTruthy();
+  });
+
+  it("mirrors panelGroups order in the strip, with a multi-member group's tiles inside its pill", () => {
+    const groups: ReadonlyArray<LeftPanelGroup> = [
+      { panelIds: ["terminals"] },
+      { panelIds: ["chats", "artifacts"] },
+      { panelIds: ["browsers"] },
+      { panelIds: ["git-diff"] },
+      { panelIds: ["pull-requests"] },
+      { panelIds: ["file-tree"] },
+      { panelIds: ["sharing"] },
+      { panelIds: ["comments"] },
+    ];
+    useLeftPanelStore.getState().applyPanelGroups(groups);
+    render(<SidebarLayoutGroup />);
+
+    const strip = screen.getByTestId("layout-sidebar-panel-strip");
+    expect(stripTileTestIds(strip)).toEqual([
+      "layout-sidebar-panel-tile-terminals",
+      "layout-sidebar-panel-tile-chats",
+      "layout-sidebar-panel-tile-artifacts",
+      "layout-sidebar-panel-tile-browsers",
+      "layout-sidebar-panel-tile-git-diff",
+      "layout-sidebar-panel-tile-pull-requests",
+      "layout-sidebar-panel-tile-file-tree",
+      "layout-sidebar-panel-tile-sharing",
+      "layout-sidebar-panel-tile-comments",
+    ]);
+
+    // "chats" and "artifacts" are the only multi-member group here, so their
+    // tiles - and only theirs - live inside the shared pill wrapper.
+    const pill = screen.getByTestId("layout-sidebar-panel-pill-chats");
+    expect(
+      within(pill).getByTestId("layout-sidebar-panel-tile-chats"),
+    ).toBeTruthy();
+    expect(
+      within(pill).getByTestId("layout-sidebar-panel-tile-artifacts"),
+    ).toBeTruthy();
+  });
+
+  it("re-renders the strip's tile order when the store's panelGroups change", () => {
+    render(<SidebarLayoutGroup />);
+    const strip = screen.getByTestId("layout-sidebar-panel-strip");
+    const initialOrder = stripTileTestIds(strip);
+
+    act(() => {
+      useLeftPanelStore
+        .getState()
+        .applyPanelGroups([
+          { panelIds: ["comments"] },
+          { panelIds: ["chats", "artifacts"] },
+          { panelIds: ["terminals"] },
+          { panelIds: ["browsers"] },
+          { panelIds: ["git-diff"] },
+          { panelIds: ["pull-requests"] },
+          { panelIds: ["file-tree"] },
+          { panelIds: ["sharing"] },
+        ]);
+    });
+
+    const nextOrder = stripTileTestIds(strip);
+    expect(nextOrder).not.toEqual(initialOrder);
+    expect(nextOrder[0]).toBe("layout-sidebar-panel-tile-comments");
+  });
+
+  it("dims unchecked panels in place in the strip, rather than removing them", () => {
+    render(<SidebarLayoutGroup />);
+    const strip = screen.getByTestId("layout-sidebar-panel-strip");
+
+    // Every panel keeps its slot in the strip whether or not its box is
+    // checked - the tile count is the panel count, dimmed or not.
+    expect(stripTileTestIds(strip)).toHaveLength(9);
+
+    // The dim is on the ICON rather than the tile, so a drop's ring and fill
+    // stay at full strength on a panel the user has unchecked.
+    expect(isTileIconDimmed("pull-requests")).toBe(true);
+    expect(isTileIconDimmed("comments")).toBe(true);
+    expect(isTileIconDimmed("chats")).toBe(false);
+    expect(
+      screen
+        .getByTestId("layout-sidebar-panel-tile-pull-requests")
+        .classList.contains("opacity-40"),
+    ).toBe(false);
+  });
+
+  it("draws the rail's tab underline under a pill, and none under a lone tile", () => {
+    render(<SidebarLayoutGroup />);
+
+    // The underline is the one mark that makes a pill read as one panel with
+    // tabs rather than as two icons that happen to sit together.
+    const underline = screen.getByTestId(
+      "layout-sidebar-panel-pill-underline-chats",
+    );
+    expect(
+      screen.getByTestId("layout-sidebar-panel-pill-chats").contains(underline),
+    ).toBe(true);
+    expect(
+      screen.queryByTestId("layout-sidebar-panel-pill-underline-terminals"),
+    ).toBeNull();
+  });
+
+  it("gives a tabbed group's card a header naming its members, and no header to a single-panel card", () => {
+    render(<SidebarLayoutGroup />);
+
+    const header = screen.getByTestId(
+      "layout-sidebar-panel-group-header-chats",
+    );
+    expect(header.textContent).toContain("Tabbed panel");
+    expect(within(header).getByText("Agents")).toBeTruthy();
+    expect(within(header).getByText("Artifacts")).toBeTruthy();
+
+    // "terminals" is alone in its card by default - nothing to tab between.
+    expect(
+      screen.queryByTestId("layout-sidebar-panel-group-header-terminals"),
+    ).toBeNull();
+  });
+
+  it("keeps every drag surface inside the strip, leaving the cards inert", () => {
+    render(<SidebarLayoutGroup />);
+    const panels = screen.getByTestId("layout-sidebar-panels");
+    const strip = screen.getByTestId("layout-sidebar-panel-strip");
+
+    // dnd-kit's listeners leave no trace in the DOM, so the mark to look for
+    // is the one a pointer drag surface cannot do without: `touch-none`, which
+    // stops the browser scrolling instead of dragging. Any handle
+    // reintroduced on a card would have to carry it, whatever it was called.
+    const dragSurfaces = Array.from(panels.querySelectorAll(".touch-none"));
+    expect(dragSurfaces.length).toBe(9);
+    for (const element of dragSurfaces) {
+      expect(strip.contains(element)).toBe(true);
+    }
+
+    // ... and no card renders a tile, the only thing the strip drags.
+    for (const card of cardElements(panels)) {
+      expect(
+        card.querySelector('[data-testid^="layout-sidebar-panel-tile-"]'),
+      ).toBeNull();
+    }
   });
 });
 

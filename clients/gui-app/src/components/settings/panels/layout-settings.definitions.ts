@@ -331,7 +331,7 @@ export const LAYOUT = defineSettingsSection("layout", {
     search: { anchor: "layout-sidebar-panels" },
     label: "Panels",
     description:
-      "Drag to reorder, or drop a panel onto another to stack them into one tabbed panel. Uncheck a panel to keep it out of the rail.",
+      "Drag icons to reorder. Drop one onto another to make a tabbed panel. Dimmed icons are unchecked below.",
     breadcrumb: "Sidebar",
     availableWhen: alwaysAvailable,
     keywords: [
