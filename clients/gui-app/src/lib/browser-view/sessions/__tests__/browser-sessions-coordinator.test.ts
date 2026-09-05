@@ -19,6 +19,10 @@ import {
   resetIndependentPageOpensForTests,
 } from "@/lib/browser-view/sessions/independent-page-open-registry";
 import {
+  handoffTokenFor,
+  resetHandoffTokensForTests,
+} from "@/lib/browser-view/sessions/screencast-handoff-tokens";
+import {
   coordinatorKey,
   epicScope,
   independentScope,
@@ -103,6 +107,7 @@ describe("browser sessions coordinator registry", () => {
   afterEach(() => {
     for (const release of releasers.splice(0)) release();
     resetIndependentPageOpensForTests();
+    resetHandoffTokensForTests();
   });
 
   function acquire(args: {
@@ -558,5 +563,104 @@ describe("browser sessions coordinator registry", () => {
     await expect(movePromise).rejects.toThrow(
       "Browser sessions stream closed.",
     );
+  });
+
+  /**
+   * The open's answer and the screencast that watches its tab travel on
+   * different streams, so the token crosses between them through the
+   * handoff-token registry. It has to be there BEFORE the open resolves - the
+   * tile mounts in response to that resolution - and it must be gone once the
+   * session is, so a later tab reusing nothing of it never presents it.
+   */
+  it("records the handoff token an open is answered with, for this client's screencast of that tab", async () => {
+    const harness = createTransportHarness();
+    const { key } = acquire({
+      scope: independentScope(),
+      openTransport: harness.openTransport,
+    });
+    const session = soleSession(soleClient(harness.clients));
+    const state = browserSessionsCoordinatorState(key);
+    if (state === null) throw new Error("expected coordinator state");
+    const tab = { hostId: "host-1", sessionId: "session-1", tabId: "tab-1" };
+
+    let openedWith: string | null | undefined;
+    const openPromise = state
+      .openTab(null, "https://example.com")
+      .then((opened) => {
+        // Observed inside the resolution: the token is already recorded by
+        // the time any caller learns the tab exists.
+        openedWith = handoffTokenFor(tab);
+        return opened;
+      });
+    const requestId = requestIdOf(sentFrameOfKind(session, "openTab"));
+    session.emit(
+      {
+        kind: "openTabResult",
+        hasBinaryPayload: false,
+        requestId,
+        result: {
+          ok: true,
+          sessionId: "session-1",
+          tabId: "tab-1",
+          handoffToken: "handoff-1",
+        },
+      },
+      null,
+    );
+    await expect(openPromise).resolves.toEqual({
+      sessionId: "session-1",
+      tabId: "tab-1",
+      handoffToken: "handoff-1",
+    });
+    expect(openedWith).toBe("handoff-1");
+    // Another tab of the same session is a bystander's view.
+    expect(handoffTokenFor({ ...tab, tabId: "tab-2" })).toBeNull();
+
+    session.emit(
+      {
+        kind: "sessionClosed",
+        hasBinaryPayload: false,
+        sessionId: "session-1",
+        reason: "completed",
+      },
+      null,
+    );
+    expect(handoffTokenFor(tab)).toBeNull();
+  });
+
+  it("records nothing for an open that owed no placement", async () => {
+    const harness = createTransportHarness();
+    const { key } = acquire({
+      scope: independentScope(),
+      openTransport: harness.openTransport,
+    });
+    const session = soleSession(soleClient(harness.clients));
+    const state = browserSessionsCoordinatorState(key);
+    if (state === null) throw new Error("expected coordinator state");
+
+    const openPromise = state.openTab(null, "https://example.com");
+    const requestId = requestIdOf(sentFrameOfKind(session, "openTab"));
+    session.emit(
+      {
+        kind: "openTabResult",
+        hasBinaryPayload: false,
+        requestId,
+        result: {
+          ok: true,
+          sessionId: "session-1",
+          tabId: "tab-1",
+          handoffToken: null,
+        },
+      },
+      null,
+    );
+    await expect(openPromise).resolves.toMatchObject({ handoffToken: null });
+    expect(
+      handoffTokenFor({
+        hostId: "host-1",
+        sessionId: "session-1",
+        tabId: "tab-1",
+      }),
+    ).toBeNull();
   });
 });

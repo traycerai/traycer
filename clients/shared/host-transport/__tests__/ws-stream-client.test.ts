@@ -1496,6 +1496,7 @@ describe("WsStreamClient", () => {
       maxHeight: 720,
       quality: 80,
       format: "jpeg",
+      handoffToken: null,
     });
     const terminalSubscription = client.subscribe("terminal.subscribe", {
       sessionId: "terminal-session-1",

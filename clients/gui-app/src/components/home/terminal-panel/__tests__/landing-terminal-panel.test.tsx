@@ -12,7 +12,7 @@ import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messen
 import type { CanonicalTerminalSessionInfo } from "@traycer/protocol/host/terminal/unary-schemas";
 import type { PlainTerminalProjection } from "@traycer/protocol/host/terminal/plain-schemas";
 import type { PlainTerminalCollection } from "@/lib/terminals/plain-terminal-authority";
-import type { BrowserTabIdentity } from "@traycer/protocol/host/browser/contracts";
+import type { BrowserOpenedTab } from "@traycer/protocol/host/browser/contracts";
 import type { BrowserSessionsState } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
 import { useLandingBrowserTombstoneDrain } from "@/providers/landing-browser-tombstone-drain";
 import {
@@ -2220,7 +2220,11 @@ describe("<LandingTerminalPanel />", () => {
     mocks.plainAuthorityStatus = "capable";
     mocks.plainCanMutate = true;
     const openTab = vi.fn(() =>
-      Promise.resolve({ sessionId: "device-session", tabId: "device-tab" }),
+      Promise.resolve({
+        sessionId: "device-session",
+        tabId: "device-tab",
+        handoffToken: null,
+      }),
     );
     mocks.browserSessionsByHost = {
       "host-a": browserSessionsState({ openTab }),
@@ -2262,10 +2266,10 @@ describe("<LandingTerminalPanel />", () => {
     mocks.freshProbeData = mocks.probeData;
     mocks.plainAuthorityStatus = "capable";
     mocks.plainCanMutate = true;
-    let settle: ((identity: BrowserTabIdentity) => void) | null = null;
+    let settle: ((identity: BrowserOpenedTab) => void) | null = null;
     const openTab = vi.fn(
       () =>
-        new Promise<BrowserTabIdentity>((resolve) => {
+        new Promise<BrowserOpenedTab>((resolve) => {
           settle = resolve;
         }),
     );
@@ -2294,7 +2298,11 @@ describe("<LandingTerminalPanel />", () => {
     expect(openTab).toHaveBeenCalledTimes(1);
 
     await act(async () => {
-      settle?.({ sessionId: "device-session", tabId: "device-tab" });
+      settle?.({
+        sessionId: "device-session",
+        tabId: "device-tab",
+        handoffToken: null,
+      });
       await Promise.resolve();
     });
     await waitFor(() => {
@@ -2406,7 +2414,11 @@ describe("<LandingTerminalPanel />", () => {
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = mocks.probeData;
     const openTab = vi.fn(() =>
-      Promise.resolve({ sessionId: "device-session", tabId: "device-tab" }),
+      Promise.resolve({
+        sessionId: "device-session",
+        tabId: "device-tab",
+        handoffToken: null,
+      }),
     );
     mocks.browserSessionsByHost = {
       "host-a": browserSessionsState({ openTab }),
@@ -2637,7 +2649,11 @@ describe("<LandingTerminalPanel />", () => {
     // Web / mobile: no native browser capability.
     mocks.runnerHostHasBrowserView = false;
     const openTab = vi.fn(() =>
-      Promise.resolve({ sessionId: "device-session", tabId: "device-tab" }),
+      Promise.resolve({
+        sessionId: "device-session",
+        tabId: "device-tab",
+        handoffToken: null,
+      }),
     );
     mocks.browserSessionsByHost = {
       "host-a": browserSessionsState({ openTab }),
@@ -2686,10 +2702,10 @@ describe("<LandingTerminalPanel />", () => {
     mocks.freshProbeData = mocks.probeData;
     mocks.plainAuthorityStatus = "capable";
     mocks.plainCanMutate = true;
-    let settle: ((identity: BrowserTabIdentity) => void) | null = null;
+    let settle: ((identity: BrowserOpenedTab) => void) | null = null;
     const openTab = vi.fn(
       () =>
-        new Promise<BrowserTabIdentity>((resolve) => {
+        new Promise<BrowserOpenedTab>((resolve) => {
           settle = resolve;
         }),
     );
@@ -2722,7 +2738,11 @@ describe("<LandingTerminalPanel />", () => {
     );
 
     await act(async () => {
-      settle?.({ sessionId: "device-session", tabId: "device-tab" });
+      settle?.({
+        sessionId: "device-session",
+        tabId: "device-tab",
+        handoffToken: null,
+      });
       await Promise.resolve();
     });
 

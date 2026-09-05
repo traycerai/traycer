@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useEffect, useState, type ReactNode } from "react";
-import type { BrowserTabIdentity } from "@traycer/protocol/host/browser/contracts";
+import type { BrowserOpenedTab } from "@traycer/protocol/host/browser/contracts";
 import type { BrowserSessionsState } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
 import {
   independentScope,
@@ -124,23 +124,23 @@ function deferredOpenTab(): {
   readonly openTab: (
     sessionId: string | null,
     url: string,
-  ) => Promise<BrowserTabIdentity>;
+  ) => Promise<BrowserOpenedTab>;
   readonly calls: Array<{ readonly sessionId: string | null }>;
-  settle: ((identity: BrowserTabIdentity) => void) | null;
+  settle: ((identity: BrowserOpenedTab) => void) | null;
 } {
   const state: {
     readonly calls: Array<{ readonly sessionId: string | null }>;
-    settle: ((identity: BrowserTabIdentity) => void) | null;
+    settle: ((identity: BrowserOpenedTab) => void) | null;
     readonly openTab: (
       sessionId: string | null,
       url: string,
-    ) => Promise<BrowserTabIdentity>;
+    ) => Promise<BrowserOpenedTab>;
   } = {
     calls: [],
     settle: null,
     openTab: (sessionId: string | null) => {
       state.calls.push({ sessionId });
-      return new Promise<BrowserTabIdentity>((resolve) => {
+      return new Promise<BrowserOpenedTab>((resolve) => {
         state.settle = resolve;
       });
     },
@@ -187,7 +187,11 @@ describe("useLandingBrowserOpenLink", () => {
     expect(deferred.calls[0]?.sessionId).toBe(RAISING_TAB.sessionId);
 
     await act(async () => {
-      deferred.settle?.({ sessionId: "raising-session", tabId: "popup-tab" });
+      deferred.settle?.({
+        sessionId: "raising-session",
+        tabId: "popup-tab",
+        handoffToken: null,
+      });
       await Promise.resolve();
     });
 
@@ -220,7 +224,11 @@ describe("useLandingBrowserOpenLink", () => {
       expect(deferred.calls).toHaveLength(1);
     });
     await act(async () => {
-      deferred.settle?.({ sessionId: "raising-session", tabId: "popup-tab" });
+      deferred.settle?.({
+        sessionId: "raising-session",
+        tabId: "popup-tab",
+        handoffToken: null,
+      });
       await Promise.resolve();
     });
 
@@ -271,7 +279,11 @@ describe("useLandingBrowserOpenLink", () => {
     });
 
     await act(async () => {
-      deferred.settle?.({ sessionId: "raising-session", tabId: "popup-tab" });
+      deferred.settle?.({
+        sessionId: "raising-session",
+        tabId: "popup-tab",
+        handoffToken: null,
+      });
       await Promise.resolve();
     });
 
@@ -313,7 +325,11 @@ describe("useLandingBrowserOpenLink", () => {
     expect(useLandingPanelStore.getState().activeInstanceId).toBe(null);
 
     await act(async () => {
-      deferred.settle?.({ sessionId: "raising-session", tabId: "popup-tab" });
+      deferred.settle?.({
+        sessionId: "raising-session",
+        tabId: "popup-tab",
+        handoffToken: null,
+      });
       await Promise.resolve();
     });
 
@@ -331,10 +347,10 @@ describe("useLandingBrowserOpenLink", () => {
   // let the second overwrite the first before either was dispatched, so one of
   // the two popups vanished with no refusal and no toast.
   it("opens both popups when a page raises two in one tick", async () => {
-    const settles: Array<(identity: BrowserTabIdentity) => void> = [];
+    const settles: Array<(identity: BrowserOpenedTab) => void> = [];
     const openTab = vi.fn(
       () =>
-        new Promise<BrowserTabIdentity>((resolve) => {
+        new Promise<BrowserOpenedTab>((resolve) => {
           settles.push(resolve);
         }),
     );
@@ -352,14 +368,22 @@ describe("useLandingBrowserOpenLink", () => {
       expect(openTab).toHaveBeenCalledTimes(1);
     });
     await act(async () => {
-      settles[0]?.({ sessionId: "raising-session", tabId: "popup-a" });
+      settles[0]?.({
+        sessionId: "raising-session",
+        tabId: "popup-a",
+        handoffToken: null,
+      });
       await Promise.resolve();
     });
     await waitFor(() => {
       expect(openTab).toHaveBeenCalledTimes(2);
     });
     await act(async () => {
-      settles[1]?.({ sessionId: "raising-session", tabId: "popup-b" });
+      settles[1]?.({
+        sessionId: "raising-session",
+        tabId: "popup-b",
+        handoffToken: null,
+      });
       await Promise.resolve();
     });
 
@@ -377,10 +401,10 @@ describe("useLandingBrowserOpenLink", () => {
   // one the cap re-check would refuse anyway, so it is dropped rather than
   // queued behind asks that cannot land.
   it("holds no more asks than the device could ever serve", async () => {
-    const settles: Array<(identity: BrowserTabIdentity) => void> = [];
+    const settles: Array<(identity: BrowserOpenedTab) => void> = [];
     const openTab = vi.fn(
       () =>
-        new Promise<BrowserTabIdentity>((resolve) => {
+        new Promise<BrowserOpenedTab>((resolve) => {
           settles.push(resolve);
         }),
     );
@@ -405,7 +429,11 @@ describe("useLandingBrowserOpenLink", () => {
       if (drained >= settles.length) break;
       const settle = settles[drained];
       await act(async () => {
-        settle({ sessionId: "raising-session", tabId: `popup-${drained}` });
+        settle({
+          sessionId: "raising-session",
+          tabId: `popup-${drained}`,
+          handoffToken: null,
+        });
         await Promise.resolve();
       });
     }
@@ -558,7 +586,11 @@ describe("useLandingBrowserOpenLink", () => {
     expect(popup.calls).toHaveLength(0);
 
     await act(async () => {
-      chooser.settle?.({ sessionId: "chooser-session", tabId: "chooser-tab" });
+      chooser.settle?.({
+        sessionId: "chooser-session",
+        tabId: "chooser-tab",
+        handoffToken: null,
+      });
       await Promise.resolve();
     });
 

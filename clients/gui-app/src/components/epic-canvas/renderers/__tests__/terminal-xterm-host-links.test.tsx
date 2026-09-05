@@ -48,7 +48,11 @@ const xtermMocks = vi.hoisted(() => ({
   webLinksHandlers: [] as LinkActivate[],
   openExternalLink: vi.fn(() => Promise.resolve()),
   openTab: vi.fn<BrowserSessionsState["openTab"]>(() =>
-    Promise.resolve({ sessionId: "session-terminal", tabId: "tab-terminal" }),
+    Promise.resolve({
+      sessionId: "session-terminal",
+      tabId: "tab-terminal",
+      handoffToken: null,
+    }),
   ),
 }));
 

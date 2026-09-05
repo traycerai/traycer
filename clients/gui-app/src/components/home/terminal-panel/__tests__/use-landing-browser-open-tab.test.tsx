@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useState, type ReactNode } from "react";
-import type { BrowserTabIdentity } from "@traycer/protocol/host/browser/contracts";
+import type { BrowserOpenedTab } from "@traycer/protocol/host/browser/contracts";
 import type { BrowserSessionsState } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
 import {
   epicScope,
@@ -108,10 +108,10 @@ describe("landingBrowserTabCount", () => {
   // whatever the other had recorded - so the association travels with its own
   // request instead.
   it("hands each answer back the request it was made with", async () => {
-    const settles: Array<(identity: BrowserTabIdentity) => void> = [];
+    const settles: Array<(identity: BrowserOpenedTab) => void> = [];
     const openTab = vi.fn(
       () =>
-        new Promise<BrowserTabIdentity>((resolve) => {
+        new Promise<BrowserOpenedTab>((resolve) => {
           settles.push(resolve);
         }),
     );
@@ -157,13 +157,21 @@ describe("landingBrowserTabCount", () => {
     // The FIRST device answers second, after the later ask recorded its own
     // row - the ordering a shared slot cannot survive.
     act(() => {
-      settles[1]?.({ sessionId: "session-b", tabId: "tab-b" });
+      settles[1]?.({
+        sessionId: "session-b",
+        tabId: "tab-b",
+        handoffToken: null,
+      });
     });
     await waitFor(() => {
       expect(answered).toHaveLength(1);
     });
     act(() => {
-      settles[0]?.({ sessionId: "session-a", tabId: "tab-a" });
+      settles[0]?.({
+        sessionId: "session-a",
+        tabId: "tab-a",
+        handoffToken: null,
+      });
     });
     await waitFor(() => {
       expect(answered).toHaveLength(2);
@@ -181,7 +189,11 @@ describe("landingBrowserTabCount", () => {
   // chooser's card, so the refusal has to be in the opener as well.
   it("refuses on a shell that could only watch the tab it opened", async () => {
     const openTab = vi.fn(() =>
-      Promise.resolve({ sessionId: "session-1", tabId: "tab-1" }),
+      Promise.resolve({
+        sessionId: "session-1",
+        tabId: "tab-1",
+        handoffToken: null,
+      }),
     );
     const onOpened = vi.fn();
     const { result } = renderHook(
@@ -259,9 +271,10 @@ describe("landingBrowserTabCount", () => {
 
 describe("useLandingBrowserOpenTab", () => {
   it("adds the ref the device answered with, never an optimistic one", async () => {
-    const opened: BrowserTabIdentity = {
+    const opened: BrowserOpenedTab = {
       sessionId: "device-minted-session",
       tabId: "device-minted-tab",
+      handoffToken: null,
     };
     const openTab = vi.fn(() => Promise.resolve(opened));
     const onOpened = vi.fn();
@@ -292,10 +305,10 @@ describe("useLandingBrowserOpenTab", () => {
   // so a second ask while one is in flight is dropped rather than opening a
   // second tab the user did not ask for.
   it("opens one tab per device even when asked twice in flight", async () => {
-    let settle: ((identity: BrowserTabIdentity) => void) | null = null;
+    let settle: ((identity: BrowserOpenedTab) => void) | null = null;
     const openTab = vi.fn(
       () =>
-        new Promise<BrowserTabIdentity>((resolve) => {
+        new Promise<BrowserOpenedTab>((resolve) => {
           settle = resolve;
         }),
     );
@@ -317,7 +330,7 @@ describe("useLandingBrowserOpenTab", () => {
     expect(openTab).toHaveBeenCalledTimes(1);
 
     await act(async () => {
-      settle?.({ sessionId: "session-1", tabId: "tab-1" });
+      settle?.({ sessionId: "session-1", tabId: "tab-1", handoffToken: null });
       await Promise.resolve();
     });
     await waitFor(() => {
@@ -331,7 +344,7 @@ describe("useLandingBrowserOpenTab", () => {
   // that enabled one and the click on it.
   it("refuses at the cap with the message the chooser's card carries", async () => {
     const openTab = vi.fn(() =>
-      Promise.resolve({ sessionId: "s", tabId: "t" }),
+      Promise.resolve({ sessionId: "s", tabId: "t", handoffToken: null }),
     );
     const { result } = renderOpener({
       sessions: sessionsState({
@@ -358,7 +371,7 @@ describe("useLandingBrowserOpenTab", () => {
   // nothing to compare against.
   it("refuses before the device has published an inventory, and says so", async () => {
     const openTab = vi.fn(() =>
-      Promise.resolve({ sessionId: "s", tabId: "t" }),
+      Promise.resolve({ sessionId: "s", tabId: "t", handoffToken: null }),
     );
     const { result } = renderOpener({
       sessions: sessionsState({ inventoryReady: false, openTab }),
@@ -389,13 +402,13 @@ describe("useLandingBrowserOpenTab", () => {
   // so between the render that dispatched B and the render that publishes B's
   // pending count, the ref is the only guard standing.
   it("keeps a device's latch when a DIFFERENT device's open settles", async () => {
-    const settles: Array<(identity: BrowserTabIdentity) => void> = [];
+    const settles: Array<(identity: BrowserOpenedTab) => void> = [];
     /** Which device each ask actually went to, in order. */
     const asked: string[] = [];
     const hostRef = { current: "host-a" };
     const openTab = vi.fn(() => {
       asked.push(hostRef.current);
-      return new Promise<BrowserTabIdentity>((resolve) => {
+      return new Promise<BrowserOpenedTab>((resolve) => {
         settles.push(resolve);
       });
     });
@@ -430,7 +443,11 @@ describe("useLandingBrowserOpenTab", () => {
       openFromDispatchRender({ placeholderInstanceId: null });
       // A answers while B is still out. A settle that clears the whole latch
       // rather than A's entry leaves B unguarded.
-      settles[0]?.({ sessionId: "session-a", tabId: "tab-a" });
+      settles[0]?.({
+        sessionId: "session-a",
+        tabId: "tab-a",
+        handoffToken: null,
+      });
       await new Promise((resolve) => setTimeout(resolve, 0));
       openFromDispatchRender({ placeholderInstanceId: null });
     });
@@ -441,7 +458,11 @@ describe("useLandingBrowserOpenTab", () => {
     // first settles. The duplicate tab is deferred, not concurrent - so
     // asserting before this settle would pass with the bug in place.
     await act(async () => {
-      settles[1]?.({ sessionId: "session-b", tabId: "tab-b" });
+      settles[1]?.({
+        sessionId: "session-b",
+        tabId: "tab-b",
+        handoffToken: null,
+      });
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
 
@@ -453,10 +474,10 @@ describe("useLandingBrowserOpenTab", () => {
   // both calls in one tick read the value from the render they were dispatched
   // in. The chord and a click on the chooser's card can land in the same tick.
   it("opens one tab when asked twice in the SAME tick", async () => {
-    let settle: ((identity: BrowserTabIdentity) => void) | null = null;
+    let settle: ((identity: BrowserOpenedTab) => void) | null = null;
     const openTab = vi.fn(
       () =>
-        new Promise<BrowserTabIdentity>((resolve) => {
+        new Promise<BrowserOpenedTab>((resolve) => {
           settle = resolve;
         }),
     );
@@ -477,7 +498,7 @@ describe("useLandingBrowserOpenTab", () => {
 
     expect(openTab).toHaveBeenCalledTimes(1);
     await act(async () => {
-      settle?.({ sessionId: "session-1", tabId: "tab-1" });
+      settle?.({ sessionId: "session-1", tabId: "tab-1", handoffToken: null });
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
 
@@ -494,7 +515,7 @@ describe("useLandingBrowserOpenTab", () => {
   // The latch is released when the mutation settles, so the NEXT ask opens.
   it("opens again once the device has answered", async () => {
     const openTab = vi.fn(() =>
-      Promise.resolve({ sessionId: "s", tabId: "t" }),
+      Promise.resolve({ sessionId: "s", tabId: "t", handoffToken: null }),
     );
     const onOpened = vi.fn();
     const { result } = renderOpener({
@@ -518,7 +539,7 @@ describe("useLandingBrowserOpenTab", () => {
 
   it("refuses before the device's stream is live", async () => {
     const openTab = vi.fn(() =>
-      Promise.resolve({ sessionId: "s", tabId: "t" }),
+      Promise.resolve({ sessionId: "s", tabId: "t", handoffToken: null }),
     );
     const { result } = renderOpener({
       sessions: sessionsState({ lifecycle: "connecting", openTab }),

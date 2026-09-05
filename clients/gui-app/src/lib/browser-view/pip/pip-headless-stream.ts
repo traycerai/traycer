@@ -40,6 +40,9 @@ export function openPipHeadlessStream(input: {
     quality: input.quality,
     format: "jpeg",
     role: "pip",
+    // A mirror of a tab some tile is already showing, never the viewer an
+    // open was made for; the tile presents the token.
+    handoffToken: null,
     callbacks: {
       onServerFrame: (frame, jpegBytes) => {
         // Answered before anything else: the host times this reply, so any

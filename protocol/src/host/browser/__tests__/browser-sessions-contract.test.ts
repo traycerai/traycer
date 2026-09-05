@@ -423,6 +423,7 @@ describe("browser.sessions@1.0 epic-scoped open + tab-shaped session info", () =
         quality: 80,
         format: "jpeg",
         role: "tile",
+        handoffToken: null,
       }).success,
     ).toBe(true);
     expect(
@@ -435,6 +436,7 @@ describe("browser.sessions@1.0 epic-scoped open + tab-shaped session info", () =
         quality: 80,
         format: "jpeg",
         role: "tile",
+        handoffToken: null,
       }).success,
     ).toBe(true);
     expect(
@@ -446,6 +448,7 @@ describe("browser.sessions@1.0 epic-scoped open + tab-shaped session info", () =
         quality: 80,
         format: "jpeg",
         role: "tile",
+        handoffToken: null,
       }).success,
     ).toBe(false);
     expect(
@@ -457,6 +460,55 @@ describe("browser.sessions@1.0 epic-scoped open + tab-shaped session info", () =
         quality: 80,
         format: "jpeg",
         role: "tile",
+        handoffToken: null,
+      }).success,
+    ).toBe(false);
+  });
+
+  it("carries the opener's handoff token on the screencast open, and answers it on the open", () => {
+    const open = {
+      scope: { kind: "independent" as const },
+      sessionId: "session-1",
+      tabId: "tab-1",
+      maxWidth: 1280,
+      maxHeight: 720,
+      quality: 80,
+      format: "jpeg" as const,
+      role: "tile" as const,
+    };
+    expect(
+      browserScreencastOpenRequestSchema.parse({
+        ...open,
+        handoffToken: "handoff-1",
+      }).handoffToken,
+    ).toBe("handoff-1");
+    // A bystander says so explicitly; a viewer that omits the field is a client
+    // built against a contract without it.
+    expect(browserScreencastOpenRequestSchema.safeParse(open).success).toBe(
+      false,
+    );
+
+    const answered = browserSessionsServerFrameSchema.parse({
+      kind: "openTabResult",
+      hasBinaryPayload: false,
+      requestId: "open-1",
+      result: {
+        ok: true,
+        sessionId: "session-1",
+        tabId: "tab-1",
+        handoffToken: "handoff-1",
+      },
+    });
+    if (answered.kind !== "openTabResult" || !answered.result.ok) {
+      throw new Error("expected a successful openTabResult");
+    }
+    expect(answered.result.handoffToken).toBe("handoff-1");
+    expect(
+      browserSessionsServerFrameSchema.safeParse({
+        kind: "openTabResult",
+        hasBinaryPayload: false,
+        requestId: "open-1",
+        result: { ok: true, sessionId: "session-1", tabId: "tab-1" },
       }).success,
     ).toBe(false);
   });

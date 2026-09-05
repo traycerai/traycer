@@ -10,7 +10,10 @@ import {
 import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
-import type { BrowserSessionInfo } from "@traycer/protocol/host/browser/contracts";
+import type {
+  BrowserOpenedTab,
+  BrowserSessionInfo,
+} from "@traycer/protocol/host/browser/contracts";
 import {
   sessionInfo,
   tabInfo,
@@ -43,7 +46,11 @@ const harness = vi.hoisted(() => ({
   // fixture - only the CALL argument differs per file (this suite's NODE
   // uses "sess-1"), never the resolved tab.
   openTab: vi.fn((_sessionId: string | null, _url: string) =>
-    Promise.resolve({ sessionId: "session-1", tabId: "tab-2" }),
+    Promise.resolve<BrowserOpenedTab>({
+      sessionId: "session-1",
+      tabId: "tab-2",
+      handoffToken: null,
+    }),
   ),
   closeTab: vi.fn(),
   attachTab: vi.fn(() => {
@@ -1440,7 +1447,7 @@ describe("BrowserSessionTile open-link routing", () => {
     // only while `openTab` is in flight - which is what makes this a test of
     // WHEN the target is resolved, not just that a missing tab falls back.
     const pending: {
-      settle: (tab: { sessionId: string; tabId: string }) => void;
+      settle: (tab: BrowserOpenedTab) => void;
     } = { settle: () => undefined };
     harness.openTab.mockImplementationOnce(
       () =>
@@ -1465,7 +1472,11 @@ describe("BrowserSessionTile open-link routing", () => {
     // with no route (R8).
     canvasState.tabsById = {};
     act(() => {
-      pending.settle({ sessionId: "session-1", tabId: "tab-2" });
+      pending.settle({
+        sessionId: "session-1",
+        tabId: "tab-2",
+        handoffToken: null,
+      });
     });
 
     await waitFor(() => {

@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import { cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
+  BrowserOpenedTab,
   BrowserSessionInfo,
   BrowserTabInfo,
 } from "@traycer/protocol/host/browser/contracts";
@@ -104,7 +105,11 @@ function session(tabs: readonly BrowserTabInfo[]): BrowserSessionInfo {
 }
 
 const openTab = vi.fn<BrowserSessionsState["openTab"]>(() =>
-  Promise.resolve({ sessionId: "session-opened", tabId: "tab-opened" }),
+  Promise.resolve({
+    sessionId: "session-opened",
+    tabId: "tab-opened",
+    handoffToken: null,
+  }),
 );
 
 function liveSessions(
@@ -355,7 +360,7 @@ describe("useOpenLink", () => {
 
   it("joins an openTab already in flight for the same page", async () => {
     const pending: {
-      settle: (tab: { sessionId: string; tabId: string }) => void;
+      settle: (tab: BrowserOpenedTab) => void;
     } = { settle: () => undefined };
     openTab.mockImplementationOnce(
       () =>
@@ -371,7 +376,11 @@ describe("useOpenLink", () => {
     void openLink(DOCS_URL, "markdown", null);
 
     expect(openTab).toHaveBeenCalledTimes(1);
-    pending.settle({ sessionId: "session-1", tabId: "tab-joined" });
+    pending.settle({
+      sessionId: "session-1",
+      tabId: "tab-joined",
+      handoffToken: null,
+    });
 
     await waitFor(() => expect(harness.intents).toHaveLength(2));
     expect(openTab).toHaveBeenCalledTimes(1);
@@ -408,8 +417,7 @@ describe("useOpenLink", () => {
   });
 
   it("falls back to the epic when the view tab closed mid-open (R8)", async () => {
-    const settles: Array<(tab: { sessionId: string; tabId: string }) => void> =
-      [];
+    const settles: Array<(tab: BrowserOpenedTab) => void> = [];
     openTab.mockImplementationOnce(
       () =>
         new Promise((resolve) => {
@@ -426,7 +434,11 @@ describe("useOpenLink", () => {
       openTabOrder: [],
       activeTabId: null,
     });
-    settles[0]({ sessionId: "session-opened", tabId: "tab-opened" });
+    settles[0]({
+      sessionId: "session-opened",
+      tabId: "tab-opened",
+      handoffToken: null,
+    });
 
     await waitFor(() => expect(harness.intents).toHaveLength(1));
     expect(harness.intents[0].target).toEqual({ epicId: EPIC_ID });

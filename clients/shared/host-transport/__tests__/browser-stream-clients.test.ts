@@ -219,6 +219,7 @@ describe("BrowserScreencastStreamClient", () => {
       quality: 80,
       format: "jpeg",
       role: "tile",
+      handoffToken: null,
       callbacks: {
         onServerFrame: (frame, bytes) => {
           received.push({ frame, bytes });
@@ -285,6 +286,7 @@ describe("BrowserScreencastStreamClient", () => {
       quality: 80,
       format: "jpeg",
       role: "tile",
+      handoffToken: null,
       callbacks: {
         onServerFrame: (frame) => {
           received.push(frame);

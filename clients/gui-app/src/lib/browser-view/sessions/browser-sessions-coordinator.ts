@@ -1,8 +1,8 @@
 import type {
+  BrowserOpenedTab,
   BrowserSessionInfo,
   BrowserSessionsUxClientFrame,
   BrowserSessionsUxServerFrame,
-  BrowserTabIdentity,
   BrowserTabPreview,
 } from "@traycer/protocol/host/browser/contracts";
 import type {
@@ -18,6 +18,10 @@ import { appLogger } from "@/lib/logger";
 import { surfaceHostOpenedTab } from "@/lib/browser-view/tiles/surface-host-opened-tab";
 import { browserSessionsReducer } from "@/lib/browser-view/sessions/browser-sessions-stream";
 import { recordIndependentPageOpenedTab } from "@/lib/browser-view/sessions/independent-page-open-registry";
+import {
+  forgetHandoffTokensForSession,
+  recordHandoffToken,
+} from "@/lib/browser-view/sessions/screencast-handoff-tokens";
 import {
   openBrowserSessionsSession,
   type BrowserSessionsSession,
@@ -47,10 +51,15 @@ export interface BrowserSessionsState {
   readonly items: readonly BrowserSessionInfo[];
   readonly errorMessage: string | null;
   readonly retry: () => void;
+  /**
+   * Resolves with the tab the host produced. A non-null `handoffToken` is
+   * recorded for the screencast that will watch the tab from this client
+   * (see `screencast-handoff-tokens`); callers need only the identity.
+   */
   readonly openTab: (
     sessionId: string | null,
     url: string,
-  ) => Promise<BrowserTabIdentity>;
+  ) => Promise<BrowserOpenedTab>;
   readonly closeTab: (sessionId: string, tabId: string) => Promise<void>;
   /**
    * "Attach this tab on MY window's route" - the electron-capable tile's ask
@@ -453,7 +462,7 @@ function createBrowserSessionsCoordinator(args: {
   const pendingCloses: PendingRequests<void> = new Map();
   const pendingAttaches: PendingRequests<void> = new Map();
   const pendingMoves: PendingRequests<void> = new Map();
-  const pendingOpens: PendingRequests<BrowserTabIdentity> = new Map();
+  const pendingOpens: PendingRequests<BrowserOpenedTab> = new Map();
   const pendingPreviews: PendingRequests<BrowserTabPreview> = new Map();
   const runtimes = new Map<symbol, BrowserSessionsCoordinatorRuntime>([
     [args.consumerId, args.runtime],
@@ -573,7 +582,7 @@ function createBrowserSessionsCoordinator(args: {
   const openTab = (
     sessionId: string | null,
     url: string,
-  ): Promise<BrowserTabIdentity> =>
+  ): Promise<BrowserOpenedTab> =>
     sendRequest(pendingOpens, null, (requestId) => ({
       kind: "openTab",
       hasBinaryPayload: false,
@@ -743,6 +752,12 @@ function createBrowserSessionsCoordinator(args: {
     dispose: () => {
       if (disposed) return;
       disposed = true;
+      // The stream closes with this coordinator, and the host releases every
+      // claim its opens held on that detach: nothing recorded here can be
+      // presented any more.
+      for (const item of coordinator.state.items) {
+        forgetHandoffTokensForSession(args.owner.hostId, item.sessionId);
+      }
       stop();
     },
   };
@@ -793,7 +808,7 @@ function handleBrowserSessionsFrame(args: {
   readonly pendingCloses: PendingRequests<void>;
   readonly pendingAttaches: PendingRequests<void>;
   readonly pendingMoves: PendingRequests<void>;
-  readonly pendingOpens: PendingRequests<BrowserTabIdentity>;
+  readonly pendingOpens: PendingRequests<BrowserOpenedTab>;
   readonly pendingPreviews: PendingRequests<BrowserTabPreview>;
   readonly presenters: readonly BrowserSessionsPresenter[];
 }): void {
@@ -803,6 +818,9 @@ function handleBrowserSessionsFrame(args: {
     case "sessionCreated":
     case "sessionUpdated":
     case "sessionClosed": {
+      if (frame.kind === "sessionClosed") {
+        forgetHandoffTokensForSession(args.hostId, frame.sessionId);
+      }
       const nextItems = browserSessionsReducer(args.currentItems(), frame);
       if (nextItems !== null) args.setItems(nextItems);
       return;
@@ -815,7 +833,7 @@ function handleBrowserSessionsFrame(args: {
       ]);
       return;
     case "openTabResult":
-      handleOpenTabResult(frame, args.pendingOpens);
+      handleOpenTabResult(frame, args.pendingOpens, args.hostId);
       return;
     case "tabPreviewResult": {
       const pending = args.pendingPreviews.get(frame.requestId);
@@ -926,12 +944,22 @@ function handleOpenTabResult(
     BrowserSessionsUxServerFrame,
     { readonly kind: "openTabResult" }
   >,
-  pendingOpens: PendingRequests<BrowserTabIdentity>,
+  pendingOpens: PendingRequests<BrowserOpenedTab>,
+  hostId: string,
 ): void {
   const pending = pendingOpens.get(frame.requestId);
   if (pending === undefined) return;
-  if (frame.result.ok) pending.resolve(frame.result);
-  else pending.reject(new Error(frame.result.reason));
+  if (!frame.result.ok) {
+    pending.reject(new Error(frame.result.reason));
+    return;
+  }
+  const { sessionId, tabId, handoffToken } = frame.result;
+  // Recorded BEFORE the caller learns the tab exists, so the screencast it
+  // mounts in response finds the token already there.
+  if (handoffToken !== null) {
+    recordHandoffToken({ hostId, sessionId, tabId }, handoffToken);
+  }
+  pending.resolve({ sessionId, tabId, handoffToken });
 }
 
 function rejectPendingRequests<

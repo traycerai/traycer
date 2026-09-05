@@ -34,7 +34,11 @@ const state = vi.hoisted(() => ({
   events: [] as string[],
   closeTab: vi.fn((_sessionId: string, _tabId: string) => Promise.resolve()),
   openTab: vi.fn((sessionId: string | null, _url: string) =>
-    Promise.resolve({ sessionId: sessionId ?? "session-1", tabId: "tab-2" }),
+    Promise.resolve({
+      sessionId: sessionId ?? "session-1",
+      tabId: "tab-2",
+      handoffToken: null,
+    }),
   ),
   closeCanvasTile: vi.fn(),
   focusAddress: vi.fn(),

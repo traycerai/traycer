@@ -55,6 +55,7 @@ import {
 } from "@/lib/browser-view/sessions/video-plane-session";
 import { deriveSpecDeadlineMs } from "@traycer/protocol/host-transport/rtt-deadlines";
 import { VIEWER_CONTROL_PLANE_DEADLINES } from "@/lib/browser-view/sessions/control-plane-deadlines";
+import { handoffTokenFor } from "@/lib/browser-view/sessions/screencast-handoff-tokens";
 import type { WebrtcVideoStatsSample } from "@/lib/browser-view/tiles/webrtc-media-registry";
 import {
   acquireBrowserMediaEntry,
@@ -683,6 +684,10 @@ export function useScreencastSession(
       quality: profile.quality,
       format: "jpeg",
       role,
+      // Read at subscribe time, not held in a dep: the open that minted it
+      // resolved before this tile could mount, and a re-subscribe presenting
+      // a spent token is inert on the host.
+      handoffToken: handoffTokenFor({ hostId, sessionId, tabId }),
       callbacks: { onServerFrame, onConnectionStatus },
     });
     streamRef.current = stream;

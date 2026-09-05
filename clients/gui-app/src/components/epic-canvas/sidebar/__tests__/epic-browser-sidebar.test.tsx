@@ -162,7 +162,7 @@ function forwardCloseTab(sessionId: string, tabId: string): Promise<void> {
 function forwardOpenTab(
   sessionId: string | null,
   url: string,
-): Promise<{ sessionId: string; tabId: string }> {
+): Promise<{ sessionId: string; tabId: string; handoffToken: string | null }> {
   return openTab(sessionId, url);
 }
 
@@ -298,6 +298,7 @@ describe("BrowsersPanelBody", () => {
     openTab.mockResolvedValue({
       sessionId: "sess-created",
       tabId: "tab-created",
+      handoffToken: null,
     });
     vi.mocked(toast.error).mockClear();
     navigateNested.mockClear();
@@ -1407,6 +1408,7 @@ describe("BrowsersPanelActions", () => {
     openTab.mockResolvedValue({
       sessionId: "sess-created",
       tabId: "tab-created",
+      handoffToken: null,
     });
     browserHostPinState.selection = null;
     browserHostPinState.setSelection.mockClear();

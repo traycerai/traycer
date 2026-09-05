@@ -94,6 +94,7 @@ describe("browser.screencast@1.0 viewer role", () => {
     maxHeight: 720,
     quality: 80,
     format: "jpeg" as const,
+    handoffToken: null,
   };
 
   it("requires the caller to name its viewer role", () => {

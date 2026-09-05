@@ -92,7 +92,7 @@ function forwardCloseTab(sessionId: string, tabId: string): Promise<void> {
 function forwardOpenTab(
   sessionId: string | null,
   url: string,
-): Promise<{ sessionId: string; tabId: string }> {
+): Promise<{ sessionId: string; tabId: string; handoffToken: string | null }> {
   return openTab(sessionId, url);
 }
 
@@ -282,7 +282,11 @@ describe("SwitcherBrowsersList", () => {
   it("offers Add browser on a list that already has rows, and closes on the tile", async () => {
     const user = userEvent.setup();
     const onClose = vi.fn();
-    openTab.mockResolvedValue({ sessionId: "sess-2", tabId: "tab-9" });
+    openTab.mockResolvedValue({
+      sessionId: "sess-2",
+      tabId: "tab-9",
+      handoffToken: null,
+    });
     renderList(onClose);
 
     // A list with rows renders no empty state, so the header "+" is the only

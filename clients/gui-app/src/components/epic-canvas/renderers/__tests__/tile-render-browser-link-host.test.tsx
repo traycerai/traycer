@@ -141,7 +141,11 @@ function liveSessionsState(hostId: string): BrowserSessionsState {
     retry: () => undefined,
     openTab: (_sessionId, url) => {
       sessionsHarness.openTabCalls.push({ hostId, url });
-      return Promise.resolve({ sessionId: "sess-1", tabId: "tab-1" });
+      return Promise.resolve({
+        sessionId: "sess-1",
+        tabId: "tab-1",
+        handoffToken: null,
+      });
     },
     closeTab: () => Promise.resolve(),
     attachTab: () => Promise.reject(new Error("not used")),

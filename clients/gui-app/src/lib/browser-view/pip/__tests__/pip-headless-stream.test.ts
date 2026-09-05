@@ -124,6 +124,7 @@ describe("openPipHeadlessStream", () => {
           quality: 50,
           format: "jpeg",
           role: "pip",
+          handoffToken: null,
         },
       },
     ]);

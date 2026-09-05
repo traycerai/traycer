@@ -143,6 +143,28 @@ export const browserTabIdentitySchema = z
 export type BrowserTabIdentity = z.infer<typeof browserTabIdentitySchema>;
 
 /**
+ * What a successful `openTab` answers with: the tab, and - when serving the
+ * open took a shared session off the desktop's native runtime so that THIS
+ * client could see it - a token naming the open to the host.
+ *
+ * The host keeps that session where the opener can receive pixels until a
+ * `browser.screencast` presenting the token is served. Session updates are
+ * broadcast to every subscriber in the scope, so another client can start
+ * watching the new tab before its opener does; without the token its pixels
+ * say nothing about whether the opener has seen any, and only a viewer
+ * presenting it counts. `null` when the open owed nobody a placement - a
+ * client on the host's own machine watches the native runtime directly - so
+ * there is nothing to hand off.
+ */
+export const browserOpenedTabSchema = z
+  .object({
+    ...browserTabIdentitySchema.shape,
+    handoffToken: z.string().nullable(),
+  })
+  .strict();
+export type BrowserOpenedTab = z.infer<typeof browserOpenedTabSchema>;
+
+/**
  * `scope` is the stream's sole authorization and routing scope: one
  * subscription speaks for one epic's browser inventory, or for the device's
  * epic-less `independent` one, and never for both.
@@ -595,7 +617,7 @@ export const browserSessionsServerFrameSchema = z.discriminatedUnion("kind", [
         z
           .object({
             ok: z.literal(true),
-            ...browserTabIdentitySchema.shape,
+            ...browserOpenedTabSchema.shape,
           })
           .strict(),
         z
@@ -1347,6 +1369,12 @@ export const browserScreencastOpenRequestSchema = z
     quality: z.number().int().min(0).max(100),
     format: browserScreencastFormatSchema,
     role: browserScreencastViewerRoleSchema,
+    // The `handoffToken` a successful `openTab` answered this client with, when
+    // this viewer is watching the tab that open produced; `null` for any other
+    // viewer. The host holds the tab's session where the opener can see it
+    // until pixels reach a viewer presenting the token, so a bystander that
+    // picked the tab up from a session update does not release it.
+    handoffToken: z.string().nullable(),
   })
   .strict();
 export type BrowserScreencastOpenRequest = z.infer<
