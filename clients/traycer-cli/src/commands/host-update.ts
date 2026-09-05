@@ -230,11 +230,7 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
     try {
       legacy =
         activationDebt !== null
-          ? await activateInstalledAndProjectLegacy(
-              environment,
-              args.force,
-              activationDebt,
-            )
+          ? await activateInstalledAndProjectLegacy(environment, args.force)
           : preparation.kind === "staged"
             ? await applyAndProjectLegacy(
                 environment,
@@ -377,11 +373,19 @@ async function detectActivationDebt(
  * Projected as an UPDATE, not a no-op: `previousVersion` is the version that
  * was serving, so the human summary and Desktop's legacy projection both say
  * `rc.1 → rc.2`, which is what actually happened from the operator's seat.
+ *
+ * The debt the caller detected is deliberately NOT a parameter: it was read
+ * outside the contender lock, and `host restart` shares that lock. Desktop's
+ * parked-registration fallback runs exactly that command on exactly this
+ * host, so a Settings click that arrives while it holds the lock would
+ * otherwise wait its turn and then restart a host that had just come up on
+ * the committed bytes - costing it its connections and reporting a
+ * `rc.1 → rc.2` transition that the other actor performed. The debt is
+ * re-derived under the lock and a cleared debt is the plain no-op.
  */
 async function activateInstalledAndProjectLegacy(
   environment: Environment,
   force: boolean,
-  debt: ActivationDebt,
 ): Promise<LegacyHostUpdateResult> {
   const contenderOptions: WithCliUpdateContenderOptions = {
     environment,
@@ -396,9 +400,12 @@ async function activateInstalledAndProjectLegacy(
     if (!force) {
       await assertHostNotBusy(environment);
     }
-    // Re-read under the lock: the record the debt was computed from may have
-    // moved while this command waited for admission.
+    // Re-read under the lock: BOTH halves the debt was computed from may have
+    // moved while this command waited for admission - the record through
+    // another apply, the running version through another actor's restart.
     const installed = await requireInstalled(environment);
+    const debt = await detectActivationDebt(environment);
+    if (debt === null) return projectNoOp(installed);
     await restartHostServiceWithAttempt(
       capability,
       contenderOptions,

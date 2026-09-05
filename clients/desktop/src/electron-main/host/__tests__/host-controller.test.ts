@@ -3438,6 +3438,81 @@ describe("platform matrix", () => {
           .args,
       ).toEqual(["host", "restart"]);
     });
+
+    // `registerService` promises a REGISTERED login item, which is a different
+    // promise from the activation cycle's "the committed bytes are running".
+    // A park attempted nothing, so the item is whatever it was before; only
+    // an item that already reads `enabled` can honestly be reported as
+    // registered, and nothing else may be restarted on the way to a failure.
+    it("registerService: a park over an ENABLED login item restarts the running host and reports registered", async () => {
+      vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+      const controller = newController("production");
+      writeInstallRecord("production", {
+        version: "1.7.0",
+        runtimeVersion: "1.7.0",
+      });
+      writePidMetadata("production", { version: "1.7.0", pid: process.pid });
+      vi.mocked(registerHostLoginItem).mockResolvedValue("parked");
+      vi.mocked(readHostLoginItemStatus).mockReturnValue("enabled");
+      vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({ data: {} });
+      vi.mocked(waitForHostReady).mockResolvedValue({
+        ready: true,
+        version: "1.7.0",
+        pid: process.pid,
+        startedAt: "2026-01-01T00:00:00.000Z",
+        reason: "ready",
+      });
+
+      const outcome = await controller.registerService({ kind: "background" });
+
+      expect(outcome).toEqual({ kind: "ok", value: { registered: true } });
+      expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
+        expect.objectContaining({ args: ["host", "restart", "--if-idle"] }),
+      );
+    });
+
+    it("registerService: a park over a REQUIRES-APPROVAL login item fails with the approval message and restarts nothing", async () => {
+      vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+      const controller = newController("production");
+      writeInstallRecord("production", {
+        version: "1.7.0",
+        runtimeVersion: "1.7.0",
+      });
+      writePidMetadata("production", { version: "1.7.0", pid: process.pid });
+      vi.mocked(registerHostLoginItem).mockResolvedValue("parked");
+      vi.mocked(readHostLoginItemStatus).mockReturnValue("requires-approval");
+      vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({ data: {} });
+
+      const outcome = await controller.registerService({ kind: "background" });
+
+      expect(outcome.kind).toBe("failed");
+      if (outcome.kind === "failed") {
+        expect(outcome.message).toMatch(/System Settings|approv/i);
+      }
+      expect(streamBundledTraycerCliJson).not.toHaveBeenCalled();
+      expect(waitForHostReady).not.toHaveBeenCalled();
+    });
+
+    it("registerService: a park over a NOT-FOUND login item fails naming the status and restarts nothing", async () => {
+      vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+      const controller = newController("production");
+      writeInstallRecord("production", {
+        version: "1.7.0",
+        runtimeVersion: "1.7.0",
+      });
+      writePidMetadata("production", { version: "1.7.0", pid: process.pid });
+      vi.mocked(registerHostLoginItem).mockResolvedValue("parked");
+      vi.mocked(readHostLoginItemStatus).mockReturnValue("not-found");
+      vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({ data: {} });
+
+      const outcome = await controller.registerService({ kind: "background" });
+
+      expect(outcome.kind).toBe("failed");
+      if (outcome.kind === "failed") {
+        expect(outcome.message).toContain("status=not-found");
+      }
+      expect(streamBundledTraycerCliJson).not.toHaveBeenCalled();
+    });
   });
 
   // Fixup B6: `convergeReadyPackagedMac`'s "already reachable, skip

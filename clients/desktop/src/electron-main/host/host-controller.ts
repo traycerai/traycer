@@ -3674,10 +3674,29 @@ export class HostController {
             return { kind: "failed", message: approvalRequiredMessage() };
           }
           if (registration.status === "parked") {
-            // Same fallback as the activation cycle: the bytes are placed,
-            // the register cycle could not begin, so ask the running host to
-            // restart onto them instead of reporting a registration failure
-            // for a registration that was never attempted.
+            // A park attempted NOTHING, so the login item is exactly what it
+            // was before this call. This method's promise is "registered",
+            // and only an item that already reads `enabled` can keep it - a
+            // `requires-approval` or unreadable item is the user's (or
+            // `traycer host doctor`'s) to fix, and restarting the running
+            // host would cost it its connections without registering a
+            // thing. The status is read HERE, not taken from the snapshot the
+            // guard refused on: the guard also parks on the LEGACY label and
+            // the manifest, so the primary item can be enabled under a park.
+            const loginItemStatus = readHostLoginItemStatus();
+            if (loginItemStatus !== "enabled") {
+              return {
+                kind: "failed",
+                message:
+                  loginItemStatus === "requires-approval"
+                    ? approvalRequiredMessage()
+                    : `Traycer Host's login item could not be re-registered (status=${loginItemStatus}) - run \`traycer host doctor\` to recover.`,
+              };
+            }
+            // Enabled already, so the registration stands; what the parked
+            // cycle left undone is the RESTART a register cycle implies. Same
+            // fallback as the activation cycle: ask the running host to
+            // restart onto the committed bytes through the CLI.
             const activated = await this.activateAroundParkedRegistration(
               {
                 phase: "parked",

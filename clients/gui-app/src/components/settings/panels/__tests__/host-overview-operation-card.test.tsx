@@ -307,7 +307,14 @@ describe("HostOverviewOperationCard - the coarse updateProgress marker beside {k
       hostId: "host-a",
       isLocalMachine: true,
       overrideHandlers: {
-        "host.status": () => statusWithCoarseProgress({ kind: "none" }, null),
+        // The live version differs from the registry copy (`1.5.0`) on
+        // purpose: the header renders the process's own answer once
+        // `host.status` has settled, so its appearance is the proof that
+        // the SAME reply carrying `{kind:"none"}` + no marker is on screen.
+        "host.status": () => ({
+          ...statusWithCoarseProgress({ kind: "none" }, null),
+          hostVersion: "1.5.0-live",
+        }),
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
@@ -315,13 +322,13 @@ describe("HostOverviewOperationCard - the coarse updateProgress marker beside {k
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
-    // Give the status query a chance to settle before asserting an absence.
-    await waitFor(() => {
-      expect(fixture.client).toBeDefined();
-    });
-    await waitFor(() => {
-      expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
-    });
+    // The card is also absent while the status query is still loading, so
+    // the absence is asserted only after a render derived from the status
+    // reply is on screen. (The fixture's own call counter is bypassed by an
+    // overridden handler, and a counted call proves the request, not the
+    // render.)
+    await screen.findByText(/1\.5\.0-live/);
+    expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
     expect(screen.queryByText(/Host is up to date/i)).toBeNull();
   });
 

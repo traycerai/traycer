@@ -1011,6 +1011,33 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
     expect(result.human).toContain("updated host 1.0.0 → 2.0.0");
   });
 
+  it("debt cleared while waiting for the contender lock: no restart, projected as the no-op", async () => {
+    // First read (outside the lock): the host runs 1.0.0 behind a 2.0.0
+    // record. Second read (under the lock): another actor - Desktop's
+    // parked-registration fallback runs `host restart` on this very host -
+    // has already brought 2.0.0 up. Restarting again would cost the fresh
+    // host its connections and report a transition this command did not make.
+    mocks.downloadAndStageHostMock.mockResolvedValue(upToDate("2.0.0"));
+    mocks.readHostInstallRecordMock.mockResolvedValue(sampleRecord("2.0.0"));
+    mocks.readHostPidMetadataMock
+      .mockResolvedValueOnce(pidRecord("1.0.0", 4242))
+      .mockResolvedValue(pidRecord("2.0.0", 4343));
+    mocks.isProcessAliveMock.mockReturnValue(true);
+
+    const result = await buildHostUpdateCommand({
+      force: false,
+      allowDowngrade: false,
+      ackNonce: null,
+    })(fakeCtx());
+
+    expect(mocks.readHostPidMetadataMock).toHaveBeenCalledTimes(2);
+    expect(mocks.restartHostServiceWithAttemptMock).not.toHaveBeenCalled();
+    const projected = projectInstallResultLikeDesktop(result.data);
+    expect(projected.previousVersion).toBe("2.0.0");
+    expect(projected.version).toBe("2.0.0");
+    expect(result.human).toContain("no-op");
+  });
+
   it("running already equal to the install record: old no-op contract, no restart, no marker", async () => {
     mocks.downloadAndStageHostMock.mockResolvedValue(upToDate("2.0.0"));
     mocks.readHostInstallRecordMock.mockResolvedValue(sampleRecord("2.0.0"));
