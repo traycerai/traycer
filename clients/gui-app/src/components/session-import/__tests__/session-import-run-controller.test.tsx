@@ -65,15 +65,29 @@ vi.mock(
 interface StreamBindingHarness {
   client: object | null;
   hostId: string | null;
+  /** The lease the ambient binding hands out; `null` models an unleased one. */
+  retain: (() => () => void) | null;
 }
 
 const streamBinding = vi.hoisted((): StreamBindingHarness => ({
   client: { stream: "test" },
   hostId: "host-a",
+  retain: null,
 }));
 vi.mock("@/lib/host/stream-runtime-context", () => ({
   useWsStreamClient: () => streamBinding.client,
   useStreamHostId: () => streamBinding.hostId,
+  // Rebuilt per read, as the provider republishes a value per client: the
+  // controller keys its once-per-binding probe on the CLIENT, not on this
+  // object's identity.
+  useStreamRuntimeBinding: () =>
+    streamBinding.client === null
+      ? null
+      : {
+          wsStreamClient: streamBinding.client,
+          hostId: streamBinding.hostId,
+          retain: streamBinding.retain,
+        },
 }));
 
 const invalidateQueriesMock = vi.hoisted(() => vi.fn(() => Promise.resolve()));
@@ -161,6 +175,7 @@ function currentRun(): SessionImportRunState {
 beforeEach(() => {
   streamBinding.client = { stream: "test" };
   streamBinding.hostId = "host-a";
+  streamBinding.retain = null;
   runClientHarness.instances = [];
   invalidateQueriesMock.mockClear();
   useSessionImportRunStore.setState({ runs: new Map() });
@@ -438,6 +453,123 @@ describe("<SessionImportRunController />", () => {
     expect(requireInstance(0).close).toHaveBeenCalledTimes(1);
     expect(requireInstance(1).close).not.toHaveBeenCalled();
     expect(requireInstance(1).selections).toEqual([]);
+  });
+
+  it("a surface probe for another host attaches with that binding's lease and releases it when the run ends", () => {
+    render(<SessionImportRunController />);
+    const release = vi.fn();
+    const retain = vi.fn(() => release);
+    const handle = getSessionImportStartHandle();
+    const target = {
+      binding: {
+        wsStreamClient: fakeWsStreamClient(),
+        hostId: "host-b",
+        retain,
+      },
+      hostId: "host-b",
+    };
+    act(() => {
+      handle?.probe(target);
+    });
+    // The ambient probe is instance 0; this is the scoped one.
+    const probe = requireInstance(1);
+    expect(retain).toHaveBeenCalledTimes(1);
+    expect(release).not.toHaveBeenCalled();
+
+    act(() => {
+      probe.callbacks.onStarted({ attached: true, runId: "run-b", total: 2 });
+    });
+    expect(runFor("host-b").status).toBe("running");
+    expect(runFor("host-b").attached).toBe(true);
+    // A second question about a host already being asked or run is a no-op.
+    act(() => {
+      handle?.probe(target);
+    });
+    expect(runClientHarness.instances).toHaveLength(2);
+    expect(retain).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      probe.callbacks.onComplete({
+        runId: "run-b",
+        counts: { imported: 2, skippedAlreadyImported: 0, failed: 0 },
+      });
+    });
+    expect(runFor("host-b").status).toBe("complete");
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancelling withdraws a surface probe still waiting and returns its lease, but never an attached one", () => {
+    render(<SessionImportRunController />);
+    // Settle the controller's own question first: an idle answer closes it
+    // and records the binding as asked, so nothing below re-asks it.
+    act(() => {
+      requireInstance(0).callbacks.onStarted({
+        attached: false,
+        runId: "run-0",
+        total: 0,
+      });
+    });
+    const release = vi.fn();
+    const retain = vi.fn(() => release);
+    const handle = getSessionImportStartHandle();
+    const target = {
+      binding: {
+        wsStreamClient: fakeWsStreamClient(),
+        hostId: "host-b",
+        retain,
+      },
+      hostId: "host-b",
+    };
+    act(() => {
+      handle?.probe(target);
+    });
+    const surfaceProbe = requireInstance(1);
+
+    act(() => {
+      handle?.cancelProbe(target);
+    });
+    expect(surfaceProbe.close).toHaveBeenCalledTimes(1);
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(runFor("host-b").status).toBe("idle");
+    expect(runClientHarness.instances).toHaveLength(2);
+
+    // A probe that attached is the run's subscription and is not withdrawn.
+    act(() => {
+      handle?.probe(target);
+    });
+    const attached = requireInstance(2);
+    act(() => {
+      attached.callbacks.onStarted({
+        attached: true,
+        runId: "run-b",
+        total: 1,
+      });
+    });
+    act(() => {
+      handle?.cancelProbe(target);
+    });
+    expect(attached.close).not.toHaveBeenCalled();
+    expect(runFor("host-b").status).toBe("running");
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("the ambient probe keeps the ambient binding's lease for a run it attaches to", () => {
+    const release = vi.fn();
+    streamBinding.retain = vi.fn(() => release);
+    render(<SessionImportRunController />);
+    const probe = requireInstance(0);
+    expect(streamBinding.retain).toHaveBeenCalledTimes(1);
+    act(() => {
+      probe.callbacks.onStarted({ attached: true, runId: "run-a", total: 1 });
+    });
+    expect(release).not.toHaveBeenCalled();
+    act(() => {
+      probe.callbacks.onComplete({
+        runId: "run-a",
+        counts: { imported: 1, skippedAlreadyImported: 0, failed: 0 },
+      });
+    });
+    expect(release).toHaveBeenCalledTimes(1);
   });
 
   it("closes the probe on unmount when no answer has arrived yet", () => {

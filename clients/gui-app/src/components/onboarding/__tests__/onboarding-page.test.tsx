@@ -195,6 +195,8 @@ vi.mock("@/hooks/session-import/use-session-import-available", () => ({
 const startSessionImportRunMock = vi.hoisted(() => vi.fn());
 vi.mock("@/components/session-import/session-import-run-handle", () => ({
   startSessionImportRun: startSessionImportRunMock,
+  probeSessionImportRun: () => undefined,
+  cancelSessionImportProbe: () => undefined,
 }));
 
 // Off by default: the login-import act needs a browser bridge and saved

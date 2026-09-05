@@ -15,6 +15,12 @@ import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
  * bypass this entire provider by mounting the per-Epic / notifications stores
  * with injected stream-client factories.
  */
+/**
+ * Published ONCE per client by every provider (memoised, or held in state):
+ * consumers key effects on the binding's identity - the session-import
+ * controller's mount-time probe among them - so a binding re-minted per
+ * render would tear those down and re-run them every render.
+ */
 export interface StreamRuntimeBinding {
   readonly wsStreamClient: IHostStreamClient<HostStreamRpcRegistry>;
   /**
@@ -42,10 +48,13 @@ export interface StreamRuntimeBinding {
    * The returned release must be called exactly once, when the run's own need
    * for the transport ends.
    *
-   * `null` when the transport never closes under its consumers - the app-wide
-   * binding, which lives for the window. A `null` here is a promise, not an
-   * absence: it says "nothing to pin", so a caller writes `retain?.()` and is
-   * done rather than guessing which kind of binding it holds.
+   * Every binding the app publishes today hands one out, the app-wide one
+   * included: it is rebuilt when the window points at another host, and a run
+   * started or attached on it has to outlive that. `null` is reserved for a
+   * binding that genuinely has nothing to pin - a test harness, or a transport
+   * that never closes under its consumers - and is a promise rather than an
+   * absence: a caller writes `retain?.()` and is done rather than guessing
+   * which kind of binding it holds.
    */
   readonly retain: (() => () => void) | null;
 }

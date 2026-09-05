@@ -29,6 +29,14 @@ interface SessionImportStartHandle {
     request: SessionImportRunRequest,
     target: SessionImportRunTarget,
   ) => void;
+  /**
+   * Asks the target host whether an import is already running and, if so,
+   * attaches to it so its slice fills in. A no-op for a host this window is
+   * already running or asking.
+   */
+  readonly probe: (target: SessionImportRunTarget) => void;
+  /** Withdraws a surface's still-unanswered probe; see `cancelSessionImportProbe`. */
+  readonly cancelProbe: (target: SessionImportRunTarget) => void;
 }
 
 const ref: { current: SessionImportStartHandle | null } = { current: null };
@@ -72,4 +80,38 @@ export function startSessionImportRun(
     return;
   }
   handle.start(request, { binding, hostId: binding.hostId });
+}
+
+/**
+ * A surface that is about to offer selections for `binding`'s host asks this
+ * first. The app-wide controller only ever probes the window's own host on
+ * its own, so a host that is already importing - started from another window,
+ * or before a reload - looks idle to a wizard opened for it, and a submission
+ * would subscribe with new selections that the host silently folds into the
+ * run in flight. Probing attaches to that run instead, so the wizard shows
+ * its progress and offers nothing. A question rather than a click, so a
+ * missing controller or an unnamed host is simply nothing to ask.
+ */
+export function probeSessionImportRun(
+  binding: StreamRuntimeBinding | null,
+): void {
+  const handle = ref.current;
+  if (handle === null) return;
+  if (binding === null || binding.hostId === null) return;
+  handle.probe({ binding, hostId: binding.hostId });
+}
+
+/**
+ * The surface's question withdrawn, for the wizard's effect cleanup: a probe
+ * still waiting when the wizard closes is closed and its transport lease
+ * returned. One that already attached is the run's subscription and stays; the
+ * wizard's own effect asks again on its next open.
+ */
+export function cancelSessionImportProbe(
+  binding: StreamRuntimeBinding | null,
+): void {
+  const handle = ref.current;
+  if (handle === null) return;
+  if (binding === null || binding.hostId === null) return;
+  handle.cancelProbe({ binding, hostId: binding.hostId });
 }

@@ -37,7 +37,11 @@ import {
 } from "@/components/session-import/session-import-group";
 import { SessionImportProgress } from "@/components/session-import/session-import-progress";
 import type { SessionImportScanHandle } from "@/components/session-import/use-session-import-scan";
-import { startSessionImportRun } from "@/components/session-import/session-import-run-handle";
+import {
+  cancelSessionImportProbe,
+  probeSessionImportRun,
+  startSessionImportRun,
+} from "@/components/session-import/session-import-run-handle";
 import { useStreamRuntimeBinding } from "@/lib/host/stream-runtime-context";
 import {
   sessionImportTone,
@@ -115,6 +119,24 @@ export function SessionImportWizard(props: {
       store.reset(hostId);
     }
   }, [hostId]);
+
+  // Then ask that host whether an import is already going. The app-wide
+  // controller only probes the window's own host by itself, so a host picked
+  // in Settings or the tour that is mid-import - from another window, or from
+  // before a reload - would otherwise show an idle list, and a submission
+  // would be folded into the run in flight with its selections dropped.
+  // Attaching instead shows that run's progress. Asked on every open, and
+  // again when the binding changes: another window may have started a run
+  // since the last visit, a reconnect is a new client the question must be
+  // asked of, and an empty answer costs the host nothing. A question still
+  // unanswered when this wizard closes is withdrawn, so its transport lease
+  // does not outlive the surface that took it.
+  useEffect(() => {
+    probeSessionImportRun(streamBinding);
+    return () => {
+      cancelSessionImportProbe(streamBinding);
+    };
+  }, [streamBinding]);
 
   const { state, dispatch } = scan;
   const view = useMemo(() => buildSessionImportView(state), [state]);

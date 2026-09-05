@@ -114,8 +114,12 @@ vi.mock("@/lib/host/stream-runtime-context", () => ({
   }),
 }));
 
+const probeSessionImportRunMock = vi.hoisted(() => vi.fn());
+const cancelSessionImportProbeMock = vi.hoisted(() => vi.fn());
 vi.mock("@/components/session-import/session-import-run-handle", () => ({
   startSessionImportRun: startSessionImportRunMock,
+  probeSessionImportRun: probeSessionImportRunMock,
+  cancelSessionImportProbe: cancelSessionImportProbeMock,
 }));
 
 vi.mock("@/lib/analytics", () => ({
@@ -991,6 +995,28 @@ describe("<SessionImportWizard />", () => {
 
     expect(screen.getByTestId("session-import-empty")).toBeTruthy();
     expect(screen.queryAllByTestId("session-import-group")).toHaveLength(0);
+  });
+
+  it("asks the host it renders under whether an import is already running when it opens", () => {
+    probeSessionImportRunMock.mockClear();
+    renderWizard(vi.fn());
+    // At least once, and always about the host it renders under. The harness
+    // mints a fresh binding object per render, so the count is not asserted:
+    // the real providers memoise theirs, and the controller dedupes anyway.
+    expect(probeSessionImportRunMock).toHaveBeenCalled();
+    for (const call of probeSessionImportRunMock.mock.calls) {
+      expect(call[0]).toMatchObject({ hostId: "host-a" });
+    }
+  });
+
+  it("withdraws its question when it closes", () => {
+    cancelSessionImportProbeMock.mockClear();
+    const { unmount } = renderWizard(vi.fn());
+    unmount();
+    expect(cancelSessionImportProbeMock).toHaveBeenCalled();
+    expect(cancelSessionImportProbeMock.mock.calls.at(-1)?.[0]).toMatchObject({
+      hostId: "host-a",
+    });
   });
 
   it("offers Import more on the summary, and pressing it retires the run and brings the list back", () => {
