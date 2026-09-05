@@ -1621,6 +1621,73 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
     expect(projected.version).toBe("2.0.0");
   });
 
+  it("a non-SemVer runtime stamp (staging.<epoch>.<sha>) that MATCHES the running host: activated, not foreign - the stale failed marker is cleared and nothing restarts", async () => {
+    // A staging host publishes `staging.<epoch>.<sha>` in both pid.json and
+    // the install record's runtimeVersion. That stamp is not SemVer, but
+    // equality still decides - no isValidHostVersion guard applies once the
+    // record carries a runtime stamp.
+    mocks.downloadAndStageHostMock.mockResolvedValue(upToDate("2.0.0"));
+    mocks.readHostInstallRecordMock.mockResolvedValue({
+      ...sampleRecord("2.0.0"),
+      runtimeVersion: "staging.1783550586518.bb8c937d9",
+    });
+    mocks.readHostPidMetadataMock.mockResolvedValue(
+      pidRecord("staging.1783550586518.bb8c937d9", 4242),
+    );
+    mocks.identityVerdictMock.mockResolvedValue("current");
+    mocks.readUpdateProgressMarkerMock.mockResolvedValue({
+      state: "failed",
+      error: "host did not become healthy: tcp refused",
+      targetVersion: "2.0.0",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    const result = await buildHostUpdateCommand({
+      force: false,
+      allowDowngrade: false,
+      ackNonce: null,
+    })(fakeCtx());
+
+    expect(mocks.stopHostForRestartWithAttemptMock).not.toHaveBeenCalled();
+    expect(mocks.writeUpdateProgressMarkerMock).not.toHaveBeenCalled();
+    // CONDITIONAL on the marker still being the `failed` record that was
+    // read - never the unconditional delete, which would erase a live
+    // `updating` another updater wrote in between.
+    expect(mocks.deleteUpdateProgressMarkerMock).not.toHaveBeenCalled();
+    expect(
+      mocks.deleteUpdateProgressMarkerIfUnchangedMock,
+    ).toHaveBeenCalledWith(
+      "production",
+      expect.objectContaining({ state: "failed", targetVersion: "2.0.0" }),
+    );
+    expect(result.human).toContain("no-op");
+  });
+
+  it("a non-SemVer runtime stamp the running host does NOT match: debt, activated - a staging host is never 'foreign'", async () => {
+    mocks.downloadAndStageHostMock.mockResolvedValue(upToDate("2.0.0"));
+    mocks.readHostInstallRecordMock.mockResolvedValue({
+      ...sampleRecord("2.0.0"),
+      runtimeVersion: "staging.1783550586518.bb8c937d9",
+    });
+    mocks.readHostPidMetadataMock.mockResolvedValue(
+      pidRecord("staging.1783540000000.0a1b2c3d4", 4242),
+    );
+    mocks.identityVerdictMock.mockResolvedValue("current");
+
+    const result = await buildHostUpdateCommand({
+      force: false,
+      allowDowngrade: false,
+      ackNonce: null,
+    })(fakeCtx());
+
+    expect(mocks.stopHostForRestartWithAttemptMock).toHaveBeenCalledTimes(1);
+    expect(mocks.relaunchHostAfterRestartWithAttemptMock).toHaveBeenCalledTimes(
+      1,
+    );
+    const projected = projectInstallResultLikeDesktop(result.data);
+    expect(projected.previousVersion).toBe("staging.1783540000000.0a1b2c3d4");
+  });
+
   it("the host is busy: assertHostNotBusy rejects, the marker is left failed, and restart never runs", async () => {
     mocks.downloadAndStageHostMock.mockResolvedValue(upToDate("2.0.0"));
     mocks.readHostInstallRecordMock.mockResolvedValue(sampleRecord("2.0.0"));

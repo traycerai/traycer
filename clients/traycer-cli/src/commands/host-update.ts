@@ -439,9 +439,12 @@ interface ActivationDebt {
  *   problem, and `host start` re-resolves the install record on every spawn.
  *   Under the lock, after a debt was seen, it means the host this command
  *   was about to replace is gone, which is not the same as replaced;
- * - `foreign-runtime`: a running version that is not a release version. A
- *   `local-*` dev build is not a host this command reasons about, whatever
- *   the record says;
+ * - `foreign-runtime`: a running version that is not a release version,
+ *   against a record with no runtime stamp. A dev build is not a host this
+ *   command reasons about when all it has to compare it with is the catalog
+ *   version. A record WITH a runtime stamp never reads this way: the stamp is
+ *   whatever the archive reported about itself (a staging host's is
+ *   `staging.<epoch>.<sha>`), and equality with it is the whole test;
  * - `activated`: the committed archive is what is running;
  * - `debt`: the record and the process disagree.
  */
@@ -504,16 +507,28 @@ async function readActivationState(
   if (identity === "dead" || identity === "mismatch") {
     return { kind: "no-live-host", installedVersion: installed.version };
   }
-  if (!isValidHostVersion(running.version)) return { kind: "foreign-runtime" };
   if (installed.runtimeVersion !== null) {
-    if (running.version === installed.runtimeVersion) {
-      return { kind: "activated" };
-    }
-  } else {
-    const comparison = compareHostVersions(running.version, installed.version);
-    if (!comparison.comparable || comparison.ordering === "equal") {
-      return { kind: "activated" };
-    }
+    // Runtime-stamp domain: equality decides, and the STAMPS are not
+    // required to be SemVer. A staging host publishes
+    // `staging.<epoch>.<sha>` and the record keeps that same stamp
+    // (`readExtractedRuntimeVersion`), so a SemVer guard applied before this
+    // comparison would classify every staging host as foreign and turn both
+    // its activated and its indebted states into no-ops.
+    return running.version === installed.runtimeVersion
+      ? { kind: "activated" }
+      : {
+          kind: "debt",
+          installedVersion: installed.version,
+          runningVersion: running.version,
+        };
+  }
+  // Catalog-version domain (a record with no runtime stamp yet): the
+  // release-version policy applies. A running version that is not a release
+  // version is not a host this command reasons about.
+  if (!isValidHostVersion(running.version)) return { kind: "foreign-runtime" };
+  const comparison = compareHostVersions(running.version, installed.version);
+  if (!comparison.comparable || comparison.ordering === "equal") {
+    return { kind: "activated" };
   }
   return {
     kind: "debt",
@@ -737,9 +752,11 @@ async function writeUpdateProgressMarkerSafely(
  * at the same path. That updater's run is the one whose outcome now matters;
  * stamping `failed` over its live marker would hide its progress for the
  * whole update and report a failure that is not about it. An absent marker
- * means nobody else is in flight, so the stamp still lands. `ours` is `null`
- * only when this run never wrote a marker, in which case there is nothing to
- * compare against and the stamp lands too.
+ * does not get the stamp either (see `replaceUpdateProgressMarkerIfUnchanged`
+ * for why an empty live path is not proof of an idle peer); the failure is
+ * still reported by exit code and log. `ours` is `null` only when this run
+ * never wrote a marker, in which case there is nothing to compare against and
+ * the stamp lands unconditionally.
  */
 async function markUpdateFailed(
   logger: ILogger,

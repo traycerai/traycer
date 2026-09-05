@@ -138,7 +138,21 @@ describe("update-progress-marker", () => {
 
   function scratchAndStagingFiles(): string[] {
     const dir = join(workHome, ".traycer", "host");
-    return readdirSync(dir).filter(
+    let names: string[];
+    try {
+      names = readdirSync(dir);
+    } catch (err) {
+      if (
+        typeof err === "object" &&
+        err !== null &&
+        "code" in err &&
+        err.code === "ENOENT"
+      ) {
+        return [];
+      }
+      throw err;
+    }
+    return names.filter(
       (name) => name.includes(".reconcile-") || name.includes(".tmp-"),
     );
   }
@@ -273,7 +287,7 @@ describe("update-progress-marker", () => {
       expect(scratchAndStagingFiles()).toEqual([]);
     });
 
-    it("lands `next` when no marker exists", async () => {
+    it("treats an absent marker as changed - nothing is landed", async () => {
       const {
         readUpdateProgressMarker,
         replaceUpdateProgressMarkerIfUnchanged,
@@ -284,8 +298,9 @@ describe("update-progress-marker", () => {
           expectedUpdating,
           failedNext,
         ),
-      ).toBe("replaced");
-      expect(await readUpdateProgressMarker("production")).toEqual(failedNext);
+      ).toBe("changed");
+      expect(await readUpdateProgressMarker("production")).toBeNull();
+      expect(scratchAndStagingFiles()).toEqual([]);
     });
 
     it("leaves no scratch or staging files behind on the replaced path", async () => {
@@ -319,6 +334,7 @@ describe("update-progress-marker", () => {
       try {
         const {
           writeUpdateProgressMarker,
+          readUpdateProgressMarker,
           deleteUpdateProgressMarkerIfUnchanged,
           replaceUpdateProgressMarkerIfUnchanged,
         } = await import("../update-progress-marker");
@@ -328,8 +344,9 @@ describe("update-progress-marker", () => {
         await expect(
           deleteUpdateProgressMarkerIfUnchanged("production", failed),
         ).resolves.toBe("cleared");
-        // Absent marker (the delete above already vacated it): lands `next`
-        // without throwing despite every `rm` rejecting.
+        // The marker exists again and matches: replaces despite every `rm`
+        // rejecting.
+        await writeUpdateProgressMarker("production", expectedUpdating);
         await expect(
           replaceUpdateProgressMarkerIfUnchanged(
             "production",
@@ -337,6 +354,9 @@ describe("update-progress-marker", () => {
             failedNext,
           ),
         ).resolves.toBe("replaced");
+        expect(await readUpdateProgressMarker("production")).toEqual(
+          failedNext,
+        );
       } finally {
         vi.doUnmock("node:fs/promises");
       }

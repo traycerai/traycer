@@ -155,9 +155,11 @@ export async function deleteUpdateProgressMarkerIfUnchanged(
  * the new update. A read-then-write pair only narrows that window; this
  * closes it with the same rename/link protocol the conditional delete uses.
  *
- * An ABSENT marker is treated as unchanged and `next` lands: nobody else is
- * in flight, and the stamp is the only record the failure will leave. Never
- * throws.
+ * An ABSENT marker is `changed`, not a free slot: the live path is also empty
+ * for the instant another conditional swap holds the current marker in its
+ * scratch, and a stamp landed then would beat that swap's restore and stand
+ * over the live marker it drops. The stamp therefore lands only over the
+ * exact record it expected. Never throws.
  */
 export async function replaceUpdateProgressMarkerIfUnchanged(
   environment: Environment,
@@ -290,6 +292,16 @@ async function swapMarkerIfUnchanged(
         state: expected.state,
       });
       return "swapped";
+    }
+    if (absent) {
+      // An empty live path is NOT proof that nobody else is in flight: another
+      // conditional swap may hold the current marker in its scratch at this
+      // instant (its step 1), and a stamp landed here now would win its
+      // restore's `link` with EEXIST - our stale failure standing over the
+      // live marker it then drops. Absence is a changed marker as far as a
+      // replace is concerned; the failure is still reported by exit code and
+      // log, and the only marker it can lose is one that was already gone.
+      return changed(null);
     }
     await ensureHostHomeDir(environment);
     const staged = await stageMarkerFile(target, next);
