@@ -421,7 +421,56 @@ describe("<SessionImportWizard />", () => {
     expect(screen.getByTestId("session-import-submit").textContent).toBe(
       "Import 3 sessions",
     );
-    expect(screen.getByTestId("session-import-missing-folder")).toBeTruthy();
+    // The "Folder not found" pill is gone: a missing folder now renders under
+    // the shared "Deleted Folders" header instead of its own per-folder pill.
+    expect(screen.getByText("Deleted Folders")).toBeTruthy();
+  });
+
+  it("folds two missing-folder groups into one Deleted Folders group, showing each row's own folder and toggling all of them together", () => {
+    renderWizard(vi.fn());
+    const callbacks = requireCallbacks();
+
+    act(() => {
+      callbacks.onGroup(
+        missingFolderGroup({
+          path: "/repo/gone-a",
+          sessions: [
+            importableCandidate("claude", "s1", "Session from gone-a"),
+          ],
+        }),
+      );
+    });
+    act(() => {
+      callbacks.onGroup(
+        missingFolderGroup({
+          path: "/repo/gone-b",
+          sessions: [importableCandidate("codex", "s2", "Session from gone-b")],
+        }),
+      );
+    });
+
+    // Both missing folders fold into ONE rendered group.
+    expect(screen.getAllByTestId("session-import-group")).toHaveLength(1);
+    expect(screen.getByText("Deleted Folders")).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId("session-import-group-toggle"));
+    const folderLabels = screen
+      .getAllByTestId("session-import-row-folder")
+      .map((element) => element.textContent);
+    expect(folderLabels).toEqual(
+      expect.arrayContaining(["/repo/gone-a", "/repo/gone-b"]),
+    );
+
+    // The group's own checkbox governs every row across both folders.
+    fireEvent.click(screen.getByTestId("session-import-group-select"));
+    for (const row of screen.getAllByTestId("session-import-row")) {
+      expect(row.getAttribute("aria-checked")).not.toBe("true");
+    }
+
+    fireEvent.click(screen.getByTestId("session-import-group-select"));
+    for (const row of screen.getAllByTestId("session-import-row")) {
+      expect(row.getAttribute("aria-checked")).toBe("true");
+    }
   });
 
   it("marks the unreadable row disabled and unticked, the importable one ticked", () => {
