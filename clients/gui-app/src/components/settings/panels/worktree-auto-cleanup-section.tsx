@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useId, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type ReactNode,
+  type RefObject,
+} from "react";
 import { ChevronRight, History, Info } from "lucide-react";
 import type { WorktreeAutoCleanupPolicyState } from "@traycer/protocol/host/worktree-auto-cleanup-schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -41,6 +49,7 @@ import {
   useRelativeTimestamp,
   useSampledNow,
 } from "@/lib/relative-time";
+import { useWorktreeCleanupViewStore } from "@/stores/settings/worktree-cleanup-view-store";
 
 /**
  * Settings ▸ Worktrees ▸ Automatic cleanup — the per-HOST opt-in.
@@ -77,6 +86,10 @@ export function WorktreeAutoCleanupSection(props: {
   if (gate !== "ready") {
     return <AutoCleanupNotice gate={gate} hostLabel={scope.hostLabel} />;
   }
+  // Unreachable: `resolveAutoCleanupGate` answers "absent" without a host, so
+  // "ready" already proves this. Restated for the type system rather than
+  // asserted, so the two can never disagree silently.
+  if (hostId === null) return null;
   // Keyed by host: switching the sidebar straight from one usable host to
   // another keeps this position in the tree, and the disclosure state inside
   // the controls is per host, not per panel visit. Remounting is what makes
@@ -84,6 +97,7 @@ export function WorktreeAutoCleanupSection(props: {
   return (
     <AutoCleanupControls
       key={hostId}
+      hostId={hostId}
       client={scope.client}
       hostLabel={scope.hostLabel}
       onOpenHistory={onOpenHistory}
@@ -152,6 +166,8 @@ const DISCLOSURE_PADDING: Record<SettingsDensity, string> = {
  * the card is consulted for — so those stay on screen and the rest folds away.
  */
 function AutoCleanupControls(props: {
+  /** The host this card administers. Non-null: `gate === "ready"` proves it. */
+  readonly hostId: string;
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly hostLabel: string;
   readonly onOpenHistory: () => void;
@@ -178,6 +194,7 @@ function AutoCleanupControls(props: {
     >
       <Collapsible open={expanded} onOpenChange={setConfiguring}>
         <AutoCleanupSummaryRow
+          hostId={props.hostId}
           policy={policy}
           density={density}
           busy={setPolicy.isPending}
@@ -242,6 +259,41 @@ function AutoCleanupControls(props: {
 }
 
 /**
+ * Consumes the one-shot "show me this card" request another surface left in
+ * `worktree-cleanup-view-store` (the Sweep dialog's discovery line).
+ *
+ * Lives BELOW the section's gate, so the request survives a host that is still
+ * handshaking: nothing consumes it until a real card is mounted to scroll to.
+ * Cleared the moment it is acted on, so a later visit to Settings does not
+ * re-scroll to a card nobody asked about this time.
+ *
+ * Matched by HOST, and left alone otherwise. A request whose host never
+ * mounted a card - offline, too old, or Settings never opened - outlives its
+ * own destination, and an unmatched request that this card consumed anyway
+ * would scroll to a machine nobody asked about.
+ */
+function useAutoCleanupFocusRequest(
+  hostId: string,
+  containerRef: RefObject<HTMLDivElement | null>,
+): void {
+  const requestedHostId = useWorktreeCleanupViewStore(
+    (state) => state.autoCleanupFocusHostId,
+  );
+  const requested = requestedHostId === hostId;
+  useEffect(() => {
+    if (!requested) return;
+    const node = containerRef.current;
+    if (node === null) return;
+    node.scrollIntoView({ block: "center" });
+    // The card is scrolled to AND given the caret, so a keyboard arrival lands
+    // on the control the link promised rather than at the top of the panel.
+    // `preventScroll` because the line above already placed it.
+    node.focus({ preventScroll: true });
+    useWorktreeCleanupViewStore.getState().clearAutoCleanupFocus();
+  }, [containerRef, requested]);
+}
+
+/**
  * Line one: what the policy currently does, the disclosure, and the switch.
  *
  * The disclosure trigger is its OWN button rather than the whole row, because
@@ -250,6 +302,7 @@ function AutoCleanupControls(props: {
  * a single tab stop unreachable.
  */
 function AutoCleanupSummaryRow(props: {
+  readonly hostId: string;
   readonly policy: WorktreeAutoCleanupPolicyState | null;
   readonly density: SettingsDensity;
   readonly busy: boolean;
@@ -258,10 +311,24 @@ function AutoCleanupSummaryRow(props: {
 }): ReactNode {
   const { policy, density, busy, expanded, onSetEnabled } = props;
   const enabled = policy !== null && policy.enabled;
+  // The row owns its own node rather than taking one down from the card: a ref
+  // threaded through props is read during THIS component's render, which is
+  // exactly what `react-hooks/refs` forbids.
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  useAutoCleanupFocusRequest(props.hostId, containerRef);
   return (
     <div
+      // Programmatically focusable only: a deep link from another surface hands
+      // this row the caret, but it never joins the tab order in front of the
+      // switch it introduces.
+      ref={containerRef}
+      tabIndex={-1}
+      data-testid="worktree-auto-cleanup-summary-row"
       className={cn(
-        "flex flex-wrap items-center",
+        // The deep link's programmatic focus must still be SEEN: no default
+        // outline (it would box the whole row on a mouse click inside it),
+        // but the same ring every control here shows to a keyboard user.
+        "flex flex-wrap items-center rounded-md outline-none focus-visible:ring-3 focus-visible:ring-ring/50",
         SUMMARY_PADDING[density],
         SETTINGS_ROW_STACK.container,
       )}
