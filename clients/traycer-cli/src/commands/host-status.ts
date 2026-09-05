@@ -11,6 +11,7 @@ import {
 } from "../host/pid-metadata";
 import { bootstrapLogPath } from "../store/paths";
 import { isProcessAlive } from "../store/cli-lock";
+import { makeColorizer, shouldUseColor, type Colorizer } from "../runner/ansi";
 import type { CommandFn, CommandResult } from "../runner/runner";
 import type { RuntimeContext } from "../runner/runtime";
 
@@ -84,46 +85,12 @@ export const hostStatusCommand: CommandFn = async (
 
 // ---------------------------------------------------------------- formatting
 
-// ANSI color resolution is per-call (not module-load) so the runner's
-// `--json` mode can force-disable colors even on a TTY: JSON-mode
-// callers consume `result.data` and never see the human text, but a
-// future caller that mixes both must never get ANSI codes leaked into a
-// machine-readable payload. `NO_COLOR` (env) and a non-TTY stdout
-// continue to suppress colors as before.
-function shouldUseColor(runtime: RuntimeContext): boolean {
-  if (runtime.json) return false;
-  return process.stdout.isTTY === true && !process.env.NO_COLOR;
-}
-
-interface Colorizer {
-  bold(s: string): string;
-  dim(s: string): string;
-  green(s: string): string;
-  red(s: string): string;
-  yellow(s: string): string;
-  cyan(s: string): string;
-  gray(s: string): string;
-}
-
-function makeColorizer(useColor: boolean): Colorizer {
-  const wrap = (s: string, code: string): string =>
-    useColor ? `\x1b[${code}m${s}\x1b[0m` : s;
-  return {
-    bold: (s) => wrap(s, "1"),
-    dim: (s) => wrap(s, "2"),
-    green: (s) => wrap(s, "32"),
-    red: (s) => wrap(s, "31"),
-    yellow: (s) => wrap(s, "33"),
-    cyan: (s) => wrap(s, "36"),
-    gray: (s) => wrap(s, "90"),
-  };
-}
-
 function renderHumanStatus(
   output: HostStatusOutput,
   runtime: RuntimeContext,
 ): string {
-  const c = makeColorizer(shouldUseColor(runtime));
+  // The block is printed on stdout, so that is the stream that decides.
+  const c = makeColorizer(shouldUseColor(runtime, process.stdout));
   const lines: string[] = [];
   const home = homedir();
   const tildePath = (p: string) =>

@@ -20,23 +20,18 @@ import {
 import { useRespondLinkLoginMutation } from "@/hooks/auth/use-respond-link-login-mutation";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
-interface RotationCountdown {
-  readonly secondsLeft: number;
-  /** The same countdown as a 0..1 share, for the tile's draining frame. */
-  readonly remainingFraction: number;
-}
-
 /**
- * Ticks down to the moment the query's interval mints the next code. The
- * rotation happens `expiresIn − LINK_LOGIN_REMINT_MS/1000` seconds before the
- * shown code's expiry, so the target derives from the mint response the panel
- * already holds — no extra requests, just a local 1s clock. The tile's frame
- * and the text below it read this one clock, so they can never disagree.
+ * Seconds until the query's interval mints the next code. The rotation
+ * happens `expiresIn − LINK_LOGIN_REMINT_MS/1000` seconds before the shown
+ * code's expiry, so the target derives from the mint response the panel
+ * already holds — no extra requests, just a local 1s clock. It is stated as a
+ * quiet text line only: a frame draining around the QR read as "hurry", and
+ * the code rotates on its own.
  */
 function useRotationCountdown(props: {
   readonly expiresAtEpochSeconds: number;
   readonly expiresInSeconds: number;
-}): RotationCountdown {
+}): number {
   const [nowMs, setNowMs] = useState(() => Date.now());
   useEffect(() => {
     const timer = setInterval(() => {
@@ -48,19 +43,47 @@ function useRotationCountdown(props: {
   }, []);
   const rotationLeadMs = props.expiresInSeconds * 1_000 - LINK_LOGIN_REMINT_MS;
   const nextCodeAtMs = props.expiresAtEpochSeconds * 1_000 - rotationLeadMs;
-  const secondsLeft = Math.max(0, Math.ceil((nextCodeAtMs - nowMs) / 1_000));
-  // Measuring the lead back from expiry makes the gap between two mints the
-  // remint interval itself, whatever TTL the server hands back — so that
-  // interval is the full window the frame drains across.
-  const windowSeconds = LINK_LOGIN_REMINT_MS / 1_000;
-  // Clamped HERE, at the producer: the server picks the TTL, so a longer one
-  // than the remint lead makes this ratio exceed 1 before the first rotation.
-  // The tile clamps too, but a fraction above 1 is wrong wherever it is read,
-  // and the second reader would have to remember.
-  return {
-    secondsLeft,
-    remainingFraction: Math.min(1, secondsLeft / windowSeconds),
-  };
+  return Math.max(0, Math.ceil((nextCodeAtMs - nowMs) / 1_000));
+}
+
+/** `m:ss` from a millisecond remainder, clamped at zero. */
+function formatRemaining(remainingMs: number): string {
+  const totalSeconds = Math.max(0, Math.ceil(remainingMs / 1_000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
+
+/**
+ * Seconds left before the pending claim expires unanswered, ticking once a
+ * second against the SERVER's deadline (`claimExpiresAt`) — the panel holds
+ * no copy of the claim window, so what it shows is what the server honours.
+ * Clamped at zero: the moment it hits zero the status poll's `gone` (or the
+ * hook's own local guard) retires the card; the clock never counts up.
+ */
+function useClaimCountdown(expiresAtMs: number): string {
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setNowMs(Date.now());
+    }, 1_000);
+    return () => {
+      clearInterval(timer);
+    };
+  }, []);
+  return formatRemaining(expiresAtMs - nowMs);
+}
+
+function ClaimCountdown(props: { readonly expiresAtMs: number }) {
+  const remaining = useClaimCountdown(props.expiresAtMs);
+  return (
+    <p
+      className="text-ui-xs text-muted-foreground tabular-nums"
+      data-testid="link-phone-claim-countdown"
+    >
+      Expires in {remaining}
+    </p>
+  );
 }
 
 /** The verdict whose respond round-trip is in flight, if any. */
@@ -165,28 +188,38 @@ function ConfirmClaimCard(props: {
       data-testid="link-phone-confirm"
     >
       <QrCode aria-hidden="true" className="text-muted-foreground" />
-      {/* The QR is swapped for this prompt with no user action on this
-          surface, and it is only answerable inside the claim window — a
-          screen-reader user has to hear about it, code included, or the
-          window expires undiscovered. */}
-      <div
-        className="flex flex-col items-center gap-1 text-center"
-        role="status"
-        aria-live="polite"
-      >
-        <ConfirmClaimHeadline claim={props.claim} />
-        <p
-          className="text-ui-xs text-muted-foreground"
-          data-testid="link-phone-claimant"
+      <div className="flex flex-col items-center gap-1 text-center">
+        {/* The QR is swapped for this prompt with no user action on this
+            surface, and it is only answerable inside the claim window — a
+            screen-reader user has to hear about it, code included, or the
+            window expires undiscovered. */}
+        <div
+          className="flex flex-col items-center gap-1"
+          role="status"
+          aria-live="polite"
         >
-          {detailLine}
-        </p>
-        {props.claim.matchCode.kind === "not-presented" ? null : (
-          <p className="text-ui-xs text-muted-foreground">
-            {props.claim.matchCode.kind === "shown"
-              ? "Approve only if the code matches and you just scanned this code yourself."
-              : "These details are approximate. Approve only if you just scanned this code yourself."}
+          <ConfirmClaimHeadline claim={props.claim} />
+          <p
+            className="text-ui-xs text-muted-foreground"
+            data-testid="link-phone-claimant"
+          >
+            {detailLine}
           </p>
+          {props.claim.matchCode.kind === "not-presented" ? null : (
+            <p className="text-ui-xs text-muted-foreground">
+              {props.claim.matchCode.kind === "shown"
+                ? "Approve only if the code matches and you just scanned this code yourself."
+                : "These details are approximate. Approve only if you just scanned this code yourself."}
+            </p>
+          )}
+        </div>
+        {/* Outside the live region: a status region announces every change
+            beneath it, and a clock that changes once a second would have a
+            screen reader repeating it over the code and the instructions the
+            person is trying to hear. The countdown is still in the reading
+            order right under the prompt, just never announced on its own. */}
+        {props.claim.claimExpiresAt === null ? null : (
+          <ClaimCountdown expiresAtMs={props.claim.claimExpiresAt} />
         )}
       </div>
       {props.respondFailed ? (
@@ -456,7 +489,7 @@ function usePlatformBaseUrl(): string | null {
 
 function ShowingCard(props: { readonly minted: MintLinkLoginCodeResponse }) {
   const platformBaseUrl = usePlatformBaseUrl();
-  const countdown = useRotationCountdown({
+  const secondsLeft = useRotationCountdown({
     expiresAtEpochSeconds: props.minted.expires_at,
     expiresInSeconds: props.minted.expires_in,
   });
@@ -466,7 +499,6 @@ function ShowingCard(props: { readonly minted: MintLinkLoginCodeResponse }) {
         <LinkPhoneQrTile
           code={props.minted.code}
           platformBaseUrl={platformBaseUrl}
-          remainingFraction={countdown.remainingFraction}
         />
       }
       codeSlot={<code className={CODE_BOX_CLASS}>{props.minted.code}</code>}
@@ -475,7 +507,7 @@ function ShowingCard(props: { readonly minted: MintLinkLoginCodeResponse }) {
           className="text-ui-xs text-muted-foreground tabular-nums"
           data-testid="link-phone-countdown"
         >
-          New code in {countdown.secondsLeft}s
+          New code in {secondsLeft}s
         </p>
       }
     />
@@ -491,13 +523,7 @@ function PendingCodeCard() {
   const platformBaseUrl = usePlatformBaseUrl();
   return (
     <CodeSurface
-      tile={
-        <LinkPhoneQrTile
-          code={null}
-          platformBaseUrl={platformBaseUrl}
-          remainingFraction={0}
-        />
-      }
+      tile={<LinkPhoneQrTile code={null} platformBaseUrl={platformBaseUrl} />}
       codeSlot={
         <code className={cn(CODE_BOX_CLASS, "relative")}>
           {/* One invisible line of the code's own type: the box keeps its
