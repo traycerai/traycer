@@ -106,9 +106,18 @@ export const LAYOUT = defineSettingsSection("layout", {
     search: { anchor: "layout-status-bar-reset-timer" },
     label: "Show reset timer",
     description:
-      "Count down to each window's reset. Off shows the window's name (5h, wk).",
+      "Count down to each limit's reset. Off shows the limit's name (5h, wk).",
     availableWhen: isStatusBarControlsAvailable,
-    keywords: ["countdown", "resets", "window name", "5h", "weekly"],
+    // `window name` is what this row said before the copy renamed windows to
+    // limits; it still routes here.
+    keywords: [
+      "countdown",
+      "resets",
+      "limit name",
+      "window name",
+      "5h",
+      "weekly",
+    ],
   },
   resourceScope: {
     kind: "row",
@@ -129,7 +138,7 @@ export const LAYOUT = defineSettingsSection("layout", {
     group: "statusBar",
     search: { contributesTo: "usageLimits" },
     label: "Providers",
-    description: "No provider on the watched host reports a usage window yet.",
+    description: "No provider on the watched host reports a usage limit yet.",
     availableWhen: isStatusBarControlsAvailable,
     keywords: ["provider", "codex", "claude", "watched host", "unreachable"],
   },
@@ -216,7 +225,7 @@ export const LAYOUT = defineSettingsSection("layout", {
     kind: "group",
     search: { anchor: "layout-status-bar-usage-limits" },
     label: "Usage limits",
-    description: "One segment per provider with a window still reporting.",
+    description: "One segment per provider with a limit still reporting.",
     breadcrumb: "Status bar",
     availableWhen: isStatusBarControlsAvailable,
     keywords: ["rate limits", "quota", "providers", "segments"],
@@ -238,7 +247,7 @@ export const LAYOUT = defineSettingsSection("layout", {
     group: "usageLimits",
     search: { anchor: "layout-status-bar-mini-bar" },
     label: "Show mini bar",
-    description: "Draw a small fill bar ahead of each provider's windows.",
+    description: "Draw a small fill bar ahead of each provider's limits.",
     availableWhen: isStatusBarControlsAvailable,
     keywords: ["fill bar", "gauge", "meter", "progress"],
   },

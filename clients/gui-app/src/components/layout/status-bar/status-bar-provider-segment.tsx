@@ -18,7 +18,10 @@ import {
   rateLimitWindowSeverityTextClassName,
   RUNNING_LOW_TEXT_CLASS_NAME,
 } from "@/lib/rate-limits/window-severity";
-import { windowPercentValueText } from "@/lib/rate-limits/status-bar-window-text";
+import {
+  windowLabelText,
+  windowPercentValueText,
+} from "@/lib/rate-limits/status-bar-window-text";
 // The same glyph the strip's resource segment prints for a reading it does not
 // have, so one bar never shows two different dashes for one idea.
 import { UNAVAILABLE_DASH } from "@/lib/resources/memory-metric";
@@ -164,6 +167,10 @@ function SegmentBody(props: StatusBarProviderSegmentProps): ReactNode {
             showModeWord={showModeWord}
             showTimer={showTimer}
             showLabel={parts.label}
+            // The provider's visible windows, not the ones this rung draws: an
+            // unexpanded provider draws its tightest alone and still has to
+            // say which of several that one is.
+            visibleWindowCount={segment.windows.length}
           />
         </Fragment>
       ))}
@@ -227,6 +234,7 @@ function StatusBarWindowText(props: {
   readonly showModeWord: boolean;
   readonly showTimer: boolean;
   readonly showLabel: boolean;
+  readonly visibleWindowCount: number;
 }): ReactNode {
   const { window } = props;
   // `null` when the timer is off, and also when the provider reported no reset
@@ -234,7 +242,16 @@ function StatusBarWindowText(props: {
   const countdown = useResetCountdown(props.showTimer ? window.resetsAt : null);
   const suffix = [
     ...(props.showModeWord ? [props.percentMode] : []),
-    ...(props.showLabel ? [windowLabel(window, countdown)] : []),
+    ...(props.showLabel
+      ? [
+          windowLabelText({
+            label: window.label,
+            labelIsDuration: window.labelIsDuration,
+            countdown,
+            visibleWindowCount: props.visibleWindowCount,
+          }),
+        ]
+      : []),
   ].join(" ");
   return (
     <span
@@ -250,23 +267,4 @@ function StatusBarWindowText(props: {
       {suffix === "" ? null : ` ${suffix}`}
     </span>
   );
-}
-
-/**
- * What follows the percentage.
- *
- * A countdown may only REPLACE a name that says nothing but how long the
- * window is, because that is the one case where it states the same fact more
- * precisely. Every other name — a model, a Cursor bucket, a named Codex limit,
- * a Grok billing period — is the only thing identifying WHICH limit the
- * percentage belongs to, and several of them are guaranteed to share one reset
- * instant with a sibling, so dropping the name would print two windows as one
- * indistinguishable string.
- */
-function windowLabel(
-  window: StatusBarRateLimitWindow,
-  countdown: string | null,
-): string {
-  if (countdown === null) return window.label;
-  return window.labelIsDuration ? countdown : `${window.label} ${countdown}`;
 }

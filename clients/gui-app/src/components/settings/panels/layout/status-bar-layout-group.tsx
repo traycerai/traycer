@@ -451,8 +451,8 @@ function ScopedStatusBarRateLimitProviders(): ReactNode {
             reach the strip, while each of them decides whether its window
             counts as visible at all - in both modes. */}
           <LiveToggleRow
-            label="Show all windows"
-            description="Off: only the tightest window. On: every window not hidden below."
+            label="Show all limits"
+            description="Off: only the tightest limit. On: every limit not hidden below."
             control={
               <Switch
                 checked={expandedProviders.includes(row.providerId)}
@@ -462,13 +462,13 @@ function ScopedStatusBarRateLimitProviders(): ReactNode {
                   );
                   toggleExpandedProvider(row.providerId);
                 }}
-                aria-label={`${row.label} show all windows`}
+                aria-label={`${row.label} show all limits`}
               />
             }
           />
           <LiveToggleRow
-            label="Windows"
-            description="Which of this provider's windows the strip may show."
+            label="Limits"
+            description="Which of this provider's limits the strip may show."
             control={
               <SettingsToggleChips
                 chips={windowChips(row, hiddenWindowKeys)}
@@ -476,7 +476,7 @@ function ScopedStatusBarRateLimitProviders(): ReactNode {
                   trackLayoutSetting("layout.statusBar.rateLimits.window");
                   toggleWindow(windowKey);
                 }}
-                ariaLabel={`${row.label} windows`}
+                ariaLabel={`${row.label} limits`}
                 emptyLabel="Waiting for first reading"
               />
             }
@@ -504,9 +504,9 @@ function providerRowDescription(row: StatusBarProviderRow): string {
   // chips row says why it lists none rather than the subtitle implying the
   // provider reports none.
   if (row.windows.length === 0) return row.profileLabel;
-  const windows =
-    row.windows.length === 1 ? "1 window" : `${row.windows.length} windows`;
-  return `${row.profileLabel} · ${windows}`;
+  const limits =
+    row.windows.length === 1 ? "1 limit" : `${row.windows.length} limits`;
+  return `${row.profileLabel} · ${limits}`;
 }
 
 /**

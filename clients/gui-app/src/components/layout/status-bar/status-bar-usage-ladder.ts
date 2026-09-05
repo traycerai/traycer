@@ -15,13 +15,13 @@ import type { StatusBarDensity } from "@/components/layout/status-bar/status-bar
  * Each rung takes away exactly one thing, in the order the user judged least
  * to most useful:
  *
- * - `full` — `57% used 6d 4h`, with the mini bar.
+ * - `full` — `57% used 6d`, with the mini bar.
  * - `no-mode-word` — the `used` / `remaining` word goes. The number and the
  *   setting that chose it already say which way it reads.
  * - `no-bars` — the mini bar goes. It duplicates the percentage beside it.
  * - `no-timers` — the countdown gives way to the window's static name.
  * - `percent-only` — icon and coloured percentage, nothing else, and one
- *   reading per provider regardless of "show all windows": several bare
+ *   reading per provider regardless of "show all limits": several bare
  *   numbers under one icon say which limits exist but not which is which.
  * - `icon-only` — the icon alone. Below this the cluster folds whole providers
  *   into a `+N` chip rather than inventing a shorter rung.
