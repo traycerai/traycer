@@ -25,6 +25,10 @@ import {
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
+import { useHostBinding } from "@/lib/host";
+import { resolveNamedHostClient } from "@/lib/host/binding-host-client";
+import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
+import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { hostQueryKeys, epicMutationKeys } from "@/lib/query-keys";
 import {
@@ -80,9 +84,14 @@ interface CreateChatMutationContext {
   readonly ownerUserId: string | null;
 }
 
-interface DeleteChatMutationContext {
+interface ChatMutationTarget {
+  readonly chatId: string;
   readonly hostId: string | null;
 }
+
+export type ArchiveChatMutationInput = SetChatArchivedRequest &
+  ChatMutationTarget;
+export type DeleteChatMutationInput = DeleteChatRequest & ChatMutationTarget;
 
 /**
  * What a chat mutation has to remember to refresh the record list afterwards:
@@ -91,17 +100,33 @@ interface DeleteChatMutationContext {
  */
 interface ChatRecordMutationContext {
   readonly hostId: string | null;
+  readonly viewerHostId: string | null;
+  readonly handle: OpenEpicStoreHandle | null;
+  readonly viewerUserId: string | null;
 }
 
 export type DeleteChatMutationOptions = Omit<
   UseMutationOptions<
     DeleteChatResponse,
     HostRpcError,
-    DeleteChatRequest,
-    DeleteChatMutationContext
+    DeleteChatMutationInput,
+    ChatRecordMutationContext
   >,
   "mutationFn"
 >;
+
+/** The named target is fixed even if the viewing epic changes hosts. */
+function useChatMutationClient(): (
+  variables: ChatMutationTarget,
+) => HostClient<HostRpcRegistry> | null {
+  const sessionClient = useEpicSessionHostClient();
+  const binding = useHostBinding();
+  return ({ hostId }) => {
+    if (hostId === null) return null;
+    if (sessionClient?.getActiveHostId() === hostId) return sessionClient;
+    return resolveNamedHostClient(binding, hostId);
+  };
+}
 
 /**
  * Whether the caller is expected to render this refusal ITSELF, inline, instead
@@ -452,32 +477,14 @@ export function useEpicRenameChat() {
 }
 
 /**
- * Mutation hook for `epic.setChatArchived` (optional host capability).
- *
- * Sets or clears the record's `archivedAt`, which the sidebar reads to hide a
- * row and its subtree. ONE hook covers chats and terminal-agents: the protocol
- * registers a single method keyed by record id and the host resolves it across
- * both the `chats` and `tuiAgents` maps, so a separate TUI variant would be the
- * same call with the same arguments under a second name.
- *
- * Scoped to the surrounding Epic session's owning host. The sidebar is outside
- * every tile-level `TabHostProvider`, so archive writes must follow the Epic
- * stream that projected these rows instead of borrowing an individual tile's
- * lifetime-bound host.
- *
- * No optimistic write and no cache invalidation, also matching rename: the
- * archive flag lives in the epic Y.Doc, so the host's write replicates back
- * through the epic stream and re-projects the tree on its own. There is no
- * TanStack-cached query derived from `archivedAt` to invalidate.
- *
- * `{ updated: false }` is success, not failure - it means the record was
- * already in the requested state (the RPC is idempotent). Callers must not
- * read it as "record gone".
+ * Chats and terminal agents share the archive RPC. The caller names the
+ * record's owning host; the viewing epic may only hold a replica.
+ * `updated: false` is an idempotent success, not a missing record.
  */
 export function useEpicArchiveChat(): UseMutationResult<
   SetChatArchivedResponse,
   HostRpcError,
-  SetChatArchivedRequest
+  ArchiveChatMutationInput
 > {
   return useEpicArchiveChatMutation("individual");
 }
@@ -487,60 +494,101 @@ function useEpicArchiveChatMutation(
 ): UseMutationResult<
   SetChatArchivedResponse,
   HostRpcError,
-  SetChatArchivedRequest
+  ArchiveChatMutationInput
 > {
-  const client = useEpicSessionHostClient();
+  const client = useChatMutationClient();
+  const sessionClient = useEpicSessionHostClient();
+  const handle = useMaybeOpenEpicHandle();
   const queryClient = useQueryClient();
+  // An imperative post-write read: the viewer's cloud replica can lag the
+  // owner's response. Reuse the record revision instead of inventing an overlay.
+  const readOwnerRecords = useHostMutation<
+    HostRpcRegistry,
+    "epic.listChatRecords",
+    unknown,
+    ArchiveChatMutationInput
+  >({
+    client,
+    method: "epic.listChatRecords",
+    mapVariables: ({ epicId }) => ({ epicId, hasDocReplica: false }),
+    options: null,
+  });
   return useHostMutation<
     HostRpcRegistry,
     "epic.setChatArchived",
     ChatRecordMutationContext,
-    SetChatArchivedRequest
+    ArchiveChatMutationInput
   >({
     client,
     method: "epic.setChatArchived",
-    mapVariables: (variables) => variables,
+    mapVariables: ({ epicId, chatId, archived }) => ({
+      epicId,
+      chatId,
+      archived,
+    }),
     options: {
       mutationKey: epicMutationKeys.setChatArchived(),
-      onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
-      onSuccess: (_data, _variables, ctx) => {
-        // The comment this replaces said the archive flag "lives in the epic
-        // Y.Doc, so the host's write replicates back through the epic stream".
-        // That stopped being true at the single-write pivot: `archivedAt` is a
-        // chat-database fact now, and the record list is how it reaches here.
-        invalidateEpicChatRecords(queryClient, ctx.hostId);
-        // ONE archive RPC covers both record kinds (the host resolves the id
-        // across chats and terminal agents) and the response does not say
-        // which one it hit, so refresh both record lists - the extra read is a
-        // local registry lookup, and guessing the kind here would leave the
-        // other table stale exactly when the guess is wrong.
-        invalidateEpicTuiAgentRecords(queryClient, ctx.hostId);
+      onMutate: ({ hostId }) => ({
+        hostId,
+        viewerHostId: sessionClient?.getActiveHostId() ?? null,
+        handle,
+        viewerUserId: currentProfileUserId(),
+      }),
+      onSuccess: async (_data, variables, ctx) => {
+        // The writer and the viewer cache different lists of the same record.
+        for (const hostId of new Set([ctx.hostId, ctx.viewerHostId])) {
+          invalidateEpicChatRecords(queryClient, hostId);
+          invalidateEpicTuiAgentRecords(queryClient, hostId);
+        }
+        if (
+          ctx.hostId === ctx.viewerHostId ||
+          ctx.handle?.epicId !== variables.epicId ||
+          ctx.viewerUserId !== currentProfileUserId()
+        )
+          return;
+        const chats = ctx.handle.store.getState().chats.byId;
+        if (!Object.hasOwn(chats, variables.chatId)) return;
+        if (
+          chats[variables.chatId].hostId !== ctx.hostId ||
+          chats[variables.chatId].userId !== ctx.viewerUserId
+        )
+          return;
+        try {
+          const { chats: records } =
+            await readOwnerRecords.mutateAsync(variables);
+          if (ctx.viewerUserId !== currentProfileUserId()) return;
+          const currentChats = ctx.handle.store.getState().chats.byId;
+          if (!Object.hasOwn(currentChats, variables.chatId)) return;
+          const currentRow = currentChats[variables.chatId];
+          if (
+            currentRow.hostId !== ctx.hostId ||
+            currentRow.userId !== ctx.viewerUserId
+          )
+            return;
+          const record = records.find(
+            (row) =>
+              row.chatId === variables.chatId &&
+              row.ownerUserId === currentRow.userId &&
+              row.originHostId === ctx.hostId &&
+              row.origin === "own",
+          );
+          if (record === undefined) return;
+          ctx.handle.store.getState().applyChatRecordDelta({
+            kind: "upsert",
+            epicId: variables.epicId,
+            record: { ...record, origin: "foreign", archivedAt: null },
+          });
+        } catch (error) {
+          // The write succeeded; only its immediate display refresh failed.
+          toastFromHostError(
+            toHostRpcError(error, "epic.listChatRecords"),
+            "Agent updated, but couldn't refresh its status.",
+          );
+        }
       },
       onError:
         failurePresentation === "individual"
-          ? (error) => {
-              // EVERY failure mode gets the same generic toast, including
-              // `E_HOST_UNSUPPORTED`. The renderer cannot discriminate them
-              // anyway: the wire error envelope is `{ code, message }` only -
-              // there is no status field on `HostRpcError` - and the specific
-              // reason travels in the message, which must not be parsed.
-              //
-              // Archive is USER-INITIATED, so it follows the foreground
-              // convention (`toastFromHostError`) rather than the background
-              // one (`toastFromBackgroundHostError`, the only helper that
-              // swallows `E_HOST_UNSUPPORTED` - it exists for work nobody asked
-              // for, where there is no one to inform). Someone clicked this
-              // control and expects an outcome; staying silent would read as a
-              // broken button.
-              //
-              // The capability gate keeps this path cold: the affordance is
-              // hidden unless that host advertised the method, so reaching it
-              // means the host changed under a live session - an anomaly worth
-              // surfacing. A missing record likewise surfaces as an ordinary
-              // failure, which is right since the row is about to leave the
-              // tree.
-              toastFromHostError(error, "Couldn't archive agent.");
-            }
+          ? (error) => toastFromHostError(error, "Couldn't archive agent.")
           : undefined,
     },
   });
@@ -548,7 +596,7 @@ function useEpicArchiveChatMutation(
 
 export interface ArchiveChatsMutationInput {
   readonly epicId: string;
-  readonly chatIds: readonly string[];
+  readonly chats: readonly ChatMutationTarget[];
   readonly archived: boolean;
 }
 
@@ -577,10 +625,10 @@ export function useEpicArchiveChats(): UseMutationResult<
     mutationKey: epicMutationKeys.archiveChats(),
     mutationFn: (variables) =>
       Promise.allSettled(
-        variables.chatIds.map((chatId) =>
+        variables.chats.map((chat) =>
           archiveChat.mutateAsync({
             epicId: variables.epicId,
-            chatId,
+            ...chat,
             archived: variables.archived,
           }),
         ),
@@ -600,34 +648,26 @@ export function useEpicArchiveChats(): UseMutationResult<
   });
 }
 
-/**
- * Mutation hook for epic.deleteChat.
- * Caller opens a confirm dialog first; on Delete the button enters
- * pending state; success is silent.
- *
- * Session-scoped for the reason given on rename above, and the stakes are
- * higher here because the request names no host: `epic.deleteChat` deletes
- * whatever the RECEIVING machine holds under that chat id. Sent to the
- * effective host during a re-point, it was a delete aimed at a row the sidebar
- * was projecting from somewhere else.
- */
+/** Deletes on the owning host and retires the viewer's confirmed replica. */
 export function useEpicDeleteChat(): UseMutationResult<
   DeleteChatResponse,
   HostRpcError,
-  DeleteChatRequest,
-  DeleteChatMutationContext
+  DeleteChatMutationInput,
+  ChatRecordMutationContext
 > {
-  const client = useEpicSessionHostClient();
+  const client = useChatMutationClient();
+  const sessionClient = useEpicSessionHostClient();
+  const handle = useMaybeOpenEpicHandle();
   const queryClient = useQueryClient();
   return useHostMutation<
     HostRpcRegistry,
     "epic.deleteChat",
-    DeleteChatMutationContext,
-    DeleteChatRequest
+    ChatRecordMutationContext,
+    DeleteChatMutationInput
   >({
     client,
     method: "epic.deleteChat",
-    mapVariables: (variables) => variables,
+    mapVariables: ({ epicId, chatId }) => ({ epicId, chatId }),
     options: {
       // `epic.deleteChat` names no host on the wire - the host it is SENT to
       // is the one that owns the chat being deleted - so the teardown below
@@ -635,7 +675,12 @@ export function useEpicDeleteChat(): UseMutationResult<
       // repo's host-swap convention) rather than re-read in `onSuccess`, so a
       // host swap while the delete is in flight cannot make us dispose a
       // same-id chat session belonging to a different machine.
-      onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
+      onMutate: ({ hostId }) => ({
+        hostId,
+        viewerHostId: sessionClient?.getActiveHostId() ?? null,
+        handle,
+        viewerUserId: currentProfileUserId(),
+      }),
       onSuccess: (_data, variables, ctx) => {
         // No active host at mutate time means nothing could have acquired a
         // session under this chat's identity either, so there is nothing to
@@ -680,10 +725,32 @@ export function useEpicDeleteChat(): UseMutationResult<
         // a host without the optional `host.chatRecords.subscribe` stream, or a
         // cross-host target whose stream this window does not mount.
         clearPendingChatCreation(variables.epicId, variables.chatId);
-        // The registry tombstones the chat, and its absence from the record
-        // list is what removes the row here - a doc-side removal no longer
-        // happens for a chat whose entry the sweep already took.
-        invalidateEpicChatRecords(queryClient, ctx.hostId);
+        // Retain the confirmed removal across stale replica polls while the
+        // owning host's cloud retraction is still travelling to the viewer.
+        if (
+          ctx.handle?.epicId === variables.epicId &&
+          ctx.viewerUserId === currentProfileUserId()
+        ) {
+          const state = ctx.handle.store.getState();
+          const row = Object.hasOwn(state.chats.byId, variables.chatId)
+            ? state.chats.byId[variables.chatId]
+            : undefined;
+          if (
+            row !== undefined &&
+            row.userId === ctx.viewerUserId &&
+            (row.hostId ?? ctx.viewerHostId) === ctx.hostId
+          ) {
+            state.applyChatRecordDelta({
+              kind: "remove",
+              epicId: variables.epicId,
+              chatId: variables.chatId,
+              reason: "deleted",
+            });
+          }
+        }
+        for (const hostId of new Set([ctx.hostId, ctx.viewerHostId])) {
+          invalidateEpicChatRecords(queryClient, hostId);
+        }
       },
       onError: (error, variables) => {
         // The optimistic sidebar row may already be unmounted, so its

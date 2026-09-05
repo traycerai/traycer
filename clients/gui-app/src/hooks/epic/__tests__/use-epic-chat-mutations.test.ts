@@ -25,8 +25,14 @@ vi.mock("@/lib/host/runtime", async () => {
           }),
         ),
     }),
+    useHostBinding: hostBinding,
   };
 });
+
+vi.mock("@/lib/host", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host")>()),
+  useHostBinding: hostBinding,
+}));
 
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => "host-test",
@@ -38,18 +44,52 @@ const {
   forceReleaseChatSession,
   beginPendingChatCreation,
   clearPendingChatCreation,
-} = vi.hoisted(() => ({
-  archiveChatMutateAsync: vi.fn(),
-  epicSessionHostClient: {
-    request: vi.fn(),
-    // The archive hook's `onMutate` captures this at mutate time, per the
-    // host-swap convention; the lifecycle tests below invoke it for real.
-    getActiveHostId: () => "host-test",
-  },
-  forceReleaseChatSession: vi.fn(),
-  beginPendingChatCreation: vi.fn(),
-  clearPendingChatCreation: vi.fn(),
-}));
+  namedHostClients,
+  hostBinding,
+} = vi.hoisted(() => {
+  const clients = new Map<
+    string,
+    {
+      readonly getActiveHostId: () => string;
+      readonly request: ReturnType<typeof vi.fn>;
+    }
+  >();
+  const namedHostClients = {
+    get(hostId: string) {
+      const existing = clients.get(hostId);
+      if (existing !== undefined) return existing;
+      const created = {
+        getActiveHostId: () => hostId,
+        request: vi.fn(),
+      };
+      clients.set(hostId, created);
+      return created;
+    },
+    reset() {
+      clients.clear();
+    },
+  };
+  return {
+    archiveChatMutateAsync: vi.fn(),
+    epicSessionHostClient: {
+      request: vi.fn(),
+      // The archive hook's `onMutate` captures this at mutate time, per the
+      // host-swap convention; the lifecycle tests below invoke it for real.
+      getActiveHostId: () => "host-test",
+    },
+    forceReleaseChatSession: vi.fn(),
+    beginPendingChatCreation: vi.fn(),
+    clearPendingChatCreation: vi.fn(),
+    namedHostClients,
+    hostBinding: () => ({
+      hostClient: {
+        createRequesterForHostId: (hostId: string) =>
+          namedHostClients.get(hostId),
+      },
+      hostId: null,
+    }),
+  };
+});
 // The pending-creation registry is the open-epic store's seam
 // (`stores/epics/open-epic/pending-chat-creations.ts`), covered on its own
 // terms in that store's tests. Mocked at its facade leaf here so these tests
@@ -72,7 +112,9 @@ vi.mock("@/lib/registries/chat-session-registry", () => ({
 }));
 
 import type {
+  ArchiveChatMutationInput,
   CreateChatMutationInput,
+  DeleteChatMutationInput,
   DeleteChatMutationOptions,
 } from "@/hooks/epic/use-epic-chat-mutations";
 
@@ -156,8 +198,34 @@ function getCapturedMutation(method: string): CapturedMutationArgs {
   return mutation;
 }
 
+interface ArchiveChatContext {
+  readonly hostId: string | null;
+  readonly viewerHostId: string | null;
+  readonly handle: unknown;
+  readonly viewerUserId: string | null;
+}
+
+type ChatMutationClientResolver = (variables: {
+  readonly hostId: string | null;
+}) => unknown;
+
+function isChatMutationClientResolver(
+  value: unknown,
+): value is ChatMutationClientResolver {
+  return typeof value === "function";
+}
+
+function resolveCapturedClient(method: string, hostId: string | null): unknown {
+  const client = getCapturedMutation(method).client;
+  if (!isChatMutationClientResolver(client)) {
+    throw new Error(`expected ${method} client resolver`);
+  }
+  return client({ hostId });
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
+  namedHostClients.reset();
   for (const method of Object.keys(capturedMutations)) {
     delete capturedMutations[method];
   }
@@ -278,10 +346,15 @@ describe("useEpicDeleteChat", () => {
 
     opts.onSuccess(
       { deleted: true },
-      { epicId: "epic-1", chatId: "chat-1" },
+      { epicId: "epic-1", chatId: "chat-1", hostId: "host-test" },
       // The host captured at mutate time - `epic.deleteChat` carries no host
       // on the wire, so the teardown is told which machine's session to close.
-      { hostId: "host-test" },
+      {
+        hostId: "host-test",
+        viewerHostId: "host-test",
+        handle: null,
+        viewerUserId: null,
+      },
       mutationContext,
     );
 
@@ -322,8 +395,13 @@ describe("useEpicDeleteChat", () => {
 
     opts.onSuccess(
       { deleted: true },
-      { epicId: "epic-1", chatId: "chat-1" },
-      { hostId: null },
+      { epicId: "epic-1", chatId: "chat-1", hostId: null },
+      {
+        hostId: null,
+        viewerHostId: "host-test",
+        handle: null,
+        viewerUserId: null,
+      },
       { client: new QueryClient(), meta: undefined },
     );
 
@@ -342,14 +420,12 @@ describe("useEpicDeleteChat", () => {
     useEpicCanvasStore.getState().markArtifactSelfDeleted("chat-1");
     renderHook(() => useEpicDeleteChat(), { wrapper: makeWrapper() });
     const opts = getCapturedMutation("epic.deleteChat").options as {
-      onError: (
-        e: HostRpcError,
-        variables: { readonly epicId: string; readonly chatId: string },
-      ) => void;
+      onError: (e: HostRpcError, variables: DeleteChatMutationInput) => void;
     };
     opts.onError(makeError("RPC_ERROR"), {
       epicId: "epic-1",
       chatId: "chat-1",
+      hostId: "host-test",
     });
     expect(
       useEpicCanvasStore.getState().selfDeletedArtifactIds.has("chat-1"),
@@ -357,15 +433,38 @@ describe("useEpicDeleteChat", () => {
     expect(toast.error).toHaveBeenCalledWith("Couldn't delete agent.");
   });
 
-  it("addresses the Epic session's host, not the app-wide one", () => {
-    // The stakes are higher here than on rename: `epic.deleteChat` names no
-    // host on the wire, so it deletes whatever the RECEIVING machine holds
-    // under that chat id. Sent to the effective host during a re-point, it is
-    // a delete aimed at a row the sidebar is projecting from elsewhere.
+  it("uses the session client when the named host is the session host", () => {
     renderHook(() => useEpicDeleteChat(), { wrapper: makeWrapper() });
-    expect(getCapturedMutation("epic.deleteChat").client).toBe(
+    expect(resolveCapturedClient("epic.deleteChat", "host-test")).toBe(
       epicSessionHostClient,
     );
+  });
+
+  it("resolves a named non-session host through the binding", () => {
+    renderHook(() => useEpicDeleteChat(), { wrapper: makeWrapper() });
+    expect(resolveCapturedClient("epic.deleteChat", "remote-host")).toBe(
+      namedHostClients.get("remote-host"),
+    );
+  });
+
+  it("fails closed when the named host is null", () => {
+    renderHook(() => useEpicDeleteChat(), { wrapper: makeWrapper() });
+    expect(resolveCapturedClient("epic.deleteChat", null)).toBeNull();
+  });
+
+  it("strips hostId from the wire request", () => {
+    renderHook(() => useEpicDeleteChat(), { wrapper: makeWrapper() });
+    const mapVariables = getCapturedMutation("epic.deleteChat").mapVariables;
+    if (mapVariables === undefined) {
+      throw new Error("expected deleteChat mapVariables");
+    }
+    expect(
+      mapVariables({
+        epicId: "epic-1",
+        chatId: "chat-1",
+        hostId: "remote-host",
+      } as never),
+    ).toEqual({ epicId: "epic-1", chatId: "chat-1" });
   });
 });
 
@@ -374,26 +473,32 @@ describe("useEpicArchiveChat", () => {
     renderHook(() => useEpicArchiveChat(), { wrapper: makeWrapper() });
 
     const mutation = getCapturedMutation("epic.setChatArchived");
-    expect(mutation.client).toBe(epicSessionHostClient);
+    expect(typeof mutation.client).toBe("function");
     expect(mutation.method).toBe("epic.setChatArchived");
-    // mapVariables is identity - chats and terminal-agents share one RPC keyed
-    // by record id; there is no separate TUI method.
+    // hostId is caller-captured routing context and must not go on the wire.
     if (mutation.mapVariables === undefined) {
       throw new Error("expected setChatArchived mapVariables");
     }
-    const variables = {
+    const variables: ArchiveChatMutationInput = {
       epicId: "epic-1",
       chatId: "agent-or-chat-id",
+      hostId: "host-test",
       archived: true,
     };
     const mapVariables = mutation.mapVariables as (
-      vars: typeof variables,
-    ) => typeof variables;
-    expect(mapVariables(variables)).toEqual(variables);
+      vars: ArchiveChatMutationInput,
+    ) => SetChatArchivedRequest;
+    expect(mapVariables(variables)).toEqual({
+      epicId: "epic-1",
+      chatId: "agent-or-chat-id",
+      archived: true,
+    });
 
     const opts = mutation.options as {
       onSuccess: ((data: SetChatArchivedResponse) => void) | undefined;
-      onMutate: (() => { readonly hostId: string | null }) | undefined;
+      onMutate:
+        | ((variables: ArchiveChatMutationInput) => ArchiveChatContext)
+        | undefined;
       onError: (e: HostRpcError) => void;
     };
     // Still no optimistic CACHE WRITE - nothing here fabricates an archived
@@ -408,6 +513,17 @@ describe("useEpicArchiveChat", () => {
     expect(opts.onSuccess).toBeDefined();
   });
 
+  it("uses the session client for the session host and the binding otherwise", () => {
+    renderHook(() => useEpicArchiveChat(), { wrapper: makeWrapper() });
+    expect(resolveCapturedClient("epic.setChatArchived", "host-test")).toBe(
+      epicSessionHostClient,
+    );
+    expect(resolveCapturedClient("epic.setChatArchived", "remote-host")).toBe(
+      namedHostClients.get("remote-host"),
+    );
+    expect(resolveCapturedClient("epic.setChatArchived", null)).toBeNull();
+  });
+
   it("treats { updated: false } as success and does not toast (B9)", () => {
     const { wrapper, queryClient } = makeWrapperWithClient();
     const invalidateQueries = vi
@@ -415,12 +531,14 @@ describe("useEpicArchiveChat", () => {
       .mockResolvedValue();
     renderHook(() => useEpicArchiveChat(), { wrapper });
     const opts = getCapturedMutation("epic.setChatArchived").options as {
-      onMutate: (() => { readonly hostId: string | null }) | undefined;
+      onMutate:
+        | ((variables: ArchiveChatMutationInput) => ArchiveChatContext)
+        | undefined;
       onSuccess:
         | ((
             data: SetChatArchivedResponse,
-            variables: SetChatArchivedRequest,
-            ctx: { readonly hostId: string | null },
+            variables: ArchiveChatMutationInput,
+            ctx: ArchiveChatContext,
             mutationContext: MutationFunctionContext,
           ) => void)
         | undefined;
@@ -431,25 +549,77 @@ describe("useEpicArchiveChat", () => {
     }
 
     // Idempotent "already in requested state" is a success response, DRIVEN
-    // here rather than merely present: `onMutate` captures the session host
-    // at mutate time, and `onSuccess` for `{ updated: false }` must still
-    // refresh that host's record list (the row may have been archived by
-    // another client - the refetch is the correction) while announcing
-    // nothing.
-    const ctx = opts.onMutate();
-    expect(ctx).toEqual({ hostId: "host-test" });
-    opts.onSuccess(
-      { updated: false },
-      { epicId: "epic-1", chatId: "chat-1", archived: true },
-      ctx,
-      { client: queryClient, meta: undefined },
-    );
+    // here rather than merely present: `onMutate` captures the named target
+    // and the viewing session, and `onSuccess` for `{ updated: false }` must
+    // still refresh both record lists while announcing nothing.
+    const variables: ArchiveChatMutationInput = {
+      epicId: "epic-1",
+      chatId: "chat-1",
+      hostId: "host-test",
+      archived: true,
+    };
+    const ctx = opts.onMutate(variables);
+    expect(ctx).toEqual({
+      hostId: "host-test",
+      viewerHostId: "host-test",
+      handle: null,
+      viewerUserId: null,
+    });
+    opts.onSuccess({ updated: false }, variables, ctx, {
+      client: queryClient,
+      meta: undefined,
+    });
 
     expect(invalidateQueries).toHaveBeenCalledWith({
       queryKey: hostQueryKeys.methodScope("host-test", "epic.listChatRecords"),
     });
     expect(toast.error).not.toHaveBeenCalled();
     expect(toast.success).not.toHaveBeenCalled();
+  });
+
+  it("refreshes both the target and viewer caches after a remote archive", () => {
+    const { wrapper, queryClient } = makeWrapperWithClient();
+    const invalidateQueries = vi
+      .spyOn(queryClient, "invalidateQueries")
+      .mockResolvedValue();
+    renderHook(() => useEpicArchiveChat(), { wrapper });
+    const opts = getCapturedMutation("epic.setChatArchived").options as {
+      onMutate: (variables: ArchiveChatMutationInput) => ArchiveChatContext;
+      onSuccess: (
+        data: SetChatArchivedResponse,
+        variables: ArchiveChatMutationInput,
+        ctx: ArchiveChatContext,
+        mutationContext: MutationFunctionContext,
+      ) => void;
+    };
+
+    const variables: ArchiveChatMutationInput = {
+      epicId: "epic-1",
+      chatId: "chat-1",
+      hostId: "remote-host",
+      archived: true,
+    };
+    const ctx = opts.onMutate(variables);
+    expect(ctx).toEqual({
+      hostId: "remote-host",
+      viewerHostId: "host-test",
+      handle: null,
+      viewerUserId: null,
+    });
+    opts.onSuccess({ updated: true }, variables, ctx, {
+      client: queryClient,
+      meta: undefined,
+    });
+
+    expect(invalidateQueries).toHaveBeenCalledWith({
+      queryKey: hostQueryKeys.methodScope(
+        "remote-host",
+        "epic.listChatRecords",
+      ),
+    });
+    expect(invalidateQueries).toHaveBeenCalledWith({
+      queryKey: hostQueryKeys.methodScope("host-test", "epic.listChatRecords"),
+    });
   });
 
   it("toasts a generic fallback on a real failure (B9)", () => {
@@ -499,7 +669,10 @@ describe("useEpicArchiveChats", () => {
     act(() => {
       result.current.mutate({
         epicId: "epic-1",
-        chatIds: ["chat-1", "chat-2"],
+        chats: [
+          { chatId: "chat-1", hostId: "host-test" },
+          { chatId: "chat-2", hostId: "remote-host" },
+        ],
         archived: true,
       });
     });
@@ -511,11 +684,13 @@ describe("useEpicArchiveChats", () => {
     expect(archiveChatMutateAsync).toHaveBeenNthCalledWith(1, {
       epicId: "epic-1",
       chatId: "chat-1",
+      hostId: "host-test",
       archived: true,
     });
     expect(archiveChatMutateAsync).toHaveBeenNthCalledWith(2, {
       epicId: "epic-1",
       chatId: "chat-2",
+      hostId: "remote-host",
       archived: true,
     });
 
@@ -532,7 +707,7 @@ describe("useEpicArchiveChats", () => {
 
   it("keeps mixed outcomes ordered and reports one batch failure", async () => {
     archiveChatMutateAsync.mockImplementation(
-      (input: SetChatArchivedRequest) =>
+      (input: ArchiveChatMutationInput) =>
         input.chatId === "chat-1"
           ? Promise.resolve({ updated: true })
           : Promise.reject(makeError("RPC_ERROR")),
@@ -547,7 +722,10 @@ describe("useEpicArchiveChats", () => {
     act(() => {
       result.current.mutate({
         epicId: "epic-1",
-        chatIds: ["chat-1", "chat-2"],
+        chats: [
+          { chatId: "chat-1", hostId: "host-test" },
+          { chatId: "chat-2", hostId: "remote-host" },
+        ],
         archived: true,
       });
     });
