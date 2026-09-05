@@ -520,9 +520,12 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
       "Open the notification center, then use Up/Down to move between notifications. Pressing the chord again closes it.",
     category: "app",
     kind: "chord",
-    // ⌘⇧N - N for notifications, in the same ⌘⇧ family as the other global
-    // panel openers (⌘⇧U usage limits). ⌘N is taken by "New task".
-    defaultChord: "mod+shift+n",
+    // ⌘⇧B - B for the bell, in the same ⌘⇧ family as the other global panel
+    // openers (⌘⇧U usage limits). ⌘N is "New task" and ⌘⇧N is the desktop
+    // File → New Window accelerator (menu-builder.ts), which the main process
+    // consumes before the renderer ever sees the keystroke - so any chord
+    // here must also avoid the native menu's accelerators, not just this map.
+    defaultChord: "mod+shift+b",
     secondaryChord: undefined,
     terminalPolicy: "app",
     secondaryTerminalPolicy: undefined,
