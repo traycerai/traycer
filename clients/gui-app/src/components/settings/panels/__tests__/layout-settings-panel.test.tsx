@@ -295,6 +295,41 @@ describe("<LayoutSettingsPanel />", () => {
     ).toBeNull();
   });
 
+  it("keeps the header resource-monitor row under status-bar placement at a narrow viewport", () => {
+    // A desktop build narrowed below `md` - a split screen, a dragged-in edge.
+    // `AppShell` drops the strip there whatever the placement says and
+    // `MobileAppHeader` keeps the resource monitor, so this row governs the
+    // only monitor on screen and the group's own `Show resource monitor`
+    // governs a strip that is not drawn. `useIsMobileViewport` reads
+    // `window.innerWidth` directly (the global `matchMedia` shim always reports
+    // `false`), so setting it before render is enough.
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: 400,
+    });
+    try {
+      useLayoutStore.setState({
+        statusBar: { ...DEFAULT_STATUS_BAR_LAYOUT, placement: "status-bar" },
+      });
+      render(<LayoutSettingsPanel />);
+      const monitor = screen.getByRole("switch", {
+        name: "Show resource monitor in header",
+      });
+
+      fireEvent.click(monitor);
+
+      expect(useSettingsStore.getState().showGlobalResourceMonitor).toBe(false);
+      // The GROUP stays on the build, not the viewport: a temporarily narrow
+      // window must not hide the placement setting.
+      expect(screen.getByRole("button", { name: "Status bar" })).toBeTruthy();
+    } finally {
+      Object.defineProperty(window, "innerWidth", {
+        configurable: true,
+        value: 1024,
+      });
+    }
+  });
+
   it("renders provider subgroups in ORDERED_PROVIDERS order regardless of input order", () => {
     // Fed claude-code before codex; ORDERED_PROVIDERS ranks codex ahead of
     // claude-code, and the panel must sort rather than render input order.

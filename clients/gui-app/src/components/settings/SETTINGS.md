@@ -924,9 +924,15 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     `SettingsGroup`, and INSIDE it a `SettingsSubgroup` per subject rather than
     a flat row list - the bar is ONE layout slice, and its subjects nest two
     deep). Reading down: the **preview**; Placement (Header / Status bar);
-    `Show resource monitor in header`, drawn only while placement is `header`
-    because in the other placement the group's own `Show resource monitor`
-    governs the same thing; **Usage limits** (subgroup, title switch =
+    `Show resource monitor in header`, drawn while placement is `header` **or
+    the viewport is below `md`** - in the other placement the group's own
+    `Show resource monitor` governs the same thing, but below `md` `AppShell`
+    drops the strip whatever the placement says and `MobileAppHeader` keeps
+    this monitor, so the row would otherwise be the only control over the only
+    monitor on screen and be missing. The GROUP still keys on the BUILD
+    (`isMobileApp()`): a temporarily narrow window must not hide the placement
+    setting. Ask which question a row's absence answers, not which gate is
+    nearest; **Usage limits** (subgroup, title switch =
     `rateLimits.enabled`) holding **Display** (percentage used / remaining, the
     used / remaining WORD after each percentage, reset timer, mini bar) and a
     `Providers on <hostLabel>` band of one subgroup per provider (title switch =
@@ -1028,9 +1034,12 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     reading yet draws its cold track, an account with none draws the strip's
     "connect a provider" line, and with no global resource stream mounted (the
     `header` placement with the header monitor off) the resource segment draws
-    its dashes. In `header` placement the frame is greyed with `Shown when
-placement is Status bar.` rather than hidden - a preview that vanished would
-    read as the settings having no effect.
+    its dashes. Wherever the strip is not the surface currently drawn the frame
+    is greyed rather than hidden - a preview that vanished would read as the
+    settings having no effect - and the caption says WHICH reason: `Shown when
+placement is Status bar.` in `header` placement, and `The strip is not shown
+at this window width; the header keeps its controls.` below `md`, where the
+    placement sentence would be a false promise.
   - **`inert` is why the frame's own tooltips are not the explanation.** It
     removes the subtree from hit testing, so no `TooltipWrapper` inside it can
     open - and the states those tooltips exist for (three bare dashes, a dimmed
@@ -1039,12 +1048,19 @@ placement is Status bar.` rather than hidden - a preview that vanished would
     instead: one line per non-live provider segment and ONE line for the
     resource segment, both from the same builders the tooltips use
     (`statusBarSegmentTooltip`, `statusBarResourceMetricViews`), so the caption
-    and the strip can never word one state two ways. They are two SIBLINGS
+    and the strip can never word one state two ways. The `+N` chip's tooltip is
+    lifted the same way, as a `Folded: <provider> <reading>, …` line built from
+    the chip's own `providerReadingText` - at the Narrow width, the one a reader
+    picks precisely to find out what folds, `+2` with no way to see which two is
+    the worst of the three. It is also why the LADDER is stepped by the preview
+    itself and handed to both halves: which providers folded is a property of
+    the measurement, and only one box can be the measured one. They are two
+    SIBLINGS
     rather than one list, because reading the resource reason costs a
     `useDesktopAppResourceUsage` SUBSCRIPTION and subscribing is what starts
     the 1 Hz IPC poll - so that half is its own component mounted under `Show
-resource monitor`, never a gated result. Both dim with the frame under
-    `header` placement, and both are absent when there is nothing to explain.
+resource monitor`, never a gated result. Both dim whenever the frame does,
+    and both are absent when there is nothing to explain.
   - **The width control's three options are the three DENSITY RUNGS**, not
     three arbitrary widths, and the frame's border is why they land where they
     do: `max-w-[480px]` measures 478 (`icon-only`), `max-w-[900px]` measures
@@ -1061,7 +1077,39 @@ resource monitor`, never a gated result. Both dim with the frame under
     the readings inside stay `shrink-0` under `contentRef`, and there is no
     separate spacer. A content-sized container would report its own content the
     moment that content fits, which is a ladder that can only ever go down -
-    Wide → Narrow → Wide would stay collapsed until Settings was reopened.
+    Wide → Narrow → Wide would stay collapsed until Settings was reopened. It
+    also carries an invisible `reservedRef` placeholder composed of the strip's
+    own two numbers (`pl-1` plus the refresh button's `size-5`): the ladder
+    subtracts whatever shares the room with the readings, and a preview that
+    reserved nothing would collapse ~24px later than the strip - at the one
+    width whose whole job is to say what collapses first. The real
+    `RefreshIconButton` would close the gap too, but it renders disabled for a
+    passive reader, which misrepresents a live control.
+  - **The preview is STICKY inside its group, from `md` up** (`md:sticky
+md:top-0`): positioned against the nearest scrollport - the settings
+    `overflow-y-auto` box, padding-less in both the modal and the tab, hence
+    `top-0` - and confined to its containing block, `SettingsGroup`'s card, so
+    it releases when the Status bar group scrolls past. The breakpoint is the
+    one `AppShell` mounts the strip on, and the reason is the same as the
+    caption's: below `md` this block is a dimmed `inert` picture of a surface
+    the shell does not draw, it is several hundred pixels tall once its
+    description and captions wrap, and a sticky box taller than its scrollport
+    pins its TOP - so its own last caption would be unreachable, scrolling
+    being what the pin cancels. Two things make it work: `SettingsGroup`'s card
+    is `overflow-clip` rather than
+    `overflow-hidden`, since `hidden` makes the card a scrollport and a sticky
+    child then anchors to a box that never scrolls; and `data-stuck` is written
+    onto the block from an `IntersectionObserver` over a 1px sentinel above it,
+    never from React - a scroll listener holding state would re-render the
+    whole preview per scrolled pixel. The fill and the lift are keyed on that
+    attribute AND on the same breakpoint (the sentinel reports at every width,
+    and a static block whose sentinel has scrolled out must not paint a stuck
+    fill mid-card), so the block looks like part of the card until rows are
+    actually travelling under it, and the fill is the card's own COMPOSITE
+    (`background`
+    plus a `-z-10` `card/40` pseudo) rather than one flat token - repainting a
+    pinned child opaque inside a `bg-card/40` pane is what cost the
+    model-providers tab its sticky search.
   - **Composer** (`panels/layout/composer-layout-group.tsx`, its own file - the
     page mounts it with one line, so groups landing beside each other do not
     contend for the panel). Seven elements, a closed list rather than a

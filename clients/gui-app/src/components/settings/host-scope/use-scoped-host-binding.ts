@@ -50,12 +50,13 @@ import type { HostScope } from "@/components/settings/host-scope/use-host-scope"
  * user's microphone rides, and a stream re-provider above a composer is the
  * voice-to-the-wrong-machine outcome directly rather than by implication.
  * That population is no longer a single surface: `resource-monitor-popover`
- * was the only stream re-provider, the epic sidebar's file tree and git diff
- * panel are two more, and `app-status-bar` is the FOURTH — it re-provides both
- * contexts for the host it watches, since the strip's readout rides
- * `resources.subscribe` while its usage segments' reads are unary. None of the
- * four contains a composer — three are file/diff/process browsers and the
- * fourth is a 24px strip — which is what keeps this safe, again positionally,
+ * was the only stream re-provider, the epic sidebar's file tree, the git diff
+ * PANEL and the git diff TILE (two surfaces, not one - a pinned panel body and
+ * a canvas tile) are three more, and `app-status-bar` is the FIFTH — it
+ * re-provides both contexts for the host it watches, since the strip's readout
+ * rides `resources.subscribe` while its usage segments' reads are unary. None
+ * of the five contains a composer — four are file/diff/process browsers and the
+ * fifth is a 24px strip — which is what keeps this safe, again positionally,
  * not structurally.
  *
  * Three arms, and which one you are in is the whole question:

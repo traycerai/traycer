@@ -26,6 +26,7 @@ import {
   resolveRateLimitProfileId,
   useRateLimitProfileSelection,
 } from "@/hooks/rate-limits/use-rate-limit-profile-selection";
+import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import {
   HostRuntimeContext,
   useHostBinding,
@@ -153,6 +154,7 @@ function StatusBarLayoutGroupContent(): ReactNode {
   const setShowGlobalResourceMonitor = useSettingsStore(
     (state) => state.setShowGlobalResourceMonitor,
   );
+  const narrowViewport = useIsMobileViewport();
   const { scope, hasExplicitPick } = useRateLimitResolveHostScope();
   const scopedBinding = useScopedHostBinding(scope);
   const ambientBinding = useHostBinding();
@@ -191,10 +193,28 @@ function StatusBarLayoutGroupContent(): ReactNode {
             />
           }
         />
-        {/* Relocated from General, and shown only in header placement: in the
-          status bar the group's own `Show resource monitor` governs the same
-          thing, and two switches over one segment is one of them lying. */}
-        {statusBar.placement === "header" ? (
+        {/* Relocated from General, and shown whenever the HEADER is the
+          surface drawing that monitor: in the status bar the group's own
+          `Show resource monitor` governs the same thing, and two switches over
+          one segment is one of them lying.
+
+          The viewport is the second half of that question and not a second
+          question. Below `md` the shell drops the strip whatever `placement`
+          says (`AppShell`) and `MobileAppHeader` keeps this monitor, so a
+          desktop window narrowed into a split screen would otherwise leave the
+          only monitor on screen with no switch anywhere - the group's own
+          `Show resource monitor` governs a strip that is not drawn.
+          `MobileStatusBarLayoutGroup` makes exactly this argument for the
+          installed app. The GROUP stays on the build rather than the viewport:
+          a temporarily narrow window must not hide the placement setting.
+
+          So below `md` under `status-bar` placement BOTH switches are on
+          screen, which is the exception to the rule above and is deliberate:
+          the alternative is neither. Nothing here says which one is currently
+          live, because it is not this row's to say - every other control in
+          the group configures that undrawn strip too, and the preview's
+          caption above is the page's one answer for all of them. */}
+        {statusBar.placement === "header" || narrowViewport ? (
           <SettingsRow
             label="Show resource monitor in header"
             description="Show the app-wide resource monitor beside the usage gauge."

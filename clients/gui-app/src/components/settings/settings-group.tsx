@@ -47,7 +47,12 @@ export function SettingsGroup(props: SettingsGroupProps): ReactNode {
       </h2>
       <div
         className={cn(
-          "overflow-hidden rounded-lg border border-border/60 bg-card/40",
+          // `clip` rather than `hidden`, and the difference is not cosmetic:
+          // both clip a row to the card's rounded corners, but `hidden` makes
+          // the card a SCROLLPORT, and a `position: sticky` child then anchors
+          // to a box that never scrolls - which reads as sticky silently doing
+          // nothing (Layout ▸ Status bar pins its preview this way).
+          "overflow-clip rounded-lg border border-border/60 bg-card/40",
           tone === "danger" && "border-destructive/30 bg-destructive/5",
           fill && "min-h-0 flex-1",
         )}

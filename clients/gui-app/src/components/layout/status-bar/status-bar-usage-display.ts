@@ -5,6 +5,7 @@ import type {
 import { providerDisplayName } from "@/lib/provider-ordering";
 import { formatUnavailableReason } from "@/lib/provider-rate-limit-content";
 import type { RateLimitProviderId } from "@/lib/rate-limit-providers";
+import { windowPercentText } from "@/lib/rate-limits/status-bar-window-text";
 import { cn } from "@/lib/utils";
 import {
   useLayoutStore,
@@ -35,6 +36,23 @@ export function statusBarUsageContentClass(
     "inline-flex items-center gap-2 px-1.5",
     cluster.kind === "segments" ? "shrink-0" : "min-w-0",
   );
+}
+
+/**
+ * One provider and its tightest reading, or the provider alone when it has none.
+ *
+ * Here rather than beside the `+N` chip that draws it, because the Settings
+ * preview's caption has to say the same line OUTSIDE its frame - `inert` puts
+ * the chip's own tooltip out of reach there - and two spellings of one reading
+ * is exactly what this module exists to prevent.
+ */
+export function providerReadingText(
+  segment: StatusBarProviderSegmentModel,
+  percentMode: PercentMode,
+): string {
+  const name = providerDisplayName(segment.providerId);
+  if (segment.tightest === null) return name;
+  return `${name} ${windowPercentText(segment.tightest.usedPercent, percentMode)}`;
 }
 
 /** One empty list for the three cluster states that draw no segments. */
