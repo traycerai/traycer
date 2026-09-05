@@ -28,12 +28,20 @@ import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 const testState = vi.hoisted(() => ({
   rows: [] as ReadonlyArray<unknown>,
   supported: true as boolean | null,
-  navigate: vi.fn(),
+  // The HOOK is counted, not only its result: the point of the structure is
+  // that a router-less dialog never reaches `useNavigate` at all.
+  useNavigateCalls: 0,
+  navigations: [] as Array<unknown>,
 }));
 
 vi.mock("@tanstack/react-router", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@tanstack/react-router")>()),
-  useNavigate: () => testState.navigate,
+  useNavigate: () => {
+    testState.useNavigateCalls += 1;
+    return (options: unknown): void => {
+      testState.navigations.push(options);
+    };
+  },
 }));
 
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
@@ -193,7 +201,8 @@ describe("SweepWorktreesDialog automatic-cleanup discovery", () => {
   beforeEach(async () => {
     testState.rows = [sweepRow(true)];
     testState.supported = true;
-    testState.navigate = vi.fn();
+    testState.useNavigateCalls = 0;
+    testState.navigations = [];
     __resetTabNavigationControllerForTesting();
     __resetTabSyncCoordinatorForTesting();
     installTabSyncCoordinator({ readyPromise: Promise.resolve() });
@@ -204,7 +213,7 @@ describe("SweepWorktreesDialog automatic-cleanup discovery", () => {
     useWorktreeCleanupViewStore.setState({
       view: "settings",
       focusedRunId: null,
-      autoCleanupFocusRequested: false,
+      autoCleanupFocusHostId: null,
     });
   });
 
@@ -245,6 +254,7 @@ describe("SweepWorktreesDialog automatic-cleanup discovery", () => {
       expect(screen.queryByTestId(DISCOVERY)).toBeNull();
     });
     expect(screen.queryByTestId(DISCOVERY)).toBeNull();
+    expect(testState.useNavigateCalls).toBe(0);
   });
 
   it("says nothing on a host that never advertised the capability", async () => {
@@ -309,18 +319,36 @@ describe("SweepWorktreesDialog automatic-cleanup discovery", () => {
     );
 
     expect(onOpenChange).toHaveBeenCalledWith(false);
-    expect(testState.navigate).toHaveBeenCalledWith(
+    expect(testState.navigations).toContainEqual(
       expect.objectContaining({ to: "/settings/worktrees" }),
     );
     // The policy is per HOST, so the destination is only well defined once
     // Settings is administering the machine this sweep was pointed at.
     expect(useSettingsHostScopeStore.getState().scopedHostId).toBe("host-1");
     // The inventory, never the cleanup history - and the card asks to be
-    // brought into view once the panel mounts it.
+    // brought into view once the panel mounts it, NAMING the host it is about
+    // so another host's card cannot pick the request up later.
     expect(useWorktreeCleanupViewStore.getState()).toMatchObject({
       view: "settings",
       focusedRunId: null,
-      autoCleanupFocusRequested: true,
+      autoCleanupFocusHostId: "host-1",
     });
+  });
+
+  it("never touches the router unless the line itself renders", async () => {
+    // A Sweep dialog rendered without a `RouterProvider` is the normal case in
+    // these suites. `useNavigate` only warns outside one, so the guarantee has
+    // to be structural: the hook lives in the line, and the line only exists
+    // once the capability is proven and the policy came back off.
+    testState.supported = false;
+
+    renderDialog({
+      client: clientWithPolicy(() => policyFixture({})),
+      onOpenChange: () => undefined,
+    });
+
+    await censusRendered();
+    expect(screen.queryByTestId(DISCOVERY)).toBeNull();
+    expect(testState.useNavigateCalls).toBe(0);
   });
 });

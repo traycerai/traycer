@@ -2144,12 +2144,22 @@ aria-live="polite"` carrying the equivalent text for
       `carryViewedHostIntoSettingsScope` (the policy is per host),
       `selectWorktreeCleanupView("settings", null)` (the inventory, never
       history), and then `ensureSettingsTab` — plus a third hint of its own,
-      `requestAutoCleanupFocus`. That flag is one-shot exactly like
-      `focusedRunId`: `AutoCleanupControls` consumes it in an effect
-      (`scrollIntoView` + `focus()` on the summary row, which carries
-      `tabIndex={-1}` so it is programmatically focusable without joining the
-      tab order) and clears it, and `openHistory` drops it because a card-focus
-      request is stale the moment the panel leaves the inventory.
+      `requestAutoCleanupFocus(hostId)`. That request is one-shot exactly like
+      `focusedRunId`, and it NAMES ITS HOST (`autoCleanupFocusHostId`, not a
+      bare boolean): the policy is per host and the card administers exactly
+      one, so a request whose host never mounts a card — offline, too old, or
+      Settings never opened — must not be spent on whichever host is scoped
+      next. The summary row consumes it in an effect only while
+      `scope.hostId` matches, then clears it (`scrollIntoView` + `focus()` on
+      that row, which carries `tabIndex={-1}` so it is programmatically
+      focusable without joining the tab order in front of the switch).
+      `openHistory` drops it because a card-focus request is stale the moment
+      the panel leaves the inventory, and a caller with no host to name asks
+      for no focus at all.
+      The line's own `useNavigate` lives in the innermost component, which
+      mounts only once the capability is proven AND the policy came back off —
+      so a Sweep dialog rendered without a `RouterProvider` never reaches the
+      router hook, rather than relying on TanStack warning and carrying on.
     - **Paused** states render the reason in plain English
       (`AUTO_CLEANUP_PAUSED_COPY`, a `Record` over the closed wire enum so a new
       arm fails to compile rather than rendering as silence) and offer NO repair

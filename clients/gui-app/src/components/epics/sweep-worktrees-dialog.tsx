@@ -364,7 +364,6 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
       },
     });
   };
-  const navigate = useNavigate();
   const handlePrimary = (hostName: string | null): void => {
     startSweepPrimary({
       sessionKey: selectionKey,
@@ -445,10 +444,7 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
         // row set, read from the rows rather than from the live selection, so
         // unchecking one does not retract a statement about the POLICY.
         hasProvenSafeRow={rows.some((row) => row.defaultChecked)}
-        onSetUpAutoCleanup={() => {
-          onOpenChange(false);
-          openWorktreeAutoCleanupSettings(navigate, hostId);
-        }}
+        onCloseDialog={() => onOpenChange(false)}
         checkedAt={checkedAt}
         refreshing={refresh.refreshing}
         canRefresh={canRefresh}
@@ -896,7 +892,7 @@ function SweepWorktreesChoose(props: {
   readonly hostClient: HostClient<HostRpcRegistry> | null;
   /** The proof settled with at least one row proven safe to delete. */
   readonly hasProvenSafeRow: boolean;
-  readonly onSetUpAutoCleanup: () => void;
+  readonly onCloseDialog: () => void;
   readonly checkedAt: number | null;
   readonly refreshing: boolean;
   readonly canRefresh: boolean;
@@ -994,7 +990,7 @@ function SweepWorktreesChoose(props: {
             <SweepAutoCleanupDiscovery
               hostId={props.hostId}
               hostClient={props.hostClient}
-              onSetUpAutoCleanup={props.onSetUpAutoCleanup}
+              onCloseDialog={props.onCloseDialog}
             />
           ) : null}
         </section>
@@ -1043,7 +1039,7 @@ function SweepWorktreesChoose(props: {
 function SweepAutoCleanupDiscovery(props: {
   readonly hostId: string | null;
   readonly hostClient: HostClient<HostRpcRegistry> | null;
-  readonly onSetUpAutoCleanup: () => void;
+  readonly onCloseDialog: () => void;
 }): ReactNode {
   const supported = useHostMethodSupport(
     props.hostId,
@@ -1052,17 +1048,52 @@ function SweepAutoCleanupDiscovery(props: {
   // `null` is "no handshake yet", and it stays hidden exactly like `false`:
   // hiding an affordance under an unknown strands nothing, and the line is
   // education rather than a control anyone is waiting for.
-  if (supported !== true || props.hostClient === null) return null;
+  //
+  // `supported === true` also settles the host id - the support registry
+  // answers `null` for a null host - which is why the policy read below can
+  // take a plain `string`.
+  if (supported !== true || props.hostId === null) return null;
+  if (props.hostClient === null) return null;
   return (
-    <SweepAutoCleanupDiscoveryLine
+    <SweepAutoCleanupDiscoveryPolicy
+      hostId={props.hostId}
       client={props.hostClient}
-      onSetUpAutoCleanup={props.onSetUpAutoCleanup}
+      onCloseDialog={props.onCloseDialog}
     />
   );
 }
 
 /**
- * The line itself, mounted only once the capability is proven present.
+ * The policy read, mounted only once the capability is proven present.
+ *
+ * Kept apart from the line it gates so the line - and the router hook it
+ * needs - exists only when there is something to render. A read that is
+ * loading or failed answers `null` here and nothing paints, which is also why
+ * no part of the sweep ever waits on it.
+ */
+function SweepAutoCleanupDiscoveryPolicy(props: {
+  readonly hostId: string;
+  readonly client: HostClient<HostRpcRegistry>;
+  readonly onCloseDialog: () => void;
+}): ReactNode {
+  const policy = useWorktreeAutoCleanupPolicy(props.client, true).data ?? null;
+  if (policy === null || policy.enabled) return null;
+  return (
+    <SweepAutoCleanupDiscoveryLine
+      hostId={props.hostId}
+      onCloseDialog={props.onCloseDialog}
+    />
+  );
+}
+
+/**
+ * The line itself, mounted only when the offer actually stands.
+ *
+ * It owns the deep link, and therefore `useNavigate`, rather than taking a
+ * pre-built handler from the dialog: a Sweep dialog rendered outside a router
+ * (every direct-render suite) must not depend on TanStack warning and carrying
+ * on. Reaching the router is now a consequence of this line rendering, which
+ * only happens where a router exists.
  *
  * The copy describes the POLICY, never these rows: manual Sweep's green rows
  * are examples of what stays proven safe, not a promise that automatic cleanup
@@ -1072,11 +1103,10 @@ function SweepAutoCleanupDiscovery(props: {
  * honest frequency cap.
  */
 function SweepAutoCleanupDiscoveryLine(props: {
-  readonly client: HostClient<HostRpcRegistry>;
-  readonly onSetUpAutoCleanup: () => void;
+  readonly hostId: string;
+  readonly onCloseDialog: () => void;
 }): ReactNode {
-  const policy = useWorktreeAutoCleanupPolicy(props.client, true).data ?? null;
-  if (policy === null || policy.enabled) return null;
+  const navigate = useNavigate();
   return (
     <p
       className="mt-2 text-ui-xs text-muted-foreground wrap-anywhere"
@@ -1088,7 +1118,10 @@ function SweepAutoCleanupDiscoveryLine(props: {
         variant="link"
         size="xs"
         className="h-auto p-0 align-baseline"
-        onClick={props.onSetUpAutoCleanup}
+        onClick={() => {
+          props.onCloseDialog();
+          openWorktreeAutoCleanupSettings(navigate, props.hostId);
+        }}
       >
         Set up automatic cleanup
       </Button>

@@ -86,6 +86,10 @@ export function WorktreeAutoCleanupSection(props: {
   if (gate !== "ready") {
     return <AutoCleanupNotice gate={gate} hostLabel={scope.hostLabel} />;
   }
+  // Unreachable: `resolveAutoCleanupGate` answers "absent" without a host, so
+  // "ready" already proves this. Restated for the type system rather than
+  // asserted, so the two can never disagree silently.
+  if (hostId === null) return null;
   // Keyed by host: switching the sidebar straight from one usable host to
   // another keeps this position in the tree, and the disclosure state inside
   // the controls is per host, not per panel visit. Remounting is what makes
@@ -93,6 +97,7 @@ export function WorktreeAutoCleanupSection(props: {
   return (
     <AutoCleanupControls
       key={hostId}
+      hostId={hostId}
       client={scope.client}
       hostLabel={scope.hostLabel}
       onOpenHistory={onOpenHistory}
@@ -161,6 +166,8 @@ const DISCLOSURE_PADDING: Record<SettingsDensity, string> = {
  * the card is consulted for — so those stay on screen and the rest folds away.
  */
 function AutoCleanupControls(props: {
+  /** The host this card administers. Non-null: `gate === "ready"` proves it. */
+  readonly hostId: string;
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly hostLabel: string;
   readonly onOpenHistory: () => void;
@@ -187,6 +194,7 @@ function AutoCleanupControls(props: {
     >
       <Collapsible open={expanded} onOpenChange={setConfiguring}>
         <AutoCleanupSummaryRow
+          hostId={props.hostId}
           policy={policy}
           density={density}
           busy={setPolicy.isPending}
@@ -258,13 +266,20 @@ function AutoCleanupControls(props: {
  * handshaking: nothing consumes it until a real card is mounted to scroll to.
  * Cleared the moment it is acted on, so a later visit to Settings does not
  * re-scroll to a card nobody asked about this time.
+ *
+ * Matched by HOST, and left alone otherwise. A request whose host never
+ * mounted a card - offline, too old, or Settings never opened - outlives its
+ * own destination, and an unmatched request that this card consumed anyway
+ * would scroll to a machine nobody asked about.
  */
 function useAutoCleanupFocusRequest(
+  hostId: string,
   containerRef: RefObject<HTMLDivElement | null>,
 ): void {
-  const requested = useWorktreeCleanupViewStore(
-    (state) => state.autoCleanupFocusRequested,
+  const requestedHostId = useWorktreeCleanupViewStore(
+    (state) => state.autoCleanupFocusHostId,
   );
+  const requested = requestedHostId === hostId;
   useEffect(() => {
     if (!requested) return;
     const node = containerRef.current;
@@ -287,6 +302,7 @@ function useAutoCleanupFocusRequest(
  * a single tab stop unreachable.
  */
 function AutoCleanupSummaryRow(props: {
+  readonly hostId: string;
   readonly policy: WorktreeAutoCleanupPolicyState | null;
   readonly density: SettingsDensity;
   readonly busy: boolean;
@@ -299,7 +315,7 @@ function AutoCleanupSummaryRow(props: {
   // threaded through props is read during THIS component's render, which is
   // exactly what `react-hooks/refs` forbids.
   const containerRef = useRef<HTMLDivElement | null>(null);
-  useAutoCleanupFocusRequest(containerRef);
+  useAutoCleanupFocusRequest(props.hostId, containerRef);
   return (
     <div
       // Programmatically focusable only: a deep link from another surface hands

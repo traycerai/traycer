@@ -22,7 +22,9 @@ import { carryViewedHostIntoSettingsScope } from "@/components/settings/host-sco
  *
  * `hostId` is the CALLING surface's latched host. `null` leaves Settings
  * administering whatever host it already was, which is the honest answer when
- * the caller has no machine of its own to name.
+ * the caller has no machine of its own to name - and it asks for no card
+ * focus either, because a request that cannot name its host is a request the
+ * card cannot check before acting on.
  */
 export function openWorktreeAutoCleanupSettings(
   navigate: UseNavigateResult<string>,
@@ -30,7 +32,9 @@ export function openWorktreeAutoCleanupSettings(
 ): void {
   carryViewedHostIntoSettingsScope(hostId);
   selectWorktreeCleanupView("settings", null);
-  useWorktreeCleanupViewStore.getState().requestAutoCleanupFocus();
+  if (hostId !== null) {
+    useWorktreeCleanupViewStore.getState().requestAutoCleanupFocus(hostId);
+  }
   navigateToTabIntent(
     navigate,
     ensureSettingsTab({ subSection: "worktrees", resetToGeneral: false }),

@@ -1,4 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type MockInstance,
+} from "vitest";
 import {
   cleanup,
   fireEvent,
@@ -78,6 +86,15 @@ async function openThresholdEditor(): Promise<void> {
   await waitFor(() => {
     screen.getByRole("textbox", { name: "Custom inactivity days" });
   });
+}
+
+/**
+ * Which nodes were scrolled to. The jsdom setup installs a no-op
+ * `scrollIntoView` on the prototype; spying on it records the receiver in
+ * `mock.contexts`, which is the only thing these tests need from it.
+ */
+function spyOnScrollIntoView(): MockInstance<() => void> {
+  return vi.spyOn(Element.prototype, "scrollIntoView");
 }
 
 function policyFixture(
@@ -167,12 +184,13 @@ beforeEach(() => {
   useWorktreeCleanupViewStore.setState({
     view: "settings",
     focusedRunId: null,
-    autoCleanupFocusRequested: false,
+    autoCleanupFocusHostId: null,
   });
 });
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
 });
 
 describe("WorktreeAutoCleanupSection", () => {
@@ -335,40 +353,64 @@ describe("WorktreeAutoCleanupSection", () => {
     ).toBeNull();
   });
 
-  it("brings itself into view for a deep link, then drops the request", async () => {
-    // The Sweep dialog's discovery line leaves this one-shot flag behind. The
-    // card is what the link promised, so it scrolls into view AND takes the
-    // caret - and clears the flag, or a later visit to Settings would re-scroll
-    // to a card nobody asked about that time.
-    const scrolled: Array<HTMLElement> = [];
-    const proto = Element.prototype as unknown as {
-      scrollIntoView: () => void;
-    };
-    const original = proto.scrollIntoView;
-    proto.scrollIntoView = function scrollIntoViewSpy(this: HTMLElement) {
-      scrolled.push(this);
-    };
-    useWorktreeCleanupViewStore.getState().requestAutoCleanupFocus();
+  it("brings itself into view for a deep link naming its host, then drops the request", async () => {
+    // The Sweep dialog's discovery line leaves this one-shot request behind.
+    // The card is what the link promised, so it scrolls into view AND takes
+    // the caret - and clears the request, or a later visit to Settings would
+    // re-scroll to a card nobody asked about that time.
+    const scrolls = spyOnScrollIntoView();
+    useWorktreeCleanupViewStore.getState().requestAutoCleanupFocus("host-a");
 
-    try {
-      renderSection(
-        clientWithPolicy({
-          get: () => policyFixture({}),
-          set: (r) => policyFixture(r),
-        }),
-      );
+    renderSection(
+      clientWithPolicy({
+        get: () => policyFixture({}),
+        set: (r) => policyFixture(r),
+      }),
+    );
 
-      const row = screen.getByTestId("worktree-auto-cleanup-summary-row");
-      await waitFor(() => {
-        expect(scrolled).toContain(row);
-      });
-      expect(document.activeElement).toBe(row);
-      expect(
-        useWorktreeCleanupViewStore.getState().autoCleanupFocusRequested,
-      ).toBe(false);
-    } finally {
-      proto.scrollIntoView = original;
-    }
+    const row = screen.getByTestId("worktree-auto-cleanup-summary-row");
+    await waitFor(() => {
+      expect(scrolls.mock.contexts).toContain(row);
+    });
+    expect(document.activeElement).toBe(row);
+    expect(
+      useWorktreeCleanupViewStore.getState().autoCleanupFocusHostId,
+    ).toBeNull();
+  });
+
+  it("leaves another host's focus request alone until that host is scoped", async () => {
+    // The request outlives its destination whenever the named host never
+    // mounts a card - offline, too old, or Settings simply never opened. An
+    // unscoped flag would then be spent on whichever host came next, scrolling
+    // to a machine nobody asked about.
+    const scrolls = spyOnScrollIntoView();
+    useWorktreeCleanupViewStore.getState().requestAutoCleanupFocus("host-b");
+    const client = clientWithPolicy({
+      get: () => policyFixture({}),
+      set: (r) => policyFixture(r),
+    });
+
+    const { rerender } = renderSection(client);
+
+    await loadedCleanupToggle();
+    expect(scrolls.mock.contexts).toEqual([]);
+    expect(document.activeElement).not.toBe(
+      screen.getByTestId("worktree-auto-cleanup-summary-row"),
+    );
+    // Untouched, so it is still there for the host it was actually about.
+    expect(useWorktreeCleanupViewStore.getState().autoCleanupFocusHostId).toBe(
+      "host-b",
+    );
+
+    rerender(sectionForHost(client, HOST_B));
+
+    const row = screen.getByTestId("worktree-auto-cleanup-summary-row");
+    await waitFor(() => {
+      expect(scrolls.mock.contexts).toContain(row);
+    });
+    expect(
+      useWorktreeCleanupViewStore.getState().autoCleanupFocusHostId,
+    ).toBeNull();
   });
 
   it("says the host is too old rather than offering a client-side fallback", () => {

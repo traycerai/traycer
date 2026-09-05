@@ -27,14 +27,19 @@ interface WorktreeCleanupViewState {
   /**
    * A ONE-SHOT request to bring the Automatic cleanup card itself into view,
    * left by a surface elsewhere that sent the user here to set cleanup up
-   * (the Sweep dialog's discovery line).
+   * (the Sweep dialog's discovery line). `null` is "nobody asked".
    *
-   * A boolean rather than an id, because the card is a singleton within the
-   * inventory view — there is nothing to name. Like `focusedRunId` it is a
-   * HINT: the card may be absent (an offline or too-old host), and nothing
+   * Names the HOST it was asked for, not merely that it was asked. The policy
+   * is per host and the card administers exactly one, so a request the card
+   * never consumed — the host was offline, too old, or the panel was never
+   * opened — must not be picked up by whichever host is scoped next. A bare
+   * boolean did precisely that: it outlived its own destination and then
+   * scrolled to a different machine's card.
+   *
+   * Like `focusedRunId` it is a HINT: the card may be absent, and nothing
    * about the destination depends on it being consumed.
    */
-  readonly autoCleanupFocusRequested: boolean;
+  readonly autoCleanupFocusHostId: string | null;
   readonly openHistory: (focusedRunId: string | null) => void;
   readonly closeHistory: () => void;
   /**
@@ -42,7 +47,7 @@ interface WorktreeCleanupViewState {
    * later does not silently re-expand a run the user already closed.
    */
   readonly clearFocusedRun: () => void;
-  readonly requestAutoCleanupFocus: () => void;
+  readonly requestAutoCleanupFocus: (hostId: string) => void;
   /** Same one-shot discipline as `clearFocusedRun`, for the same reason. */
   readonly clearAutoCleanupFocus: () => void;
 }
@@ -51,7 +56,7 @@ export const useWorktreeCleanupViewStore = create<WorktreeCleanupViewState>(
   (set) => ({
     view: "settings",
     focusedRunId: null,
-    autoCleanupFocusRequested: false,
+    autoCleanupFocusHostId: null,
     // History is the OTHER sub-view, so a card-focus request that has not been
     // consumed yet is stale the moment the panel leaves the inventory - it
     // would otherwise fire on whatever return to the card came next.
@@ -59,12 +64,13 @@ export const useWorktreeCleanupViewStore = create<WorktreeCleanupViewState>(
       set({
         view: "cleanupHistory",
         focusedRunId,
-        autoCleanupFocusRequested: false,
+        autoCleanupFocusHostId: null,
       }),
     closeHistory: () => set({ view: "settings", focusedRunId: null }),
     clearFocusedRun: () => set({ focusedRunId: null }),
-    requestAutoCleanupFocus: () => set({ autoCleanupFocusRequested: true }),
-    clearAutoCleanupFocus: () => set({ autoCleanupFocusRequested: false }),
+    requestAutoCleanupFocus: (hostId) =>
+      set({ autoCleanupFocusHostId: hostId }),
+    clearAutoCleanupFocus: () => set({ autoCleanupFocusHostId: null }),
   }),
 );
 
