@@ -5,10 +5,46 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionImportSelection } from "@traycer/protocol/host/session-import/candidate";
+import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
+import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
+import type { StreamRuntimeBinding } from "@/lib/host/stream-runtime-context";
 import {
   setSessionImportStartHandle,
   startSessionImportRun,
 } from "@/components/session-import/session-import-run-handle";
+
+/**
+ * A stub satisfying `IHostStreamClient` honestly rather than casting - the
+ * handle only carries this through to the controller, it never calls it.
+ */
+function fakeWsStreamClient(): IHostStreamClient<HostStreamRpcRegistry> {
+  return {
+    subscribe: () => {
+      throw new Error("not exercised by this test");
+    },
+    subscribeWithParamsProvider: () => {
+      throw new Error("not exercised by this test");
+    },
+    close: () => undefined,
+    isClosed: () => false,
+    isReady: () => true,
+    notifyBearerRotated: () => undefined,
+    reconnectAll: () => undefined,
+    getMethodSupport: () => "unknown",
+    subscribeMethodSupport: () => () => undefined,
+    getMethodSchemaVersion: () => null,
+    subscribeAvailabilityRecovered: () => () => undefined,
+    getClosedReason: () => null,
+    onClosed: () => () => undefined,
+    instanceId: "fake-ws-stream-client",
+  };
+}
+
+const BINDING: StreamRuntimeBinding = {
+  wsStreamClient: fakeWsStreamClient(),
+  hostId: "host-a",
+  retain: null,
+};
 
 /**
  * The tour renders through `RootSurface`'s standalone branch - `StandaloneShell`
@@ -77,9 +113,12 @@ describe("startSessionImportRun", () => {
       titles: new Map([["claude:native-1", "My Session"]]),
     };
 
-    startSessionImportRun(request);
+    startSessionImportRun(request, BINDING);
 
-    expect(start).toHaveBeenCalledWith(request);
+    expect(start).toHaveBeenCalledWith(request, {
+      binding: BINDING,
+      hostId: "host-a",
+    });
   });
 
   it("logs an error rather than swallowing the click when no controller is mounted", () => {
@@ -87,11 +126,30 @@ describe("startSessionImportRun", () => {
       .spyOn(console, "error")
       .mockImplementation(() => undefined);
 
-    startSessionImportRun({ selections: [SELECTION], titles: new Map() });
+    startSessionImportRun(
+      { selections: [SELECTION], titles: new Map() },
+      BINDING,
+    );
 
     expect(consoleError).toHaveBeenCalledTimes(1);
     expect(String(consoleError.mock.calls[0][0])).toContain(
       "no run controller mounted",
+    );
+  });
+
+  it("logs an error and does not call start when no host is bound", () => {
+    const start = vi.fn();
+    setSessionImportStartHandle({ start });
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+
+    startSessionImportRun({ selections: [SELECTION], titles: new Map() }, null);
+
+    expect(start).not.toHaveBeenCalled();
+    expect(consoleError).toHaveBeenCalledTimes(1);
+    expect(String(consoleError.mock.calls[0][0])).toContain(
+      "no named host to run it on",
     );
   });
 });

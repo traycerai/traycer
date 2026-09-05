@@ -98,7 +98,7 @@ import type {
   TreeNode,
   TreeSlice,
 } from "@/stores/epics/open-epic/types";
-import { EMPTY_ARRAY } from "@/stores/epics/open-epic/types";
+import { EMPTY_ARRAY, EMPTY_TREE_SLICE } from "@/stores/epics/open-epic/types";
 
 // ─── Type re-exports ──────────────────────────────────────────────────────
 
@@ -636,6 +636,59 @@ export function useEpicArchivedNodeIds(): ReadonlyArray<string> {
       if (archived.length === 0) return EMPTY_TREE_ID_ARRAY;
       return archived.sort();
     }),
+  );
+}
+
+const maybeArchivedNodeIdsCache = new WeakMap<
+  OpenEpicStoreHandle,
+  { readonly ids: readonly string[]; readonly key: string }
+>();
+
+/**
+ * `useShallow` is not available under `useSyncExternalStore` - the snapshot has
+ * to be reference-stable already, not stabilized after the fact - so the
+ * bail-out the strict hook gets from it is preserved here by caching the array
+ * against the handle under its own join key, the same shape as
+ * {@link useRegisteredEpicLiveAgentIds}'s snapshot. Without it the constant
+ * churn of chat projections would hand back a new array on every read and
+ * re-walk the tree downstream.
+ */
+function archivedNodeIdsSnapshot(
+  handle: OpenEpicStoreHandle | null,
+): readonly string[] {
+  if (handle === null) return EMPTY_TREE_ID_ARRAY;
+  const s = handle.store.getState();
+  const archived = [
+    ...s.chats.allIds.filter((id) => s.chats.byId[id].archivedAt !== null),
+    ...s.tuiAgents.allIds.filter(
+      (id) => s.tuiAgents.byId[id].archivedAt !== null,
+    ),
+  ];
+  if (archived.length === 0) return EMPTY_TREE_ID_ARRAY;
+  const ids = archived.sort();
+  const key = ids.join("\x00");
+  const cached = maybeArchivedNodeIdsCache.get(handle);
+  if (cached !== undefined && cached.key === key) return cached.ids;
+  const entry = { ids, key };
+  maybeArchivedNodeIdsCache.set(handle, entry);
+  return entry.ids;
+}
+
+/**
+ * The archived ids, or none when there is no open-epic session.
+ *
+ * The provider-optional sibling of {@link useEpicArchivedNodeIds}, and it
+ * exists for the same reason as {@link useMaybeEpicTreeIndex}: the chat picker
+ * resolves send targets both inside the canvas and inside a Start Page browser
+ * tile, which has no session. Same guidance - prefer the strict hook wherever
+ * the provider is structurally guaranteed.
+ */
+export function useMaybeEpicArchivedNodeIds(): readonly string[] {
+  const handle = useMaybeOpenEpicHandle();
+  return useSyncExternalStore(
+    (listener) => handle?.store.subscribe(listener) ?? noopSubscribe,
+    () => archivedNodeIdsSnapshot(handle),
+    () => EMPTY_TREE_ID_ARRAY,
   );
 }
 
@@ -1317,6 +1370,32 @@ function liveAgentIdsSnapshot(
 
 export function useEpicTreeIndex(): TreeSlice {
   return useEpicStore((s) => s.tree);
+}
+
+/**
+ * The tree, or the shared empty one when there is no open-epic session.
+ *
+ * The provider-optional sibling of {@link useEpicTreeIndex}, for the chat
+ * picker: the same picker resolves send targets inside the canvas AND inside a
+ * Start Page browser tile, which mounts at the app shell with no
+ * `<EpicSessionProvider>` because a Start Page browser tab belongs to no epic.
+ * The strict hook cannot be called conditionally to cover both, so the
+ * tolerance has to live in the read.
+ *
+ * Prefer {@link useEpicTreeIndex} anywhere the provider is structurally
+ * guaranteed - a missing session is a bug there, and the throw is how it gets
+ * found. Reach for this one only where "no epic" is a real, expected state.
+ *
+ * Returns {@link EMPTY_TREE_SLICE} rather than an empty tree of its own so the
+ * snapshot is reference-stable across renders. See RENDER_PERF_INVARIANTS.md.
+ */
+export function useMaybeEpicTreeIndex(): TreeSlice {
+  const handle = useMaybeOpenEpicHandle();
+  return useSyncExternalStore(
+    (listener) => handle?.store.subscribe(listener) ?? noopSubscribe,
+    () => (handle === null ? EMPTY_TREE_SLICE : handle.store.getState().tree),
+    () => EMPTY_TREE_SLICE,
+  );
 }
 
 export function useRootIds(): readonly string[] {

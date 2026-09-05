@@ -248,12 +248,17 @@ describe("app-local notifications store", () => {
       ...entry("other", 11, null),
       payload: { kind: "chat", epicId: "epic-1", chatId: "chat-2" },
     });
+    store.getState().upsert({
+      ...entry("task", 12, null),
+      payload: { kind: "epic", epicId: "epic-1" },
+    });
 
     store
       .getState()
       .markEntityAsRead("host-a", { epicId: "epic-1", chatId: "chat-1" }, 20);
 
     expect(store.getState().byId.match.readAt).toBe(20);
+    expect(store.getState().byId.task.readAt).toBe(20);
     expect(store.getState().byId.other.readAt).toBeNull();
   });
 

@@ -63,7 +63,7 @@ export function BrowsersPanelActions(props: LeftPanelSlotProps) {
   return (
     <BrowserSessionsHostBoundary
       hostId={hostPin.resolvedHostId}
-      epicId={props.epicId}
+      scope={{ kind: "epic", epicId: props.epicId }}
     >
       <BrowsersPanelActionsLive {...props} />
     </BrowserSessionsHostBoundary>

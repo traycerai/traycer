@@ -653,9 +653,14 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
     "Two different mobile questions"), Show global resources button, Show
     navigator resource stats (these stay out of Appearance - they change
     information visibility, not styling).
-  - **Setup & migration**: Product tour (replay onboarding), Data migration
-    (retry moving local SQLite tasks/epics to cloud - stays out of
-    Diagnostics, which is support capture, not user data recovery).
+  - **Onboarding**: Product tour (replay onboarding), and nothing else. Import
+    your work and Data migration used to share this group under the name
+    "Setup & migration"; both moved to the scoped host's **Overview**, because
+    each acts on ONE machine's local data and General is app-wide - the rows
+    could only ever speak for whichever host the window happened to point at,
+    while naming none. The tour stays because it is genuinely window-level:
+    replaying it re-runs this app's onboarding, which no host owns. The group
+    is named for its subject rather than for its single row.
   - **Danger Zone** (`DangerZoneSection`, `SettingsGroup` with `tone:
 "danger"`, `data-testid="settings-danger-zone"`, kept last): **Local app state
     only** (reset tabs/layout/drafts/settings/view prefs + reload) - the one
@@ -2315,6 +2320,30 @@ aria-live="polite"` carrying the equivalent text for
   - **Installation** reads `host.getInstallationInfo`. `unmanaged` is a real
     state, not an error - a host run from a checkout has no install record - and
     it says so rather than claiming nothing is installed.
+  - **Data & migration** (`panels/host-import-migration-section.tsx`), between
+    Installation and the danger zone: **Import your work** (opens the session
+    import wizard for the sessions on THIS host's disk) and **Data migration**
+    (retry moving this host's local SQLite tasks and epics to cloud). Both came
+    off General for the reason that section now states - they move one
+    machine's data, and this page is the only one that names the machine. It
+    stays out of Diagnostics for the older reason: that page is support
+    capture, not user data recovery.
+    - Both rows ride the STREAM transport, not the unary one, so the Overview
+      re-provides `StreamRuntimeContext` from `useScopedStreamBinding` beside
+      the unary `HostRuntimeContext` it already re-provided - the fourth stream
+      re-provider, and safe for the same positional reason as the other three
+      (no composer below it, so no path to the microphone; see the roster in
+      `use-scoped-host-binding.ts`).
+    - The group is WITHHELD, not emptied, until the stream beneath it names the
+      host the page names. `useScopedStreamBinding` is null for a commit or two
+      after an explicit pick, and null by design while `following`, so the
+      provider falls back to the ambient stream - which is still dialing the
+      effective host. Running an import or a migration through it would move
+      one machine's data under another machine's name. Availability is read
+      from that same client (`useSessionImportAvailableFor`) rather than from
+      context, so the row cannot offer an import host A negotiated and submit
+      it to host B. An empty titled card reads as a page that failed to load,
+      which is why the whole group goes rather than its contents.
   - **Doctor** (`host-doctor-rpc-card.tsx`) has the host shell its own CLI. Two
     things make the report trustworthy over a connection, and both come from the
     host: the structured failure arms (`cli-unavailable` / `cli-failed` /

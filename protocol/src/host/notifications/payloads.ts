@@ -344,6 +344,8 @@ export const hostNotificationWorktreeDeletionPayloadSchema = z
     source: idSchema,
     /** Task that initiated a single-Task sweep. */
     epicId: idSchema.optional(),
+    /** Read-time title for a single-Task sweep. */
+    taskTitle: z.string().optional(),
     requestedCount: z.number().int().nonnegative(),
     deletedCount: z.number().int().nonnegative(),
     failedCount: z.number().int().nonnegative(),

@@ -414,9 +414,7 @@ function PrDiffTileLive(props: PrDiffTileProps): ReactNode {
           // No editor-open row: a PR diff spans many files and the range's
           // endpoints are commits, so there is no single path to hand an
           // editor. The per-file sections keep their own affordances.
-          onOpenFile={null}
-          openFileDisabled={false}
-          openFileOpening={false}
+          openFile={null}
         />
       }
     >
