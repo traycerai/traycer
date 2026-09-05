@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   actEyebrow,
   ONBOARDING_ACTS,
@@ -6,13 +6,18 @@ import {
   type OnboardingAct,
   type OnboardingActId,
 } from "@/components/onboarding/onboarding-acts";
-import { setMobileApp } from "@/lib/mobile-app";
 
-const FULL_TOUR = { sessionImportAvailable: true, loginImportAvailable: true };
+const FULL_TOUR = {
+  phoneLayout: false,
+  sessionImportAvailable: true,
+  loginImportAvailable: true,
+};
 const NO_IMPORTS = {
+  phoneLayout: false,
   sessionImportAvailable: false,
   loginImportAvailable: false,
 };
+const PHONE_TOUR = { ...FULL_TOUR, phoneLayout: true };
 
 function actById(
   acts: ReadonlyArray<OnboardingAct>,
@@ -24,10 +29,6 @@ function actById(
 }
 
 describe("onboardingActsFor", () => {
-  afterEach(() => {
-    setMobileApp(false);
-  });
-
   it("plays the full desktop tour when the host can scan sessions", () => {
     expect(onboardingActsFor(FULL_TOUR).map((act) => act.id)).toEqual([
       "task-tabs",
@@ -56,10 +57,8 @@ describe("onboardingActsFor", () => {
     expect(onboardingActsFor(NO_IMPORTS)).toBe(onboardingActsFor(NO_IMPORTS));
   });
 
-  it("plays the mobile tour inside the installed mobile app, capability aside", () => {
-    setMobileApp(true);
-
-    const withScan = onboardingActsFor(FULL_TOUR).map((act) => act.id);
+  it("plays the mobile tour under the phone layout, capability aside", () => {
+    const withScan = onboardingActsFor(PHONE_TOUR).map((act) => act.id);
     expect(withScan).toEqual([
       "mobile-tasks",
       "mobile-switcher",
@@ -69,20 +68,9 @@ describe("onboardingActsFor", () => {
     ]);
     // The phone tour never lists session-import, so the capability cannot
     // change its shape.
-    expect(onboardingActsFor(NO_IMPORTS)).toBe(onboardingActsFor(FULL_TOUR));
-  });
-
-  // The Capacitor entry sets the flag in its bootstrap, which runs AFTER
-  // gui-app's static module graph - including this module - has been
-  // evaluated. A list captured at module scope would pin the desktop tour on
-  // every phone.
-  it("resolves the platform per call rather than at module evaluation", () => {
-    const beforeFlag = onboardingActsFor(FULL_TOUR);
-
-    setMobileApp(true);
-
-    expect(onboardingActsFor(FULL_TOUR)).not.toBe(beforeFlag);
-    expect(onboardingActsFor(FULL_TOUR)[0].id).toBe("mobile-tasks");
+    expect(onboardingActsFor({ ...NO_IMPORTS, phoneLayout: true })).toBe(
+      onboardingActsFor(PHONE_TOUR),
+    );
   });
 
   it("numbers the eyebrow off the tour being shown, not the catalog", () => {
@@ -92,8 +80,7 @@ describe("onboardingActsFor", () => {
     expect(actEyebrow(shorterTour[5], 5)).toBe("ACT 06 - FLOW");
     expect(actEyebrow(ONBOARDING_ACTS[7], 7)).toBe("ACT 08 - YOUR WORK");
 
-    setMobileApp(true);
-    const mobileTour = onboardingActsFor(FULL_TOUR);
+    const mobileTour = onboardingActsFor(PHONE_TOUR);
     expect(mobileTour.map(actEyebrow)).toEqual([
       "ACT 01 - TASKS",
       "ACT 02 - LAYOUT",
@@ -110,12 +97,10 @@ describe("onboardingActsFor", () => {
     );
     const desktopProviders = actById(onboardingActsFor(FULL_TOUR), "providers");
 
-    setMobileApp(true);
-
-    expect(actById(onboardingActsFor(FULL_TOUR), "task-context")).toBe(
+    expect(actById(onboardingActsFor(PHONE_TOUR), "task-context")).toBe(
       desktopTaskContext,
     );
-    expect(actById(onboardingActsFor(FULL_TOUR), "providers")).toBe(
+    expect(actById(onboardingActsFor(PHONE_TOUR), "providers")).toBe(
       desktopProviders,
     );
   });
@@ -124,9 +109,7 @@ describe("onboardingActsFor", () => {
     const desktopGuide = actById(onboardingActsFor(FULL_TOUR), "agent-guide");
     expect(desktopGuide.addon).toBeNull();
 
-    setMobileApp(true);
-
-    expect(actById(onboardingActsFor(FULL_TOUR), "agent-guide")).toEqual({
+    expect(actById(onboardingActsFor(PHONE_TOUR), "agent-guide")).toEqual({
       ...desktopGuide,
       addon: "agent-guide",
     });
@@ -134,6 +117,7 @@ describe("onboardingActsFor", () => {
 
   it("adds the login-import act after providers when the machine can import logins", () => {
     const acts = onboardingActsFor({
+      phoneLayout: false,
       sessionImportAvailable: true,
       loginImportAvailable: true,
     });
@@ -145,6 +129,7 @@ describe("onboardingActsFor", () => {
 
   it("drops the login-import act entirely when the machine cannot import logins", () => {
     const acts = onboardingActsFor({
+      phoneLayout: false,
       sessionImportAvailable: true,
       loginImportAvailable: false,
     });
@@ -153,10 +138,12 @@ describe("onboardingActsFor", () => {
 
   it("positions login-import independent of session-import's own availability", () => {
     const withSessionImport = onboardingActsFor({
+      phoneLayout: false,
       sessionImportAvailable: true,
       loginImportAvailable: true,
     });
     const withoutSessionImport = onboardingActsFor({
+      phoneLayout: false,
       sessionImportAvailable: false,
       loginImportAvailable: true,
     });
@@ -172,6 +159,7 @@ describe("onboardingActsFor", () => {
 
   it("hands back a stable reference for the same capability pair across calls", () => {
     const capabilities = {
+      phoneLayout: false,
       sessionImportAvailable: false,
       loginImportAvailable: true,
     };
@@ -184,27 +172,40 @@ describe("onboardingActsFor", () => {
     expect(onboardingActsFor(FULL_TOUR)).toBe(ONBOARDING_ACTS);
   });
 
+  // The installed app on an iPad: the shell is still `isMobileApp()`, but the
+  // window is desktop width, so the LAYOUT read must pick the desktop acts -
+  // the ones that actually describe the tab strip and canvas it is showing.
+  it("plays the desktop tour on a wide window regardless of the installed app", () => {
+    const acts = onboardingActsFor({
+      phoneLayout: false,
+      sessionImportAvailable: true,
+      loginImportAvailable: true,
+    });
+    expect(acts).toBe(ONBOARDING_ACTS);
+    expect(acts[0].id).toBe("task-tabs");
+  });
+
   it("ignores both import capabilities on the mobile tour", () => {
-    setMobileApp(true);
     expect(
       onboardingActsFor({
+        phoneLayout: true,
         sessionImportAvailable: true,
         loginImportAvailable: true,
       }),
     ).toBe(
       onboardingActsFor({
+        phoneLayout: true,
         sessionImportAvailable: false,
         loginImportAvailable: false,
       }),
     );
-    expect(onboardingActsFor(FULL_TOUR).map((act) => act.id)).not.toContain(
+    expect(onboardingActsFor(PHONE_TOUR).map((act) => act.id)).not.toContain(
       "login-import",
     );
   });
 
   it("teaches the drawer and the switcher in place of desktop chrome", () => {
-    setMobileApp(true);
-    const acts = onboardingActsFor(FULL_TOUR);
+    const acts = onboardingActsFor(PHONE_TOUR);
 
     expect(actById(acts, "mobile-tasks")).toEqual({
       id: "mobile-tasks",
