@@ -241,6 +241,7 @@ export function hostOptionUpdateBadge(view: FleetUpdateView): string | null {
 
 function liveBadgeWord(kind: FleetUpdateViewKind): string | null {
   switch (kind) {
+    case "updating":
     case "downloading":
     case "preparing":
     case "applying":
@@ -267,6 +268,7 @@ function retainedBadgeWord(kind: FleetUpdateViewKind): string | null {
     // Every mid-update phase collapses to one word. "last seen restart to
     // finish" and "last seen update waiting" are compounds that read as
     // instructions for a machine this client cannot currently reach.
+    case "updating":
     case "downloading":
     case "preparing":
     case "applying":

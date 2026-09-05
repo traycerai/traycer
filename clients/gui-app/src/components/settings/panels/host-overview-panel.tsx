@@ -76,6 +76,7 @@ import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import {
   holdsLifecycleGate,
+  isQuietUpdateView,
   projectFleetUpdateView,
   UNKNOWN_FLEET_UPDATE_VIEW,
 } from "@/lib/host/fleet-update/fleet-update-view";
@@ -930,8 +931,15 @@ export function HostOverviewPanel(props: {
             below rather than sitting beside it — two update lines describing one
             operation in different vocabularies is the drift the shared
             projection exists to prevent. A pre-@1.3 peer has no attempt to
-            show and keeps the coarse notice unchanged. */}
-        {operationView === null ? null : (
+            show and keeps the coarse notice unchanged.
+
+            A QUIET view renders nothing. `idle` used to render as "Host is up
+            to date" — a sentence about the catalog from a projection that
+            knows only the attempt record — directly above the updates region
+            saying "v1.3.0-rc.2 is available." about the same host. The card is
+            for an operation; when there is none, the updates region below is
+            the whole answer. Same predicate the landing banner hides on. */}
+        {operationView === null || isQuietUpdateView(operationView) ? null : (
           <HostOverviewOperationCard
             view={operationView}
             hostName={displayName}

@@ -129,6 +129,36 @@ describe("observationFromStatus — the synthetic placeholder never escapes", ()
   });
 });
 
+// The two-state `updateProgress` marker is the only signal the shipped legacy
+// `traycer host update` path emits, and it must ride along beside the
+// (possibly absent) schema-v2 attempt record rather than being dropped at this
+// stamping boundary — see `FleetUpdateWireObservation.coarseProgress`'s doc.
+describe("observationFromStatus — carries the coarse updateProgress marker through", () => {
+  it("carries `updateProgress: null` through as `coarseProgress: null`", () => {
+    const observation = observationFromStatus({
+      hostId: "host-a",
+      status: { ...status({ kind: "none" }), updateProgress: null },
+      nowMs: NOW_MS,
+    });
+    expect(observation.coarseProgress).toBeNull();
+  });
+
+  it("carries a non-null `updateProgress` through untouched, equal to what the wire reported", () => {
+    const observation = observationFromStatus({
+      hostId: "host-a",
+      status: {
+        ...status({ kind: "none" }),
+        updateProgress: { state: "updating", error: null },
+      },
+      nowMs: NOW_MS,
+    });
+    expect(observation.coarseProgress).toEqual({
+      state: "updating",
+      error: null,
+    });
+  });
+});
+
 // The wiring proof this module needs alongside `fleet-read-gate.test.ts`'s
 // bound-in-isolation suite: `fleet-read-gate.test.ts` proves the SEMAPHORE
 // works; nothing proved that `readUpdateStatusOverBorrowedSession` actually

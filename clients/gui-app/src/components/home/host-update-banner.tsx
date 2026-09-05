@@ -33,6 +33,7 @@ import {
   type LocalHostUpdateOperation,
 } from "@/hooks/host/use-local-host-update-operation";
 import {
+  isQuietUpdateView,
   offersForceRestart,
   type FleetUpdateView,
 } from "@/lib/host/fleet-update/fleet-update-view";
@@ -493,15 +494,11 @@ function operationSupersedesControllerStatus(
   view: FleetUpdateView,
   controllerHasConcreteFact: boolean,
 ): boolean {
-  if (view.kind === "idle") return false;
-  if (view.kind === "unknown") {
-    return (
-      view.lastKnownKind !== null &&
-      view.lastKnownKind !== "idle" &&
-      view.lastKnownKind !== "unknown" &&
-      !controllerHasConcreteFact
-    );
-  }
+  // `isQuietUpdateView` is the shared "nothing to show" predicate — the
+  // Overview hides its operation card on the same test, so the two surfaces
+  // agree on where quiet begins.
+  if (isQuietUpdateView(view)) return false;
+  if (view.kind === "unknown") return !controllerHasConcreteFact;
   return true;
 }
 
