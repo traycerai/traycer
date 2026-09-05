@@ -124,4 +124,61 @@ describe("update-progress-marker", () => {
       await import("../update-progress-marker");
     expect(await readUpdateProgressMarker("production")).toBeNull();
   });
+
+  // The conditional delete backs `host update`'s stale-failure reconcile: it
+  // decided from a marker it READ, and another updater can replace that
+  // marker with a live `updating` before the unlink. Deleting unconditionally
+  // there would erase the legacy path's only progress signal.
+  describe("deleteUpdateProgressMarkerIfUnchanged", () => {
+    const failed = {
+      state: "failed" as const,
+      error: "host did not become healthy",
+      targetVersion: "1.4.0",
+      updatedAt: "2026-07-03T00:00:00.000Z",
+    };
+
+    it("clears the marker when it still reads exactly as expected", async () => {
+      const {
+        writeUpdateProgressMarker,
+        readUpdateProgressMarker,
+        deleteUpdateProgressMarkerIfUnchanged,
+      } = await import("../update-progress-marker");
+      await writeUpdateProgressMarker("production", failed);
+      expect(
+        await deleteUpdateProgressMarkerIfUnchanged("production", failed),
+      ).toBe("cleared");
+      expect(await readUpdateProgressMarker("production")).toBeNull();
+    });
+
+    it("leaves a marker that changed underneath - a live `updating` written by another updater survives", async () => {
+      const {
+        writeUpdateProgressMarker,
+        readUpdateProgressMarker,
+        deleteUpdateProgressMarkerIfUnchanged,
+      } = await import("../update-progress-marker");
+      await writeUpdateProgressMarker("production", failed);
+      // The race: between the caller's read and its delete, another updater
+      // replaced the marker.
+      await writeUpdateProgressMarker("production", {
+        state: "updating",
+        error: null,
+        targetVersion: "1.5.0",
+        updatedAt: "2026-07-03T00:00:01.000Z",
+      });
+      expect(
+        await deleteUpdateProgressMarkerIfUnchanged("production", failed),
+      ).toBe("changed");
+      expect((await readUpdateProgressMarker("production"))?.state).toBe(
+        "updating",
+      );
+    });
+
+    it("reports absent when there is no marker to clear", async () => {
+      const { deleteUpdateProgressMarkerIfUnchanged } =
+        await import("../update-progress-marker");
+      expect(
+        await deleteUpdateProgressMarkerIfUnchanged("production", failed),
+      ).toBe("absent");
+    });
+  });
 });

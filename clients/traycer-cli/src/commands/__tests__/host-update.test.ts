@@ -40,9 +40,10 @@ const mocks = vi.hoisted(() => ({
   writeUpdateProgressMarkerMock: vi.fn(),
   deleteUpdateProgressMarkerMock: vi.fn(),
   readUpdateProgressMarkerMock: vi.fn(),
+  deleteUpdateProgressMarkerIfUnchangedMock: vi.fn(),
   probeHostHealthMock: vi.fn(),
   readHostPidMetadataMock: vi.fn(),
-  isProcessAliveMock: vi.fn(),
+  identityVerdictMock: vi.fn(),
   assertHostNotBusyMock: vi.fn(),
   stopHostForRestartWithAttemptMock: vi.fn(),
   relaunchHostAfterRestartWithAttemptMock: vi.fn(),
@@ -52,6 +53,8 @@ vi.mock("../../host/update-progress-marker", () => ({
   writeUpdateProgressMarker: mocks.writeUpdateProgressMarkerMock,
   deleteUpdateProgressMarker: mocks.deleteUpdateProgressMarkerMock,
   readUpdateProgressMarker: mocks.readUpdateProgressMarkerMock,
+  deleteUpdateProgressMarkerIfUnchanged:
+    mocks.deleteUpdateProgressMarkerIfUnchangedMock,
 }));
 
 vi.mock("../../service/health-probe", () => ({
@@ -62,7 +65,7 @@ vi.mock("../../installer/download-stage", () => ({
   downloadAndStageHost: mocks.downloadAndStageHostMock,
 }));
 
-// SAFETY, not convenience: `detectActivationDebt` reads the REAL
+// SAFETY, not convenience: `readActivationState` reads the REAL
 // `~/.traycer/host/pid.json` (the CLI's home is `homedir()`-derived and not
 // overridable), and with `readHostInstallRecord` mocked to a version the
 // developer's live host is not running, an unmocked read would classify the
@@ -72,7 +75,7 @@ vi.mock("../../host/pid-metadata", () => ({
   readHostPidMetadata: mocks.readHostPidMetadataMock,
 }));
 vi.mock("../../store/process-identity", () => ({
-  isProcessAlive: mocks.isProcessAliveMock,
+  getPublishedProcessIdentityVerdict: mocks.identityVerdictMock,
 }));
 vi.mock("../../host/busy-check", () => ({
   assertHostNotBusy: mocks.assertHostNotBusyMock,
@@ -291,8 +294,9 @@ function fakeCtx(): CommandContext {
 // because `resetAllMocks` wipes return values.
 function armActivationDefaults(): void {
   mocks.readUpdateProgressMarkerMock.mockResolvedValue(null);
+  mocks.deleteUpdateProgressMarkerIfUnchangedMock.mockResolvedValue("cleared");
   mocks.readHostPidMetadataMock.mockResolvedValue(null);
-  mocks.isProcessAliveMock.mockReturnValue(true);
+  mocks.identityVerdictMock.mockResolvedValue("current");
   mocks.assertHostNotBusyMock.mockResolvedValue(undefined);
   mocks.stopHostForRestartWithAttemptMock.mockResolvedValue({
     forcedRecycle: false,
@@ -989,7 +993,7 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
     mocks.downloadAndStageHostMock.mockResolvedValue(upToDate("2.0.0"));
     mocks.readHostInstallRecordMock.mockResolvedValue(sampleRecord("2.0.0"));
     mocks.readHostPidMetadataMock.mockResolvedValue(pidRecord("1.0.0", 4242));
-    mocks.isProcessAliveMock.mockReturnValue(true);
+    mocks.identityVerdictMock.mockResolvedValue("current");
 
     const result = await buildHostUpdateCommand({
       force: false,
@@ -1039,7 +1043,7 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
     mocks.readHostPidMetadataMock
       .mockResolvedValueOnce(pidRecord("1.0.0", 4242))
       .mockResolvedValue(pidRecord("2.0.0", 4343));
-    mocks.isProcessAliveMock.mockReturnValue(true);
+    mocks.identityVerdictMock.mockResolvedValue("current");
 
     const result = await buildHostUpdateCommand({
       force: false,
@@ -1066,7 +1070,7 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
     mocks.readHostPidMetadataMock
       .mockResolvedValueOnce(pidRecord("1.0.0", 4242))
       .mockResolvedValue(pidRecord("2.0.0", 4343));
-    mocks.isProcessAliveMock.mockReturnValue(true);
+    mocks.identityVerdictMock.mockResolvedValue("current");
     mocks.probeHostHealthMock.mockResolvedValue({
       healthy: false,
       detail: "tcp refused",
@@ -1100,7 +1104,7 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
       .mockResolvedValueOnce(sampleRecord("2.0.0"))
       .mockResolvedValue(sampleRecord("2.1.0"));
     mocks.readHostPidMetadataMock.mockResolvedValue(pidRecord("1.0.0", 4242));
-    mocks.isProcessAliveMock.mockReturnValue(true);
+    mocks.identityVerdictMock.mockResolvedValue("current");
 
     const result = await buildHostUpdateCommand({
       force: false,
@@ -1134,7 +1138,7 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
     mocks.readHostPidMetadataMock
       .mockResolvedValueOnce(pidRecord("1.0.0", 4242))
       .mockResolvedValue(null);
-    mocks.isProcessAliveMock.mockReturnValue(true);
+    mocks.identityVerdictMock.mockResolvedValue("current");
 
     const result = await buildHostUpdateCommand({
       force: false,
@@ -1165,7 +1169,7 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
     mocks.downloadAndStageHostMock.mockResolvedValue(upToDate("2.0.0"));
     mocks.readHostInstallRecordMock.mockResolvedValue(sampleRecord("2.0.0"));
     mocks.readHostPidMetadataMock.mockResolvedValue(pidRecord("2.0.0", 4242));
-    mocks.isProcessAliveMock.mockReturnValue(true);
+    mocks.identityVerdictMock.mockResolvedValue("current");
     mocks.readUpdateProgressMarkerMock.mockResolvedValue({
       state: "failed",
       error: "host did not become healthy: tcp refused",
@@ -1181,10 +1185,66 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
 
     expect(mocks.stopHostForRestartWithAttemptMock).not.toHaveBeenCalled();
     expect(mocks.writeUpdateProgressMarkerMock).not.toHaveBeenCalled();
-    expect(mocks.deleteUpdateProgressMarkerMock).toHaveBeenCalledWith(
+    // CONDITIONAL on the marker still being the `failed` record that was
+    // read - never the unconditional delete, which would erase a live
+    // `updating` another updater wrote in between.
+    expect(mocks.deleteUpdateProgressMarkerMock).not.toHaveBeenCalled();
+    expect(
+      mocks.deleteUpdateProgressMarkerIfUnchangedMock,
+    ).toHaveBeenCalledWith(
       "production",
+      expect.objectContaining({ state: "failed", targetVersion: "2.0.0" }),
     );
     expect(result.human).toContain("no-op");
+  });
+
+  it("pid.json names a RECYCLED pid (identity verdict `mismatch`): not a live host - no debt, no restart, and a `failed` marker is NOT cleared", async () => {
+    // The pid survived a crash and the OS handed it to an unrelated process.
+    // Bare liveness would call that occupant the host: with the recorded
+    // 1.0.0 that reads as debt (and the busy gate then fails against a stale
+    // endpoint); with a matching version it would clear a `failed` marker
+    // over no host at all. The published identity verdict rules it out.
+    mocks.downloadAndStageHostMock.mockResolvedValue(upToDate("2.0.0"));
+    mocks.readHostInstallRecordMock.mockResolvedValue(sampleRecord("2.0.0"));
+    mocks.readHostPidMetadataMock.mockResolvedValue(pidRecord("2.0.0", 4242));
+    mocks.identityVerdictMock.mockResolvedValue("mismatch");
+    mocks.readUpdateProgressMarkerMock.mockResolvedValue({
+      state: "failed",
+      error: "host did not become healthy: tcp refused",
+      targetVersion: "2.0.0",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    const result = await buildHostUpdateCommand({
+      force: false,
+      allowDowngrade: false,
+      ackNonce: null,
+    })(fakeCtx());
+
+    expect(mocks.identityVerdictMock).toHaveBeenCalledWith(4242, null);
+    expect(mocks.stopHostForRestartWithAttemptMock).not.toHaveBeenCalled();
+    expect(mocks.assertHostNotBusyMock).not.toHaveBeenCalled();
+    expect(mocks.writeUpdateProgressMarkerMock).not.toHaveBeenCalled();
+    expect(
+      mocks.deleteUpdateProgressMarkerIfUnchangedMock,
+    ).not.toHaveBeenCalled();
+    expect(mocks.deleteUpdateProgressMarkerMock).not.toHaveBeenCalled();
+    expect(result.human).toContain("no-op");
+  });
+
+  it("identity verdict `indeterminate` (a pid.json that predates the stamp): the host is KEPT - debt is still detected and activated", async () => {
+    mocks.downloadAndStageHostMock.mockResolvedValue(upToDate("2.0.0"));
+    mocks.readHostInstallRecordMock.mockResolvedValue(sampleRecord("2.0.0"));
+    mocks.readHostPidMetadataMock.mockResolvedValue(pidRecord("1.0.0", 4242));
+    mocks.identityVerdictMock.mockResolvedValue("indeterminate");
+
+    await buildHostUpdateCommand({
+      force: false,
+      allowDowngrade: false,
+      ackNonce: null,
+    })(fakeCtx());
+
+    expect(mocks.stopHostForRestartWithAttemptMock).toHaveBeenCalledTimes(1);
   });
 
   it("no work owed but the host is DOWN: a `failed` marker is left alone - it may still be exactly true", async () => {
@@ -1205,6 +1265,9 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
     })(fakeCtx());
 
     expect(mocks.deleteUpdateProgressMarkerMock).not.toHaveBeenCalled();
+    expect(
+      mocks.deleteUpdateProgressMarkerIfUnchangedMock,
+    ).not.toHaveBeenCalled();
     expect(mocks.stopHostForRestartWithAttemptMock).not.toHaveBeenCalled();
   });
 
@@ -1212,7 +1275,7 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
     mocks.downloadAndStageHostMock.mockResolvedValue(upToDate("2.0.0"));
     mocks.readHostInstallRecordMock.mockResolvedValue(sampleRecord("2.0.0"));
     mocks.readHostPidMetadataMock.mockResolvedValue(pidRecord("2.0.0", 4242));
-    mocks.isProcessAliveMock.mockReturnValue(true);
+    mocks.identityVerdictMock.mockResolvedValue("current");
     mocks.readUpdateProgressMarkerMock.mockResolvedValue({
       state: "updating",
       error: null,
@@ -1227,6 +1290,9 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
     })(fakeCtx());
 
     expect(mocks.deleteUpdateProgressMarkerMock).not.toHaveBeenCalled();
+    expect(
+      mocks.deleteUpdateProgressMarkerIfUnchangedMock,
+    ).not.toHaveBeenCalled();
   });
 
   it("debt cleared under the lock on a BUSY host: still the no-op - the busy gate is never consulted and no failed marker is written", async () => {
@@ -1238,7 +1304,7 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
     mocks.readHostPidMetadataMock
       .mockResolvedValueOnce(pidRecord("1.0.0", 4242))
       .mockResolvedValue(pidRecord("2.0.0", 4343));
-    mocks.isProcessAliveMock.mockReturnValue(true);
+    mocks.identityVerdictMock.mockResolvedValue("current");
     mocks.assertHostNotBusyMock.mockRejectedValue(
       new Error("host is busy: 1 live session"),
     );
@@ -1263,7 +1329,7 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
     mocks.downloadAndStageHostMock.mockResolvedValue(upToDate("2.0.0"));
     mocks.readHostInstallRecordMock.mockResolvedValue(sampleRecord("2.0.0"));
     mocks.readHostPidMetadataMock.mockResolvedValue(pidRecord("2.0.0", 4242));
-    mocks.isProcessAliveMock.mockReturnValue(true);
+    mocks.identityVerdictMock.mockResolvedValue("current");
 
     const result = await buildHostUpdateCommand({
       force: false,
@@ -1281,7 +1347,7 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
     mocks.downloadAndStageHostMock.mockResolvedValue(upToDate("2.0.0"));
     mocks.readHostInstallRecordMock.mockResolvedValue(sampleRecord("2.0.0"));
     mocks.readHostPidMetadataMock.mockResolvedValue(pidRecord("1.0.0", 4242));
-    mocks.isProcessAliveMock.mockReturnValue(false);
+    mocks.identityVerdictMock.mockResolvedValue("dead");
 
     const result = await buildHostUpdateCommand({
       force: false,
@@ -1300,7 +1366,7 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
     mocks.readHostPidMetadataMock.mockResolvedValue(
       pidRecord("local-abc123", 4242),
     );
-    mocks.isProcessAliveMock.mockReturnValue(true);
+    mocks.identityVerdictMock.mockResolvedValue("current");
 
     const result = await buildHostUpdateCommand({
       force: false,
@@ -1317,7 +1383,7 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
     mocks.downloadAndStageHostMock.mockResolvedValue(upToDate("1.9.0"));
     mocks.readHostInstallRecordMock.mockResolvedValue(sampleRecord("1.9.0"));
     mocks.readHostPidMetadataMock.mockResolvedValue(pidRecord("2.0.0", 4242));
-    mocks.isProcessAliveMock.mockReturnValue(true);
+    mocks.identityVerdictMock.mockResolvedValue("current");
 
     const result = await buildHostUpdateCommand({
       force: false,
@@ -1336,7 +1402,7 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
     mocks.downloadAndStageHostMock.mockResolvedValue(upToDate("2.0.0"));
     mocks.readHostInstallRecordMock.mockResolvedValue(sampleRecord("2.0.0"));
     mocks.readHostPidMetadataMock.mockResolvedValue(pidRecord("1.0.0", 4242));
-    mocks.isProcessAliveMock.mockReturnValue(true);
+    mocks.identityVerdictMock.mockResolvedValue("current");
 
     await buildHostUpdateCommand({
       force: true,
@@ -1369,7 +1435,7 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
       runtimeVersion: "2.0.1",
     });
     mocks.readHostPidMetadataMock.mockResolvedValue(pidRecord("2.0.1", 4242));
-    mocks.isProcessAliveMock.mockReturnValue(true);
+    mocks.identityVerdictMock.mockResolvedValue("current");
 
     const result = await buildHostUpdateCommand({
       force: false,
@@ -1393,7 +1459,7 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
     mocks.readHostPidMetadataMock.mockResolvedValue(
       pidRecord("2.0.0-rc.3", 4242),
     );
-    mocks.isProcessAliveMock.mockReturnValue(true);
+    mocks.identityVerdictMock.mockResolvedValue("current");
 
     const result = await buildHostUpdateCommand({
       force: false,
@@ -1411,7 +1477,7 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
     mocks.downloadAndStageHostMock.mockResolvedValue(upToDate("2.0.0"));
     mocks.readHostInstallRecordMock.mockResolvedValue(sampleRecord("2.0.0"));
     mocks.readHostPidMetadataMock.mockResolvedValue(pidRecord("1.0.0", 4242));
-    mocks.isProcessAliveMock.mockReturnValue(true);
+    mocks.identityVerdictMock.mockResolvedValue("current");
     mocks.assertHostNotBusyMock.mockRejectedValue(
       cliError({
         code: CLI_ERROR_CODES.HOST_BUSY,
@@ -1440,7 +1506,7 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
     mocks.downloadAndStageHostMock.mockResolvedValue(upToDate("2.0.0"));
     mocks.readHostInstallRecordMock.mockResolvedValue(sampleRecord("2.0.0"));
     mocks.readHostPidMetadataMock.mockResolvedValue(pidRecord("1.0.0", 4242));
-    mocks.isProcessAliveMock.mockReturnValue(true);
+    mocks.identityVerdictMock.mockResolvedValue("current");
     mocks.probeHostHealthMock.mockResolvedValue({
       healthy: false,
       detail: "port never accepted a connection",

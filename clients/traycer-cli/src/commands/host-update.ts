@@ -10,6 +10,7 @@ import {
 } from "../installer/download-stage";
 import {
   deleteUpdateProgressMarker,
+  deleteUpdateProgressMarkerIfUnchanged,
   readUpdateProgressMarker,
   writeUpdateProgressMarker,
 } from "../host/update-progress-marker";
@@ -34,7 +35,7 @@ import {
   stopHostForRestartWithAttempt,
 } from "../host/update-mutation";
 import { readHostPidMetadata } from "../host/pid-metadata";
-import { isProcessAlive } from "../store/process-identity";
+import { getPublishedProcessIdentityVerdict } from "../store/process-identity";
 import { assertHostNotBusy } from "../host/busy-check";
 import { createServiceController, serviceLabelFor } from "../service";
 
@@ -449,7 +450,24 @@ async function readActivationState(
   const installed = await readHostInstallRecord(environment);
   if (installed === null) return { kind: "no-install" };
   const running = await readHostPidMetadata(environment);
-  if (running === null || !isProcessAlive(running.pid)) {
+  if (running === null) {
+    return { kind: "no-live-host", installedVersion: installed.version };
+  }
+  // The published identity verdict, not bare pid liveness: a `pid.json` that
+  // survived a crash names a pid the OS may since have handed to an unrelated
+  // process, and `isProcessAlive` would call that occupant the host. With a
+  // differing recorded version that reads as debt (and the busy gate then
+  // fails against a stale endpoint); with a matching one it reads as
+  // activated and would clear a `failed` marker over no host at all. The
+  // verdict compares the process start stamp `pid.json` published and
+  // reports `mismatch` for exactly that impostor. `indeterminate` (a record
+  // that predates the stamp, or a failed OS probe) keeps the host, the same
+  // fail-open reading every other consumer of the verdict takes.
+  const identity = await getPublishedProcessIdentityVerdict(
+    running.pid,
+    running.processStartIdentity,
+  );
+  if (identity === "dead" || identity === "mismatch") {
     return { kind: "no-live-host", installedVersion: installed.version };
   }
   if (!isValidHostVersion(running.version)) return { kind: "foreign-runtime" };
@@ -472,10 +490,15 @@ async function readActivationState(
 
 /**
  * Remove a `failed` progress marker that the observed state contradicts.
- * Read-then-delete outside any lock: the only writer that could interleave
- * is another updater stamping `updating`, and that window is the width of
- * one file read. Marker I/O never fails the command (same rule as the
- * writes).
+ *
+ * The delete is CONDITIONAL on the marker still being the `failed` record
+ * that was read: another updater racing this no-op can replace it with a
+ * live `updating` in between, and deleting that would erase the legacy
+ * path's only progress signal for the whole download → swap → restart. A
+ * lock would not close the window (the `updating` write precedes its
+ * writer's lock acquisition), so the marker module re-reads and compares
+ * immediately before the unlink. Marker I/O never fails the command (same
+ * rule as the writes).
  */
 async function clearStaleFailedMarker(
   logger: ILogger,
@@ -483,17 +506,20 @@ async function clearStaleFailedMarker(
 ): Promise<void> {
   const marker = await readUpdateProgressMarker(environment);
   if (marker === null || marker.state !== "failed") return;
-  try {
-    await deleteUpdateProgressMarker(environment);
+  const outcome = await deleteUpdateProgressMarkerIfUnchanged(
+    environment,
+    marker,
+  );
+  if (outcome === "cleared") {
     logger.info(
       "Host update cleared a stale failed progress marker - the running host is at the installed version",
       { environment, staleTargetVersion: marker.targetVersion },
     );
-  } catch (err) {
-    logger.warn("Host update failed to clear a stale progress marker", {
-      environment,
-      errorMessage: err instanceof Error ? err.message : String(err),
-    });
+  } else {
+    logger.info(
+      "Host update left the progress marker alone - it changed under the stale-failure check",
+      { environment, outcome },
+    );
   }
 }
 

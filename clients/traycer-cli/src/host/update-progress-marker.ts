@@ -75,6 +75,61 @@ export async function deleteUpdateProgressMarker(
   }
 }
 
+export type ConditionalMarkerDelete = "cleared" | "changed" | "absent";
+
+/**
+ * Delete the marker only if it still reads as `expected`.
+ *
+ * For a reconciliation that decided from a marker it READ - "this `failed`
+ * is stale, the host is current" - rather than one it wrote. Another updater
+ * can replace that marker with a live `updating` between the read and the
+ * delete, and an unconditional delete would then erase the only signal the
+ * legacy path has, rendering a real download → swap → restart as a quiet
+ * host. The re-read here narrows that window to the gap between one read
+ * and one unlink; there is no atomic compare-and-delete for a file, and a
+ * lock does not close it either because the `updating` write happens before
+ * its writer takes the lock. Never throws (same rule as the other marker I/O).
+ */
+export async function deleteUpdateProgressMarkerIfUnchanged(
+  environment: Environment,
+  expected: HostUpdateProgress,
+): Promise<ConditionalMarkerDelete> {
+  const logger = createCliLogger(environment);
+  const current = await readUpdateProgressMarker(environment);
+  if (current === null) return "absent";
+  if (
+    current.state !== expected.state ||
+    current.targetVersion !== expected.targetVersion ||
+    current.updatedAt !== expected.updatedAt ||
+    current.error !== expected.error
+  ) {
+    logger.info(
+      "Host update progress marker changed under a conditional clear",
+      {
+        environment,
+        expectedState: expected.state,
+        currentState: current.state,
+      },
+    );
+    return "changed";
+  }
+  try {
+    await rm(hostUpdateProgressMarkerPath(environment), { force: true });
+    logger.info("Host update progress marker cleared (conditional)", {
+      environment,
+      state: expected.state,
+    });
+    return "cleared";
+  } catch (err) {
+    logger.warn("Host update progress marker conditional clear failed", {
+      environment,
+      errorName: errorFromUnknown(err).name,
+      errorMessage: errorFromUnknown(err).message,
+    });
+    return "changed";
+  }
+}
+
 // Read-only accessor for Doctor / tests. Returns `null` when absent or
 // malformed (a malformed marker is treated the same as "no marker" - it is
 // advisory UI state, not an authoritative record worth failing loudly on).

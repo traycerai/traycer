@@ -23,6 +23,7 @@ vi.mock("../../host/update-progress-marker", () => ({
   writeUpdateProgressMarker: mocks.writeUpdateProgressMarkerMock,
   deleteUpdateProgressMarker: mocks.deleteUpdateProgressMarkerMock,
   readUpdateProgressMarker: async () => null,
+  deleteUpdateProgressMarkerIfUnchanged: async () => "absent",
 }));
 
 vi.mock("../../service/health-probe", () => ({
