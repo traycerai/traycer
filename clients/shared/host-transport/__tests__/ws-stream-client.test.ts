@@ -1485,10 +1485,10 @@ describe("WsStreamClient", () => {
     });
 
     const sessionsSubscription = client.subscribe("browser.sessions", {
-      epicId: "epic-1",
+      scope: { kind: "epic", epicId: "epic-1" },
     });
     const screencastSubscription = client.subscribe("browser.screencast", {
-      epicId: "epic-1",
+      scope: { kind: "epic", epicId: "epic-1" },
       sessionId: "browser-session-1",
       tabId: "browser-tab-1",
       role: "tile",

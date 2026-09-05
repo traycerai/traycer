@@ -1,7 +1,7 @@
 import { v4 as uuidv4 } from "uuid";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import { PROVIDER_DISPLAY_NAMES } from "@traycer/protocol/host/provider-schemas";
-import { useLandingTerminalStore } from "@/stores/home/landing-terminal-store";
+import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
 import { landingPaneAnchorDraftIds } from "@/components/home/terminal-panel/landing-pane-anchor-store";
 import { recordProviderLoginTerminal } from "@/stores/providers/provider-login-terminals";
 import { focusTerminalInstance } from "@/lib/terminals/terminal-focus-registry";
@@ -57,12 +57,13 @@ export function openLandingSignInTerminal(args: {
   // reopened from `terminal.list` by any other path builds its ref without an
   // origin, and this store is how that path learns not to create under the id.
   recordProviderLoginTerminal({ hostId, sessionId, providerId });
-  const store = useLandingTerminalStore.getState();
+  const store = useLandingPanelStore.getState();
   for (const retired of [replacedSessionId, launchedFromSessionId]) {
     if (retired === null || retired === sessionId) continue;
     store.removeHostTerminal(hostId, retired);
   }
   store.addTab({
+    kind: "terminal",
     instanceId: `landing-terminal-${uuidv4()}`,
     sessionId,
     hostId,
@@ -77,7 +78,7 @@ export function openLandingSignInTerminal(args: {
   });
   // `addTab` activated the tab to show - the new one, or the existing tab for
   // the same session on a retry.
-  const activeInstanceId = useLandingTerminalStore.getState().activeInstanceId;
+  const activeInstanceId = useLandingPanelStore.getState().activeInstanceId;
   if (activeInstanceId === null) return;
   // Opened as a REVEAL of that tab, never as an opening gesture: the panel
   // settles a gesture by re-targeting the launch cwd, and this tab's

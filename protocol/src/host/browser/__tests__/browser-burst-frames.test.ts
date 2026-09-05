@@ -87,7 +87,7 @@ describe("browser.sessions@1.0 burst and caption frames", () => {
 
 describe("browser.screencast@1.0 viewer role", () => {
   const baseOpen = {
-    epicId: "epic-1",
+    scope: { kind: "epic" as const, epicId: "epic-1" },
     sessionId: "session-1",
     tabId: "tab-1",
     maxWidth: 1280,

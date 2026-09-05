@@ -40,6 +40,7 @@
 import { z } from "zod";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
 import { defineRpcContract } from "@traycer/protocol/framework/index";
+import { hostResourceScopeSchema } from "@traycer/protocol/host/resource-scope";
 
 export const resourcesSubscribeOpenRequestV10Schema = z.object({
   epicId: z.string(),
@@ -636,10 +637,15 @@ export const resourcesKillV10 = defineRpcContract({
 
 // ── `resources.listLocalServers@1.0` — unary ───────────────────────────────
 // Lists listening TCP ports owned by process trees already attributed to one
-// epic. Discovery is intentionally on demand rather than part of the resource
+// scope. Discovery is intentionally on demand rather than part of the resource
 // stream: port scans are useful only while a blank browser tab is visible.
+//
+// `hostResourceScopeSchema`, not this module's `resourcesSubscribeScopeSchema`:
+// the two unions share a word and mean different things. `global` up there is
+// EVERY epic's owners; `independent` here is the owners with NO epic, which for
+// this request is exactly the device's Start Page terminals.
 export const resourcesListLocalServersRequestSchema = z.object({
-  epicId: z.string(),
+  scope: hostResourceScopeSchema,
 });
 export type ResourcesListLocalServersRequest = z.infer<
   typeof resourcesListLocalServersRequestSchema
