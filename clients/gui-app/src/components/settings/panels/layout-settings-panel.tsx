@@ -164,6 +164,9 @@ function StatusBarLayoutGroupContent(): ReactNode {
   );
   const setShowTimer = useLayoutStore((state) => state.setStatusBarShowTimer);
   const setShowBar = useLayoutStore((state) => state.setStatusBarShowBar);
+  const setShowModeWord = useLayoutStore(
+    (state) => state.setStatusBarShowModeWord,
+  );
   const setResourcesEnabled = useLayoutStore(
     (state) => state.setStatusBarResourcesEnabled,
   );
@@ -280,6 +283,19 @@ function StatusBarLayoutGroupContent(): ReactNode {
               setShowBar(value);
             }}
             aria-label="Show usage bar"
+          />
+        }
+      />
+      <SettingsRow
+        row={LAYOUT.definitions.modeWord}
+        control={
+          <Switch
+            checked={rateLimits.showModeWord}
+            onCheckedChange={(value) => {
+              trackLayoutSetting("layout.statusBar.rateLimits.showModeWord");
+              setShowModeWord(value);
+            }}
+            aria-label="Show used / remaining label"
           />
         }
       />
@@ -451,10 +467,16 @@ function ScopedStatusBarRateLimitProviders(): ReactNode {
   const hiddenWindowKeys = useLayoutStore(
     (state) => state.statusBar.rateLimits.hiddenWindowKeys,
   );
+  const expandedProviders = useLayoutStore(
+    (state) => state.statusBar.rateLimits.expandedProviders,
+  );
   const toggleProvider = useLayoutStore(
     (state) => state.toggleStatusBarProvider,
   );
   const toggleWindow = useLayoutStore((state) => state.toggleStatusBarWindow);
+  const toggleExpandedProvider = useLayoutStore(
+    (state) => state.toggleStatusBarExpandedProvider,
+  );
 
   if (rows.length === 0) {
     return <SettingsRow row={LAYOUT.definitions.providers} control={null} />;
@@ -484,6 +506,25 @@ function ScopedStatusBarRateLimitProviders(): ReactNode {
               what a segment that is not drawn would have contained. */}
             {hidden ? null : (
               <div className="pl-4">
+                {/* Above the window switches on purpose: it decides how many
+                  of them reach the strip, while each of them decides whether
+                  its window counts as visible at all - in both modes. */}
+                <LiveToggleRow
+                  label="Show all windows"
+                  description="Off: only the tightest window. On: every window not hidden below."
+                  control={
+                    <Switch
+                      checked={expandedProviders.includes(row.providerId)}
+                      onCheckedChange={() => {
+                        trackLayoutSetting(
+                          "layout.statusBar.rateLimits.expandedProvider",
+                        );
+                        toggleExpandedProvider(row.providerId);
+                      }}
+                      aria-label={`${row.label} show all windows`}
+                    />
+                  }
+                />
                 {row.windows.map((window) => (
                   <LiveToggleRow
                     key={window.windowKey}

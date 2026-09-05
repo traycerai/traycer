@@ -32,9 +32,11 @@ describe("useLayoutStore", () => {
           enabled: true,
           hiddenProviders: [],
           hiddenWindowKeys: [],
+          expandedProviders: [],
           percentMode: "used",
           showTimer: true,
           showBar: true,
+          showModeWord: true,
         },
         resources: {
           enabled: true,
@@ -70,9 +72,11 @@ describe("useLayoutStore", () => {
             enabled: false,
             hiddenProviders: ["codex"],
             hiddenWindowKeys: ["claude-code:sevenDayOpus"],
+            expandedProviders: ["claude-code"],
             percentMode: "remaining",
             showTimer: false,
             showBar: false,
+            showModeWord: false,
           },
           resources: {
             enabled: false,
@@ -88,9 +92,11 @@ describe("useLayoutStore", () => {
           enabled: false,
           hiddenProviders: ["codex"],
           hiddenWindowKeys: ["claude-code:sevenDayOpus"],
+          expandedProviders: ["claude-code"],
           percentMode: "remaining",
           showTimer: false,
           showBar: false,
+          showModeWord: false,
         },
         resources: {
           enabled: false,
@@ -110,9 +116,11 @@ describe("useLayoutStore", () => {
             enabled: "yes",
             hiddenProviders: "codex",
             hiddenWindowKeys: { 0: "codex:primary" },
+            expandedProviders: "codex",
             percentMode: "leftover",
             showTimer: 1,
             showBar: false,
+            showModeWord: "no",
           },
           resources: { enabled: null, metrics: "cpu", scope: "everything" },
         },
@@ -124,9 +132,11 @@ describe("useLayoutStore", () => {
           enabled: true,
           hiddenProviders: [],
           hiddenWindowKeys: [],
+          expandedProviders: [],
           percentMode: "used",
           showTimer: true,
           showBar: false,
+          showModeWord: true,
         },
         resources: {
           enabled: true,
@@ -193,6 +203,40 @@ describe("useLayoutStore", () => {
       ).toEqual(["codex:primary", "grok:period"]);
     });
 
+    it("drops a persisted expanded-provider id no build knows and dedupes the rest", async () => {
+      await rehydrateFrom({
+        statusBar: {
+          rateLimits: {
+            expandedProviders: ["codex", "codex", "not-a-provider", "grok"],
+          },
+        },
+      });
+
+      expect(
+        useLayoutStore.getState().statusBar.rateLimits.expandedProviders,
+      ).toEqual(["codex", "grok"]);
+    });
+
+    it("falls back to the default expandedProviders when the persisted value isn't an array", async () => {
+      await rehydrateFrom({
+        statusBar: { rateLimits: { expandedProviders: "codex" } },
+      });
+
+      expect(
+        useLayoutStore.getState().statusBar.rateLimits.expandedProviders,
+      ).toEqual([]);
+    });
+
+    it("falls back to the default showModeWord when the persisted value isn't a boolean", async () => {
+      await rehydrateFrom({
+        statusBar: { rateLimits: { showModeWord: "no" } },
+      });
+
+      expect(useLayoutStore.getState().statusBar.rateLimits.showModeWord).toBe(
+        true,
+      );
+    });
+
     it("returns a hidden provider to visible on the second toggle", () => {
       const { toggleStatusBarProvider } = useLayoutStore.getState();
 
@@ -218,6 +262,20 @@ describe("useLayoutStore", () => {
       toggleStatusBarWindow("claude-code:model:Fable");
       expect(
         useLayoutStore.getState().statusBar.rateLimits.hiddenWindowKeys,
+      ).toEqual([]);
+    });
+
+    it("returns an expanded provider to collapsed on the second toggle", () => {
+      const { toggleStatusBarExpandedProvider } = useLayoutStore.getState();
+
+      toggleStatusBarExpandedProvider("claude-code");
+      expect(
+        useLayoutStore.getState().statusBar.rateLimits.expandedProviders,
+      ).toEqual(["claude-code"]);
+
+      toggleStatusBarExpandedProvider("claude-code");
+      expect(
+        useLayoutStore.getState().statusBar.rateLimits.expandedProviders,
       ).toEqual([]);
     });
 
@@ -282,6 +340,7 @@ describe("useLayoutStore", () => {
       store.setStatusBarPercentMode("remaining");
       store.setStatusBarShowTimer(false);
       store.setStatusBarShowBar(false);
+      store.setStatusBarShowModeWord(false);
       store.setStatusBarRateLimitsEnabled(false);
       store.setStatusBarResourcesEnabled(false);
       store.setStatusBarResourceScope("desktop-app");
@@ -290,6 +349,7 @@ describe("useLayoutStore", () => {
       expect(statusBar.rateLimits.percentMode).toBe("remaining");
       expect(statusBar.rateLimits.showTimer).toBe(false);
       expect(statusBar.rateLimits.showBar).toBe(false);
+      expect(statusBar.rateLimits.showModeWord).toBe(false);
       expect(statusBar.rateLimits.enabled).toBe(false);
       expect(statusBar.resources.enabled).toBe(false);
       expect(statusBar.resources.scope).toBe("desktop-app");
@@ -299,6 +359,14 @@ describe("useLayoutStore", () => {
       const before = useLayoutStore.getState().statusBar;
 
       useLayoutStore.getState().setStatusBarPercentMode("used");
+
+      expect(useLayoutStore.getState().statusBar).toBe(before);
+    });
+
+    it("leaves state untouched when setStatusBarShowModeWord is handed the value already held", () => {
+      const before = useLayoutStore.getState().statusBar;
+
+      useLayoutStore.getState().setStatusBarShowModeWord(true);
 
       expect(useLayoutStore.getState().statusBar).toBe(before);
     });

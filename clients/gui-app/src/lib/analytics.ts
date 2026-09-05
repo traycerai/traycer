@@ -287,9 +287,11 @@ export type AnalyticsSetting =
   // surface's rows read as siblings instead of colliding on a verb.
   | "layout.statusBar.placement"
   | "layout.statusBar.rateLimits.enabled"
+  | "layout.statusBar.rateLimits.expandedProvider"
   | "layout.statusBar.rateLimits.percentMode"
   | "layout.statusBar.rateLimits.provider"
   | "layout.statusBar.rateLimits.showBar"
+  | "layout.statusBar.rateLimits.showModeWord"
   | "layout.statusBar.rateLimits.showTimer"
   | "layout.statusBar.rateLimits.window"
   | "layout.statusBar.resources.enabled"
@@ -1177,9 +1179,11 @@ const ANALYTICS_SETTINGS = new Set<string>([
   "glassOpacity",
   "layout.statusBar.placement",
   "layout.statusBar.rateLimits.enabled",
+  "layout.statusBar.rateLimits.expandedProvider",
   "layout.statusBar.rateLimits.percentMode",
   "layout.statusBar.rateLimits.provider",
   "layout.statusBar.rateLimits.showBar",
+  "layout.statusBar.rateLimits.showModeWord",
   "layout.statusBar.rateLimits.showTimer",
   "layout.statusBar.rateLimits.window",
   "layout.statusBar.resources.enabled",

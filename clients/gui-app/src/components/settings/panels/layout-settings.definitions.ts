@@ -99,6 +99,16 @@ export const LAYOUT = defineSettingsSection("layout", {
     availableWhen: isStatusBarControlsAvailable,
     keywords: ["used", "remaining", "percent", "left"],
   },
+  modeWord: {
+    kind: "row",
+    group: "statusBar",
+    search: { anchor: "layout-status-bar-mode-word" },
+    label: "Show used / remaining label",
+    description:
+      "Spell out the word after each percentage. Off leaves the number alone.",
+    availableWhen: isStatusBarControlsAvailable,
+    keywords: ["word", "suffix", "used", "remaining", "percent"],
+  },
   resetTimer: {
     kind: "row",
     group: "statusBar",
