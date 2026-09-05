@@ -1,6 +1,7 @@
 import type {
   HostBusyBreakdown,
   HostStatusUpdateOperation,
+  HostStatusUpdateProgress,
   HostUpdateTransactionCapability,
 } from "@traycer/protocol/host/status/index";
 import type { HostUpdateAttemptPhase } from "@traycer/protocol/config/host-update-attempt";
@@ -56,6 +57,21 @@ export interface FleetUpdateWireObservation {
   readonly operation: HostStatusUpdateOperation | null;
   /** `null` = peer did not say. Every transaction gate fails closed on it. */
   readonly transaction: HostUpdateTransactionCapability | null;
+  /**
+   * The released two-state marker (`host.status@1.1`'s `updateProgress`),
+   * carried BESIDE the attempt rather than folded into it.
+   *
+   * It is the only update signal the shipped legacy path emits: `traycer host
+   * update` writes `update-progress.json` around download → swap → restart →
+   * health probe and never a schema-v2 attempt record while the executor
+   * cohort is shadow-disabled. A @1.3 host running that path answers
+   * `updateOperation: {kind:"none"}` (it read the record; there is none) AND
+   * `updateProgress: {state:"updating"}` at the same time, and only this field
+   * lets the projector tell that host apart from a genuinely quiet one.
+   *
+   * `null` when the peer reported nothing in that field.
+   */
+  readonly coarseProgress: HostStatusUpdateProgress | null;
 }
 
 /**
@@ -147,6 +163,15 @@ export type FleetUpdateViewKind =
   | "unknown"
   /** Read cleanly; this host has no attempt. */
   | "idle"
+  /**
+   * An update is in flight and the host can say nothing finer than that. The
+   * legacy `traycer host update` path reports through the coarse
+   * `updateProgress` marker alone, which has no phase, no target and no
+   * percentage — so this kind exists for exactly that signal, and a surface
+   * renders it as a generic, indeterminate "Updating host". A live phase from
+   * the attempt record always outranks it.
+   */
+  | "updating"
   | "downloading"
   | "preparing"
   | "applying"
@@ -268,7 +293,8 @@ export interface FleetUpdateViewInput {
  * 2. **Stale observation** → `unknown`, but *qualified* and carrying the last
  *    phase, so a surface can say "last seen downloading" rather than going
  *    blank. A missed poll is not a state change on the host.
- * 3. **`operation === null`** → `unknown`. This is the one that is easy to get
+ * 3. **`operation === null`** → the coarse `updateProgress` view when the peer
+ *    reported one, else `unknown`. This is the one that is easy to get
  *    wrong and expensive when wrong: for a REMOTE host on a per-host `manual`
  *    update policy this is potentially the indefinite steady state, not an
  *    upgrade transient. Reading it as "no update in progress" would show those
@@ -344,10 +370,30 @@ export function projectFleetUpdateView(
   // inner ternary so that no single edit — a "simplification", a merged
   // condition — can silently turn the first into the second.
   if (operation === null) {
+    // A pre-@1.3 peer cannot report an attempt, but it CAN report the coarse
+    // `updateProgress` marker (`host.status@1.1`), and for that cohort the
+    // marker is the only update signal there is. Consulted first: without it
+    // the landing banner and the host badges hid a live or failed legacy
+    // update on exactly the hosts that could say nothing finer. Only when the
+    // peer reported no marker either does this fall through to `unknown` -
+    // never `idle`, for the reasons above.
+    const coarseView = coarseProgressView(observation, stale);
+    if (coarseView !== null) return coarseView;
     return UNKNOWN_FLEET_UPDATE_VIEW;
   }
 
   if (operation.kind === "none") {
+    // "No attempt record" is NOT "no update". The shipped legacy update path
+    // (`traycer host update`, every host while the executor cohort is shadow
+    // -disabled) writes no schema-v2 record at all; it reports through the
+    // coarse `updateProgress` marker, and a @1.3 host on that path answers
+    // `{kind:"none"}` here while `updateProgress` says `updating`. Reading
+    // the attempt alone rendered a live download → swap → restart as "Host is
+    // up to date" — on the very Overview whose Update now had just started it
+    // — which is the incident this branch was rewritten for. The coarse
+    // marker is consulted FIRST, and only its absence means quiet.
+    const coarseView = coarseProgressView(observation, stale);
+    if (coarseView !== null) return coarseView;
     // A stale read of a quiet host is still unknown rather than idle: the
     // absence of an attempt was true when we looked, and we have since stopped
     // looking. Claiming "up to date" from a reading we cannot refresh is the
@@ -440,6 +486,90 @@ export function projectFleetUpdateView(
   // saying. `lastKnownKind` is populated only where `kind` decayed to
   // `unknown` — that is the invariant the field's doc states.
   return { ...view, qualified: operation.liveness === "indeterminate" };
+}
+
+/**
+ * What the coarse `updateProgress` marker says, as a view kind — or `null`
+ * when it says nothing, which is the only case that may fall through to `idle`.
+ *
+ * `updating` is the marker's whole vocabulary for "in flight": the legacy
+ * updater sets it before the download and clears it after the post-restart
+ * health probe, so it covers every phase without naming one. `failed` carries
+ * the cause the updater terminated the marker with — the health-check failure
+ * that used to be invisible on a @1.3 peer, because the Overview only read the
+ * coarse field for peers that could not report an attempt.
+ */
+/**
+ * The view the coarse `updateProgress` marker projects on its own, or `null`
+ * when the peer reported no marker. Shared by the two arms that have no
+ * attempt to read - a pre-@1.3 peer (`operation === null`) and a @1.3 peer
+ * with no record (`kind: "none"`) - so the two cannot drift on how the legacy
+ * path's only signal is rendered. A live phase from an attempt record always
+ * outranks it; neither caller reaches here with one.
+ */
+function coarseProgressView(
+  observation: FleetUpdateWireObservation,
+  stale: boolean,
+): FleetUpdateView | null {
+  const coarse = coarseKind(observation.coarseProgress);
+  if (coarse === null) return null;
+  if (stale) {
+    return {
+      ...UNKNOWN_FLEET_UPDATE_VIEW,
+      lastKnownKind: coarse.kind,
+      lastObservedAtMs: observation.observedAtMs,
+      errorMessage: coarse.errorMessage,
+    };
+  }
+  return {
+    ...UNKNOWN_FLEET_UPDATE_VIEW,
+    kind: coarse.kind,
+    qualified: false,
+    // Indeterminate, never `none`: the marker proves motion and nothing
+    // about how far along it is, and a surface draws that as a moving bar
+    // rather than as an operation with no progress to show.
+    progress:
+      coarse.kind === "updating"
+        ? { kind: "indeterminate", bytes: null, totalBytes: null }
+        : { kind: "none" },
+    errorMessage: coarse.errorMessage,
+  };
+}
+
+function coarseKind(coarse: HostStatusUpdateProgress | null): {
+  readonly kind: "updating" | "failed";
+  readonly errorMessage: string | null;
+} | null {
+  if (coarse === null) return null;
+  if (coarse.state === "updating") {
+    return { kind: "updating", errorMessage: null };
+  }
+  return {
+    kind: "failed",
+    errorMessage:
+      coarse.error ?? "The last update attempt failed on this host.",
+  };
+}
+
+/**
+ * Whether a view has nothing a person needs to see about an update.
+ *
+ * `idle` is a fresh read with no attempt; `unknown` with no retained phase (or
+ * a retained `idle`) is a host we cannot currently ask and last saw quiet.
+ * Neither is a claim about the catalog — "Host is up to date" is a sentence
+ * about VERSIONS, which this projection knows nothing about — so a surface that
+ * also renders the catalog's own answer ("v2.0.0 is available.") must not put
+ * this view beside it. The landing banner and the Overview both hide on this
+ * predicate; it lives here so they cannot drift on where "quiet" begins.
+ */
+export function isQuietUpdateView(view: FleetUpdateView): boolean {
+  if (view.kind === "idle") return true;
+  if (view.kind !== "unknown") return false;
+  return (
+    view.lastKnownKind === null ||
+    view.lastKnownKind === "idle" ||
+    view.lastKnownKind === "unknown"
+  );
 }
 
 /**
@@ -574,6 +704,17 @@ export function offersForceRestart(view: FleetUpdateView): boolean {
  * absolutely should stop a second install being launched over it — that is the
  * contender boundary's job on the host, and it refuses with `already-updating`.
  * This predicate is only about the surrounding lifecycle controls.
+ *
+ * `updating` — the coarse `updateProgress` marker projected beside a `none`
+ * attempt — is deliberately in the fail-open arm with `unknown`, for the same
+ * reason `unknown` is. The marker is a file the legacy updater writes before
+ * it starts and deletes when it finishes; it carries no liveness, and a host
+ * keeps serving a fresh `{state:"updating"}` for as long as that file exists,
+ * which after an updater crash or hang is forever. A gate held by it would be
+ * the unrecoverable case above with a different name: Restart, Diagnostics
+ * and the service verbs disabled indefinitely by an update nobody is running.
+ * The marker informs (a card, a moving bar); it never stands between a
+ * person and their host.
  */
 export function holdsLifecycleGate(view: FleetUpdateView): boolean {
   switch (view.kind) {
@@ -583,6 +724,7 @@ export function holdsLifecycleGate(view: FleetUpdateView): boolean {
     case "restarting":
     case "verifying":
       return true;
+    case "updating":
     case "reconnecting":
     case "waiting-for-work":
     case "waiting-to-activate":
@@ -603,6 +745,13 @@ export function holdsLifecycleGate(view: FleetUpdateView): boolean {
  * terminal one is retained for seven days, and a qualified one is evidence we
  * already know we cannot refresh — none of those justify polling a host every
  * two seconds, and doing so would be the retry storm §6 forbids.
+ *
+ * The coarse `updating` kind does not earn it either, and for the same
+ * reason it does not hold the lifecycle gate: the marker proves a file
+ * exists, not that anything is moving, and a marker left behind by a crashed
+ * updater would otherwise keep one host on the 2s cadence for as long as any
+ * surface observing it stays mounted. The `host.status` 10s baseline still
+ * shows the card within one poll of a real legacy update.
  */
 export function warrantsFastPoll(view: FleetUpdateView): boolean {
   if (view.qualified) return false;
@@ -614,6 +763,7 @@ export function warrantsFastPoll(view: FleetUpdateView): boolean {
     case "reconnecting":
     case "verifying":
       return true;
+    case "updating":
     case "unknown":
     case "idle":
     case "waiting-for-work":

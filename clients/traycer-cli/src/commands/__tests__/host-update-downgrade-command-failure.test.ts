@@ -1,12 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CommandContext } from "../../runner/runner";
 import type { HostInstallRecord } from "../../manifest/host-install";
+import type { HostUpdateProgress } from "../../host/update-progress-marker";
 
 const mocks = vi.hoisted(() => ({
   installHostDowngradeMock: vi.fn(),
   readHostInstallRecordMock: vi.fn(),
   writeUpdateProgressMarkerMock: vi.fn(),
   deleteUpdateProgressMarkerMock: vi.fn(),
+  replaceUpdateProgressMarkerMock: vi.fn(),
   probeHostHealthMock: vi.fn(),
   installDispatchAckStamperMock: vi.fn(),
 }));
@@ -22,6 +24,19 @@ vi.mock("../../manifest/host-install", () => ({
 vi.mock("../../host/update-progress-marker", () => ({
   writeUpdateProgressMarker: mocks.writeUpdateProgressMarkerMock,
   deleteUpdateProgressMarker: mocks.deleteUpdateProgressMarkerMock,
+  readUpdateProgressMarker: async () => null,
+  deleteUpdateProgressMarkerIfUnchanged: async () => "absent",
+  replaceUpdateProgressMarkerIfUnchanged: mocks.replaceUpdateProgressMarkerMock,
+  progressRecord: (fields: {
+    state: "updating" | "failed";
+    error: string | null;
+    targetVersion: string;
+  }): HostUpdateProgress => ({
+    ...fields,
+    updatedAt: new Date().toISOString(),
+    writerId: "test-writer",
+  }),
+  sameProgress: () => true,
 }));
 
 vi.mock("../../service/health-probe", () => ({
@@ -34,6 +49,14 @@ vi.mock("../../host/update-dispatch-ack", () => ({
 
 vi.mock("../../installer/download-stage", () => ({
   downloadAndStageHost: vi.fn(),
+}));
+
+// SAFETY: `buildHostUpdateCommand` now probes the REAL `~/.traycer/host/
+// pid.json` for activation debt, and an unmocked read on a developer machine
+// could classify the developer's live host as debt and restart it. Every test
+// that invokes the command mocks the probe to "no running host".
+vi.mock("../../host/pid-metadata", () => ({
+  readHostPidMetadata: vi.fn(async () => null),
 }));
 
 import { buildHostUpdateCommand } from "../host-update";
@@ -92,6 +115,7 @@ describe("host update explicit downgrade failure", () => {
     mocks.installHostDowngradeMock.mockRejectedValue(
       new Error("downgrade commit failed"),
     );
+    mocks.replaceUpdateProgressMarkerMock.mockResolvedValue("replaced");
 
     await expect(
       buildHostUpdateCommand({
@@ -102,6 +126,9 @@ describe("host update explicit downgrade failure", () => {
       })(fakeCtx()),
     ).rejects.toThrow("downgrade commit failed");
 
+    // Only the initial `updating` write happens unconditionally; the
+    // `failed` stamp goes through the compare-and-swap against it.
+    expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenCalledTimes(1);
     expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenNthCalledWith(
       1,
       "production",
@@ -110,9 +137,12 @@ describe("host update explicit downgrade failure", () => {
         targetVersion: "1.2.0",
       }),
     );
-    expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenNthCalledWith(
-      2,
+    expect(mocks.replaceUpdateProgressMarkerMock).toHaveBeenCalledWith(
       "production",
+      expect.objectContaining({
+        state: "updating",
+        targetVersion: "1.2.0",
+      }),
       expect.objectContaining({
         state: "failed",
         targetVersion: "1.2.0",

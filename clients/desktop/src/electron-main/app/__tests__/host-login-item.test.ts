@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import electronLog from "electron-log";
 import {
   chmodSync,
   existsSync,
@@ -466,10 +467,22 @@ describe("registerHostLoginItem", () => {
               .mockReturnValueOnce({ status: "enabled" }) // snapshot: primary
               .mockReturnValueOnce({ status: "enabled" }) // snapshot: legacy
               .mockReturnValue({ status: "not-registered" });
+            // Production change: this guard's refusal now ALWAYS reports
+            // "parked" rather than the prior primary status it used to
+            // return in its place - an `enabled` here used to read as a
+            // completed register cycle to the caller.
             await expect(registerHostLoginItem(undefined)).resolves.toBe(
-              "enabled",
+              "parked",
             );
             expect(setLoginItemSettings).not.toHaveBeenCalled();
+            expect(electronLog.warn).toHaveBeenLastCalledWith(
+              "[host-login-item] registration parked: prior registration cannot be restored exactly",
+              {
+                primary: "enabled",
+                legacy: "enabled",
+                legacyManifest: "unreadable",
+              },
+            );
           }),
         );
       } finally {
@@ -777,23 +790,28 @@ describe("registerHostLoginItem - legacy manifest retirement (present-manifest d
     expect(existsSync(legacyCliManifestPath())).toBe(true);
   });
 
-  it("a park BEFORE the first mutation reports the truthful prior primary status, never `deferred-busy` - unlike the two fail-closed cases above", async () => {
-    // Contrast with the two fail-closed cases above: THIS park happens at
-    // the very first guard (`canBeginDestructiveRegistration`), before any
-    // edge has run, so there is no authority-loss ambiguity - the snapshot
-    // IS still current and safe to hand back verbatim. A POST-mutation park
-    // (a failed/reappeared manifest removal, or any edge after that point)
-    // cannot make the same claim - a mutation may already have landed under
-    // a since-lost capability, so it reports the busy-continuation sentinel
-    // instead of pretending the stale snapshot is still truthful.
+  it("a park BEFORE the first mutation reports `parked`, never the prior primary status and never `deferred-busy`", async () => {
+    // Production change: this guard's refusal — whether it happens before
+    // any edge has run (this case) or mid-cycle after some have already
+    // landed (the fail-closed cases above) — now uniformly reports
+    // "parked", carrying the diagnosing snapshot in the warn log rather than
+    // in the return value itself. The prior behaviour distinguished a
+    // pre-mutation park (truthful prior status) from a post-mutation one
+    // (`deferred-busy`); that distinction is gone from the return value.
     getLoginItemSettings
       .mockReturnValueOnce({ status: "requires-approval" }) // snapshot: primary - disqualifying
       .mockReturnValueOnce({ status: "not-registered" }); // snapshot: legacy
 
-    await expect(registerHostLoginItem(undefined)).resolves.toBe(
-      "requires-approval",
-    );
+    await expect(registerHostLoginItem(undefined)).resolves.toBe("parked");
     expect(setLoginItemSettings).not.toHaveBeenCalled();
+    expect(electronLog.warn).toHaveBeenLastCalledWith(
+      "[host-login-item] registration parked: prior registration cannot be restored exactly",
+      {
+        primary: "requires-approval",
+        legacy: "not-registered",
+        legacyManifest: "absent",
+      },
+    );
   });
 });
 
