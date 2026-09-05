@@ -1,6 +1,12 @@
 import "../../../../../__tests__/test-browser-apis";
 import type { SyntheticEvent } from "react";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  createEvent,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { BrowserTileToolbar } from "@/components/epic-canvas/renderers/browser-tile-toolbar";
 import {
@@ -89,6 +95,7 @@ function renderToolbar(
       <BrowserTileToolbar
         controller={makeController(capabilities, annotation)}
         pictureInPicture={null}
+        loading={false}
       />
     </TooltipProvider>,
   );
@@ -169,7 +176,11 @@ describe("<BrowserTileToolbar /> capability gating", () => {
     };
     render(
       <TooltipProvider>
-        <BrowserTileToolbar controller={controller} pictureInPicture={null} />
+        <BrowserTileToolbar
+          controller={controller}
+          pictureInPicture={null}
+          loading={false}
+        />
       </TooltipProvider>,
     );
 
@@ -229,6 +240,7 @@ describe("<BrowserTileToolbar /> capability gating", () => {
         <BrowserTileToolbar
           controller={makeController(DISABLED_CAPABILITIES, null)}
           pictureInPicture={{ disabled: false, convert }}
+          loading={false}
         />
       </TooltipProvider>,
     );
@@ -250,7 +262,11 @@ describe("<BrowserTileToolbar /> capability gating", () => {
     };
     render(
       <TooltipProvider>
-        <BrowserTileToolbar controller={controller} pictureInPicture={null} />
+        <BrowserTileToolbar
+          controller={controller}
+          pictureInPicture={null}
+          loading={false}
+        />
       </TooltipProvider>,
     );
 
@@ -331,7 +347,11 @@ describe("<BrowserTileToolbar /> clear cookies for this site", () => {
   function renderWith(controller: TileController): void {
     render(
       <TooltipProvider>
-        <BrowserTileToolbar controller={controller} pictureInPicture={null} />
+        <BrowserTileToolbar
+          controller={controller}
+          pictureInPicture={null}
+          loading={false}
+        />
       </TooltipProvider>,
     );
   }
@@ -424,5 +444,81 @@ describe("<BrowserTileToolbar /> clear cookies for this site", () => {
     fireEvent.click(screen.getByTestId("confirm-cancel"));
 
     expect(onClearSite).not.toHaveBeenCalled();
+  });
+});
+
+describe("<BrowserTileToolbar /> address first-focus", () => {
+  afterEach(cleanup);
+
+  it("prevents the first mousedown default so a full-URL selection survives mouseup", () => {
+    renderToolbar(PRIMARY_TILE_CHROME_CAPABILITIES, ANNOTATION);
+
+    const input = screen.getByRole("textbox", { name: "Browser address" });
+    expect(document.activeElement).not.toBe(input);
+
+    const first = createEvent.mouseDown(input, { button: 0 });
+    fireEvent(input, first);
+    expect(first.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(input);
+
+    const second = createEvent.mouseDown(input, { button: 0 });
+    fireEvent(input, second);
+    expect(second.defaultPrevented).toBe(false);
+  });
+});
+
+describe("<BrowserTileToolbar /> reload loading", () => {
+  afterEach(cleanup);
+
+  it("moves the spinner into Reload while loading and restores it when idle", () => {
+    const controller = makeController(
+      PRIMARY_TILE_CHROME_CAPABILITIES,
+      ANNOTATION,
+    );
+    const { rerender } = render(
+      <TooltipProvider>
+        <BrowserTileToolbar
+          controller={controller}
+          pictureInPicture={null}
+          loading={false}
+        />
+      </TooltipProvider>,
+    );
+
+    const reload = (): HTMLElement =>
+      screen.getByRole("button", { name: "Reload" });
+
+    expect(reload()).toHaveProperty("disabled", false);
+    expect(reload().getAttribute("aria-busy")).not.toBe("true");
+    expect(screen.queryByTestId("browser-reload-loading")).toBeNull();
+
+    rerender(
+      <TooltipProvider>
+        <BrowserTileToolbar
+          controller={controller}
+          pictureInPicture={null}
+          loading
+        />
+      </TooltipProvider>,
+    );
+
+    expect(reload()).toHaveProperty("disabled", true);
+    expect(reload().getAttribute("aria-busy")).toBe("true");
+    const spinner = screen.getByTestId("browser-reload-loading");
+    expect(reload().contains(spinner)).toBe(true);
+
+    rerender(
+      <TooltipProvider>
+        <BrowserTileToolbar
+          controller={controller}
+          pictureInPicture={null}
+          loading={false}
+        />
+      </TooltipProvider>,
+    );
+
+    expect(reload()).toHaveProperty("disabled", false);
+    expect(reload().getAttribute("aria-busy")).not.toBe("true");
+    expect(screen.queryByTestId("browser-reload-loading")).toBeNull();
   });
 });
