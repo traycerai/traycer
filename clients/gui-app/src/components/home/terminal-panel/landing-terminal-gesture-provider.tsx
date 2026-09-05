@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
 import type { TerminalScope } from "@traycer/protocol/host/terminal/unary-schemas";
+import type { WorktreeIntent } from "@traycer/protocol/host/worktree-schemas";
 import { useHostDirectory } from "@/lib/host";
 import { buildDialableHostClient } from "@/hooks/host/use-host-client-for";
 import { useComposerPlacement } from "@/hooks/host/use-composer-placement";
@@ -19,6 +20,18 @@ import {
 import { resolveLandingTerminalAvailability } from "./landing-terminal-availability";
 
 const INDEPENDENT_SCOPE: TerminalScope = { kind: "independent" };
+
+function resolveWorkspaceLaunchPath(
+  workspacePath: string | null,
+  intent: WorktreeIntent | null,
+): string | null {
+  const entry = intent?.entries.find(
+    (entry) => entry.workspacePath === workspacePath,
+  );
+  // Folder identity stays the repository path. Only an import already names
+  // another directory; a new worktree is materialized when an agent launches.
+  return entry?.kind === "import" ? entry.worktreePath : workspacePath;
+}
 
 /**
  * The SINGLE reader of live landing-terminal state (active host, default
@@ -106,6 +119,11 @@ export function LandingTerminalGestureProvider(props: {
   const workspace = useHomeWorkspaceSource(stagingKey, null, workspaceHostId);
   const liveWorkspacePath = workspace.primaryWorkspacePath;
   const liveWorkspacePaths = workspace.folders;
+  const capturedIntent = workspace.capturedIntent;
+  const liveLaunchWorkspacePath = resolveWorkspaceLaunchPath(
+    liveWorkspacePath,
+    capturedIntent,
+  );
 
   // Downgrade memory: keep the pending gesture's availability in step with the
   // captured host's LATEST observed verdict while that host stays selected. A
@@ -148,7 +166,7 @@ export function LandingTerminalGestureProvider(props: {
       hostId: activeHostId,
       primaryWorkspacePath: capturedPath,
       workspacePaths: ownWorkspace ? [...liveWorkspacePaths] : [],
-      launchWorkspacePath: capturedPath,
+      launchWorkspacePath: ownWorkspace ? liveLaunchWorkspacePath : null,
       availability,
       generation: gestureGenerationRef.current + 1,
       client: pinnedClient,
@@ -163,6 +181,7 @@ export function LandingTerminalGestureProvider(props: {
     defaultClient,
     draftId,
     hostDirectory,
+    liveLaunchWorkspacePath,
     liveWorkspacePath,
     liveWorkspacePaths,
     workspaceHostId,
@@ -185,14 +204,23 @@ export function LandingTerminalGestureProvider(props: {
         ...pendingGesture,
         primaryWorkspacePath: liveWorkspacePath,
         workspacePaths: [...liveWorkspacePaths],
-        launchWorkspacePath: workspacePath,
+        launchWorkspacePath: resolveWorkspaceLaunchPath(
+          workspacePath,
+          capturedIntent,
+        ),
         generation: gestureGenerationRef.current + 1,
       };
       gestureGenerationRef.current = next.generation;
       setPendingGesture(next);
       return next;
     },
-    [liveWorkspacePath, liveWorkspacePaths, pendingGesture, workspaceHostId],
+    [
+      capturedIntent,
+      liveWorkspacePath,
+      liveWorkspacePaths,
+      pendingGesture,
+      workspaceHostId,
+    ],
   );
 
   const clearPending = useCallback(() => {
@@ -211,7 +239,7 @@ export function LandingTerminalGestureProvider(props: {
             hostId: activeHostId,
             primaryWorkspacePath: liveWorkspacePath,
             workspacePaths: liveWorkspacePaths,
-            launchWorkspacePath: liveWorkspacePath,
+            launchWorkspacePath: liveLaunchWorkspacePath,
             availability,
             generation: 0,
             client: defaultClient,
@@ -222,6 +250,7 @@ export function LandingTerminalGestureProvider(props: {
       availability,
       defaultClient,
       draftId,
+      liveLaunchWorkspacePath,
       liveWorkspacePath,
       liveWorkspacePaths,
       openGesture,

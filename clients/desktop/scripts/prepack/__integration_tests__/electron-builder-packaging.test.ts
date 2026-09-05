@@ -517,14 +517,17 @@ describe.skipIf(process.platform !== "darwin")(
       }
     });
 
+    // These assertions invoke real `lipo` processes for both apps; CI has
+    // exceeded the default five-second test budget during binary inspection.
     it("packs one app per arch", () => {
       expect(buildError).toBeNull();
       const apps = findPackagedApps();
-      // Guards the assertion below against passing vacuously: a single-arch
-      // (or zero-app) output would otherwise satisfy an empty loop.
+      // Guards the assertion below against passing vacuously: a
+      // single-arch (or zero-app) output would otherwise satisfy an empty
+      // loop.
       expect(apps).toHaveLength(MAC_PACK_ARCHES.length);
       expect(apps.map(appArchOf).sort()).toEqual([...MAC_PACK_ARCHES].sort());
-    });
+    }, 30_000);
 
     it("gives each app only the CLI matching its own Mach-O arch", () => {
       expect(buildError).toBeNull();
@@ -548,6 +551,6 @@ describe.skipIf(process.platform !== "darwin")(
           JSON.parse(readFileSync(path.join(archDir, "version.json"), "utf8")),
         ).toEqual({ version: twoArchVersion(arch) });
       }
-    });
+    }, 30_000);
   },
 );

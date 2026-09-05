@@ -9,16 +9,35 @@
  * repair is an in-boundary deferred pass before projection/clear.
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
+import type { HostLeaseSnapshot } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import {
   __resetTabSyncCoordinatorForTesting,
   installTabSyncCoordinator,
 } from "@/lib/tab-sync/tab-sync-coordinator";
+import {
+  browserTabId,
+  resetBrowserTabIdentityForTesting,
+} from "@/lib/browser-tab-identity";
+import { openNewEpicIntent } from "@/lib/commands/actions/new-epic";
 import { createEmptyCanvas } from "@/stores/epics/canvas/canvas-state";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import {
   setLandingDraftDesktopProjectionBridge,
   useLandingDraftStore,
+  type LandingDraftTab,
 } from "@/stores/home/landing-draft-store";
+import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import {
+  composerSurfaceKey,
+  useSurfaceHostSelectionStore,
+} from "@/stores/host/surface-host-selection-store";
+import {
+  selectWorkspaceFoldersBucket,
+  useWorkspaceFoldersStore,
+  type WorkspaceFolderInfo,
+} from "@/stores/workspace/workspace-folders-store";
 import {
   flattenLayoutRefs,
   tabRefKey,
@@ -29,6 +48,7 @@ import {
   getTabCommandLedger,
   subscribeToTabCommandLedger,
   tabCommandCoordinator,
+  type CoordinatedTabActivation,
   type TabCommandCoordinatorDiagnostics,
 } from "@/stores/tabs/tab-command-coordinator";
 import { useTabsStore } from "@/stores/tabs/store";
@@ -178,6 +198,14 @@ function openEpicSource(
 function openDraftSource(): TabRef {
   const draftId = useLandingDraftStore.getState().createDraft(null);
   return { kind: "draft", id: draftId };
+}
+
+function readyLease(hostId: string): HostLeaseSnapshot {
+  return { hostId, status: "ready", dead: null };
+}
+
+function deadLease(hostId: string): HostLeaseSnapshot {
+  return { hostId, status: "dead", dead: { reason: "offline" } };
 }
 
 function expectFinalizedOnce(session: CaptureSession): void {
@@ -1185,5 +1213,281 @@ describe("tab command coordinator transactions", () => {
     expectFinalizedOnce(session);
     const remaining = flattenLayoutRefs(layoutFromTabsState());
     expect(remaining.map(tabRefKey)).toEqual([tabRefKey(left.ref)]);
+  });
+
+  // Regression coverage for the fix: `resolveDraftActivation` (via
+  // `createDraftWithId`) now resolves a new draft's workspace AND default
+  // settings through `readComposerHostIdSnapshot()` - the composer's real
+  // resolved placement host (pin, or the app-wide effective host when
+  // unpinned or the pin is dead) - instead of the app-wide host alone.
+  // `createDraftForSplit` shares the same creation path and is fixed the
+  // same way. Every store here is real: `useWorkspaceFoldersStore`,
+  // `useComposerRunSettingsStore`, `useSelectionAuthorityStore`, and the
+  // actual per-WINDOW pin in `useSurfaceHostSelectionStore`, keyed by the
+  // real `browserTabId()` (no desktop bridge is set in this suite, so
+  // `readComposerHostIdSnapshot()` falls through to it exactly as
+  // production does outside Electron).
+  describe("resolveDraftActivation resolves the composer's placement host (regression)", () => {
+    const HOST_LOCAL = "host-local";
+    const HOST_REMOTE = "host-remote";
+    const HOST_OTHER = "host-other";
+    const REPO_IDENTIFIER = { owner: "traycerai", repo: "traycer-internal" };
+
+    const LOCAL_FOLDER: WorkspaceFolderInfo = {
+      path: "/local/traycer-internal",
+      name: "traycer-internal",
+      repoIdentifier: REPO_IDENTIFIER,
+      hostId: HOST_LOCAL,
+    };
+    const REMOTE_FOLDER: WorkspaceFolderInfo = {
+      path: "/remote/traycer-internal",
+      name: "traycer-internal",
+      repoIdentifier: REPO_IDENTIFIER,
+      hostId: HOST_REMOTE,
+    };
+
+    const LOCAL_SETTINGS: ChatRunSettings = {
+      harnessId: "claude",
+      model: "local-model",
+      permissionMode: "supervised",
+      reasoningEffort: null,
+      serviceTier: null,
+      agentMode: "regular",
+      profileId: null,
+    };
+    const REMOTE_SETTINGS: ChatRunSettings = {
+      harnessId: "codex",
+      model: "remote-model",
+      permissionMode: "supervised",
+      reasoningEffort: null,
+      serviceTier: null,
+      agentMode: "epic",
+      profileId: null,
+    };
+    const EXPLICIT_SETTINGS: ChatRunSettings = {
+      harnessId: "claude",
+      model: "explicit-model",
+      permissionMode: "supervised",
+      reasoningEffort: "high",
+      serviceTier: null,
+      agentMode: "regular",
+      profileId: null,
+    };
+
+    let composerKey: string;
+
+    function pinComposerTo(hostId: string | null): void {
+      useSurfaceHostSelectionStore.getState().setSelection(composerKey, hostId);
+    }
+
+    function mintedDraft(
+      activation: CoordinatedTabActivation | null,
+    ): LandingDraftTab {
+      if (activation === null) {
+        throw new Error("expected activateTab to mint a draft");
+      }
+      const draft = useLandingDraftStore
+        .getState()
+        .drafts.find((d) => d.id === activation.ref.id);
+      if (draft === undefined) {
+        throw new Error("expected the minted draft to exist");
+      }
+      return draft;
+    }
+
+    beforeEach(() => {
+      composerKey = composerSurfaceKey(browserTabId());
+      useWorkspaceFoldersStore.setState({ byHost: {} });
+      useWorkspaceFoldersStore
+        .getState()
+        .addResolvedFolders(HOST_LOCAL, [LOCAL_FOLDER]);
+      useWorkspaceFoldersStore
+        .getState()
+        .addResolvedFolders(HOST_REMOTE, [REMOTE_FOLDER]);
+      useComposerRunSettingsStore.getState().resetForTests();
+      useComposerRunSettingsStore
+        .getState()
+        .setGlobalRunSettings(HOST_LOCAL, LOCAL_SETTINGS, Date.now());
+      useComposerRunSettingsStore
+        .getState()
+        .setGlobalRunSettings(HOST_REMOTE, REMOTE_SETTINGS, Date.now());
+      useSelectionAuthorityStore.setState({
+        attached: true,
+        effectiveHostId: HOST_LOCAL,
+        leases: [readyLease(HOST_LOCAL), readyLease(HOST_REMOTE)],
+      });
+      useSurfaceHostSelectionStore.getState().resetForTests();
+    });
+
+    afterEach(() => {
+      useWorkspaceFoldersStore.setState({ byHost: {} });
+      useComposerRunSettingsStore.getState().resetForTests();
+      useSelectionAuthorityStore.setState({
+        attached: false,
+        effectiveHostId: null,
+        leases: [],
+      });
+      useSurfaceHostSelectionStore.getState().resetForTests();
+      resetBrowserTabIdentityForTesting();
+    });
+
+    it("a new draft pinned to the remote host resolves workspace + default settings from the remote host, not the app-wide local host", () => {
+      pinComposerTo(HOST_REMOTE);
+
+      // The REAL command-palette entry point, not a hardcoded `settings:
+      // null` - this is what actually catches `new-epic.ts` regressing to
+      // an eager `getGlobalRunSettings(activeHostIdOrNull())` read: that
+      // would hand this test a non-null LOCAL_SETTINGS intent, and the
+      // draft would then resolve LOCAL_SETTINGS instead of REMOTE_SETTINGS
+      // below, failing the assertion even though the coordinator itself is
+      // untouched.
+      const intent = openNewEpicIntent();
+
+      const activation = tabCommandCoordinator.activateTab({
+        kind: "draft",
+        draftId: null,
+        settings: intent.settings,
+        create: true,
+      });
+      const draft = mintedDraft(activation);
+
+      expect(draft.workspace.primaryPath).toBe(REMOTE_FOLDER.path);
+      expect(draft.workspace.folders).toEqual([REMOTE_FOLDER.path]);
+      expect(draft.settings).toEqual(REMOTE_SETTINGS);
+    });
+
+    it("createDraftForSplit resolves the same pinned remote host", () => {
+      pinComposerTo(HOST_REMOTE);
+      const { ref: epicRef } = openEpicSource("epic-host-pin", "Pinned");
+      expect(
+        tabCommandCoordinator.createEmptySplit({
+          ref: epicRef,
+          splitId: "split-host-pin",
+          populatedSide: "left",
+          focusedSide: "right",
+          leftRatio: 0.5,
+        }),
+      ).toBe(true);
+
+      const draftRef = tabCommandCoordinator.createDraftForSplit({
+        splitId: "split-host-pin",
+        side: "right",
+      });
+      expect(draftRef).not.toBeNull();
+      if (draftRef === null) {
+        throw new Error("expected createDraftForSplit to mint a draft");
+      }
+      const draft = useLandingDraftStore
+        .getState()
+        .drafts.find((d) => d.id === draftRef.id);
+      expect(draft?.workspace.primaryPath).toBe(REMOTE_FOLDER.path);
+      expect(draft?.settings).toEqual(REMOTE_SETTINGS);
+    });
+
+    it("explicit settings passed to activateTab are preserved verbatim; workspace still resolves to the pinned host", () => {
+      pinComposerTo(HOST_REMOTE);
+
+      const activation = tabCommandCoordinator.activateTab({
+        kind: "draft",
+        draftId: null,
+        settings: EXPLICIT_SETTINGS,
+        create: true,
+      });
+      const draft = mintedDraft(activation);
+
+      expect(draft.settings).toEqual(EXPLICIT_SETTINGS);
+      expect(draft.workspace.primaryPath).toBe(REMOTE_FOLDER.path);
+    });
+
+    it("reactivating an existing draft does not reseed its workspace or settings from the current pin", () => {
+      pinComposerTo(HOST_REMOTE);
+      const created = tabCommandCoordinator.activateTab({
+        kind: "draft",
+        draftId: null,
+        settings: null,
+        create: true,
+      });
+      const draftId = mintedDraft(created).id;
+      const before = useLandingDraftStore
+        .getState()
+        .drafts.find((d) => d.id === draftId);
+      expect(before?.workspace.primaryPath).toBe(REMOTE_FOLDER.path);
+
+      // The pin moves to a THIRD host after the draft already exists.
+      pinComposerTo(HOST_OTHER);
+      const reactivated = tabCommandCoordinator.activateTab({
+        kind: "draft",
+        draftId,
+        settings: null,
+        create: false,
+      });
+
+      expect(reactivated?.ref).toEqual({ kind: "draft", id: draftId });
+      const after = useLandingDraftStore
+        .getState()
+        .drafts.find((d) => d.id === draftId);
+      expect(after?.workspace).toEqual(before?.workspace);
+      expect(after?.settings).toEqual(before?.settings);
+    });
+
+    it("a DEAD pinned host falls through to the app-wide effective host, exactly as the reactive pin resolver does", () => {
+      pinComposerTo(HOST_REMOTE);
+      useSelectionAuthorityStore.setState({
+        attached: true,
+        effectiveHostId: HOST_LOCAL,
+        leases: [readyLease(HOST_LOCAL), deadLease(HOST_REMOTE)],
+      });
+
+      const activation = tabCommandCoordinator.activateTab({
+        kind: "draft",
+        draftId: null,
+        settings: null,
+        create: true,
+      });
+      const draft = mintedDraft(activation);
+
+      expect(draft.workspace.primaryPath).toBe(LOCAL_FOLDER.path);
+      expect(draft.settings).toEqual(LOCAL_SETTINGS);
+      // The pin itself is untouched by the fallback - only its RESOLUTION
+      // moved (selection model: death never clears a pin).
+      expect(
+        useSurfaceHostSelectionStore.getState().selections[composerKey],
+      ).toBe(HOST_REMOTE);
+    });
+
+    it("an empty remote bucket/settings never falls back to the local host's non-empty bucket", () => {
+      // Re-seed with the remote host having NOTHING - a real "just added
+      // this machine" state, not a mismatch that could resolve to the wrong
+      // data.
+      useWorkspaceFoldersStore.setState({ byHost: {} });
+      useWorkspaceFoldersStore
+        .getState()
+        .addResolvedFolders(HOST_LOCAL, [LOCAL_FOLDER]);
+      useComposerRunSettingsStore.getState().resetForTests();
+      useComposerRunSettingsStore
+        .getState()
+        .setGlobalRunSettings(HOST_LOCAL, LOCAL_SETTINGS, Date.now());
+      pinComposerTo(HOST_REMOTE);
+
+      const activation = tabCommandCoordinator.activateTab({
+        kind: "draft",
+        draftId: null,
+        settings: null,
+        create: true,
+      });
+      const draft = mintedDraft(activation);
+
+      expect(draft.workspace.folders).toEqual([]);
+      expect(draft.workspace.primaryPath).toBeNull();
+      expect(draft.settings).toBeNull();
+      // The local bucket is untouched and still resolvable directly - the
+      // empty remote read did not consume or clobber it.
+      expect(
+        selectWorkspaceFoldersBucket(
+          useWorkspaceFoldersStore.getState(),
+          HOST_LOCAL,
+        ).primaryPath,
+      ).toBe(LOCAL_FOLDER.path);
+    });
   });
 });

@@ -131,7 +131,10 @@ function isPackageManagerSource(
   return PACKAGE_MANAGER_SOURCES.has(source);
 }
 
-function packageManagerUpgradeHint(source: PackageManagerSource): string {
+function packageManagerUpgradeHint(
+  source: PackageManagerSource,
+  bundledVersion: string,
+): string {
   switch (source) {
     case "homebrew":
       // Must match the Homebrew formula name shipped via
@@ -140,7 +143,9 @@ function packageManagerUpgradeHint(source: PackageManagerSource): string {
       // traycer-cli/src/commands/cli-upgrade.ts.
       return "brew upgrade traycer";
     case "npm":
-      return "npm install -g @traycerai/cli@latest";
+      // `latest` names stable builds, so it can be older than an installed RC.
+      // Name the version this reconciliation actually offered to upgrade to.
+      return `npm install -g @traycerai/cli@${bundledVersion}`;
     case "winget":
       return "winget upgrade Traycer.CLI";
     case "scoop":
@@ -652,7 +657,10 @@ async function persistPackageManagerUpgradeHint(
     readonly bundledVersion: string;
   },
 ): Promise<string> {
-  const upgradeHint = packageManagerUpgradeHint(args.source);
+  const upgradeHint = packageManagerUpgradeHint(
+    args.source,
+    args.bundledVersion,
+  );
   // Persist the hint to a Desktop-owned sidecar so the renderer's
   // `cliManifest()` IPC can surface "your homebrew traycer is N
   // versions behind - `brew upgrade traycer`" without Desktop ever

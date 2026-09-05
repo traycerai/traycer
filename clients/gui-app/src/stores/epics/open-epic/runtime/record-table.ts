@@ -233,6 +233,10 @@ export interface RecordTable<TRow, TSlice> {
     issuedAtSeq: number | null,
   ): RecordTablePublication<TSlice> | null;
   applyUpsert(row: TRow): RecordTablePublication<TSlice> | null;
+  /** A single authoritative list row, retaining snapshot supersession rules. */
+  applyPointRead(row: TRow): RecordTablePublication<TSlice> | null;
+  /** Remove a retained identity without announcing an id-wide retraction. */
+  removeRow(rowKey: string): RecordTablePublication<TSlice> | null;
   applyRemoval(
     retractionId: string,
     reason: ChatRecordRemovalReason,
@@ -403,6 +407,23 @@ export function createRecordTable<TRow, TSlice>(
       ingestSeq += 1;
       rowSeq.set(key, ingestSeq);
       hooks.onUpsertAdmitted(row);
+      return recompute(false);
+    },
+    applyPointRead(row) {
+      if (retractions.has(plane.retractionIdOf(row))) return null;
+      hooks.onRowServed(row);
+      const key = plane.rowKey(row);
+      const held = rows.get(key);
+      if (held === undefined || plane.supersedesOnSnapshot(row, held)) {
+        rows.set(key, row);
+        ingestSeq += 1;
+        rowSeq.set(key, ingestSeq);
+      }
+      return recompute(false);
+    },
+    removeRow(rowKey) {
+      if (!rows.delete(rowKey)) return null;
+      rowSeq.delete(rowKey);
       return recompute(false);
     },
 
