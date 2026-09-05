@@ -124,6 +124,85 @@ function makeDeps(overrides: {
 }
 
 describe("reconcileCli - newest-wins", () => {
+  it.each([
+    {
+      installed: "1.3.0-rc.1",
+      bundled: "1.3.0-rc.2",
+      expected: "upgraded",
+    },
+    {
+      installed: "1.3.0-rc.2",
+      bundled: "1.3.0",
+      expected: "upgraded",
+    },
+    {
+      installed: "1.3.0",
+      bundled: "1.3.0-rc.2",
+      expected: "trusted-equal",
+    },
+  ] as const)(
+    "orders desktop-owned RC and stable CLIs by SemVer ($installed -> $bundled)",
+    async ({ installed, bundled, expected }) => {
+      const { deps, install } = makeDeps({
+        manifest: {
+          version: installed,
+          installedAt: "2026-04-01T00:00:00Z",
+          binaryPath: "/stable/traycer",
+          source: "desktop",
+          pendingUpgrade: null,
+        },
+        bundledPath: "/bundled/traycer",
+        bundledVersion: bundled,
+        probeCliVersion: () => installed,
+      });
+
+      const result = await reconcileCli(deps);
+
+      expect(result.kind).toBe(expected);
+      if (expected === "upgraded") {
+        expect(install).toHaveBeenCalledWith({
+          bundledCliPath: "/bundled/traycer",
+          version: bundled,
+          source: "desktop",
+        });
+      } else {
+        expect(install).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it("preserves package-manager ownership and records its upgrade hint for an older RC", async () => {
+    const { deps, install, writeState } = makeDeps({
+      manifest: {
+        version: "1.3.0-rc.1",
+        installedAt: "2026-04-01T00:00:00Z",
+        binaryPath: "/usr/local/bin/traycer",
+        source: "npm",
+        pendingUpgrade: null,
+      },
+      bundledPath: "/bundled/traycer",
+      bundledVersion: "1.3.0-rc.2",
+    });
+
+    const result = await reconcileCli(deps);
+
+    expect(install).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      kind: "package-manager-older",
+      source: "npm",
+      installedVersion: "1.3.0-rc.1",
+      bundledVersion: "1.3.0-rc.2",
+      upgradeHint: "npm install -g @traycerai/cli@latest",
+    });
+    expect(writeState).toHaveBeenCalledWith({
+      packageManagerUpgrade: expect.objectContaining({
+        source: "npm",
+        installedVersion: "1.3.0-rc.1",
+        bundledVersion: "1.3.0-rc.2",
+      }),
+    });
+  });
+
   it("upgrades a desktop-owned manifest CLI that is older than the bundled CLI", async () => {
     const { deps, install } = makeDeps({
       manifest: {
