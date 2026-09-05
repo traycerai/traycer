@@ -1126,11 +1126,36 @@ header`, which describes `MobileAppHeader`'s own monitor rather than the
     the build, so the pair follows from the field.
   - **Sidebar** (`panels/layout/sidebar-layout-group.tsx`, its own file because
     the group is a list rather than a stack of rows): the relocated `Show
-resource chips on sidebar rows` switch, then **Panels** - one card per
-    `left-panel-store.panelGroups` entry, one row per panel inside it, each row
-    a drag handle, the registry's icon and title
-    (`getLeftPanelDefinition`, shared with the rail), a visibility checkbox and
-    a row menu.
+resource chips on sidebar rows` switch, then **Panels**, which draws the same
+    `left-panel-store.panelGroups` twice - as the rail, and as the detail the
+    rail has no room for.
+  - **The page mirrors the rail, because the rail is what it configures.** The
+    block leads with a horizontal STRIP of rail tiles: the registry's icons
+    (`getLeftPanelDefinition`, shared with the rail) in `panelGroups` order, in
+    the rail's own tile size and tab underline
+    (`epic-canvas/sidebar/left-panel-rail-tile.ts` holds those three class
+    constants, and the rail itself renders from them so the two cannot drift).
+    A tabbed group is ONE pill of member tiles under a single underline; pills
+    and lone tiles are separated by a real gap. An unchecked panel keeps its
+    place with a dimmed icon rather than vanishing, since the strip is about
+    WHERE a panel sits and dropping those tiles would shift every icon after
+    them out of agreement with the cards. The dim mirrors the CHECKBOX, and the
+    helper line says exactly that (`Dimmed icons are unchecked below.`) - not
+    "hidden from the rail", which the next paragraph's all-false presence
+    context would make false for `pull-requests` in a PR-bearing epic, on a
+    page whose whole premise is that it pictures that rail. The strip is `aria-hidden`: it is a
+    picture of the cards below, which carry every panel's name, checkbox and
+    menu, and a second unlabelled pass over the same nine panels would only
+    lengthen the tab order.
+  - **The strip is the ONLY drag surface.** The cards below have no handles and
+    register no droppable: a stacked group drawn as a draggable card reads as
+    "attached" rather than nested, and two drag surfaces for one order would
+    each have to teach the same boundary rule in its own geometry. Below the
+    strip, one card per group: a multi-panel group opens with a `Tabbed panel`
+    header and a mini tab strip of its member titles, then hangs its rows off a
+    left connector line; a single-panel group is that one row, no header and no
+    connector to explain. A row is the registry icon and title, a visibility
+    checkbox and the row menu.
   - **It is a SECOND VIEW, never a second source of truth.** The checkbox
     writes the override the rail's right-click menu writes
     (`setPanelVisibilityOverride`, and the last visible panel is locked the
@@ -1157,17 +1182,29 @@ resource chips on sidebar rows` switch, then **Panels** - one card per
     and nothing locked while the rail still has an icon. Recoverable - `Reset
 panel visibility` is enabled there - and reachable only from the rail.
   - **What a boundary MEANS is read from where it sits**, which is the one
-    thing the page adds over the rail: a group is a card here, so the boundary
-    above a card's first row places the panel in a card of its own
-    (`moveLeftPanelToGroupPosition`) while a boundary between two rows inside a
-    card nests it there (`moveLeftPanelToPanelPosition`); dropping onto a row
-    combines (`moveLeftPanelToGroup`). Bands come from the rail's own
-    `getLeftPanelRailDropPositionFromPoint`, and the pointer is read from the
-    collision pass rather than the event delta for the reason
+    thing the page adds over the rail: a tabbed group is a pill on the strip, so
+    the boundary before a pill's first tile places the panel in a group of its
+    own (`moveLeftPanelToGroupPosition`) while a boundary between two tiles
+    inside a pill joins it there (`moveLeftPanelToPanelPosition`); dropping onto
+    a tile combines (`moveLeftPanelToGroup`), and dragging a tile out of a pill
+    un-nests it. Bands are the rail's own 30/40/30 fractions, read along the
+    strip's axis through `getLeftPanelRailDropPositionOnAxis(point, rect, "x")`;
+    the rail's `getLeftPanelRailDropPositionFromPoint` is that same function at
+    `"y"`. The FRACTIONS are what the two surfaces share - the axis is not.
+    `getEpicCanvasDropPreview` has no orientation in hand for a
+    `left-panel-rail-item`, so the rail resolves on `"y"` in both orientations,
+    which is right for the vertical one and means a HORIZONTAL rail drag turns
+    on pointer height rather than which side of an icon it is on. Fixing that
+    widens the rail's drop-target data and changes its live drag behaviour, so
+    it is its own change; this page is the surface that is already correct. The
+    pointer is read
+    from the collision pass rather than the event delta for the reason
     `queued-message-reorder-dnd.ts` documents. The row menu (Move up / Move
     down / Group with panel above / Move out of group) is the pointer-free path
     to the same four outcomes, composed from the same helpers, and each item is
-    disabled where it would change nothing.
+    disabled where it would change nothing - it is also the ONLY path for a
+    keyboard, which is why a move it makes re-aims focus at the moved panel's
+    new menu trigger and announces the new placement in a live region.
   - **The DnD context here is LOCAL**, like the queued-message list's: it is
     the second `DndContext` outside `root-dnd-provider.tsx`, because settings
     rows are not canvas drop targets and must not enter the root drag store.

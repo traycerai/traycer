@@ -58,6 +58,11 @@ import {
   type LeftPanelAvailabilityContext,
   type LeftPanelMetadataDefinition,
 } from "@/components/epic-canvas/sidebar/left-panel-registry";
+import {
+  LEFT_PANEL_RAIL_COMBINE_TARGET_CLASS,
+  LEFT_PANEL_RAIL_TAB_UNDERLINE_CLASS,
+  LEFT_PANEL_RAIL_TILE_CLASS,
+} from "@/components/epic-canvas/sidebar/left-panel-rail-tile";
 import { useEpicArtifact } from "@/lib/epic-selectors";
 import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
 import {
@@ -585,7 +590,7 @@ function RailButton(props: RailButtonProps) {
   const activeIndicatorClass =
     orientation === "vertical"
       ? "absolute inset-y-1 left-0 rounded-l-none rounded-r"
-      : "absolute inset-x-2 bottom-0 rounded-b-none rounded-t";
+      : LEFT_PANEL_RAIL_TAB_UNDERLINE_CLASS;
   return (
     <TooltipWrapper
       label={label}
@@ -605,11 +610,10 @@ function RailButton(props: RailButtonProps) {
         // Bubbles on to the rail's own trigger, which opens the shared menu.
         onContextMenu={onContextMenu}
         className={cn(
-          "relative size-9 rounded-md text-muted-foreground hover:text-foreground",
+          LEFT_PANEL_RAIL_TILE_CLASS,
           active && activeClass,
           isDragSource && "cursor-grabbing opacity-50",
-          dropPosition === "combine" &&
-            "bg-primary/10 text-foreground ring-1 ring-primary/60",
+          dropPosition === "combine" && LEFT_PANEL_RAIL_COMBINE_TARGET_CLASS,
           isDropTarget && dropPosition === null && "bg-accent/70",
         )}
       >

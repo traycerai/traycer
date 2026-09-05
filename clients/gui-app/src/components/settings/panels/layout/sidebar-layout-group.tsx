@@ -1,13 +1,18 @@
 /**
  * Layout ▸ Sidebar: the epic sidebar's own layout.
  *
- * The Panels list is a SECOND VIEW onto `left-panel-store`, never a second
+ * The Panels block is a SECOND VIEW onto `left-panel-store`, never a second
  * source of truth. Its checkboxes write the override the rail's right-click
  * menu writes, and its reordering commits through `applyPanelGroups` after
  * resolving with the same pure `moveLeftPanel*` helpers the rail's DnD uses
  * (see `sidebar-panel-moves.ts`). So a change here is on the rail immediately,
  * a change on the rail is here, and neither can express a grouping the other
  * cannot.
+ *
+ * It is drawn as the rail is drawn: a strip of tiles across the top, in the
+ * rail's own tile size and tab underline, and that strip is the ONLY drag
+ * surface. The cards below carry what a tile cannot say - the panel's name, its
+ * visibility checkbox, and the keyboard path through the row menu.
  */
 import {
   useCallback,
@@ -31,11 +36,16 @@ import {
   type DragOverEvent,
   type UniqueIdentifier,
 } from "@dnd-kit/core";
-import { EllipsisVertical, GripVertical } from "lucide-react";
+import { EllipsisVertical } from "lucide-react";
 import {
-  getLeftPanelRailDropPositionFromPoint,
+  getLeftPanelRailDropPositionOnAxis,
   type LeftPanelRailDropPosition,
 } from "@/components/epic-canvas/dnd/dnd";
+import {
+  LEFT_PANEL_RAIL_COMBINE_TARGET_CLASS,
+  LEFT_PANEL_RAIL_TAB_UNDERLINE_CLASS,
+  LEFT_PANEL_RAIL_TILE_CLASS,
+} from "@/components/epic-canvas/sidebar/left-panel-rail-tile";
 import {
   getLeftPanelDefinition,
   isLeftPanelVisible,
@@ -64,6 +74,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Switch } from "@/components/ui/switch";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { mergeRefs } from "@/lib/merge-refs";
 import { cn } from "@/lib/utils";
@@ -130,7 +141,7 @@ export function SidebarLayoutGroup(): ReactNode {
 }
 
 /**
- * The panel list, or a note in its place.
+ * The panel block, or a note in its place.
  *
  * The gate is the VIEWPORT, not the build: `epic-surface.tsx` drops the whole
  * sidebar column - rail included - below `md`, so on a narrow window there is
@@ -259,7 +270,14 @@ function SidebarPanelList(): ReactNode {
         return null;
       const targetPanelId = readPanelId(over.id);
       if (targetPanelId === null) return null;
-      const position = getLeftPanelRailDropPositionFromPoint(point, over.rect);
+      // The strip lays the rail's slots out in a ROW, so the rail's bands are
+      // read along x here; the fractions, and the three outcomes they resolve
+      // to, are the rail's own.
+      const position = getLeftPanelRailDropPositionOnAxis(
+        point,
+        over.rect,
+        "x",
+      );
       // A drop that lands the panel where it already is draws nothing, so the
       // indicator can never promise a move the commit would decline.
       const nextGroups = resolveSidebarPanelDrop(
@@ -318,8 +336,8 @@ function SidebarPanelList(): ReactNode {
       <div className="space-y-1">
         <div className="font-medium text-foreground">Panels</div>
         <p className="max-w-[72ch] text-pretty text-ui-sm text-muted-foreground">
-          Drag to reorder, or drop a panel onto another to stack them into one
-          tabbed panel. Uncheck a panel to keep it out of the rail.
+          Drag icons to reorder. Drop one onto another to make a tabbed panel.
+          Dimmed icons are unchecked below.
         </p>
       </div>
       <DndContext
@@ -330,28 +348,27 @@ function SidebarPanelList(): ReactNode {
         onDragEnd={handleDragEnd}
         onDragCancel={handleDragCancel}
       >
-        <div className="space-y-1.5">
-          {groups.map((group) => (
-            <div
-              key={group.panelIds[0]}
-              data-testid={`layout-sidebar-panel-group-${group.panelIds[0]}`}
-              className="rounded-md border border-border/60 bg-foreground/3 p-1"
-            >
-              {group.panelIds.map((panelId) => (
-                <SidebarPanelRow
-                  key={panelId}
-                  panelId={panelId}
-                  groups={groups}
-                  context={context}
-                  visibleCount={visibleCount}
-                  preview={preview}
-                  onRunAction={runRowAction}
-                />
-              ))}
-            </div>
-          ))}
-        </div>
+        <SidebarPanelRailStrip
+          groups={groups}
+          context={context}
+          preview={preview}
+        />
       </DndContext>
+      <p className="max-w-[72ch] text-pretty text-ui-sm text-muted-foreground">
+        Uncheck a panel to keep it out of the rail.
+      </p>
+      <div className="space-y-1.5">
+        {groups.map((group) => (
+          <SidebarPanelCard
+            key={group.panelIds[0]}
+            group={group}
+            groups={groups}
+            context={context}
+            visibleCount={visibleCount}
+            onRunAction={runRowAction}
+          />
+        ))}
+      </div>
       <span className="sr-only" role="status" aria-live="polite">
         {announcement}
       </span>
@@ -385,12 +402,288 @@ function SidebarPanelList(): ReactNode {
   );
 }
 
+interface SidebarPanelRailStripProps {
+  readonly groups: ReadonlyArray<LeftPanelGroup>;
+  readonly context: LeftPanelAvailabilityContext;
+  readonly preview: SidebarPanelDropPreview | null;
+}
+
+/**
+ * The rail, as the page can draw it: every panel in `panelGroups` order, in the
+ * rail's own tile, with a tabbed group drawn as one pill under the rail's tab
+ * underline. A dimmed tile is one whose checkbox below is unchecked - which is
+ * not the same claim as "absent from the rail", since the checkbox answers a
+ * page with no epic in view (see `SETTINGS_PRESENCE`) and a presence-gated
+ * panel can be dimmed here while an epic with PRs draws it. The dim keeps its
+ * slot rather than dropping out, because this strip is about WHERE a panel
+ * sits: removing tiles would shift every icon after them out of agreement with
+ * the cards.
+ *
+ * `aria-hidden`, and deliberately: it is a picture of the cards underneath,
+ * which carry each panel's name, its checkbox and its menu. A second,
+ * unlabelled pass over the same nine panels would only lengthen the tab order.
+ * The keyboard path to every move this strip offers is the row menu.
+ */
+function SidebarPanelRailStrip(props: SidebarPanelRailStripProps): ReactNode {
+  const { groups, context, preview } = props;
+  return (
+    <div
+      aria-hidden
+      data-testid="layout-sidebar-panel-strip"
+      className="flex w-full min-w-0 flex-wrap items-center gap-2 rounded-md border border-border/60 bg-foreground/3 px-2 py-2"
+    >
+      {groups.map((group) =>
+        group.panelIds.length > 1 ? (
+          <SidebarPanelStripPill
+            key={group.panelIds[0]}
+            group={group}
+            groups={groups}
+            context={context}
+            preview={preview}
+          />
+        ) : (
+          <SidebarPanelStripTile
+            key={group.panelIds[0]}
+            panelId={group.panelIds[0]}
+            groups={groups}
+            context={context}
+            preview={preview}
+            ownsCombineHighlight
+          />
+        ),
+      )}
+    </div>
+  );
+}
+
+interface SidebarPanelStripPillProps {
+  readonly group: LeftPanelGroup;
+  readonly groups: ReadonlyArray<LeftPanelGroup>;
+  readonly context: LeftPanelAvailabilityContext;
+  readonly preview: SidebarPanelDropPreview | null;
+}
+
+/**
+ * A tabbed group: its member tiles together under one of the rail's tab
+ * underlines, which is what makes them read as one panel rather than as
+ * neighbours.
+ *
+ * The pill, not the tile, carries the combine highlight. A drop onto any member
+ * appends the panel to that member's whole GROUP (`moveLeftPanelToGroup`), so
+ * lighting only the tile under the pointer would name a smaller thing than the
+ * drop does. On the rail the two coincide, because a rail tile IS a group.
+ */
+function SidebarPanelStripPill(props: SidebarPanelStripPillProps): ReactNode {
+  const { group, groups, context, preview } = props;
+  const combineTarget =
+    preview !== null &&
+    preview.position === "combine" &&
+    group.panelIds.includes(preview.targetPanelId);
+  return (
+    <div
+      data-testid={`layout-sidebar-panel-pill-${group.panelIds[0]}`}
+      className={cn(
+        "relative flex shrink-0 items-center rounded-md bg-foreground/6 px-0.5",
+        combineTarget && LEFT_PANEL_RAIL_COMBINE_TARGET_CLASS,
+      )}
+    >
+      {group.panelIds.map((panelId) => (
+        <SidebarPanelStripTile
+          key={panelId}
+          panelId={panelId}
+          groups={groups}
+          context={context}
+          preview={preview}
+          ownsCombineHighlight={false}
+        />
+      ))}
+      <DropLine
+        orientation="horizontal"
+        glow={false}
+        className={LEFT_PANEL_RAIL_TAB_UNDERLINE_CLASS}
+        testId={`layout-sidebar-panel-pill-underline-${group.panelIds[0]}`}
+      />
+    </div>
+  );
+}
+
+interface SidebarPanelStripTileProps {
+  readonly panelId: LeftPanelId;
+  readonly groups: ReadonlyArray<LeftPanelGroup>;
+  readonly context: LeftPanelAvailabilityContext;
+  readonly preview: SidebarPanelDropPreview | null;
+  /** False for a pill's member, whose pill draws the highlight for it. */
+  readonly ownsCombineHighlight: boolean;
+}
+
+function SidebarPanelStripTile(props: SidebarPanelStripTileProps): ReactNode {
+  const { panelId, groups, context, preview, ownsCombineHighlight } = props;
+  const definition = getLeftPanelDefinition(panelId);
+  const {
+    listeners,
+    setNodeRef: dragRef,
+    isDragging,
+  } = useDraggable({ id: panelId });
+  const { setNodeRef: dropRef } = useDroppable({ id: panelId });
+  const setTileRef = useMemo(
+    () => mergeRefs<HTMLDivElement>(dragRef, dropRef),
+    [dragRef, dropRef],
+  );
+  const previewPosition =
+    preview !== null && preview.targetPanelId === panelId
+      ? preview.position
+      : null;
+  const hidden = !isLeftPanelVisible(definition, context);
+  const Icon = definition.icon;
+
+  return (
+    <div className="relative flex shrink-0 items-center">
+      {previewPosition === "before" ? (
+        <SidebarPanelStripDropLine
+          edge="start"
+          spansGroup={isSidebarPanelGroupBoundary(groups, panelId, "before")}
+        />
+      ) : null}
+      {/* The rail names its icons the same way, and here it is the only name a
+          tile has: the strip is `aria-hidden`, so nothing else says which panel
+          a user is about to drag. */}
+      <TooltipWrapper
+        label={definition.title}
+        side="bottom"
+        sideOffset={undefined}
+        align={undefined}
+      >
+        <div
+          ref={setTileRef}
+          {...listeners}
+          data-testid={`layout-sidebar-panel-tile-${panelId}`}
+          className={cn(
+            LEFT_PANEL_RAIL_TILE_CLASS,
+            "flex cursor-grab touch-none items-center justify-center",
+            isDragging && "cursor-grabbing opacity-50",
+            ownsCombineHighlight &&
+              previewPosition === "combine" &&
+              LEFT_PANEL_RAIL_COMBINE_TARGET_CLASS,
+          )}
+        >
+          {/* The dim sits on the ICON, not the tile: nesting into a hidden
+              panel is a legitimate drop, and the ring that offers it would be
+              dimmed along with everything else if the tile carried it. */}
+          <Icon className={cn("size-4", hidden && "opacity-40")} />
+        </div>
+      </TooltipWrapper>
+      {previewPosition === "after" ? (
+        <SidebarPanelStripDropLine
+          edge="end"
+          spansGroup={isSidebarPanelGroupBoundary(groups, panelId, "after")}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * Where the panel would land, drawn so the two OUTCOMES look different: a line
+ * standing clear of the strip's tiles lands the panel in a group of its own, a
+ * line drawn between two tiles inside a pill nests it there at that index. Same
+ * boundary rule the drop resolves through, so the picture cannot promise a
+ * grouping the commit would not make.
+ */
+function SidebarPanelStripDropLine(props: {
+  readonly edge: "start" | "end";
+  readonly spansGroup: boolean;
+}): ReactNode {
+  return (
+    <DropLine
+      orientation="vertical"
+      glow={props.spansGroup}
+      className={cn(
+        "absolute z-10",
+        // A group-boundary line stands taller than the tiles, clearing the pill
+        // it is about to put the panel outside of; an in-pill one sits inside
+        // them, between the two tabs it would land between.
+        props.spansGroup ? "-inset-y-1" : "inset-y-1.5",
+        props.edge === "start" && (props.spansGroup ? "-left-1" : "-left-px"),
+        props.edge === "end" && (props.spansGroup ? "-right-1" : "-right-px"),
+      )}
+      testId="layout-sidebar-panel-drop-line"
+    />
+  );
+}
+
+interface SidebarPanelCardProps {
+  readonly group: LeftPanelGroup;
+  readonly groups: ReadonlyArray<LeftPanelGroup>;
+  readonly context: LeftPanelAvailabilityContext;
+  readonly visibleCount: number;
+  readonly onRunAction: (
+    panelId: LeftPanelId,
+    groups: ReadonlyArray<LeftPanelGroup>,
+  ) => void;
+}
+
+/**
+ * One group, in the detail a tile has no room for. A tabbed group says so in a
+ * header row and repeats the strip's pill as a mini tab strip of member names,
+ * then hangs its members off a connector line - so a card that is one panel and
+ * a card that is three are told apart before any label is read. A single-panel
+ * group is the row alone, with no header and no connector to explain.
+ */
+function SidebarPanelCard(props: SidebarPanelCardProps): ReactNode {
+  const { group, groups, context, visibleCount, onRunAction } = props;
+  const tabbed = group.panelIds.length > 1;
+  return (
+    <div
+      data-testid={`layout-sidebar-panel-group-${group.panelIds[0]}`}
+      className="rounded-md border border-border/60 bg-foreground/3 p-1"
+    >
+      {tabbed ? <SidebarPanelCardHeader panelIds={group.panelIds} /> : null}
+      <div className={cn(tabbed && "ml-2.5 border-l border-border/60 pl-2")}>
+        {group.panelIds.map((panelId) => (
+          <SidebarPanelRow
+            key={panelId}
+            panelId={panelId}
+            groups={groups}
+            context={context}
+            visibleCount={visibleCount}
+            onRunAction={onRunAction}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function SidebarPanelCardHeader(props: {
+  readonly panelIds: ReadonlyArray<LeftPanelId>;
+}): ReactNode {
+  return (
+    <div
+      data-testid={`layout-sidebar-panel-group-header-${props.panelIds[0]}`}
+      className="flex flex-wrap items-center gap-x-2 gap-y-1 px-1.5 pb-1 pt-0.5"
+    >
+      <span className="text-ui-xs font-medium uppercase tracking-wide text-muted-foreground">
+        Tabbed panel
+      </span>
+      <span className="flex min-w-0 flex-wrap items-center gap-1">
+        {props.panelIds.map((panelId) => (
+          <span
+            key={panelId}
+            className="truncate border-b-2 border-primary px-1 pb-0.5 text-ui-xs text-foreground"
+          >
+            {getLeftPanelDefinition(panelId).title}
+          </span>
+        ))}
+      </span>
+    </div>
+  );
+}
+
 interface SidebarPanelRowProps {
   readonly panelId: LeftPanelId;
   readonly groups: ReadonlyArray<LeftPanelGroup>;
   readonly context: LeftPanelAvailabilityContext;
   readonly visibleCount: number;
-  readonly preview: SidebarPanelDropPreview | null;
   readonly onRunAction: (
     panelId: LeftPanelId,
     groups: ReadonlyArray<LeftPanelGroup>,
@@ -398,21 +691,10 @@ interface SidebarPanelRowProps {
 }
 
 function SidebarPanelRow(props: SidebarPanelRowProps): ReactNode {
-  const { panelId, groups, context, visibleCount, preview, onRunAction } =
-    props;
+  const { panelId, groups, context, visibleCount, onRunAction } = props;
   const definition = getLeftPanelDefinition(panelId);
   const setOverride = useLeftPanelStore(
     (state) => state.setPanelVisibilityOverride,
-  );
-  const {
-    listeners,
-    setNodeRef: dragRef,
-    isDragging,
-  } = useDraggable({ id: panelId });
-  const { setNodeRef: dropRef } = useDroppable({ id: panelId });
-  const setRowRef = useMemo(
-    () => mergeRefs<HTMLDivElement>(dragRef, dropRef),
-    [dragRef, dropRef],
   );
 
   const visible = isLeftPanelVisible(definition, context);
@@ -422,36 +704,13 @@ function SidebarPanelRow(props: SidebarPanelRowProps): ReactNode {
   // two disagreeing with no icon to click back.
   const locked = visible && visibleCount === 1;
   const actions = sidebarPanelRowActions(groups, panelId);
-  const previewPosition =
-    preview !== null && preview.targetPanelId === panelId
-      ? preview.position
-      : null;
   const Icon = definition.icon;
 
   return (
     <div
-      ref={setRowRef}
       data-testid={`layout-sidebar-panel-${panelId}`}
-      className={cn(
-        "relative flex items-center gap-2 rounded-sm px-1.5 py-1",
-        isDragging && "opacity-50",
-        previewPosition === "combine" && "bg-primary/10 ring-1 ring-primary/60",
-      )}
+      className="flex items-center gap-2 rounded-sm px-1.5 py-1"
     >
-      {previewPosition === "before" ? (
-        <SidebarPanelDropLine
-          edge="top"
-          spansCard={isSidebarPanelGroupBoundary(groups, panelId, "before")}
-        />
-      ) : null}
-      <span
-        {...listeners}
-        aria-hidden
-        data-testid={`layout-sidebar-panel-handle-${panelId}`}
-        className="flex cursor-grab touch-none items-center text-muted-foreground/70"
-      >
-        <GripVertical className="size-4" />
-      </span>
       <Icon className="size-4 shrink-0 text-muted-foreground" aria-hidden />
       <span className="truncate text-ui-sm text-foreground">
         {definition.title}
@@ -502,43 +761,7 @@ function SidebarPanelRow(props: SidebarPanelRowProps): ReactNode {
         canUngroup={actions.canUngroup}
         onRunAction={onRunAction}
       />
-      {previewPosition === "after" ? (
-        <SidebarPanelDropLine
-          edge="bottom"
-          spansCard={isSidebarPanelGroupBoundary(groups, panelId, "after")}
-        />
-      ) : null}
     </div>
-  );
-}
-
-/**
- * Where the panel would land, drawn so the two OUTCOMES look different: a line
- * reaching past the card's edges lands the panel in a card of its own, a line
- * inset between two rows nests it in the card it is drawn inside. Same
- * boundary rule the drop resolves through, so the picture cannot promise a
- * grouping the commit would not make.
- */
-function SidebarPanelDropLine(props: {
-  readonly edge: "top" | "bottom";
-  readonly spansCard: boolean;
-}): ReactNode {
-  return (
-    <DropLine
-      orientation="horizontal"
-      glow={props.spansCard}
-      className={cn(
-        "absolute",
-        // A card-edge line clears the card's own `p-1` so it lands ON the
-        // border it is about to put the panel outside of, rather than a few
-        // pixels inside the card it is leaving.
-        props.spansCard ? "-inset-x-2" : "inset-x-0",
-        props.edge === "top" && (props.spansCard ? "-top-1" : "-top-px"),
-        props.edge === "bottom" &&
-          (props.spansCard ? "-bottom-1" : "-bottom-px"),
-      )}
-      testId="layout-sidebar-panel-drop-line"
-    />
   );
 }
 
@@ -557,11 +780,11 @@ interface SidebarPanelRowMenuProps {
 }
 
 /**
- * The pointer-free path through the same move helpers the drag resolves
- * through, so every order a keyboard user reaches is an order a drag could
- * have produced. Not always in ONE drag: swapping the two members of a
- * two-panel card takes a step here and two by pointer, because every boundary
- * inside such a card is a no-op.
+ * The pointer-free path through the same move helpers the strip's drag resolves
+ * through, so every order a keyboard user reaches is an order a drag could have
+ * produced. Not always in ONE drag: swapping the two members of a two-panel
+ * pill takes a step here and two by pointer, because every boundary inside such
+ * a pill is a no-op.
  */
 function SidebarPanelRowMenu(props: SidebarPanelRowMenuProps): ReactNode {
   const { panelId, title, groups, onRunAction } = props;
@@ -621,7 +844,7 @@ function panelMenuTestId(panelId: LeftPanelId): string {
 }
 
 /**
- * Where a panel ended up, in the terms the list shows: its place in the whole
+ * Where a panel ended up, in the terms the cards show: its place in the whole
  * order, and who it shares a card with.
  */
 function describePanelPlacement(

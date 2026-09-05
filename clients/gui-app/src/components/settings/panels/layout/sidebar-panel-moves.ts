@@ -1,19 +1,22 @@
 /**
- * "A row moved on the Layout page → the next `panelGroups`", for both the
+ * "A panel moved on the Layout page → the next `panelGroups`", for both the
  * pointer and the keyboard path.
  *
  * Every function here composes the SAME pure `moveLeftPanel*` helpers the rail
  * commits through (`resolveLeftPanelGroupsForDrop` is their other caller), so
- * the settings list can only ever produce groupings the rail could produce
+ * the settings page can only ever produce groupings the rail could produce
  * itself. Nothing writes; the caller applies the result with
  * `applyPanelGroups`, which normalizes and drops a structurally-unchanged
  * write.
  *
  * The one thing this layer adds is reading a boundary's MEANING from where it
- * sits. On the page a group is a card, so the boundary above a card's first
- * row is a group boundary (the panel lands as its own card) while a boundary
- * between two rows inside a card is an in-group one (the panel nests at that
- * index). Dropping onto a row combines, exactly as it does on the rail.
+ * sits. The page's drag surface is a strip of rail tiles, where a tabbed group
+ * is one pill: the boundary before a pill's first tile is a group boundary (the
+ * panel lands as a tile of its own) while a boundary between two tiles inside a
+ * pill is an in-group one (the panel joins that pill at that index). Dropping
+ * onto a tile combines, exactly as it does on the rail. The cards below the
+ * strip reach the same four outcomes through the row menu, which is why the
+ * keyboard helpers live here too.
  */
 import type { LeftPanelRailDropPosition } from "@/components/epic-canvas/dnd/dnd";
 import {
@@ -84,9 +87,9 @@ export function sidebarPanelRowActions(
 }
 
 /**
- * Whether a before/after boundary on this row is a GROUP boundary - the outer
- * edge of its card - rather than one between two rows inside it. The resolver
- * below and the row's drop indicator both ask this, so what the user is shown
+ * Whether a before/after boundary on this panel is a GROUP boundary - the outer
+ * edge of its pill - rather than one between two tiles inside it. The resolver
+ * below and the strip's drop indicator both ask this, so what the user is shown
  * and what the drop does cannot drift apart.
  */
 export function isSidebarPanelGroupBoundary(

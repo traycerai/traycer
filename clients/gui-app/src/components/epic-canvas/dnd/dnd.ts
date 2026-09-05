@@ -939,15 +939,39 @@ export function getArtifactTabDropIndexFromPoint(
   return target.index + 1;
 }
 
+/**
+ * The rail's own drop bands, along whichever axis the slots are laid out on:
+ * the outer 30% at each end reorders, the middle 40% nests. `"y"` is the rail
+ * itself; `"x"` is for a surface that lays the same slots out in a row, such
+ * as the strip on Layout ▸ Sidebar, which resolves a drop to the same three
+ * outcomes from the same fractions.
+ *
+ * The FRACTIONS are shared; the axis is not. `getEpicCanvasDropPreview` has no
+ * orientation in hand for a `left-panel-rail-item` - the drop data carries only
+ * `viewTabId` and `panelId` - so the rail reads `"y"` in both of its
+ * orientations, and a drag along a HORIZONTAL rail is decided by how high in
+ * the icon the pointer sits rather than which side of it. Teaching the rail its
+ * own axis means widening that drop data, which is a change to the rail's live
+ * drag behaviour and belongs to its own line of work.
+ */
+export function getLeftPanelRailDropPositionOnAxis(
+  point: PointLike,
+  rect: RectLike | null,
+  axis: "x" | "y",
+): LeftPanelRailDropPosition {
+  if (rect === null) return "combine";
+  const offset = axis === "x" ? point.x - rect.left : point.y - rect.top;
+  const extent = axis === "x" ? rect.width : rect.height;
+  if (offset < extent * 0.3) return "before";
+  if (offset > extent * 0.7) return "after";
+  return "combine";
+}
+
 export function getLeftPanelRailDropPositionFromPoint(
   point: PointLike,
   rect: RectLike | null,
 ): LeftPanelRailDropPosition {
-  if (rect === null) return "combine";
-  const y = point.y - rect.top;
-  if (y < rect.height * 0.3) return "before";
-  if (y > rect.height * 0.7) return "after";
-  return "combine";
+  return getLeftPanelRailDropPositionOnAxis(point, rect, "y");
 }
 
 function getRectBottom(rect: RectLike): number {
