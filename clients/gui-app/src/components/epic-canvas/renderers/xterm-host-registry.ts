@@ -140,6 +140,14 @@ export interface XtermRendererControllerHooks {
    * unavailable in this environment (headless, blocked). The controller
    * LATCHES a `null`: xterm has fallen back to its DOM renderer for good and a
    * later presentation must not retry the construction on every show.
+   *
+   * The implementation owes a best-effort rollback before it returns `null`,
+   * because `loadAddon` is NOT transactional (see the call site). One window
+   * survives even that: a throw between the addon installing its renderer and
+   * registering the disposable that restores xterm's DOM one leaves a partial
+   * canvas renderer owning the render service, and no public API can put the
+   * DOM renderer back. So a latched `null` means "this controller owns no
+   * addon", not "no accelerated renderer is installed anywhere".
    */
   readonly loadCanvasAddon: () => CanvasAddon | null;
   /**
@@ -178,11 +186,38 @@ export interface XtermRendererController {
   /** Drop one presented mount; the last one out arms the disposal grace. */
   readonly unpresent: () => void;
   /**
-   * The live addon, or `null` while the engine is unpresented (or permanently
-   * DOM-rendered). Read it at USE time - the atlas clear must reach whichever
-   * addon is live now, not whichever one was live when a ref was last written.
+   * The live addon, or `null` once an unpresented engine's grace has EXPIRED
+   * (a live addon remains throughout the grace), and on an engine that is
+   * permanently DOM-rendered. Read it at USE time - the atlas clear must reach
+   * whichever addon is live now, not whichever one was live when a ref was
+   * last written. `null` means only that this controller owns no addon; see
+   * {@link XtermRendererControllerHooks.loadCanvasAddon} for the one failure
+   * mode where that is not the same as "no accelerated renderer exists".
    */
   readonly currentCanvas: () => CanvasAddon | null;
+  /**
+   * Whether the renderer currently installed on the terminal is the one this
+   * engine SETTLES on - and therefore whether a grid measured right now may be
+   * reported to the host.
+   *
+   * xterm's two renderers do not measure the same cell. The canvas renderer
+   * takes `floor(charWidth * dpr)`; the DOM renderer keeps the fraction
+   * (`CanvasRenderer._updateDimensions` vs `DomRenderer._updateDimensions`),
+   * and `FitAddon.proposeDimensions` divides the available width by whichever
+   * one is installed. For 8.4 CSS px glyphs at DPR 2 in an 800 px box that is
+   * 100 columns under canvas and 95 under DOM. So an unchanged box measured
+   * during the unpresented DOM interlude proposes a DIFFERENT grid, and
+   * reporting it would drag the host's `min()` across every attached client
+   * down and back up again - two spurious PTY resizes (SIGWINCH, TUI redraw)
+   * per hide/show.
+   *
+   * True while the canvas addon is live, and true once the canvas renderer is
+   * known to be unavailable - there the DOM renderer IS the settled one and
+   * nothing will swap under it. False only in between: unpresented with the
+   * grace expired, or before the first presentation of an engine that could
+   * still get a canvas.
+   */
+  readonly isRendererSettled: () => boolean;
   /**
    * Teardown, owned by the engine's own `disposeEngine`. Cancels a pending
    * grace timer and disposes any live addon; every later `present()` /
@@ -216,6 +251,18 @@ export function createXtermRendererController(
     // Disposing the addon hands the render service back to xterm's default DOM
     // renderer and removes the addon's `<canvas>` layers from the container,
     // which is what actually releases their backing surfaces.
+    //
+    // DEFERRED (the plan's second tier): that DOM renderer is LIVE, not idle.
+    // xterm pauses rendering on IntersectionObserver geometry only, and a
+    // retained terminal keeps its box under `visibility:hidden`, so a hidden
+    // session that is still streaming keeps running `DomRenderer.renderRows`
+    // and rebuilding each dirty row's spans. Concealing or detaching the inner
+    // xterm surface would pause it, but that trades a measured problem for an
+    // unmeasured one: un-pausing is asynchronous, so the restore would land a
+    // frame after `present()` installs the canvas renderer, exactly where the
+    // first-frame correctness this change already owes a browser check is
+    // weakest. Measure the hidden-stream CPU/heap first (a streaming shell
+    // hidden for a minute), then decide.
     live.dispose();
   };
 
@@ -239,8 +286,12 @@ export function createXtermRendererController(
 
   const unpresent = (): void => {
     if (disposed) return;
-    // A host that never presented (born hidden) unpresents on unmount anyway;
-    // it must not push the count below zero and strand a presented peer.
+    // Every `unpresent` must balance a `present`, and production keeps that
+    // true: a never-presented host is skipped by the presentation effect and
+    // passes `false` to `releaseXtermHost`. This guard is the defensive half -
+    // it stops a stray call driving the count negative, where a later balanced
+    // release would then read as still-presented. It cannot protect a peer
+    // whose count is one; that is what the count itself is for.
     if (presentedMounts === 0) return;
     presentedMounts -= 1;
     if (presentedMounts > 0) return;
@@ -259,6 +310,7 @@ export function createXtermRendererController(
     present,
     unpresent,
     currentCanvas: () => canvas,
+    isRendererSettled: () => canvas !== null || canvasUnavailable,
     dispose: () => {
       if (disposed) return;
       disposed = true;

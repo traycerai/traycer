@@ -1,4 +1,10 @@
-import { act, StrictMode, type ReactNode } from "react";
+import {
+  act,
+  StrictMode,
+  useEffect,
+  useLayoutEffect,
+  type ReactNode,
+} from "react";
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import {
   cleanup,
@@ -47,7 +53,32 @@ type MockTerminalInstance = {
 const xtermMocks = vi.hoisted(() => ({
   terminals: [] as MockTerminalInstance[],
   canvasAddons: [] as MockCanvasAddonInstance[],
+  // Which renderer the engine currently has. The canvas addon sets it on
+  // activate and clears it on dispose, exactly as xterm's render service swaps
+  // renderers, and the fit addon below measures through it.
+  canvasRendererInstalled: false,
+  // CSS px available to the grid. Only a REAL box change should ever move the
+  // reported grid.
+  availableWidthPx: 800,
+  // Arms one `CanvasAddon.activate` to throw AFTER it has installed its
+  // renderer - the non-transactional `loadAddon` failure from the review.
+  failNextActivationAfterInstall: false,
 }));
+
+// xterm's two renderers do not round the cell the same way: canvas takes
+// `floor(charWidth * dpr)` and DOM keeps the fraction, so an 8.4 CSS px glyph
+// at DPR 2 measures 8 CSS px under canvas and 8.4 under DOM. In an 800 px box
+// that is 100 columns versus 95 - the divergence that lets a renderer swap
+// alone re-report the grid.
+const CANVAS_CELL_WIDTH_PX = 8;
+const DOM_CELL_WIDTH_PX = 8.4;
+
+function proposedColsForCurrentRenderer(): number {
+  const cellWidth = xtermMocks.canvasRendererInstalled
+    ? CANVAS_CELL_WIDTH_PX
+    : DOM_CELL_WIDTH_PX;
+  return Math.floor(xtermMocks.availableWidthPx / cellWidth);
+}
 
 const runnerHostMocks = vi.hoisted(() => ({
   openExternalLink: vi.fn(() => Promise.resolve()),
@@ -187,9 +218,11 @@ vi.mock("@xterm/addon-search", () => ({
 vi.mock("@xterm/addon-fit", () => ({
   FitAddon: class MockFitAddon {
     proposeDimensions(): { readonly cols: number; readonly rows: number } {
-      // Real enough that a fit during a renderer swap WOULD reach
-      // `onContainerResize` if the engine reported a grid.
-      return { cols: 80, rows: 24 };
+      // Renderer-DEPENDENT, like the real one: `proposeDimensions` divides the
+      // box by `renderService.dimensions.css.cell.width`, which belongs to
+      // whichever renderer is installed. A fixed proposal here would let the
+      // engine's dedupe hide a renderer-driven re-report.
+      return { cols: proposedColsForCurrentRenderer(), rows: 24 };
     }
 
     fit(): void {}
@@ -211,6 +244,8 @@ vi.mock("@xterm/addon-canvas", () => ({
     readonly clearTextureAtlas = vi.fn();
     readonly dispose = vi.fn(() => {
       this.disposed = true;
+      // Disposal hands the render service back to xterm's DOM renderer.
+      xtermMocks.canvasRendererInstalled = false;
     });
     private disposed = false;
 
@@ -218,7 +253,16 @@ vi.mock("@xterm/addon-canvas", () => ({
       xtermMocks.canvasAddons.push(this);
     }
 
-    activate(_terminal: unknown): void {}
+    activate(_terminal: unknown): void {
+      // Order matches the real addon: the renderer is installed BEFORE the
+      // disposable that would restore the DOM one is registered, so a throw
+      // here leaves canvas state behind for the caller's catch to clean up.
+      xtermMocks.canvasRendererInstalled = true;
+      if (xtermMocks.failNextActivationAfterInstall) {
+        xtermMocks.failNextActivationAfterInstall = false;
+        throw new Error("canvas activation failed after install");
+      }
+    }
 
     isDisposed(): boolean {
       return this.disposed;
@@ -241,7 +285,12 @@ function HostUnderVisibility(props: {
           hostId="host-1"
           tileKind="terminal"
           instanceId={props.instanceId}
-          effectiveCols={80}
+          // The host's effective grid is what the box measures under the canvas
+          // renderer, i.e. the engine's own first report echoed back. Pinning a
+          // grid the box never proposes would leave the engine permanently
+          // latched, and its re-report self-heal would fire inside these tests
+          // for reasons that have nothing to do with presentation.
+          effectiveCols={100}
           effectiveRows={24}
           onUserInput={vi.fn()}
           onContainerResize={props.onContainerResize}
@@ -300,6 +349,9 @@ describe("<TerminalXtermHost /> presentation-gated canvases", () => {
     vi.useRealTimers();
     xtermMocks.terminals.length = 0;
     xtermMocks.canvasAddons.length = 0;
+    xtermMocks.canvasRendererInstalled = false;
+    xtermMocks.availableWidthPx = 800;
+    xtermMocks.failNextActivationAfterInstall = false;
     runnerHostMocks.openExternalLink.mockClear();
     runnerHostMocks.resolveDroppedFilePaths.mockReset();
     runnerHostMocks.resolveDroppedFilePaths.mockResolvedValue([]);
@@ -444,8 +496,16 @@ describe("<TerminalXtermHost /> presentation-gated canvases", () => {
     expect(xtermMocks.canvasAddons).toHaveLength(1);
   });
 
-  it("a renderer swap never reports a grid to the host", () => {
+  it("a renderer swap never reports a grid to the host, but a real resize still does", () => {
     // Invariant 7: No host round-trip.
+    //
+    // The fit here is renderer-DEPENDENT on purpose. Disposing the canvas
+    // addon hands the render service back to xterm's DOM renderer, which
+    // measures a wider cell, so an unchanged box proposes 95 columns instead of
+    // 100. Reporting that would drag the host's `min()` down for every attached
+    // client and back up on the next present - two spurious PTY resizes per
+    // hide/show. A fixed 80x24 proposal cannot see this: the engine's dedupe
+    // swallows it.
     vi.useFakeTimers();
     const instanceId = "no-round-trip-instance";
     const onContainerResize = vi.fn();
@@ -463,9 +523,9 @@ describe("<TerminalXtermHost /> presentation-gated canvases", () => {
     const entry = requireEntry(instanceId);
     const canvasBefore = entry.rendererController.currentCanvas();
     expect(canvasBefore).not.toBeNull();
-    // The spy is live: the initial present's refresh → onRender → fit reports
-    // the measurable grid. A later zero is therefore a real observation.
-    expect(onContainerResize).toHaveBeenCalled();
+    // The spy is live, and the engine is calibrated to the canvas renderer:
+    // the mount-time fit reported the canvas-measured grid.
+    expect(onContainerResize).toHaveBeenCalledWith(100, 24);
     onContainerResize.mockClear();
 
     rendered.rerender(
@@ -480,7 +540,20 @@ describe("<TerminalXtermHost /> presentation-gated canvases", () => {
     act(() => {
       vi.advanceTimersByTime(XTERM_CANVAS_DISPOSE_DELAY_MS);
     });
+
+    // The canvas is gone and the DOM renderer is live, so the box now MEASURES
+    // 95 - and the host must not hear about it.
     expect(entry.rendererController.currentCanvas()).toBeNull();
+    expect(xtermMocks.canvasRendererInstalled).toBe(false);
+    expect(proposedColsForCurrentRenderer()).toBe(95);
+    expect(onContainerResize).toHaveBeenCalledTimes(0);
+
+    // Even an explicit fit - what the ResizeObserver drives - stays silent
+    // while the engine is sitting on a renderer it is only passing through.
+    act(() => {
+      entry.controls.fitToContainer();
+      vi.runOnlyPendingTimers();
+    });
     expect(onContainerResize).toHaveBeenCalledTimes(0);
 
     rendered.rerender(
@@ -495,10 +568,141 @@ describe("<TerminalXtermHost /> presentation-gated canvases", () => {
     const canvasAfter = entry.rendererController.currentCanvas();
     expect(canvasAfter).not.toBeNull();
     expect(canvasAfter).not.toBe(canvasBefore);
+    // Back on the canvas renderer the same box measures the same 100 columns it
+    // last reported, so the round trip closes with nothing sent either way.
     expect(onContainerResize).toHaveBeenCalledTimes(0);
 
-    entry.live.onContainerResize(99, 40);
+    // The gate is not "never report": a genuine box change while presented
+    // still reaches the host, which is what proves the zeros above are a
+    // suppressed renderer swap and not a dead code path.
+    xtermMocks.availableWidthPx = 400;
+    act(() => {
+      entry.controls.fitToContainer();
+      vi.runOnlyPendingTimers();
+    });
     expect(onContainerResize).toHaveBeenCalledTimes(1);
+    expect(onContainerResize).toHaveBeenCalledWith(50, 24);
+  });
+
+  it("observes the restored canvas from a later layout effect, before passive effects run", () => {
+    // Invariant 1, the before-paint half. Reading the controller after
+    // `rerender` returns cannot tell a layout effect from a passive one - both
+    // have flushed by then. A sibling declared AFTER the host records the
+    // controller from its OWN layout effect and again from its passive effect;
+    // React runs every layout effect in the commit before any passive effect,
+    // so a canvas visible to the first observation can only have been restored
+    // by a layout effect.
+    vi.useFakeTimers();
+    const instanceId = "layout-ordering-instance";
+    const seen: Array<{ readonly phase: string; readonly hasCanvas: boolean }> =
+      [];
+
+    const hasLiveCanvas = (): boolean => {
+      const observed = __getXtermHostEntryForTests(instanceId);
+      if (observed === null) return false;
+      return observed.rendererController.currentCanvas() !== null;
+    };
+
+    function PresentationObserver(): ReactNode {
+      useLayoutEffect(() => {
+        seen.push({ phase: "layout", hasCanvas: hasLiveCanvas() });
+      });
+      useEffect(() => {
+        seen.push({ phase: "passive", hasCanvas: hasLiveCanvas() });
+      });
+      return null;
+    }
+
+    function Scene(props: { readonly tabSelected: boolean }): ReactNode {
+      return (
+        <>
+          <HostUnderVisibility
+            paneVisible
+            tabSelected={props.tabSelected}
+            instanceId={instanceId}
+            onContainerResize={vi.fn()}
+            keepAlive
+          />
+          <PresentationObserver />
+        </>
+      );
+    }
+
+    const rendered = render(<Scene tabSelected />);
+    const entry = requireEntry(instanceId);
+    expect(entry.rendererController.currentCanvas()).not.toBeNull();
+
+    // Drop the canvas, so the next present is a genuine RESTORATION rather than
+    // a first load.
+    rendered.rerender(<Scene tabSelected={false} />);
+    act(() => {
+      vi.advanceTimersByTime(XTERM_CANVAS_DISPOSE_DELAY_MS);
+    });
+    expect(entry.rendererController.currentCanvas()).toBeNull();
+
+    seen.length = 0;
+    rendered.rerender(<Scene tabSelected />);
+
+    // Both phases ran, and the canvas was already back at layout time.
+    expect(seen.map((entrySeen) => entrySeen.phase)).toEqual([
+      "layout",
+      "passive",
+    ]);
+    expect(seen).toEqual([
+      { phase: "layout", hasCanvas: true },
+      { phase: "passive", hasCanvas: true },
+    ]);
+  });
+
+  it("disposes a canvas addon whose activation throws after installing its renderer", () => {
+    // Finding 3: `loadAddon` is not transactional. `AddonManager` stores the
+    // addon before activating it, and activation installs the renderer before
+    // registering the disposable that would restore xterm's DOM one, so the
+    // engine's catch is the only thing that can hand back what was built.
+    xtermMocks.failNextActivationAfterInstall = true;
+    const instanceId = "activation-failure-instance";
+
+    const rendered = render(
+      <HostUnderVisibility
+        paneVisible
+        tabSelected
+        instanceId={instanceId}
+        onContainerResize={vi.fn()}
+        keepAlive
+      />,
+    );
+
+    const addon = requireCanvasAddon(0);
+    // Rolled back rather than abandoned mid-activation.
+    expect(addon.dispose).toHaveBeenCalledTimes(1);
+    expect(addon.isDisposed()).toBe(true);
+
+    const entry = requireEntry(instanceId);
+    expect(entry.rendererController.currentCanvas()).toBeNull();
+    // Latched: the engine is DOM-rendered for life, which also makes it settled
+    // again, so its grid measurements stay self-consistent.
+    expect(entry.rendererController.isRendererSettled()).toBe(true);
+
+    // ...and never retried, however many times it is presented again.
+    rendered.rerender(
+      <HostUnderVisibility
+        paneVisible
+        tabSelected={false}
+        instanceId={instanceId}
+        onContainerResize={vi.fn()}
+        keepAlive
+      />,
+    );
+    rendered.rerender(
+      <HostUnderVisibility
+        paneVisible
+        tabSelected
+        instanceId={instanceId}
+        onContainerResize={vi.fn()}
+        keepAlive
+      />,
+    );
+    expect(xtermMocks.canvasAddons).toHaveLength(1);
   });
 
   it("StrictMode double mount keeps the same canvas addon and never disposes it", () => {

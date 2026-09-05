@@ -478,9 +478,11 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
   // actually on screen. `useTileBodyVisible()` is the composed predicate -
   // pane shown AND this tab selected - so a tab deselected inside a still
   // visible pane counts as unpresented, which `usePaneVisible()` alone would
-  // miss. Outside the hosted surface (the measure probe, PiP, mobile, tests
-  // with no provider) both contexts default to `true`, so those placements
-  // present exactly as they do today.
+  // miss. Both contexts default to `true` only where no provider exists at all
+  // (isolated renders, tests); every real placement inherits real values -
+  // mobile provides `selected=true` and inherits its pane's visibility, and the
+  // measure probe provides BOTH itself, because a grid measured through the
+  // wrong renderer must never reach the host (see `TerminalGridMeasureProbe`).
   //
   // A LAYOUT effect, and declared after the acquire effect above, so the
   // engine's container is attached and its controller published before
@@ -825,14 +827,34 @@ function createXtermEntry(
   // it merely parks itself on `onWillOpen`.
   const rendererController = createXtermRendererController({
     loadCanvasAddon: () => {
+      let addon: CanvasAddon | null = null;
       try {
-        const addon = new CanvasAddon();
+        addon = new CanvasAddon();
         term.loadAddon(addon);
         return addon;
       } catch {
-        // Canvas unavailable (headless / blocked); xterm falls back to its DOM
-        // renderer automatically and the controller latches that, so a later
-        // presentation never retries the construction.
+        // Canvas unavailable (headless / blocked). xterm does NOT roll back for
+        // us: `AddonManager` stores the addon before activating it, and
+        // `CanvasAddon.activate` builds its layers, installs its renderer and
+        // resizes it BEFORE registering the disposable that restores the DOM
+        // renderer. So dispose what we built - that runs whatever the addon did
+        // manage to register (the DOM restore and the layers' own removal) and
+        // is a no-op when it registered nothing.
+        //
+        // One window is not recoverable: a throw between `setRenderer` and that
+        // registration leaves the partial canvas renderer owning the render
+        // service, and no public API can hand the DOM renderer back (xterm's
+        // own restore reaches `_core._createRenderer()`). We still latch - a
+        // per-present retry of a construction that just failed is worse - so
+        // `currentCanvas() === null` means this controller owns no addon, not
+        // that nothing accelerated is installed.
+        if (addon !== null) {
+          try {
+            addon.dispose();
+          } catch {
+            // Rollback itself failed; nothing further is reachable from here.
+          }
+        }
         return null;
       }
     },
@@ -1021,6 +1043,17 @@ function createXtermEntry(
   // ever this small.
   const proposeContainerDims = (): { cols: number; rows: number } | null => {
     if (!containerEl.isConnected) return null;
+    // Never measure through a renderer this engine is only passing through.
+    // `FitAddon.proposeDimensions` divides the box by the LIVE renderer's cell
+    // width, and xterm's two renderers round it differently, so an unpresented
+    // engine sitting on the temporary DOM renderer proposes a different grid
+    // for an unchanged box - and reporting that would shrink the host's
+    // `min()` for every attached client and grow it back on the next present.
+    // See `XtermRendererController.isRendererSettled`. Both readers below
+    // treat `null` as "unmeasurable right now": the fit reports nothing and
+    // `reconcileWithHost` defers into `pendingHostGrid`, which the first fit
+    // after the canvas is back completes.
+    if (!rendererController.isRendererSettled()) return null;
     if (
       containerEl.clientWidth < MIN_FIT_CONTAINER_PX ||
       containerEl.clientHeight < MIN_FIT_CONTAINER_PX

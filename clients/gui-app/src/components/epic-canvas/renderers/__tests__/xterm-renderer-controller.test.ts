@@ -253,6 +253,61 @@ describe("createXtermRendererController", () => {
     expect(controller.currentCanvas()).toBeNull();
   });
 
+  it("loads the addon before refreshing, and refreshes only after it is installed", () => {
+    // Invariant 1, the ordering half. Final call counts cannot tell
+    // load-then-refresh from refresh-then-load; only the callback ORDER can,
+    // and only reading the controller from inside the refresh callback shows
+    // that the addon was already installed when the repaint was asked for.
+    const calls: string[] = [];
+    let canvasDuringRefresh: CanvasAddon | null | "not-called" = "not-called";
+    let controller: XtermRendererController | null = null;
+    const loaded = createFakeCanvasAddon(null).addon;
+    controller = createXtermRendererController({
+      loadCanvasAddon: () => {
+        calls.push("load");
+        return loaded;
+      },
+      refreshAllRows: () => {
+        calls.push("refresh");
+        canvasDuringRefresh = controller?.currentCanvas() ?? null;
+      },
+    });
+
+    expect(calls).toEqual([]);
+    expect(canvasDuringRefresh).toBe("not-called");
+
+    controller.present();
+
+    expect(calls).toEqual(["load", "refresh"]);
+    // The repaint was requested against the installed addon, not ahead of it.
+    expect(canvasDuringRefresh).toBe(loaded);
+  });
+
+  it("reports the renderer as unsettled only between disposal and the next present", () => {
+    // Finding 1's gate at the controller boundary: `isRendererSettled()` is
+    // what stops a grid measured through the temporary DOM renderer reaching
+    // the host.
+    vi.useFakeTimers();
+    const { controller } = createTrackedController(null);
+
+    // Before the first present the engine could still get a canvas, so no
+    // measurement it takes now is the one it will agree with later.
+    expect(controller.isRendererSettled()).toBe(false);
+
+    controller.present();
+    expect(controller.isRendererSettled()).toBe(true);
+
+    controller.unpresent();
+    // Still settled through the grace - the canvas renderer is still installed.
+    expect(controller.isRendererSettled()).toBe(true);
+
+    vi.advanceTimersByTime(XTERM_CANVAS_DISPOSE_DELAY_MS);
+    expect(controller.isRendererSettled()).toBe(false);
+
+    controller.present();
+    expect(controller.isRendererSettled()).toBe(true);
+  });
+
   it("a null canvas loader is latched and never retried", () => {
     const loadCanvasAddon = vi.fn((): CanvasAddon | null => null);
     const refreshAllRows = vi.fn(() => undefined);
@@ -273,5 +328,11 @@ describe("createXtermRendererController", () => {
     expect(loadCanvasAddon).toHaveBeenCalledTimes(1);
     expect(controller.currentCanvas()).toBeNull();
     expect(refreshAllRows).toHaveBeenCalledTimes(0);
+    // A permanently DOM-rendered engine is SETTLED: nothing will swap under it,
+    // so its grid measurements stay self-consistent and may still be reported.
+    // (The rollback the loader owes before returning null is production's job
+    // and is pinned against the real catch in
+    // terminal-xterm-host-presentation.test.tsx.)
+    expect(controller.isRendererSettled()).toBe(true);
   });
 });
