@@ -58,6 +58,15 @@ vi.mock("../../host/update-progress-marker", () => ({
     mocks.deleteUpdateProgressMarkerIfUnchangedMock,
   replaceUpdateProgressMarkerIfUnchanged:
     mocks.replaceUpdateProgressMarkerIfUnchangedMock,
+  progressRecord: (fields: {
+    state: "updating" | "failed";
+    error: string | null;
+    targetVersion: string;
+  }): HostUpdateProgress => ({
+    ...fields,
+    updatedAt: new Date().toISOString(),
+    writerId: "test-writer",
+  }),
   // Pure comparator; the real one, so the "is this marker still ours"
   // decisions under test compare the way production does.
   sameProgress: (
@@ -66,18 +75,21 @@ vi.mock("../../host/update-progress-marker", () => ({
       targetVersion: string;
       updatedAt: string;
       error: string | null;
+      writerId: string | null;
     },
     b: {
       state: string;
       targetVersion: string;
       updatedAt: string;
       error: string | null;
+      writerId: string | null;
     },
   ) =>
     a.state === b.state &&
     a.targetVersion === b.targetVersion &&
     a.updatedAt === b.updatedAt &&
-    a.error === b.error,
+    a.error === b.error &&
+    a.writerId === b.writerId,
 }));
 
 vi.mock("../../service/health-probe", () => ({
@@ -1323,6 +1335,7 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
       error: "host did not become healthy: tcp refused",
       targetVersion: "2.0.0",
       updatedAt: "2026-01-01T00:00:00.000Z",
+      writerId: null,
     });
 
     const result = await buildHostUpdateCommand({
@@ -1361,6 +1374,7 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
       error: "host did not become healthy: tcp refused",
       targetVersion: "2.0.0",
       updatedAt: "2026-01-01T00:00:00.000Z",
+      writerId: null,
     });
 
     const result = await buildHostUpdateCommand({
@@ -1404,6 +1418,7 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
       error: "host did not become healthy: tcp refused",
       targetVersion: "2.0.0",
       updatedAt: "2026-01-01T00:00:00.000Z",
+      writerId: null,
     });
 
     await buildHostUpdateCommand({
@@ -1429,6 +1444,7 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
       error: null,
       targetVersion: "2.1.0",
       updatedAt: "2026-01-01T00:00:00.000Z",
+      writerId: null,
     });
 
     await buildHostUpdateCommand({
@@ -1640,6 +1656,7 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
       error: "host did not become healthy: tcp refused",
       targetVersion: "2.0.0",
       updatedAt: "2026-01-01T00:00:00.000Z",
+      writerId: null,
     });
 
     const result = await buildHostUpdateCommand({

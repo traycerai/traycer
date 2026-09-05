@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CommandContext } from "../../runner/runner";
 import type { HostInstallRecord } from "../../manifest/host-install";
+import type { HostUpdateProgress } from "../../host/update-progress-marker";
 
 const mocks = vi.hoisted(() => ({
   installHostDowngradeMock: vi.fn(),
@@ -26,6 +27,15 @@ vi.mock("../../host/update-progress-marker", () => ({
   readUpdateProgressMarker: async () => null,
   deleteUpdateProgressMarkerIfUnchanged: async () => "absent",
   replaceUpdateProgressMarkerIfUnchanged: mocks.replaceUpdateProgressMarkerMock,
+  progressRecord: (fields: {
+    state: "updating" | "failed";
+    error: string | null;
+    targetVersion: string;
+  }): HostUpdateProgress => ({
+    ...fields,
+    updatedAt: new Date().toISOString(),
+    writerId: "test-writer",
+  }),
   sameProgress: () => true,
 }));
 

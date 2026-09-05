@@ -10,6 +10,7 @@ import {
 } from "../installer/download-stage";
 import {
   deleteUpdateProgressMarkerIfUnchanged,
+  progressRecord,
   readUpdateProgressMarker,
   replaceUpdateProgressMarkerIfUnchanged,
   writeUpdateProgressMarker,
@@ -252,12 +253,11 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
     // unconditional delete would erase that updater's only progress signal.
     let writtenMarker: HostUpdateProgress | null = null;
     if (needsWork) {
-      writtenMarker = {
+      writtenMarker = progressRecord({
         state: "updating",
         error: null,
         targetVersion,
-        updatedAt: new Date().toISOString(),
-      };
+      });
       await writeUpdateProgressMarkerSafely(
         ctx.runtime.logger,
         environment,
@@ -289,12 +289,11 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
           async (installedVersion) => {
             if (installedVersion === markerTargetVersion) return;
             markerTargetVersion = installedVersion;
-            writtenMarker = {
+            writtenMarker = progressRecord({
               state: "updating",
               error: null,
               targetVersion: installedVersion,
-              updatedAt: new Date().toISOString(),
-            };
+            });
             await writeUpdateProgressMarkerSafely(
               ctx.runtime.logger,
               environment,
@@ -765,12 +764,7 @@ async function markUpdateFailed(
   error: string,
   ours: HostUpdateProgress | null,
 ): Promise<void> {
-  const failed: HostUpdateProgress = {
-    state: "failed",
-    error,
-    targetVersion,
-    updatedAt: new Date().toISOString(),
-  };
+  const failed = progressRecord({ state: "failed", error, targetVersion });
   if (ours === null) {
     await writeUpdateProgressMarkerSafely(logger, environment, failed);
     return;

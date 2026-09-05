@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { link, readFile, rename, rm, writeFile } from "node:fs/promises";
 import type { Environment } from "../runner/environment";
 import { createCliLogger, errorFromUnknown } from "../logger";
@@ -32,6 +33,36 @@ export interface HostUpdateProgress {
   readonly error: string | null;
   readonly targetVersion: string;
   readonly updatedAt: string;
+  /**
+   * Identity of the process that wrote the record - what lets a conditional
+   * clear or replace tell "the marker I wrote" from an identical-looking one
+   * another updater wrote in the same millisecond. Additive: the host daemon
+   * reads `state` and `error` only, and a marker written by an older CLI
+   * reads back as `null`.
+   */
+  readonly writerId: string | null;
+}
+
+// One identity per process. Two `host update` invocations racing for the
+// same target can write byte-identical `state`/`targetVersion`/`updatedAt`
+// (millisecond clock), and content alone would then let the first to finish
+// clear or fail-stamp the second's live marker - which the second could
+// never clear, because the stamp no longer matches what IT wrote.
+const PROGRESS_WRITER_ID = `${process.pid}-${randomBytes(6).toString("hex")}`;
+
+/** A marker record stamped with the current time and this process's identity. */
+export function progressRecord(fields: {
+  readonly state: HostUpdateProgressState;
+  readonly error: string | null;
+  readonly targetVersion: string;
+}): HostUpdateProgress {
+  return {
+    state: fields.state,
+    error: fields.error,
+    targetVersion: fields.targetVersion,
+    updatedAt: new Date().toISOString(),
+    writerId: PROGRESS_WRITER_ID,
+  };
 }
 
 export async function writeUpdateProgressMarker(
@@ -75,13 +106,12 @@ export type ConditionalMarkerDelete = "cleared" | "changed" | "absent";
 export type ConditionalMarkerReplace = "replaced" | "changed";
 
 /**
- * Field-wise identity of two marker records. A marker carries no writer id -
- * its shape is shared by contract with the host daemon's reader - so "the
- * marker I wrote" is decided by content, and `updatedAt` (millisecond ISO
- * time) is what tells two writers apart. Two updaters that land an identical
- * `updating` for the same target within the same millisecond are therefore
- * indistinguishable here, and either may clear the other's; the two records
- * say the same thing about the same update, so the survivor is correct.
+ * Identity of two marker records: every field, `writerId` included. Content
+ * alone is not identity - two updaters racing for the same target can write
+ * the same `state`, `targetVersion` and millisecond `updatedAt` - so the
+ * writer's identity is what tells "mine" from "an identical one of theirs".
+ * Two `null` writer ids (markers from an older CLI) compare equal on content,
+ * which is the best that record can offer.
  */
 export function sameProgress(
   a: HostUpdateProgress,
@@ -91,7 +121,8 @@ export function sameProgress(
     a.state === b.state &&
     a.targetVersion === b.targetVersion &&
     a.updatedAt === b.updatedAt &&
-    a.error === b.error
+    a.error === b.error &&
+    a.writerId === b.writerId
   );
 }
 
@@ -216,10 +247,14 @@ async function swapMarkerIfUnchanged(
     }
   };
   // `link(from → target)` lands `from` at the live path only if that path is
-  // empty; EEXIST means a newer marker is there and wins. Any other failure
-  // (a filesystem without hard links) falls back to a plain rename, accepting
-  // that it could overwrite a marker landed in the last few microseconds.
-  // Returns whether `from` is now the live marker.
+  // empty; EEXIST means a newer marker is there and wins. A filesystem that
+  // refuses hard links falls back to an exclusive create (`wx`) of the same
+  // bytes - still create-if-absent, so a marker landed in between still wins
+  // with EEXIST. A plain rename is never the fallback: it would overwrite
+  // that marker and reopen exactly the race this swap exists to close. The
+  // cost of the `wx` path is a non-atomic content write - a reader polling in
+  // that instant may see a partial file, which it parses as "no marker" for
+  // one poll. Returns whether `from` is now the live marker.
   const landAtomically = async (
     from: string,
     step: string,
@@ -234,16 +269,20 @@ async function swapMarkerIfUnchanged(
         return false;
       }
       try {
-        await rename(from, target);
+        const bytes = await readFile(from);
+        await writeFile(target, bytes, { flag: "wx", mode: 0o600 });
+        await dropFile(from, `${step}-unlink-source`);
         return true;
-      } catch (renameErr) {
-        logger.warn("Host update progress marker conditional swap failed", {
-          environment,
-          step,
-          errorName: errorFromUnknown(renameErr).name,
-          errorMessage: errorFromUnknown(renameErr).message,
-        });
-        await dropFile(from, `${step}-rename-failed`);
+      } catch (createErr) {
+        if (errnoCode(createErr) !== "EEXIST") {
+          logger.warn("Host update progress marker conditional swap failed", {
+            environment,
+            step,
+            errorName: errorFromUnknown(createErr).name,
+            errorMessage: errorFromUnknown(createErr).message,
+          });
+        }
+        await dropFile(from, `${step}-create-failed`);
         return false;
       }
     }
@@ -372,5 +411,8 @@ async function readMarkerFile(
     error: obj.error === null ? null : obj.error,
     targetVersion: obj.targetVersion,
     updatedAt: obj.updatedAt,
+    // Absent on markers written before the field existed; carried through so
+    // a conditional swap compares what was actually written.
+    writerId: typeof obj.writerId === "string" ? obj.writerId : null,
   };
 }
