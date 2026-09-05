@@ -662,7 +662,10 @@ it("lets a chat remove its last folder and commits the folderless rebind", async
       name: /^(?:Move|Remove) alpha(?: to Recent)?$/,
     })
   )[0];
-  expect(remove instanceof HTMLButtonElement && remove.disabled).toBe(false);
+  if (!(remove instanceof HTMLButtonElement)) {
+    throw new TypeError("Expected a native remove button");
+  }
+  expect(remove.disabled).toBe(false);
   fireEvent.click(remove);
 
   await waitFor(() => {
