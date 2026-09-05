@@ -180,7 +180,7 @@ function renderSubscription(
   const wrapper = (props: { readonly children: ReactNode }) => (
     <QueryClientProvider client={queryClient}>
       <StreamRuntimeContext.Provider
-        value={{ wsStreamClient: client, hostId: null }}
+        value={{ wsStreamClient: client, hostId: null, retain: null }}
       >
         {props.children}
       </StreamRuntimeContext.Provider>
