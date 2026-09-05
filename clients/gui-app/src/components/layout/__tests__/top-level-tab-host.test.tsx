@@ -55,7 +55,7 @@ import {
 } from "@/lib/terminals/terminal-focus-registry";
 import { resetPrimaryFocusCoordinatorForTests } from "@/lib/focus/primary-focus-coordinator";
 import { PrimaryFocusCoordinatorProvider } from "@/lib/focus/primary-focus-coordinator-provider";
-import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
+import { useLandingTerminalStore } from "@/stores/home/landing-terminal-store";
 
 const stableTileSurfaceHostTestState = vi.hoisted(() => ({ enabled: false }));
 
@@ -381,7 +381,7 @@ describe("<TopLevelTabHost />", () => {
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     useLandingDraftStore.setState(useLandingDraftStore.getInitialState(), true);
     useAuthStore.setState(useAuthStore.getInitialState(), true);
-    useLandingPanelStore.getState().resetForTests();
+    useLandingTerminalStore.getState().resetForTests();
   });
 
   afterEach(() => {
@@ -390,7 +390,7 @@ describe("<TopLevelTabHost />", () => {
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     useLandingDraftStore.setState(useLandingDraftStore.getInitialState(), true);
     useAuthStore.setState(useAuthStore.getInitialState(), true);
-    useLandingPanelStore.getState().resetForTests();
+    useLandingTerminalStore.getState().resetForTests();
     resetTerminalFocusRegistryForTests();
     resetPrimaryFocusCoordinatorForTests();
   });
@@ -622,9 +622,8 @@ describe("<TopLevelTabHost />", () => {
     }));
     seedSources(refs);
     setSingle(refs[0], refs);
-    const terminalStore = useLandingPanelStore.getState();
+    const terminalStore = useLandingTerminalStore.getState();
     terminalStore.addTab({
-      kind: "terminal",
       instanceId: "integrated-terminal",
       sessionId: "integrated-terminal-session",
       hostId: TEST_HOST_ID,

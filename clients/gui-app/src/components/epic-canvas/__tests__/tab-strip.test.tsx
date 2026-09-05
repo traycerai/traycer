@@ -38,10 +38,6 @@ import {
 import { managedCommandSchema } from "@traycer/protocol/host/managed-command/unary-schemas";
 import type { BrowserSessionInfo } from "@traycer/protocol/host/browser/contracts";
 import {
-  sessionInfo,
-  tabInfo,
-} from "@/lib/browser-view/sessions/__tests__/browser-session-test-kit";
-import {
   BrowserSessionsContext,
   type BrowserSessionsState,
 } from "@/components/epic-canvas/renderers/browser-sessions-context";
@@ -237,8 +233,6 @@ function browserSessionsState(
     retry: () => undefined,
     openTab: () => Promise.reject(new Error("not used")),
     closeTab: () => Promise.resolve(),
-    attachTab: () => Promise.reject(new Error("not used")),
-    moveTab: () => Promise.reject(new Error("not used")),
   };
 }
 
@@ -427,21 +421,25 @@ describe("<TabStrip />", () => {
         onSplit: () => undefined,
       },
       [
-        sessionInfo({
+        {
           sessionId: "session-1",
+          epicId: "epic-1",
           hostId: "host-A",
+          profile: "primary",
           lastActivityAt: 2,
           runtime: { kind: "electron", revision: 0 },
           tabs: [
-            tabInfo({
+            {
               tabId: "browser-tab-1",
               url: "https://thepier5.com/",
               originTier: "external",
+              status: "ready",
               title: "Waterfront Hotel in Baltimore | Pier 5 Hotel",
               viewed: true,
-            }),
+              drivenBy: [],
+            },
           ],
-        }),
+        },
       ],
     );
 
@@ -468,21 +466,25 @@ describe("<TabStrip />", () => {
       viewportPreset: "responsive",
     };
     testState.browserSessionsByHost.set("host-B", [
-      sessionInfo({
+      {
         sessionId: "session-1",
+        epicId: "epic-1",
         hostId: "host-B",
+        profile: "primary",
         lastActivityAt: 2,
         runtime: { kind: "electron", revision: 0 },
         tabs: [
-          tabInfo({
+          {
             tabId: "browser-tab-1",
             url: "https://thepier5.com/",
             originTier: "external",
+            status: "ready",
             title: "Waterfront Hotel in Baltimore | Pier 5 Hotel",
             viewed: true,
-          }),
+            drivenBy: [],
+          },
         ],
-      }),
+      },
     ]);
     renderTabStripForTab(
       browserTab,

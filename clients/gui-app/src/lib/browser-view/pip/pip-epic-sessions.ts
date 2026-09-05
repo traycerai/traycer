@@ -100,10 +100,7 @@ export class RemotePipSessionsManager {
       transport = openedTransport;
       const stream = new BrowserSessionsStreamClient({
         wsStreamClient: openedTransport.wsStreamClient,
-        // PiP mirrors a tab that is open on an epic canvas, so this fleet is
-        // epic-scoped by construction; the device's independent inventory is
-        // reached through the panel's own coordinator, never through here.
-        scope: { kind: "epic", epicId: this.epicId },
+        epicId: this.epicId,
         callbacks: {
           onServerFrame: (frame) => {
             if (slot.generation !== generation) return;

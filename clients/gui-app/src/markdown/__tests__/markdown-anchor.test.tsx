@@ -138,8 +138,6 @@ function renderMarkdownWithBrowserRouting(
     retry: () => undefined,
     openTab,
     closeTab: () => Promise.resolve(),
-    attachTab: () => Promise.reject(new Error("not used")),
-    moveTab: () => Promise.reject(new Error("not used")),
   };
   return render(
     <RunnerHostContext.Provider value={host}>

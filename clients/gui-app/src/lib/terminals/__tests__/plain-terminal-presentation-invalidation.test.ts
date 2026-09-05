@@ -20,7 +20,7 @@ import {
 } from "@/lib/terminals/plain-terminal-presentation-invalidation";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
-import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
+import { useLandingTerminalStore } from "@/stores/home/landing-terminal-store";
 
 const TARGET_HOST_ID = "host-a";
 const TARGET_TERMINAL_ID = "terminal-shared";
@@ -62,7 +62,7 @@ function remainingEpicInstanceIds(): readonly string[] {
 describe("plain terminal presentation invalidation", () => {
   afterEach(() => {
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
-    useLandingPanelStore.getState().resetForTests();
+    useLandingTerminalStore.getState().resetForTests();
     // The GUI Vitest config does not restore mocks automatically, so the
     // store-action `vi.spyOn` wrappers below would otherwise leak forward.
     vi.restoreAllMocks();
@@ -144,10 +144,9 @@ describe("plain terminal presentation invalidation", () => {
       },
     ]);
 
-    useLandingPanelStore.setState({
+    useLandingTerminalStore.setState({
       tabs: [
         {
-          kind: "terminal",
           instanceId: "landing-target",
           sessionId: TARGET_TERMINAL_ID,
           hostId: TARGET_HOST_ID,
@@ -157,7 +156,6 @@ describe("plain terminal presentation invalidation", () => {
           hostAuthorityAcknowledged: true,
         },
         {
-          kind: "terminal",
           instanceId: "landing-target-legacy",
           sessionId: TARGET_TERMINAL_ID,
           hostId: TARGET_HOST_ID,
@@ -167,7 +165,6 @@ describe("plain terminal presentation invalidation", () => {
           hostAuthorityAcknowledged: false,
         },
         {
-          kind: "terminal",
           instanceId: "landing-target-pending",
           sessionId: TARGET_TERMINAL_ID,
           hostId: TARGET_HOST_ID,
@@ -178,7 +175,6 @@ describe("plain terminal presentation invalidation", () => {
           pendingCreate: true,
         },
         {
-          kind: "terminal",
           instanceId: "landing-other-host",
           sessionId: TARGET_TERMINAL_ID,
           hostId: "host-b",
@@ -188,7 +184,6 @@ describe("plain terminal presentation invalidation", () => {
           hostAuthorityAcknowledged: true,
         },
         {
-          kind: "terminal",
           instanceId: "landing-other-terminal",
           sessionId: "terminal-other",
           hostId: TARGET_HOST_ID,
@@ -316,12 +311,12 @@ describe("plain terminal presentation invalidation", () => {
       "epic-other-terminal-ref",
     ]);
     expect(
-      useLandingPanelStore
+      useLandingTerminalStore
         .getState()
         .tabs.map((tab) => tab.instanceId)
         .sort(),
     ).toEqual(["landing-other-host", "landing-other-terminal"]);
-    expect(useLandingPanelStore.getState().activeInstanceId).toBe(
+    expect(useLandingTerminalStore.getState().activeInstanceId).toBe(
       "landing-other-host",
     );
     expect(
@@ -334,49 +329,6 @@ describe("plain terminal presentation invalidation", () => {
       "closed-other-host-ref",
       "closed-other-terminal-ref",
     ]);
-  });
-
-  // The landing list is mixed, and a browser tab's `sessionId` is a host-minted
-  // id from a namespace nothing proves disjoint from terminal ids - which is
-  // why `landingTabRefKey` carries a `kind` segment. A predicate keyed on
-  // host + session alone answered `true` here, so the sweep removed nothing and
-  // the deletion was still reported as discharged.
-  it("does not count a browser tab sharing a terminal's session id as a presentation ref", () => {
-    const queryClient = new QueryClient();
-    const queryKey = ["plain-terminal-browser-collision"] as const;
-    expect(
-      commitPlainTerminalDeletion({
-        queryClient,
-        queryKey,
-        hostId: TARGET_HOST_ID,
-        terminalId: TARGET_TERMINAL_ID,
-        evidence: { kind: "stream", revision: 2 },
-        deferPresentation: false,
-      }),
-    ).toBe(true);
-    // The ONLY landing ref with these ids is a browser tab. Nothing else in
-    // either store carries them, so the answer is entirely this predicate's.
-    useLandingPanelStore.getState().addTab({
-      kind: "browser",
-      instanceId: "landing-browser",
-      sessionId: TARGET_TERMINAL_ID,
-      hostId: TARGET_HOST_ID,
-      tabId: "tab-1",
-      name: "example.com",
-      titleSource: "default",
-    });
-
-    expect(
-      consumeRetainedPlainTerminalTombstone({
-        queryClient,
-        queryKey,
-        hostId: TARGET_HOST_ID,
-        terminalId: TARGET_TERMINAL_ID,
-      }),
-    ).toBe(false);
-    expect(
-      useLandingPanelStore.getState().tabs.map((tab) => tab.instanceId),
-    ).toEqual(["landing-browser"]);
   });
 
   it("discharges the same deferred tombstone across Query clients without duplicate store effects", () => {
@@ -395,8 +347,7 @@ describe("plain terminal presentation invalidation", () => {
         },
       },
     ]);
-    useLandingPanelStore.getState().addTab({
-      kind: "terminal",
+    useLandingTerminalStore.getState().addTab({
       instanceId: "landing-target",
       sessionId: TARGET_TERMINAL_ID,
       hostId: TARGET_HOST_ID,
@@ -410,7 +361,7 @@ describe("plain terminal presentation invalidation", () => {
       "removeHostTerminalRefs",
     );
     const landingRemove = vi.spyOn(
-      useLandingPanelStore.getState(),
+      useLandingTerminalStore.getState(),
       "removeHostTerminal",
     );
     epicRemove.mockClear();
@@ -547,10 +498,9 @@ describe("plain terminal presentation invalidation", () => {
         },
       },
     });
-    useLandingPanelStore.setState({
+    useLandingTerminalStore.setState({
       tabs: [
         {
-          kind: "terminal",
           instanceId: "late-legacy",
           sessionId: TARGET_TERMINAL_ID,
           hostId: TARGET_HOST_ID,
@@ -560,7 +510,6 @@ describe("plain terminal presentation invalidation", () => {
           hostAuthorityAcknowledged: false,
         },
         {
-          kind: "terminal",
           instanceId: "late-other-host",
           sessionId: TARGET_TERMINAL_ID,
           hostId: "host-b",
@@ -580,7 +529,7 @@ describe("plain terminal presentation invalidation", () => {
       "removeHostTerminalRefs",
     );
     const landingRemove = vi.spyOn(
-      useLandingPanelStore.getState(),
+      useLandingTerminalStore.getState(),
       "removeHostTerminal",
     );
     epicRemove.mockClear();
@@ -612,7 +561,7 @@ describe("plain terminal presentation invalidation", () => {
       "late-epic-other-host",
     ]);
     expect(
-      useLandingPanelStore.getState().tabs.map((tab) => tab.instanceId),
+      useLandingTerminalStore.getState().tabs.map((tab) => tab.instanceId),
     ).toEqual(["late-other-host"]);
     expect(
       Object.keys(
@@ -679,8 +628,7 @@ describe("plain terminal presentation invalidation", () => {
         cwd: "/legacy",
       },
     ]);
-    useLandingPanelStore.getState().addTab({
-      kind: "terminal",
+    useLandingTerminalStore.getState().addTab({
       instanceId: "late-legacy",
       sessionId: TARGET_TERMINAL_ID,
       hostId: TARGET_HOST_ID,
@@ -712,7 +660,7 @@ describe("plain terminal presentation invalidation", () => {
       ],
     ).toBeDefined();
     expect(
-      useLandingPanelStore
+      useLandingTerminalStore
         .getState()
         .tabs.some((tab) => tab.instanceId === "late-legacy"),
     ).toBe(true);
@@ -731,8 +679,7 @@ describe("plain terminal presentation invalidation", () => {
         deferPresentation: false,
       }),
     ).toBe(true);
-    useLandingPanelStore.getState().addTab({
-      kind: "terminal",
+    useLandingTerminalStore.getState().addTab({
       instanceId: "late-legacy",
       sessionId: TARGET_TERMINAL_ID,
       hostId: TARGET_HOST_ID,
@@ -749,7 +696,7 @@ describe("plain terminal presentation invalidation", () => {
         terminalId: TARGET_TERMINAL_ID,
       }),
     ).toBe(true);
-    expect(useLandingPanelStore.getState().tabs).toEqual([]);
+    expect(useLandingTerminalStore.getState().tabs).toEqual([]);
     expect(
       queryClient.getQueryData<PlainTerminalCollection>(queryKey)
         ?.projectionSequence,

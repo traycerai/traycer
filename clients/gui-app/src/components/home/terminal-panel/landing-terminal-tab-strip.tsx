@@ -6,14 +6,7 @@ import {
   type MouseEvent,
   type ReactNode,
 } from "react";
-import {
-  Globe,
-  Pencil,
-  Plus,
-  SquareDashed,
-  TerminalSquare,
-  X,
-} from "lucide-react";
+import { Pencil, Plus, TerminalSquare, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   ContextMenu,
@@ -29,46 +22,27 @@ import {
 } from "@/hooks/ui/use-inline-rename";
 import { registerPrimaryFocusEndpoint } from "@/lib/focus/primary-focus-coordinator";
 import { cn } from "@/lib/utils";
-import type {
-  LandingPanelPlaceholder,
-  LandingPanelTabRef,
-} from "@/stores/home/landing-panel-store";
+import type { LandingTerminalTabRef } from "@/stores/home/landing-terminal-store";
 import type { PlainTerminalViewModel } from "@/lib/terminals/plain-terminal-authority";
-import {
-  LANDING_BROWSER_UNWATCHED_TOOLTIP,
-  type LandingBrowserViewModel,
-} from "./landing-browser-presentation";
-import { landingStripRows } from "./landing-strip-rows";
 
 export interface LandingTerminalTabStripProps {
-  readonly tabs: ReadonlyArray<LandingPanelTabRef>;
-  /**
-   * The unpicked "New tab" row, rendered at its own index among {@link tabs}.
-   * `null` when there is none.
-   */
-  readonly placeholder: LandingPanelPlaceholder | null;
+  readonly tabs: ReadonlyArray<LandingTerminalTabRef>;
   readonly activeInstanceId: string | null;
   /**
-   * The "+" and the empty-strip double-click open the CHOOSER, which is
-   * reachable whatever the devices are doing - a device that cannot start a
-   * terminal can still open a browser, and the chooser is where a refusal can
-   * say which half it applies to. So neither affordance is gated any more, and
-   * this is a plain tooltip.
+   * Why creating a terminal is currently unavailable, or `null` when the
+   * create affordances are live. Doubles as the disabled flag: the "+"
+   * button and the empty-strip double-click gate on it, and the button
+   * surfaces the string as a tooltip so the dead control explains itself.
    */
-  readonly addTooltip: string;
+  readonly createDisabledReason: string | null;
   readonly onAdd: () => void;
   readonly onActivate: (instanceId: string) => void;
-  readonly onClose: (tab: LandingPanelTabRef) => void;
-  /** The placeholder's own "×": there is no tab to close, only a pick to drop. */
-  readonly onDismissPlaceholder: () => void;
+  readonly onClose: (tab: LandingTerminalTabRef) => void;
   readonly onCloseAll: () => void;
   readonly onRename: (instanceId: string, name: string) => void;
-  readonly canRename: (tab: LandingPanelTabRef) => boolean;
+  readonly canRename: (tab: LandingTerminalTabRef) => boolean;
   readonly terminalViewModels: Readonly<
     Partial<Record<string, PlainTerminalViewModel>>
-  >;
-  readonly browserViewModels: Readonly<
-    Partial<Record<string, LandingBrowserViewModel>>
   >;
 }
 
@@ -84,11 +58,13 @@ export interface LandingTerminalTabStripProps {
 export function LandingTerminalTabStrip(
   props: LandingTerminalTabStripProps,
 ): ReactNode {
-  const { onAdd } = props;
+  const { createDisabledReason, onAdd } = props;
+  const canCreate = createDisabledReason === null;
   const handleStripDoubleClick = (event: MouseEvent<HTMLDivElement>): void => {
-    // Only the empty strip background opens a new tab. A double-click that
+    if (!canCreate) return;
+    // Only the empty strip background opens a terminal. A double-click that
     // lands on a tab (or on the "+"/close buttons, whose own click handler
-    // already fired twice) must not open a second one.
+    // already fired twice) must not spawn a second one.
     if (
       event.target instanceof Element &&
       event.target.closest('[role="tab"], button') !== null
@@ -105,38 +81,25 @@ export function LandingTerminalTabStrip(
     >
       <div className="flex min-w-0 max-w-full flex-[0_1_auto] items-stretch">
         <div className="no-scrollbar flex min-w-0 max-w-full flex-[0_1_auto] items-stretch overflow-x-auto overscroll-x-contain">
-          {landingStripRows(props.tabs, props.placeholder).map((row) =>
-            row.kind === "placeholder" ? (
-              <LandingPlaceholderTab
-                key={row.placeholder.instanceId}
-                instanceId={row.placeholder.instanceId}
-                active={row.placeholder.instanceId === props.activeInstanceId}
-                onActivate={props.onActivate}
-                onDismiss={props.onDismissPlaceholder}
-                onCloseAll={props.onCloseAll}
-              />
-            ) : (
-              <LandingPanelTab
-                key={row.tab.instanceId}
-                tab={row.tab}
-                active={row.tab.instanceId === props.activeInstanceId}
-                onActivate={props.onActivate}
-                onClose={props.onClose}
-                onCloseAll={props.onCloseAll}
-                onRename={props.onRename}
-                canRename={props.canRename(row.tab)}
-                row={landingPanelRowFor({
-                  tab: row.tab,
-                  terminal:
-                    props.terminalViewModels[row.tab.instanceId] ?? null,
-                  browser: props.browserViewModels[row.tab.instanceId] ?? null,
-                })}
-              />
-            ),
-          )}
+          {props.tabs.map((tab) => (
+            <LandingTerminalTab
+              key={tab.instanceId}
+              tab={tab}
+              active={tab.instanceId === props.activeInstanceId}
+              onActivate={props.onActivate}
+              onClose={props.onClose}
+              onCloseAll={props.onCloseAll}
+              onRename={props.onRename}
+              canRename={props.canRename(tab)}
+              viewModel={props.terminalViewModels[tab.instanceId] ?? null}
+            />
+          ))}
         </div>
         <div className="flex shrink-0 items-center px-1">
-          <NewTabButton tooltip={props.addTooltip} onAdd={onAdd} />
+          <NewTerminalButton
+            disabledReason={createDisabledReason}
+            onAdd={onAdd}
+          />
         </div>
       </div>
     </div>
@@ -144,18 +107,19 @@ export function LandingTerminalTabStrip(
 }
 
 /**
- * The strip's "+" affordance, which opens the chooser.
- *
- * It carries a tooltip but is never disabled: the chooser is what knows whether
- * either kind can be started, and it says so per card. The button previously
- * gated on the terminal create reason, which would now hide the browser the
- * device can perfectly well open.
+ * The strip's "+" affordance. While creation is unavailable the button is
+ * `aria-disabled` rather than natively `disabled`, so it stays hoverable and
+ * focusable and the reason is reachable as a tooltip - the same
+ * disabled-with-hint convention as `ComposerSendButton` / the launch panel's
+ * `StartButton` (a native `disabled` button emits no pointer events, so a
+ * tooltip on it would never open).
  */
-function NewTabButton(props: {
-  readonly tooltip: string;
+function NewTerminalButton(props: {
+  readonly disabledReason: string | null;
   readonly onAdd: () => void;
 }): ReactNode {
-  const { onAdd } = props;
+  const { disabledReason, onAdd } = props;
+  const disabled = disabledReason !== null;
   const buttonRef = useRef<HTMLButtonElement | null>(null);
   useLayoutEffect(
     () =>
@@ -170,188 +134,51 @@ function NewTabButton(props: {
       ),
     [],
   );
+  const button = (
+    <Button
+      ref={buttonRef}
+      type="button"
+      variant="ghost"
+      size="icon-sm"
+      aria-label="New terminal"
+      data-testid="landing-terminal-new-tab"
+      aria-disabled={disabled || undefined}
+      className="aria-disabled:cursor-not-allowed aria-disabled:opacity-50 aria-disabled:hover:bg-transparent aria-disabled:hover:text-current dark:aria-disabled:hover:bg-transparent"
+      onClick={() => {
+        if (disabled) return;
+        onAdd();
+      }}
+    >
+      <Plus className="size-4" />
+    </Button>
+  );
+  if (disabledReason === null) return button;
   return (
     <TooltipWrapper
-      label={props.tooltip}
+      label={disabledReason}
       side="bottom"
       sideOffset={undefined}
       align={undefined}
     >
-      <Button
-        ref={buttonRef}
-        type="button"
-        variant="ghost"
-        size="icon-sm"
-        aria-label="New tab"
-        data-testid="landing-terminal-new-tab"
-        onClick={onAdd}
-      >
-        <Plus className="size-4" />
-      </Button>
+      <span className="inline-flex">{button}</span>
     </TooltipWrapper>
   );
 }
 
-/**
- * The "New tab" row: a real strip entry the user can activate, close, or switch
- * away from, whose body is the chooser. It has no rename and no view model -
- * there is nothing yet to name.
- */
-function LandingPlaceholderTab(props: {
-  readonly instanceId: string;
+function LandingTerminalTab(props: {
+  readonly tab: LandingTerminalTabRef;
   readonly active: boolean;
   readonly onActivate: (instanceId: string) => void;
-  readonly onDismiss: () => void;
-  readonly onCloseAll: () => void;
-}): ReactNode {
-  const { active, instanceId, onActivate } = props;
-  const tabRef = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    if (!active) return;
-    tabRef.current?.scrollIntoView({ block: "nearest", inline: "nearest" });
-  }, [active]);
-  return (
-    <ContextMenu modal={false}>
-      <ContextMenuTrigger asChild>
-        <div
-          ref={tabRef}
-          role="tab"
-          aria-label="New tab"
-          aria-selected={active}
-          tabIndex={0}
-          data-testid={`landing-terminal-tab-${instanceId}`}
-          onClick={() => onActivate(instanceId)}
-          onKeyDown={(event) => {
-            if (event.key !== "Enter" && event.key !== " ") return;
-            event.preventDefault();
-            onActivate(instanceId);
-          }}
-          className={cn(
-            "group relative flex min-w-0 shrink-0 items-center gap-1.5 border-r border-canvas-border/70 px-3 text-ui-sm text-muted-foreground outline-hidden transition-colors hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-ring",
-            "max-w-[45vw]",
-            active &&
-              "bg-(--app-background) text-foreground shadow-[inset_0_-1px_0_var(--color-background)] before:absolute before:inset-x-0 before:top-0 before:h-px before:bg-primary",
-          )}
-        >
-          <SquareDashed className="size-3.5 shrink-0" aria-hidden="true" />
-          <span className="truncate">New tab</span>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            aria-label="Close New tab"
-            className="opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 pointer-coarse:opacity-100"
-            onClick={(event) => {
-              event.stopPropagation();
-              props.onDismiss();
-            }}
-          >
-            <X className="size-3.5" />
-          </Button>
-        </div>
-      </ContextMenuTrigger>
-      <ContextMenuContent onCloseAutoFocus={(event) => event.preventDefault()}>
-        <ContextMenuItem onSelect={props.onDismiss}>Close</ContextMenuItem>
-        <ContextMenuItem onSelect={props.onCloseAll}>Close All</ContextMenuItem>
-      </ContextMenuContent>
-    </ContextMenu>
-  );
-}
-
-/**
- * One row's rendered facts, resolved from whichever authority owns its kind.
- *
- * The two kinds share the row chrome - selection, rename, close, context menu,
- * scroll-into-view - and differ only in these fields and the icon, so they are
- * flattened here rather than branched inside the row. A row that reached for
- * its own authority would be the third place that decides what a browser tab
- * is called.
- */
-interface LandingPanelRowModel {
-  readonly displayName: string;
-  /** The row's tooltip and the tail of its aria-label: a cwd, or an address. */
-  readonly detail: string | null;
-  /** `· <process>` on a renamed terminal. Browsers have no counterpart. */
-  readonly processName: string | null;
-  readonly isDormant: boolean;
-  readonly isRuntimeUnknown: boolean;
-  /**
-   * The panel is not watching this row's device, so neither flag above is a
-   * fact it can report. Terminals never carry it - the panel mounts an
-   * authority for every terminal tab host.
-   */
-  readonly isUnwatched: boolean;
-}
-
-function landingPanelRowFor(args: {
-  readonly tab: LandingPanelTabRef;
-  readonly terminal: PlainTerminalViewModel | null;
-  readonly browser: LandingBrowserViewModel | null;
-}): LandingPanelRowModel {
-  return args.tab.kind === "browser"
-    ? landingBrowserRowFor(args.tab.name, args.browser)
-    : landingTerminalRowFor(args.tab.name, args.terminal);
-}
-
-function landingBrowserRowFor(
-  storedName: string,
-  browser: LandingBrowserViewModel | null,
-): LandingPanelRowModel {
-  // The three states are mutually exclusive HERE as well as in the view model,
-  // so no later reader of this row can render two suffixes at once: an
-  // unwatched device is one this window holds no stream for, and "dormant" and
-  // "status unavailable" are both claims only a watched stream could support.
-  const isUnwatched = browser?.isUnwatched === true;
-  return {
-    displayName: browser?.displayTitle ?? storedName,
-    // The address is a live reading, so an unwatched row has none. The tooltip
-    // takes its place and says why, rather than leaving the row mute.
-    detail: isUnwatched
-      ? LANDING_BROWSER_UNWATCHED_TOOLTIP
-      : (browser?.address ?? null),
-    processName: null,
-    isDormant: !isUnwatched && browser?.isDormant === true,
-    // No view model at all means the panel has not resolved this device's
-    // inventory, which is the same thing the flag says when it has not
-    // spoken yet.
-    isRuntimeUnknown:
-      !isUnwatched && (browser === null || browser.isRuntimeUnknown),
-    isUnwatched,
-  };
-}
-
-function landingTerminalRowFor(
-  storedName: string,
-  terminal: PlainTerminalViewModel | null,
-): LandingPanelRowModel {
-  return {
-    displayName: terminal?.displayTitle ?? storedName,
-    detail: terminal?.liveCwd ?? terminal?.launchCwd ?? null,
-    processName:
-      terminal !== null &&
-      terminal.manualTitle !== null &&
-      terminal.activeProcessName !== null
-        ? terminal.activeProcessName
-        : null,
-    isDormant: terminal?.isDormant === true,
-    isRuntimeUnknown: terminal?.isRuntimeUnknown === true,
-    isUnwatched: false,
-  };
-}
-
-function LandingPanelTab(props: {
-  readonly tab: LandingPanelTabRef;
-  readonly active: boolean;
-  readonly onActivate: (instanceId: string) => void;
-  readonly onClose: (tab: LandingPanelTabRef) => void;
+  readonly onClose: (tab: LandingTerminalTabRef) => void;
   readonly onCloseAll: () => void;
   readonly onRename: (instanceId: string, name: string) => void;
   readonly canRename: boolean;
-  readonly row: LandingPanelRowModel;
+  readonly viewModel: PlainTerminalViewModel | null;
 }): ReactNode {
   const { tab, active, onActivate, onRename } = props;
-  const displayName = props.row.displayName;
-  const displayCwd = props.row.detail;
+  const displayName = props.viewModel?.displayTitle ?? tab.name;
+  const displayCwd =
+    props.viewModel?.liveCwd ?? props.viewModel?.launchCwd ?? null;
   const tabRef = useRef<HTMLDivElement | null>(null);
 
   // Keep the active tab on screen. A tab created past the right edge of the
@@ -416,17 +243,13 @@ function LandingPanelTab(props: {
               "bg-(--app-background) text-foreground shadow-[inset_0_-1px_0_var(--color-background)] before:absolute before:inset-x-0 before:top-0 before:h-px before:bg-primary",
           )}
         >
-          {tab.kind === "browser" ? (
-            <Globe className="size-3.5 shrink-0" aria-hidden="true" />
-          ) : (
-            <TerminalSquare className="size-3.5 shrink-0" aria-hidden="true" />
-          )}
-          <LandingPanelTabLabel
+          <TerminalSquare className="size-3.5 shrink-0" aria-hidden="true" />
+          <LandingTerminalTabLabel
             instanceId={tab.instanceId}
             displayName={displayName}
             isEditing={isEditing}
             inputProps={rename.inputProps}
-            row={props.row}
+            viewModel={props.viewModel}
           />
           <Button
             type="button"
@@ -461,18 +284,18 @@ function LandingPanelTab(props: {
   );
 }
 
-function LandingPanelTabLabel(props: {
+function LandingTerminalTabLabel(props: {
   readonly instanceId: string;
   readonly displayName: string;
   readonly isEditing: boolean;
   readonly inputProps: InlineRenameInputProps;
-  readonly row: LandingPanelRowModel;
+  readonly viewModel: PlainTerminalViewModel | null;
 }): ReactNode {
   if (props.isEditing) {
     return (
       <input
         {...props.inputProps}
-        aria-label="Rename tab"
+        aria-label="Rename terminal"
         data-testid={`landing-terminal-tab-input-${props.instanceId}`}
         className="h-6 min-w-[7ch] max-w-40 rounded-sm border border-border bg-background px-1 text-ui-sm text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring"
       />
@@ -481,22 +304,24 @@ function LandingPanelTabLabel(props: {
   return (
     <>
       <TooltipWrapper
-        label={props.row.detail}
+        label={props.viewModel?.liveCwd ?? props.viewModel?.launchCwd}
         side="bottom"
         sideOffset={undefined}
         align={undefined}
       >
         <span className="truncate">{props.displayName}</span>
       </TooltipWrapper>
-      {props.row.processName === null ? null : (
+      {props.viewModel?.manualTitle !== null &&
+      props.viewModel?.manualTitle !== undefined &&
+      props.viewModel.activeProcessName !== null ? (
         <span
           className="max-w-24 truncate text-ui-xs text-muted-foreground"
           data-testid={`landing-terminal-process-${props.instanceId}`}
         >
-          · {props.row.processName}
+          · {props.viewModel.activeProcessName}
         </span>
-      )}
-      {props.row.isDormant ? (
+      ) : null}
+      {props.viewModel?.isDormant === true ? (
         <span
           className="text-ui-xs text-muted-foreground"
           data-testid={`landing-terminal-dormant-${props.instanceId}`}
@@ -504,20 +329,12 @@ function LandingPanelTabLabel(props: {
           · dormant
         </span>
       ) : null}
-      {props.row.isRuntimeUnknown ? (
+      {props.viewModel?.isRuntimeUnknown === true ? (
         <span
           className="text-ui-xs text-muted-foreground"
           data-testid={`landing-terminal-unavailable-${props.instanceId}`}
         >
           · status unavailable
-        </span>
-      ) : null}
-      {props.row.isUnwatched ? (
-        <span
-          className="text-ui-xs text-muted-foreground"
-          data-testid={`landing-terminal-unwatched-${props.instanceId}`}
-        >
-          · not watched
         </span>
       ) : null}
     </>

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseLandingTerminalTabRef } from "@/stores/home/landing-panel-store";
+import { parseLandingTerminalTabRef } from "@/stores/home/landing-terminal-store";
 
 function baseTabJson(): Record<string, unknown> {
   return {

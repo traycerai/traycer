@@ -5,22 +5,12 @@ import {
   useHostDirectoryEntryForHostId,
 } from "@/hooks/host/use-host-client-for-host-id";
 import { useHostQuery } from "@/hooks/host/use-host-query";
-import type { HostResourceScope } from "@traycer/protocol/host/resource-scope";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 
 interface BrowserStartPageProps {
-  readonly scope: HostResourceScope;
+  readonly epicId: string;
   readonly hostId: string;
   readonly browserRunsOnHost: boolean;
-  /**
-   * Whether the tile this start page fills is actually on screen.
-   *
-   * The tile's own three-axis answer, passed straight down rather than
-   * re-derived: a start page has no view of the panel, the pane, or which tab
-   * is active, and a fourth spelling of "visible" is a fourth thing to keep in
-   * agreement.
-   */
-  readonly visible: boolean;
   readonly onNavigate: (url: string) => void;
 }
 
@@ -34,19 +24,10 @@ export function BrowserStartPage(props: BrowserStartPageProps) {
   const query = useHostQuery({
     client,
     method: "resources.listLocalServers",
-    // The canvas start page is always inside a task. The Start Page panel
-    // renders the same surface under `{ kind: "independent" }`, which lists the
-    // ports that device's own terminals own rather than any epic's.
-    params: { scope: props.scope },
+    params: { epicId: props.epicId },
     cacheKeyIdentity: undefined,
     options: {
-      // Visibility is part of the GATE, not just of the rendering: this query
-      // polls, the surfaces that host it keep every tab mounted while it is
-      // inactive / the panel is collapsed / the pane is backgrounded, and a
-      // blank tab is what the panel opens by default. Without this term every
-      // retained start page keeps asking a device for its listening ports on
-      // the poll cadence with nothing able to show the answer.
-      enabled: localServersReachable && props.visible,
+      enabled: localServersReachable,
       poll: true,
       retry: false,
     },
@@ -126,7 +107,6 @@ export function BrowserStartPage(props: BrowserStartPageProps) {
             role="status"
           >
             {startPageStatus(
-              props.scope,
               localServersReachable,
               query.isPending,
               query.isError,
@@ -138,15 +118,7 @@ export function BrowserStartPage(props: BrowserStartPageProps) {
   );
 }
 
-/**
- * The empty state has to name the right place to go start a server, and that
- * differs by scope: the canvas start page lists what this epic's terminals own,
- * while the Start Page panel renders the same surface under
- * `{ kind: "independent" }` and lists what the DEVICE's own terminals own. A
- * single "in this epic" line was wrong on the panel, where there is no epic.
- */
 function startPageStatus(
-  scope: HostResourceScope,
   localServersReachable: boolean,
   pending: boolean,
   failed: boolean,
@@ -156,8 +128,5 @@ function startPageStatus(
   }
   if (pending) return "Looking for local servers…";
   if (failed) return "Unable to find local servers. Enter a URL above.";
-  if (scope.kind === "independent") {
-    return "No local servers detected. Start one in a terminal here or enter a URL above.";
-  }
   return "No local servers detected. Start one in this epic or enter a URL above.";
 }
