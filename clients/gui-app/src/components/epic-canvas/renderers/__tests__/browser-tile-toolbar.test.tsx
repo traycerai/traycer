@@ -62,6 +62,7 @@ function makeController(
     profile: "primary",
     url: "https://example.com",
     addressValue: "https://example.com",
+    selectAddressOnFocus: false,
     setAddressInput: () => undefined,
     focusAddress: () => undefined,
     canGoBack: true,
@@ -451,7 +452,19 @@ describe("<BrowserTileToolbar /> address first-focus", () => {
   afterEach(cleanup);
 
   it("prevents the first mousedown default so a full-URL selection survives mouseup", () => {
-    renderToolbar(PRIMARY_TILE_CHROME_CAPABILITIES, ANNOTATION);
+    const controller: TileController = {
+      ...makeController(PRIMARY_TILE_CHROME_CAPABILITIES, ANNOTATION),
+      selectAddressOnFocus: true,
+    };
+    render(
+      <TooltipProvider>
+        <BrowserTileToolbar
+          controller={controller}
+          pictureInPicture={null}
+          loading={false}
+        />
+      </TooltipProvider>,
+    );
 
     const input = screen.getByRole("textbox", { name: "Browser address" });
     expect(document.activeElement).not.toBe(input);
@@ -465,16 +478,28 @@ describe("<BrowserTileToolbar /> address first-focus", () => {
     fireEvent(input, second);
     expect(second.defaultPrevented).toBe(false);
   });
+
+  it("does not prevent the first mousedown when selectAddressOnFocus is false", () => {
+    renderToolbar(PRIMARY_TILE_CHROME_CAPABILITIES, ANNOTATION);
+
+    const input = screen.getByRole("textbox", { name: "Browser address" });
+    expect(document.activeElement).not.toBe(input);
+
+    const first = createEvent.mouseDown(input, { button: 0 });
+    fireEvent(input, first);
+    expect(first.defaultPrevented).toBe(false);
+  });
 });
 
 describe("<BrowserTileToolbar /> reload loading", () => {
   afterEach(cleanup);
 
   it("moves the spinner into Reload while loading and restores it when idle", () => {
-    const controller = makeController(
-      PRIMARY_TILE_CHROME_CAPABILITIES,
-      ANNOTATION,
-    );
+    const onReload = vi.fn();
+    const controller: TileController = {
+      ...makeController(PRIMARY_TILE_CHROME_CAPABILITIES, ANNOTATION),
+      onReload,
+    };
     const { rerender } = render(
       <TooltipProvider>
         <BrowserTileToolbar
@@ -502,10 +527,13 @@ describe("<BrowserTileToolbar /> reload loading", () => {
       </TooltipProvider>,
     );
 
-    expect(reload()).toHaveProperty("disabled", true);
+    expect(reload()).toHaveProperty("disabled", false);
     expect(reload().getAttribute("aria-busy")).toBe("true");
     const spinner = screen.getByTestId("browser-reload-loading");
     expect(reload().contains(spinner)).toBe(true);
+
+    fireEvent.click(reload());
+    expect(onReload).toHaveBeenCalledOnce();
 
     rerender(
       <TooltipProvider>

@@ -103,6 +103,7 @@ export function useScreencastTileChrome(
     profile: args.profile,
     url: liveUrl,
     addressValue,
+    selectAddressOnFocus: true,
     setAddressInput: draft.setAddressInput,
     focusAddress: draft.focusAddress,
     canGoBack: navState.canGoBack,

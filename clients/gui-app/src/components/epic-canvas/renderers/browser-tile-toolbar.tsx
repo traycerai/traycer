@@ -231,7 +231,7 @@ function BrowserTileToolbarNav(props: {
           size="icon-sm"
           aria-label="Reload"
           aria-busy={props.loading}
-          disabled={controller.disabled || props.loading}
+          disabled={controller.disabled}
           onClick={controller.onReload}
         >
           {props.loading ? (
@@ -280,6 +280,7 @@ function BrowserTileToolbarAddress(props: {
           }}
           onMouseDown={(event) => {
             if (
+              props.controller.selectAddressOnFocus &&
               event.button === 0 &&
               event.currentTarget.ownerDocument.activeElement !==
                 event.currentTarget
