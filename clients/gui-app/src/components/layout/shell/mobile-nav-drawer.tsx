@@ -1,4 +1,4 @@
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useMemo, useState } from "react";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import { LogOut, Pin, Settings, SquareArrowOutUpRight } from "lucide-react";
 import { SignOutConfirmDialog } from "@/components/auth/sign-out-confirm-dialog";
@@ -8,6 +8,8 @@ import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { HistoryRowStatusIcon } from "@/components/epics/epics-list-shared";
+import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
+import { useNotificationIndicators } from "@/hooks/notifications/use-notification-indicators-query";
 import "@/components/layout/shell/mobile-shell-touch-targets.css";
 import { MobileNavDrawerSurface } from "@/components/layout/shell/mobile-nav-drawer-surface";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
@@ -276,7 +278,26 @@ function DrawerTaskList(props: DrawerTaskListProps): ReactNode {
     hasNextPage,
     isFetchingNextPage,
   } = useHistoryQuery({ search, nowMs: null });
-  const items = data?.items ?? [];
+  // Memoized so the id list below only changes when the page does, not on
+  // every render's fresh empty array.
+  const items = useMemo(() => data?.items ?? [], [data]);
+
+  // The rows' status indicator reads notification state from context, and the
+  // drawer is mounted by the shell outside the providers the tab strip and the
+  // list panel each put around their own rows - so it provides its own, for
+  // exactly the ids on screen. Same call as the list panel's: epic ids only,
+  // so the app-wide active host is the right one to ask (an Epic is a shared
+  // cloud entity, not a host-owned record).
+  const indicatorEpicIds = useMemo(
+    () => items.map((item) => item.epicId),
+    [items],
+  );
+  const notificationIndicators = useNotificationIndicators({
+    hostId: null,
+    epicIds: indicatorEpicIds,
+    chatIds: [],
+    enabled: indicatorEpicIds.length > 0,
+  });
 
   const openItem = (item: HistoryItem) => {
     props.onNavigate();
@@ -446,7 +467,9 @@ function DrawerTaskList(props: DrawerTaskListProps): ReactNode {
           View all
         </button>
       </div>
-      {body}
+      <NotificationIndicatorsProvider indicators={notificationIndicators}>
+        {body}
+      </NotificationIndicatorsProvider>
     </div>
   );
 }

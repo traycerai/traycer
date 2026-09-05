@@ -2,7 +2,7 @@ import "../../../../../__tests__/test-browser-apis";
 
 import type { HistoryItem } from "@/components/home/data/home-page.data";
 import type { EpicActivityStatus } from "@/hooks/epic/use-epic-activity-status";
-import type { NotificationIndicatorState } from "@/stores/notifications/notification-indicator-state";
+import type { SurfaceNotificationIndicators } from "@/stores/notifications/notification-indicator-state";
 
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
@@ -16,39 +16,48 @@ const testState: {
   openSettings: () => void;
   /** Live agent activity per epic id; anything unlisted is idle. */
   activity: Readonly<Record<string, EpicActivityStatus>>;
-  /** Notification indicator state per epic id; anything unlisted is empty. */
-  indicators: Readonly<Record<string, NotificationIndicatorState>>;
+  /**
+   * What the notifications source answers for the drawer's epics, keyed by
+   * epic id; anything unlisted has no indicator state.
+   */
+  indicators: SurfaceNotificationIndicators["epics"];
+  /** The epic-id sets the drawer asked the notifications source about. */
+  indicatorEpicIdCalls: ReadonlyArray<string>[];
 } = {
   items: [],
   signOut: () => Promise.resolve(),
   openSettings: () => undefined,
   activity: {},
   indicators: {},
+  indicatorEpicIdCalls: [],
 };
 
-const EMPTY_INDICATOR_STATE: NotificationIndicatorState = {
+const UNREAD_DONE: SurfaceNotificationIndicators["epics"][string] = {
   unreadFailure: false,
-  unreadNonTerminalFailure: false,
-  unreadTerminalFailure: false,
   pendingFork: false,
   pendingApproval: false,
   pendingInterview: false,
-  unreadDone: false,
+  unreadDone: true,
 };
 
-// The two status sources the shared row indicator reads, the same way the
-// history-list suite fakes them: the row asks about ITS epic id (or `null` for
-// a phase, which has no live activity), and the answer comes from the test.
+// The two status sources behind the shared row indicator. Live activity is
+// asked per row, about ITS epic id (`null` for a phase, which has none). The
+// notifications source is asked ONCE for the ids on screen and reaches the
+// rows through the drawer's own provider - the real context path, so a drawer
+// mounted without that provider would fail these tests rather than pass them
+// on a mocked hook.
 vi.mock("@/hooks/epic/use-epic-activity-status", () => ({
   useEpicActivityStatus: (epicId: string | null): EpicActivityStatus =>
     epicId === null ? "idle" : (testState.activity[epicId] ?? "idle"),
 }));
 
-vi.mock("@/components/notifications/notification-indicator-context", () => ({
-  useSurfaceNotificationIndicatorState: (entity: {
-    readonly epicId: string;
-  }): NotificationIndicatorState =>
-    testState.indicators[entity.epicId] ?? EMPTY_INDICATOR_STATE,
+vi.mock("@/hooks/notifications/use-notification-indicators-query", () => ({
+  useNotificationIndicators: (args: {
+    readonly epicIds: ReadonlyArray<string>;
+  }): SurfaceNotificationIndicators => {
+    testState.indicatorEpicIdCalls.push(args.epicIds);
+    return { epics: testState.indicators, chats: {} };
+  },
 }));
 
 const openLink = vi.hoisted(() => vi.fn());
@@ -176,6 +185,7 @@ describe("MobileNavDrawer", () => {
     testState.items = [];
     testState.activity = {};
     testState.indicators = {};
+    testState.indicatorEpicIdCalls = [];
     testState.signOut = () => Promise.resolve();
     testState.openSettings = () => undefined;
     openLink.mockClear();
@@ -829,21 +839,27 @@ describe("MobileNavDrawer", () => {
       ).toBeTruthy();
     });
 
-    it("shows the indicator for a task with an unread result", async () => {
+    it("shows the indicator for a task with an unread result, through its own provider", async () => {
+      // No live activity, only notification state: this is the case that
+      // needs the drawer to supply indicators itself, since the shell mounts
+      // it outside the providers the tab strip and the list panel put around
+      // their own rows.
       testState.items = [
         historyItem({ id: "a", title: "done", updatedAtMs: NOW_MS - DAY_MS }),
+        historyItem({ id: "b", title: "quiet", updatedAtMs: NOW_MS - DAY_MS }),
       ];
-      testState.indicators = {
-        a: { ...EMPTY_INDICATOR_STATE, unreadDone: true },
-      };
+      testState.indicators = { a: UNREAD_DONE };
       renderDrawer();
       const rows = await screen.findAllByTestId("mobile-nav-task-row");
 
+      // Asked about exactly the ids on screen, epic ids only.
+      expect(testState.indicatorEpicIdCalls.at(-1)).toEqual(["a", "b"]);
       const status = rows[0]?.querySelector('[role="status"]');
       expect(status).not.toBeNull();
       expect(
         status?.querySelector('[data-testid^="mobile-nav-task-"]'),
       ).not.toBeNull();
+      expect(rows[1]?.querySelector('[role="status"]')).toBeNull();
     });
 
     it("never looks a phase up for live activity", async () => {
