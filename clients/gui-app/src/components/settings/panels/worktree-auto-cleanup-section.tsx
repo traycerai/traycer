@@ -325,7 +325,10 @@ function AutoCleanupSummaryRow(props: {
       tabIndex={-1}
       data-testid="worktree-auto-cleanup-summary-row"
       className={cn(
-        "flex flex-wrap items-center outline-none",
+        // The deep link's programmatic focus must still be SEEN: no default
+        // outline (it would box the whole row on a mouse click inside it),
+        // but the same ring every control here shows to a keyboard user.
+        "flex flex-wrap items-center rounded-md outline-none focus-visible:ring-3 focus-visible:ring-ring/50",
         SUMMARY_PADDING[density],
         SETTINGS_ROW_STACK.container,
       )}
