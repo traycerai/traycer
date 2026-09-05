@@ -453,42 +453,11 @@ function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
 }
 
 /**
- * Whether the durable attempt has something to say that outranks the two-lane
- * controller status.
+ * Determines whether a durable update operation should take precedence over controller status.
  *
- * `idle` does NOT: the host looked and there is no attempt, so the controller's
- * "a stage is ready" / "activation debt" answer is the more useful one.
- *
- * Everything concrete wins — including `unavailable`, whose whole point is to
- * stay visible rather than read as a quiet host.
- *
- * `unknown` SPLITS, and used to be rejected outright.
- *
- * A BARE unknown (`lastKnownKind === null`) still loses: we could not establish
- * anything, and an unknown must never displace a concrete local fact the
- * controller does know.
- *
- * A RETAINED ATTEMPT phase does not lose, because it is not the absence of
- * knowledge — and rejecting it made the host-down window (Ticket 07 §5.2.7)
- * unrenderable on this surface. The projection's record arm ALWAYS returns
- * `kind: "unknown"` with `lastKnownKind` set: that is the deliberate shape for
- * "an attempt exists and the host is unreachable", chosen so the view holds no
- * lifecycle gate and earns no active poll. The blanket `kind !== "unknown"`
- * test therefore suppressed 100% of record-backed views, and the landing banner
- * showed nothing at all while a local update sat half-finished behind a host
- * that was not answering. The two modules downstream of this one were already
- * built for the case — `primarySentence` has a "Last seen: …" arm and
- * `showsProgressBar` an `unknown`-with-progress arm — and neither could ever be
- * reached from here.
- *
- * Retained `idle` is different: it means the last successful read found no
- * update attempt. It remains useful last-known context in Settings, but it is
- * not an operation and must not raise the landing update banner merely because
- * startup temporarily made that quiet read stale.
- *
- * It still may not DISPLACE a concrete controller fact, which is the original
- * rule kept verbatim: a ready stage or activation debt is something the user
- * can act on now, and it outranks a phase we are only remembering.
+ * @param view - The durable update view to evaluate.
+ * @param controllerHasConcreteFact - Whether controller status contains an actionable update or activation fact.
+ * @returns `true` when the view should supersede controller status, `false` for quiet views or when an unknown view would displace a concrete controller fact.
  */
 function operationSupersedesControllerStatus(
   view: FleetUpdateView,

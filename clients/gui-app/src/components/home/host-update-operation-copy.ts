@@ -88,10 +88,11 @@ function primarySentence(view: FleetUpdateView): string {
 }
 
 /**
- * One phase, in words — taking the kind as an ARGUMENT rather than reading
- * `view.kind`, which is what lets the retained-phase sentence above reuse this
- * table instead of growing a parallel one. A second table is how "Downloading
- * update" and "last seen downloading" end up disagreeing about a version suffix.
+ * Creates user-facing text for an update phase.
+ *
+ * @param kind - The phase to describe, which may differ from `view.kind` for retained phases
+ * @param view - Update view providing the target version and phase-specific details
+ * @returns A sentence describing the update phase
  */
 function phaseSentence(
   kind: FleetUpdateViewKind,

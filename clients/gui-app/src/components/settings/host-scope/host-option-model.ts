@@ -239,6 +239,12 @@ export function hostOptionUpdateBadge(view: FleetUpdateView): string | null {
   return liveBadgeWord(view.kind);
 }
 
+/**
+ * Converts a live fleet update state into a concise status label.
+ *
+ * @param kind - The current fleet update state
+ * @returns The status label, or `null` when no live badge should be shown
+ */
 function liveBadgeWord(kind: FleetUpdateViewKind): string | null {
   switch (kind) {
     case "updating":
@@ -263,6 +269,12 @@ function liveBadgeWord(kind: FleetUpdateViewKind): string | null {
   }
 }
 
+/**
+ * Converts a retained update state into a concise status label.
+ *
+ * @param kind - The retained fleet update state
+ * @returns `"updating"` for in-progress states, `"update failed"` for failures, or `null` when no label applies
+ */
 function retainedBadgeWord(kind: FleetUpdateViewKind): string | null {
   switch (kind) {
     // Every mid-update phase collapses to one word. "last seen restart to

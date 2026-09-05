@@ -90,19 +90,10 @@ export async function readUpdateStatusOverBorrowedSession(input: {
 }
 
 /**
- * Stamps a raw `host.status` response into an observation.
+ * Converts a `host.status` response into a fleet update observation.
  *
- * Exported because the LOCAL and SELECTED legs read `host.status` through the
- * ordinary host-client query rather than a borrow, and all three legs must
- * produce the same shape — otherwise the three surfaces would be projecting
- * from three subtly different records and the "one derivation" property the
- * view module exists for would be lost at the source instead of at the sink.
- *
- * The freshness deadline is computed from the cadence the resulting view earns,
- * so a host that is actively updating gets a tight deadline (its data goes
- * stale fast because it is expected to change fast) and an idle one a loose
- * one. Computing it from a fixed constant instead would either flicker the
- * active case or let the idle case present minute-old data as current.
+ * @param input - The host identifier, status response, observation timestamp, and optional observation source
+ * @returns A fleet update observation with a freshness deadline based on the projected polling cadence
  */
 export function observationFromStatus(input: {
   readonly hostId: string;

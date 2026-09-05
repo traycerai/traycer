@@ -335,6 +335,12 @@ async function mutationAllowed(
     : revalidateBeforeMutation();
 }
 
+/**
+ * Registers the host Login Item when the current device state permits a safe mutation.
+ *
+ * @param revalidateBeforeBootout - Optional guard checked before destructive operations.
+ * @returns The resulting registration status, including whether registration was enabled, skipped, deferred, parked, or unsuccessful.
+ */
 async function registerHostLoginItemUnserialized(
   revalidateBeforeBootout: (() => Promise<boolean>) | undefined,
 ): Promise<RegisterHostLoginItemResult> {

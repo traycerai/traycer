@@ -146,7 +146,12 @@ const UPDATE_INSTALL_ACCEPTED_LATCH_MS = 60_000;
 // conditions that decide which of its regions apply. That residue is
 // irreducible branching over surfaced concerns rather than nesting, and the same
 // disable sat on the page this replaced, for the same reason.
-// eslint-disable-next-line complexity
+/**
+ * Renders the settings overview for a selected host.
+ *
+ * @param props - Host scope, local bridge availability, and doctor repair handlers.
+ * @returns The host overview content.
+ */
 export function HostOverviewPanel(props: {
   readonly scope: HostScope;
   /** True when this shell has a CLI bridge for the local-only doctor repairs. */

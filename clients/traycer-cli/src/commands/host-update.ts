@@ -142,6 +142,12 @@ const NO_SERVICE_ACTION_LIFECYCLE: LegacyHostUpdateServiceLifecycle = {
   postSwapError: null,
 };
 
+/**
+ * Creates the command handler for updating the host, including activation, health verification, and progress tracking.
+ *
+ * @param args - Options controlling the requested version, downgrade permission, force behavior, and dispatch acknowledgement.
+ * @returns A command handler that performs the host update and returns its legacy result and status.
+ */
 export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
   return async (ctx): Promise<CommandResult> => {
     const environment = ctx.runtime.environment;
@@ -321,28 +327,9 @@ interface ActivationDebt {
 }
 
 /**
- * Whether the committed install is waiting for a process that runs it.
+ * Detects when the running host version differs from the committed installation.
  *
- * Three readings, all required, and each absence answers `null` (no debt) on
- * purpose - this decides whether to restart a host, and the safe error is to
- * leave one alone:
- *
- * - no install record: nothing to activate (the caller throws later anyway);
- * - no pid metadata, or a pid that is not alive: no process to replace. A
- *   host that is DOWN is the service manager's problem, not this command's -
- *   `host start` re-resolves the install record on every spawn, so the next
- *   launch already runs the committed bytes;
- * - incomparable or equal versions: a `local-*` build is not a target this
- *   command reasons about, and equal means activated.
- *
- * The comparison is on VERSION rather than on install generation because
- * `pid.json` publishes the version and nothing finer; a swap to the same
- * version (re-install of identical bytes) is invisible here, and restarting
- * for it would be gratuitous.
- *
- * Either direction of inequality is debt. A downgrade that was committed but
- * never activated leaves the running host AHEAD of the record, and the record
- * is what the operator asked for.
+ * @returns The committed and running versions when both are comparable and differ; `null` otherwise.
  */
 async function detectActivationDebt(
   environment: Environment,
@@ -360,28 +347,14 @@ async function detectActivationDebt(
 }
 
 /**
- * The activation half of an update whose bytes are already committed: stop
- * the running host and relaunch it from the install record, under the same
- * busy gate and the same contender admission a full apply runs under.
+ * Activates the committed installation by restarting the host service when the
+ * running version differs from the installed version.
  *
- * `controller.restart` is the SAME actuator `host restart` uses, so a
- * Desktop-managed macOS agent is restarted cooperatively (claim → commit →
- * kickstart) rather than by a `launchctl` the CLI does not own - and the
- * supervisor it relaunches re-resolves the install record on spawn, which is
- * what turns "committed" into "running".
+ * Rechecks activation debt while holding the update contender lock and returns
+ * a no-op result if another actor has already activated the installation.
  *
- * Projected as an UPDATE, not a no-op: `previousVersion` is the version that
- * was serving, so the human summary and Desktop's legacy projection both say
- * `rc.1 → rc.2`, which is what actually happened from the operator's seat.
- *
- * The debt the caller detected is deliberately NOT a parameter: it was read
- * outside the contender lock, and `host restart` shares that lock. Desktop's
- * parked-registration fallback runs exactly that command on exactly this
- * host, so a Settings click that arrives while it holds the lock would
- * otherwise wait its turn and then restart a host that had just come up on
- * the committed bytes - costing it its connections and reporting a
- * `rc.1 → rc.2` transition that the other actor performed. The debt is
- * re-derived under the lock and a cleared debt is the plain no-op.
+ * @param force - Whether to allow activation while the host is busy
+ * @returns The legacy update result describing the activation or no-op
  */
 async function activateInstalledAndProjectLegacy(
   environment: Environment,
@@ -428,6 +401,12 @@ async function activateInstalledAndProjectLegacy(
   });
 }
 
+/**
+ * Selects whether to prepare an explicit downgrade or stage the requested host version.
+ *
+ * @param input - Update options, including the requested version, downgrade permission, environment, and progress callback
+ * @returns A downgrade preparation for an allowed request targeting an older comparable version; otherwise, a staged download preparation
+ */
 async function prepareHostUpdate(input: {
   readonly environment: Environment;
   readonly version: string | null;

@@ -284,25 +284,14 @@ export interface FleetUpdateViewInput {
 }
 
 /**
- * Projects an observation into the one view every surface renders from.
+ * Projects a fleet update observation into the UI state for an update view.
  *
- * The order of the guards is the contract, so it is worth reading as a
- * sequence rather than as a switch:
+ * Stale or unavailable observations are represented as qualified unknown or
+ * unavailable states while retaining relevant last-known information. Legacy
+ * coarse progress is used when no attempt operation is reported.
  *
- * 1. **No observation at all** → `unknown`. A cache-cold client knows nothing.
- * 2. **Stale observation** → `unknown`, but *qualified* and carrying the last
- *    phase, so a surface can say "last seen downloading" rather than going
- *    blank. A missed poll is not a state change on the host.
- * 3. **`operation === null`** → `unknown`. This is the one that is easy to get
- *    wrong and expensive when wrong: for a REMOTE host on a per-host `manual`
- *    update policy this is potentially the indefinite steady state, not an
- *    upgrade transient. Reading it as "no update in progress" would show those
- *    users nothing during a real update, for as long as their host stayed on
- *    `@1.2`.
- * 4. **`kind: "none"`** → `idle`. The host looked and there is nothing.
- * 5. **`kind: "unavailable"`** → `unavailable`. Fail-closed evidence stays
- *    distinct from both "no attempt" and "failed".
- * 6. **`kind: "attempt"`** → liveness first, then phase.
+ * @param input - The observation, current time, and connection status used for projection
+ * @returns The projected fleet update view
  */
 export function projectFleetUpdateView(
   input: FleetUpdateViewInput,
@@ -501,15 +490,10 @@ export function projectFleetUpdateView(
 }
 
 /**
- * What the coarse `updateProgress` marker says, as a view kind — or `null`
- * when it says nothing, which is the only case that may fall through to `idle`.
+ * Maps coarse host update progress to a view kind and failure message.
  *
- * `updating` is the marker's whole vocabulary for "in flight": the legacy
- * updater sets it before the download and clears it after the post-restart
- * health probe, so it covers every phase without naming one. `failed` carries
- * the cause the updater terminated the marker with — the health-check failure
- * that used to be invisible on a @1.3 peer, because the Overview only read the
- * coarse field for peers that could not report an attempt.
+ * @param coarse - The host's coarse update progress, or `null` when unavailable
+ * @returns The corresponding view kind and error message, or `null` when no coarse progress is reported
  */
 function coarseKind(coarse: HostStatusUpdateProgress | null): {
   readonly kind: "updating" | "failed";
@@ -527,15 +511,10 @@ function coarseKind(coarse: HostStatusUpdateProgress | null): {
 }
 
 /**
- * Whether a view has nothing a person needs to see about an update.
+ * Identifies update views that require no active update messaging.
  *
- * `idle` is a fresh read with no attempt; `unknown` with no retained phase (or
- * a retained `idle`) is a host we cannot currently ask and last saw quiet.
- * Neither is a claim about the catalog — "Host is up to date" is a sentence
- * about VERSIONS, which this projection knows nothing about — so a surface that
- * also renders the catalog's own answer ("v2.0.0 is available.") must not put
- * this view beside it. The landing banner and the Overview both hide on this
- * predicate; it lives here so they cannot drift on where "quiet" begins.
+ * @param view - The update view to evaluate
+ * @returns `true` for idle views and unknown views without a retained active phase; `false` otherwise
  */
 export function isQuietUpdateView(view: FleetUpdateView): boolean {
   if (view.kind === "idle") return true;
@@ -648,37 +627,11 @@ export function offersForceRestart(view: FleetUpdateView): boolean {
 }
 
 /**
- * Whether an update is genuinely EXECUTING right now — the only thing that may
- * hold a page-wide lifecycle gate.
+ * Determines whether an update is actively executing and should gate lifecycle controls.
  *
- * This exists because the coarse `updateProgress` field cannot answer it, and
- * the difference is a shipped-defect-sized gap. Ticket 04's derivation maps a
- * PARKED attempt (`waiting-for-work`, `waiting-to-activate`) to
- * `{state:"updating"}` — correctly, for its own purpose: bytes or an activation
- * really are still pending, and calling it `failed` would be worse. But a
- * consumer that reads "updating" as "a mutation is in flight, lock the page"
- * then locks it for the entire life of the park, and `waiting-to-activate` is
- * designed to survive a reboot and sit for a week.
+ * Parked, terminal, unavailable, idle, and unknown views do not hold the gate.
  *
- * The result would be the exact inversion the ticket forbids twice: a parked
- * update disabling Restart, Diagnostics and the service verbs — while the
- * restart it is waiting for is the user's only way out. A banner may inform and
- * may offer **Force restart…**; it may never be the thing standing between a
- * person and their host.
- *
- * So: `execution === "active"` only. Parked is not executing. Terminal is not
- * executing. `unknown` is not executing either — and that last one is a
- * deliberate fail-OPEN rather than fail-closed, which is worth stating because
- * it inverts this codebase's usual instinct. The risk of leaving controls live
- * during an unobserved update is a refused or queued mutation; the risk of
- * locking them on a stale reading is a host nobody can recover, indefinitely,
- * with no way to clear it. Only the second is unrecoverable, so `unknown`
- * leaves the controls alone.
- *
- * Note what this does NOT gate: starting a conflicting UPDATE. A parked attempt
- * absolutely should stop a second install being launched over it — that is the
- * contender boundary's job on the host, and it refuses with `already-updating`.
- * This predicate is only about the surrounding lifecycle controls.
+ * @returns `true` for actively executing update phases, `false` otherwise.
  */
 export function holdsLifecycleGate(view: FleetUpdateView): boolean {
   switch (view.kind) {
@@ -702,13 +655,10 @@ export function holdsLifecycleGate(view: FleetUpdateView): boolean {
 }
 
 /**
- * Whether this host is running an operation worth polling at the fast cadence.
+ * Determines whether the view warrants fast polling.
  *
- * Only a genuinely ACTIVE, unqualified operation earns ~2s. A parked attempt
- * can sit for a week (`waiting-to-activate` survives a reboot by design), a
- * terminal one is retained for seven days, and a qualified one is evidence we
- * already know we cannot refresh — none of those justify polling a host every
- * two seconds, and doing so would be the retry storm §6 forbids.
+ * @param view - The projected fleet update view
+ * @returns `true` for unqualified active or reconnecting views, `false` otherwise
  */
 export function warrantsFastPoll(view: FleetUpdateView): boolean {
   if (view.qualified) return false;
