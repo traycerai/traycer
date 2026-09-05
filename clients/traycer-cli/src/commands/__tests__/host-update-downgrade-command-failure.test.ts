@@ -24,6 +24,7 @@ vi.mock("../../host/update-progress-marker", () => ({
   deleteUpdateProgressMarker: mocks.deleteUpdateProgressMarkerMock,
   readUpdateProgressMarker: async () => null,
   deleteUpdateProgressMarkerIfUnchanged: async () => "absent",
+  sameProgress: () => true,
 }));
 
 vi.mock("../../service/health-probe", () => ({

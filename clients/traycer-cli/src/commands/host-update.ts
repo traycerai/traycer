@@ -9,10 +9,11 @@ import {
   type HostDownloadOutcome,
 } from "../installer/download-stage";
 import {
-  deleteUpdateProgressMarker,
   deleteUpdateProgressMarkerIfUnchanged,
   readUpdateProgressMarker,
+  sameProgress,
   writeUpdateProgressMarker,
+  type HostUpdateProgress,
 } from "../host/update-progress-marker";
 import { probeHostHealth } from "../service/health-probe";
 import {
@@ -244,13 +245,24 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
         : preparation.kind === "downgrade"
           ? preparation.version
           : downloadTargetVersion(preparation.download);
+    // The marker THIS invocation wrote, kept so the clear at the end can be
+    // conditional on it: marker writes happen before their writer takes the
+    // contender lock, so by the time this command reaches its clear another
+    // updater may have landed its own `updating` at the same path, and an
+    // unconditional delete would erase that updater's only progress signal.
+    let writtenMarker: HostUpdateProgress | null = null;
     if (needsWork) {
-      await writeUpdateProgressMarkerSafely(ctx.runtime.logger, environment, {
+      writtenMarker = {
         state: "updating",
         error: null,
         targetVersion,
         updatedAt: new Date().toISOString(),
-      });
+      };
+      await writeUpdateProgressMarkerSafely(
+        ctx.runtime.logger,
+        environment,
+        writtenMarker,
+      );
     }
 
     let legacy: LegacyHostUpdateResult;
@@ -277,15 +289,16 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
           async (installedVersion) => {
             if (installedVersion === markerTargetVersion) return;
             markerTargetVersion = installedVersion;
+            writtenMarker = {
+              state: "updating",
+              error: null,
+              targetVersion: installedVersion,
+              updatedAt: new Date().toISOString(),
+            };
             await writeUpdateProgressMarkerSafely(
               ctx.runtime.logger,
               environment,
-              {
-                state: "updating",
-                error: null,
-                targetVersion: installedVersion,
-                updatedAt: new Date().toISOString(),
-              },
+              writtenMarker,
             );
           },
         );
@@ -316,6 +329,7 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
           environment,
           markerTargetVersion,
           err instanceof Error ? err.message : String(err),
+          writtenMarker,
         );
       }
       throw err;
@@ -344,6 +358,7 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
           environment,
           legacy.version,
           probe.detail,
+          writtenMarker,
         );
         throw cliError({
           code: CLI_ERROR_CODES.HOST_UPDATE_HEALTH_CHECK_FAILED,
@@ -353,12 +368,24 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
         });
       }
     }
-    if (needsWork) {
+    if (writtenMarker !== null) {
       // Written above whenever work was OWED, so it is cleared whenever it
       // was - including the activation debt that another actor paid while
       // this command waited, which leaves nothing to probe but a marker
-      // that still says `updating`.
-      await deleteUpdateProgressMarker(environment);
+      // that still says `updating`. Cleared CONDITIONALLY: the lock has been
+      // released by now, and a third updater writes its `updating` before it
+      // waits for that lock, so a marker that is no longer the one written
+      // above belongs to someone whose update is still to come.
+      const cleared = await deleteUpdateProgressMarkerIfUnchanged(
+        environment,
+        writtenMarker,
+      );
+      if (cleared !== "cleared") {
+        ctx.runtime.logger.info(
+          "Host update left the progress marker in place - another updater owns it now",
+          { environment, outcome: cleared },
+        );
+      }
     }
 
     ctx.runtime.logger.info("Host update command completed", {
@@ -695,12 +722,33 @@ async function writeUpdateProgressMarkerSafely(
 
 // Terminates the "updating" marker with the real cause so the daemon reports
 // a failed update instead of an update that appears to still be running.
+/**
+ * Stamp this invocation's failure - but only over ITS OWN marker.
+ *
+ * Marker writes precede their writer's lock acquisition, so by the time
+ * this command fails another updater may already have landed its `updating`
+ * at the same path. That updater's run is the one whose outcome now matters;
+ * stamping `failed` over its live marker would hide its progress for the
+ * whole update and report a failure that is not about it. An absent marker
+ * means nobody else is in flight, so the stamp still lands. `ours` is `null`
+ * only when this run never wrote a marker, in which case there is nothing to
+ * compare against and the stamp lands too.
+ */
 async function markUpdateFailed(
   logger: ILogger,
   environment: Environment,
   targetVersion: string,
   error: string,
+  ours: HostUpdateProgress | null,
 ): Promise<void> {
+  const current = await readUpdateProgressMarker(environment);
+  if (current !== null && ours !== null && !sameProgress(current, ours)) {
+    logger.info(
+      "Host update did not stamp its failure - another updater owns the progress marker now",
+      { environment, currentState: current.state },
+    );
+    return;
+  }
   await writeUpdateProgressMarkerSafely(logger, environment, {
     state: "failed",
     error,

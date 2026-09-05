@@ -77,7 +77,10 @@ export async function deleteUpdateProgressMarker(
 
 export type ConditionalMarkerDelete = "cleared" | "changed" | "absent";
 
-function sameProgress(a: HostUpdateProgress, b: HostUpdateProgress): boolean {
+export function sameProgress(
+  a: HostUpdateProgress,
+  b: HostUpdateProgress,
+): boolean {
   return (
     a.state === b.state &&
     a.targetVersion === b.targetVersion &&

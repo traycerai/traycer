@@ -55,6 +55,26 @@ vi.mock("../../host/update-progress-marker", () => ({
   readUpdateProgressMarker: mocks.readUpdateProgressMarkerMock,
   deleteUpdateProgressMarkerIfUnchanged:
     mocks.deleteUpdateProgressMarkerIfUnchangedMock,
+  // Pure comparator; the real one, so the "is this marker still ours"
+  // decisions under test compare the way production does.
+  sameProgress: (
+    a: {
+      state: string;
+      targetVersion: string;
+      updatedAt: string;
+      error: string | null;
+    },
+    b: {
+      state: string;
+      targetVersion: string;
+      updatedAt: string;
+      error: string | null;
+    },
+  ) =>
+    a.state === b.state &&
+    a.targetVersion === b.targetVersion &&
+    a.updatedAt === b.updatedAt &&
+    a.error === b.error,
 }));
 
 vi.mock("../../service/health-probe", () => ({
@@ -462,8 +482,15 @@ describe("buildHostUpdateCommand composite", () => {
       expect.objectContaining({ state: "updating", targetVersion: "1.2.0" }),
     );
     expect(mocks.probeHostHealthMock).toHaveBeenCalledTimes(1);
-    expect(mocks.deleteUpdateProgressMarkerMock).toHaveBeenCalledWith(
+    // The clear is CONDITIONAL on the marker still being the one this
+    // invocation wrote - a third updater's `updating`, written before it
+    // waits for the lock, must survive this command's exit.
+    expect(mocks.deleteUpdateProgressMarkerMock).not.toHaveBeenCalled();
+    expect(
+      mocks.deleteUpdateProgressMarkerIfUnchangedMock,
+    ).toHaveBeenCalledWith(
       "production",
+      expect.objectContaining({ state: "updating" }),
     );
     expect(result.human).toContain("updated host 1.3.0-rc.1 → 1.2.0");
   });
@@ -835,8 +862,15 @@ describe("buildHostUpdateCommand update-progress marker (T16)", () => {
       "production",
       expect.objectContaining({ state: "updating", targetVersion: "2.0.0" }),
     );
-    expect(mocks.deleteUpdateProgressMarkerMock).toHaveBeenCalledWith(
+    // The clear is CONDITIONAL on the marker still being the one this
+    // invocation wrote - a third updater's `updating`, written before it
+    // waits for the lock, must survive this command's exit.
+    expect(mocks.deleteUpdateProgressMarkerMock).not.toHaveBeenCalled();
+    expect(
+      mocks.deleteUpdateProgressMarkerIfUnchangedMock,
+    ).toHaveBeenCalledWith(
       "production",
+      expect.objectContaining({ state: "updating" }),
     );
   });
 
@@ -1016,8 +1050,15 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
       1,
     );
     expect(mocks.probeHostHealthMock).toHaveBeenCalledTimes(1);
-    expect(mocks.deleteUpdateProgressMarkerMock).toHaveBeenCalledWith(
+    // The clear is CONDITIONAL on the marker still being the one this
+    // invocation wrote - a third updater's `updating`, written before it
+    // waits for the lock, must survive this command's exit.
+    expect(mocks.deleteUpdateProgressMarkerMock).not.toHaveBeenCalled();
+    expect(
+      mocks.deleteUpdateProgressMarkerIfUnchangedMock,
+    ).toHaveBeenCalledWith(
       "production",
+      expect.objectContaining({ state: "updating" }),
     );
     expect(mocks.applyHostMock).not.toHaveBeenCalled();
     const projected = projectInstallResultLikeDesktop(result.data);
@@ -1088,11 +1129,84 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
       "production",
       expect.objectContaining({ state: "updating" }),
     );
-    expect(mocks.deleteUpdateProgressMarkerMock).toHaveBeenCalledWith(
+    // The clear is CONDITIONAL on the marker still being the one this
+    // invocation wrote - a third updater's `updating`, written before it
+    // waits for the lock, must survive this command's exit.
+    expect(mocks.deleteUpdateProgressMarkerMock).not.toHaveBeenCalled();
+    expect(
+      mocks.deleteUpdateProgressMarkerIfUnchangedMock,
+    ).toHaveBeenCalledWith(
       "production",
+      expect.objectContaining({ state: "updating" }),
     );
     expect(result.exitCode).toBe(0);
     expect(result.human).toContain("no-op");
+  });
+
+  it("debt cleared while waiting and a THIRD updater has since written its own marker: the clear is asked with exactly the marker this run wrote, and a `changed` answer leaves the third updater's marker alone", async () => {
+    mocks.downloadAndStageHostMock.mockResolvedValue(upToDate("2.0.0"));
+    mocks.readHostInstallRecordMock.mockResolvedValue(sampleRecord("2.0.0"));
+    mocks.readHostPidMetadataMock
+      .mockResolvedValueOnce(pidRecord("1.0.0", 4242))
+      .mockResolvedValue(pidRecord("2.0.0", 4343));
+    // The primitive reports the marker is no longer ours.
+    mocks.deleteUpdateProgressMarkerIfUnchangedMock.mockResolvedValue(
+      "changed",
+    );
+
+    const result = await buildHostUpdateCommand({
+      force: false,
+      allowDowngrade: false,
+      ackNonce: null,
+    })(fakeCtx());
+
+    expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenCalledTimes(1);
+    const written = mocks.writeUpdateProgressMarkerMock.mock.calls[0][1];
+    expect(
+      mocks.deleteUpdateProgressMarkerIfUnchangedMock,
+    ).toHaveBeenCalledTimes(1);
+    expect(
+      mocks.deleteUpdateProgressMarkerIfUnchangedMock.mock.calls[0][1],
+    ).toEqual(written);
+    expect(mocks.deleteUpdateProgressMarkerMock).not.toHaveBeenCalled();
+    expect(mocks.stopHostForRestartWithAttemptMock).not.toHaveBeenCalled();
+    expect(result.exitCode).toBe(0);
+  });
+
+  it("this run FAILS while a third updater's marker has replaced ours: the failure is not stamped over the other updater's live marker", async () => {
+    mocks.downloadAndStageHostMock.mockResolvedValue(upToDate("2.0.0"));
+    mocks.readHostInstallRecordMock.mockResolvedValue(sampleRecord("2.0.0"));
+    mocks.readHostPidMetadataMock.mockResolvedValue(pidRecord("1.0.0", 4242));
+    mocks.assertHostNotBusyMock.mockRejectedValue(
+      cliError({
+        code: CLI_ERROR_CODES.HOST_BUSY,
+        message: "host is busy",
+        details: {},
+        exitCode: 1,
+      }),
+    );
+    // By the time the failure is stamped, the marker at the live path is a
+    // third updater's `updating` (written before it waits for the lock).
+    mocks.readUpdateProgressMarkerMock.mockResolvedValue({
+      state: "updating",
+      error: null,
+      targetVersion: "2.1.0",
+      updatedAt: "2026-01-01T00:00:05.000Z",
+    });
+
+    await expect(
+      buildHostUpdateCommand({
+        force: false,
+        allowDowngrade: false,
+        ackNonce: null,
+      })(fakeCtx()),
+    ).rejects.toMatchObject({ code: CLI_ERROR_CODES.HOST_BUSY });
+
+    // Our own `updating` was written; no `failed` was stamped over theirs.
+    const states = mocks.writeUpdateProgressMarkerMock.mock.calls.map(
+      (call) => (call[1] as { state: string }).state,
+    );
+    expect(states).toEqual(["updating"]);
   });
 
   it("the install record moves while waiting for the lock: the restart activates the record as read UNDER the lock and the marker is re-pointed at it", async () => {
@@ -1152,8 +1266,15 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
       1,
     );
     expect(mocks.probeHostHealthMock).toHaveBeenCalledTimes(1);
-    expect(mocks.deleteUpdateProgressMarkerMock).toHaveBeenCalledWith(
+    // The clear is CONDITIONAL on the marker still being the one this
+    // invocation wrote - a third updater's `updating`, written before it
+    // waits for the lock, must survive this command's exit.
+    expect(mocks.deleteUpdateProgressMarkerMock).not.toHaveBeenCalled();
+    expect(
+      mocks.deleteUpdateProgressMarkerIfUnchangedMock,
+    ).toHaveBeenCalledWith(
       "production",
+      expect.objectContaining({ state: "updating" }),
     );
     const projected = projectInstallResultLikeDesktop(result.data);
     expect(projected.previousVersion).toBe("1.0.0");
