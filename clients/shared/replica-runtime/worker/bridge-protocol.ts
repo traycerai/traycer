@@ -67,6 +67,9 @@ import type {
  * a worker that connects and then quietly ignores half its traffic. The
  * handshake turns that into one loud error at startup.
  *
+ * **13** adds `apply-confirmed-chat-mutation`; an older worker cannot dispatch
+ * the renderer-local archive/delete reconciliation command.
+ *
  * **12** since `main/lane-unary` and the first production emitter of
  * `stream/manifest`. The two moved together because they are the lane arm's
  * two halves: the manifest is what lets a worker SELECT the lanes at all, and
@@ -139,7 +142,7 @@ import type {
  * that does not move with its contract is not a check; it is a comment that
  * looks like one.
  */
-export const RUNTIME_BRIDGE_PROTOCOL_VERSION = 12;
+export const RUNTIME_BRIDGE_PROTOCOL_VERSION = 13;
 
 /**
  * The runtime facts main's books read between settlements.
@@ -499,12 +502,23 @@ export type WorkerToMainEvent =
  * have ZERO production callers on either side of the boundary - minting them
  * would be dead wire with a test-only reader.
  */
+/** Renderer-confirmed results; separate from the host stream's coarser deltas. */
+export type ConfirmedChatMutation =
+  | { readonly kind: "upsert"; readonly record: ChatRecordSummaryV11 }
+  | {
+      readonly kind: "remove";
+      readonly ownerUserId: string;
+      readonly originHostId: string;
+      readonly chatId: string;
+    };
+
 export interface RuntimeCommandMap {
   "apply-chat-records": {
     readonly records: readonly ChatRecordSummaryV11[];
     readonly issuedAtSeq: number | null;
   };
   "apply-chat-record-delta": { readonly delta: ChatRecordDelta };
+  "apply-confirmed-chat-mutation": { readonly mutation: ConfirmedChatMutation };
   "apply-tui-agent-records": {
     readonly records: readonly TuiAgentRecordSummaryV12[];
     readonly issuedAtSeq: number | null;
@@ -564,6 +578,7 @@ const RUNTIME_COMMAND_COVERAGE: {
 } = {
   "apply-chat-records": true,
   "apply-chat-record-delta": true,
+  "apply-confirmed-chat-mutation": true,
   "apply-tui-agent-records": true,
   "apply-tui-agent-record-delta": true,
   "mark-chat-records-authoritative": true,

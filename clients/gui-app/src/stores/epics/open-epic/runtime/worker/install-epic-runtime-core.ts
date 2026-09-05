@@ -160,6 +160,8 @@ export function epicRuntimeCorePortSourceOf(
     applyChatRecords: (records, issuedAtSeq) =>
       runtime.applyChatRecords(records, issuedAtSeq),
     applyChatRecordDelta: (delta) => runtime.applyChatRecordDelta(delta),
+    applyConfirmedChatMutation: (mutation) =>
+      runtime.applyConfirmedChatMutation(mutation),
     applyTuiAgentRecords: (records, issuedAtSeq) =>
       runtime.applyTuiAgentRecords(records, issuedAtSeq),
     applyTuiAgentRecordDelta: (delta) =>

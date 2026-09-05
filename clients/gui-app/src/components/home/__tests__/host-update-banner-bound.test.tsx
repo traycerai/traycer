@@ -469,6 +469,24 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
     },
   );
 
+  // The coarse `updateProgress` marker beside `updateOperation:
+  // {kind:"none"}` - the shipped legacy `traycer host update` path's whole
+  // signal for "in flight", with no attempt record at all. Before this field
+  // reached the projection, a @1.3 local host running that path showed no
+  // operation branch here whatsoever while a real download/swap/restart was
+  // under way.
+  it("a local host reporting {kind:'none'} with coarse updateProgress {state:'updating'} shows the operation branch with 'Updating host'", async () => {
+    bindLocalHost({
+      "host.status": () => ({
+        ...attemptStatus({ kind: "none" }),
+        updateProgress: { state: "updating", error: null },
+      }),
+    });
+    renderBanner(undefined);
+    const text = await findPhaseText();
+    expect(text).toMatch(/Updating host/);
+  });
+
   // `restarting`-while-disconnected ("reconnecting") is a projection-level
   // rule (`connected` from `useReactiveHostReadiness`), already pinned
   // directly against `projectFleetUpdateView` in subject D's table-driven

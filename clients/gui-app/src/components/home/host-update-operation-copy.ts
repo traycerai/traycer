@@ -102,6 +102,11 @@ function phaseSentence(
   // did not report one — a sentence must never read "Downloading update to v".
   const to = target === null ? "" : ` to v${target}`;
   switch (kind) {
+    case "updating":
+      // The coarse marker's whole vocabulary: in flight, phase unknown. Never
+      // narrower than that — "Installing" during a three-minute download reads
+      // as a stall, and the marker cannot tell the two apart.
+      return `Updating host${to}`;
     case "downloading":
       return `Downloading update${to}`;
     case "preparing":

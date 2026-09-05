@@ -119,7 +119,21 @@ export type HostLoginItemStatus =
 export type RegisterHostLoginItemResult =
   | HostLoginItemStatus
   | "removed-by-user"
-  | "deferred-busy";
+  | "deferred-busy"
+  /**
+   * The cycle refused to begin because the prior registration is in a state
+   * it could not restore exactly (`canBeginDestructiveRegistration`). NOTHING
+   * was booted out or re-registered; whatever host was running is still
+   * running the bytes it started with.
+   *
+   * Its own arm, and not the prior primary status it used to return in its
+   * place: an `enabled` here read as a completed register cycle, so the
+   * caller waited a full readiness timeout for a replacement process nobody
+   * had asked launchd to spawn, retried the same parked cycle, waited again,
+   * and reported the activation failed - two minutes after a committed
+   * install that one cooperative restart would have finished.
+   */
+  | "parked";
 
 type LoginItemRegistrationSnapshot = {
   readonly primary: HostLoginItemStatus | null;
@@ -358,10 +372,18 @@ async function registerHostLoginItemUnserialized(
     // undo those edges. Park before the first bootout and leave a newly
     // admitted repair to make the next registration decision from current
     // evidence.
+    // The snapshot is the whole diagnosis, so it goes in the line: a bare
+    // "parked" left an incident with no way to tell WHICH of the three
+    // guards refused, and the answer was not recoverable after the fact.
     log.warn(
       "[host-login-item] registration parked: prior registration cannot be restored exactly",
+      {
+        primary: priorRegistration.primary,
+        legacy: priorRegistration.legacy,
+        legacyManifest: priorRegistration.legacyManifest,
+      },
     );
-    return priorRegistration.primary ?? "not-registered";
+    return "parked";
   }
 
   // Steps 1–3: retire every registration under the legacy shared label.

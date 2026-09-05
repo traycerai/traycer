@@ -26,6 +26,7 @@ import {
   useWorkspaceFoldersStore,
   type WorkspaceFolderInfo,
 } from "@/stores/workspace/workspace-folders-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
 import {
   focusActiveComposer,
@@ -151,10 +152,12 @@ vi.mock("@/lib/host/runtime", () => ({
   // read, not through a hook. A whole-module mock missing one leaves the
   // import `undefined` and throws on the very first call.
   //
-  // `activeHostIdOrNull` is that read now: the spine stopped carrying an
-  // identity at P4.2/D17, so it resolves the authority projection instead.
-  // Same knob as the spine below, so a test that moves the host moves both.
-  activeHostIdOrNull: () => homeMocks.getActiveHostId(),
+  // `createDraft`'s own host resolution no longer goes through this module at
+  // all - it reads `readComposerHostIdSnapshot()` (real, unmocked), which
+  // falls through to the app-wide effective host since this suite pins no
+  // composer surface. `useSelectionAuthorityStore` below is seeded to the
+  // same `TEST_HOST_ID` this mock's `getActiveHostId()` returns, so the two
+  // cannot drift apart.
   getHostBindingSnapshot: () => ({
     hostClient: {
       request: homeMocks.request,
@@ -451,10 +454,21 @@ describe("<HomePage />", () => {
       mostRecentTabIdByEpicId: {},
     });
     useWorkspaceFoldersStore.setState({ byHost: {} });
+    // `createDraft`'s workspace/settings seed falls through to this (no
+    // composer surface pin is set in this suite) - keep it in lockstep with
+    // `homeMocks.getActiveHostId()` above.
+    useSelectionAuthorityStore.setState({
+      attached: true,
+      effectiveHostId: TEST_HOST_ID,
+    });
   });
 
   afterEach(() => {
     cleanup();
+    useSelectionAuthorityStore.setState({
+      attached: false,
+      effectiveHostId: null,
+    });
     resetTerminalFocusRegistryForTests();
     resetPrimaryFocusCoordinatorForTests();
     useLandingTerminalStore.getState().resetForTests();

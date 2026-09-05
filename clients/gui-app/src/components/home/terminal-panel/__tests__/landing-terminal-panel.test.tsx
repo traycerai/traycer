@@ -244,6 +244,9 @@ vi.mock(
     }) => ({
       primaryWorkspacePath: mocks.primaryWorkspacePath,
       folders: mocks.workspacePaths,
+      // No staged worktree intent in this suite's fixtures; keeps
+      // `resolveWorkspaceLaunchPath` on its no-entry fallback (raw path).
+      capturedIntent: null,
       // Tag the source with the draft it was keyed by so a test can assert the
       // provider keys it to the CAPTURED draft while a gesture pins.
       draftId: key.surface === "landing" ? key.draftId : null,
