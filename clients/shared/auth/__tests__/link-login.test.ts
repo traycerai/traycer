@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   buildLinkLoginQrPayload,
   claimantDeviceLabel,
+  claimantDeviceName,
   claimLinkLoginCodeViaHttp,
   linkLoginStatusViaHttp,
   linkLoginTokenViaHttp,
@@ -419,5 +420,22 @@ describe("claimant device label", () => {
     expect(claimantDeviceLabel("")).toBe("a device");
     // Long enough to be UA-shaped, with no family to bucket into.
     expect(claimantDeviceLabel("x".repeat(41))).toBe("a device");
+  });
+
+  it("names the device bare for labels, the same bucket without the article", () => {
+    expect(claimantDeviceName("iPhone")).toBe("iPhone");
+    expect(
+      claimantDeviceName(
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)",
+      ),
+    ).toBe("iPhone");
+    expect(claimantDeviceName("Mozilla/5.0 (Linux; Android 15; Pixel 8)")).toBe(
+      "Android device",
+    );
+    expect(claimantDeviceName("Pixel 8")).toBe("Pixel 8");
+    expect(claimantDeviceName(null)).toBe("device");
+    // A self-reported name that happens to BE a generic kind is still that
+    // kind - "device" typed by a phone does not become a proper name.
+    expect(claimantDeviceLabel("device")).toBe("a device");
   });
 });

@@ -3,6 +3,7 @@ import QRCode from "qrcode";
 import {
   buildLinkLoginQrPayload,
   claimantDeviceLabel,
+  claimantDeviceName,
   linkLoginStatusViaHttp,
   mintLinkLoginCodeViaHttp,
   respondLinkLoginViaHttp,
@@ -13,6 +14,7 @@ import type {
   MintLinkLoginCodeResponse,
 } from "@traycer/protocol/auth/link-login";
 import { config } from "../config";
+import { makeColorizer, shouldUseColor, type Colorizer } from "../runner/ansi";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import type { CommandContext } from "../runner/runner";
 import { validateStoredCredentials } from "./validate";
@@ -29,6 +31,12 @@ import { validateStoredCredentials } from "./validate";
  * surface. So a code printed here can be superseded by a mint elsewhere (the
  * desktop panel, the web portal), which this flow reports and exits on rather
  * than leaving a dead QR on screen.
+ *
+ * Two streams, on purpose. The blocks a person reads go through the output
+ * sink (stdout); everything transient - the ticking line under the code and
+ * the approval prompt - goes to stderr, so a piped stdout carries only the
+ * command's own output. Colour is decided per stream, since only the stream
+ * being written to knows whether it is a terminal.
  */
 
 // One rotation of the printed code, comfortably inside its 60s server TTL so a
@@ -44,10 +52,23 @@ export type LinkPhoneDecision = "approved" | "rejected";
 export interface LinkPhoneResult {
   readonly decision: LinkPhoneDecision;
   readonly claimant: {
-    readonly address: string | null;
-    readonly location: string | null;
+    /**
+     * The claimant's self-description, verbatim. Nothing else about the
+     * phone is carried: the service reports no address it can vouch for and
+     * no location at all, so there is nothing to put beside this.
+     */
     readonly userAgent: string | null;
   };
+}
+
+/** The colour on stderr, where the prompts and the ticking line live. */
+function stderrColors(ctx: CommandContext): Colorizer {
+  return makeColorizer(shouldUseColor(ctx.runtime, process.stderr));
+}
+
+/** The colour on stdout, where the blocks a person reads are printed. */
+function stdoutColors(ctx: CommandContext): Colorizer {
+  return makeColorizer(shouldUseColor(ctx.runtime, process.stdout));
 }
 
 /**
@@ -75,51 +96,46 @@ async function renderQr(code: string): Promise<string | null> {
   }
 }
 
+/** Whole seconds until `atMs`, never negative. */
+function secondsUntil(atMs: number): number {
+  return Math.max(0, Math.ceil((atMs - Date.now()) / 1_000));
+}
+
+/** `m:ss` from a deadline, clamped at zero. */
+function formatRemaining(atMs: number): string {
+  const totalSeconds = secondsUntil(atMs);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = String(totalSeconds % 60).padStart(2, "0");
+  return `${minutes}:${seconds}`;
+}
+
+/** What the code's own footer says besides the clock. */
+const CODE_FOOTER = "one phone per code · you approve here";
+
+/** Wide enough to blank the longest footer the ticker can print. */
+const TICKER_BLANK = " ".repeat(64);
+
 /**
- * Transient chrome: a single stderr line rewritten in place until the code
- * rotates. It bypasses the output sink on purpose - that sink is line-oriented
- * and feeds the NDJSON stream, and a carriage-returned counter is neither a log
- * line nor an event. The caller only starts it on an interactive, non-quiet
- * run.
+ * The footer under the code: one stderr line rewritten in place until the
+ * code rotates, carrying the rotation clock and the two facts a person needs
+ * while they wait. It bypasses the output sink on purpose - that sink is
+ * line-oriented and feeds the NDJSON stream, and a carriage-returned counter
+ * is neither a log line nor an event. Only started on a non-quiet run; the
+ * caller prints the same facts once, statically, when quiet.
  */
-function startExpiryCountdown(expiresAtEpochSeconds: number): () => void {
+function startCodeFooter(ctx: CommandContext, rotateAtMs: number): () => void {
+  const c = stderrColors(ctx);
   const tick = (): void => {
-    const secondsLeft = Math.max(
-      0,
-      Math.ceil(expiresAtEpochSeconds - Date.now() / 1_000),
+    process.stderr.write(
+      `\r  ${c.dim(`New code in ${secondsUntil(rotateAtMs)}s · ${CODE_FOOTER}`)}   `,
     );
-    process.stderr.write(`\r  Code expires in ${secondsLeft}s   `);
   };
   tick();
   const timer = setInterval(tick, 1_000);
   return () => {
     clearInterval(timer);
     // Blank the line so the next block starts clean.
-    process.stderr.write(`\r${" ".repeat(40)}\r`);
-  };
-}
-
-/**
- * The approval prompt's own countdown: how long the pending claim is still
- * answerable, on the SERVER's deadline. Same transient stderr line as the code
- * countdown, for the same reasons; clamped at zero, since the poll that
- * follows an expired claim reports it gone.
- */
-function startClaimCountdown(expiresAtMs: number): () => void {
-  const tick = (): void => {
-    const secondsLeft = Math.max(
-      0,
-      Math.ceil((expiresAtMs - Date.now()) / 1_000),
-    );
-    const minutes = Math.floor(secondsLeft / 60);
-    const seconds = String(secondsLeft % 60).padStart(2, "0");
-    process.stderr.write(`\r  Approve within ${minutes}:${seconds}   `);
-  };
-  tick();
-  const timer = setInterval(tick, 1_000);
-  return () => {
-    clearInterval(timer);
-    process.stderr.write(`\r${" ".repeat(40)}\r`);
+    process.stderr.write(`\r${TICKER_BLANK}\r`);
   };
 }
 
@@ -128,12 +144,38 @@ function startClaimCountdown(expiresAtMs: number): () => void {
  * yes, including a bare newline: the confirm gate exists to make an unwanted
  * sign-in take a deliberate keystroke. Prompt and echo go to stderr so a piped
  * stdout carries only the command's own output.
+ *
+ * With a deadline, the prompt is two lines - the claim's remaining window
+ * above the question - and it is readline that redraws them once a second,
+ * through `setPrompt` + `prompt(true)`, which repaints the whole prompt and
+ * the answer typed so far with the cursor where it was. Writing the clock to
+ * the stream directly would land on readline's own line and walk over the
+ * question, or over a half-typed answer, on a prompt whose whole point is
+ * being read carefully. The redraw is only asked for on a terminal: on any
+ * other output readline would print the prompt again per tick instead of
+ * repainting it, and the first line then simply states the window once.
  */
-async function askApproval(question: string): Promise<boolean> {
+async function askApproval(
+  ctx: CommandContext,
+  question: string,
+  deadline: { readonly expiresAtMs: number } | null,
+): Promise<boolean> {
+  const c = stderrColors(ctx);
+  const render = (): string =>
+    deadline === null
+      ? question
+      : `  ${c.dim(`Approve within ${formatRemaining(deadline.expiresAtMs)}`)}\n${question}`;
   const rl = createInterface({
     input: process.stdin,
     output: process.stderr,
   });
+  const redraw =
+    deadline === null || process.stderr.isTTY !== true
+      ? null
+      : setInterval(() => {
+          rl.setPrompt(render());
+          rl.prompt(true);
+        }, 1_000);
   try {
     const answer = await new Promise<string>((resolve) => {
       // Registered BEFORE `question`, not after: stdin can already be at EOF
@@ -149,11 +191,14 @@ async function askApproval(question: string): Promise<boolean> {
       rl.once("close", () => {
         resolve("");
       });
-      rl.question(question, resolve);
+      rl.question(render(), resolve);
     });
     const normalized = answer.trim().toLowerCase();
     return normalized === "y" || normalized === "yes";
   } finally {
+    if (redraw !== null) {
+      clearInterval(redraw);
+    }
     rl.close();
   }
 }
@@ -240,18 +285,24 @@ function mintFailure(outcome: MintLinkLoginCodeFetchResult): never {
   }
 }
 
-/** Prints one code: the QR (unless suppressed), the typeable text, the hint. */
+/**
+ * Prints one code: the QR (unless suppressed) and the typeable text. The
+ * footer beneath it is the ticking line on a normal run; a quiet run has no
+ * ticker, so the same two facts are printed once, plainly.
+ */
 async function printCode(
   ctx: CommandContext,
   minted: MintLinkLoginCodeResponse,
   showQr: boolean,
+  quiet: boolean,
 ): Promise<void> {
+  const c = stdoutColors(ctx);
   const qr = showQr ? await renderQr(minted.code) : null;
   ctx.output.humanRequired(
     `${qr === null ? "" : `${qr}\n`}` +
-      `In the Traycer mobile app, choose "Scan QR code" - or type this code:\n` +
-      `  ${minted.code}\n\n` +
-      `Each code signs in one phone, expires in ${minted.expires_in}s, and needs your approval here.`,
+      `Scan with the Traycer mobile app, or type this code:\n\n` +
+      `    ${c.bold(minted.code)}\n` +
+      (quiet ? `\n  ${c.dim(CODE_FOOTER)}` : ""),
   );
   ctx.progress({
     stage: "link-code-shown",
@@ -301,7 +352,7 @@ async function watchUntilClaimed(
     if (outcome.kind !== "ok") {
       mintFailure(outcome);
     }
-    await printCode(ctx, outcome.response, showQr);
+    await printCode(ctx, outcome.response, showQr, quiet);
     return {
       minted: outcome.response,
       rotateAtMs: Date.now() + LINK_PHONE_REMINT_MS,
@@ -313,9 +364,7 @@ async function watchUntilClaimed(
     mintFailure({ kind: "claim-pending" });
   }
   let watched: WatchedCode = first;
-  let stopCountdown = quiet
-    ? () => {}
-    : startExpiryCountdown(watched.minted.expires_at);
+  let stopFooter = quiet ? () => {} : startCodeFooter(ctx, watched.rotateAtMs);
 
   try {
     for (;;) {
@@ -326,7 +375,7 @@ async function watchUntilClaimed(
       // exits, while a status-only outage still reprints a live code. Leaving
       // it after the call meant a `network-error` skipped it entirely.
       if (Date.now() >= watched.rotateAtMs) {
-        stopCountdown();
+        stopFooter();
         const next = await mintAndPrint();
         // Refused because the displayed code was claimed between the last poll
         // and now. Keep it on screen; the poll just below surfaces the claim.
@@ -337,9 +386,9 @@ async function watchUntilClaimed(
                 rotateAtMs: Date.now() + LINK_PHONE_POLL_INTERVAL_MS,
               }
             : next;
-        stopCountdown = quiet
+        stopFooter = quiet
           ? () => {}
-          : startExpiryCountdown(watched.minted.expires_at);
+          : startCodeFooter(ctx, watched.rotateAtMs);
       }
 
       const status = await linkLoginStatusViaHttp(
@@ -405,8 +454,54 @@ async function watchUntilClaimed(
       }
     }
   } finally {
-    stopCountdown();
+    stopFooter();
   }
+}
+
+/**
+ * The scan announcement and the question that follows it, one of three
+ * pairs. With a match code the question IS the code: the phone in the user's
+ * hand shows the same two digits, and agreement between the two screens
+ * proves the prompt belongs to that phone - which the self-reported
+ * description cannot, since the claimant chooses it. An explicit null is the
+ * server saying the phone presented NO code: a legitimate older app, or a
+ * leaked-QR holder withholding the flag to dodge the check - this terminal
+ * cannot tell, so it warns loudly rather than reading like an ordinary claim.
+ * No word at all (an older server) is the plain prompt.
+ *
+ * The announcement names the device once and states the one condition for
+ * approving once; the question does not repeat either.
+ */
+function scanPrompt(
+  ctx: CommandContext,
+  claimant: NonNullable<LinkLoginStatusResponse["claimant"]>,
+): { readonly announcement: string; readonly question: string } {
+  const c = stdoutColors(ctx);
+  const device = claimantDeviceName(claimant.userAgent);
+  const matchCode = claimant.matchCode;
+  if (matchCode === undefined) {
+    return {
+      announcement:
+        `${c.green("●")} A phone scanned this code · ${device}\n` +
+        `Approve only if you scanned this code yourself.`,
+      question: `Approve sign-in from ${claimantDeviceLabel(claimant.userAgent)}? [y/N] `,
+    };
+  }
+  if (matchCode === null) {
+    return {
+      announcement:
+        `${c.yellow("▲")} A phone scanned this code but showed NO sign-in code · ${device}\n` +
+        `An up-to-date Traycer app always shows one. Only approve if you scanned this code yourself\n` +
+        `and your phone is waiting without a code; otherwise reject and update the app.`,
+      question: `No code shown by the phone. Approve sign-in anyway? [y/N] `,
+    };
+  }
+  return {
+    announcement:
+      `${c.green("●")} A phone scanned this code · ${device} · shows ${c.bold(matchCode)}\n` +
+      `Approve only if the phone in your hand shows ${matchCode}.`,
+    question: `Does your phone show ${matchCode}? Approve sign-in [y/N] `,
+  };
 }
 
 /**
@@ -422,7 +517,16 @@ export async function runLinkPhoneFlow(
   // The decision is the whole point of this command, and only a human at this
   // terminal can give it. Refuse up front rather than printing a QR nobody can
   // approve.
-  if (ctx.runtime.json || ctx.runtime.nonInteractive) {
+  if (ctx.runtime.json) {
+    throw cliError({
+      code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+      message:
+        "--json is not available for link-phone: the command asks you, at this terminal, to approve the phone that scans the code.",
+      details: null,
+      exitCode: 1,
+    });
+  }
+  if (ctx.runtime.nonInteractive) {
     throw cliError({
       code: CLI_ERROR_CODES.INVALID_ARGUMENT,
       message:
@@ -449,61 +553,18 @@ export async function runLinkPhoneFlow(
     ctx.runtime.quiet,
   );
 
-  const detail = [
-    claim.claimant.address ?? "address unknown",
-    claim.claimant.location ?? "location unknown",
-  ].join(" · ");
-  const device = claimantDeviceLabel(claim.claimant.userAgent);
-  // Three prompts. With a match code the question IS the code: the phone in
-  // the user's hand shows the same two digits, and agreement between the two
-  // screens proves the prompt belongs to that phone — which the self-reported
-  // description cannot, since the claimant chooses it. An explicit null is
-  // the server saying the phone presented NO code: a legitimate older app, or
-  // a leaked-QR holder withholding the flag to dodge the check — this
-  // terminal cannot tell, so it warns loudly rather than reading like an
-  // ordinary claim. No word at all (an older server) is today's prompt.
-  const matchCode = claim.claimant.matchCode;
-  if (matchCode === undefined) {
-    ctx.output.humanRequired(
-      `A phone scanned the code.\n` +
-        `  ${detail}\n` +
-        `Details are approximate. Only approve if you scanned this code yourself.`,
-    );
-  } else if (matchCode === null) {
-    ctx.output.humanRequired(
-      `WARNING: a phone scanned the code but did not show a sign-in code.\n` +
-        `  ${device} · ${detail}\n` +
-        `An up-to-date Traycer app always shows one. Only approve if you scanned this code yourself\n` +
-        `and your phone is waiting without a code; otherwise reject and update the app.`,
-    );
-  } else {
-    ctx.output.humanRequired(
-      `A phone scanned the code and is showing the number ${matchCode}.\n` +
-        `  ${device} · ${detail}\n` +
-        `Only approve if the phone in your hand shows ${matchCode} and you scanned this code yourself.`,
-    );
-  }
+  const prompt = scanPrompt(ctx, claim.claimant);
+  ctx.output.humanRequired(prompt.announcement);
 
-  // The claim's deadline, when the server states one: the prompt below is
-  // answerable only until then, so the terminal counts it down while the
-  // question is open. An older server states none and the prompt stands alone.
+  // The claim's deadline, when the server states one: the question below is
+  // answerable only until then, so the prompt counts it down while it is
+  // open. An older server states none and the question stands alone.
   const claimExpiresAt = claim.claimant.claimExpiresAt;
-  const stopClaimCountdown =
-    claimExpiresAt === undefined || ctx.runtime.quiet
-      ? () => {}
-      : startClaimCountdown(claimExpiresAt);
-  let approve: boolean;
-  try {
-    approve = await askApproval(
-      matchCode === undefined
-        ? `Approve sign-in from ${device} · ${claim.claimant.address ?? "address unknown"}? [y/N] `
-        : matchCode === null
-          ? `No code shown by the phone. Approve sign-in from ${device} anyway? [y/N] `
-          : `Does your phone show ${matchCode}? Approve sign-in from ${device}? [y/N] `,
-    );
-  } finally {
-    stopClaimCountdown();
-  }
+  const approve = await askApproval(
+    ctx,
+    prompt.question,
+    claimExpiresAt === undefined ? null : { expiresAtMs: claimExpiresAt },
+  );
 
   const responded = await respondLinkLoginViaHttp(
     config.authnBaseUrl,
@@ -550,10 +611,6 @@ export async function runLinkPhoneFlow(
 
   return {
     decision: approve ? "approved" : "rejected",
-    claimant: {
-      address: claim.claimant.address,
-      location: claim.claimant.location,
-      userAgent: claim.claimant.userAgent,
-    },
+    claimant: { userAgent: claim.claimant.userAgent },
   };
 }

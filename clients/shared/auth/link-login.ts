@@ -205,34 +205,36 @@ export function parseLinkLoginInput(text: string): string | null {
   return NORMALIZED_CODE_PATTERN.test(normalized) ? normalized : null;
 }
 
-/** The device strings a claimant reports as a bare family, article-less. */
-const CLAIMANT_DEVICE_FAMILIES: Readonly<Record<string, string>> = {
-  iPhone: "an iPhone",
-  iPad: "an iPad",
+/**
+ * The generic device kinds a claimant can be bucketed into, with the article
+ * each takes in running prose. A self-reported name is never one of these.
+ */
+const CLAIMANT_DEVICE_KINDS: Readonly<Record<string, string>> = {
+  iPhone: "an",
+  iPad: "an",
+  "Android device": "an",
+  device: "a",
 };
 
 /** A self-reported name longer than this is UA-shaped, not a device name. */
 const CLAIMANT_DEVICE_NAME_MAX = 40;
 
 /**
- * Best-effort device line for the approve prompt, from whatever the claimant
- * reported about itself. Descriptive, not authenticated — the copy says so,
- * and the real trust anchor is "you minted this code and someone just scanned
- * it". The result carries its own article where one is needed — it slots into
- * "Approve sign-in from ___?" and a proper name reads better bare.
+ * What the claimant is, as a bare noun phrase: "iPhone", "Pixel 8",
+ * "Android device", "device". For labels and separators ("· iPhone ·") where
+ * an article would read wrong. Descriptive, not authenticated — the real trust
+ * anchor is "you minted this code and someone just scanned it".
  *
  * Three shapes arrive here. A bare family ("iPhone") is what iOS reports,
- * since Apple exposes no marketing-name API; it needs the article added. A
- * self-reported model name ("Pixel 8") is short and UA-free, and reads best
- * verbatim. A browser or CFNetwork User-Agent is long and structured, and is
- * only good for a family bucket. Families are matched first because they
- * would otherwise satisfy the verbatim test and lose their article.
+ * since Apple exposes no marketing-name API. A self-reported model name
+ * ("Pixel 8") is short and UA-free, and reads best verbatim. A browser or
+ * CFNetwork User-Agent is long and structured, and is only good for a family
+ * bucket.
  */
-export function claimantDeviceLabel(userAgent: string | null): string {
+export function claimantDeviceName(userAgent: string | null): string {
   const value = userAgent ?? "";
-  const family = CLAIMANT_DEVICE_FAMILIES[value];
-  if (family !== undefined) {
-    return family;
+  if (value in CLAIMANT_DEVICE_KINDS) {
+    return value;
   }
   if (
     value.length > 0 &&
@@ -244,15 +246,26 @@ export function claimantDeviceLabel(userAgent: string | null): string {
     return value;
   }
   if (value.includes("iPhone")) {
-    return "an iPhone";
+    return "iPhone";
   }
   if (value.includes("iPad")) {
-    return "an iPad";
+    return "iPad";
   }
   if (value.includes("Android")) {
-    return "an Android device";
+    return "Android device";
   }
-  return "a device";
+  return "device";
+}
+
+/**
+ * `claimantDeviceName` for running prose: a generic kind carries its article
+ * ("an iPhone", "a device") so it slots into "Approve sign-in from ___?",
+ * while a proper name ("Pixel 8") reads better bare and stays so.
+ */
+export function claimantDeviceLabel(userAgent: string | null): string {
+  const name = claimantDeviceName(userAgent);
+  const article = CLAIMANT_DEVICE_KINDS[name];
+  return article === undefined ? name : `${article} ${name}`;
 }
 
 async function postJson(

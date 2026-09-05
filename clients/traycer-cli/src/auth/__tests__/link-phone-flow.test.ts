@@ -5,7 +5,7 @@ import {
   respondLinkLoginViaHttp,
   type MintLinkLoginCodeFetchResult,
 } from "../../../../shared/auth/link-login";
-import { runLinkPhoneFlow } from "../link-phone-flow";
+import { runLinkPhoneFlow, type LinkPhoneResult } from "../link-phone-flow";
 import { validateStoredCredentials } from "../validate";
 import { noopLogger } from "../../logger";
 import { CLI_ERROR_CODES, CliError } from "../../runner/errors";
@@ -40,6 +40,16 @@ const answer = vi.hoisted(() => ({
   current: "" as string | null,
   /** The question the human was last asked, verbatim. */
   lastPrompt: "",
+  /**
+   * When set, the human has not answered yet: `question` parks its callback
+   * in `release` so a test can advance the clock while the prompt is open.
+   */
+  hold: false,
+  release: null as (() => void) | null,
+  /** Every prompt readline was asked to repaint, in order. */
+  redraws: [] as string[],
+  /** The `preserveCursor` argument of each repaint request. */
+  repaints: [] as boolean[],
 }));
 vi.mock("node:readline", () => ({
   createInterface: () => {
@@ -63,7 +73,19 @@ vi.mock("node:readline", () => ({
           emitClose();
           return;
         }
+        if (answer.hold) {
+          answer.release = () => {
+            callback(typed);
+          };
+          return;
+        }
         callback(typed);
+      },
+      setPrompt: (prompt: string) => {
+        answer.redraws.push(prompt);
+      },
+      prompt: (preserveCursor: boolean) => {
+        answer.repaints.push(preserveCursor);
       },
       close: emitClose,
     };
@@ -162,12 +184,34 @@ const UNCLAIMED = {
 };
 
 let originalIsTty: boolean | undefined;
+let originalNoColor: string | undefined;
+
+/** Pins a stream's terminal-ness for one test; `afterEach` restores stdin. */
+function setTty(stream: NodeJS.WriteStream, isTTY: boolean): () => void {
+  const original = Object.getOwnPropertyDescriptor(stream, "isTTY");
+  Object.defineProperty(stream, "isTTY", { configurable: true, value: isTTY });
+  return () => {
+    if (original === undefined) {
+      Reflect.deleteProperty(stream, "isTTY");
+    } else {
+      Object.defineProperty(stream, "isTTY", original);
+    }
+  };
+}
 
 beforeEach(() => {
   vi.clearAllMocks();
   vi.useFakeTimers();
   answer.current = "";
   answer.lastPrompt = "";
+  answer.hold = false;
+  answer.release = null;
+  answer.redraws = [];
+  answer.repaints = [];
+  // The copy is asserted on, never the escapes around it: colour stays off
+  // even where a test makes a stream a terminal.
+  originalNoColor = process.env.NO_COLOR;
+  process.env.NO_COLOR = "1";
   originalIsTty = process.stdin.isTTY;
   Object.defineProperty(process.stdin, "isTTY", {
     configurable: true,
@@ -192,6 +236,11 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+  if (originalNoColor === undefined) {
+    delete process.env.NO_COLOR;
+  } else {
+    process.env.NO_COLOR = originalNoColor;
+  }
   Object.defineProperty(process.stdin, "isTTY", {
     configurable: true,
     value: originalIsTty,
@@ -239,7 +288,7 @@ function expectCliError(
 }
 
 describe("runLinkPhoneFlow", () => {
-  it("prints the QR, the typeable code and the single-phone hint", async () => {
+  it("prints the QR, the typeable code and - quietly - the single-phone hint", async () => {
     statusMock.mockResolvedValue(CLAIMED);
     const ctx = interactiveCtx();
 
@@ -247,8 +296,36 @@ describe("runLinkPhoneFlow", () => {
 
     const output = printed(ctx);
     expect(output).toContain("[qr]");
+    expect(output).toContain("or type this code");
     expect(output).toContain("ABCDE-FGHJK");
-    expect(output).toContain("Each code signs in one phone");
+    // A quiet run has no ticking footer, so the facts it carries are printed
+    // once with the code instead.
+    expect(output).toContain("one phone per code · you approve here");
+  });
+
+  it("ticks one footer line under the code: the rotation clock and the two facts", async () => {
+    // The footer is transient stderr, rewritten in place: it bypasses the
+    // line-oriented output sink, and it is the ONLY line under the code - the
+    // hint and the clock are one line, not a static sentence plus a counter.
+    const stderrWrite = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation(() => true);
+    try {
+      statusMock.mockResolvedValue(CLAIMED);
+      const ctx = makeCtx({ json: false, quiet: false, nonInteractive: false });
+
+      await runWithPolls(ctx, 1);
+
+      const lines = stderrWrite.mock.calls.map((call) => String(call[0]));
+      // The clock counts to the ROTATION (50 s), not to the server's expiry.
+      expect(lines[0]).toContain(
+        "New code in 50s · one phone per code · you approve here",
+      );
+      expect(lines[0]?.startsWith("\r")).toBe(true);
+      expect(printed(ctx)).not.toContain("one phone per code");
+    } finally {
+      stderrWrite.mockRestore();
+    }
   });
 
   it("watches the code it just minted", async () => {
@@ -274,7 +351,15 @@ describe("runLinkPhoneFlow", () => {
     expect(result.status).toBe("fulfilled");
     expect(result.status === "fulfilled" ? result.value : null).toMatchObject({
       decision: "approved",
+      claimant: { userAgent: CLAIMED.response.claimant.userAgent },
     });
+    // Nothing else about the phone rides along: the service vouches for no
+    // address and reports no location, so neither is a field here.
+    const claimant =
+      result.status === "fulfilled" && typeof result.value === "object"
+        ? Object.keys((result.value as LinkPhoneResult).claimant)
+        : [];
+    expect(claimant).toEqual(["userAgent"]);
   });
 
   it("rejects on a bare newline - the confirm gate needs a deliberate yes", async () => {
@@ -294,20 +379,29 @@ describe("runLinkPhoneFlow", () => {
     });
   });
 
-  it("names the claimant's address and location in the prompt block", async () => {
+  it("announces the scan with the device alone, and asks once", async () => {
     statusMock.mockResolvedValue(CLAIMED);
     const ctx = interactiveCtx();
 
     await runWithPolls(ctx, 1);
 
     const output = printed(ctx);
-    expect(output).toContain("203.0.113.7");
-    expect(output).toContain("Bengaluru, IN");
-    expect(output).toContain("Only approve if you scanned this code yourself");
+    expect(output).toContain("● A phone scanned this code · iPhone");
+    expect(output).toContain("Approve only if you scanned this code yourself.");
+    // The phone's address was never the phone's (it is the load balancer's,
+    // if anything) and its location is never reported: neither is shown
+    // anywhere, block or question.
+    for (const text of [output, answer.lastPrompt]) {
+      expect(text).not.toContain("203.0.113.7");
+      expect(text).not.toContain("Bengaluru");
+      expect(text).not.toContain("unknown");
+    }
+    // The condition for approving is stated once, in the block - the
+    // question does not repeat it.
+    expect(output.match(/Approve only if/g)).toHaveLength(1);
     // No code minted (an older server, or a phone that cannot show one):
-    // the description IS the prompt, exactly as before.
-    expect(answer.lastPrompt).toContain("Approve sign-in from an iPhone");
-    expect(answer.lastPrompt).not.toContain("Does your phone show");
+    // the description IS the prompt.
+    expect(answer.lastPrompt).toBe("Approve sign-in from an iPhone? [y/N] ");
   });
 
   it("warns loudly when the server says the phone presented no code", async () => {
@@ -322,12 +416,15 @@ describe("runLinkPhoneFlow", () => {
     const result = await runWithPolls(ctx, 1);
 
     const output = printed(ctx);
-    expect(output).toContain("WARNING");
-    expect(output).toContain("did not show a sign-in code");
+    expect(output).toContain(
+      "▲ A phone scanned this code but showed NO sign-in code · iPhone",
+    );
+    expect(output).toContain("An up-to-date Traycer app always shows one.");
     expect(output).toContain("otherwise reject and update the app");
-    expect(output).not.toContain("Details are approximate");
-    expect(answer.lastPrompt).toContain("No code shown by the phone");
-    expect(answer.lastPrompt).not.toContain("Does your phone show");
+    expect(output).not.toContain("●");
+    expect(answer.lastPrompt).toBe(
+      "No code shown by the phone. Approve sign-in anyway? [y/N] ",
+    );
     expect(respondMock).toHaveBeenCalledWith(
       expect.any(String),
       "bearer-1",
@@ -337,12 +434,104 @@ describe("runLinkPhoneFlow", () => {
     expect(result.status).toBe("fulfilled");
   });
 
-  it("counts the claim's server-stated deadline down beside the prompt, and not without one", async () => {
-    // The deadline is the server's; the terminal only ticks it. Quiet runs
-    // skip the transient stderr line like they skip the code countdown.
+  it("states the claim's server-stated deadline above the question, and not without one", async () => {
+    // The deadline is the server's; the terminal only ticks it. It is part of
+    // the PROMPT - the line above the question - never a write of its own to
+    // the stream readline is drawing on.
+    statusMock.mockResolvedValue({
+      kind: "ok" as const,
+      response: {
+        status: "claimed" as const,
+        claimant: {
+          ...CLAIMED.response.claimant,
+          claimExpiresAt: Date.now() + 90_000,
+        },
+      },
+    });
+    answer.current = "y";
+    const ctx = makeCtx({ json: false, quiet: false, nonInteractive: false });
+
+    await runWithPolls(ctx, 1);
+
+    // The prompt goes up one poll interval (2 s) after the claim was stated
+    // 90 s out, so it opens at 1:28 - the server's deadline minus the
+    // terminal's own clock, not a copy of the claim window.
+    expect(answer.lastPrompt).toBe(
+      "  Approve within 1:28\nApprove sign-in from an iPhone? [y/N] ",
+    );
+
+    vi.clearAllMocks();
+    mintMock.mockResolvedValue(mintedCode("ABCDE-FGHJK"));
+    statusMock.mockResolvedValue(CLAIMED);
+    respondMock.mockResolvedValue({ kind: "ok" });
+    await runWithPolls(
+      makeCtx({ json: false, quiet: false, nonInteractive: false }),
+      1,
+    );
+    expect(answer.lastPrompt).toBe("Approve sign-in from an iPhone? [y/N] ");
+  });
+
+  it("repaints the open prompt through readline as the deadline ticks, never over it", async () => {
+    // The regression: a clock written straight to stderr while readline owns
+    // that line lands on the question, or on a half-typed answer. Every tick
+    // must instead go through readline's own repaint (`setPrompt` + a
+    // cursor-preserving `prompt`), and only on a terminal - anywhere else,
+    // readline would print the prompt again per tick rather than repaint it.
+    const restoreStderr = setTty(process.stderr, true);
     const stderrWrite = vi
       .spyOn(process.stderr, "write")
       .mockImplementation(() => true);
+    try {
+      statusMock.mockResolvedValue({
+        kind: "ok" as const,
+        response: {
+          status: "claimed" as const,
+          claimant: {
+            ...CLAIMED_WITH_CODE.response.claimant,
+            claimExpiresAt: Date.now() + 90_000,
+          },
+        },
+      });
+      answer.current = "y";
+      answer.hold = true;
+      const ctx = makeCtx({ json: false, quiet: false, nonInteractive: false });
+
+      const settled = Promise.allSettled([
+        runLinkPhoneFlow(ctx, { showQr: true }),
+      ]);
+      await vi.advanceTimersByTimeAsync(POLL_MS);
+      expect(answer.lastPrompt).toBe(
+        "  Approve within 1:28\nDoes your phone show 47? Approve sign-in [y/N] ",
+      );
+      expect(answer.redraws).toEqual([]);
+
+      // One tick with the prompt still open.
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(answer.redraws).toEqual([
+        "  Approve within 1:27\nDoes your phone show 47? Approve sign-in [y/N] ",
+      ]);
+      expect(answer.repaints).toEqual([true]);
+      // The code footer stopped at the claim; nothing was written to the
+      // stream around the prompt since, so nothing could have overwritten it.
+      const sincePrompt = stderrWrite.mock.calls
+        .map((call) => String(call[0]))
+        .filter((line) => line.includes("Approve within"));
+      expect(sincePrompt).toEqual([]);
+
+      answer.release?.();
+      const [result] = await settled;
+      expect(result.status).toBe("fulfilled");
+      // The repaint stops with the answer.
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(answer.redraws).toHaveLength(1);
+    } finally {
+      stderrWrite.mockRestore();
+      restoreStderr();
+    }
+  });
+
+  it("does not ask readline to repaint when stderr is not a terminal", async () => {
+    const restoreStderr = setTty(process.stderr, false);
     try {
       statusMock.mockResolvedValue({
         kind: "ok" as const,
@@ -355,36 +544,23 @@ describe("runLinkPhoneFlow", () => {
         },
       });
       answer.current = "y";
-      const ctx = makeCtx({ json: false, quiet: false, nonInteractive: false });
-
-      await runWithPolls(ctx, 1);
-
-      // The prompt goes up one poll interval (2 s) after the claim was
-      // stated 90 s out, so the first tick reads 1:28 - the server's deadline
-      // minus the terminal's own clock, not a copy of the claim window.
-      const lines = stderrWrite.mock.calls.map((call) => String(call[0]));
-      expect(lines.some((line) => line.includes("Approve within 1:28"))).toBe(
-        true,
-      );
-      // The line is cleared once the question is answered.
-      expect(lines.at(-1)).toBe(`\r${" ".repeat(40)}\r`);
-
-      stderrWrite.mockClear();
-      vi.clearAllMocks();
-      mintMock.mockResolvedValue(mintedCode("ABCDE-FGHJK"));
-      statusMock.mockResolvedValue(CLAIMED);
-      respondMock.mockResolvedValue({ kind: "ok" });
-      await runWithPolls(
-        makeCtx({ json: false, quiet: false, nonInteractive: false }),
-        1,
-      );
-      expect(
-        stderrWrite.mock.calls.some((call) =>
-          String(call[0]).includes("Approve within"),
+      answer.hold = true;
+      const settled = Promise.allSettled([
+        runLinkPhoneFlow(
+          makeCtx({ json: false, quiet: false, nonInteractive: false }),
+          {
+            showQr: true,
+          },
         ),
-      ).toBe(false);
+      ]);
+      await vi.advanceTimersByTimeAsync(POLL_MS + 3_000);
+      // The window is still stated, once, in the prompt itself.
+      expect(answer.lastPrompt).toContain("Approve within 1:28");
+      expect(answer.redraws).toEqual([]);
+      answer.release?.();
+      await settled;
     } finally {
-      stderrWrite.mockRestore();
+      restoreStderr();
     }
   });
 
@@ -400,11 +576,15 @@ describe("runLinkPhoneFlow", () => {
     const result = await runWithPolls(ctx, 1);
 
     const output = printed(ctx);
-    expect(output).toContain("showing the number 47");
-    expect(output).toContain("an iPhone");
-    expect(output).toContain("Only approve if the phone in your hand shows 47");
-    expect(answer.lastPrompt).toContain("Does your phone show 47?");
-    expect(answer.lastPrompt).toContain("an iPhone");
+    expect(output).toContain("● A phone scanned this code · iPhone · shows 47");
+    expect(output).toContain(
+      "Approve only if the phone in your hand shows 47.",
+    );
+    expect(output.match(/Approve only if/g)).toHaveLength(1);
+    // The question is the code; the device was named in the block already.
+    expect(answer.lastPrompt).toBe(
+      "Does your phone show 47? Approve sign-in [y/N] ",
+    );
     expect(respondMock).toHaveBeenCalledWith(
       expect.any(String),
       "bearer-1",
@@ -529,12 +709,19 @@ describe("runLinkPhoneFlow", () => {
     });
   });
 
-  it("refuses to run where no human can answer", async () => {
-    const ctx = makeCtx({ json: true, quiet: false, nonInteractive: false });
-
-    await expect(runLinkPhoneFlow(ctx, { showQr: true })).rejects.toThrowError(
-      /interactive terminal/,
-    );
+  it("refuses --json by name, and a non-interactive run", async () => {
+    await expect(
+      runLinkPhoneFlow(
+        makeCtx({ json: true, quiet: false, nonInteractive: false }),
+        { showQr: true },
+      ),
+    ).rejects.toThrowError(/--json is not available for link-phone/);
+    await expect(
+      runLinkPhoneFlow(
+        makeCtx({ json: false, quiet: false, nonInteractive: true }),
+        { showQr: true },
+      ),
+    ).rejects.toThrowError(/interactive terminal/);
     expect(mintMock).not.toHaveBeenCalled();
   });
 
