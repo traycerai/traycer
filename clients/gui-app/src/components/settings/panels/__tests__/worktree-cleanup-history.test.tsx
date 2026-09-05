@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -23,7 +24,9 @@ import {
   hostScopeFixture,
   hostScopeOptionFixture,
 } from "@/components/settings/host-scope/host-scope-fixture";
+import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 import { useWorktreeCleanupViewStore } from "@/stores/settings/worktree-cleanup-view-store";
+import { isConcealed } from "@/components/settings/host-scope/concealment-test-helpers";
 
 /**
  * The history sub-view's presentation contract: a `skipped` target is neutral,
@@ -120,6 +123,17 @@ function clientWithHistory(
 function renderHistory(client: HostClient<HostRpcRegistry>): {
   readonly onBack: () => void;
 } {
+  return renderHistoryForScope(
+    hostScopeFixture({
+      host: hostScopeOptionFixture({ hostId: "host-a", name: "Host A" }),
+      client,
+    }),
+  );
+}
+
+function renderHistoryForScope(scope: HostScope): {
+  readonly onBack: () => void;
+} {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
@@ -131,13 +145,7 @@ function renderHistory(client: HostClient<HostRpcRegistry>): {
   );
   render(
     <Wrapper>
-      <WorktreeCleanupHistory
-        scope={hostScopeFixture({
-          host: hostScopeOptionFixture({ hostId: "host-a", name: "Host A" }),
-          client,
-        })}
-        onBack={onBack}
-      />
+      <WorktreeCleanupHistory scope={scope} onBack={onBack} />
     </Wrapper>,
   );
   return { onBack };
@@ -357,6 +365,78 @@ describe("WorktreeCleanupHistory", () => {
     );
     cleanup();
     expect(useWorktreeCleanupViewStore.getState().focusedRunId).toBeNull();
+  });
+
+  it("says it is connecting rather than claiming no history while the host is not yet usable", async () => {
+    // With no client the runs query would simply read as disabled - "not
+    // pending, no runs" - which must never surface as "nothing has run" for a
+    // host that is still connecting.
+    renderHistoryForScope(
+      hostScopeFixture({
+        host: hostScopeOptionFixture({ hostId: "host-a", name: "Host A" }),
+        status: "connecting",
+        client: null,
+      }),
+    );
+
+    await waitFor(() => {
+      screen.getByText("Connecting to Host A…");
+    });
+    // The disabled query still resolves as "no runs" underneath, but the
+    // gate must never let that render visibly while the host is connecting.
+    const empty = screen.queryByText(
+      "No automatic cleanup has run on this host yet.",
+    );
+    expect(empty === null || isConcealed(empty)).toBe(true);
+  });
+
+  it("lets a new focused run outrank an earlier manual collapse", async () => {
+    useWorktreeCleanupViewStore.setState({
+      view: "cleanupHistory",
+      focusedRunId: "run-1",
+    });
+    renderHistory(
+      clientWithHistory({
+        listRuns: () => ({
+          runs: [
+            runFixture({ runId: "run-1" }),
+            runFixture({ runId: "run-2" }),
+          ],
+          nextCursor: null,
+        }),
+        getRun: (request) => ({
+          run: runFixture({ runId: request.runId }),
+          targets: [targetFixture({ targetId: "t-1", runId: request.runId })],
+        }),
+      }),
+    );
+
+    function expandedRunIds(): string[] {
+      return screen
+        .getAllByTestId("worktree-cleanup-run")
+        .filter((row) => row.querySelector('[aria-expanded="true"]') !== null)
+        .map((row) => row.getAttribute("data-run-id"))
+        .filter((id): id is string => id !== null);
+    }
+
+    await waitFor(() => {
+      expect(expandedRunIds()).toEqual(["run-1"]);
+    });
+
+    // A manual choice collapses it - and spends the hint that opened it.
+    fireEvent.click(screen.getByRole("button", { expanded: true }));
+    await waitFor(() => {
+      expect(expandedRunIds()).toEqual([]);
+    });
+    expect(useWorktreeCleanupViewStore.getState().focusedRunId).toBeNull();
+
+    // A NEW focus hint outranks that manual choice.
+    act(() => {
+      useWorktreeCleanupViewStore.setState({ focusedRunId: "run-2" });
+    });
+    await waitFor(() => {
+      expect(expandedRunIds()).toEqual(["run-2"]);
+    });
   });
 
   it("says a focused run is gone instead of dead-ending on it", async () => {

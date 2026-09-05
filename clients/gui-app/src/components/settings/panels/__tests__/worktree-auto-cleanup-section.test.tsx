@@ -638,6 +638,50 @@ describe("WorktreeAutoCleanupSection", () => {
     });
   });
 
+  it("offers only the presets inside the host's bounds", async () => {
+    const requests: number[] = [];
+    renderSection(
+      clientWithPolicy({
+        get: () =>
+          policyFixture({
+            enabled: true,
+            inactivityDays: 30,
+            bounds: { minDays: 30, maxDays: 60 },
+          }),
+        set: (request) => {
+          requests.push(request.inactivityDays);
+          return policyFixture(request);
+        },
+      }),
+    );
+
+    await openThresholdEditor();
+    // Only the two presets inside [30, 60] are offered - a preset the host
+    // would refuse is not shown as a button at all.
+    screen.getByRole("button", { name: "30 days" });
+    screen.getByRole("button", { name: "60 days" });
+    for (const days of [7, 14, 90]) {
+      expect(screen.queryByRole("button", { name: `${days} days` })).toBeNull();
+    }
+
+    // The custom input validates against the same bounds.
+    const input = screen.getByRole("textbox", {
+      name: "Custom inactivity days",
+    });
+    fireEvent.change(input, { target: { value: "90" } });
+    fireEvent.blur(input);
+    await waitFor(() => {
+      screen.getByText("Choose between 30 and 60 days.");
+    });
+    expect(requests).toEqual([]);
+
+    fireEvent.change(input, { target: { value: "45" } });
+    fireEvent.blur(input);
+    await waitFor(() => {
+      expect(requests).toEqual([45]);
+    });
+  });
+
   it("refuses a custom value outside the host's bounds without sending it", async () => {
     const requests: number[] = [];
     renderSection(
