@@ -641,9 +641,8 @@ export class AuthService {
   }
 
   /**
-   * Live identity-transition generation. WindowsBridge captures this before a
-   * delayed `authSession.get()` so a stale initial snapshot cannot overwrite a
-   * newer local mutation that landed while the get was in flight.
+   * Live identity-transition generation for observing interactive sign-in,
+   * sign-out, and disposal independently of same-user credential rotations.
    *
    * NOT a credential counter, and it must not be pressed into service as one:
    * it moves on `signIn` / `signOut` / `dispose` only, so every ordinary
