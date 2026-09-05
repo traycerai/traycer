@@ -43,7 +43,8 @@ const mocks = vi.hoisted(() => ({
   readHostPidMetadataMock: vi.fn(),
   isProcessAliveMock: vi.fn(),
   assertHostNotBusyMock: vi.fn(),
-  restartHostServiceWithAttemptMock: vi.fn(),
+  stopHostForRestartWithAttemptMock: vi.fn(),
+  relaunchHostAfterRestartWithAttemptMock: vi.fn(),
 }));
 
 vi.mock("../../host/update-progress-marker", () => ({
@@ -88,7 +89,9 @@ vi.mock("../../host/update-mutation", async (importOriginal) => {
     await importOriginal<typeof import("../../host/update-mutation")>();
   return {
     ...actual,
-    restartHostServiceWithAttempt: mocks.restartHostServiceWithAttemptMock,
+    stopHostForRestartWithAttempt: mocks.stopHostForRestartWithAttemptMock,
+    relaunchHostAfterRestartWithAttempt:
+      mocks.relaunchHostAfterRestartWithAttemptMock,
   };
 });
 
@@ -288,7 +291,10 @@ function armActivationDefaults(): void {
   mocks.readHostPidMetadataMock.mockResolvedValue(null);
   mocks.isProcessAliveMock.mockReturnValue(true);
   mocks.assertHostNotBusyMock.mockResolvedValue(undefined);
-  mocks.restartHostServiceWithAttemptMock.mockResolvedValue(undefined);
+  mocks.stopHostForRestartWithAttemptMock.mockResolvedValue({
+    forcedRecycle: false,
+  });
+  mocks.relaunchHostAfterRestartWithAttemptMock.mockResolvedValue(undefined);
 }
 
 describe("buildHostUpdateCommand composite", () => {
@@ -993,7 +999,15 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
       expect.objectContaining({ state: "updating", targetVersion: "2.0.0" }),
     );
     expect(mocks.assertHostNotBusyMock).toHaveBeenCalledWith("production");
-    expect(mocks.restartHostServiceWithAttemptMock).toHaveBeenCalledTimes(1);
+    // The SAME stop → relaunch pair `host restart` drives, force threaded
+    // into the stop half (a cooperative stand-down here, not a kill).
+    expect(mocks.stopHostForRestartWithAttemptMock).toHaveBeenCalledTimes(1);
+    expect(mocks.stopHostForRestartWithAttemptMock.mock.calls[0][4]).toEqual({
+      force: false,
+    });
+    expect(mocks.relaunchHostAfterRestartWithAttemptMock).toHaveBeenCalledTimes(
+      1,
+    );
     expect(mocks.probeHostHealthMock).toHaveBeenCalledTimes(1);
     expect(mocks.deleteUpdateProgressMarkerMock).toHaveBeenCalledWith(
       "production",
@@ -1031,7 +1045,7 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
     })(fakeCtx());
 
     expect(mocks.readHostPidMetadataMock).toHaveBeenCalledTimes(2);
-    expect(mocks.restartHostServiceWithAttemptMock).not.toHaveBeenCalled();
+    expect(mocks.stopHostForRestartWithAttemptMock).not.toHaveBeenCalled();
     const projected = projectInstallResultLikeDesktop(result.data);
     expect(projected.previousVersion).toBe("2.0.0");
     expect(projected.version).toBe("2.0.0");
@@ -1059,7 +1073,7 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
     })(fakeCtx());
 
     expect(mocks.assertHostNotBusyMock).not.toHaveBeenCalled();
-    expect(mocks.restartHostServiceWithAttemptMock).not.toHaveBeenCalled();
+    expect(mocks.stopHostForRestartWithAttemptMock).not.toHaveBeenCalled();
     expect(mocks.writeUpdateProgressMarkerMock).not.toHaveBeenCalledWith(
       "production",
       expect.objectContaining({ state: "failed" }),
@@ -1080,7 +1094,7 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
       ackNonce: null,
     })(fakeCtx());
 
-    expect(mocks.restartHostServiceWithAttemptMock).not.toHaveBeenCalled();
+    expect(mocks.stopHostForRestartWithAttemptMock).not.toHaveBeenCalled();
     expect(mocks.writeUpdateProgressMarkerMock).not.toHaveBeenCalled();
     expect(mocks.deleteUpdateProgressMarkerMock).not.toHaveBeenCalled();
     expect(result.human).toContain("no-op");
@@ -1098,7 +1112,7 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
       ackNonce: null,
     })(fakeCtx());
 
-    expect(mocks.restartHostServiceWithAttemptMock).not.toHaveBeenCalled();
+    expect(mocks.stopHostForRestartWithAttemptMock).not.toHaveBeenCalled();
     expect(mocks.writeUpdateProgressMarkerMock).not.toHaveBeenCalled();
     expect(result.human).toContain("no-op");
   });
@@ -1117,7 +1131,7 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
       ackNonce: null,
     })(fakeCtx());
 
-    expect(mocks.restartHostServiceWithAttemptMock).not.toHaveBeenCalled();
+    expect(mocks.stopHostForRestartWithAttemptMock).not.toHaveBeenCalled();
     expect(mocks.writeUpdateProgressMarkerMock).not.toHaveBeenCalled();
     expect(result.human).toContain("no-op");
   });
@@ -1134,7 +1148,7 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
       ackNonce: null,
     })(fakeCtx());
 
-    expect(mocks.restartHostServiceWithAttemptMock).toHaveBeenCalledTimes(1);
+    expect(mocks.stopHostForRestartWithAttemptMock).toHaveBeenCalledTimes(1);
     const projected = projectInstallResultLikeDesktop(result.data);
     expect(projected.previousVersion).toBe("2.0.0");
     expect(projected.version).toBe("1.9.0");
@@ -1154,7 +1168,66 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
     })(fakeCtx());
 
     expect(mocks.assertHostNotBusyMock).not.toHaveBeenCalled();
-    expect(mocks.restartHostServiceWithAttemptMock).toHaveBeenCalledTimes(1);
+    // `--force` reaches the stop half, not only the busy pre-check: a busy
+    // Desktop-managed host denies the cooperative stand-down claim, and
+    // `host update --force` promises to force-stop it - the recovery case
+    // this path exists for.
+    expect(mocks.stopHostForRestartWithAttemptMock).toHaveBeenCalledTimes(1);
+    expect(mocks.stopHostForRestartWithAttemptMock.mock.calls[0][4]).toEqual({
+      force: true,
+    });
+    expect(mocks.relaunchHostAfterRestartWithAttemptMock).toHaveBeenCalledTimes(
+      1,
+    );
+  });
+
+  it("the record carries a runtime stamp: debt is decided by runtime-stamp EQUALITY, not by SemVer on the catalog version", async () => {
+    // An older CLI installing a newer archive records the archive's own
+    // runtime version beside the catalog version it was asked for. The host
+    // publishes the RUNTIME version in pid.json, so comparing it against the
+    // catalog version would restart a correctly activated host forever.
+    mocks.downloadAndStageHostMock.mockResolvedValue(upToDate("2.0.0"));
+    mocks.readHostInstallRecordMock.mockResolvedValue({
+      ...sampleRecord("2.0.0"),
+      runtimeVersion: "2.0.1",
+    });
+    mocks.readHostPidMetadataMock.mockResolvedValue(pidRecord("2.0.1", 4242));
+    mocks.isProcessAliveMock.mockReturnValue(true);
+
+    const result = await buildHostUpdateCommand({
+      force: false,
+      allowDowngrade: false,
+      ackNonce: null,
+    })(fakeCtx());
+
+    expect(mocks.stopHostForRestartWithAttemptMock).not.toHaveBeenCalled();
+    expect(mocks.writeUpdateProgressMarkerMock).not.toHaveBeenCalled();
+    expect(result.human).toContain("no-op");
+  });
+
+  it("the record carries a runtime stamp the running host does not match: debt, even when the catalog versions would compare equal", async () => {
+    mocks.downloadAndStageHostMock.mockResolvedValue(upToDate("2.0.0"));
+    mocks.readHostInstallRecordMock.mockResolvedValue({
+      ...sampleRecord("2.0.0"),
+      runtimeVersion: "2.0.0",
+    });
+    // Same catalog identity, different runtime stamp: the committed archive
+    // is not what is running.
+    mocks.readHostPidMetadataMock.mockResolvedValue(
+      pidRecord("2.0.0-rc.3", 4242),
+    );
+    mocks.isProcessAliveMock.mockReturnValue(true);
+
+    const result = await buildHostUpdateCommand({
+      force: false,
+      allowDowngrade: false,
+      ackNonce: null,
+    })(fakeCtx());
+
+    expect(mocks.stopHostForRestartWithAttemptMock).toHaveBeenCalledTimes(1);
+    const projected = projectInstallResultLikeDesktop(result.data);
+    expect(projected.previousVersion).toBe("2.0.0-rc.3");
+    expect(projected.version).toBe("2.0.0");
   });
 
   it("the host is busy: assertHostNotBusy rejects, the marker is left failed, and restart never runs", async () => {
@@ -1179,7 +1252,7 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
       })(fakeCtx()),
     ).rejects.toMatchObject({ code: CLI_ERROR_CODES.HOST_BUSY });
 
-    expect(mocks.restartHostServiceWithAttemptMock).not.toHaveBeenCalled();
+    expect(mocks.stopHostForRestartWithAttemptMock).not.toHaveBeenCalled();
     expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenLastCalledWith(
       "production",
       expect.objectContaining({ state: "failed", targetVersion: "2.0.0" }),
@@ -1206,7 +1279,7 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
       code: CLI_ERROR_CODES.HOST_UPDATE_HEALTH_CHECK_FAILED,
     });
 
-    expect(mocks.restartHostServiceWithAttemptMock).toHaveBeenCalledTimes(1);
+    expect(mocks.stopHostForRestartWithAttemptMock).toHaveBeenCalledTimes(1);
     expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenLastCalledWith(
       "production",
       expect.objectContaining({

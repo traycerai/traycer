@@ -1,4 +1,7 @@
-import { compareHostVersions } from "@traycer-clients/shared/host-version/compare-host-versions";
+import {
+  compareHostVersions,
+  isValidHostVersion,
+} from "@traycer-clients/shared/host-version/compare-host-versions";
 import { installHostDowngrade } from "./host-update-downgrade";
 import type { ApplyHostOutcome } from "../installer/apply";
 import {
@@ -26,7 +29,8 @@ import { installDispatchAckStamper } from "../host/update-dispatch-ack";
 import { hostHomeDir } from "../store/paths";
 import {
   applyHostWithAttempt,
-  restartHostServiceWithAttempt,
+  relaunchHostAfterRestartWithAttempt,
+  stopHostForRestartWithAttempt,
 } from "../host/update-mutation";
 import { readHostPidMetadata } from "../host/pid-metadata";
 import { isProcessAlive } from "../store/process-identity";
@@ -332,8 +336,23 @@ interface ActivationDebt {
  *   host that is DOWN is the service manager's problem, not this command's -
  *   `host start` re-resolves the install record on every spawn, so the next
  *   launch already runs the committed bytes;
- * - incomparable or equal versions: a `local-*` build is not a target this
- *   command reasons about, and equal means activated.
+ * - a running version that is not a release version: a `local-*` dev build
+ *   is not a host this command reasons about, whatever the record says;
+ * - a match: the committed archive is what is running.
+ *
+ * "Match" is decided in the RUNTIME identity domain when the record has one.
+ * `pid.json` publishes the version the host binary reports about itself,
+ * and the install record keeps that same stamp as `runtimeVersion` (read
+ * from the extracted archive, or stamped after its first run) precisely
+ * because it can differ from the catalog `version` the caller asked for -
+ * an older CLI installing a newer archive, a build whose self-reported
+ * version carries a suffix the manifest does not. Ordering those two
+ * domains by SemVer would skip a needed restart when they happen to read
+ * equal, or restart a correctly activated host on every run when they do
+ * not; equality of runtime stamps is the test Desktop uses, and it is the
+ * one used here. Only a record with no runtime stamp yet falls back to the
+ * catalog version, compared with the same comparator the update decision
+ * itself uses (comparable and unequal).
  *
  * The comparison is on VERSION rather than on install generation because
  * `pid.json` publishes the version and nothing finer; a swap to the same
@@ -351,8 +370,13 @@ async function detectActivationDebt(
   if (installed === null) return null;
   const running = await readHostPidMetadata(environment);
   if (running === null || !isProcessAlive(running.pid)) return null;
-  const comparison = compareHostVersions(running.version, installed.version);
-  if (!comparison.comparable || comparison.ordering === "equal") return null;
+  if (!isValidHostVersion(running.version)) return null;
+  if (installed.runtimeVersion !== null) {
+    if (running.version === installed.runtimeVersion) return null;
+  } else {
+    const comparison = compareHostVersions(running.version, installed.version);
+    if (!comparison.comparable || comparison.ordering === "equal") return null;
+  }
   return {
     installedVersion: installed.version,
     runningVersion: running.version,
@@ -409,11 +433,29 @@ async function activateInstalledAndProjectLegacy(
     if (!force) {
       await assertHostNotBusy(environment);
     }
-    await restartHostServiceWithAttempt(
+    // The stop → relaunch pair `host restart` drives, with `force` threaded
+    // into the stop half. The busy gate above is only the pre-check: on a
+    // Desktop-managed macOS host the stop itself claims a cooperative
+    // stand-down that a busy host denies, so a `--force` that skipped the
+    // gate but not the claim would still fail to activate - in precisely
+    // the recovery case `host update --force` exists for. `stopForRestart`
+    // also reports an unreachable host as a forced recycle instead of
+    // throwing, so the relaunch below repairs it rather than aborting.
+    const controller = createServiceController();
+    const label = serviceLabelFor(environment);
+    const stopped = await stopHostForRestartWithAttempt(
       capability,
       contenderOptions,
-      createServiceController(),
-      serviceLabelFor(environment),
+      controller,
+      label,
+      { force },
+    );
+    await relaunchHostAfterRestartWithAttempt(
+      capability,
+      contenderOptions,
+      controller,
+      label,
+      stopped,
     );
     return {
       ...projectNoOp(installed),
