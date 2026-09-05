@@ -1265,19 +1265,90 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
       ackNonce: null,
     })(fakeCtx());
 
-    const markerTargets = mocks.writeUpdateProgressMarkerMock.mock.calls.map(
-      (call) => {
-        const progress = call[1] as { targetVersion: string; state: string };
-        return `${progress.state}:${progress.targetVersion}`;
-      },
+    // The pre-lock `updating:2.0.0` is written once, unconditionally. The
+    // re-point under the lock is ownership-aware: it goes through the
+    // compare-and-swap against that same pre-lock marker, never a second
+    // unconditional write.
+    expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenCalledTimes(1);
+    const written = mocks.writeUpdateProgressMarkerMock.mock
+      .calls[0][1] as HostUpdateProgress;
+    expect(written.state).toBe("updating");
+    expect(written.targetVersion).toBe("2.0.0");
+    expect(
+      mocks.replaceUpdateProgressMarkerIfUnchangedMock,
+    ).toHaveBeenCalledWith(
+      "production",
+      written,
+      expect.objectContaining({ state: "updating", targetVersion: "2.1.0" }),
     );
-    expect(markerTargets).toEqual(["updating:2.0.0", "updating:2.1.0"]);
     expect(mocks.stopHostForRestartWithAttemptMock).toHaveBeenCalledTimes(1);
     expect(mocks.probeHostHealthMock).toHaveBeenCalledTimes(1);
+    // The compare-and-swap reports "replaced" by default, so the marker this
+    // run tracks follows the re-pointed record - the final clear targets the
+    // MOVED version, not the stale pre-lock one.
+    const repointed = mocks.replaceUpdateProgressMarkerIfUnchangedMock.mock
+      .calls[0][2] as HostUpdateProgress;
+    expect(
+      mocks.deleteUpdateProgressMarkerIfUnchangedMock,
+    ).toHaveBeenCalledWith("production", repointed);
     const projected = projectInstallResultLikeDesktop(result.data);
     expect(projected.previousVersion).toBe("1.0.0");
     expect(projected.version).toBe("2.1.0");
     expect(result.human).toContain("updated host 1.0.0 → 2.1.0");
+  });
+
+  it("the record moved under the lock but the marker is no longer ours: the re-point is refused, and the final clear still targets the ORIGINAL marker", async () => {
+    // Same setup as the re-point test above, but the compare-and-swap reports
+    // the pre-lock marker no longer matches what is on disk (a newer updater
+    // owns it now). The activation still proceeds - the debt clears either
+    // way - but the progress marker this run tracks must stay pinned to the
+    // ORIGINAL pre-lock record rather than following a re-point that never
+    // actually landed.
+    mocks.downloadAndStageHostMock.mockResolvedValue(upToDate("2.0.0"));
+    mocks.readHostInstallRecordMock
+      .mockResolvedValueOnce(sampleRecord("2.0.0"))
+      .mockResolvedValue(sampleRecord("2.1.0"));
+    mocks.readHostPidMetadataMock.mockResolvedValue(pidRecord("1.0.0", 4242));
+    mocks.identityVerdictMock.mockResolvedValue("current");
+    mocks.replaceUpdateProgressMarkerIfUnchangedMock.mockResolvedValue(
+      "changed",
+    );
+
+    const result = await buildHostUpdateCommand({
+      force: false,
+      allowDowngrade: false,
+      ackNonce: null,
+    })(fakeCtx());
+
+    expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenCalledTimes(1);
+    const written = mocks.writeUpdateProgressMarkerMock.mock
+      .calls[0][1] as HostUpdateProgress;
+    expect(written.targetVersion).toBe("2.0.0");
+    expect(
+      mocks.replaceUpdateProgressMarkerIfUnchangedMock,
+    ).toHaveBeenCalledWith(
+      "production",
+      written,
+      expect.objectContaining({ state: "updating", targetVersion: "2.1.0" }),
+    );
+    // Activation still proceeds: a refused re-point does not block the
+    // restart, it only leaves the progress marker pointed at the stale
+    // record.
+    expect(mocks.stopHostForRestartWithAttemptMock).toHaveBeenCalledTimes(1);
+    expect(mocks.relaunchHostAfterRestartWithAttemptMock).toHaveBeenCalledTimes(
+      1,
+    );
+    expect(mocks.probeHostHealthMock).toHaveBeenCalledTimes(1);
+    // The final clear is CONDITIONAL on `writtenMarker`, which never moved
+    // off the original pre-lock record because the swap reported "changed" -
+    // it must target that original marker, never a record naming the moved
+    // 2.1.0 version.
+    expect(
+      mocks.deleteUpdateProgressMarkerIfUnchangedMock,
+    ).toHaveBeenCalledWith("production", written);
+    const projected = projectInstallResultLikeDesktop(result.data);
+    expect(projected.previousVersion).toBe("1.0.0");
+    expect(projected.version).toBe("2.1.0");
   });
 
   it("the running host VANISHES under the lock (pid gone, not replaced): relaunched through the stop → relaunch pair, busy gate not asked, health probed, reported as the update", async () => {

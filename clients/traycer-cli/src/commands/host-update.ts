@@ -288,17 +288,45 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
           activationDebt.runningVersion,
           async (installedVersion) => {
             if (installedVersion === markerTargetVersion) return;
-            markerTargetVersion = installedVersion;
-            writtenMarker = progressRecord({
+            const repointed = progressRecord({
               state: "updating",
               error: null,
               targetVersion: installedVersion,
             });
-            await writeUpdateProgressMarkerSafely(
-              ctx.runtime.logger,
+            // Ownership-aware like every other write after the first: a newer
+            // updater's pre-lock `updating` may already sit at the path, and
+            // an unconditional re-point would replace it with a record THIS
+            // run then clears at the end - leaving that updater's whole
+            // apply/restart without its progress signal. The re-point lands
+            // only over this run's own marker, and `writtenMarker` follows
+            // what is actually on disk: if the swap reports the marker is no
+            // longer ours, it stays pointed at the old record, so the later
+            // stamp and clear (both conditional on it) leave the newer
+            // updater's marker alone.
+            if (writtenMarker === null) {
+              writtenMarker = repointed;
+              markerTargetVersion = installedVersion;
+              await writeUpdateProgressMarkerSafely(
+                ctx.runtime.logger,
+                environment,
+                repointed,
+              );
+              return;
+            }
+            const outcome = await replaceUpdateProgressMarkerIfUnchanged(
               environment,
               writtenMarker,
+              repointed,
             );
+            if (outcome === "replaced") {
+              writtenMarker = repointed;
+              markerTargetVersion = installedVersion;
+            } else {
+              ctx.runtime.logger.info(
+                "Host update did not re-point the progress marker - another updater owns it now",
+                { environment, installedVersion },
+              );
+            }
           },
         );
         legacy = activation.legacy;
