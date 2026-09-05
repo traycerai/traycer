@@ -205,7 +205,7 @@ function makeSwappableStreamWrapper(
   const wrapper = ({ children }: { children: ReactNode }) => (
     <QueryClientProvider client={queryClient}>
       <StreamRuntimeContext.Provider
-        value={{ wsStreamClient: holder.current, hostId: null }}
+        value={{ wsStreamClient: holder.current, hostId: null, retain: null }}
       >
         {children}
       </StreamRuntimeContext.Provider>
@@ -274,6 +274,7 @@ describe("useGitListChangedFilesSubscription", () => {
           value={{
             wsStreamClient: mockWsStreamClient,
             hostId: null,
+            retain: null,
           }}
         >
           {children}

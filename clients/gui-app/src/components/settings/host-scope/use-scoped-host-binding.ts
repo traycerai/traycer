@@ -20,10 +20,18 @@ import type { HostScope } from "@/components/settings/host-scope/use-host-scope"
  *     `useTabHostClient()` and its host `useTabHostId()`. It has no `HostScope`
  *     to hand this hook, so it structurally cannot use it.
  *
- * SEVEN surfaces re-provide `HostRuntimeContext` in total: the five panels
- * through this hook (`rate-limit-icon`, `shell`, `diagnostics`, `providers`,
- * `host`) plus those two. Anything reading `useHostClient()` /
- * `useAddressableHostId()` beneath any of them gets that surface's host.
+ * EIGHT surfaces re-provide `HostRuntimeContext` in total: the six through
+ * this hook (`rate-limit-icon`, `shell`, `diagnostics`, `providers`, `host`,
+ * and the onboarding TOUR) plus those two. Anything reading `useHostClient()`
+ * / `useAddressableHostId()` beneath any of them gets that surface's host.
+ *
+ * The tour (`onboarding-page.tsx`) is the eighth, and the first outside
+ * Settings-shaped surfaces: its two host-dependent acts read one machine -
+ * the session scan lists what is on it, the agent guide is stored on it - so
+ * a person with several hosts can run the tour once and still import into,
+ * and write a guide for, whichever machine they name. It re-provides BOTH
+ * contexts for that reason, and it is safe for the positional reason below:
+ * the tour has no composer, and so no path to the microphone.
  *
  * ⚠ A RE-PROVIDER MUST NOT WRAP A SURFACE CONTAINING THE MIC PATH.
  * `useDictationAvailability` reads `useHostClient()` and is app-wide BY DESIGN
@@ -41,10 +49,22 @@ import type { HostScope } from "@/components/settings/host-scope/use-host-scope"
  * user's microphone rides, and a stream re-provider above a composer is the
  * voice-to-the-wrong-machine outcome directly rather than by implication.
  * That population is no longer a single surface: `resource-monitor-popover`
- * was the only stream re-provider, and the epic sidebar's file tree and git
- * diff panel are now two more. All three are file/diff browsers containing no
- * composer, which is what keeps this safe — again positionally, not
- * structurally.
+ * was the only stream re-provider, and the epic sidebar's file tree, the git
+ * diff panel, the HOST OVERVIEW (`host-settings-panel.tsx`, whose
+ * `StreamRuntimeContext.Provider` carries `useScopedStreamBinding`) and the
+ * onboarding TOUR are now four more. The Overview joined the list for its
+ * Data & migration group: both rows move ONE machine's local data over a
+ * stream, so the stream has to be the named host's. The tour joined it for
+ * the same reason one act down — the session scan and the run it starts are
+ * that machine's. Both are safe for the same positional reason as the other
+ * three — they contain no composer, and so no path to the microphone.
+ *
+ * Two consumers of a re-provided stream now also CHECK it before acting,
+ * because this hook's binding lands in an effect: `host-import-migration-
+ * section.tsx` withholds its rows and the tour withholds its stages until
+ * `useStreamRuntimeBinding()` names the host the surface does. A re-provider
+ * whose subtree starts work on one machine's data owes that check — the
+ * commit after a pick is still on the ambient transport.
  *
  * Three arms, and which one you are in is the whole question:
  *

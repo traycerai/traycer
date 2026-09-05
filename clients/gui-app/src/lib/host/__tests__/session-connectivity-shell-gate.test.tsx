@@ -59,6 +59,9 @@ function mountStrip(args: {
   const binding: StreamRuntimeBinding = {
     wsStreamClient: createFakeHostStreamClient(args.isReady),
     hostId: "host-a",
+    // Nothing to pin: this stands in for the app-wide binding, whose transport
+    // outlives every surface reading it.
+    retain: null,
   };
   return (
     <RunnerHostProvider runnerHost={args.runnerHost}>

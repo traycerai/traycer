@@ -47,6 +47,7 @@ import {
   settledHostBusy,
 } from "@/components/settings/panels/my-hosts-model";
 import { persistedDraftFromIdentity } from "@/components/settings/panels/host-settings-panel-model";
+import { HostImportMigrationSection } from "@/components/settings/panels/host-import-migration-section";
 import { LocalPackageManagerUpgradeHint } from "@/components/settings/panels/host-settings-package-manager-upgrade-hint";
 import { useRunnerConvergeReady } from "@/hooks/runner/use-runner-converge-ready-mutation";
 import { useRunnerHostRemovalStateQuery } from "@/hooks/runner/use-runner-host-removal-state-query";
@@ -1012,6 +1013,18 @@ export function HostOverviewPanel(props: {
           )
         }
       />
+
+      {/* Everything about this host's OWN local data: the sessions on its disk
+          waiting to be imported, and the SQLite tasks and epics still to reach
+          cloud. Both moved off General, which is app-wide and so could only
+          ever speak for whichever host the window pointed at.
+
+          Gated on `usable` for the reason every host read on this page is - a
+          hook mounted under a non-ready scope fires against the ambient host
+          regardless of what the gate hides. The section applies a second,
+          narrower check of its own: the stream beneath it must already name
+          this host. */}
+      {!usable ? null : <HostImportMigrationSection hostId={scope.hostId} />}
 
       {/* Local machine only, by the nature of the fact rather than a scope
           rule: the hint is Desktop's launch-time comparison of ITS bundled CLI

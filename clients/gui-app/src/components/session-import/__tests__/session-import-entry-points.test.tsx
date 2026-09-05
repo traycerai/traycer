@@ -2,11 +2,56 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionImportStatusResponse } from "@traycer/protocol/host/session-import/contracts";
-import { GeneralSettingsPanel } from "@/components/settings/panels/general-settings-panel";
+import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
+import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
+import {
+  StreamRuntimeContext,
+  type StreamRuntimeBinding,
+} from "@/lib/host/stream-runtime-context";
+import { HostImportMigrationSection } from "@/components/settings/panels/host-import-migration-section";
 import {
   progressEntryFrom,
   useSessionImportRunStore,
 } from "@/stores/session-import/session-import-run-store";
+
+const HOST = "host-test";
+
+/**
+ * A stub satisfying `IHostStreamClient` honestly rather than casting - the
+ * section never calls through to it, since every host RPC it drives is mocked
+ * separately below.
+ */
+function fakeWsStreamClient(): IHostStreamClient<HostStreamRpcRegistry> {
+  return {
+    subscribe: () => {
+      throw new Error("not exercised by this test");
+    },
+    subscribeWithParamsProvider: () => {
+      throw new Error("not exercised by this test");
+    },
+    close: () => undefined,
+    isClosed: () => false,
+    isReady: () => true,
+    notifyBearerRotated: () => undefined,
+    reconnectAll: () => undefined,
+    getMethodSupport: () => "unknown",
+    subscribeMethodSupport: () => () => undefined,
+    getMethodSchemaVersion: () => null,
+    subscribeAvailabilityRecovered: () => () => undefined,
+    getClosedReason: () => null,
+    onClosed: () => () => undefined,
+    instanceId: "fake-ws-stream-client",
+  };
+}
+
+// PROVIDED rather than mocked: the section reads its binding from
+// `StreamRuntimeContext`, exactly as it does beneath the Host Overview's own
+// re-provider, so the tests below exercise that read instead of replacing it.
+const STREAM_BINDING: StreamRuntimeBinding = {
+  wsStreamClient: fakeWsStreamClient(),
+  hostId: HOST,
+  retain: null,
+};
 
 /**
  * The two seams the settings entry point sits on. Mocked at module level so
@@ -22,7 +67,7 @@ const sessionImportStatusMock = vi.hoisted(
 );
 
 vi.mock("@/hooks/session-import/use-session-import-available", () => ({
-  useSessionImportAvailable: () => sessionImportAvailableMock.value,
+  useSessionImportAvailableFor: () => sessionImportAvailableMock.value,
 }));
 
 vi.mock("@/hooks/session-import/use-session-import-status-query", () => ({
@@ -41,47 +86,6 @@ vi.mock("@/components/session-import/session-import-dialog", () => ({
   ),
 }));
 
-/**
- * Two of the panel's other rows key on what the shell can do - voice reads
- * `hasLocalHost`, prevent-sleep feature-detects the power bridge - so drawing
- * the panel at all needs a runner host. Desktop-flavoured, matching the shape
- * the panel's own suite uses: those rows render, which is the realistic
- * neighbourhood for the row under test.
- */
-const runnerHostMock = vi.hoisted(
-  (): {
-    current: {
-      readonly hasLocalHost: boolean;
-      readonly power: { setSleepBlocked: () => Promise<void> };
-    };
-  } => ({
-    current: {
-      hasLocalHost: true,
-      power: { setSleepBlocked: () => Promise.resolve() },
-    },
-  }),
-);
-
-// Both accessors, because replacing the module removes whichever one is left
-// out: rows in this panel read the throwing one for capabilities they cannot
-// render without, and the non-throwing one where absence is a legitimate
-// answer. Same host either way - the difference is only what each promises.
-vi.mock("@/providers/use-runner-host", () => ({
-  useRunnerHost: () => runnerHostMock.current,
-  useRunnerHostOrNull: () => runnerHostMock.current,
-}));
-
-const navigateMock = vi.hoisted(() => vi.fn());
-
-vi.mock("@tanstack/react-router", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("@tanstack/react-router")>();
-  return {
-    ...actual,
-    useNavigate: () => navigateMock,
-  };
-});
-
 function statusOf(
   overrides: Partial<SessionImportStatusResponse>,
 ): SessionImportStatusResponse {
@@ -92,12 +96,11 @@ function statusOf(
   };
 }
 
-describe("SessionImportSettingsRow (via GeneralSettingsPanel)", () => {
+describe("Import your work row (via HostImportMigrationSection)", () => {
   beforeEach(() => {
     sessionImportAvailableMock.value = true;
     sessionImportStatusMock.data = undefined;
-    useSessionImportRunStore.getState().reset();
-    navigateMock.mockReset();
+    useSessionImportRunStore.setState({ runs: new Map() });
   });
 
   afterEach(() => {
@@ -110,7 +113,9 @@ describe("SessionImportSettingsRow (via GeneralSettingsPanel)", () => {
     });
     render(
       <QueryClientProvider client={queryClient}>
-        <GeneralSettingsPanel />
+        <StreamRuntimeContext.Provider value={STREAM_BINDING}>
+          <HostImportMigrationSection hostId={HOST} />
+        </StreamRuntimeContext.Provider>
       </QueryClientProvider>,
     );
   }
@@ -147,13 +152,14 @@ describe("SessionImportSettingsRow (via GeneralSettingsPanel)", () => {
       },
     });
 
-    useSessionImportRunStore.getState().markStarting(new Map());
-    useSessionImportRunStore.getState().applyStarted({
+    useSessionImportRunStore.getState().markStarting(HOST, new Map());
+    useSessionImportRunStore.getState().applyStarted(HOST, {
       runId: "run-live",
       total: 5,
       attached: false,
     });
     useSessionImportRunStore.getState().applyProgress(
+      HOST,
       progressEntryFrom({
         runId: "run-live",
         harness: "claude",

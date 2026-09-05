@@ -20,11 +20,6 @@ import {
 import { GeneralSettingsPanel } from "@/components/settings/panels/general-settings-panel";
 import { modLabel } from "@/lib/keybindings/platform";
 import { clearAllPersistedStores } from "@/lib/persist";
-import {
-  useMigrationRunStore,
-  type MigrationRunState,
-} from "@/stores/migration/migration-run-store";
-import { useSessionImportRunStore } from "@/stores/session-import/session-import-run-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
@@ -82,32 +77,6 @@ interface TestHostClient {
   readonly getActiveHostId: () => string | null;
 }
 
-const INITIAL_COUNTS = {
-  taskChainsComplete: 0,
-  taskChainsSkipped: 0,
-  taskChainsFailed: 0,
-  epicsComplete: 0,
-  epicsFailed: 0,
-  replaysIncomplete: 0,
-};
-
-const idleState: MigrationRunState = {
-  status: "idle",
-  totals: null,
-  counts: INITIAL_COUNTS,
-  finalSuccess: null,
-  remoteRunning: false,
-};
-
-const runningState: MigrationRunState = {
-  status: "running",
-  totals: { totalTaskChains: 7, totalLocalEpics: 3 },
-  counts: { ...INITIAL_COUNTS, taskChainsComplete: 2 },
-  finalSuccess: null,
-  remoteRunning: false,
-};
-
-const migrationStart = vi.hoisted(() => ({ fn: vi.fn() }));
 const navigateMock = vi.hoisted(() => vi.fn());
 
 interface TestPerWindowSnapshot {
@@ -187,15 +156,6 @@ const hostQueryMocks = vi.hoisted((): HostQueryMocks => ({
       websocketUrl: "ws://remote.invalid",
     },
   ],
-}));
-
-vi.mock("@/components/migration/migration-run-handle", () => ({
-  startMigrationRun: () => {
-    migrationStart.fn();
-  },
-  isMigrationRunStartReady: () => true,
-  setMigrationStartHandle: () => undefined,
-  getMigrationStartHandle: () => null,
 }));
 
 vi.mock("@/lib/host", () => ({
@@ -292,8 +252,6 @@ function makeBridgeWithoutClear(snapshot: TestPerWindowSnapshot): {
 describe("GeneralSettingsPanel", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    useMigrationRunStore.setState(idleState);
-    useSessionImportRunStore.getState().reset();
     hostQueryMocks.queryResult = {
       data: { bytes: 432 * 1024 * 1024 },
       isPending: false,
@@ -443,19 +401,6 @@ describe("GeneralSettingsPanel", () => {
     expect(toggle.getAttribute("aria-checked")).toBe("false");
   });
 
-  it("renders the Data migration row and starts the stream on click", () => {
-    renderPanel();
-
-    expect(screen.getByText("Data migration")).toBeTruthy();
-    const button = screen.getByRole("button", {
-      name: "Re-attempt migration",
-    });
-
-    fireEvent.click(button);
-
-    expect(migrationStart.fn).toHaveBeenCalledTimes(1);
-  });
-
   it("renders the pinned context usage breakdown row and toggles the setting", () => {
     renderPanel();
 
@@ -553,46 +498,6 @@ describe("GeneralSettingsPanel", () => {
     });
     expect(useOnboardingStore.getState().completedAt).toBe(123);
     expect(useOnboardingStore.getState().step).toBe(0);
-  });
-
-  it("disables the button and renders inline progress while running", () => {
-    useMigrationRunStore.setState(runningState);
-
-    renderPanel();
-
-    expect(
-      screen.getByRole<HTMLButtonElement>("button", {
-        name: "Re-attempt migration",
-      }).disabled,
-    ).toBe(true);
-    expect(
-      screen.getByTestId("settings-reattempt-migration-spinner"),
-    ).toBeTruthy();
-    expect(
-      screen.getByText("Migrating tasks - tasks 2/7, epics 0/3"),
-    ).toBeTruthy();
-  });
-
-  // A submitted run is active before the host has said how big it is, and the
-  // row must not report a size it does not have yet.
-  it("says the import is starting until the host confirms a total, then counts", () => {
-    useSessionImportRunStore.getState().markStarting(new Map());
-
-    renderPanel();
-
-    expect(screen.getByText("Starting import…")).toBeTruthy();
-    expect(screen.queryByText("Importing 0 of 0…")).toBeNull();
-    // Same run, same spinner - only the sentence was waiting on the total.
-    expect(screen.getByTestId("settings-import-sessions-spinner")).toBeTruthy();
-
-    cleanup();
-    useSessionImportRunStore
-      .getState()
-      .applyStarted({ runId: "run-1", total: 3, attached: false });
-
-    renderPanel();
-
-    expect(screen.getByText("Importing 0 of 3…")).toBeTruthy();
   });
 
   // The Danger Zone used to mix three scopes in one red box: one machine's
@@ -721,12 +626,22 @@ describe("GeneralSettingsPanel", () => {
 
     const chat = screen.getByText("Chat & composer");
     const running = screen.getByText("Running agents");
-    const setup = screen.getByText("Setup & migration");
+    const onboarding = screen.getByText("Onboarding");
     const danger = screen.getByText("Danger Zone");
 
     expect(documentPosition(chat, running)).toBe("before");
-    expect(documentPosition(running, setup)).toBe("before");
-    expect(documentPosition(setup, danger)).toBe("before");
+    expect(documentPosition(running, onboarding)).toBe("before");
+    expect(documentPosition(onboarding, danger)).toBe("before");
+  });
+
+  // Both rows moved to the scoped host's Overview: each acts on ONE machine's
+  // local data, and this page is app-wide and names no machine.
+  it("no longer carries the import or data-migration rows", () => {
+    renderPanel();
+
+    expect(screen.queryByTestId("settings-import-sessions")).toBeNull();
+    expect(screen.queryByTestId("settings-reattempt-migration")).toBeNull();
+    expect(screen.queryByText("Setup & migration")).toBeNull();
   });
 
   it("renders named sections as h2 headings outside separate bordered cards", () => {
@@ -738,7 +653,7 @@ describe("GeneralSettingsPanel", () => {
     const sectionTitles = [
       "Chat & composer",
       "Running agents",
-      "Setup & migration",
+      "Onboarding",
       "Danger Zone",
     ] as const;
 
@@ -762,7 +677,7 @@ describe("GeneralSettingsPanel", () => {
 
     const chatHeading = headings[0];
     const runningHeading = headings[1];
-    const setupHeading = headings[2];
+    const onboardingHeading = headings[2];
     const dangerHeading = headings[3];
 
     // Heading and its rows do NOT share the closest bordered card.
@@ -794,7 +709,7 @@ describe("GeneralSettingsPanel", () => {
     expect(runningHeading.closest("section")).toBe(
       preventSleep.closest("section"),
     );
-    expect(setupHeading.closest("section")).toBe(
+    expect(onboardingHeading.closest("section")).toBe(
       productTour.closest("section"),
     );
     expect(dangerHeading.closest("section")).toBe(snapshots.closest("section"));
@@ -809,7 +724,7 @@ describe("GeneralSettingsPanel", () => {
 
     const chat = screen.getByText("Chat & composer");
     const running = screen.getByText("Running agents");
-    const setup = screen.getByText("Setup & migration");
+    const onboarding = screen.getByText("Onboarding");
     const danger = screen.getByText("Danger Zone");
 
     const voice = screen.getByText("Voice input");
@@ -818,7 +733,6 @@ describe("GeneralSettingsPanel", () => {
     const preventSleep = screen.getByText("Prevent sleep while running");
     const globalResources = screen.getByText("Show global resources button");
     const productTour = screen.getByText("Product tour");
-    const dataMigration = screen.getByText("Data migration");
     const snapshots = screen.getByText("Local app state");
 
     // Chat & composer rows sit between that header and Running agents.
@@ -827,18 +741,17 @@ describe("GeneralSettingsPanel", () => {
     expect(documentPosition(quote, pin)).toBe("before");
     expect(documentPosition(pin, running)).toBe("before");
 
-    // Running agents rows sit between that header and Setup & migration.
+    // Running agents rows sit between that header and Onboarding.
     expect(documentPosition(running, preventSleep)).toBe("before");
     expect(documentPosition(preventSleep, globalResources)).toBe("before");
-    expect(documentPosition(globalResources, setup)).toBe("before");
+    expect(documentPosition(globalResources, onboarding)).toBe("before");
     // Prevent sleep is not still in Chat & composer.
     expect(documentPosition(chat, preventSleep)).toBe("before");
     expect(documentPosition(preventSleep, running)).not.toBe("before");
 
-    // Setup & migration: Product tour before Data migration.
-    expect(documentPosition(setup, productTour)).toBe("before");
-    expect(documentPosition(productTour, dataMigration)).toBe("before");
-    expect(documentPosition(dataMigration, danger)).toBe("before");
+    // Onboarding holds the tour alone now.
+    expect(documentPosition(onboarding, productTour)).toBe("before");
+    expect(documentPosition(productTour, danger)).toBe("before");
 
     // Danger Zone content after its header.
     expect(documentPosition(danger, snapshots)).toBe("before");

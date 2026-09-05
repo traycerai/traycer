@@ -7,7 +7,8 @@ import {
 } from "@/components/ui/dialog";
 import { SessionImportWizard } from "@/components/session-import/session-import-wizard";
 import { useSessionImportScan } from "@/components/session-import/use-session-import-scan";
-import { useSessionImportRunStore } from "@/stores/session-import/session-import-run-store";
+import { useStreamHostId } from "@/lib/host/stream-runtime-context";
+import { useSessionImportRun } from "@/stores/session-import/session-import-run-store";
 
 /**
  * The wizard as a Settings dialog. Closing it does not stop an import that has
@@ -19,7 +20,10 @@ export function SessionImportDialog(props: { readonly onClose: () => void }) {
   // The scan lives as long as the dialog is open and pauses while a run owns
   // the screen; the wizard retires a finished run on mount, which is what
   // brings the scan back for a second visit.
-  const runIdle = useSessionImportRunStore((state) => state.status === "idle");
+  // The run on the host this dialog renders under, which is the one its
+  // wizard submits to.
+  const streamHostId = useStreamHostId();
+  const runIdle = useSessionImportRun(streamHostId).status === "idle";
   const scan = useSessionImportScan(runIdle);
   return (
     <Dialog

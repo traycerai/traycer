@@ -1,3 +1,4 @@
+import { useMemo, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   act,
@@ -7,14 +8,25 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { CanonicalTerminalSessionInfo } from "@traycer/protocol/host/terminal/unary-schemas";
 import type { PlainTerminalProjection } from "@traycer/protocol/host/terminal/plain-schemas";
 import type { PlainTerminalCollection } from "@/lib/terminals/plain-terminal-authority";
+import type { BrowserTabIdentity } from "@traycer/protocol/host/browser/contracts";
+import type { BrowserSessionsState } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
+import { useLandingBrowserTombstoneDrain } from "@/providers/landing-browser-tombstone-drain";
 import {
-  landingTerminalLayoutFor,
-  useLandingTerminalStore,
+  independentScope,
+  sessionInfo,
+  tabInfo,
+} from "@/lib/browser-view/sessions/__tests__/browser-session-test-kit";
+import {
+  landingBrowserPendingKills,
+  landingPanelLayoutFor,
+  landingTerminalTabs,
+  useLandingPanelStore,
   type LandingTerminalTabRef,
-} from "@/stores/home/landing-terminal-store";
+} from "@/stores/home/landing-panel-store";
 import {
   recordProviderLoginTerminal,
   useProviderLoginTerminalsStore,
@@ -28,6 +40,7 @@ import { useMobileHeaderRightActions } from "@/stores/layout/mobile-header-right
 import { registerComposerFocus } from "@/lib/composer/composer-focus-registry";
 import {
   handlePrimaryFocusIn,
+  hasPrimaryFocusIntent,
   reconcilePrimaryFocus,
   resetPrimaryFocusCoordinatorForTests,
   setPrimaryFocusInteractionActive,
@@ -70,6 +83,11 @@ const mocks = vi.hoisted(() => {
     Record<string, "legacy" | "capable" | "unknown">
   > = {};
   const plainCanMutateByHost: Partial<Record<string, boolean>> = {};
+  // What the fleet's BROWSER arm reports per device. Empty by default, so the
+  // panel sees `null` for every host and its browser closes fall back to the
+  // tombstone alone - which is what every terminal-only case here wants.
+  const browserSessionsByHost: Partial<Record<string, BrowserSessionsState>> =
+    {};
   return {
     // React reactive host (useAddressableHostId) vs client host (getActiveHostId).
     // Kept in lockstep for ordinary tests; the host-switch race test diverges them.
@@ -80,7 +98,7 @@ const mocks = vi.hoisted(() => {
     clientActiveHostId: null as string | null,
     probeData: undefined as TerminalListFixture | undefined,
     freshProbeData: undefined as TerminalListFixture | undefined,
-    probeError: null,
+    probeError: null as HostRpcError | null,
     dataUpdatedAt: 1,
     primaryWorkspacePath: null as string | null,
     isMobile: false,
@@ -98,6 +116,13 @@ const mocks = vi.hoisted(() => {
     plainRename: vi.fn(),
     plainCloseAsync: vi.fn(),
     plainImportAsync: vi.fn(),
+    browserSessionsByHost,
+    browserCloseTab: vi.fn(() => Promise.resolve()),
+    browserStreamHostIds: [] as readonly string[],
+    // Whether the SHELL has native browser capability. True is a desktop, the
+    // shell every browser scenario here is about; false is the web / mobile
+    // shell that can only watch a tab.
+    runnerHostHasBrowserView: true,
     reconcileXtermHostAfterLayoutTransition: vi.fn(),
     queryClient: {
       cancelQueries: vi.fn(() => Promise.resolve()),
@@ -146,6 +171,12 @@ const mocks = vi.hoisted(() => {
     })),
   };
 });
+
+vi.mock("@/providers/use-runner-host", () => ({
+  useRunnerHostOrNull: () => ({
+    browserView: mocks.runnerHostHasBrowserView ? {} : null,
+  }),
+}));
 
 vi.mock("@tanstack/react-query", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@tanstack/react-query")>();
@@ -266,10 +297,39 @@ vi.mock(
     return {
       LandingTerminalAuthorityFleet: (props: {
         readonly hostIds: readonly string[];
+        readonly browserHostIds: readonly string[];
         readonly onEntry: (hostId: string, entry: unknown) => void;
+        readonly onBrowserSessions: (
+          hostId: string,
+          sessions: BrowserSessionsState | null,
+        ) => void;
       }) => {
-        const { onEntry } = props;
+        const { onBrowserSessions, onEntry } = props;
         const hostKey = props.hostIds.join("\u0000");
+        // Joined so the effect depends on the LIST rather than on the array
+        // identity the panel re-memoizes each render, same as the arm above.
+        const browserHostKey = props.browserHostIds.join("\u0000");
+        // Which devices have published one, so a test that fills the map
+        // mid-run re-publishes on the next render rather than staying silent.
+        const browserSessionsKey = Object.keys(mocks.browserSessionsByHost)
+          .sort()
+          .join("\u0000");
+        useEffect(() => {
+          const browserHostIds =
+            browserHostKey.length === 0 ? [] : browserHostKey.split("\u0000");
+          // The devices the panel is asking to be put on a stream. Recorded
+          // because each one costs a capped per-window browser stream.
+          mocks.browserStreamHostIds = browserHostIds;
+          browserHostIds.forEach((hostId) => {
+            onBrowserSessions(
+              hostId,
+              mocks.browserSessionsByHost[hostId] ?? null,
+            );
+          });
+          return () => {
+            browserHostIds.forEach((hostId) => onBrowserSessions(hostId, null));
+          };
+        }, [browserHostKey, browserSessionsKey, onBrowserSessions]);
         useEffect(() => {
           const hostIds = hostKey.length === 0 ? [] : hostKey.split("\u0000");
           hostIds.forEach((hostId) => {
@@ -317,30 +377,53 @@ vi.mock("@/components/home/terminal-panel/landing-terminal-tile", () => ({
     <div data-testid="landing-terminal-tile">Starting terminal…</div>
   ),
 }));
+// Stood in for the same reason the terminal tile is: the real one mounts a
+// coordinator provider off the host binding, which this suite does not stand
+// up. Its own behavior is covered in `landing-browser-tile.test.tsx`.
+vi.mock("@/components/home/terminal-panel/landing-browser-tile", () => ({
+  // Renders the two props the panel DECIDES, because a browser tile's pixels
+  // are a native view the desktop paints over the window: no DOM assertion can
+  // see whether it is on screen, and `invisible` on an ancestor does not hide
+  // it. Visibility there is this prop, so this is where it has to be asserted.
+  LandingBrowserTile: (props: {
+    readonly tab: { readonly instanceId: string };
+    readonly active: boolean;
+    readonly panelOpen: boolean;
+    readonly watched: boolean;
+  }) => (
+    <div
+      data-testid={`landing-browser-tile-${props.tab.instanceId}`}
+      data-active={String(props.active)}
+      data-panel-open={String(props.panelOpen)}
+      data-watched={String(props.watched)}
+    >
+      Browser
+    </div>
+  ),
+}));
 vi.mock("@/components/epic-canvas/renderers/xterm-host-registry", () => ({
   reconcileXtermHostAfterLayoutTransition:
     mocks.reconcileXtermHostAfterLayoutTransition,
 }));
 
 import { LandingTerminalPanel } from "@/components/home/terminal-panel/landing-terminal-panel";
+import { LANDING_BROWSER_WATCHED_HOST_CAP } from "@/components/home/terminal-panel/landing-browser-presentation";
 import { LandingTerminalGestureProvider } from "@/components/home/terminal-panel/landing-terminal-gesture-provider";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { requestLandingTerminalClose } from "@/lib/terminals/landing-terminal-close-coordinator";
 
 const TEST_LANDING_PAGE_ID = "test-landing-page";
 
 function testLayout() {
-  return landingTerminalLayoutFor(
-    useLandingTerminalStore.getState(),
+  return landingPanelLayoutFor(
+    useLandingPanelStore.getState(),
     TEST_LANDING_PAGE_ID,
   );
 }
 
 function layoutFor(landingPageId: string) {
-  return landingTerminalLayoutFor(
-    useLandingTerminalStore.getState(),
-    landingPageId,
-  );
+  return landingPanelLayoutFor(useLandingPanelStore.getState(), landingPageId);
 }
 
 /**
@@ -354,30 +437,44 @@ function panelUi() {
   return panelUiForDraft(TEST_LANDING_PAGE_ID);
 }
 
+/**
+ * A REAL client, unlike the hand-rolled `mocks.queryClient` the panel's own
+ * `useQueryClient()` reads. The panel opens browser tabs through `useMutation`
+ * / `useIsMutating`, and those resolve the client through react-query's own
+ * internal reference rather than through this suite's mocked export - so the
+ * fake never reaches them and they need a provider. Re-made per test, because
+ * `useIsMutating` counts across the whole client.
+ */
+let testQueryClient = new QueryClient();
+
 function panelUiForDraft(draftId: string | null) {
   return (
-    <TooltipProvider>
-      <LandingTerminalGestureProvider draftId={draftId}>
-        <LandingTerminalPanel />
-      </LandingTerminalGestureProvider>
-    </TooltipProvider>
+    <QueryClientProvider client={testQueryClient}>
+      <TooltipProvider>
+        <LandingTerminalGestureProvider draftId={draftId}>
+          <LandingTerminalPanel />
+        </LandingTerminalGestureProvider>
+      </TooltipProvider>
+    </QueryClientProvider>
   );
 }
 
 function panelUiInBoxlessPaneAnchor() {
   return (
-    <TooltipProvider>
-      <LandingTerminalGestureProvider draftId="draft-a">
-        <div className="flex" data-testid="landing-terminal-layout-row">
-          <div
-            data-testid="landing-terminal-pane-anchor"
-            style={{ display: "contents" }}
-          >
-            <LandingTerminalPanel />
+    <QueryClientProvider client={testQueryClient}>
+      <TooltipProvider>
+        <LandingTerminalGestureProvider draftId="draft-a">
+          <div className="flex" data-testid="landing-terminal-layout-row">
+            <div
+              data-testid="landing-terminal-pane-anchor"
+              style={{ display: "contents" }}
+            >
+              <LandingTerminalPanel />
+            </div>
           </div>
-        </div>
-      </LandingTerminalGestureProvider>
-    </TooltipProvider>
+        </LandingTerminalGestureProvider>
+      </TooltipProvider>
+    </QueryClientProvider>
   );
 }
 
@@ -520,6 +617,76 @@ async function drainDeferredListFetches(
   });
 }
 
+/**
+ * Picks Terminal in the placeholder's chooser.
+ *
+ * An empty panel opens onto the chooser instead of spawning, so a case that
+ * used to reach a terminal (or its directory picker) straight off the opening
+ * gesture now says "terminal" first. `revealAndCreateTerminal` runs from the
+ * click exactly as it did from the auto-spawn, picker round trip included.
+ */
+async function pickTerminalFromChooser(): Promise<void> {
+  const terminalCard = await screen.findByTestId(
+    "landing-new-tab-card-terminal",
+  );
+  await waitFor(() => {
+    expect(terminalCard.getAttribute("aria-disabled")).toBeNull();
+  });
+  fireEvent.click(terminalCard);
+}
+
+/** A device whose browser stream is live and has published an inventory. */
+function browserSessionsState(
+  overrides: Partial<BrowserSessionsState>,
+): BrowserSessionsState {
+  return {
+    hostId: "host-a",
+    lifecycle: "live",
+    inventoryReady: true,
+    canMaterializeElectron: false,
+    items: [],
+    errorMessage: null,
+    retry: () => undefined,
+    openTab: () => Promise.reject(new Error("not used in this test")),
+    closeTab: () => Promise.reject(new Error("not used in this test")),
+    attachTab: () => Promise.reject(new Error("not used in this test")),
+    moveTab: () => Promise.reject(new Error("not used in this test")),
+    ...overrides,
+  };
+}
+
+/** One browser tab on `hostId`, added to the store in strip order. */
+function addBrowserTab(hostId: string, instanceId: string): void {
+  useLandingPanelStore.getState().addTab({
+    kind: "browser",
+    instanceId,
+    hostId,
+    sessionId: `session-${instanceId}`,
+    tabId: `tab-${instanceId}`,
+    name: `${hostId}.example`,
+    titleSource: "default",
+  });
+}
+
+/**
+ * The always-mounted drain, standing in for the recovery bridge that carries it
+ * app-wide. Rendered beside the panel so a close is observed with BOTH watchers
+ * of the tombstone set present, which is the only arrangement in which a second
+ * sender can show up at all.
+ */
+function BrowserTombstoneDrainProbe(): ReactNode {
+  const pendingKills = useLandingPanelStore((state) => state.pendingKills);
+  const browserPendingKills = useMemo(
+    () => landingBrowserPendingKills(pendingKills),
+    [pendingKills],
+  );
+  useLandingBrowserTombstoneDrain({
+    pendingKills: browserPendingKills,
+    browserSessions: mocks.browserSessionsByHost,
+  });
+  return null;
+}
+
 async function flushAnimationFrame(): Promise<void> {
   await act(
     () =>
@@ -614,6 +781,14 @@ describe("<LandingTerminalPanel />", () => {
     mocks.plainImportAsync.mockImplementation(() =>
       Promise.reject(new Error("unexpected legacy import")),
     );
+    mocks.browserSessionsByHost = {};
+    mocks.browserStreamHostIds = [];
+    mocks.runnerHostHasBrowserView = true;
+    mocks.browserCloseTab.mockClear();
+    // `mockClear` keeps an implementation a test installed, so restore the
+    // declared default here - a test that defers its close must not leak that
+    // into every test after it.
+    mocks.browserCloseTab.mockImplementation(() => Promise.resolve());
     // Reset (not just clear): a test may override the return with a fail-closed
     // `null`, and mockClear would leak that override into later tests. Restore
     // the default host-pinned client here.
@@ -631,7 +806,13 @@ describe("<LandingTerminalPanel />", () => {
     mocks.queryClient.fetchQuery.mockImplementation(() =>
       Promise.resolve(mocks.freshProbeData ?? mocks.probeData),
     );
-    useLandingTerminalStore.getState().resetForTests();
+    useLandingPanelStore.getState().resetForTests();
+    testQueryClient = new QueryClient({
+      defaultOptions: {
+        mutations: { retry: false },
+        queries: { retry: false },
+      },
+    });
   });
 
   afterEach(() => {
@@ -641,7 +822,7 @@ describe("<LandingTerminalPanel />", () => {
     focusCleanups.length = 0;
     resetTerminalFocusRegistryForTests();
     resetPrimaryFocusCoordinatorForTests();
-    useLandingTerminalStore.getState().resetForTests();
+    useLandingPanelStore.getState().resetForTests();
     useProviderLoginTerminalsStore.setState({
       providerBySessionKey: {},
       recentKeys: [],
@@ -660,6 +841,46 @@ describe("<LandingTerminalPanel />", () => {
       // the header) only renders the toggle while that page is on screen.
       seedTabsLayout([PANEL_DRAFT_TAB], PANEL_DRAFT_TAB.id);
       mocks.probeData = emptyList("/Users/dev");
+    });
+
+    // The key bar sends terminal chords to one instance id. Over a browser row
+    // its keys have nowhere to land, and on a phone it would cover the surface
+    // the reader is actually on.
+    it("mounts the key bar for a terminal row and not for a browser row", async () => {
+      mocks.browserSessionsByHost = {
+        "host-a": browserSessionsState({}),
+      };
+      useLandingPanelStore.getState().addTab({
+        kind: "terminal",
+        instanceId: "terminal-instance",
+        sessionId: "terminal-session",
+        hostId: "host-a",
+        cwd: "/workspace/project",
+        name: "project",
+        titleSource: "default",
+      });
+      useLandingPanelStore.getState().addTab({
+        kind: "browser",
+        instanceId: "browser-instance",
+        hostId: "host-a",
+        sessionId: "browser-session",
+        tabId: "browser-tab",
+        name: "example.com",
+        titleSource: "default",
+      });
+      useLandingPanelStore.getState().activateTab("terminal-instance");
+      useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+      render(panelUi());
+
+      expect(await screen.findByTestId("mobile-terminal-key-bar")).toBeTruthy();
+
+      act(() => {
+        useLandingPanelStore.getState().activateTab("browser-instance");
+      });
+
+      await waitFor(() => {
+        expect(screen.queryByTestId("mobile-terminal-key-bar")).toBeNull();
+      });
     });
 
     it("registers the reveal toggle for the mobile header instead of floating it", async () => {
@@ -694,9 +915,7 @@ describe("<LandingTerminalPanel />", () => {
     // app header - collapse therefore belongs in the same slot rather than in a
     // panel bar stacked under a header that is still on screen.
     it("turns into collapse in the same slot while the panel is open", async () => {
-      useLandingTerminalStore
-        .getState()
-        .setPanelOpen(TEST_LANDING_PAGE_ID, true);
+      useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
       render(
         <>
           {panelUi()}
@@ -714,16 +933,14 @@ describe("<LandingTerminalPanel />", () => {
     });
 
     it("renders no panel header row of its own", async () => {
-      useLandingTerminalStore
-        .getState()
-        .setPanelOpen(TEST_LANDING_PAGE_ID, true);
+      useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
       render(panelUi());
       await screen.findByTestId("landing-terminal-panel");
 
       // Collapse lives in the header slot, which this render does not mount.
       expect(screen.queryByTestId("landing-terminal-collapse")).toBeNull();
       expect(
-        screen.queryByRole("button", { name: "Maximize terminal panel" }),
+        screen.queryByRole("button", { name: "Maximize panel" }),
       ).toBeNull();
     });
 
@@ -768,9 +985,7 @@ describe("<LandingTerminalPanel />", () => {
         ).not.toBeUndefined();
       });
 
-      expect(
-        screen.queryByRole("button", { name: "Open terminal panel" }),
-      ).toBeNull();
+      expect(screen.queryByRole("button", { name: "Open panel" })).toBeNull();
     });
 
     // The return leg of a launch round-trip: leaving for a task and coming
@@ -785,20 +1000,18 @@ describe("<LandingTerminalPanel />", () => {
           <MobileHeaderSlotProbe />
         </>,
       );
-      await screen.findByRole("button", { name: "Open terminal panel" });
+      await screen.findByRole("button", { name: "Open panel" });
 
       act(() => {
         seedTabsLayout([PANEL_DRAFT_TAB, PANEL_EPIC_TAB], PANEL_EPIC_TAB.id);
       });
-      expect(
-        screen.queryByRole("button", { name: "Open terminal panel" }),
-      ).toBeNull();
+      expect(screen.queryByRole("button", { name: "Open panel" })).toBeNull();
 
       act(() => {
         seedTabsLayout([PANEL_DRAFT_TAB, PANEL_EPIC_TAB], PANEL_DRAFT_TAB.id);
       });
       expect(
-        await screen.findByRole("button", { name: "Open terminal panel" }),
+        await screen.findByRole("button", { name: "Open panel" }),
       ).not.toBeNull();
     });
 
@@ -835,7 +1048,7 @@ describe("<LandingTerminalPanel />", () => {
   });
 
   it("hides while no host is selected, preserving an open panel until selection", async () => {
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     const view = render(panelUi());
     expect(screen.queryByTestId("landing-terminal-panel")).toBeNull();
     expect(screen.queryByTestId("landing-terminal-toggle")).toBeNull();
@@ -859,7 +1072,7 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = "/workspace/project";
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = emptyList("/Users/dev");
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
 
     // Open: the header owns collapse; the floating reveal button must be gone
@@ -952,22 +1165,14 @@ describe("<LandingTerminalPanel />", () => {
     const view = render(panelUiForDraft("draft-b"));
 
     fireEvent.click(screen.getByTestId("landing-terminal-toggle"));
-    fireEvent.click(
-      screen.getByRole("button", { name: "Maximize terminal panel" }),
-    );
-    expect(
-      screen.getByRole("button", { name: "Restore terminal panel" }),
-    ).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Maximize panel" }));
+    expect(screen.getByRole("button", { name: "Restore panel" })).toBeTruthy();
 
     view.rerender(panelUiForDraft("draft-a"));
-    expect(
-      screen.queryByRole("button", { name: "Restore terminal panel" }),
-    ).toBeNull();
+    expect(screen.queryByRole("button", { name: "Restore panel" })).toBeNull();
 
     view.rerender(panelUiForDraft("draft-b"));
-    expect(
-      screen.getByRole("button", { name: "Restore terminal panel" }),
-    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Restore panel" })).toBeTruthy();
   });
 
   it("resizes through the boxless split-pane portal anchor", async () => {
@@ -976,7 +1181,7 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = "/workspace/project";
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = mocks.probeData;
-    useLandingTerminalStore.getState().setPanelOpen("draft-a", true);
+    useLandingPanelStore.getState().setPanelOpen("draft-a", true);
     render(panelUiInBoxlessPaneAnchor());
 
     const handle = await screen.findByTestId("landing-terminal-resize-handle");
@@ -1028,19 +1233,35 @@ describe("<LandingTerminalPanel />", () => {
     expect(layoutFor("draft-a").panelWidthFraction).toBe(0.46);
   });
 
-  it("auto-spawns in the host home when nothing is pinned", async () => {
+  it("opens onto the chooser, then creates in the host home once picked, when nothing is pinned", async () => {
     mocks.activeHostId = "host-a";
     mocks.clientActiveHostId = "host-a";
     mocks.primaryWorkspacePath = null;
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = emptyList("/Users/dev");
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
 
+    // No auto-spawn: an empty open panel shows the chooser, not a terminal.
+    expect(await screen.findByTestId("landing-new-tab-chooser")).toBeTruthy();
+    expect(
+      landingTerminalTabs(useLandingPanelStore.getState().tabs),
+    ).toHaveLength(0);
+
+    const terminalCard = screen.getByTestId("landing-new-tab-card-terminal");
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+      expect(terminalCard.getAttribute("aria-disabled")).toBeNull();
     });
-    expect(useLandingTerminalStore.getState().tabs[0]?.cwd).toBe("/Users/dev");
+    fireEvent.click(terminalCard);
+
+    await waitFor(() => {
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(1);
+    });
+    expect(
+      landingTerminalTabs(useLandingPanelStore.getState().tabs)[0]?.cwd,
+    ).toBe("/Users/dev");
     expect(screen.queryByTestId("landing-terminal-select-folder")).toBeNull();
   });
 
@@ -1057,29 +1278,65 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = null;
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = emptyList("/Users/dev");
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
+
+    const terminalCard = await screen.findByTestId(
+      "landing-new-tab-card-terminal",
+    );
+    await waitFor(() => {
+      expect(terminalCard.getAttribute("aria-disabled")).toBeNull();
+    });
+    fireEvent.click(terminalCard);
 
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(1);
     });
-    expect(useLandingTerminalStore.getState().tabs[0]?.hostId).toBe("host-b");
+    expect(
+      landingTerminalTabs(useLandingPanelStore.getState().tabs)[0]?.hostId,
+    ).toBe("host-b");
   });
 
-  it("holds an auto-spawn that settles while the start page is backgrounded, then spawns on return", async () => {
+  it("holds a pending reopen that settles while the start page is backgrounded, then completes on return", async () => {
     mocks.activeHostId = "host-a";
     mocks.clientActiveHostId = "host-a";
-    mocks.primaryWorkspacePath = null;
+    mocks.primaryWorkspacePath = "/workspace/project";
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = emptyList("/Users/dev");
-    // Open the panel, then switch to the epic tab before `terminal.list`
-    // settles. The panel used to UNMOUNT here, which aborted the pass; now it
-    // survives, so the settlement has to gate itself - a terminal spawned into
-    // a `display:none` pane cannot be measured and lands at the 80x24 fallback,
-    // and the focus grab would pull the keyboard off the epic canvas.
-    seedTabsLayout([PANEL_DRAFT_TAB, PANEL_EPIC_TAB], PANEL_EPIC_TAB.id);
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
-    render(panelUi());
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
+      instanceId: "tab-1",
+      sessionId: "session-1",
+      hostId: "host-a",
+      cwd: "/workspace/project",
+      name: "project",
+      titleSource: "default",
+    });
+    seedTabsLayout([PANEL_DRAFT_TAB, PANEL_EPIC_TAB], PANEL_DRAFT_TAB.id);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    const view = render(panelUi());
+    const router = fakeKeybindingRouter();
+
+    // Collapse, repoint to a folder with no matching terminal, then reopen -
+    // the reopen captures a gesture that reconciliation would spawn into. Then
+    // switch to the epic tab before `terminal.list` settles. The panel used to
+    // UNMOUNT here, which aborted the pass; now it survives, so the settlement
+    // has to gate itself - a terminal spawned into a `display:none` pane
+    // cannot be measured and lands at the 80x24 fallback grid, and the focus
+    // grab would pull the keyboard off the epic canvas.
+    act(() => {
+      dispatchAction("app.terminal.toggle", router);
+    });
+    mocks.primaryWorkspacePath = "/workspace/other";
+    view.rerender(panelUi());
+    act(() => {
+      dispatchAction("app.terminal.toggle", router);
+    });
+    act(() => {
+      seedTabsLayout([PANEL_DRAFT_TAB, PANEL_EPIC_TAB], PANEL_EPIC_TAB.id);
+    });
 
     // The fresh list is the last step before settlement, so waiting on it makes
     // "nothing spawned" an ordering claim rather than a race the test won.
@@ -1089,7 +1346,9 @@ describe("<LandingTerminalPanel />", () => {
     await act(async () => {
       await Promise.resolve();
     });
-    expect(useLandingTerminalStore.getState().tabs).toHaveLength(0);
+    expect(
+      landingTerminalTabs(useLandingPanelStore.getState().tabs),
+    ).toHaveLength(1);
 
     // Returning must still open the terminal the user asked for: the
     // reconciliation key is unchanged on the way back, so a settlement that was
@@ -1101,24 +1360,39 @@ describe("<LandingTerminalPanel />", () => {
     });
 
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(2);
     });
-    expect(useLandingTerminalStore.getState().tabs[0]?.cwd).toBe("/Users/dev");
+    const second = landingTerminalTabs(
+      useLandingPanelStore.getState().tabs,
+    ).find((tab) => tab.instanceId !== "tab-1");
+    expect(second?.cwd).toBe("/workspace/other");
   });
 
-  it("shows host update guidance when homeCwd is null and nothing is pinned", async () => {
+  it("shows host update guidance on the chooser's Terminal card when homeCwd is null and nothing is pinned", async () => {
     mocks.activeHostId = "host-a";
     mocks.clientActiveHostId = "host-a";
     mocks.primaryWorkspacePath = null;
     mocks.probeData = emptyList(null);
     mocks.freshProbeData = emptyList(null);
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
 
+    // The empty state is displaced by the chooser; the guidance now lives on
+    // the Terminal card's disabled reason.
+    const terminalCard = await screen.findByTestId(
+      "landing-new-tab-card-terminal",
+    );
+    await waitFor(() => {
+      expect(terminalCard.getAttribute("aria-disabled")).toBe("true");
+    });
     expect(
-      await screen.findByTestId("landing-terminal-host-update"),
-    ).toBeTruthy();
-    expect(useLandingTerminalStore.getState().tabs).toHaveLength(0);
+      screen.getByTestId("landing-new-tab-card-terminal-reason").textContent,
+    ).toBe("Update the selected host to open a terminal without a folder.");
+    expect(
+      landingTerminalTabs(useLandingPanelStore.getState().tabs),
+    ).toHaveLength(0);
     expect(screen.queryByTestId("landing-terminal-select-folder")).toBeNull();
   });
 
@@ -1126,7 +1400,8 @@ describe("<LandingTerminalPanel />", () => {
     mocks.activeHostId = "host-a";
     mocks.clientActiveHostId = "host-a";
     mocks.primaryWorkspacePath = "/workspace/project";
-    useLandingTerminalStore.getState().addTab({
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
       instanceId: "tab-1",
       sessionId: "session-1",
       hostId: "host-a",
@@ -1134,7 +1409,7 @@ describe("<LandingTerminalPanel />", () => {
       name: "project",
       titleSource: "default",
     });
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
 
     render(panelUi());
 
@@ -1144,31 +1419,46 @@ describe("<LandingTerminalPanel />", () => {
     expect(screen.queryByText("Starting terminal…")).toBeNull();
   });
 
-  it("opens a terminal when the empty tab-strip space is double-clicked", async () => {
+  it("opens the chooser when the empty tab-strip space is double-clicked", async () => {
     mocks.activeHostId = "host-a";
     mocks.clientActiveHostId = "host-a";
     mocks.primaryWorkspacePath = "/workspace/project";
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = emptyList("/Users/dev");
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
+    const router = fakeKeybindingRouter();
 
-    // Opening an empty panel auto-spawns exactly one terminal.
-    await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+    // No auto-spawn: create the first terminal directly (a folder is pinned,
+    // so ⇧⌘J creates synchronously without depending on the chooser). The
+    // double-click behavior under test does not care how it got there.
+    act(() => {
+      dispatchAction("app.terminal.new", router);
     });
-    expect(useLandingTerminalStore.getState().tabs[0]?.name).toBe(
-      "project · New Terminal",
-    );
-
-    fireEvent.doubleClick(screen.getByTestId("landing-terminal-tab-strip"));
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(2);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(1);
+    });
+    expect(
+      landingTerminalTabs(useLandingPanelStore.getState().tabs)[0]?.name,
+    ).toBe("project · New Terminal");
+
+    // The empty-strip double-click now opens the chooser rather than
+    // spawning directly; picking Terminal fills it in place.
+    fireEvent.doubleClick(screen.getByTestId("landing-terminal-tab-strip"));
+    expect(screen.getByTestId("landing-new-tab-chooser")).toBeTruthy();
+    fireEvent.click(screen.getByTestId("landing-new-tab-card-terminal"));
+    await waitFor(() => {
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(2);
     });
 
     // A double-click that lands on a tab activates it; it must not spawn.
     fireEvent.doubleClick(screen.getAllByRole("tab")[0]);
-    expect(useLandingTerminalStore.getState().tabs).toHaveLength(2);
+    expect(
+      landingTerminalTabs(useLandingPanelStore.getState().tabs),
+    ).toHaveLength(2);
   });
 
   it("scrolls a newly created tab into view when it overflows the strip", async () => {
@@ -1177,24 +1467,37 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = "/workspace/project";
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = emptyList("/Users/dev");
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
+    const router = fakeKeybindingRouter();
 
+    // No auto-spawn: create the first terminal directly (a folder is pinned,
+    // so ⇧⌘J creates synchronously, without depending on the chooser).
+    act(() => {
+      dispatchAction("app.terminal.new", router);
+    });
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(1);
     });
 
     const scrollIntoView = vi.spyOn(
       window.HTMLElement.prototype,
       "scrollIntoView",
     );
+    // The "+" opens the chooser now; picking Terminal fills it in place.
     fireEvent.click(screen.getByTestId("landing-terminal-new-tab"));
+    fireEvent.click(screen.getByTestId("landing-new-tab-card-terminal"));
 
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(2);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(2);
     });
 
-    const created = useLandingTerminalStore.getState().tabs[1];
+    const created = landingTerminalTabs(
+      useLandingPanelStore.getState().tabs,
+    )[1];
     const createdEl = screen.getByTestId(
       `landing-terminal-tab-${created.instanceId}`,
     );
@@ -1210,13 +1513,20 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = "/workspace/project";
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = emptyList("/Users/dev");
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
+    const router = fakeKeybindingRouter();
 
-    await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+    // No auto-spawn: create the first terminal directly (a folder is pinned,
+    // so ⇧⌘J creates synchronously, without depending on the chooser).
+    act(() => {
+      dispatchAction("app.terminal.new", router);
     });
-    const tab = useLandingTerminalStore.getState().tabs[0];
+    await waitFor(() => {
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(1);
+    });
+    const tab = landingTerminalTabs(useLandingPanelStore.getState().tabs)[0];
 
     fireEvent.contextMenu(
       screen.getByTestId(`landing-terminal-tab-${tab.instanceId}`),
@@ -1236,7 +1546,9 @@ describe("<LandingTerminalPanel />", () => {
     fireEvent.keyDown(input, { key: "Enter" });
 
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs[0]?.name).toBe("build");
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs)[0]?.name,
+      ).toBe("build");
     });
   });
 
@@ -1259,7 +1571,8 @@ describe("<LandingTerminalPanel />", () => {
       runtime: "dormant",
     });
     mocks.plainCollection = freshPlainCollection([running, dormant]);
-    useLandingTerminalStore.getState().addTab({
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
       instanceId: "running-instance",
       sessionId: "terminal-running",
       hostId: "host-a",
@@ -1268,7 +1581,8 @@ describe("<LandingTerminalPanel />", () => {
       titleSource: "default",
       hostAuthorityAcknowledged: true,
     });
-    useLandingTerminalStore.getState().addTab({
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
       instanceId: "dormant-instance",
       sessionId: "terminal-dormant",
       hostId: "host-a",
@@ -1277,7 +1591,7 @@ describe("<LandingTerminalPanel />", () => {
       titleSource: "default",
       hostAuthorityAcknowledged: true,
     });
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
 
     expect(await screen.findByText("Host title")).toBeTruthy();
@@ -1310,7 +1624,8 @@ describe("<LandingTerminalPanel />", () => {
         runtime: "unknown",
       }),
     ]);
-    useLandingTerminalStore.getState().addTab({
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
       instanceId: "unknown-instance",
       sessionId: "terminal-unknown",
       hostId: "host-a",
@@ -1319,7 +1634,7 @@ describe("<LandingTerminalPanel />", () => {
       titleSource: "default",
       hostAuthorityAcknowledged: true,
     });
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
 
     expect(
@@ -1347,6 +1662,7 @@ describe("<LandingTerminalPanel />", () => {
     });
     mocks.plainCollection = freshPlainCollection([projection]);
     const local = {
+      kind: "terminal" as const,
       instanceId: "shared-instance",
       sessionId: "terminal-shared",
       hostId: "host-a",
@@ -1355,8 +1671,8 @@ describe("<LandingTerminalPanel />", () => {
       titleSource: "manual" as const,
       hostAuthorityAcknowledged: true,
     };
-    useLandingTerminalStore.getState().addTab(local);
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().addTab(local);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
 
     fireEvent.contextMenu(
@@ -1374,9 +1690,9 @@ describe("<LandingTerminalPanel />", () => {
       terminalId: "terminal-shared",
       manualTitle: "Renamed everywhere",
     });
-    expect(useLandingTerminalStore.getState().tabs[0]?.name).not.toBe(
-      "Renamed everywhere",
-    );
+    expect(
+      landingTerminalTabs(useLandingPanelStore.getState().tabs)[0]?.name,
+    ).not.toBe("Renamed everywhere");
 
     fireEvent.click(screen.getByRole("button", { name: "Close Shared title" }));
     await waitFor(() => {
@@ -1384,7 +1700,7 @@ describe("<LandingTerminalPanel />", () => {
         hostId: "host-a",
         terminalId: "terminal-shared",
       });
-      expect(useLandingTerminalStore.getState().pendingKills).toEqual([]);
+      expect(useLandingPanelStore.getState().pendingKills).toEqual([]);
     });
     expect(mocks.kill).not.toHaveBeenCalled();
   });
@@ -1398,6 +1714,7 @@ describe("<LandingTerminalPanel />", () => {
     mocks.plainAuthorityStatus = "capable";
     mocks.plainCanMutate = true;
     const signInTab: LandingTerminalTabRef = {
+      kind: "terminal",
       instanceId: "sign-in-instance",
       sessionId: "term-sign-in",
       hostId: "host-a",
@@ -1407,8 +1724,8 @@ describe("<LandingTerminalPanel />", () => {
       origin: "provider-login",
       originProviderId: "reasonix",
     };
-    useLandingTerminalStore.getState().addTab(signInTab);
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().addTab(signInTab);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
 
     // Rename is disabled - the tab strip does not even attempt an inline
@@ -1472,8 +1789,8 @@ describe("<LandingTerminalPanel />", () => {
       });
     });
     expect(
-      landingTerminalLayoutFor(
-        useLandingTerminalStore.getState(),
+      landingPanelLayoutFor(
+        useLandingPanelStore.getState(),
         TEST_LANDING_PAGE_ID,
       ).panelOpen,
     ).toBe(true);
@@ -1495,9 +1812,9 @@ describe("<LandingTerminalPanel />", () => {
       for (let tick = 0; tick < 10; tick += 1) await Promise.resolve();
     });
 
-    const state = useLandingTerminalStore.getState();
+    const state = useLandingPanelStore.getState();
     expect(state.tabs).toHaveLength(1);
-    expect(state.tabs[0]?.origin).toBe("provider-login");
+    expect(state.tabs[0]).toMatchObject({ origin: "provider-login" });
     expect(state.activeInstanceId).toBe(state.tabs[0]?.instanceId);
     expect(mocks.plainCreateAsync).not.toHaveBeenCalled();
     // Consumed by that one transition, so the next open is a real gesture.
@@ -1524,16 +1841,16 @@ describe("<LandingTerminalPanel />", () => {
       sessionId: "term-peer-sign-in",
       providerId: "reasonix",
     });
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
 
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+      expect(useLandingPanelStore.getState().tabs).toHaveLength(1);
     });
     // Through the rendered panel too: the adopted tab is reachable, not only
     // stored.
     await screen.findByRole("tab", { name: /Reasonix sign-in/ });
-    const tab = useLandingTerminalStore.getState().tabs[0];
+    const tab = useLandingPanelStore.getState().tabs[0];
     expect(tab).toMatchObject({
       sessionId: "term-peer-sign-in",
       hostId: "host-a",
@@ -1570,14 +1887,14 @@ describe("<LandingTerminalPanel />", () => {
       sessionId: "term-peer-sign-in",
       providerId: "reasonix",
     });
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
 
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+      expect(useLandingPanelStore.getState().tabs).toHaveLength(1);
     });
     await screen.findByRole("tab", { name: /Reasonix sign-in/ });
-    expect(useLandingTerminalStore.getState().tabs[0]).toMatchObject({
+    expect(useLandingPanelStore.getState().tabs[0]).toMatchObject({
       sessionId: "term-peer-sign-in",
       origin: "provider-login",
     });
@@ -1603,7 +1920,8 @@ describe("<LandingTerminalPanel />", () => {
       runtime: "running",
     });
     mocks.plainCollection = freshPlainCollection([projection]);
-    useLandingTerminalStore.getState().addTab({
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
       instanceId: "owned-instance",
       sessionId: "terminal-owned",
       hostId: "host-a",
@@ -1612,7 +1930,7 @@ describe("<LandingTerminalPanel />", () => {
       titleSource: "manual" as const,
       hostAuthorityAcknowledged: true,
     });
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
 
     // Another surface's request is already in flight for this lifetime, and it
     // settles without retiring the record.
@@ -1633,14 +1951,14 @@ describe("<LandingTerminalPanel />", () => {
     render(panelUi());
     fireEvent.click(screen.getByRole("button", { name: "Close Owned title" }));
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().pendingKills).toHaveLength(1);
+      expect(useLandingPanelStore.getState().pendingKills).toHaveLength(1);
     });
     releaseOwner();
     await waitFor(() => expect(ownerClose).toHaveBeenCalledTimes(1));
 
     // It joined rather than sending its own, and left the record alone.
     expect(mocks.plainCloseAsync).not.toHaveBeenCalled();
-    expect(useLandingTerminalStore.getState().pendingKills).toHaveLength(1);
+    expect(useLandingPanelStore.getState().pendingKills).toHaveLength(1);
   });
 
   it("blocks capable-host create and rename, but still tombstones a close without dispatching, while authority is stale", async () => {
@@ -1658,6 +1976,7 @@ describe("<LandingTerminalPanel />", () => {
     });
     mocks.plainCollection = freshPlainCollection([projection]);
     const local = {
+      kind: "terminal" as const,
       instanceId: "stale-instance",
       sessionId: "terminal-stale",
       hostId: "host-a",
@@ -1666,14 +1985,21 @@ describe("<LandingTerminalPanel />", () => {
       titleSource: "manual" as const,
       hostAuthorityAcknowledged: true,
     };
-    useLandingTerminalStore.getState().addTab(local);
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().addTab(local);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
 
-    const plus = await screen.findByRole("button", { name: "New terminal" });
-    expect(plus.getAttribute("aria-disabled")).toBe("true");
-    fireEvent.click(plus);
-    expect(useLandingTerminalStore.getState().tabs).toEqual([local]);
+    // The "+" is never disabled now - it opens the chooser, and the stale-
+    // authority refusal is surfaced on the chooser's Terminal card instead.
+    fireEvent.click(await screen.findByTestId("landing-terminal-new-tab"));
+    const terminalCard = await screen.findByTestId(
+      "landing-new-tab-card-terminal",
+    );
+    expect(terminalCard.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(terminalCard);
+    expect(landingTerminalTabs(useLandingPanelStore.getState().tabs)).toEqual([
+      local,
+    ]);
 
     // Rename gates on the same authority readiness create does - unlike
     // close, it has no durable fallback.
@@ -1699,10 +2025,13 @@ describe("<LandingTerminalPanel />", () => {
     fireEvent.click(closeButton);
 
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toEqual([]);
+      expect(landingTerminalTabs(useLandingPanelStore.getState().tabs)).toEqual(
+        [],
+      );
     });
-    expect(useLandingTerminalStore.getState().pendingKills).toEqual([
+    expect(useLandingPanelStore.getState().pendingKills).toEqual([
       {
+        kind: "terminal",
         hostId: "host-a",
         sessionId: "terminal-stale",
         hostAuthorityAcknowledged: true,
@@ -1721,6 +2050,7 @@ describe("<LandingTerminalPanel />", () => {
     mocks.freshProbeData = mocks.probeData;
     mocks.plainAuthorityStatus = "unknown";
     const local = {
+      kind: "terminal" as const,
       instanceId: "unresolved-instance",
       sessionId: "terminal-unresolved",
       hostId: "host-a",
@@ -1728,8 +2058,8 @@ describe("<LandingTerminalPanel />", () => {
       name: "Unresolved title",
       titleSource: "default" as const,
     };
-    useLandingTerminalStore.getState().addTab(local);
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().addTab(local);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
 
     const closeButton = await screen.findByRole("button", {
@@ -1741,10 +2071,13 @@ describe("<LandingTerminalPanel />", () => {
     fireEvent.click(closeButton);
 
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toEqual([]);
+      expect(landingTerminalTabs(useLandingPanelStore.getState().tabs)).toEqual(
+        [],
+      );
     });
-    expect(useLandingTerminalStore.getState().pendingKills).toEqual([
+    expect(useLandingPanelStore.getState().pendingKills).toEqual([
       {
+        kind: "terminal",
         hostId: "host-a",
         sessionId: "terminal-unresolved",
         hostAuthorityAcknowledged: false,
@@ -1770,6 +2103,7 @@ describe("<LandingTerminalPanel />", () => {
     });
     mocks.plainCollection = freshPlainCollection([projection]);
     const local = {
+      kind: "terminal" as const,
       instanceId: "ready-instance",
       sessionId: "terminal-ready",
       hostId: "host-a",
@@ -1778,8 +2112,8 @@ describe("<LandingTerminalPanel />", () => {
       titleSource: "manual" as const,
       hostAuthorityAcknowledged: true,
     };
-    useLandingTerminalStore.getState().addTab(local);
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().addTab(local);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
 
     const closeButton = await screen.findByRole("button", {
@@ -1797,26 +2131,608 @@ describe("<LandingTerminalPanel />", () => {
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = mocks.probeData;
     mocks.plainAuthorityStatus = "unknown";
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
     const router = fakeKeybindingRouter();
 
-    const plus = await screen.findByRole("button", { name: "New terminal" });
-    expect(plus.getAttribute("aria-disabled")).toBe("true");
-    fireEvent.click(plus);
-    // Bypasses the disabled "+" affordance: before the fix, every creation
-    // path funneled into `addTerminalTab` without consulting the host's
-    // authority readiness, so a chord could still persist a tab that looked
-    // exactly like legacy import evidence for a terminal never created on any
-    // host.
+    // The "+" is never disabled now; the refusal is on the chooser's Terminal
+    // card, which the empty open panel shows immediately.
+    const terminalCard = await screen.findByTestId(
+      "landing-new-tab-card-terminal",
+    );
+    expect(terminalCard.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(terminalCard);
+    // Bypasses the chooser entirely: before the fix, every creation path
+    // funneled into `addTerminalTab` without consulting the host's authority
+    // readiness, so a chord could still persist a tab that looked exactly
+    // like legacy import evidence for a terminal never created on any host.
     act(() => {
-      dispatchAction("tab.new", router);
+      dispatchAction("app.terminal.new", router);
     });
     await act(async () => {
       await Promise.resolve();
     });
 
-    expect(useLandingTerminalStore.getState().tabs).toHaveLength(0);
+    expect(
+      landingTerminalTabs(useLandingPanelStore.getState().tabs),
+    ).toHaveLength(0);
+  });
+
+  // Each card answers for its own half of the connection: the Terminal card
+  // waits on the host's capability probe, the Browser card on the device
+  // publishing an inventory. Neither blanks the panel - a body that says
+  // nothing never explains what it is waiting to offer.
+  it("says the device is still connecting on the card that is waiting for it", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    mocks.plainAuthorityStatus = "unknown";
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    const view = render(panelUi());
+
+    await screen.findByTestId("landing-new-tab-chooser");
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("landing-new-tab-card-terminal-reason").textContent,
+      ).toBe("Connecting to the selected host…");
+      expect(
+        screen.getByTestId("landing-new-tab-card-browser-reason").textContent,
+      ).toBe("Connecting to the selected host…");
+    });
+    expect(
+      screen
+        .getByTestId("landing-new-tab-card-browser")
+        .getAttribute("aria-disabled"),
+    ).toBe("true");
+
+    // The device answers for browsers first: its card goes live on its own,
+    // without waiting for the terminal probe it has nothing to do with.
+    mocks.browserSessionsByHost = {
+      "host-a": browserSessionsState({}),
+    };
+    view.rerender(panelUi());
+
+    await waitFor(() => {
+      expect(
+        screen.queryByTestId("landing-new-tab-card-browser-reason"),
+      ).toBeNull();
+    });
+    expect(
+      screen.getByTestId("landing-new-tab-card-terminal-reason").textContent,
+    ).toBe("Connecting to the selected host…");
+  });
+
+  // The other end of the chooser's Browser card: the device answers, the card
+  // comes alive, and picking it fills the placeholder IN PLACE from the ids the
+  // device minted - never optimistically, which a reconciliation pass would
+  // reconcile straight back out.
+  it("opens a browser tab into the placeholder once the device has published an inventory", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    mocks.plainAuthorityStatus = "capable";
+    mocks.plainCanMutate = true;
+    const openTab = vi.fn(() =>
+      Promise.resolve({ sessionId: "device-session", tabId: "device-tab" }),
+    );
+    mocks.browserSessionsByHost = {
+      "host-a": browserSessionsState({ openTab }),
+    };
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+
+    const browserCard = await screen.findByTestId(
+      "landing-new-tab-card-browser",
+    );
+    await waitFor(() => {
+      expect(browserCard.getAttribute("aria-disabled")).toBeNull();
+    });
+    fireEvent.click(browserCard);
+
+    await waitFor(() => {
+      expect(useLandingPanelStore.getState().tabs).toHaveLength(1);
+    });
+    expect(openTab).toHaveBeenCalledWith(null, "about:blank");
+    const [opened] = useLandingPanelStore.getState().tabs;
+    expect(opened.kind).toBe("browser");
+    expect(opened.sessionId).toBe("device-session");
+    // Filled, not stacked beside: the placeholder is gone and the new tab is
+    // the active row.
+    expect(useLandingPanelStore.getState().placeholder).toBe(null);
+    expect(useLandingPanelStore.getState().activeInstanceId).toBe(
+      opened.instanceId,
+    );
+  });
+
+  // The opener's in-flight state has to REACH the card. Without it the chooser
+  // shows an enabled Browser card while a tab is already on its way, which is
+  // the one place a second click is easiest to make.
+  it("marks the chooser's browser card pending while the device is answering", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    mocks.plainAuthorityStatus = "capable";
+    mocks.plainCanMutate = true;
+    let settle: ((identity: BrowserTabIdentity) => void) | null = null;
+    const openTab = vi.fn(
+      () =>
+        new Promise<BrowserTabIdentity>((resolve) => {
+          settle = resolve;
+        }),
+    );
+    mocks.browserSessionsByHost = {
+      "host-a": browserSessionsState({ openTab }),
+    };
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+
+    const browserCard = await screen.findByTestId(
+      "landing-new-tab-card-browser",
+    );
+    await waitFor(() => {
+      expect(browserCard.getAttribute("aria-disabled")).toBeNull();
+    });
+    fireEvent.click(browserCard);
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("landing-new-tab-card-browser-pending"),
+      ).toBeTruthy();
+    });
+    expect(browserCard.getAttribute("aria-disabled")).toBe("true");
+    // A second click while the first is unanswered reaches nothing.
+    fireEvent.click(browserCard);
+    expect(openTab).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      settle?.({ sessionId: "device-session", tabId: "device-tab" });
+      await Promise.resolve();
+    });
+    await waitFor(() => {
+      expect(useLandingPanelStore.getState().tabs).toHaveLength(1);
+    });
+  });
+
+  // A browser stream costs a socket, a relay attach, an identity attestation
+  // and a contributed-set replay, and the desktop caps a window at twelve of
+  // them and refuses whichever is asked for LAST. So a panel holding streams
+  // for devices it is showing nothing of can cost the reader the very tab they
+  // just opened.
+  it("drops every tab host's stream when the panel is collapsed", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    useLandingPanelStore.getState().addTab({
+      kind: "browser",
+      instanceId: "browser-a",
+      hostId: "host-a",
+      sessionId: "session-a",
+      tabId: "tab-a",
+      name: "a.example",
+      titleSource: "default",
+    });
+    useLandingPanelStore.getState().addTab({
+      kind: "browser",
+      instanceId: "browser-b",
+      hostId: "host-b",
+      sessionId: "session-b",
+      tabId: "tab-b",
+      name: "b.example",
+      titleSource: "default",
+    });
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+
+    // Open: every tab host, because the strip is rendering a row for each and
+    // those rows read their title and dormancy from that device's inventory.
+    await waitFor(() => {
+      expect([...mocks.browserStreamHostIds].sort()).toEqual([
+        "host-a",
+        "host-b",
+      ]);
+    });
+
+    act(() => {
+      useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, false);
+    });
+
+    // Collapsed: nothing of those devices is on screen, so nothing holds their
+    // streams. The TARGET host stays - `app.browser.new` reveals the panel and
+    // opens through that device's coordinator, and the chooser's cap count
+    // reads the same one.
+    await waitFor(() => {
+      expect(mocks.browserStreamHostIds).toEqual(["host-a"]);
+    });
+  });
+
+  // The other half of the ruling this restores: the target device is on a
+  // stream before any browser tab exists, which is what the chord and the
+  // chooser's count both need.
+  it("keeps the target host's stream with no browser tab open", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    mocks.browserSessionsByHost = {
+      "host-a": browserSessionsState({
+        items: [
+          sessionInfo({
+            sessionId: "independent-session",
+            hostId: "host-a",
+            scope: independentScope(),
+            tabs: [tabInfo({ tabId: "existing", url: "https://example.com/" })],
+          }),
+        ],
+      }),
+    };
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+
+    await waitFor(() => {
+      expect(mocks.browserStreamHostIds).toEqual(["host-a"]);
+    });
+    // And the count that stream carries reaches the card, which is the whole
+    // reason the ruling held it unconditionally.
+    const browserCard = await screen.findByTestId(
+      "landing-new-tab-card-browser",
+    );
+    await waitFor(() => {
+      expect(browserCard.getAttribute("aria-disabled")).toBeNull();
+    });
+    expect(
+      screen.queryByTestId("landing-new-tab-card-browser-reason"),
+    ).toBeNull();
+  });
+
+  // The chooser's cap count and `app.browser.new` both read the TARGET host's
+  // coordinator, which the panel pins unconditionally - so both must still
+  // work while the panel itself is collapsed and showing nothing.
+  it("opens a browser tab via app.browser.new with the panel collapsed", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    const openTab = vi.fn(() =>
+      Promise.resolve({ sessionId: "device-session", tabId: "device-tab" }),
+    );
+    mocks.browserSessionsByHost = {
+      "host-a": browserSessionsState({ openTab }),
+    };
+    render(panelUi());
+    const router = fakeKeybindingRouter();
+
+    expect(testLayout().panelOpen).toBe(false);
+    await waitFor(() => {
+      expect(mocks.browserStreamHostIds).toEqual(["host-a"]);
+    });
+
+    act(() => {
+      dispatchAction("app.browser.new", router);
+    });
+
+    await waitFor(() => {
+      expect(testLayout().panelOpen).toBe(true);
+    });
+    // Redden: if the target host were not mounted while collapsed, its
+    // sessions state would still be `null` here and the open would never
+    // reach the device's `openTab`.
+    await waitFor(() => {
+      expect(openTab).toHaveBeenCalledWith(null, "about:blank");
+    });
+  });
+
+  // A browser stream is a socket, a relay attach, an identity attestation and
+  // a contributed-set replay, and the desktop refuses whichever window stream
+  // is asked for LAST past its cap - so a strip with tabs on many devices must
+  // not exhaust it with rows nobody is looking at.
+  it("mounts at most LANDING_BROWSER_WATCHED_HOST_CAP hosts, with the target and the active tab's host always among them, across tabs on six devices", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    for (const hostId of [
+      "host-a",
+      "host-b",
+      "host-c",
+      "host-d",
+      "host-e",
+      "host-f",
+    ]) {
+      addBrowserTab(hostId, `browser-${hostId}`);
+    }
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+
+    // Redden: without the bound, all six tab hosts would be mounted.
+    await waitFor(() => {
+      expect(mocks.browserStreamHostIds).toHaveLength(
+        LANDING_BROWSER_WATCHED_HOST_CAP,
+      );
+    });
+    expect(mocks.browserStreamHostIds).toContain("host-a");
+    // `host-f` is the last tab added, so `addTab` left it active.
+    expect(mocks.browserStreamHostIds).toContain("host-f");
+  });
+
+  // The other half of the LRU: an activation past the bound brings its device
+  // in and must make room by evicting the least recently activated one that
+  // is not pinned - never the target, never the newly active host.
+  it("activating a row of an unwatched host mounts it and evicts the least recently activated non-pinned host", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    // Strip order e, a, b, c, d; `d` ends active (last added). With the
+    // target (a) and active (d) pinned, the two-slot budget fills from strip
+    // order and lands on e and b - c is left unwatched.
+    for (const [hostId, instanceId] of [
+      ["host-e", "browser-e"],
+      ["host-a", "browser-a"],
+      ["host-b", "browser-b"],
+      ["host-c", "browser-c"],
+      ["host-d", "browser-d"],
+    ] as const) {
+      addBrowserTab(hostId, instanceId);
+    }
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+
+    await waitFor(() => {
+      expect(mocks.browserStreamHostIds).toHaveLength(
+        LANDING_BROWSER_WATCHED_HOST_CAP,
+      );
+    });
+    expect(mocks.browserStreamHostIds).not.toContain("host-c");
+
+    fireEvent.click(screen.getByTestId("landing-terminal-tab-browser-c"));
+
+    await waitFor(() => {
+      expect(mocks.browserStreamHostIds).toContain("host-c");
+    });
+    // Redden: without eviction the set would grow to five instead of holding
+    // at the cap, and the previously-idle `host-b` (recency's tiebreak loser
+    // against untouched `host-c`) would survive alongside it.
+    expect(mocks.browserStreamHostIds).toHaveLength(
+      LANDING_BROWSER_WATCHED_HOST_CAP,
+    );
+    expect(mocks.browserStreamHostIds).not.toContain("host-b");
+    // The target and the newly active host both survive the eviction.
+    expect(mocks.browserStreamHostIds).toContain("host-a");
+  });
+
+  // A row past the bound is rendered from the store alone: no dormancy claim
+  // and no outage claim, even when the store already has (or would have) an
+  // answer for that device - this window just isn't watching it.
+  it("shows `· not watched` on an unwatched row and neither `dormant` nor `status unavailable`, even where the store would otherwise report unavailable", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    for (const [hostId, instanceId] of [
+      ["host-e", "browser-e"],
+      ["host-a", "browser-a"],
+      ["host-b", "browser-b"],
+      ["host-c", "browser-c"],
+      ["host-d", "browser-d"],
+    ] as const) {
+      addBrowserTab(hostId, instanceId);
+    }
+    // What the store would report for the unwatched host if it were watched -
+    // still no inventory, the same shape a healthy-but-quiet device leaves.
+    mocks.browserSessionsByHost = {
+      "host-c": browserSessionsState({ inventoryReady: false }),
+    };
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+
+    await waitFor(() => {
+      expect(mocks.browserStreamHostIds).not.toContain("host-c");
+    });
+    // Redden: without the unwatched branch this row would read `sessions` as
+    // absent and render `status unavailable` instead.
+    expect(
+      screen.getByTestId("landing-terminal-unwatched-browser-c"),
+    ).toBeTruthy();
+    expect(
+      screen.queryByTestId("landing-terminal-dormant-browser-c"),
+    ).toBeNull();
+    expect(
+      screen.queryByTestId("landing-terminal-unavailable-browser-c"),
+    ).toBeNull();
+  });
+
+  // The bound is on DEVICES, not tabs - a device costs one stream however
+  // many rows it holds in the strip.
+  it("counts hosts, not tabs: eight tabs on two devices mount exactly two streams", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    for (let index = 0; index < 4; index += 1) {
+      addBrowserTab("host-a", `browser-a-${index}`);
+      addBrowserTab("host-b", `browser-b-${index}`);
+    }
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+
+    // Redden: counting by tab rather than by host would either exceed two
+    // streams or under/over-count relative to the eight rows in the strip.
+    await waitFor(() => {
+      expect([...mocks.browserStreamHostIds].sort()).toEqual([
+        "host-a",
+        "host-b",
+      ]);
+    });
+  });
+
+  // Two provider seams acquire the SAME refcounted coordinator - the fleet's
+  // arm above, and each tile's own `BrowserSessionsHostProvider`. If the
+  // panel computed the bound but never handed it to the tile, the tile would
+  // mount every tab host's stream on its own and the bound would hold nothing
+  // back.
+  it("hands each tile a watched prop matching the bound", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    for (const [hostId, instanceId] of [
+      ["host-e", "browser-e"],
+      ["host-a", "browser-a"],
+      ["host-b", "browser-b"],
+      ["host-c", "browser-c"],
+      ["host-d", "browser-d"],
+    ] as const) {
+      addBrowserTab(hostId, instanceId);
+    }
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+
+    await waitFor(() => {
+      expect(mocks.browserStreamHostIds).not.toContain("host-c");
+    });
+    // Redden: a tile that always reports itself watched (or whose `watched`
+    // prop was never threaded through) would read "true" here too.
+    expect(
+      screen
+        .getByTestId("landing-browser-tile-browser-c")
+        .getAttribute("data-watched"),
+    ).toBe("false");
+    expect(
+      screen
+        .getByTestId("landing-browser-tile-browser-a")
+        .getAttribute("data-watched"),
+    ).toBe("true");
+  });
+
+  // A shell with no native browser capability can only WATCH a browser tab -
+  // the tile renders "View only" and an independent session has no agent
+  // driving it either - so the card would open a blank page nobody can
+  // navigate. Unlike the cap or the connecting wait, this does not resolve.
+  it("refuses the browser card on a shell that could only watch the tab", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    mocks.plainAuthorityStatus = "capable";
+    mocks.plainCanMutate = true;
+    // Web / mobile: no native browser capability.
+    mocks.runnerHostHasBrowserView = false;
+    const openTab = vi.fn(() =>
+      Promise.resolve({ sessionId: "device-session", tabId: "device-tab" }),
+    );
+    mocks.browserSessionsByHost = {
+      "host-a": browserSessionsState({ openTab }),
+    };
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+
+    const browserCard = await screen.findByTestId(
+      "landing-new-tab-card-browser",
+    );
+    // Disabled with a reason, the same shape the cap and the connecting wait
+    // use - and it stays that way, because a device answering changes nothing.
+    await waitFor(() => {
+      expect(browserCard.getAttribute("aria-disabled")).toBe("true");
+    });
+    expect(
+      screen.getByTestId("landing-new-tab-card-browser-reason").textContent,
+    ).toBe("Browser tabs need the desktop app");
+
+    fireEvent.click(browserCard);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(openTab).not.toHaveBeenCalled();
+    // The chooser is still there to pick a terminal from.
+    expect(useLandingPanelStore.getState().placeholder).not.toBe(null);
+
+    // The Terminal card is untouched: a shell that cannot drive a browser can
+    // still open a shell.
+    expect(
+      screen
+        .getByTestId("landing-new-tab-card-terminal")
+        .getAttribute("aria-disabled"),
+    ).toBeNull();
+  });
+
+  // The chooser's two cards are two answers to ONE row, and the device takes
+  // time over the browser one. A reader who changes their mind mid-flight is
+  // looking at the terminal they picked second; the browser answer arriving
+  // afterwards must not pull the keyboard onto a row they moved away from.
+  it("keeps the keyboard with the pick the reader made last", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    mocks.plainAuthorityStatus = "capable";
+    mocks.plainCanMutate = true;
+    let settle: ((identity: BrowserTabIdentity) => void) | null = null;
+    const openTab = vi.fn(
+      () =>
+        new Promise<BrowserTabIdentity>((resolve) => {
+          settle = resolve;
+        }),
+    );
+    mocks.browserSessionsByHost = {
+      "host-a": browserSessionsState({ openTab }),
+    };
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+
+    const browserCard = await screen.findByTestId(
+      "landing-new-tab-card-browser",
+    );
+    await waitFor(() => {
+      expect(browserCard.getAttribute("aria-disabled")).toBeNull();
+    });
+    fireEvent.click(browserCard);
+    await waitFor(() => {
+      expect(openTab).toHaveBeenCalledTimes(1);
+    });
+
+    // Second thoughts, while the device is still answering the first pick.
+    fireEvent.click(screen.getByTestId("landing-new-tab-card-terminal"));
+    await waitFor(() => {
+      expect(useLandingPanelStore.getState().tabs).toHaveLength(1);
+    });
+    const terminal = useLandingPanelStore.getState().tabs[0];
+    expect(terminal.kind).toBe("terminal");
+    expect(useLandingPanelStore.getState().activeInstanceId).toBe(
+      terminal.instanceId,
+    );
+
+    await act(async () => {
+      settle?.({ sessionId: "device-session", tabId: "device-tab" });
+      await Promise.resolve();
+    });
+
+    // The browser tab landed - the device opened it, and dropping it would
+    // leave a tab on the device with no row here.
+    await waitFor(() => {
+      expect(useLandingPanelStore.getState().tabs).toHaveLength(2);
+    });
+    expect(useLandingPanelStore.getState().tabs[1].kind).toBe("browser");
+    // ...  and the terminal the reader actually chose still has the keyboard.
+    expect(useLandingPanelStore.getState().activeInstanceId).toBe(
+      terminal.instanceId,
+    );
   });
 
   it("closes every terminal from the context menu, tombstoning before killing", async () => {
@@ -1825,17 +2741,27 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = "/workspace/project";
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = emptyList("/Users/dev");
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
+    const router = fakeKeybindingRouter();
 
+    // No auto-spawn: create the first terminal directly (a folder is pinned,
+    // so ⇧⌘J creates synchronously, without depending on the chooser).
+    act(() => {
+      dispatchAction("app.terminal.new", router);
+    });
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(1);
     });
     fireEvent.click(screen.getByTestId("landing-terminal-new-tab"));
+    fireEvent.click(screen.getByTestId("landing-new-tab-card-terminal"));
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(2);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(2);
     });
-    const before = useLandingTerminalStore.getState().tabs;
+    const before = landingTerminalTabs(useLandingPanelStore.getState().tabs);
 
     fireEvent.contextMenu(
       screen.getByTestId(`landing-terminal-tab-${before[0].instanceId}`),
@@ -1843,7 +2769,9 @@ describe("<LandingTerminalPanel />", () => {
     fireEvent.click(await screen.findByText("Close All"));
 
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(0);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(0);
     });
     expect(testLayout().panelOpen).toBe(false);
     // Every closed shell gets its own kill. (The tombstones they were written
@@ -1859,6 +2787,190 @@ describe("<LandingTerminalPanel />", () => {
         });
       });
     });
+  });
+
+  // The two senders, mounted together for the first time. The panel had a fast
+  // path AND the always-mounted drain watches the same tombstone set, so one
+  // gesture sent two closes - the second racing a tab the host had already
+  // removed.
+  it("sends exactly one host close for one panel close", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    // The device answers LATE, which is the only timing in which a second
+    // sender is visible: a `Promise.resolve()` close clears the tombstone in a
+    // microtask, before the drain's effect ever reads it, so an instant mock
+    // hides the very collision this pins. A real device takes milliseconds.
+    let settleClose: (() => void) | null = null;
+    mocks.browserCloseTab.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          settleClose = resolve;
+        }),
+    );
+    // The inventory still LISTS the tab, which is the whole point: the device
+    // has been asked and has not answered, so its published snapshot is
+    // unchanged. An empty inventory makes the drain decide `clear` and retire
+    // the tombstone without sending - a second vacuum on top of the first.
+    mocks.browserSessionsByHost = {
+      "host-a": browserSessionsState({
+        closeTab: mocks.browserCloseTab,
+        items: [
+          sessionInfo({
+            sessionId: "browser-session",
+            hostId: "host-a",
+            scope: independentScope(),
+            // Titled, because reconciliation renames an untitled tab to its
+            // URL and the close control is labelled from the name.
+            tabs: [
+              tabInfo({
+                tabId: "browser-tab",
+                url: "https://example.com/",
+                title: "example.com",
+              }),
+            ],
+          }),
+        ],
+      }),
+    };
+    useLandingPanelStore.getState().addTab({
+      kind: "browser",
+      instanceId: "browser-instance",
+      hostId: "host-a",
+      sessionId: "browser-session",
+      tabId: "browser-tab",
+      name: "example.com",
+      titleSource: "default",
+    });
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(
+      <>
+        {panelUi()}
+        <BrowserTombstoneDrainProbe />
+      </>,
+    );
+
+    fireEvent.click(screen.getByLabelText("Close example.com"));
+
+    // The tombstone is written and the tab is gone from the strip; the device
+    // has not answered, and the inventory still lists the tab.
+    await waitFor(() => {
+      expect(useLandingPanelStore.getState().pendingKills).toHaveLength(1);
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(mocks.browserCloseTab).toHaveBeenCalledTimes(1);
+    expect(mocks.browserCloseTab).toHaveBeenCalledWith(
+      "browser-session",
+      "browser-tab",
+    );
+
+    await act(async () => {
+      settleClose?.();
+      await Promise.resolve();
+    });
+    await waitFor(() => {
+      expect(useLandingPanelStore.getState().pendingKills).toEqual([]);
+    });
+    expect(mocks.browserCloseTab).toHaveBeenCalledTimes(1);
+  });
+
+  // "Close All" over a MIXED list: one strip, two kinds, two different close
+  // boundaries. Routing per tab is the whole point - a partition by list would
+  // send a browser tab's ids to the terminal kill, which the host answers by
+  // killing nothing and the panel by never clearing the tombstone.
+  it("routes close-all to each kind's own boundary, and takes the placeholder with it", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    mocks.plainAuthorityStatus = "capable";
+    mocks.plainCanMutate = true;
+    mocks.browserSessionsByHost = {
+      "host-a": browserSessionsState({
+        closeTab: mocks.browserCloseTab,
+        items: [
+          sessionInfo({
+            sessionId: "browser-session",
+            hostId: "host-a",
+            scope: independentScope(),
+            tabs: [
+              tabInfo({
+                tabId: "browser-tab",
+                url: "https://example.com/",
+                title: "example.com",
+              }),
+            ],
+          }),
+        ],
+      }),
+    };
+    const terminalTab = {
+      kind: "terminal" as const,
+      instanceId: "terminal-instance",
+      sessionId: "terminal-session",
+      hostId: "host-a",
+      cwd: "/workspace/project",
+      name: "project",
+      titleSource: "default" as const,
+      hostAuthorityAcknowledged: true,
+    };
+    const browserTab = {
+      kind: "browser" as const,
+      instanceId: "browser-instance",
+      hostId: "host-a",
+      sessionId: "browser-session",
+      tabId: "browser-tab",
+      name: "example.com",
+      titleSource: "default" as const,
+    };
+    useLandingPanelStore.getState().addTab(terminalTab);
+    useLandingPanelStore.getState().addTab(browserTab);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    // The browser half of "its own boundary" is the drain, so the drain has to
+    // be here for the boundary to be observable at all.
+    render(
+      <>
+        {panelUi()}
+        <BrowserTombstoneDrainProbe />
+      </>,
+    );
+
+    // A third strip row that is neither kind: an unpicked placeholder.
+    fireEvent.click(screen.getByTestId("landing-terminal-new-tab"));
+    await screen.findByTestId("landing-new-tab-chooser");
+
+    fireEvent.contextMenu(
+      screen.getByTestId(`landing-terminal-tab-${terminalTab.instanceId}`),
+    );
+    fireEvent.click(await screen.findByText("Close All"));
+
+    await waitFor(() => {
+      expect(useLandingPanelStore.getState().tabs).toHaveLength(0);
+    });
+    expect(useLandingPanelStore.getState().placeholder).toBe(null);
+    expect(testLayout().panelOpen).toBe(false);
+
+    // Each kind reached its own boundary, with its own ids: the terminal
+    // through its dispatch, the browser through the tombstone the drain sends.
+    await waitFor(() => {
+      expect(mocks.plainCloseAsync).toHaveBeenCalledWith(
+        expect.objectContaining({
+          hostId: "host-a",
+          terminalId: terminalTab.sessionId,
+        }),
+      );
+      expect(mocks.browserCloseTab).toHaveBeenCalledWith(
+        browserTab.sessionId,
+        browserTab.tabId,
+      );
+    });
+    expect(mocks.plainCloseAsync).toHaveBeenCalledTimes(1);
+    expect(mocks.browserCloseTab).toHaveBeenCalledTimes(1);
   });
 
   it("closes every tab across a mix of ready and not-ready hosts, dispatching only for the ready one", async () => {
@@ -1882,6 +2994,7 @@ describe("<LandingTerminalPanel />", () => {
         }),
     );
     const readyTab = {
+      kind: "terminal" as const,
       instanceId: "ready-instance",
       sessionId: "terminal-ready",
       hostId: "host-a",
@@ -1891,6 +3004,7 @@ describe("<LandingTerminalPanel />", () => {
       hostAuthorityAcknowledged: true,
     };
     const notReadyTab = {
+      kind: "terminal" as const,
       instanceId: "not-ready-instance",
       sessionId: "terminal-not-ready",
       hostId: "host-b",
@@ -1899,9 +3013,9 @@ describe("<LandingTerminalPanel />", () => {
       titleSource: "default" as const,
       hostAuthorityAcknowledged: true,
     };
-    useLandingTerminalStore.getState().addTab(readyTab);
-    useLandingTerminalStore.getState().addTab(notReadyTab);
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().addTab(readyTab);
+    useLandingPanelStore.getState().addTab(notReadyTab);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
 
     await screen.findByTestId(`landing-terminal-tab-${readyTab.instanceId}`);
@@ -1913,20 +3027,24 @@ describe("<LandingTerminalPanel />", () => {
     fireEvent.click(await screen.findByText("Close All"));
 
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toEqual([]);
+      expect(landingTerminalTabs(useLandingPanelStore.getState().tabs)).toEqual(
+        [],
+      );
     });
     // Tombstone-first, batched: both refs are durably recorded - the
     // not-ready host's tombstone is the recovery bridge's only record that a
     // shell needs killing once that host becomes dialable.
-    expect(useLandingTerminalStore.getState().pendingKills).toEqual(
+    expect(useLandingPanelStore.getState().pendingKills).toEqual(
       expect.arrayContaining([
         {
+          kind: "terminal",
           hostId: "host-a",
           sessionId: "terminal-ready",
           hostAuthorityAcknowledged: true,
           pendingCreate: false,
         },
         {
+          kind: "terminal",
           hostId: "host-b",
           sessionId: "terminal-not-ready",
           hostAuthorityAcknowledged: true,
@@ -1953,8 +3071,9 @@ describe("<LandingTerminalPanel />", () => {
     // Only the dispatched (ready-host) tombstone clears on acknowledgement;
     // the not-ready host's stays until the recovery bridge can ask it.
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().pendingKills).toEqual([
+      expect(useLandingPanelStore.getState().pendingKills).toEqual([
         {
+          kind: "terminal",
           hostId: "host-b",
           sessionId: "terminal-not-ready",
           hostAuthorityAcknowledged: true,
@@ -1970,14 +3089,16 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = "/workspace/project";
     mocks.probeData = listWith([runningSession("orphan")], "/Users/dev");
     mocks.freshProbeData = mocks.probeData;
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
 
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
-      expect(useLandingTerminalStore.getState().tabs[0]?.sessionId).toBe(
-        "orphan",
-      );
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(1);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs)[0]?.sessionId,
+      ).toBe("orphan");
     });
     expect(mocks.kill).not.toHaveBeenCalled();
     expect(mocks.queryClient.fetchQuery).toHaveBeenCalledTimes(1);
@@ -1992,14 +3113,16 @@ describe("<LandingTerminalPanel />", () => {
       [runningSession("fresh-orphan")],
       "/Users/dev",
     );
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
 
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
-      expect(useLandingTerminalStore.getState().tabs[0]?.sessionId).toBe(
-        "fresh-orphan",
-      );
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(1);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs)[0]?.sessionId,
+      ).toBe("fresh-orphan");
     });
   });
 
@@ -2011,7 +3134,8 @@ describe("<LandingTerminalPanel />", () => {
       [runningSession("still-running")],
       "/Users/dev",
     );
-    useLandingTerminalStore.getState().addTab({
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
       instanceId: "tab-1",
       sessionId: "still-running",
       hostId: "host-a",
@@ -2019,8 +3143,8 @@ describe("<LandingTerminalPanel />", () => {
       name: "project",
       titleSource: "default",
     });
-    useLandingTerminalStore.getState().closeTab(TEST_LANDING_PAGE_ID, "tab-1");
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().closeTab(TEST_LANDING_PAGE_ID, "tab-1");
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
 
     await waitFor(() => {
@@ -2029,8 +3153,9 @@ describe("<LandingTerminalPanel />", () => {
         sessionId: "still-running",
       });
     });
-    expect(useLandingTerminalStore.getState().pendingKills).toEqual([
+    expect(useLandingPanelStore.getState().pendingKills).toEqual([
       {
+        kind: "terminal",
         hostId: "host-a",
         sessionId: "still-running",
         hostAuthorityAcknowledged: false,
@@ -2044,13 +3169,27 @@ describe("<LandingTerminalPanel />", () => {
     mocks.clientActiveHostId = "host-a";
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = mocks.probeData;
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     const view = render(panelUi());
 
+    // No auto-spawn: the empty panel opens onto the chooser; pick Terminal
+    // once the host's home resolves to get the "home" terminal this test is
+    // about.
+    const terminalCard = await screen.findByTestId(
+      "landing-new-tab-card-terminal",
+    );
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+      expect(terminalCard.getAttribute("aria-disabled")).toBeNull();
     });
-    const homeTab = useLandingTerminalStore.getState().tabs[0];
+    fireEvent.click(terminalCard);
+    await waitFor(() => {
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(1);
+    });
+    const homeTab = landingTerminalTabs(
+      useLandingPanelStore.getState().tabs,
+    )[0];
     expect(homeTab.cwd).toBe("/Users/dev");
     expect(mocks.queryClient.fetchQuery).toHaveBeenCalledTimes(1);
 
@@ -2065,18 +3204,23 @@ describe("<LandingTerminalPanel />", () => {
     await act(async () => {
       await Promise.resolve();
     });
-    expect(useLandingTerminalStore.getState().tabs).toEqual([homeTab]);
-    expect(useLandingTerminalStore.getState().activeInstanceId).toBe(
+    expect(landingTerminalTabs(useLandingPanelStore.getState().tabs)).toEqual([
+      homeTab,
+    ]);
+    expect(useLandingPanelStore.getState().activeInstanceId).toBe(
       homeTab.instanceId,
     );
 
     fireEvent.click(screen.getByTestId("landing-terminal-new-tab"));
+    fireEvent.click(screen.getByTestId("landing-new-tab-card-terminal"));
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(2);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(2);
     });
-    const created = useLandingTerminalStore
-      .getState()
-      .tabs.find((tab) => tab.instanceId !== homeTab.instanceId);
+    const created = landingTerminalTabs(
+      useLandingPanelStore.getState().tabs,
+    ).find((tab) => tab.instanceId !== homeTab.instanceId);
     expect(created?.cwd).toBe("/workspace/project");
   });
 
@@ -2086,35 +3230,51 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = "/workspace/project";
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = mocks.probeData;
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
     const router = fakeKeybindingRouter();
 
+    // No auto-spawn: create the first terminal directly.
+    act(() => {
+      dispatchAction("app.terminal.new", router);
+    });
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(1);
     });
 
+    // tab.new (⌘T) opens the chooser rather than creating directly; picking
+    // Terminal fills the placeholder in place.
     act(() => {
       dispatchAction("tab.new", router);
     });
+    expect(screen.getByTestId("landing-new-tab-chooser")).toBeTruthy();
+    expect(
+      landingTerminalTabs(useLandingPanelStore.getState().tabs),
+    ).toHaveLength(1);
+    fireEvent.click(screen.getByTestId("landing-new-tab-card-terminal"));
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(2);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(2);
     });
-    const [first, second] = useLandingTerminalStore.getState().tabs;
-    expect(useLandingTerminalStore.getState().activeInstanceId).toBe(
+    const [first, second] = landingTerminalTabs(
+      useLandingPanelStore.getState().tabs,
+    );
+    expect(useLandingPanelStore.getState().activeInstanceId).toBe(
       second.instanceId,
     );
 
     act(() => {
       dispatchAction("tab.prev", router);
     });
-    expect(useLandingTerminalStore.getState().activeInstanceId).toBe(
+    expect(useLandingPanelStore.getState().activeInstanceId).toBe(
       first.instanceId,
     );
     act(() => {
       dispatchAction("tab.next", router);
     });
-    expect(useLandingTerminalStore.getState().activeInstanceId).toBe(
+    expect(useLandingPanelStore.getState().activeInstanceId).toBe(
       second.instanceId,
     );
 
@@ -2122,11 +3282,13 @@ describe("<LandingTerminalPanel />", () => {
       dispatchAction("tab.close", router);
     });
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(1);
     });
-    expect(useLandingTerminalStore.getState().tabs[0].instanceId).toBe(
-      first.instanceId,
-    );
+    expect(
+      landingTerminalTabs(useLandingPanelStore.getState().tabs)[0].instanceId,
+    ).toBe(first.instanceId);
     await waitFor(() => {
       expect(mocks.killAsync).toHaveBeenCalledWith({
         hostId: second.hostId,
@@ -2135,24 +3297,37 @@ describe("<LandingTerminalPanel />", () => {
     });
   });
 
-  it("switches terminal tabs with the leader digit chord", async () => {
+  it("switches terminal tabs with the leader digit chord", () => {
     mocks.activeHostId = "host-a";
     mocks.clientActiveHostId = "host-a";
     mocks.primaryWorkspacePath = "/workspace/project";
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = mocks.probeData;
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
+      instanceId: "tab-1",
+      sessionId: "session-1",
+      hostId: "host-a",
+      cwd: "/workspace/project",
+      name: "project",
+      titleSource: "default",
+    });
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
+      instanceId: "tab-2",
+      sessionId: "session-2",
+      hostId: "host-a",
+      cwd: "/workspace/project",
+      name: "project 2",
+      titleSource: "default",
+    });
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
 
-    await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
-    });
-    fireEvent.click(screen.getByRole("button", { name: "New terminal" }));
-    await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(2);
-    });
-    const [first, second] = useLandingTerminalStore.getState().tabs;
-    expect(useLandingTerminalStore.getState().activeInstanceId).toBe(
+    const [first, second] = landingTerminalTabs(
+      useLandingPanelStore.getState().tabs,
+    );
+    expect(useLandingPanelStore.getState().activeInstanceId).toBe(
       second.instanceId,
     );
 
@@ -2161,7 +3336,7 @@ describe("<LandingTerminalPanel />", () => {
     act(() => {
       expect(match?.run()).toBe(true);
     });
-    expect(useLandingTerminalStore.getState().activeInstanceId).toBe(
+    expect(useLandingPanelStore.getState().activeInstanceId).toBe(
       first.instanceId,
     );
 
@@ -2170,41 +3345,201 @@ describe("<LandingTerminalPanel />", () => {
     expect(outOfRange?.run()).toBe(false);
   });
 
-  it("maximizes and restores via app.terminal.maximize, revealing when collapsed", async () => {
+  // The strip renders `landingStripRows`, which splices the placeholder in at
+  // its own index; the chords used to index `state.tabs`. Two projections are
+  // two orders the moment the placeholder is not last - and it need not be,
+  // since a reconciliation adoption appends past it.
+  function seedStripFixture(
+    count: number,
+    placeholderIndex: number | null,
+  ): void {
+    const store = useLandingPanelStore.getState();
+    for (let index = 1; index <= count; index += 1) {
+      store.addTab({
+        kind: "terminal",
+        instanceId: `tab-${index}`,
+        sessionId: `session-${index}`,
+        hostId: "host-a",
+        cwd: "/workspace/project",
+        name: `project ${index}`,
+        titleSource: "default",
+      });
+    }
+    store.setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    if (placeholderIndex !== null) {
+      useLandingPanelStore
+        .getState()
+        .openPlaceholder("placeholder-1", placeholderIndex);
+    }
+  }
+
+  function seedStripHost(): void {
     mocks.activeHostId = "host-a";
     mocks.clientActiveHostId = "host-a";
     mocks.primaryWorkspacePath = "/workspace/project";
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = mocks.probeData;
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+  }
+
+  it("steps tab.next and tab.prev OVER the placeholder row, from either side", () => {
+    seedStripHost();
+    // Rows: [tab-1, placeholder, tab-2, tab-3].
+    seedStripFixture(3, 1);
     render(panelUi());
     const router = fakeKeybindingRouter();
 
-    await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+    act(() => {
+      useLandingPanelStore.getState().activateTab("tab-1");
     });
-    expect(
-      screen.queryByRole("button", { name: "Restore terminal panel" }),
-    ).toBeNull();
+    act(() => {
+      dispatchAction("tab.next", router);
+    });
+    expect(useLandingPanelStore.getState().activeInstanceId).toBe("tab-2");
+
+    // From the placeholder itself: forward is the first real tab AFTER it,
+    // backward the one before. Before this, `findIndex` returned -1 and
+    // `Math.max(index, 0)` turned it into 0, so next skipped tab-1 entirely.
+    act(() => {
+      useLandingPanelStore.getState().activateTab("placeholder-1");
+    });
+    act(() => {
+      dispatchAction("tab.next", router);
+    });
+    expect(useLandingPanelStore.getState().activeInstanceId).toBe("tab-2");
+
+    act(() => {
+      useLandingPanelStore.getState().activateTab("placeholder-1");
+    });
+    act(() => {
+      dispatchAction("tab.prev", router);
+    });
+    expect(useLandingPanelStore.getState().activeInstanceId).toBe("tab-1");
+  });
+
+  it("wraps around the placeholder when it sits at either end", () => {
+    seedStripHost();
+    // Rows: [placeholder, tab-1, tab-2].
+    seedStripFixture(2, 0);
+    render(panelUi());
+    const router = fakeKeybindingRouter();
+
+    act(() => {
+      dispatchAction("tab.prev", router);
+    });
+    expect(useLandingPanelStore.getState().activeInstanceId).toBe("tab-2");
+
+    act(() => {
+      useLandingPanelStore.getState().activateTab("tab-2");
+    });
+    act(() => {
+      dispatchAction("tab.next", router);
+    });
+    expect(useLandingPanelStore.getState().activeInstanceId).toBe("tab-1");
+  });
+
+  it("counts REAL tabs in the move guard, so one tab beside the chooser is reachable", () => {
+    seedStripHost();
+    // Rows: [tab-1, placeholder], with the placeholder active.
+    seedStripFixture(1, 1);
+    render(panelUi());
+    const router = fakeKeybindingRouter();
+
+    // `state.tabs.length < 2` made this a no-op, so with the chooser open
+    // beside a single terminal the chord could not reach that terminal at all.
+    act(() => {
+      dispatchAction("tab.next", router);
+    });
+    expect(useLandingPanelStore.getState().activeInstanceId).toBe("tab-1");
+  });
+
+  it("still refuses to move with one tab and no placeholder", () => {
+    seedStripHost();
+    seedStripFixture(1, null);
+    render(panelUi());
+    const router = fakeKeybindingRouter();
+
+    act(() => {
+      dispatchAction("tab.next", router);
+    });
+    expect(useLandingPanelStore.getState().activeInstanceId).toBe("tab-1");
+  });
+
+  it("counts digits over the REAL rows in display order, with the placeholder first", () => {
+    seedStripHost();
+    // Rows: [placeholder, tab-1, tab-2].
+    seedStripFixture(2, 0);
+    render(panelUi());
+
+    act(() => {
+      expect(matchDigitAction(leaderDigitEvent("Digit1"))?.run()).toBe(true);
+    });
+    expect(useLandingPanelStore.getState().activeInstanceId).toBe("tab-1");
+
+    act(() => {
+      expect(matchDigitAction(leaderDigitEvent("Digit2"))?.run()).toBe(true);
+    });
+    expect(useLandingPanelStore.getState().activeInstanceId).toBe("tab-2");
+
+    // Three rows are on screen, but only two are reachable by digit - the
+    // placeholder is never a destination.
+    act(() => {
+      expect(matchDigitAction(leaderDigitEvent("Digit3"))?.run()).toBe(false);
+    });
+    expect(useLandingPanelStore.getState().activeInstanceId).toBe("tab-2");
+  });
+
+  it("counts digits over the REAL rows in display order, with the placeholder in the middle", () => {
+    seedStripHost();
+    // Rows: [tab-1, placeholder, tab-2, tab-3].
+    seedStripFixture(3, 1);
+    render(panelUi());
+
+    act(() => {
+      expect(matchDigitAction(leaderDigitEvent("Digit2"))?.run()).toBe(true);
+    });
+    expect(useLandingPanelStore.getState().activeInstanceId).toBe("tab-2");
+
+    act(() => {
+      expect(matchDigitAction(leaderDigitEvent("Digit3"))?.run()).toBe(true);
+    });
+    expect(useLandingPanelStore.getState().activeInstanceId).toBe("tab-3");
+  });
+
+  it("maximizes and restores via app.terminal.maximize, revealing when collapsed", () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
+      instanceId: "tab-1",
+      sessionId: "session-1",
+      hostId: "host-a",
+      cwd: "/workspace/project",
+      name: "project",
+      titleSource: "default",
+    });
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+    const router = fakeKeybindingRouter();
+
+    expect(screen.queryByRole("button", { name: "Restore panel" })).toBeNull();
 
     act(() => {
       dispatchAction("app.terminal.maximize", router);
     });
     expect(
-      screen.queryByRole("button", { name: "Restore terminal panel" }),
+      screen.queryByRole("button", { name: "Restore panel" }),
     ).not.toBeNull();
 
     act(() => {
       dispatchAction("app.terminal.maximize", router);
     });
-    expect(
-      screen.queryByRole("button", { name: "Restore terminal panel" }),
-    ).toBeNull();
+    expect(screen.queryByRole("button", { name: "Restore panel" })).toBeNull();
 
     // Collapsed panel: the chord reveals and maximizes in one stroke.
-    fireEvent.click(
-      screen.getByRole("button", { name: "Collapse terminal panel" }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Collapse panel" }));
     expect(screen.getByTestId("landing-terminal-panel").dataset.open).toBe(
       "false",
     );
@@ -2215,67 +3550,98 @@ describe("<LandingTerminalPanel />", () => {
       "true",
     );
     expect(
-      screen.queryByRole("button", { name: "Restore terminal panel" }),
+      screen.queryByRole("button", { name: "Restore panel" }),
     ).not.toBeNull();
   });
 
-  it("explains the disabled + button when an old host cannot report homeCwd", async () => {
+  it("explains the disabled Terminal card when an old host cannot report homeCwd", async () => {
     mocks.activeHostId = "host-a";
     mocks.clientActiveHostId = "host-a";
     mocks.primaryWorkspacePath = null;
     mocks.probeData = emptyList(null);
     mocks.freshProbeData = mocks.probeData;
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
 
-    await screen.findByTestId("landing-terminal-host-update");
-    const plus = screen.getByRole("button", { name: "New terminal" });
-    expect(plus.getAttribute("aria-disabled")).toBe("true");
-    // aria-disabled instead of the native attr keeps it inert but reachable.
-    fireEvent.click(plus);
-    expect(useLandingTerminalStore.getState().tabs).toHaveLength(0);
-
-    fireEvent.focus(plus);
-    const hints = await screen.findAllByText(
-      "Update the selected host to open a terminal without a folder.",
-    );
-    // At least the tooltip copy beyond the empty-state paragraph.
-    expect(hints.length).toBeGreaterThanOrEqual(2);
-  });
-
-  it("keeps the + button live with no tooltip once a folder is pinned", async () => {
-    mocks.activeHostId = "host-a";
-    mocks.clientActiveHostId = "host-a";
-    mocks.primaryWorkspacePath = "/workspace/project";
-    mocks.probeData = emptyList("/Users/dev");
-    mocks.freshProbeData = mocks.probeData;
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
-    render(panelUi());
-
-    await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
-    });
-    const plus = screen.getByRole("button", { name: "New terminal" });
+    // The empty state is displaced by the chooser; the "+" is never disabled
+    // now, and the old-host guidance lives on the chooser's Terminal card.
+    expect(screen.queryByTestId("landing-terminal-host-update")).toBeNull();
+    const plus = await screen.findByTestId("landing-terminal-new-tab");
     expect(plus.getAttribute("aria-disabled")).toBeNull();
-    fireEvent.click(plus);
+
+    const terminalCard = await screen.findByTestId(
+      "landing-new-tab-card-terminal",
+    );
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(2);
+      expect(terminalCard.getAttribute("aria-disabled")).toBe("true");
     });
+    // aria-disabled instead of the native attr keeps it inert but reachable.
+    fireEvent.click(terminalCard);
+    expect(
+      landingTerminalTabs(useLandingPanelStore.getState().tabs),
+    ).toHaveLength(0);
+    expect(
+      screen.getByTestId("landing-new-tab-card-terminal-reason").textContent,
+    ).toBe("Update the selected host to open a terminal without a folder.");
   });
 
-  it("holds the tab chords while the system-tab modal occludes the page", async () => {
+  it("keeps the chooser's Terminal card live with no tooltip once a folder is pinned", async () => {
     mocks.activeHostId = "host-a";
     mocks.clientActiveHostId = "host-a";
     mocks.primaryWorkspacePath = "/workspace/project";
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = mocks.probeData;
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
     const router = fakeKeybindingRouter();
 
-    await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+    // No auto-spawn: create the first terminal directly (a folder is pinned,
+    // so ⇧⌘J creates synchronously, without depending on the chooser).
+    act(() => {
+      dispatchAction("app.terminal.new", router);
     });
+    await waitFor(() => {
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(1);
+    });
+    // The "+" is never disabled, and the chooser it opens carries no refusal
+    // once a folder is pinned.
+    const plus = screen.getByTestId("landing-terminal-new-tab");
+    expect(plus.getAttribute("aria-disabled")).toBeNull();
+    fireEvent.click(plus);
+    const terminalCard = await screen.findByTestId(
+      "landing-new-tab-card-terminal",
+    );
+    expect(terminalCard.getAttribute("aria-disabled")).toBeNull();
+    expect(
+      screen.queryByTestId("landing-new-tab-card-terminal-reason"),
+    ).toBeNull();
+    fireEvent.click(terminalCard);
+    await waitFor(() => {
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(2);
+    });
+  });
+
+  it("holds the tab chords while the system-tab modal occludes the page", () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
+      instanceId: "tab-1",
+      sessionId: "session-1",
+      hostId: "host-a",
+      cwd: "/workspace/project",
+      name: "project",
+      titleSource: "default",
+    });
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+    const router = fakeKeybindingRouter();
 
     setSystemTabModalApi(openOverlayApi);
     act(() => {
@@ -2284,7 +3650,9 @@ describe("<LandingTerminalPanel />", () => {
       dispatchAction("tab.close-all", router);
     });
     expect(matchDigitAction(leaderDigitEvent("Digit1"))).toBeNull();
-    expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+    expect(
+      landingTerminalTabs(useLandingPanelStore.getState().tabs),
+    ).toHaveLength(1);
     expect(mocks.kill).not.toHaveBeenCalled();
   });
 
@@ -2294,14 +3662,20 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = "/workspace/project";
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = mocks.probeData;
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
+      instanceId: "tab-1",
+      sessionId: "session-1",
+      hostId: "host-a",
+      cwd: "/workspace/project",
+      name: "project",
+      titleSource: "default",
+    });
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
     const router = fakeKeybindingRouter();
 
-    await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
-    });
-    const tab = useLandingTerminalStore.getState().tabs[0];
+    const tab = landingTerminalTabs(useLandingPanelStore.getState().tabs)[0];
     const terminalFocus = vi.fn();
     const composerFocus = vi.fn();
     focusCleanups.push(
@@ -2341,12 +3715,500 @@ describe("<LandingTerminalPanel />", () => {
     });
   });
 
+  // The three tests below pin one class: `activeInstanceId` is no longer
+  // always a terminal. A terminal focus request is fulfilled by a REGISTERED
+  // terminal endpoint and otherwise PARKS, so aiming one at a browser row or
+  // the chooser leaves an intent nothing can ever claim - it outlives the row
+  // and swallows the next terminal's focus. Each asserts on the parked intent,
+  // because the harm is the request existing, not a call that never happened.
+  // `availability` is the TERMINAL TARGET host's, and the panel's rows name
+  // several devices. Replacing the whole body with its status line therefore
+  // takes a working page off screen and puts a sentence about an unrelated
+  // machine in its place.
+  it("keeps a live device's browser row on screen while the target host resolves", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    // No probe answer for the target host: availability is "unknown".
+    mocks.probeData = undefined;
+    mocks.freshProbeData = undefined;
+    mocks.browserSessionsByHost = {
+      "host-b": browserSessionsState({ hostId: "host-b" }),
+    };
+    useLandingPanelStore.getState().addTab({
+      kind: "browser",
+      instanceId: "browser-instance",
+      hostId: "host-b",
+      sessionId: "browser-session",
+      tabId: "browser-tab",
+      name: "example.com",
+      titleSource: "default",
+    });
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+
+    const tile = await screen.findByTestId(
+      "landing-browser-tile-browser-instance",
+    );
+    // Mounted is not enough - the native view is only on screen when the panel
+    // says so.
+    expect(tile.getAttribute("data-active")).toBe("true");
+    expect(tile.getAttribute("data-panel-open")).toBe("true");
+    expect(screen.queryByText("Connecting to the selected host…")).toBeNull();
+  });
+
+  // The other half, unchanged: with nothing else to show, the connecting line
+  // is still what a resolving target puts in the body.
+  it("still shows the connecting status when there is no row to keep", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = undefined;
+    mocks.freshProbeData = undefined;
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
+      instanceId: "terminal-instance",
+      sessionId: "terminal-session",
+      hostId: "host-a",
+      cwd: "/workspace/project",
+      name: "project",
+      titleSource: "default",
+    });
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+
+    expect(
+      await screen.findByText("Connecting to the selected host…"),
+    ).toBeTruthy();
+  });
+
+  /**
+   * The same class as the three above, one level UP. `availability` also gates
+   * whether the panel MOUNTS, and an `unsupported` / `no-active-host` verdict
+   * about the terminal target unmounted every row - including a browser row on
+   * a device that verdict says nothing about. Fixing it only inside the body
+   * left the harm reachable through the branch above it.
+   *
+   * Asserted on the tile's PROPS, as the visibility work established: a native
+   * `WebContentsView` is painted over the window, so its presence and its
+   * on-screen state are the props the panel decides, not DOM the test can see.
+   */
+  it("keeps a live device's browser row when the target host is unsupported", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = undefined;
+    mocks.freshProbeData = undefined;
+    // The terminal target is an old host that cannot serve `terminal.list`.
+    mocks.probeError = new HostRpcError({
+      code: "DOWNGRADE_UNSUPPORTED",
+      message: "terminal.list is not supported by this host",
+      requestId: "req-unsupported",
+      method: "terminal.list",
+      fatalDetails: null,
+    });
+    mocks.browserSessionsByHost = {
+      "host-b": browserSessionsState({ hostId: "host-b" }),
+    };
+    useLandingPanelStore.getState().addTab({
+      kind: "browser",
+      instanceId: "browser-instance",
+      hostId: "host-b",
+      sessionId: "browser-session",
+      tabId: "browser-tab",
+      name: "example.com",
+      titleSource: "default",
+    });
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+
+    const tile = await screen.findByTestId(
+      "landing-browser-tile-browser-instance",
+    );
+    expect(tile.getAttribute("data-active")).toBe("true");
+    expect(tile.getAttribute("data-panel-open")).toBe("true");
+  });
+
+  it("keeps a live device's browser row when no host is selected", async () => {
+    // `activeHostId: null` is `no-active-host` - the panel has no terminal
+    // target at all. The browser row still names a device that is serving it.
+    mocks.activeHostId = null;
+    mocks.clientActiveHostId = null;
+    mocks.primaryWorkspacePath = null;
+    mocks.probeData = undefined;
+    mocks.freshProbeData = undefined;
+    mocks.browserSessionsByHost = {
+      "host-b": browserSessionsState({ hostId: "host-b" }),
+    };
+    useLandingPanelStore.getState().addTab({
+      kind: "browser",
+      instanceId: "browser-instance",
+      hostId: "host-b",
+      sessionId: "browser-session",
+      tabId: "browser-tab",
+      name: "example.com",
+      titleSource: "default",
+    });
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+
+    const tile = await screen.findByTestId(
+      "landing-browser-tile-browser-instance",
+    );
+    expect(tile.getAttribute("data-active")).toBe("true");
+    expect(tile.getAttribute("data-panel-open")).toBe("true");
+  });
+
+  // The other half, unchanged: with only terminal rows, every row IS served by
+  // the target host, so the verdict speaks for all of them and the panel still
+  // goes away exactly as it does today.
+  it("still unmounts a terminal-only panel when no host is selected", async () => {
+    mocks.activeHostId = null;
+    mocks.clientActiveHostId = null;
+    mocks.primaryWorkspacePath = null;
+    mocks.probeData = undefined;
+    mocks.freshProbeData = undefined;
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
+      instanceId: "terminal-instance",
+      sessionId: "terminal-session",
+      hostId: "host-a",
+      cwd: "/workspace/project",
+      name: "project",
+      titleSource: "default",
+    });
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("landing-terminal-panel")).toBeNull();
+    });
+    expect(screen.queryByTestId("landing-terminal-tile")).toBeNull();
+  });
+
+  // CSS cannot hide a `WebContentsView`: it is painted over the window by the
+  // desktop, so the picker's `invisible` wrapper leaves it on top of the DOM
+  // dialog, taking input. The assertion is on the visibility PROP for exactly
+  // that reason - a DOM-only assertion cannot see this class of bug.
+  it("takes the native browser view off screen while the directory picker is up", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.workspacePaths = ["/workspace/project", "/workspace/other"];
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    mocks.browserSessionsByHost = {
+      "host-a": browserSessionsState({}),
+    };
+    useLandingPanelStore.getState().addTab({
+      kind: "browser",
+      instanceId: "browser-instance",
+      hostId: "host-a",
+      sessionId: "browser-session",
+      tabId: "browser-tab",
+      name: "example.com",
+      titleSource: "default",
+    });
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+    const router = fakeKeybindingRouter();
+
+    const tile = await screen.findByTestId(
+      "landing-browser-tile-browser-instance",
+    );
+    expect(tile.getAttribute("data-active")).toBe("true");
+
+    // ⇧⌘J with two folders raises the picker OVER the body, and cancelling it
+    // from an already-open panel leaves the panel open.
+    act(() => {
+      dispatchAction("app.terminal.new", router);
+    });
+    expect(
+      await screen.findByTestId("landing-terminal-directory-picker"),
+    ).toBeTruthy();
+    await waitFor(() => {
+      expect(
+        screen
+          .getByTestId("landing-browser-tile-browser-instance")
+          .getAttribute("data-active"),
+      ).toBe("false");
+    });
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Cancel terminal creation" }),
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.queryByTestId("landing-terminal-directory-picker"),
+      ).toBeNull();
+      expect(
+        screen
+          .getByTestId("landing-browser-tile-browser-instance")
+          .getAttribute("data-active"),
+      ).toBe("true");
+    });
+  });
+
+  // Reveal is not create. `⇧⌘J` still asks for a terminal in as many words;
+  // this chord asks for the panel, and a strip holding only browser tabs has
+  // nothing to reuse - which used to mean "spawn one".
+  it("reveals a browser-only panel without spawning a terminal", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    mocks.browserSessionsByHost = {
+      "host-a": browserSessionsState({}),
+    };
+    useLandingPanelStore.getState().addTab({
+      kind: "browser",
+      instanceId: "browser-instance",
+      hostId: "host-a",
+      sessionId: "browser-session",
+      tabId: "browser-tab",
+      name: "example.com",
+      titleSource: "default",
+    });
+    render(panelUi());
+    const router = fakeKeybindingRouter();
+
+    act(() => {
+      dispatchAction("app.terminal.toggle", router);
+    });
+
+    await waitFor(() => {
+      expect(testLayout().panelOpen).toBe(true);
+    });
+    // Settle every reconciliation generation the reveal armed - the spawn this
+    // pins against was never synchronous.
+    await act(async () => {
+      for (let pass = 0; pass < 5; pass += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+    });
+    expect(landingTerminalTabs(useLandingPanelStore.getState().tabs)).toEqual(
+      [],
+    );
+    expect(
+      screen.getByTestId("landing-browser-tile-browser-instance"),
+    ).toBeTruthy();
+  });
+
+  it("does not park a terminal focus request when a browser tab is activated", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    mocks.browserSessionsByHost = {
+      "host-a": browserSessionsState({}),
+    };
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
+      instanceId: "terminal-instance",
+      sessionId: "terminal-session",
+      hostId: "host-a",
+      cwd: "/workspace/project",
+      name: "project",
+      titleSource: "default",
+    });
+    useLandingPanelStore.getState().addTab({
+      kind: "browser",
+      instanceId: "browser-instance",
+      hostId: "host-a",
+      sessionId: "browser-session",
+      tabId: "browser-tab",
+      name: "example.com",
+      titleSource: "default",
+    });
+    useLandingPanelStore.getState().activateTab("terminal-instance");
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+
+    fireEvent.click(
+      screen.getByTestId("landing-terminal-tab-browser-instance"),
+    );
+
+    await waitFor(() => {
+      expect(useLandingPanelStore.getState().activeInstanceId).toBe(
+        "browser-instance",
+      );
+    });
+    expect(
+      hasPrimaryFocusIntent(
+        (target) =>
+          target.kind === "terminal" &&
+          target.instanceId === "browser-instance",
+      ),
+    ).toBe(false);
+  });
+
+  it("leaves the keyboard alone when the panel opens on a browser row", () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    mocks.browserSessionsByHost = {
+      "host-a": browserSessionsState({}),
+    };
+    useLandingPanelStore.getState().addTab({
+      kind: "browser",
+      instanceId: "browser-instance",
+      hostId: "host-a",
+      sessionId: "browser-session",
+      tabId: "browser-tab",
+      name: "example.com",
+      titleSource: "default",
+    });
+    // Reconciliation never settles, so the reveal gesture the open transition
+    // captures cannot resolve into a terminal that supersedes what this effect
+    // requested. That is also the state an offline host leaves behind, and the
+    // one where a misaimed request stays parked for good.
+    mocks.queryClient.fetchQuery.mockImplementation(
+      () => new Promise(() => undefined),
+    );
+    render(panelUi());
+
+    // The phone header's route: `setPanelOpen` written on the store directly.
+    // `app.terminal.toggle` would not reach this effect - its own capture can
+    // raise a directory request the effect defers to.
+    act(() => {
+      useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    });
+
+    expect(testLayout().panelOpen).toBe(true);
+    expect(useLandingPanelStore.getState().activeInstanceId).toBe(
+      "browser-instance",
+    );
+    expect(
+      hasPrimaryFocusIntent(
+        (target) =>
+          target.kind === "terminal" &&
+          target.instanceId === "browser-instance",
+      ),
+    ).toBe(false);
+  });
+
+  it("does not aim the reveal gesture's eager focus at a browser row", () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    mocks.browserSessionsByHost = {
+      "host-a": browserSessionsState({}),
+    };
+    // Reconciliation never settles, so the captured reveal gesture cannot
+    // create the terminal it will eventually focus - which leaves the toggle's
+    // own EAGER hand-off as the only focus request in play. That is exactly
+    // the state an offline host leaves behind, and the reason the eager
+    // request must not be aimed at a row no terminal will ever back.
+    mocks.queryClient.fetchQuery.mockImplementation(
+      () => new Promise(() => undefined),
+    );
+    useLandingPanelStore.getState().addTab({
+      kind: "browser",
+      instanceId: "browser-instance",
+      hostId: "host-a",
+      sessionId: "browser-session",
+      tabId: "browser-tab",
+      name: "example.com",
+      titleSource: "default",
+    });
+    render(panelUi());
+    const router = fakeKeybindingRouter();
+
+    act(() => {
+      dispatchAction("app.terminal.toggle", router);
+    });
+
+    expect(testLayout().panelOpen).toBe(true);
+    expect(
+      hasPrimaryFocusIntent(
+        (target) =>
+          target.kind === "terminal" &&
+          target.instanceId === "browser-instance",
+      ),
+    ).toBe(false);
+  });
+
+  it("hands focus back to the composer when closing a terminal promotes a browser neighbour", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    mocks.plainAuthorityStatus = "capable";
+    mocks.plainCanMutate = true;
+    mocks.browserSessionsByHost = {
+      "host-a": browserSessionsState({ closeTab: mocks.browserCloseTab }),
+    };
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
+      instanceId: "terminal-instance",
+      sessionId: "terminal-session",
+      hostId: "host-a",
+      cwd: "/workspace/project",
+      name: "project",
+      titleSource: "default",
+    });
+    useLandingPanelStore.getState().addTab({
+      kind: "browser",
+      instanceId: "browser-instance",
+      hostId: "host-a",
+      sessionId: "browser-session",
+      tabId: "browser-tab",
+      name: "example.com",
+      titleSource: "default",
+    });
+    useLandingPanelStore.getState().activateTab("terminal-instance");
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    const composerFocus = vi.fn();
+    focusCleanups.push(
+      registerComposerFocus(
+        "test-composer-promote-browser",
+        {
+          focus: composerFocus,
+          containsActiveElement: () => true,
+          isEligible: () => true,
+        },
+        true,
+      ),
+    );
+    render(panelUi());
+
+    fireEvent.click(screen.getByLabelText("Close project"));
+
+    await waitFor(() => {
+      expect(useLandingPanelStore.getState().activeInstanceId).toBe(
+        "browser-instance",
+      );
+    });
+    // The panel stayed open, so the open-transition effect never runs - this
+    // fallback is the only thing that can hand the keyboard back.
+    expect(testLayout().panelOpen).toBe(true);
+    await waitFor(() => {
+      expect(composerFocus).toHaveBeenCalled();
+    });
+    expect(
+      hasPrimaryFocusIntent(
+        (target) =>
+          target.kind === "terminal" &&
+          target.instanceId === "browser-instance",
+      ),
+    ).toBe(false);
+  });
+
   it("refits the active terminal after reopening from zero width to the stored panel width", async () => {
     mocks.activeHostId = "host-a";
     mocks.primaryWorkspacePath = "/workspace/project";
     mocks.probeData = listWith([runningSession("session-1")], "/Users/dev");
     mocks.freshProbeData = mocks.probeData;
-    useLandingTerminalStore.getState().addTab({
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
       instanceId: "tab-1",
       sessionId: "session-1",
       hostId: "host-a",
@@ -2354,10 +4216,10 @@ describe("<LandingTerminalPanel />", () => {
       name: "project",
       titleSource: "default",
     });
-    useLandingTerminalStore
+    useLandingPanelStore
       .getState()
       .setPanelWidthFraction(TEST_LANDING_PAGE_ID, 0.42);
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
 
     const panel = screen.getByTestId("landing-terminal-panel");
@@ -2401,7 +4263,8 @@ describe("<LandingTerminalPanel />", () => {
       runningSession("session-1"),
       { ...runningSession("session-2"), cwd: "/workspace/other" },
     ];
-    useLandingTerminalStore.getState().addTab({
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
       instanceId: "tab-1",
       sessionId: "session-1",
       hostId: "host-a",
@@ -2409,7 +4272,8 @@ describe("<LandingTerminalPanel />", () => {
       name: "project",
       titleSource: "default",
     });
-    useLandingTerminalStore.getState().addTab({
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
       instanceId: "tab-2",
       sessionId: "session-2",
       hostId: "host-a",
@@ -2417,7 +4281,7 @@ describe("<LandingTerminalPanel />", () => {
       name: "other",
       titleSource: "default",
     });
-    useLandingTerminalStore.getState().activateTab("tab-1");
+    useLandingPanelStore.getState().activateTab("tab-1");
     const resolvers: Array<(value: unknown) => void> = [];
     mocks.queryClient.fetchQuery.mockImplementation(
       () =>
@@ -2452,7 +4316,7 @@ describe("<LandingTerminalPanel />", () => {
     });
 
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().activeInstanceId).toBe("tab-2");
+      expect(useLandingPanelStore.getState().activeInstanceId).toBe("tab-2");
     });
     await waitFor(() => {
       expect(
@@ -2466,7 +4330,8 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = "/workspace/project";
     mocks.probeData = listWith([runningSession("session-1")], "/Users/dev");
     mocks.freshProbeData = mocks.probeData;
-    useLandingTerminalStore.getState().addTab({
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
       instanceId: "tab-1",
       sessionId: "session-1",
       hostId: "host-a",
@@ -2474,7 +4339,7 @@ describe("<LandingTerminalPanel />", () => {
       name: "project",
       titleSource: "default",
     });
-    useLandingTerminalStore
+    useLandingPanelStore
       .getState()
       .setPanelWidthFraction(TEST_LANDING_PAGE_ID, 0.42);
     render(panelUi());
@@ -2519,7 +4384,8 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = "/workspace/project";
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = mocks.probeData;
-    useLandingTerminalStore.getState().addTab({
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
       instanceId: "tab-1",
       sessionId: "session-1",
       hostId: "host-a",
@@ -2527,7 +4393,7 @@ describe("<LandingTerminalPanel />", () => {
       name: "project",
       titleSource: "default",
     });
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     const terminalFocus = vi.fn();
     focusCleanups.push(
       registerTerminalFocus(
@@ -2563,12 +4429,20 @@ describe("<LandingTerminalPanel />", () => {
     act(() => {
       dispatchAction("app.terminal.toggle", router);
     });
+    const terminalCard = await screen.findByTestId(
+      "landing-new-tab-card-terminal",
+    );
+    fireEvent.click(terminalCard);
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(1);
     });
-    const created = useLandingTerminalStore.getState().tabs[0];
+    const created = landingTerminalTabs(
+      useLandingPanelStore.getState().tabs,
+    )[0];
 
-    // The auto-spawned tile's engine registers after the create - the parked
+    // The spawned tile's engine registers after the create - the parked
     // request must fire exactly then, not get lost.
     const terminalFocus = vi.fn();
     focusCleanups.push(
@@ -2590,17 +4464,27 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = "/workspace/project";
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = mocks.probeData;
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
+    const router = fakeKeybindingRouter();
 
+    // No auto-spawn: create the first terminal directly (a folder is pinned,
+    // so ⇧⌘J creates synchronously, without depending on the chooser).
+    act(() => {
+      dispatchAction("app.terminal.new", router);
+    });
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(1);
     });
     fireEvent.click(screen.getByTestId("landing-terminal-new-tab"));
+    fireEvent.click(screen.getByTestId("landing-new-tab-card-terminal"));
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(2);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(2);
     });
-    const [first] = useLandingTerminalStore.getState().tabs;
+    const [first] = landingTerminalTabs(useLandingPanelStore.getState().tabs);
     const firstFocus = vi.fn();
     let firstEligible = true;
     focusCleanups.push(
@@ -2639,6 +4523,19 @@ describe("<LandingTerminalPanel />", () => {
           resolvers.push(resolve);
         }),
     );
+    // An existing tab, so the toggle below is a REOPEN that captures the
+    // gesture and defers to reconciliation settlement - an empty panel's
+    // plain toggle no longer captures anything (it shows the chooser
+    // instead).
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
+      instanceId: "seed-tab",
+      sessionId: "seed-session",
+      hostId: "host-a",
+      cwd: "/workspace/seed",
+      name: "seed",
+      titleSource: "default",
+    });
     const view = render(panelUiForDraft("draft-a"));
     const router = fakeKeybindingRouter();
 
@@ -2652,12 +4549,16 @@ describe("<LandingTerminalPanel />", () => {
     await drainDeferredListFetches(resolvers);
 
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(2);
     });
-    const [spawned] = useLandingTerminalStore.getState().tabs;
-    expect(spawned.cwd).toBe("/workspace/draft-a");
-    expect(useLandingTerminalStore.getState().activeInstanceId).toBe(
-      spawned.instanceId,
+    const spawned = landingTerminalTabs(
+      useLandingPanelStore.getState().tabs,
+    ).find((tab) => tab.instanceId !== "seed-tab");
+    expect(spawned?.cwd).toBe("/workspace/draft-a");
+    expect(useLandingPanelStore.getState().activeInstanceId).toBe(
+      spawned?.instanceId,
     );
   });
 
@@ -2665,7 +4566,8 @@ describe("<LandingTerminalPanel />", () => {
     mocks.activeHostId = "host-a";
     mocks.primaryWorkspacePath = "/workspace/draft-a";
     mocks.probeData = emptyList(null);
-    useLandingTerminalStore.getState().addTab({
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
       instanceId: "exited-tab",
       sessionId: "exited-session",
       hostId: "host-a",
@@ -2685,7 +4587,7 @@ describe("<LandingTerminalPanel />", () => {
 
     act(() => {
       dispatchAction("app.terminal.toggle", router);
-      useLandingTerminalStore.getState().setPanelOpen("draft-b", true);
+      useLandingPanelStore.getState().setPanelOpen("draft-b", true);
     });
     mocks.primaryWorkspacePath = "/workspace/draft-b";
     view.rerender(panelUiForDraft("draft-b"));
@@ -2712,7 +4614,9 @@ describe("<LandingTerminalPanel />", () => {
     });
 
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(0);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(0);
     });
     expect(layoutFor("draft-a").panelOpen).toBe(false);
     expect(layoutFor("draft-b").panelOpen).toBe(false);
@@ -2729,6 +4633,19 @@ describe("<LandingTerminalPanel />", () => {
           resolvers.push(resolve);
         }),
     );
+    // An existing tab, so the toggle below is a REOPEN that captures the
+    // gesture and defers to reconciliation settlement - an empty panel's
+    // plain toggle no longer captures anything (it shows the chooser
+    // instead).
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
+      instanceId: "seed-tab",
+      sessionId: "seed-session",
+      hostId: "host-a",
+      cwd: "/workspace/seed",
+      name: "seed",
+      titleSource: "default",
+    });
     const view = render(panelUiForDraft("draft-a"));
     const router = fakeKeybindingRouter();
 
@@ -2741,9 +4658,15 @@ describe("<LandingTerminalPanel />", () => {
 
     // A folderless gesture resolves to the settled host home (#567), never to
     // draft-b's folder - that folder only became focused AFTER the capture.
-    const tabs = useLandingTerminalStore.getState().tabs;
-    expect(tabs).toHaveLength(1);
-    expect(tabs[0]?.cwd).toBe("/Users/dev");
+    await waitFor(() => {
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(2);
+    });
+    const created = landingTerminalTabs(
+      useLandingPanelStore.getState().tabs,
+    ).find((tab) => tab.instanceId !== "seed-tab");
+    expect(created?.cwd).toBe("/Users/dev");
   });
 
   it("reconciles through the host client captured at the opening gesture", async () => {
@@ -2757,6 +4680,19 @@ describe("<LandingTerminalPanel />", () => {
           resolvers.push(resolve);
         }),
     );
+    // An existing tab, so the toggle below is a REOPEN: it captures the
+    // gesture and defers to reconciliation settlement to spawn-or-reuse at
+    // the resolved cwd, same as before - an empty panel no longer captures
+    // anything on a plain toggle (it shows the chooser instead).
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
+      instanceId: "seed-tab",
+      sessionId: "seed-session",
+      hostId: "host-a",
+      cwd: "/workspace/seed",
+      name: "seed",
+      titleSource: "default",
+    });
     const view = render(panelUiForDraft("draft-a"));
     const router = fakeKeybindingRouter();
 
@@ -2767,8 +4703,15 @@ describe("<LandingTerminalPanel />", () => {
     view.rerender(panelUiForDraft("draft-b"));
     await drainDeferredListFetches(resolvers);
 
-    expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
-    expect(useLandingTerminalStore.getState().tabs[0]).toMatchObject({
+    await waitFor(() => {
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(2);
+    });
+    const created = landingTerminalTabs(
+      useLandingPanelStore.getState().tabs,
+    ).find((tab) => tab.instanceId !== "seed-tab");
+    expect(created).toMatchObject({
       hostId: "host-a",
       cwd: "/workspace/draft-a",
     });
@@ -2784,20 +4727,27 @@ describe("<LandingTerminalPanel />", () => {
     render(panelUiForDraft("draft-a"));
     const router = fakeKeybindingRouter();
 
-    // Opening captures a gesture whose pinned client is null -> fail-closed.
+    // The chord captures a gesture whose pinned client is null -> fail-closed.
+    // The synchronous create attempt fails, the panel opens empty, and the
+    // chooser's Terminal card is what now carries the refusal (the "+" is
+    // never disabled).
     act(() => {
-      dispatchAction("app.terminal.toggle", router);
+      dispatchAction("app.terminal.new", router);
     });
 
-    const plus = await screen.findByRole("button", { name: "New terminal" });
+    const terminalCard = await screen.findByTestId(
+      "landing-new-tab-card-terminal",
+    );
     // Fail-closed: disabled, and NOT silently reconciling on the default client
-    // (which would auto-spawn a terminal into the empty panel).
-    expect(plus.getAttribute("aria-disabled")).toBe("true");
-    fireEvent.click(plus);
+    // (which would spawn a terminal into the empty panel).
+    expect(terminalCard.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(terminalCard);
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
-    expect(useLandingTerminalStore.getState().tabs).toHaveLength(0);
+    expect(
+      landingTerminalTabs(useLandingPanelStore.getState().tabs),
+    ).toHaveLength(0);
     expect(mocks.queryClient.fetchQuery).not.toHaveBeenCalled();
   });
 
@@ -2812,6 +4762,19 @@ describe("<LandingTerminalPanel />", () => {
           resolvers.push(resolve);
         }),
     );
+    // An existing tab, so the toggle below is a REOPEN: it captures the
+    // gesture and defers to reconciliation settlement to spawn-or-reuse at
+    // the resolved cwd, same as before - an empty panel no longer captures
+    // anything on a plain toggle (it shows the chooser instead).
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
+      instanceId: "seed-tab",
+      sessionId: "seed-session",
+      hostId: "host-a",
+      cwd: "/workspace/seed",
+      name: "seed",
+      titleSource: "default",
+    });
     const view = render(panelUiForDraft("draft-a"));
     const router = fakeKeybindingRouter();
 
@@ -2827,55 +4790,79 @@ describe("<LandingTerminalPanel />", () => {
     view.rerender(panelUiForDraft("draft-b"));
     await drainDeferredListFetches(resolvers);
 
-    expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
-    expect(useLandingTerminalStore.getState().tabs[0]).toMatchObject({
+    await waitFor(() => {
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(2);
+    });
+    const created = landingTerminalTabs(
+      useLandingPanelStore.getState().tabs,
+    ).find((tab) => tab.instanceId !== "seed-tab");
+    expect(created).toMatchObject({
       hostId: "host-a",
       cwd: "/workspace/draft-a",
     });
   });
 
-  it("clears a settled opening gesture so the + button follows focus to a folderless draft", async () => {
+  it("clears a settled opening gesture so the chooser follows focus to a folderless draft", async () => {
     mocks.activeHostId = "host-a";
     mocks.primaryWorkspacePath = "/workspace/draft-a";
     mocks.probeData = emptyList(null);
     mocks.freshProbeData = mocks.probeData;
+    // An existing tab, so the toggle below is a REOPEN that captures the
+    // gesture and settles through reconciliation, same mechanism as before -
+    // an empty panel's plain toggle no longer captures anything.
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
+      instanceId: "seed-tab",
+      sessionId: "seed-session",
+      hostId: "host-a",
+      cwd: "/workspace/seed",
+      name: "seed",
+      titleSource: "default",
+    });
     const view = render(panelUiForDraft("draft-a"));
     const router = fakeKeybindingRouter();
 
-    // Open on foldered draft A: the gesture settles and auto-spawns A's terminal.
+    // Reopen on foldered draft A: the gesture settles and spawns A's terminal.
     act(() => {
       dispatchAction("app.terminal.toggle", router);
     });
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(2);
     });
-    expect(
-      screen
-        .getByRole("button", { name: "New terminal" })
-        .getAttribute("aria-disabled"),
-    ).toBeNull();
+
+    // The "+" is never disabled; the chooser it opens carries the refusal on
+    // its Terminal card instead.
+    fireEvent.click(screen.getByTestId("landing-terminal-new-tab"));
+    const terminalCard = await screen.findByTestId(
+      "landing-new-tab-card-terminal",
+    );
+    expect(terminalCard.getAttribute("aria-disabled")).toBeNull();
 
     // Focus moves to a folderless draft B AFTER the gesture settled. A stale A
-    // snapshot would keep + enabled from A's pinned folder; the cleared gesture
-    // makes + reflect the live folderless B instead.
+    // snapshot would keep the card enabled from A's pinned folder; the cleared
+    // gesture makes it reflect the live folderless B instead.
     mocks.primaryWorkspacePath = null;
     view.rerender(panelUiForDraft("draft-b"));
 
     await waitFor(() => {
-      expect(
-        screen
-          .getByRole("button", { name: "New terminal" })
-          .getAttribute("aria-disabled"),
-      ).toBe("true");
+      expect(terminalCard.getAttribute("aria-disabled")).toBe("true");
     });
     // The A terminal survives; focus-following must not have spawned in B.
-    expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
-    expect(useLandingTerminalStore.getState().tabs[0]?.cwd).toBe(
-      "/workspace/draft-a",
-    );
+    expect(
+      landingTerminalTabs(useLandingPanelStore.getState().tabs),
+    ).toHaveLength(2);
+    expect(
+      landingTerminalTabs(useLandingPanelStore.getState().tabs).find(
+        (tab) => tab.instanceId !== "seed-tab",
+      )?.cwd,
+    ).toBe("/workspace/draft-a");
   });
 
-  it("creates a + terminal on the captured host and folder even after focus moved to a folderless draft", async () => {
+  it("creates a terminal on the captured host and folder even after focus moved to a folderless draft", async () => {
     mocks.activeHostId = "host-a";
     mocks.primaryWorkspacePath = "/workspace/draft-a";
     mocks.probeData = emptyList(null);
@@ -2886,11 +4873,23 @@ describe("<LandingTerminalPanel />", () => {
           resolvers.push(resolve);
         }),
     );
+    // An existing tab, so the toggle below is a REOPEN that captures the
+    // gesture without creating yet (single workspace path, so it only
+    // focuses the existing active tab) - same capture mechanism as before.
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
+      instanceId: "seed-tab",
+      sessionId: "seed-session",
+      hostId: "host-a",
+      cwd: "/workspace/seed",
+      name: "seed",
+      titleSource: "default",
+    });
     const view = render(panelUiForDraft("draft-a"));
     const router = fakeKeybindingRouter();
 
-    // Open on draft A (the gesture pins host-a + /workspace/draft-a); the list
-    // fetch is deferred, so the gesture is still pending.
+    // Reopen on draft A (the gesture pins host-a + /workspace/draft-a); the
+    // list fetch is deferred, so the gesture is still pending.
     act(() => {
       dispatchAction("app.terminal.toggle", router);
     });
@@ -2898,15 +4897,25 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = null;
     view.rerender(panelUiForDraft("draft-b"));
 
-    // The + button must create against the pinned A gesture, not the folderless
-    // B the panel now happens to be focused on. It must NOT re-capture.
-    const plus = await screen.findByRole("button", { name: "New terminal" });
-    fireEvent.click(plus);
+    // The chooser's Terminal card must create against the pinned A gesture,
+    // not the folderless B the panel now happens to be focused on. It must
+    // NOT re-capture.
+    fireEvent.click(screen.getByTestId("landing-terminal-new-tab"));
+    const terminalCard = await screen.findByTestId(
+      "landing-new-tab-card-terminal",
+    );
+    expect(terminalCard.getAttribute("aria-disabled")).toBeNull();
+    fireEvent.click(terminalCard);
 
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(2);
     });
-    expect(useLandingTerminalStore.getState().tabs[0]).toMatchObject({
+    const created = landingTerminalTabs(
+      useLandingPanelStore.getState().tabs,
+    ).find((tab) => tab.instanceId !== "seed-tab");
+    expect(created).toMatchObject({
       hostId: "host-a",
       cwd: "/workspace/draft-a",
     });
@@ -2931,7 +4940,9 @@ describe("<LandingTerminalPanel />", () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
 
-    expect(useLandingTerminalStore.getState().tabs).toHaveLength(0);
+    expect(
+      landingTerminalTabs(useLandingPanelStore.getState().tabs),
+    ).toHaveLength(0);
   });
 
   it("remembers a captured host's availability downgrade after focus switches away", async () => {
@@ -2945,6 +4956,18 @@ describe("<LandingTerminalPanel />", () => {
           resolvers.push(resolve);
         }),
     );
+    // An existing tab, so the toggle below is a REOPEN that captures the
+    // gesture without creating yet (single workspace path, so it only
+    // focuses the existing active tab) - same capture mechanism as before.
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
+      instanceId: "seed-tab",
+      sessionId: "seed-session",
+      hostId: "host-a",
+      cwd: "/workspace/seed",
+      name: "seed",
+      titleSource: "default",
+    });
     const view = render(panelUiForDraft("draft-a"));
     const router = fakeKeybindingRouter();
 
@@ -2959,15 +4982,16 @@ describe("<LandingTerminalPanel />", () => {
     mocks.activeHostId = "host-b";
     view.rerender(panelUiForDraft("draft-b"));
 
-    // The + button must reflect host-a's LAST observed (downgraded) verdict, not
-    // the initial captured "supported": a forgotten downgrade would leave it
-    // enabled.
+    // The chooser's Terminal card must reflect host-a's LAST observed
+    // (downgraded) verdict, not the initial captured "supported": a
+    // forgotten downgrade would leave it enabled. The "+" is never disabled
+    // itself; the card it opens carries the refusal.
+    fireEvent.click(screen.getByTestId("landing-terminal-new-tab"));
+    const terminalCard = await screen.findByTestId(
+      "landing-new-tab-card-terminal",
+    );
     await waitFor(() => {
-      expect(
-        screen
-          .getByRole("button", { name: "New terminal" })
-          .getAttribute("aria-disabled"),
-      ).toBe("true");
+      expect(terminalCard.getAttribute("aria-disabled")).toBe("true");
     });
   });
 
@@ -2978,7 +5002,8 @@ describe("<LandingTerminalPanel />", () => {
     // spawn there on settle.
     mocks.primaryWorkspacePath = "/workspace/other";
     mocks.probeData = emptyList("/Users/dev");
-    useLandingTerminalStore.getState().addTab({
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
       instanceId: "tab-1",
       sessionId: "session-1",
       hostId: "host-a",
@@ -3004,8 +5029,10 @@ describe("<LandingTerminalPanel />", () => {
     fireEvent.click(screen.getByTestId("landing-terminal-tab-tab-1"));
     await drainDeferredListFetches(resolvers);
 
-    expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
-    expect(useLandingTerminalStore.getState().activeInstanceId).toBe("tab-1");
+    expect(
+      landingTerminalTabs(useLandingPanelStore.getState().tabs),
+    ).toHaveLength(1);
+    expect(useLandingPanelStore.getState().activeInstanceId).toBe("tab-1");
   });
 
   it("hands focus to the composer when closing the last tab collapses the panel", async () => {
@@ -3014,13 +5041,19 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = "/workspace/project";
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = mocks.probeData;
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
+      instanceId: "tab-1",
+      sessionId: "session-1",
+      hostId: "host-a",
+      cwd: "/workspace/project",
+      name: "project",
+      titleSource: "default",
+    });
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
     const router = fakeKeybindingRouter();
 
-    await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
-    });
     const composerFocus = vi.fn();
     focusCleanups.push(
       registerComposerFocus(
@@ -3050,6 +5083,20 @@ describe("<LandingTerminalPanel />", () => {
     mocks.workspacePaths = ["/workspace/project", "/workspace/other"];
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = mocks.probeData;
+    // An existing tab, so the panel is never empty: reaching the picker on a
+    // truly empty panel races the chooser's own placeholder, which also opens
+    // there and steals focus from the picker's input onto its (hidden)
+    // Terminal card. Seeding a tab keeps this test on the picker mechanics it
+    // is actually about.
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
+      instanceId: "existing-tab",
+      sessionId: "existing-session",
+      hostId: "host-a",
+      cwd: "/workspace/existing",
+      name: "existing",
+      titleSource: "default",
+    });
     render(panelUi());
     const router = fakeKeybindingRouter();
 
@@ -3069,17 +5116,22 @@ describe("<LandingTerminalPanel />", () => {
     await waitFor(() => {
       expect(document.activeElement).toBe(pickerInput);
     });
-    expect(useLandingTerminalStore.getState().tabs).toHaveLength(0);
+    expect(
+      landingTerminalTabs(useLandingPanelStore.getState().tabs),
+    ).toHaveLength(1);
 
     fireEvent.keyDown(pickerInput, { key: "ArrowDown" });
     fireEvent.keyDown(pickerInput, { key: "Enter" });
 
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(2);
     });
-    expect(useLandingTerminalStore.getState().tabs[0]?.cwd).toBe(
-      "/workspace/other",
-    );
+    const created = landingTerminalTabs(
+      useLandingPanelStore.getState().tabs,
+    ).find((tab) => tab.instanceId !== "existing-tab");
+    expect(created?.cwd).toBe("/workspace/other");
     expect(
       screen.queryByTestId("landing-terminal-directory-picker"),
     ).toBeNull();
@@ -3101,7 +5153,7 @@ describe("<LandingTerminalPanel />", () => {
     render(panelUi());
 
     act(() => {
-      dispatchAction("app.terminal.toggle", fakeKeybindingRouter());
+      dispatchAction("app.terminal.new", fakeKeybindingRouter());
     });
     await screen.findByRole("combobox", {
       name: "Create terminal in workspace",
@@ -3111,13 +5163,15 @@ describe("<LandingTerminalPanel />", () => {
     setPrimaryFocusInteractionActive(false);
     await drainDeferredListFetches(resolvers);
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(1);
     });
 
     const terminalTarget = document.createElement("textarea");
     document.body.append(terminalTarget);
     const terminalFocus = vi.fn(() => terminalTarget.focus());
-    const tab = useLandingTerminalStore.getState().tabs[0];
+    const tab = landingTerminalTabs(useLandingPanelStore.getState().tabs)[0];
     focusCleanups.push(
       registerTerminalFocus(
         tab.instanceId,
@@ -3147,7 +5201,7 @@ describe("<LandingTerminalPanel />", () => {
     render(panelUi());
 
     act(() => {
-      dispatchAction("app.terminal.toggle", fakeKeybindingRouter());
+      dispatchAction("app.terminal.new", fakeKeybindingRouter());
     });
     const pickerInput = await screen.findByRole("combobox", {
       name: "Create terminal in workspace",
@@ -3161,13 +5215,15 @@ describe("<LandingTerminalPanel />", () => {
     handlePrimaryFocusIn(composer);
     await drainDeferredListFetches(resolvers);
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(1);
     });
 
     const terminalTarget = document.createElement("textarea");
     document.body.append(terminalTarget);
     const terminalFocus = vi.fn(() => terminalTarget.focus());
-    const tab = useLandingTerminalStore.getState().tabs[0];
+    const tab = landingTerminalTabs(useLandingPanelStore.getState().tabs)[0];
     focusCleanups.push(
       registerTerminalFocus(
         tab.instanceId,
@@ -3198,6 +5254,7 @@ describe("<LandingTerminalPanel />", () => {
     act(() => {
       dispatchAction("app.terminal.toggle", fakeKeybindingRouter());
     });
+    await pickTerminalFromChooser();
     const pickerInput = await screen.findByRole("combobox", {
       name: "Create terminal in workspace",
     });
@@ -3226,6 +5283,7 @@ describe("<LandingTerminalPanel />", () => {
     act(() => {
       dispatchAction("app.terminal.toggle", fakeKeybindingRouter());
     });
+    await pickTerminalFromChooser();
     const pickerInput = await screen.findByRole("combobox", {
       name: "Create terminal in workspace",
     });
@@ -3252,6 +5310,7 @@ describe("<LandingTerminalPanel />", () => {
     act(() => {
       dispatchAction("app.terminal.toggle", fakeKeybindingRouter());
     });
+    await pickTerminalFromChooser();
     const pickerInput = await screen.findByRole("combobox", {
       name: "Create terminal in workspace",
     });
@@ -3286,6 +5345,7 @@ describe("<LandingTerminalPanel />", () => {
     act(() => {
       dispatchAction("app.terminal.toggle", fakeKeybindingRouter());
     });
+    await pickTerminalFromChooser();
     const pickerInput = await screen.findByRole("combobox", {
       name: "Create terminal in workspace",
     });
@@ -3323,6 +5383,7 @@ describe("<LandingTerminalPanel />", () => {
     act(() => {
       dispatchAction("app.terminal.toggle", router);
     });
+    await pickTerminalFromChooser();
     await screen.findByTestId("landing-terminal-directory-picker");
 
     mocks.primaryWorkspacePath = "/workspace/other";
@@ -3341,9 +5402,9 @@ describe("<LandingTerminalPanel />", () => {
     fireEvent.keyDown(pickerInput, { key: "Enter" });
 
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs[0]?.cwd).toBe(
-        "/workspace/other",
-      );
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs)[0]?.cwd,
+      ).toBe("/workspace/other");
     });
   });
 
@@ -3354,7 +5415,8 @@ describe("<LandingTerminalPanel />", () => {
     mocks.workspacePaths = ["/workspace/project", "/workspace/other"];
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = mocks.probeData;
-    useLandingTerminalStore.getState().addTab({
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
       instanceId: "project-tab",
       sessionId: "project-session",
       hostId: "host-a",
@@ -3362,7 +5424,8 @@ describe("<LandingTerminalPanel />", () => {
       name: "project · New Terminal",
       titleSource: "default",
     });
-    useLandingTerminalStore.getState().addTab({
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
       instanceId: "other-tab",
       sessionId: "other-session",
       hostId: "host-a",
@@ -3370,7 +5433,7 @@ describe("<LandingTerminalPanel />", () => {
       name: "other · New Terminal",
       titleSource: "default",
     });
-    useLandingTerminalStore.getState().activateTab("project-tab");
+    useLandingPanelStore.getState().activateTab("project-tab");
     render(panelUi());
     const router = fakeKeybindingRouter();
     focusCleanups.push(
@@ -3407,14 +5470,16 @@ describe("<LandingTerminalPanel />", () => {
     fireEvent.keyDown(pickerInput, { key: "Enter" });
 
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().activeInstanceId).toBe(
+      expect(useLandingPanelStore.getState().activeInstanceId).toBe(
         "other-tab",
       );
       expect(document.activeElement).toBe(
         screen.getByTestId("landing-terminal-tab-other-tab"),
       );
     });
-    expect(useLandingTerminalStore.getState().tabs).toHaveLength(2);
+    expect(
+      landingTerminalTabs(useLandingPanelStore.getState().tabs),
+    ).toHaveLength(2);
   });
 
   it("always creates for explicit new-terminal actions after directory selection", async () => {
@@ -3424,13 +5489,8 @@ describe("<LandingTerminalPanel />", () => {
     mocks.workspacePaths = ["/workspace/project", "/workspace/other"];
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = mocks.probeData;
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
     const router = fakeKeybindingRouter();
-
-    await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
-    });
 
     const createInOther = async (): Promise<void> => {
       const pickerInput = await screen.findByRole("combobox", {
@@ -3447,29 +5507,39 @@ describe("<LandingTerminalPanel />", () => {
       });
     };
 
-    fireEvent.click(screen.getByTestId("landing-terminal-new-tab"));
-    await createInOther();
-
+    // No auto-spawn: ⇧⌘J on the collapsed panel creates directly and raises
+    // the picker immediately, since several workspace paths are attached.
     act(() => {
       dispatchAction("app.terminal.new", router);
     });
     await createInOther();
 
+    // "+" opens the chooser now (the panel is already open); picking
+    // Terminal raises the same picker.
+    fireEvent.click(screen.getByTestId("landing-terminal-new-tab"));
+    fireEvent.click(screen.getByTestId("landing-new-tab-card-terminal"));
+    await createInOther();
+
+    // tab.new (⌘T) opens the chooser too.
     act(() => {
       dispatchAction("tab.new", router);
     });
+    fireEvent.click(screen.getByTestId("landing-new-tab-card-terminal"));
     await createInOther();
 
+    // The empty-strip double-click also opens the chooser rather than
+    // spawning directly.
     fireEvent.doubleClick(screen.getByTestId("landing-terminal-tab-strip"));
+    fireEvent.click(screen.getByTestId("landing-new-tab-card-terminal"));
     await createInOther();
 
-    const otherTabs = useLandingTerminalStore
-      .getState()
-      .tabs.filter((tab) => tab.cwd === "/workspace/other");
+    const otherTabs = landingTerminalTabs(
+      useLandingPanelStore.getState().tabs,
+    ).filter((tab) => tab.cwd === "/workspace/other");
     expect(otherTabs).toHaveLength(4);
   });
 
-  it("cancels a chooser opened from a collapsed panel without spawning", async () => {
+  it("cancels a directory picker opened from a collapsed panel without spawning", async () => {
     mocks.activeHostId = "host-a";
     mocks.clientActiveHostId = "host-a";
     mocks.primaryWorkspacePath = "/workspace/project";
@@ -3491,8 +5561,12 @@ describe("<LandingTerminalPanel />", () => {
       ),
     );
 
+    // app.terminal.toggle on an empty panel only opens the chooser now (no
+    // directory request). ⇧⌘J is what still creates directly on a collapsed
+    // panel and raises the picker immediately - with `closePanelOnCancel`
+    // true, since the gesture is the one that opened the panel.
     act(() => {
-      dispatchAction("app.terminal.toggle", router);
+      dispatchAction("app.terminal.new", router);
     });
     const pickerInput = await screen.findByRole("combobox", {
       name: "Create terminal in workspace",
@@ -3503,7 +5577,9 @@ describe("<LandingTerminalPanel />", () => {
       expect(testLayout().panelOpen).toBe(false);
       expect(composerFocus).toHaveBeenCalled();
     });
-    expect(useLandingTerminalStore.getState().tabs).toHaveLength(0);
+    expect(
+      landingTerminalTabs(useLandingPanelStore.getState().tabs),
+    ).toHaveLength(0);
   });
 
   it("returns from the inline chooser to the active terminal", async () => {
@@ -3513,14 +5589,34 @@ describe("<LandingTerminalPanel />", () => {
     mocks.workspacePaths = ["/workspace/project", "/workspace/other"];
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = mocks.probeData;
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
+    const router = fakeKeybindingRouter();
 
+    // No auto-spawn: create the first terminal with ⇧⌘J, which bypasses the
+    // chooser. Two folders are attached, so it raises the directory picker;
+    // Enter takes the primary one.
+    act(() => {
+      dispatchAction("app.terminal.new", router);
+    });
+    fireEvent.keyDown(
+      await screen.findByRole("combobox", {
+        name: "Create terminal in workspace",
+      }),
+      { key: "Enter" },
+    );
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(1);
     });
     const newTerminalButton = screen.getByTestId("landing-terminal-new-tab");
-    fireEvent.click(newTerminalButton);
+    // ⇧⌘J again, on the now-open panel: it raises the picker directly, with no
+    // placeholder behind it, which is the arrangement whose cancel hands the
+    // keyboard back to the "+". (Through the chooser it goes back to the
+    // chooser instead - the case below.)
+    act(() => {
+      dispatchAction("app.terminal.new", router);
+    });
     const pickerInput = await screen.findByRole("combobox", {
       name: "Create terminal in workspace",
     });
@@ -3540,7 +5636,52 @@ describe("<LandingTerminalPanel />", () => {
       expect(document.activeElement).toBe(newTerminalButton);
     });
     expect(testLayout().panelOpen).toBe(true);
-    expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+    expect(
+      landingTerminalTabs(useLandingPanelStore.getState().tabs),
+    ).toHaveLength(1);
+  });
+
+  it("returns to the chooser when a picker raised from it is cancelled", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.workspacePaths = ["/workspace/project", "/workspace/other"];
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+
+    await pickTerminalFromChooser();
+    const pickerInput = await screen.findByRole("combobox", {
+      name: "Create terminal in workspace",
+    });
+    // The chooser is still mounted UNDER the picker, hidden. It must not pull
+    // the keyboard back out of the picker while it is up.
+    await waitFor(() => {
+      expect(document.activeElement).toBe(pickerInput);
+    });
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Cancel terminal creation",
+      }),
+    );
+
+    // Cancelling leaves the placeholder standing, so the chooser is the
+    // topmost surface again and takes the keyboard back - not the "+", which
+    // is not what the user is looking at.
+    await waitFor(() => {
+      expect(
+        screen.queryByTestId("landing-terminal-directory-picker"),
+      ).toBeNull();
+      expect(document.activeElement).toBe(
+        screen.getByTestId("landing-new-tab-card-terminal"),
+      );
+    });
+    expect(useLandingPanelStore.getState().placeholder).not.toBeNull();
+    expect(
+      landingTerminalTabs(useLandingPanelStore.getState().tabs),
+    ).toHaveLength(0);
   });
 
   it("clears an open chooser when the panel collapses through the store", async () => {
@@ -3550,18 +5691,18 @@ describe("<LandingTerminalPanel />", () => {
     mocks.workspacePaths = ["/workspace/project", "/workspace/other"];
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = mocks.probeData;
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
 
+    // "+" opens the placeholder's chooser; picking Terminal raises the picker.
     fireEvent.click(screen.getByTestId("landing-terminal-new-tab"));
+    await pickTerminalFromChooser();
     expect(
       await screen.findByTestId("landing-terminal-directory-picker"),
     ).toBeTruthy();
 
     act(() =>
-      useLandingTerminalStore
-        .getState()
-        .setPanelOpen(TEST_LANDING_PAGE_ID, false),
+      useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, false),
     );
 
     await waitFor(() => {
@@ -3574,6 +5715,7 @@ describe("<LandingTerminalPanel />", () => {
     act(() => {
       dispatchAction("tab.new", router);
     });
+    await pickTerminalFromChooser();
     expect(
       await screen.findByTestId("landing-terminal-directory-picker"),
     ).toBeTruthy();
@@ -3585,14 +5727,19 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = "/workspace/project";
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = mocks.probeData;
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     const view = render(panelUi());
     const router = fakeKeybindingRouter();
 
+    // No auto-spawn: the open empty panel shows the chooser. One folder is
+    // pinned, so picking Terminal creates there without a directory picker.
+    await pickTerminalFromChooser();
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(1);
     });
-    const first = useLandingTerminalStore.getState().tabs[0];
+    const first = landingTerminalTabs(useLandingPanelStore.getState().tabs)[0];
     expect(first.cwd).toBe("/workspace/project");
 
     // Collapse, repoint the composer's pinned folder, re-expand: the panel
@@ -3607,13 +5754,15 @@ describe("<LandingTerminalPanel />", () => {
       dispatchAction("app.terminal.toggle", router);
     });
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(2);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(2);
     });
-    const second = useLandingTerminalStore
-      .getState()
-      .tabs.find((tab) => tab.instanceId !== first.instanceId);
+    const second = landingTerminalTabs(
+      useLandingPanelStore.getState().tabs,
+    ).find((tab) => tab.instanceId !== first.instanceId);
     expect(second?.cwd).toBe("/workspace/other");
-    expect(useLandingTerminalStore.getState().activeInstanceId).toBe(
+    expect(useLandingPanelStore.getState().activeInstanceId).toBe(
       second?.instanceId,
     );
 
@@ -3628,11 +5777,13 @@ describe("<LandingTerminalPanel />", () => {
       dispatchAction("app.terminal.toggle", router);
     });
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().activeInstanceId).toBe(
+      expect(useLandingPanelStore.getState().activeInstanceId).toBe(
         first.instanceId,
       );
     });
-    expect(useLandingTerminalStore.getState().tabs).toHaveLength(2);
+    expect(
+      landingTerminalTabs(useLandingPanelStore.getState().tabs),
+    ).toHaveLength(2);
   });
 
   it("leaves the open panel alone when the pinned folder changes without a reopen", async () => {
@@ -3641,27 +5792,39 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = "/workspace/project";
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = mocks.probeData;
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     const view = render(panelUi());
 
+    // No auto-spawn: seed the one terminal through the chooser instead.
+    await pickTerminalFromChooser();
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(1);
     });
-    const first = useLandingTerminalStore.getState().tabs[0];
+    const first = landingTerminalTabs(useLandingPanelStore.getState().tabs)[0];
+    const beforeDetach = mocks.queryClient.fetchQuery.mock.calls.length;
 
     mocks.primaryWorkspacePath = "/workspace/other";
     view.rerender(panelUi());
 
     // The folder change re-runs reconciliation; it must not spawn or switch
     // while the panel stays open - only a reopen re-targets the pinned folder.
+    // What is pinned is that the change runs a further generation, not how
+    // many the create left behind: opening onto the chooser and filling it is
+    // itself a pass, so an absolute count would measure the seeding.
     await waitFor(() => {
-      expect(mocks.queryClient.fetchQuery).toHaveBeenCalledTimes(2);
+      expect(mocks.queryClient.fetchQuery.mock.calls.length).toBeGreaterThan(
+        beforeDetach,
+      );
     });
     await act(async () => {
       await Promise.resolve();
     });
-    expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
-    expect(useLandingTerminalStore.getState().activeInstanceId).toBe(
+    expect(
+      landingTerminalTabs(useLandingPanelStore.getState().tabs),
+    ).toHaveLength(1);
+    expect(useLandingPanelStore.getState().activeInstanceId).toBe(
       first.instanceId,
     );
   });
@@ -3678,16 +5841,23 @@ describe("<LandingTerminalPanel />", () => {
     act(() => {
       dispatchAction("app.terminal.toggle", router);
     });
+    // The expand shows the chooser rather than spawning; picking Terminal is
+    // what resolves the folderless launch cwd to the host's home.
+    await pickTerminalFromChooser();
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(1);
     });
-    const created = useLandingTerminalStore.getState().tabs[0];
+    const created = landingTerminalTabs(
+      useLandingPanelStore.getState().tabs,
+    )[0];
     expect(created.cwd).toBe("/Users/dev");
     expect(created.hostId).toBe("host-a");
     expect(screen.queryByTestId("landing-terminal-select-folder")).toBeNull();
 
     // Mirror the folder-backed expand-empty focus test: the parked request
-    // fires when the auto-spawned tile engine registers after create.
+    // fires when the created tile's engine registers.
     const terminalFocus = vi.fn();
     focusCleanups.push(
       registerTerminalFocus(
@@ -3708,40 +5878,69 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = null;
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = emptyList("/Users/dev");
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
     const router = fakeKeybindingRouter();
 
+    // No auto-spawn: the empty panel opens onto the chooser; pick Terminal
+    // once the host's home resolves.
+    const terminalCard = await screen.findByTestId(
+      "landing-new-tab-card-terminal",
+    );
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+      expect(terminalCard.getAttribute("aria-disabled")).toBeNull();
     });
-    expect(useLandingTerminalStore.getState().tabs[0]?.cwd).toBe("/Users/dev");
+    fireEvent.click(terminalCard);
+    await waitFor(() => {
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(1);
+    });
+    expect(
+      landingTerminalTabs(useLandingPanelStore.getState().tabs)[0]?.cwd,
+    ).toBe("/Users/dev");
 
+    // "+" opens the chooser; picking Terminal fills it in place.
     fireEvent.click(screen.getByTestId("landing-terminal-new-tab"));
+    fireEvent.click(screen.getByTestId("landing-new-tab-card-terminal"));
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(2);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(2);
     });
 
+    // The empty-strip double-click also opens the chooser rather than
+    // spawning directly.
     fireEvent.doubleClick(screen.getByTestId("landing-terminal-tab-strip"));
+    fireEvent.click(screen.getByTestId("landing-new-tab-card-terminal"));
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(3);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(3);
     });
 
+    // tab.new (⌘T) opens the chooser too.
     act(() => {
       dispatchAction("tab.new", router);
     });
+    fireEvent.click(screen.getByTestId("landing-new-tab-card-terminal"));
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(4);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(4);
     });
 
+    // app.terminal.new (⇧⌘J) still creates directly, bypassing the chooser.
     act(() => {
       dispatchAction("app.terminal.new", router);
     });
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(5);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(5);
     });
 
-    const tabs = useLandingTerminalStore.getState().tabs;
+    const tabs = landingTerminalTabs(useLandingPanelStore.getState().tabs);
     expect(tabs.every((tab) => tab.cwd === "/Users/dev")).toBe(true);
     expect(tabs.every((tab) => tab.hostId === "host-a")).toBe(true);
     expect(screen.queryByTestId("landing-terminal-select-folder")).toBeNull();
@@ -3753,38 +5952,57 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = "/workspace/project";
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = emptyList("/Users/dev");
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     const view = render(panelUi());
+    const router = fakeKeybindingRouter();
 
-    await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+    // No auto-spawn: create the first terminal directly (a folder is pinned,
+    // so ⇧⌘J creates synchronously, without depending on the chooser).
+    act(() => {
+      dispatchAction("app.terminal.new", router);
     });
-    const folderTab = useLandingTerminalStore.getState().tabs[0];
+    await waitFor(() => {
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(1);
+    });
+    const folderTab = landingTerminalTabs(
+      useLandingPanelStore.getState().tabs,
+    )[0];
     expect(folderTab.cwd).toBe("/workspace/project");
-    expect(mocks.queryClient.fetchQuery).toHaveBeenCalledTimes(1);
+    // Relative, not absolute: revealing the panel opens the placeholder before
+    // the create fills it, so the create's own generation count is not what
+    // this case is about. Detaching the folder must run one MORE.
+    const beforeDetach = mocks.queryClient.fetchQuery.mock.calls.length;
 
     // Detach the last folder: live tabs stay put; no restart, no auto-spawn.
     mocks.primaryWorkspacePath = null;
     view.rerender(panelUi());
     await waitFor(() => {
-      expect(mocks.queryClient.fetchQuery).toHaveBeenCalledTimes(2);
+      expect(mocks.queryClient.fetchQuery.mock.calls.length).toBeGreaterThan(
+        beforeDetach,
+      );
     });
     await act(async () => {
       await Promise.resolve();
     });
-    expect(useLandingTerminalStore.getState().tabs).toEqual([folderTab]);
-    expect(useLandingTerminalStore.getState().activeInstanceId).toBe(
+    expect(landingTerminalTabs(useLandingPanelStore.getState().tabs)).toEqual([
+      folderTab,
+    ]);
+    expect(useLandingPanelStore.getState().activeInstanceId).toBe(
       folderTab.instanceId,
     );
     expect(screen.queryByTestId("landing-terminal-select-folder")).toBeNull();
 
     fireEvent.click(screen.getByTestId("landing-terminal-new-tab"));
+    fireEvent.click(screen.getByTestId("landing-new-tab-card-terminal"));
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(2);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(2);
     });
-    const created = useLandingTerminalStore
-      .getState()
-      .tabs.find((tab) => tab.instanceId !== folderTab.instanceId);
+    const created = landingTerminalTabs(
+      useLandingPanelStore.getState().tabs,
+    ).find((tab) => tab.instanceId !== folderTab.instanceId);
     expect(created?.cwd).toBe("/Users/dev");
   });
 
@@ -3794,26 +6012,36 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = "/workspace/project";
     mocks.probeData = emptyList(null);
     mocks.freshProbeData = emptyList(null);
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
+    const router = fakeKeybindingRouter();
 
-    await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+    // No auto-spawn: create the first terminal directly (a folder is pinned,
+    // so ⇧⌘J creates synchronously, without depending on the chooser).
+    act(() => {
+      dispatchAction("app.terminal.new", router);
     });
-    expect(useLandingTerminalStore.getState().tabs[0]?.cwd).toBe(
-      "/workspace/project",
-    );
+    await waitFor(() => {
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(1);
+    });
+    expect(
+      landingTerminalTabs(useLandingPanelStore.getState().tabs)[0]?.cwd,
+    ).toBe("/workspace/project");
     expect(screen.queryByTestId("landing-terminal-host-update")).toBeNull();
     expect(screen.queryByTestId("landing-terminal-select-folder")).toBeNull();
 
     fireEvent.click(screen.getByTestId("landing-terminal-new-tab"));
+    fireEvent.click(screen.getByTestId("landing-new-tab-card-terminal"));
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(2);
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(2);
     });
     expect(
-      useLandingTerminalStore
-        .getState()
-        .tabs.every((tab) => tab.cwd === "/workspace/project"),
+      landingTerminalTabs(useLandingPanelStore.getState().tabs).every(
+        (tab) => tab.cwd === "/workspace/project",
+      ),
     ).toBe(true);
   });
 
@@ -3823,14 +6051,21 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = null;
     mocks.probeData = emptyList(null);
     mocks.freshProbeData = emptyList(null);
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
     const router = fakeKeybindingRouter();
 
+    // The empty state is displaced by the chooser; the guidance shows on the
+    // Terminal card instead.
+    const terminalCard = await screen.findByTestId(
+      "landing-new-tab-card-terminal",
+    );
+    await waitFor(() => {
+      expect(terminalCard.getAttribute("aria-disabled")).toBe("true");
+    });
     expect(
-      await screen.findByTestId("landing-terminal-host-update"),
-    ).toBeTruthy();
-    expect(useLandingTerminalStore.getState().tabs).toHaveLength(0);
+      landingTerminalTabs(useLandingPanelStore.getState().tabs),
+    ).toHaveLength(0);
     expect(screen.queryByTestId("landing-terminal-select-folder")).toBeNull();
 
     fireEvent.doubleClick(screen.getByTestId("landing-terminal-tab-strip"));
@@ -3841,8 +6076,14 @@ describe("<LandingTerminalPanel />", () => {
     await act(async () => {
       await Promise.resolve();
     });
-    expect(useLandingTerminalStore.getState().tabs).toHaveLength(0);
-    expect(screen.getByTestId("landing-terminal-host-update")).toBeTruthy();
+    expect(
+      landingTerminalTabs(useLandingPanelStore.getState().tabs),
+    ).toHaveLength(0);
+    expect(
+      screen
+        .getByTestId("landing-new-tab-card-terminal")
+        .getAttribute("aria-disabled"),
+    ).toBe("true");
     expect(screen.queryByTestId("landing-terminal-select-folder")).toBeNull();
   });
 
@@ -3852,7 +6093,7 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = null;
     mocks.probeData = emptyList("/Users/host-a");
     mocks.freshProbeData = emptyList("/Users/host-a");
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
 
     type PendingList = {
       readonly hostId: string | null;
@@ -3871,11 +6112,24 @@ describe("<LandingTerminalPanel />", () => {
 
     const view = render(panelUi());
 
-    // Host A settles folderless: reconciledContext + Host-A create callback.
+    // No auto-spawn: the empty panel opens onto the chooser; pick Terminal
+    // once host-a's home resolves, which settles reconciledContext + the
+    // Host-A create callback the rest of this test exercises.
+    const terminalCard = await screen.findByTestId(
+      "landing-new-tab-card-terminal",
+    );
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+      expect(terminalCard.getAttribute("aria-disabled")).toBeNull();
     });
-    const hostATab = useLandingTerminalStore.getState().tabs[0];
+    fireEvent.click(terminalCard);
+    await waitFor(() => {
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(1);
+    });
+    const hostATab = landingTerminalTabs(
+      useLandingPanelStore.getState().tabs,
+    )[0];
     expect(hostATab.hostId).toBe("host-a");
     expect(hostATab.cwd).toBe("/Users/host-a");
     // Subscribed BY HOST since P4.2: the panel is told "host-a's row moved",
@@ -3902,7 +6156,9 @@ describe("<LandingTerminalPanel />", () => {
     // Client advances to B; React reactive host and Host-A create closure stay A.
     mocks.clientActiveHostId = "host-b";
 
-    const tabsBeforeManualCreate = useLandingTerminalStore.getState().tabs;
+    const tabsBeforeManualCreate = landingTerminalTabs(
+      useLandingPanelStore.getState().tabs,
+    );
     const router = fakeKeybindingRouter();
     act(() => {
       dispatchAction("app.terminal.new", router);
@@ -3914,15 +6170,13 @@ describe("<LandingTerminalPanel />", () => {
     });
 
     // Manual create must not persist Host A's home after the client switched.
-    expect(useLandingTerminalStore.getState().tabs).toEqual(
+    expect(landingTerminalTabs(useLandingPanelStore.getState().tabs)).toEqual(
       tabsBeforeManualCreate,
     );
     expect(
-      useLandingTerminalStore
-        .getState()
-        .tabs.filter(
-          (tab) => tab.hostId === "host-a" && tab.cwd === "/Users/host-a",
-        ),
+      landingTerminalTabs(useLandingPanelStore.getState().tabs).filter(
+        (tab) => tab.hostId === "host-a" && tab.cwd === "/Users/host-a",
+      ),
     ).toHaveLength(1);
 
     // Late Host-A list resolves while client is already B (still no React rerender).
@@ -3935,14 +6189,14 @@ describe("<LandingTerminalPanel />", () => {
 
     // Stale publication/spawn rejected: no extra Host-A home tabs, nothing for B yet.
     expect(
-      useLandingTerminalStore
-        .getState()
-        .tabs.filter((tab) => tab.cwd === "/Users/host-a"),
+      landingTerminalTabs(useLandingPanelStore.getState().tabs).filter(
+        (tab) => tab.cwd === "/Users/host-a",
+      ),
     ).toHaveLength(1);
     expect(
-      useLandingTerminalStore
-        .getState()
-        .tabs.some((tab) => tab.hostId === "host-b"),
+      landingTerminalTabs(useLandingPanelStore.getState().tabs).some(
+        (tab) => tab.hostId === "host-b",
+      ),
     ).toBe(false);
     expect(screen.queryByTestId("landing-terminal-select-folder")).toBeNull();
 
@@ -3967,24 +6221,24 @@ describe("<LandingTerminalPanel />", () => {
     });
 
     // Once B is current, manual create may only use Host B's home.
-    const tabCountBeforeBCreate =
-      useLandingTerminalStore.getState().tabs.length;
+    const tabCountBeforeBCreate = landingTerminalTabs(
+      useLandingPanelStore.getState().tabs,
+    ).length;
     fireEvent.click(screen.getByTestId("landing-terminal-new-tab"));
+    fireEvent.click(screen.getByTestId("landing-new-tab-card-terminal"));
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs.length).toBe(
-        tabCountBeforeBCreate + 1,
-      );
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs).length,
+      ).toBe(tabCountBeforeBCreate + 1);
     });
-    const createdOnB = useLandingTerminalStore
-      .getState()
-      .tabs.find((tab) => tab.hostId === "host-b");
+    const createdOnB = landingTerminalTabs(
+      useLandingPanelStore.getState().tabs,
+    ).find((tab) => tab.hostId === "host-b");
     expect(createdOnB?.cwd).toBe("/Users/host-b");
     expect(
-      useLandingTerminalStore
-        .getState()
-        .tabs.some(
-          (tab) => tab.hostId === "host-b" && tab.cwd === "/Users/host-a",
-        ),
+      landingTerminalTabs(useLandingPanelStore.getState().tabs).some(
+        (tab) => tab.hostId === "host-b" && tab.cwd === "/Users/host-a",
+      ),
     ).toBe(false);
   });
 
@@ -3999,22 +6253,30 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = "/workspace/host-a-project";
     mocks.probeData = emptyList("/Users/host-a");
     mocks.freshProbeData = emptyList("/Users/host-a");
-    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
+    const router = fakeKeybindingRouter();
 
-    await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+    // No auto-spawn: create the first terminal directly (a folder is pinned,
+    // so ⇧⌘J creates synchronously without depending on the chooser).
+    act(() => {
+      dispatchAction("app.terminal.new", router);
     });
-    expect(useLandingTerminalStore.getState().tabs[0]?.cwd).toBe(
-      "/workspace/host-a-project",
-    );
+    await waitFor(() => {
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(1);
+    });
+    expect(
+      landingTerminalTabs(useLandingPanelStore.getState().tabs)[0]?.cwd,
+    ).toBe("/workspace/host-a-project");
 
     // Client advances to B; the reactive host and every installed handler
     // still come from Host A's render.
     mocks.clientActiveHostId = "host-b";
 
-    const tabsBeforeManualCreate = useLandingTerminalStore.getState().tabs;
-    const router = fakeKeybindingRouter();
+    const tabsBeforeManualCreate = landingTerminalTabs(
+      useLandingPanelStore.getState().tabs,
+    );
     act(() => {
       dispatchAction("app.terminal.new", router);
       dispatchAction("tab.new", router);
@@ -4025,18 +6287,18 @@ describe("<LandingTerminalPanel />", () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
 
-    expect(useLandingTerminalStore.getState().tabs).toEqual(
+    expect(landingTerminalTabs(useLandingPanelStore.getState().tabs)).toEqual(
       tabsBeforeManualCreate,
     );
     expect(
-      useLandingTerminalStore
-        .getState()
-        .tabs.filter((tab) => tab.cwd === "/workspace/host-a-project"),
+      landingTerminalTabs(useLandingPanelStore.getState().tabs).filter(
+        (tab) => tab.cwd === "/workspace/host-a-project",
+      ),
     ).toHaveLength(1);
     expect(
-      useLandingTerminalStore
-        .getState()
-        .tabs.some((tab) => tab.hostId === "host-b"),
+      landingTerminalTabs(useLandingPanelStore.getState().tabs).some(
+        (tab) => tab.hostId === "host-b",
+      ),
     ).toBe(false);
   });
 });

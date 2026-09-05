@@ -17,10 +17,11 @@ import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
  * The timestamp is when the id was consumed, kept for support reports rather
  * than read by any surface.
  */
-export type FeatureAnnouncementId = "login-import";
+export type FeatureAnnouncementId = "login-import" | "session-import";
 
 const FEATURE_ANNOUNCEMENT_IDS: ReadonlyArray<FeatureAnnouncementId> = [
   "login-import",
+  "session-import",
 ];
 
 type ConsumedAnnouncements = Readonly<

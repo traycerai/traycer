@@ -80,7 +80,7 @@ export function SwitcherBrowsersList(props: SwitcherListProps) {
   return (
     <BrowserSessionsHostBoundary
       hostId={hostPin.resolvedHostId}
-      epicId={props.epicId}
+      scope={{ kind: "epic", epicId: props.epicId }}
     >
       <SwitcherBrowsersListLive {...props} />
     </BrowserSessionsHostBoundary>
