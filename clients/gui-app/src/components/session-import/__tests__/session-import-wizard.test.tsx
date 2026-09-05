@@ -30,6 +30,7 @@ import type {
 } from "@traycer-clients/shared/host-transport/session-import-scan-client";
 import type { SessionImportRunRequest } from "@/components/session-import/session-import-run-handle";
 import type { SessionImportSurface } from "@/components/session-import/session-import-tone";
+import type { StreamRuntimeBinding } from "@/lib/host/stream-runtime-context";
 import {
   SESSION_IMPORT_DEFAULT_SCAN_WINDOW,
   sessionImportGroupKey,
@@ -56,7 +57,12 @@ const scanClient = vi.hoisted((): ScanClientHarness => ({
 }));
 
 const startSessionImportRunMock = vi.hoisted(() =>
-  vi.fn<(request: SessionImportRunRequest) => void>(),
+  vi.fn<
+    (
+      request: SessionImportRunRequest,
+      binding: StreamRuntimeBinding | null,
+    ) => void
+  >(),
 );
 const analyticsTrackMock = vi.hoisted(() => vi.fn());
 
@@ -101,6 +107,11 @@ const streamBinding = vi.hoisted((): StreamBindingHarness => ({
 vi.mock("@/lib/host/stream-runtime-context", () => ({
   useWsStreamClient: () => streamBinding.client,
   useStreamHostId: () => streamBinding.hostId,
+  useStreamRuntimeBinding: () => ({
+    wsStreamClient: streamBinding.client,
+    hostId: streamBinding.hostId,
+    retain: null,
+  }),
 }));
 
 vi.mock("@/components/session-import/session-import-run-handle", () => ({
@@ -117,7 +128,10 @@ import {
   type SessionImportSecondaryAction,
 } from "@/components/session-import/session-import-wizard";
 import { useSessionImportScan } from "@/components/session-import/use-session-import-scan";
-import { useSessionImportRunStore } from "@/stores/session-import/session-import-run-store";
+import {
+  sessionImportRunFor,
+  useSessionImportRunStore,
+} from "@/stores/session-import/session-import-run-store";
 
 /**
  * Stands in for the two real callers (`SessionImportDialog`,
@@ -132,7 +146,10 @@ function TestWizard(props: {
   readonly onImportStarted: () => void;
   readonly secondaryAction: SessionImportSecondaryAction | null;
 }) {
-  const runIdle = useSessionImportRunStore((state) => state.status === "idle");
+  const runIdle = useSessionImportRunStore(
+    (state) =>
+      sessionImportRunFor(state, streamBinding.hostId).status === "idle",
+  );
   const scan = useSessionImportScan(runIdle);
   return <SessionImportWizard {...props} scan={scan} />;
 }
@@ -316,12 +333,12 @@ beforeEach(() => {
   scanClient.close.mockClear();
   startSessionImportRunMock.mockClear();
   analyticsTrackMock.mockClear();
-  useSessionImportRunStore.getState().reset();
+  useSessionImportRunStore.setState({ runs: new Map() });
 });
 
 afterEach(() => {
   cleanup();
-  useSessionImportRunStore.getState().reset();
+  useSessionImportRunStore.setState({ runs: new Map() });
 });
 
 describe("<SessionImportWizard />", () => {
@@ -974,6 +991,54 @@ describe("<SessionImportWizard />", () => {
 
     expect(screen.getByTestId("session-import-empty")).toBeTruthy();
     expect(screen.queryAllByTestId("session-import-group")).toHaveLength(0);
+  });
+
+  it("offers Import more on the summary, and pressing it retires the run and brings the list back", () => {
+    render(
+      <TestWizard
+        surface="dialog"
+        onImportStarted={vi.fn()}
+        secondaryAction={{ label: "Close", onSelect: vi.fn() }}
+      />,
+    );
+    act(() => {
+      const store = useSessionImportRunStore.getState();
+      store.markStarting("host-a", new Map([["claude:s1", "One"]]));
+      store.applyStarted("host-a", {
+        runId: "run-1",
+        total: 1,
+        attached: false,
+      });
+      store.applyComplete("host-a", {
+        runId: "run-1",
+        counts: { imported: 1, skippedAlreadyImported: 0, failed: 0 },
+      });
+    });
+    expect(screen.getByTestId("session-import-summary")).toBeTruthy();
+    // The summary holds: nothing retires it but the button (or a reopen).
+    expect(screen.queryByTestId("session-import-submit")).toBeNull();
+    const more = screen.getByTestId("session-import-more");
+    expect(more.textContent).toBe("Import more");
+
+    fireEvent.click(more);
+
+    expect(
+      useSessionImportRunStore.getState().runs.get("host-a"),
+    ).toBeUndefined();
+    expect(screen.queryByTestId("session-import-summary")).toBeNull();
+    expect(screen.getByTestId("session-import-submit")).toBeTruthy();
+  });
+
+  it("labels the way back from a failed run as Back to sessions", () => {
+    renderWizard(vi.fn());
+    act(() => {
+      const store = useSessionImportRunStore.getState();
+      store.markStarting("host-a", new Map());
+      store.applyError("host-a");
+    });
+    expect(screen.getByTestId("session-import-more").textContent).toBe(
+      "Back to sessions",
+    );
   });
 
   it("on the onboarding surface, renders its own Import button that starts the run and notifies the caller", () => {

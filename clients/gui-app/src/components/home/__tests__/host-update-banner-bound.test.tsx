@@ -1,3 +1,11 @@
+// The Overview re-provides a scoped STREAM binding beside its unary one (for
+// the Data & migration group), and the real hook reads `useAuthService` -
+// which this suite deliberately does not stand up. `null` keeps the panel on
+// the ambient stream, the arrangement every assertion below already assumed.
+vi.mock("@/components/settings/host-scope/use-scoped-stream-binding", () => ({
+  useScopedStreamBinding: () => null,
+}));
+
 // Mirrors `local-host-restart-flow.test.tsx`'s boundary exactly, because
 // `HostUpdateBanner`'s bound arm pulls in the SAME split
 // (`useHostBinding`) plus `useLocalHostUpdateOperation`'s own two leaf

@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import {
   authenticatedOwnerIdentityKey,
+  streamTransportRetain,
   useHostStreamClientBindingFor,
 } from "@/hooks/host/use-host-stream-client-for";
 import { useHostClient } from "@/lib/host";
@@ -57,12 +58,21 @@ export function useScopedStreamBinding(
   const expectedKey = authenticatedOwnerIdentityKey(ambientClient, target);
   const matched =
     binding !== null && binding.transportKey === expectedKey ? binding : null;
-  const client = matched === null ? null : matched.client;
   // Safe to read off `target` only BECAUSE the key matched: that comparison is
   // what proves this client was built for the target we are naming it with.
   const hostId = matched === null ? null : (target?.hostId ?? null);
   return useMemo(
-    () => (client === null ? null : { wsStreamClient: client, hostId }),
-    [client, hostId],
+    () =>
+      matched === null
+        ? null
+        : {
+            wsStreamClient: matched.client,
+            hostId,
+            // This transport IS reference-counted, and this hook holds only
+            // the panel's own reference: a consumer that outlives the panel -
+            // an import or a migration run started from it - takes its own.
+            retain: streamTransportRetain(matched),
+          },
+    [matched, hostId],
   );
 }

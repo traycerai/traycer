@@ -15,6 +15,7 @@ import { AnalyticsEvent } from "@/lib/analytics";
 import type { OnboardingAgentGuideState } from "@/components/onboarding/onboarding-agent-guide-pane";
 import type { OnboardingPhoneSceneId } from "@/components/onboarding/onboarding-phone-diorama";
 import { setMobileApp } from "@/lib/mobile-app";
+import { hostScopeFixture } from "@/components/settings/host-scope/host-scope-fixture";
 
 // Stub heavy layout-only sub-trees that have no bearing on the platform wiring.
 vi.mock("@/components/auth/cinematic-backdrop", () => ({
@@ -41,6 +42,30 @@ vi.mock("@/components/onboarding/onboarding-session-import-stage", () => ({
   OnboardingSessionImportStage: () => (
     <div data-testid="session-import-stage-stub" />
   ),
+}));
+
+/**
+ * The tour re-provides the picked host's runtimes above itself. The phone tour
+ * stubs both surfaces that show the picker, so all this suite needs from the
+ * host layer is a scope that resolves - mocked at the same boundary the
+ * Settings panel suites use rather than standing up the six hooks behind it.
+ */
+vi.mock(
+  "@/components/settings/host-scope/use-host-scope",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/components/settings/host-scope/use-host-scope")
+    >()),
+    useHostScopeFor: () => hostScopeFixture({}),
+  }),
+);
+
+vi.mock("@/components/settings/host-scope/use-scoped-host-binding", () => ({
+  useScopedHostBinding: () => null,
+}));
+
+vi.mock("@/components/settings/host-scope/use-scoped-stream-binding", () => ({
+  useScopedStreamBinding: () => null,
 }));
 
 // Advertised as AVAILABLE on purpose: the phone tour omits the act regardless,
