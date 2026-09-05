@@ -59,6 +59,7 @@ describe("buildHostUpdateCommand — illegal ack nonce refuses before anything i
   it("rejects on an illegal nonce and never calls downloadAndStageHost", async () => {
     const command = buildHostUpdateCommand({
       force: false,
+      allowDowngrade: false,
       versionRequest: null,
       // Too short and outside the legal charset for
       // `isValidUpdateDispatchAckNonce` (`^[A-Za-z0-9_-]{8,128}$`).
@@ -81,6 +82,7 @@ describe("buildHostUpdateCommand — illegal ack nonce refuses before anything i
     );
     const command = buildHostUpdateCommand({
       force: false,
+      allowDowngrade: false,
       versionRequest: null,
       ackNonce: "nonce-abcdefgh",
     });
