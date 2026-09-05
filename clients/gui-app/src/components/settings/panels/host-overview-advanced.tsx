@@ -133,14 +133,9 @@ function VersionPicker(props: VersionPickerProps): ReactNode {
         <div className="font-medium text-foreground">
           Pick a different version
         </div>
-        {/* No rolling-back claim: every row OLDER than the installed host is
-            deliberately disabled (`supersededReason`), and the CLI would
-            short-circuit such an install anyway — advertising rollback here
-            misleads exactly the person who opened this picker to escape a bad
-            upgrade. */}
         <p className="text-ui-sm text-muted-foreground">
-          Install a specific newer host version — useful for stepping up to a
-          release candidate or a hotfix ahead of auto-update.
+          Install a specific host version — upgrade to a release candidate or
+          hotfix, or downgrade to an earlier release.
         </p>
       </div>
       <div className="flex items-start gap-2 text-ui-sm text-muted-foreground">

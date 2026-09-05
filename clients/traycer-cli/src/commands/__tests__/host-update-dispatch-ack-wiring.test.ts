@@ -68,6 +68,7 @@ describe("buildHostUpdateCommand — dispatch ACK stamper is installed as the FI
     );
     const command = buildHostUpdateCommand({
       force: false,
+      allowDowngrade: false,
       versionRequest: null,
       ackNonce: "nonce-abcdefgh",
     });
@@ -92,6 +93,7 @@ describe("buildHostUpdateCommand — dispatch ACK stamper is installed as the FI
     );
     const command = buildHostUpdateCommand({
       force: false,
+      allowDowngrade: false,
       versionRequest: null,
       ackNonce: null,
     });

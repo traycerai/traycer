@@ -1554,6 +1554,13 @@ function registerHostCommands(program: Command): void {
         "--release <version>",
         "Registry version to update to (defaults to the latest compatible release)",
       )
+      // Host maintenance probes `host update --help` for this literal before
+      // dispatching a downgrade. Keep the option visible: it is the capability
+      // contract for hosts paired with an independently installed CLI.
+      .option(
+        "--allow-downgrade",
+        "Allow an explicitly selected --release to replace a newer installed host",
+      )
       .option(
         "--force",
         "Update the host even if it has work in progress: skips the busy check and force-stops a busy host. Running terminal sessions and in-flight agent work are killed.",
@@ -1611,6 +1618,7 @@ function registerHostCommands(program: Command): void {
         }
         return buildHostUpdateCommand({
           force: opts.force === true,
+          allowDowngrade: opts.allowDowngrade === true,
           versionRequest: release,
           ackNonce: typeof opts.ackNonce === "string" ? opts.ackNonce : null,
         })(ctx);

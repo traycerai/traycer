@@ -2286,6 +2286,19 @@ aria-live="polite"` carrying the equivalent text for
       first attempt). An install in flight freezes EVERY row, which is where the
       old `showUpdateNowInput` guard went - it existed so a second
       `desiredVersion` write could not retarget a draining update.
+    - **Explicit downgrades are supported.** The picker permits any available,
+      non-yanked version with different SemVer precedence from the installed
+      version (build metadata alone is not a distinct target). Hosts must
+      negotiate `host.update.install@1.2` before older rows are enabled; earlier
+      hosts show guidance to update first. The summary and automatic updater
+      still offer only newer versions. A downgrade dispatch
+      opts into `host update --allow-downgrade` after checking the host's CLI
+      supports it; the CLI uses a private verified install source while keeping
+      update progress, busy-host refusal, and the post-swap health check. An
+      older CLI that cannot honor a downgrade is refused before dispatch.
+      This installs a version once; it does not pin it against future updates.
+      Desktop launch reconciliation may install a newer resolved release, and
+      the host reconciler still enforces the channel's minimum supported version.
     - The asset lookup takes a SOLE `platforms` key as authoritative: the host's
       CLI projects each entry to `currentHostPlatformKey()` before emitting it,
       so re-deriving a key here would get win32-arm64 wrong (it resolves to the

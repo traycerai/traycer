@@ -65,6 +65,7 @@ import type {
   INotificationHost,
   IPushPermissionHost,
   IRunnerHost,
+  ISystemBackHost,
   SystemResumeEvent,
   ISecureStorage,
   ITokenStore,
@@ -201,6 +202,12 @@ export class WebRunnerHost implements IRunnerHost {
   readonly linkLoginDeepLinks: ILinkLoginDeepLinkSource | null = null;
   /** No Web Push adapter in v1: the in-app bell is the whole notification surface. */
   readonly pushPermission: IPushPermissionHost | null = null;
+  /**
+   * No OS back request reaches a tab, and the browser's own Back button already
+   * walks the history the app writes. There is also nothing to minimize: a tab
+   * is backgrounded by the browser, not by the page.
+   */
+  readonly systemBack: ISystemBackHost | null = null;
   readonly deviceFlow: IDeviceFlowHost;
   private retainedStepUpCredential: RetainedStepUpCredential | null = null;
   /**

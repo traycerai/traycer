@@ -26,6 +26,10 @@ import {
   useHostUpdateCheckQuery,
   useHostUpdateInstall,
 } from "@/components/settings/panels/host-overview-rpc";
+import {
+  useHostNegotiatedMethodVersion,
+  type NegotiatedMethodVersion,
+} from "@/hooks/host/use-host-negotiated-method-version";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import type { HostRpcRegistry } from "@/lib/host";
 
@@ -81,6 +85,11 @@ export function useHostOverviewUpdates(input: {
   readonly busy: boolean;
 }): HostOverviewUpdatesState {
   const { client, hostName, installedVersion } = input;
+  const installVersion = useHostNegotiatedMethodVersion(
+    client,
+    "host.update.install",
+  );
+  const supportsDowngrade = versionSupportsDowngrade(installVersion);
   const [showAllVersions, setShowAllVersions] = useState(false);
   // `undefined` until the user touches the checkbox: the DEFAULT is the host's
   // own derivation, not a value this component picked. Only a deliberate
@@ -230,9 +239,8 @@ export function useHostOverviewUpdates(input: {
   // `updatableVersion` below is what the button can act on.
   //
   // PRECEDENCE, not equality: a host running a hotfix or RC AHEAD of the
-  // stable channel is not outdated, and offering Update now there submits a
-  // target the CLI short-circuits as `installed-up-to-date` - an update that
-  // announces itself and performs no work. Equal precedence (build-metadata
+  // stable channel is not outdated. Only the picker may request a deliberate
+  // downgrade; the summary must never offer one as an update. Equal precedence (build-metadata
   // differences included) and incomparable pairs both count as up to date for
   // the SUMMARY - the picker stays the surface for deliberate cross-channel
   // moves.
@@ -314,6 +322,7 @@ export function useHostOverviewUpdates(input: {
         installedVersion,
         platformKey: input.platformKey,
         showAll: showAllVersions,
+        supportsDowngrade,
       }),
       totalCount: manifest?.versions.length ?? 0,
       showAll: showAllVersions,
@@ -381,6 +390,7 @@ function visibleVersionRows(input: {
   readonly installedVersion: string | null;
   readonly platformKey: string | null;
   readonly showAll: boolean;
+  readonly supportsDowngrade: boolean;
 }): readonly HostVersionRow[] {
   const { manifest } = input;
   if (manifest === null) return [];
@@ -398,9 +408,11 @@ function visibleVersionRows(input: {
       isInstalled,
       unavailableReason:
         assetUnavailableReason(asset) ??
-        (isInstalled
-          ? null
-          : supersededReason(input.installedVersion, entry.version)),
+        versionUnavailableReason(
+          input.installedVersion,
+          entry.version,
+          input.supportsDowngrade,
+        ),
     };
   });
 }
@@ -408,13 +420,11 @@ function visibleVersionRows(input: {
 /**
  * The version the summary's Update now may offer, or `null`.
  *
- * Four gates, all of which the picker enforces per row and the summary must
- * therefore enforce for its one target: the manifest must be from a check the
- * host CONFIRMED (not error-retained data), the target must be strictly newer
- * than what is installed, its entry must not be YANKED (the row disables it and
- * the CLI's `resolveAsset` refuses it before download, so an offer here would
- * dispatch an install the host is guaranteed to reject), and the entry must
- * resolve a usable asset for this host's platform.
+ * The summary additionally requires a strictly newer target; the picker also
+ * permits explicit downgrades. Both require a manifest from a check the
+ * host CONFIRMED (not error-retained data), a non-yanked entry, and a usable
+ * asset for this host's platform. The CLI also refuses yanked releases before
+ * downloading.
  *
  * WHICH version is the target depends on how the catalog was resolved, and
  * that is the whole reason provenance rides on the response. For an
@@ -619,30 +629,25 @@ function latestIsStrictlyNewer(
   return comparison.comparable && comparison.ordering === "less";
 }
 
-/**
- * Why a row below the installed version cannot be installed.
- *
- * This mirrors the CLI's own short-circuit rather than inventing a policy:
- * `download-stage.ts` computes `installedAtOrAboveTarget` and returns
- * `installed-up-to-date` for a target at OR BELOW what is installed, then skips
- * the apply and writes no progress marker. The RPC has already answered
- * `accepted` by then, so an enabled button here would toast "Updating…" for a
- * host that will do nothing and report nothing — the list would be lying about
- * an action it cannot perform.
- *
- * Incomparable pairs are deliberately left installable. `compareHostVersions`
- * refuses anything non-semver, a staging build id is not semver, and the CLI
- * applies the same refusal — an incomparable target does NOT short-circuit
- * there, so it must not be blocked here.
- */
-function supersededReason(
+function versionSupportsDowngrade(version: NegotiatedMethodVersion): boolean {
+  if (version === null || version === false) return false;
+  return version.major > 1 || (version.major === 1 && version.minor >= 2);
+}
+
+/** Only a host advertising downgrade support can honor an older target. */
+function versionUnavailableReason(
   installedVersion: string | null,
   rowVersion: string,
+  supportsDowngrade: boolean,
 ): string | null {
-  if (installedVersion === null) return null;
+  if (installedVersion === null || installedVersion === rowVersion) return null;
   const comparison = compareHostVersions(installedVersion, rowVersion);
-  if (!comparison.comparable || comparison.ordering === "less") return null;
-  return `Already on v${installedVersion}`;
+  if (!comparison.comparable) return null;
+  if (comparison.ordering === "equal") return `Already on v${installedVersion}`;
+  if (comparison.ordering === "greater" && !supportsDowngrade) {
+    return "Update this host to a release that supports downgrades from Settings.";
+  }
+  return null;
 }
 
 /**
