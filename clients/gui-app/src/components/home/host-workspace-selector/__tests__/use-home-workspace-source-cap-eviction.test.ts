@@ -1,27 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import { useHomeWorkspaceSource } from "../use-home-workspace-source";
-
-// `landing-draft-store.ts`'s `createDraft` snapshots the global workspace
-// bucket through this imperative call (real, unmocked returns `null` -
-// unbound). The second test below pre-seeds the global bucket under
-// TEST_HOST_ID and expects a freshly-created draft to inherit it, so this
-// must resolve to the SAME host id `useHomeWorkspaceSource` is given below.
-// The landing draft's workspace bucket resolves through `activeHostIdOrNull`
-// (the authority projection) since P4.2/D17 retired the spine's active slot.
-// Both are pinned to the same host so the bucket this suite stages into and
-// the one the store reads back cannot drift apart.
-vi.mock("@/lib/host/runtime", () => ({
-  activeHostIdOrNull: () => "host-a",
-  getHostBindingSnapshot: () => ({
-    hostClient: { getActiveHostId: () => "host-a" },
-  }),
-}));
 import {
   selectWorkspaceFoldersBucket,
   useWorkspaceFoldersStore,
 } from "@/stores/workspace/workspace-folders-store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import {
   useWorktreeIntentStagingStore,
   worktreeStagingKeyString,
@@ -85,12 +70,26 @@ beforeEach(() => {
   useWorkspaceFoldersStore.setState({ byHost: {} });
   useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
   useWorktreeIntentStagingStore.getState().resetForTests();
+  // `landing-draft-store.ts`'s `createDraft` snapshots the workspace/settings
+  // bucket of the composer's resolved placement host
+  // (`readComposerHostIdSnapshot()`, real and unmocked here). No surface pin
+  // is set in this suite, so it falls through to the app-wide effective host
+  // - seed that to TEST_HOST_ID so the bucket this suite stages into and the
+  // one a freshly-created draft inherits cannot drift apart.
+  useSelectionAuthorityStore.setState({
+    attached: true,
+    effectiveHostId: TEST_HOST_ID,
+  });
 });
 
 afterEach(() => {
   useWorkspaceFoldersStore.setState({ byHost: {} });
   useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
   useWorktreeIntentStagingStore.getState().resetForTests();
+  useSelectionAuthorityStore.setState({
+    attached: false,
+    effectiveHostId: null,
+  });
 });
 
 describe("useHomeWorkspaceSource addResolvedFolders - cap eviction unstages the evicted secondary", () => {
