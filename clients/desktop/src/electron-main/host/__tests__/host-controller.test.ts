@@ -3406,6 +3406,49 @@ describe("platform matrix", () => {
       expect(waitForHostReady).not.toHaveBeenCalled();
     });
 
+    // A host that is DOWN because its login item is toggled off is a
+    // DIFFERENT failure from "no host is running to restart": `host doctor`
+    // cannot fix a login item macOS is refusing to run, only re-enabling it
+    // in System Settings can. The park guard names that condition directly
+    // instead of pointing at the wrong remedy.
+    it("with no running host and a login item that requires approval, fails with the System Settings approval guidance instead of pointing at host doctor", async () => {
+      vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+      const controller = newController("production");
+      writeInstallRecord("production", {
+        version: "1.7.0",
+        runtimeVersion: "1.7.0",
+      });
+      // No `writePidMetadata` call: no running host, so `prePid` resolves
+      // `null` and there is nothing to restart onto.
+      vi.mocked(registerHostLoginItem).mockResolvedValue("parked");
+      vi.mocked(readHostLoginItemStatus).mockReturnValue("requires-approval");
+      vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({ data: {} });
+
+      const outcome = await controller.installVersion("1.8.0", false);
+
+      expect(outcome.kind).toBe("failed");
+      if (outcome.kind === "failed") {
+        // `approvalRequiredMessage()` (host-controller.ts) is the sole
+        // canonical copy for this state and is not exported, so this is the
+        // exact literal it returns - asserted in full so the "no host is
+        // running" message text (a substring match would let through) is
+        // provably absent, not merely unmatched.
+        expect(outcome.message).toBe(
+          "Traycer's background host is registered but disabled by macOS. " +
+            "Open System Settings → General → Login Items & Extensions and turn on " +
+            'Traycer under "Allow in the Background", then click Retry.',
+        );
+        expect(outcome.message).not.toContain("host doctor");
+      }
+      const restartCallIndex = vi
+        .mocked(streamBundledTraycerCliJson)
+        .mock.calls.findIndex(
+          ([opts]) => Array.isArray(opts.args) && opts.args[1] === "restart",
+        );
+      expect(restartCallIndex).toBe(-1);
+      expect(waitForHostReady).not.toHaveBeenCalled();
+    });
+
     it("force:true restarts with the CLI's --force (skips the cooperative shutdown claim a busy host would deny), never merely without --if-idle", async () => {
       vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
       const controller = newController("production");

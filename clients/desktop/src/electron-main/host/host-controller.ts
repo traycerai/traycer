@@ -1994,8 +1994,23 @@ export class HostController {
     force: boolean,
   ): Promise<MutationOutcome<{ readonly activated: boolean }>> {
     if (step.prePid === null) {
+      // A host that is DOWN because its login item is toggled off reads as
+      // `requires-approval` in the registration snapshot, and that snapshot is
+      // one of the states the park guard refuses to restore. The pre-lock
+      // approval pre-flight is deliberately skipped when no host is running,
+      // so this is the first place the condition can be named - and `host
+      // doctor` cannot fix it; only re-enabling the item in System Settings
+      // can. Same routing the service-registration path uses for a park.
+      const loginItemStatus = readHostLoginItemStatus();
+      if (loginItemStatus === "requires-approval") {
+        log.warn(
+          "[host-controller] login-item registration parked with no running host - login item requires approval in System Settings",
+        );
+        return this.failedAfterServiceCycle(approvalRequiredMessage());
+      }
       log.warn(
         "[host-controller] login-item registration parked with no running host to restart",
+        { loginItemStatus },
       );
       return this.failedAfterServiceCycle(
         "Traycer Host's login item could not be re-registered and no host is running to restart - run `traycer host doctor` to recover.",

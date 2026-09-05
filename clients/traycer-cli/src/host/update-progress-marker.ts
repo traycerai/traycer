@@ -225,6 +225,13 @@ export async function replaceUpdateProgressMarkerIfUnchanged(
  * update. Every step is guarded: `rm` with `force` still rejects on EACCES /
  * EPERM / EBUSY, and this is advisory state that must never fail the update.
  * The outer catch is the contract; the inner ones choose the right outcome.
+ *
+ * Leftovers are bounded and inert: a process killed mid-swap leaves at most
+ * one `.reconcile-*` (and a stamp at most one `.tmp-*`) beside the marker,
+ * and nothing reads those paths - the host daemon and this module read the
+ * live path only. They are deliberately NOT swept here: a sweep keyed on age
+ * or pid would be one more concurrent actor in a directory whose whole
+ * difficulty is concurrent actors, for a few hundred bytes per crash.
  */
 async function swapMarkerIfUnchanged(
   environment: Environment,

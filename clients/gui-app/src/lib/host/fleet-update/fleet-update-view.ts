@@ -293,7 +293,8 @@ export interface FleetUpdateViewInput {
  * 2. **Stale observation** → `unknown`, but *qualified* and carrying the last
  *    phase, so a surface can say "last seen downloading" rather than going
  *    blank. A missed poll is not a state change on the host.
- * 3. **`operation === null`** → `unknown`. This is the one that is easy to get
+ * 3. **`operation === null`** → the coarse `updateProgress` view when the peer
+ *    reported one, else `unknown`. This is the one that is easy to get
  *    wrong and expensive when wrong: for a REMOTE host on a per-host `manual`
  *    update policy this is potentially the indefinite steady state, not an
  *    upgrade transient. Reading it as "no update in progress" would show those
@@ -369,6 +370,15 @@ export function projectFleetUpdateView(
   // inner ternary so that no single edit — a "simplification", a merged
   // condition — can silently turn the first into the second.
   if (operation === null) {
+    // A pre-@1.3 peer cannot report an attempt, but it CAN report the coarse
+    // `updateProgress` marker (`host.status@1.1`), and for that cohort the
+    // marker is the only update signal there is. Consulted first: without it
+    // the landing banner and the host badges hid a live or failed legacy
+    // update on exactly the hosts that could say nothing finer. Only when the
+    // peer reported no marker either does this fall through to `unknown` -
+    // never `idle`, for the reasons above.
+    const coarseView = coarseProgressView(observation, stale);
+    if (coarseView !== null) return coarseView;
     return UNKNOWN_FLEET_UPDATE_VIEW;
   }
 
@@ -382,30 +392,8 @@ export function projectFleetUpdateView(
     // up to date" — on the very Overview whose Update now had just started it
     // — which is the incident this branch was rewritten for. The coarse
     // marker is consulted FIRST, and only its absence means quiet.
-    const coarse = coarseKind(observation.coarseProgress);
-    if (coarse !== null) {
-      if (stale) {
-        return {
-          ...UNKNOWN_FLEET_UPDATE_VIEW,
-          lastKnownKind: coarse.kind,
-          lastObservedAtMs: observation.observedAtMs,
-          errorMessage: coarse.errorMessage,
-        };
-      }
-      return {
-        ...UNKNOWN_FLEET_UPDATE_VIEW,
-        kind: coarse.kind,
-        qualified: false,
-        // Indeterminate, never `none`: the marker proves motion and nothing
-        // about how far along it is, and a surface draws that as a moving bar
-        // rather than as an operation with no progress to show.
-        progress:
-          coarse.kind === "updating"
-            ? { kind: "indeterminate", bytes: null, totalBytes: null }
-            : { kind: "none" },
-        errorMessage: coarse.errorMessage,
-      };
-    }
+    const coarseView = coarseProgressView(observation, stale);
+    if (coarseView !== null) return coarseView;
     // A stale read of a quiet host is still unknown rather than idle: the
     // absence of an attempt was true when we looked, and we have since stopped
     // looking. Claiming "up to date" from a reading we cannot refresh is the
@@ -511,6 +499,43 @@ export function projectFleetUpdateView(
  * that used to be invisible on a @1.3 peer, because the Overview only read the
  * coarse field for peers that could not report an attempt.
  */
+/**
+ * The view the coarse `updateProgress` marker projects on its own, or `null`
+ * when the peer reported no marker. Shared by the two arms that have no
+ * attempt to read - a pre-@1.3 peer (`operation === null`) and a @1.3 peer
+ * with no record (`kind: "none"`) - so the two cannot drift on how the legacy
+ * path's only signal is rendered. A live phase from an attempt record always
+ * outranks it; neither caller reaches here with one.
+ */
+function coarseProgressView(
+  observation: FleetUpdateWireObservation,
+  stale: boolean,
+): FleetUpdateView | null {
+  const coarse = coarseKind(observation.coarseProgress);
+  if (coarse === null) return null;
+  if (stale) {
+    return {
+      ...UNKNOWN_FLEET_UPDATE_VIEW,
+      lastKnownKind: coarse.kind,
+      lastObservedAtMs: observation.observedAtMs,
+      errorMessage: coarse.errorMessage,
+    };
+  }
+  return {
+    ...UNKNOWN_FLEET_UPDATE_VIEW,
+    kind: coarse.kind,
+    qualified: false,
+    // Indeterminate, never `none`: the marker proves motion and nothing
+    // about how far along it is, and a surface draws that as a moving bar
+    // rather than as an operation with no progress to show.
+    progress:
+      coarse.kind === "updating"
+        ? { kind: "indeterminate", bytes: null, totalBytes: null }
+        : { kind: "none" },
+    errorMessage: coarse.errorMessage,
+  };
+}
+
 function coarseKind(coarse: HostStatusUpdateProgress | null): {
   readonly kind: "updating" | "failed";
   readonly errorMessage: string | null;

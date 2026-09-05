@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type {
   HostStatusUpdateOperation,
+  HostStatusUpdateProgress,
   HostUpdateTransactionCapability,
 } from "@traycer/protocol/host/status/index";
 import { recordObservationFromLocalAttempt } from "@/lib/host/fleet-update/record-attempt-observation";
@@ -99,6 +100,134 @@ describe("projectFleetUpdateView — no observation / operation: null", () => {
       connected: true,
     });
     expect(view.kind).toBe("unknown");
+  });
+});
+
+describe("projectFleetUpdateView — operation: null + coarse updateProgress (pre-1.3 peer)", () => {
+  // A pre-@1.3 peer cannot report an attempt at all, but it CAN report the
+  // coarse `updateProgress` marker (`host.status@1.1`) — for that cohort the
+  // marker is the ONLY update signal there is, and `coarseProgressView` is
+  // now consulted here FIRST, exactly as it already is for `kind: "none"`.
+  // These mirror the assertions in the "coarse updateProgress beside
+  // {kind:'none'}" describe below, because the two arms share one helper and
+  // must not drift on how they render it.
+
+  const UPDATING: HostStatusUpdateProgress = { state: "updating", error: null };
+  const FAILED_WITH_ERROR: HostStatusUpdateProgress = {
+    state: "failed",
+    error: "health probe failed",
+  };
+
+  it("a fresh updating marker projects kind 'updating', indeterminate progress, unqualified, no error", () => {
+    const view = projectFleetUpdateView({
+      observation: observation({
+        operation: null,
+        coarseProgress: UPDATING,
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(view.kind).toBe("updating");
+    expect(view.qualified).toBe(false);
+    expect(view.progress).toEqual({
+      kind: "indeterminate",
+      bytes: null,
+      totalBytes: null,
+    });
+    expect(view.errorMessage).toBeNull();
+  });
+
+  it("a fresh failed marker with error text projects kind 'failed', progress none, and carries the error message", () => {
+    const view = projectFleetUpdateView({
+      observation: observation({
+        operation: null,
+        coarseProgress: FAILED_WITH_ERROR,
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(view.kind).toBe("failed");
+    expect(view.progress).toEqual({ kind: "none" });
+    expect(view.errorMessage).toBe("health probe failed");
+  });
+
+  it("a fresh failed marker with a null error falls back to the default sentence", () => {
+    const view = projectFleetUpdateView({
+      observation: observation({
+        operation: null,
+        coarseProgress: { state: "failed", error: null },
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(view.kind).toBe("failed");
+    expect(view.errorMessage).toBe(
+      "The last update attempt failed on this host.",
+    );
+  });
+
+  it("a STALE coarse-updating marker decays to unknown, retaining lastKnownKind 'updating' and the observed time", () => {
+    const view = projectFleetUpdateView({
+      observation: observation({
+        freshUntilMs: NOW_MS - 1,
+        observedAtMs: NOW_MS - 5_000,
+        operation: null,
+        coarseProgress: UPDATING,
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(view.kind).toBe("unknown");
+    expect(view.lastKnownKind).toBe("updating");
+    expect(view.lastObservedAtMs).toBe(NOW_MS - 5_000);
+  });
+
+  // `coarseProgress: null` here still falls through to UNKNOWN_FLEET_UPDATE_VIEW
+  // (never `idle`) — already covered above by "operation: null ... projects
+  // unknown - NEVER idle" and the STALE variant right before this describe,
+  // both of which use the `observation()` fixture's `coarseProgress: null`
+  // default. Not duplicated here.
+
+  it("operation: null and operation: {kind:'none'} project IDENTICAL views for the same fresh coarse marker - the two arms share one helper and must not drift", () => {
+    const viaOperationNull = projectFleetUpdateView({
+      observation: observation({
+        operation: null,
+        coarseProgress: UPDATING,
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    const viaKindNone = projectFleetUpdateView({
+      observation: observation({
+        operation: { kind: "none" },
+        coarseProgress: UPDATING,
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(viaOperationNull).toEqual(viaKindNone);
+  });
+
+  it("operation: null and operation: {kind:'none'} project IDENTICAL views for the same STALE coarse marker", () => {
+    const staleOverrides = {
+      freshUntilMs: NOW_MS - 1,
+      observedAtMs: NOW_MS - 5_000,
+      coarseProgress: FAILED_WITH_ERROR,
+    };
+    const viaOperationNull = projectFleetUpdateView({
+      observation: observation({ ...staleOverrides, operation: null }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    const viaKindNone = projectFleetUpdateView({
+      observation: observation({
+        ...staleOverrides,
+        operation: { kind: "none" },
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(viaOperationNull).toEqual(viaKindNone);
   });
 });
 
