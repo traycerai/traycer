@@ -711,6 +711,20 @@ type LockedMacActivationStep =
       readonly prePid: number | null;
       readonly expectedGeneration: string | null;
       readonly expectedRuntimeVersion: string | null;
+    }
+  /**
+   * `registerHostLoginItem` parked before its first bootout: no process was
+   * torn down and none was asked for, so a readiness wait here can only time
+   * out. Resolved after the lock releases by asking the RUNNING host to
+   * restart itself through the CLI (`host restart`, cooperative claim →
+   * commit → kickstart); the supervisor it relaunches re-resolves the install
+   * record on spawn, which is the activation this cycle set out to perform.
+   */
+  | {
+      readonly phase: "parked";
+      readonly prePid: number | null;
+      readonly expectedGeneration: string | null;
+      readonly expectedRuntimeVersion: string | null;
     };
 
 // Phases where a pending packaged-macOS activation could still be continued.
@@ -1837,6 +1851,16 @@ export class HostController {
         ),
       };
     }
+    if (registerResult === "parked") {
+      // Also post-lock, for the same reason as `register-failed`: the
+      // fallback spawns the CLI, which re-acquires this lock.
+      return {
+        phase: "parked",
+        prePid,
+        expectedGeneration,
+        expectedRuntimeVersion: record.runtimeVersion,
+      };
+    }
     if (this.isCliTakeoverRecoverableStatus(registerResult)) {
       // Not terminal: this cycle's own bootout already tore the loaded
       // agent down, so failing here would strand the machine with no
@@ -1949,6 +1973,58 @@ export class HostController {
     return true;
   }
 
+  /**
+   * Finish an activation whose SMAppService register cycle parked.
+   *
+   * The install is committed and the old host is still serving it — the
+   * exact state the incident of 2026-09-05 sat in for four minutes while two
+   * readiness waits timed out against a process nothing had asked to exit,
+   * until a person pressed Restart. This does what that person did: ask the
+   * running host to restart through the CLI's cooperative route (`host
+   * restart`, `--if-idle` unless forced, so live work still refuses), then
+   * confirm readiness against `prePid` the way every other cycle does.
+   *
+   * With NO running host there is nothing to restart and the register cycle
+   * was the only way to start one, so that case stays a failure — but an
+   * immediate one that names the parked registration, not a two-minute
+   * timeout that names the wrong cause.
+   */
+  private async activateAroundParkedRegistration(
+    step: Extract<LockedMacActivationStep, { phase: "parked" }>,
+    force: boolean,
+  ): Promise<MutationOutcome<{ readonly activated: boolean }>> {
+    if (step.prePid === null) {
+      log.warn(
+        "[host-controller] login-item registration parked with no running host to restart",
+      );
+      return this.failedAfterServiceCycle(
+        "Traycer Host's login item could not be re-registered and no host is running to restart - run `traycer host doctor` to recover.",
+      );
+    }
+    log.warn(
+      "[host-controller] login-item registration parked - restarting the running host through the CLI to activate the committed install",
+      { prePid: step.prePid, force },
+    );
+    try {
+      await this.streamBundled<unknown>(
+        force ? ["host", "restart"] : ["host", "restart", "--if-idle"],
+      );
+    } catch (err) {
+      await this.reloadAfterServiceCycleFailure();
+      return this.classifyMutationSubprocessError(err, "retry-with-force");
+    }
+    try {
+      await this.completeServiceStart(
+        step.prePid,
+        step.expectedGeneration,
+        step.expectedRuntimeVersion,
+      );
+    } catch (err) {
+      return this.failedAfterServiceCycle(err);
+    }
+    return { kind: "ok", value: { activated: true } };
+  }
+
   private async runLockedMacActivationCycleOnce(
     force: boolean,
     postCommitContinuation: BusyContinuation,
@@ -1983,6 +2059,9 @@ export class HostController {
     const step = outcome.result;
     if (step.phase === "terminal") {
       return step.outcome;
+    }
+    if (step.phase === "parked") {
+      return this.activateAroundParkedRegistration(step, force);
     }
     if (step.phase === "register-failed") {
       const recovery = await this.recoverRegistrationViaCliTakeover({
@@ -2350,6 +2429,17 @@ export class HostController {
     if (status === "deferred-busy") {
       log.debug(
         "[host-controller] pending LaunchAgent revision deferred - host became busy while queued behind another registration cycle",
+      );
+      return null;
+    }
+    if (status === "parked") {
+      // An opportunistic plist refresh that could not begin. Nothing was torn
+      // down, the host this call already confirmed reachable is untouched,
+      // and there is no swapped install waiting behind it - so there is
+      // nothing to restart FOR. Leave the revision pending for a later cycle
+      // rather than failing a healthy converge over work that never ran.
+      log.info(
+        "[host-controller] pending LaunchAgent revision skipped - registration parked",
       );
       return null;
     }
@@ -3583,6 +3673,24 @@ export class HostController {
           if (registration.status === "requires-approval") {
             return { kind: "failed", message: approvalRequiredMessage() };
           }
+          if (registration.status === "parked") {
+            // Same fallback as the activation cycle: the bytes are placed,
+            // the register cycle could not begin, so ask the running host to
+            // restart onto them instead of reporting a registration failure
+            // for a registration that was never attempted.
+            const activated = await this.activateAroundParkedRegistration(
+              {
+                phase: "parked",
+                prePid: registration.prePid,
+                expectedGeneration: registration.expectedInstallGeneration,
+                expectedRuntimeVersion: registration.expectedRuntimeVersion,
+              },
+              false,
+            );
+            return activated.kind === "ok"
+              ? { kind: "ok", value: { registered: true } }
+              : activated;
+          }
           if (registration.status === "enabled") {
             try {
               await this.completeServiceStart(
@@ -3916,6 +4024,17 @@ export class HostController {
             "activate",
           );
           if (step.phase === "registered") return { kind: "activated" };
+          if (step.phase === "parked") {
+            // The executor segment holds the actuator lock and the parked
+            // fallback spawns the CLI, so it cannot run inline. Report it as
+            // deferred: the record stays where it is and the next
+            // continuation (or an explicit Restart) performs the activation.
+            return {
+              kind: "deferred",
+              message:
+                "Traycer Host's login item could not be re-registered right now; the update is installed and will finish when the host restarts.",
+            };
+          }
           if (step.phase === "register-failed") {
             // F3 MINT SITE - the only bundled-CLI child in this flow, and it
             // runs OUTSIDE the span. Adoption waives the attempt lock only;

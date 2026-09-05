@@ -40,6 +40,10 @@ const mocks = vi.hoisted(() => ({
   writeUpdateProgressMarkerMock: vi.fn(),
   deleteUpdateProgressMarkerMock: vi.fn(),
   probeHostHealthMock: vi.fn(),
+  readHostPidMetadataMock: vi.fn(),
+  isProcessAliveMock: vi.fn(),
+  assertHostNotBusyMock: vi.fn(),
+  restartHostServiceWithAttemptMock: vi.fn(),
 }));
 
 vi.mock("../../host/update-progress-marker", () => ({
@@ -54,6 +58,39 @@ vi.mock("../../service/health-probe", () => ({
 vi.mock("../../installer/download-stage", () => ({
   downloadAndStageHost: mocks.downloadAndStageHostMock,
 }));
+
+// SAFETY, not convenience: `detectActivationDebt` reads the REAL
+// `~/.traycer/host/pid.json` (the CLI's home is `homedir()`-derived and not
+// overridable), and with `readHostInstallRecord` mocked to a version the
+// developer's live host is not running, an unmocked read would classify the
+// developer's own host as activation debt and RESTART it from a unit test.
+// Every test file that invokes `buildHostUpdateCommand` carries this mock.
+vi.mock("../../host/pid-metadata", () => ({
+  readHostPidMetadata: mocks.readHostPidMetadataMock,
+}));
+vi.mock("../../store/process-identity", () => ({
+  isProcessAlive: mocks.isProcessAliveMock,
+}));
+vi.mock("../../host/busy-check", () => ({
+  assertHostNotBusy: mocks.assertHostNotBusyMock,
+}));
+vi.mock("../../service", () => ({
+  createServiceController: () => ({}),
+  serviceLabelFor: (environment: string) => ({
+    id: `ai.traycer.host.${environment}`,
+    displayName: "Traycer Host",
+    environment,
+    devSlot: null,
+  }),
+}));
+vi.mock("../../host/update-mutation", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../host/update-mutation")>();
+  return {
+    ...actual,
+    restartHostServiceWithAttempt: mocks.restartHostServiceWithAttemptMock,
+  };
+});
 
 vi.mock("../../installer/apply", () => ({
   applyHost: mocks.applyHostMock,
@@ -243,6 +280,17 @@ function fakeCtx(): CommandContext {
   };
 }
 
+// No running host by default: the activation-debt probe finds nothing and
+// every existing short-circuit test keeps its no-op contract. Tests that
+// exercise activation opt in with an explicit pid record. Re-armed per test
+// because `resetAllMocks` wipes return values.
+function armActivationDefaults(): void {
+  mocks.readHostPidMetadataMock.mockResolvedValue(null);
+  mocks.isProcessAliveMock.mockReturnValue(true);
+  mocks.assertHostNotBusyMock.mockResolvedValue(undefined);
+  mocks.restartHostServiceWithAttemptMock.mockResolvedValue(undefined);
+}
+
 describe("buildHostUpdateCommand composite", () => {
   beforeEach(() => {
     // The post-apply health probe gates success, so every apply-path test
@@ -252,6 +300,7 @@ describe("buildHostUpdateCommand composite", () => {
       healthy: true,
       detail: "ok",
     });
+    armActivationDefaults();
   });
 
   afterEach(() => {
@@ -744,6 +793,7 @@ describe("buildHostUpdateCommand update-progress marker (T16)", () => {
       healthy: true,
       detail: "ok",
     });
+    armActivationDefaults();
   });
 
   afterEach(() => {
@@ -868,5 +918,245 @@ describe("buildHostUpdateCommand update-progress marker (T16)", () => {
 
     // Degraded remote progress reporting must not fail a local update.
     expect(result.exitCode).toBe(0);
+  });
+});
+
+// `detectActivationDebt` (Ticket: activation debt owed by `host update` when
+// the install record is ahead of the running host - see the module's own
+// comment on `ActivationDebt`). These exercise the SHORT-CIRCUIT
+// (`installed-up-to-date`) leg only, which is exactly where a stale running
+// process would otherwise be silently left behind: `downloadAndStageHost`
+// already says nothing needs staging, so activation is the only work left.
+describe("buildHostUpdateCommand — activation debt (installed-up-to-date short-circuit)", () => {
+  beforeEach(() => {
+    mocks.probeHostHealthMock.mockResolvedValue({
+      healthy: true,
+      detail: "ok",
+    });
+    armActivationDefaults();
+  });
+
+  afterEach(() => {
+    vi.resetAllMocks();
+    mocks.callOrder = [];
+  });
+
+  function upToDate(version: string): HostDownloadOutcome {
+    return {
+      outcome: "short-circuit",
+      reason: "installed-up-to-date",
+      targetVersion: version,
+      installedVersion: version,
+      stagedVersion: null,
+    };
+  }
+
+  function pidRecord(
+    version: string,
+    pid: number,
+  ): {
+    pid: number;
+    hostId: string;
+    version: string;
+    websocketUrl: string;
+    startedAt: string;
+    processStartIdentity: null;
+    layer0: null;
+    layer0Slot: null;
+  } {
+    return {
+      pid,
+      hostId: "host-1",
+      version,
+      websocketUrl: "ws://127.0.0.1:51820/rpc",
+      startedAt: "2026-01-01T00:00:00.000Z",
+      processStartIdentity: null,
+      layer0: null,
+      layer0Slot: null,
+    };
+  }
+
+  it("running behind the install record: activates, writes the updating marker, restarts under the busy gate, probes health, and clears the marker", async () => {
+    mocks.downloadAndStageHostMock.mockResolvedValue(upToDate("2.0.0"));
+    mocks.readHostInstallRecordMock.mockResolvedValue(sampleRecord("2.0.0"));
+    mocks.readHostPidMetadataMock.mockResolvedValue(pidRecord("1.0.0", 4242));
+    mocks.isProcessAliveMock.mockReturnValue(true);
+
+    const result = await buildHostUpdateCommand({
+      force: false,
+      allowDowngrade: false,
+      ackNonce: null,
+    })(fakeCtx());
+
+    expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenCalledWith(
+      "production",
+      expect.objectContaining({ state: "updating", targetVersion: "2.0.0" }),
+    );
+    expect(mocks.assertHostNotBusyMock).toHaveBeenCalledWith("production");
+    expect(mocks.restartHostServiceWithAttemptMock).toHaveBeenCalledTimes(1);
+    expect(mocks.probeHostHealthMock).toHaveBeenCalledTimes(1);
+    expect(mocks.deleteUpdateProgressMarkerMock).toHaveBeenCalledWith(
+      "production",
+    );
+    expect(mocks.applyHostMock).not.toHaveBeenCalled();
+    const projected = projectInstallResultLikeDesktop(result.data);
+    expect(projected.previousVersion).toBe("1.0.0");
+    expect(projected.version).toBe("2.0.0");
+    expect(projected.serviceLifecycle).toEqual({
+      priorServiceState: "running",
+      stoppedBeforeSwap: false,
+      postSwapAction: "restart",
+      postSwapError: null,
+    });
+    expect(result.human).toContain("updated host 1.0.0 → 2.0.0");
+  });
+
+  it("running already equal to the install record: old no-op contract, no restart, no marker", async () => {
+    mocks.downloadAndStageHostMock.mockResolvedValue(upToDate("2.0.0"));
+    mocks.readHostInstallRecordMock.mockResolvedValue(sampleRecord("2.0.0"));
+    mocks.readHostPidMetadataMock.mockResolvedValue(pidRecord("2.0.0", 4242));
+    mocks.isProcessAliveMock.mockReturnValue(true);
+
+    const result = await buildHostUpdateCommand({
+      force: false,
+      allowDowngrade: false,
+      ackNonce: null,
+    })(fakeCtx());
+
+    expect(mocks.restartHostServiceWithAttemptMock).not.toHaveBeenCalled();
+    expect(mocks.writeUpdateProgressMarkerMock).not.toHaveBeenCalled();
+    expect(mocks.deleteUpdateProgressMarkerMock).not.toHaveBeenCalled();
+    expect(result.human).toContain("no-op");
+  });
+
+  it("pid record present but the process is dead: no debt, old no-op contract", async () => {
+    mocks.downloadAndStageHostMock.mockResolvedValue(upToDate("2.0.0"));
+    mocks.readHostInstallRecordMock.mockResolvedValue(sampleRecord("2.0.0"));
+    mocks.readHostPidMetadataMock.mockResolvedValue(pidRecord("1.0.0", 4242));
+    mocks.isProcessAliveMock.mockReturnValue(false);
+
+    const result = await buildHostUpdateCommand({
+      force: false,
+      allowDowngrade: false,
+      ackNonce: null,
+    })(fakeCtx());
+
+    expect(mocks.restartHostServiceWithAttemptMock).not.toHaveBeenCalled();
+    expect(mocks.writeUpdateProgressMarkerMock).not.toHaveBeenCalled();
+    expect(result.human).toContain("no-op");
+  });
+
+  it("an incomparable running version (e.g. a local-* build): no debt, old no-op contract", async () => {
+    mocks.downloadAndStageHostMock.mockResolvedValue(upToDate("2.0.0"));
+    mocks.readHostInstallRecordMock.mockResolvedValue(sampleRecord("2.0.0"));
+    mocks.readHostPidMetadataMock.mockResolvedValue(
+      pidRecord("local-abc123", 4242),
+    );
+    mocks.isProcessAliveMock.mockReturnValue(true);
+
+    const result = await buildHostUpdateCommand({
+      force: false,
+      allowDowngrade: false,
+      ackNonce: null,
+    })(fakeCtx());
+
+    expect(mocks.restartHostServiceWithAttemptMock).not.toHaveBeenCalled();
+    expect(mocks.writeUpdateProgressMarkerMock).not.toHaveBeenCalled();
+    expect(result.human).toContain("no-op");
+  });
+
+  it("downgrade-shaped debt (running AHEAD of the install record) still activates - either direction of inequality counts", async () => {
+    mocks.downloadAndStageHostMock.mockResolvedValue(upToDate("1.9.0"));
+    mocks.readHostInstallRecordMock.mockResolvedValue(sampleRecord("1.9.0"));
+    mocks.readHostPidMetadataMock.mockResolvedValue(pidRecord("2.0.0", 4242));
+    mocks.isProcessAliveMock.mockReturnValue(true);
+
+    const result = await buildHostUpdateCommand({
+      force: false,
+      allowDowngrade: false,
+      ackNonce: null,
+    })(fakeCtx());
+
+    expect(mocks.restartHostServiceWithAttemptMock).toHaveBeenCalledTimes(1);
+    const projected = projectInstallResultLikeDesktop(result.data);
+    expect(projected.previousVersion).toBe("2.0.0");
+    expect(projected.version).toBe("1.9.0");
+    expect(result.human).toContain("updated host 2.0.0 → 1.9.0");
+  });
+
+  it("--force skips the busy assertion but still restarts", async () => {
+    mocks.downloadAndStageHostMock.mockResolvedValue(upToDate("2.0.0"));
+    mocks.readHostInstallRecordMock.mockResolvedValue(sampleRecord("2.0.0"));
+    mocks.readHostPidMetadataMock.mockResolvedValue(pidRecord("1.0.0", 4242));
+    mocks.isProcessAliveMock.mockReturnValue(true);
+
+    await buildHostUpdateCommand({
+      force: true,
+      allowDowngrade: false,
+      ackNonce: null,
+    })(fakeCtx());
+
+    expect(mocks.assertHostNotBusyMock).not.toHaveBeenCalled();
+    expect(mocks.restartHostServiceWithAttemptMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("the host is busy: assertHostNotBusy rejects, the marker is left failed, and restart never runs", async () => {
+    mocks.downloadAndStageHostMock.mockResolvedValue(upToDate("2.0.0"));
+    mocks.readHostInstallRecordMock.mockResolvedValue(sampleRecord("2.0.0"));
+    mocks.readHostPidMetadataMock.mockResolvedValue(pidRecord("1.0.0", 4242));
+    mocks.isProcessAliveMock.mockReturnValue(true);
+    mocks.assertHostNotBusyMock.mockRejectedValue(
+      cliError({
+        code: CLI_ERROR_CODES.HOST_BUSY,
+        message: "The running host has work in progress",
+        details: null,
+        exitCode: 1,
+      }),
+    );
+
+    await expect(
+      buildHostUpdateCommand({
+        force: false,
+        allowDowngrade: false,
+        ackNonce: null,
+      })(fakeCtx()),
+    ).rejects.toMatchObject({ code: CLI_ERROR_CODES.HOST_BUSY });
+
+    expect(mocks.restartHostServiceWithAttemptMock).not.toHaveBeenCalled();
+    expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenLastCalledWith(
+      "production",
+      expect.objectContaining({ state: "failed", targetVersion: "2.0.0" }),
+    );
+  });
+
+  it("the health probe fails after activation: rejects the health-check error, marks the marker failed, and never clears it", async () => {
+    mocks.downloadAndStageHostMock.mockResolvedValue(upToDate("2.0.0"));
+    mocks.readHostInstallRecordMock.mockResolvedValue(sampleRecord("2.0.0"));
+    mocks.readHostPidMetadataMock.mockResolvedValue(pidRecord("1.0.0", 4242));
+    mocks.isProcessAliveMock.mockReturnValue(true);
+    mocks.probeHostHealthMock.mockResolvedValue({
+      healthy: false,
+      detail: "port never accepted a connection",
+    });
+
+    await expect(
+      buildHostUpdateCommand({
+        force: false,
+        allowDowngrade: false,
+        ackNonce: null,
+      })(fakeCtx()),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_UPDATE_HEALTH_CHECK_FAILED,
+    });
+
+    expect(mocks.restartHostServiceWithAttemptMock).toHaveBeenCalledTimes(1);
+    expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenLastCalledWith(
+      "production",
+      expect.objectContaining({
+        state: "failed",
+        error: "port never accepted a connection",
+      }),
+    );
+    expect(mocks.deleteUpdateProgressMarkerMock).not.toHaveBeenCalled();
   });
 });

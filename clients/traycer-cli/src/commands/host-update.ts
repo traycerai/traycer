@@ -24,7 +24,14 @@ import { withCliUpdateContender } from "../host/update-contender";
 import type { WithCliUpdateContenderOptions } from "../host/update-contender";
 import { installDispatchAckStamper } from "../host/update-dispatch-ack";
 import { hostHomeDir } from "../store/paths";
-import { applyHostWithAttempt } from "../host/update-mutation";
+import {
+  applyHostWithAttempt,
+  restartHostServiceWithAttempt,
+} from "../host/update-mutation";
+import { readHostPidMetadata } from "../host/pid-metadata";
+import { isProcessAlive } from "../store/process-identity";
+import { assertHostNotBusy } from "../host/busy-check";
+import { createServiceController, serviceLabelFor } from "../service";
 
 // `traycer host update [--version X] [--force]` - the composite (Host Update Layer
 // Redesign Tech Plan, "New/changed commands" > `host update`, D6): stage
@@ -46,8 +53,11 @@ import { applyHostWithAttempt } from "../host/update-mutation";
 // SUCCESS CONTRACT: when an update is actually applied, exit 0 here means a
 // host came back healthy after the swap. Two limits are deliberate and worth
 // naming rather than overstating:
-//   - an install already at the target short-circuits before the probe and
-//     re-checks nothing; it reports the installed version, not a live one;
+//   - an install already at the target whose RUNNING host is also at the
+//     target short-circuits before the probe and re-checks nothing. When the
+//     running host is NOT at the target (bytes committed by `host apply
+//     --no-service` and never activated), this command owes the activation
+//     and performs it - restart, marker, probe - see `detectActivationDebt`;
 //   - `probeHostHealth` asks "is the recorded pid alive and its port
 //     accepting?" - it does not compare versions. On the Desktop-managed macOS
 //     degraded path a surviving OLD host can answer it, so a healthy probe is
@@ -163,12 +173,36 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
       allowDowngrade: args.allowDowngrade,
       onProgress: (info) => ctx.progress(info),
     });
-    const needsApply =
-      preparation.kind === "downgrade" ||
-      !(
-        preparation.download.outcome === "short-circuit" &&
-        preparation.download.reason === "installed-up-to-date"
+    const installedUpToDate =
+      preparation.kind === "staged" &&
+      preparation.download.outcome === "short-circuit" &&
+      preparation.download.reason === "installed-up-to-date";
+    const needsApply = !installedUpToDate;
+    // "Installed" is a fact about `install.json`; "running" is a fact about
+    // the process. The two disagree whenever the bytes were swapped by a
+    // caller that could not (or did not) restart the host - Desktop's launch
+    // reconcile runs `host apply --no-service` and then activates through
+    // SMAppService, and when that cycle parks the OLD host keeps serving on
+    // top of the NEW install record indefinitely. This command then answered
+    // "installed-up-to-date" to a Settings click made precisely BECAUSE the
+    // live version was behind, exited 0 having changed nothing, and the GUI
+    // toasted "Updating…" over a host that never moved. Activation debt is
+    // therefore an update this command owes, not a no-op it may report.
+    const activationDebt = installedUpToDate
+      ? await detectActivationDebt(environment)
+      : null;
+    if (activationDebt !== null) {
+      ctx.runtime.logger.info(
+        "Host update found the install record ahead of the running host; activating",
+        {
+          environment,
+          installedVersion: activationDebt.installedVersion,
+          runningVersion: activationDebt.runningVersion,
+        },
       );
+    }
+    const needsActivate = activationDebt !== null;
+    const needsWork = needsApply || needsActivate;
 
     // Remote Host Support T16: the daemon polls `update-progress.json` and
     // folds it into `host.status@1.1` / the drain gate, so an update that is
@@ -178,10 +212,12 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
     // never allowed to fail the update itself - a missing marker degrades
     // the remote progress readout, it must not break the local update.
     const targetVersion =
-      preparation.kind === "downgrade"
-        ? preparation.version
-        : downloadTargetVersion(preparation.download);
-    if (needsApply) {
+      activationDebt !== null
+        ? activationDebt.installedVersion
+        : preparation.kind === "downgrade"
+          ? preparation.version
+          : downloadTargetVersion(preparation.download);
+    if (needsWork) {
       await writeUpdateProgressMarkerSafely(ctx.runtime.logger, environment, {
         state: "updating",
         error: null,
@@ -193,23 +229,29 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
     let legacy: LegacyHostUpdateResult;
     try {
       legacy =
-        preparation.kind === "staged"
-          ? await applyAndProjectLegacy(
+        activationDebt !== null
+          ? await activateInstalledAndProjectLegacy(
               environment,
               args.force,
-              needsApply,
-              (info) => ctx.progress(info),
+              activationDebt,
             )
-          : projectApplied(
-              await installHostDowngrade({
+          : preparation.kind === "staged"
+            ? await applyAndProjectLegacy(
                 environment,
-                version: preparation.version,
-                force: args.force,
-                onProgress: (info) => ctx.progress(info),
-              }),
-            );
+                args.force,
+                needsApply,
+                (info) => ctx.progress(info),
+              )
+            : projectApplied(
+                await installHostDowngrade({
+                  environment,
+                  version: preparation.version,
+                  force: args.force,
+                  onProgress: (info) => ctx.progress(info),
+                }),
+              );
     } catch (err) {
-      if (needsApply) {
+      if (needsWork) {
         await markUpdateFailed(
           ctx.runtime.logger,
           environment,
@@ -220,7 +262,7 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
       throw err;
     }
 
-    if (needsApply) {
+    if (needsWork) {
       // Verify the host the swap just installed actually comes back before
       // reporting success: a binary that commits cleanly but never listens
       // is exactly the failure the marker exists to surface remotely.
@@ -261,6 +303,7 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
           : "explicit-downgrade",
       version: legacy.version,
       changed: legacy.previousVersion !== legacy.version,
+      activatedInstalled: needsActivate,
       hasPostSwapError: legacy.serviceLifecycle.postSwapError !== null,
     });
     return {
@@ -274,6 +317,106 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
 type HostUpdatePreparation =
   | { readonly kind: "downgrade"; readonly version: string }
   | { readonly kind: "staged"; readonly download: HostDownloadOutcome };
+
+/** The install record and the live process disagree about the version. */
+interface ActivationDebt {
+  readonly installedVersion: string;
+  readonly runningVersion: string;
+}
+
+/**
+ * Whether the committed install is waiting for a process that runs it.
+ *
+ * Three readings, all required, and each absence answers `null` (no debt) on
+ * purpose - this decides whether to restart a host, and the safe error is to
+ * leave one alone:
+ *
+ * - no install record: nothing to activate (the caller throws later anyway);
+ * - no pid metadata, or a pid that is not alive: no process to replace. A
+ *   host that is DOWN is the service manager's problem, not this command's -
+ *   `host start` re-resolves the install record on every spawn, so the next
+ *   launch already runs the committed bytes;
+ * - incomparable or equal versions: a `local-*` build is not a target this
+ *   command reasons about, and equal means activated.
+ *
+ * The comparison is on VERSION rather than on install generation because
+ * `pid.json` publishes the version and nothing finer; a swap to the same
+ * version (re-install of identical bytes) is invisible here, and restarting
+ * for it would be gratuitous.
+ *
+ * Either direction of inequality is debt. A downgrade that was committed but
+ * never activated leaves the running host AHEAD of the record, and the record
+ * is what the operator asked for.
+ */
+async function detectActivationDebt(
+  environment: Environment,
+): Promise<ActivationDebt | null> {
+  const installed = await readHostInstallRecord(environment);
+  if (installed === null) return null;
+  const running = await readHostPidMetadata(environment);
+  if (running === null || !isProcessAlive(running.pid)) return null;
+  const comparison = compareHostVersions(running.version, installed.version);
+  if (!comparison.comparable || comparison.ordering === "equal") return null;
+  return {
+    installedVersion: installed.version,
+    runningVersion: running.version,
+  };
+}
+
+/**
+ * The activation half of an update whose bytes are already committed: stop
+ * the running host and relaunch it from the install record, under the same
+ * busy gate and the same contender admission a full apply runs under.
+ *
+ * `controller.restart` is the SAME actuator `host restart` uses, so a
+ * Desktop-managed macOS agent is restarted cooperatively (claim → commit →
+ * kickstart) rather than by a `launchctl` the CLI does not own - and the
+ * supervisor it relaunches re-resolves the install record on spawn, which is
+ * what turns "committed" into "running".
+ *
+ * Projected as an UPDATE, not a no-op: `previousVersion` is the version that
+ * was serving, so the human summary and Desktop's legacy projection both say
+ * `rc.1 → rc.2`, which is what actually happened from the operator's seat.
+ */
+async function activateInstalledAndProjectLegacy(
+  environment: Environment,
+  force: boolean,
+  debt: ActivationDebt,
+): Promise<LegacyHostUpdateResult> {
+  const contenderOptions: WithCliUpdateContenderOptions = {
+    environment,
+    reason: "host-update-activate",
+    waitMs: 30_000,
+    pollIntervalMs: 100,
+    admission: "legacy-update-shadow",
+  };
+  return withCliUpdateContender(contenderOptions, async (capability) => {
+    // Same gate `applyHost` runs before it touches anything: a host with
+    // live work is not restarted under it unless the caller said `--force`.
+    if (!force) {
+      await assertHostNotBusy(environment);
+    }
+    // Re-read under the lock: the record the debt was computed from may have
+    // moved while this command waited for admission.
+    const installed = await requireInstalled(environment);
+    await restartHostServiceWithAttempt(
+      capability,
+      contenderOptions,
+      createServiceController(),
+      serviceLabelFor(environment),
+    );
+    return {
+      ...projectNoOp(installed),
+      previousVersion: debt.runningVersion,
+      serviceLifecycle: {
+        priorServiceState: "running",
+        stoppedBeforeSwap: false,
+        postSwapAction: "restart",
+        postSwapError: null,
+      },
+    };
+  });
+}
 
 async function prepareHostUpdate(input: {
   readonly environment: Environment;

@@ -3328,6 +3328,118 @@ describe("platform matrix", () => {
     }
   });
 
+  // `activateAroundParkedRegistration` - the cooperative-restart fallback for
+  // a `registerHostLoginItem` cycle that parked (production: `parked` is a
+  // dedicated arm rather than the prior primary status, and this cycle asks
+  // the RUNNING host to restart through the CLI instead of reporting a
+  // registration failure for bytes that already committed).
+  describe("activateAroundParkedRegistration - the parked SMAppService register fallback", () => {
+    it("restarts the running host through the CLI (--if-idle) and confirms readiness AFTER that spawn, never before it", async () => {
+      vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+      const controller = newController("production");
+      writeInstallRecord("production", {
+        version: "1.7.0",
+        runtimeVersion: "1.7.0",
+      });
+      writePidMetadata("production", { version: "1.7.0", pid: process.pid });
+      vi.mocked(registerHostLoginItem).mockResolvedValue("parked");
+      vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({ data: {} });
+      vi.mocked(waitForHostReady).mockResolvedValue({
+        ready: true,
+        version: "1.7.0",
+        pid: process.pid,
+        startedAt: "2026-01-01T00:00:00.000Z",
+        reason: "ready",
+      });
+
+      const outcome = await controller.installVersion("1.8.0", false);
+
+      expect(outcome.kind).toBe("ok");
+      const restartCallIndex = vi
+        .mocked(streamBundledTraycerCliJson)
+        .mock.calls.findIndex(
+          ([opts]) =>
+            Array.isArray(opts.args) &&
+            opts.args[0] === "host" &&
+            opts.args[1] === "restart",
+        );
+      expect(restartCallIndex).toBeGreaterThanOrEqual(0);
+      expect(
+        vi.mocked(streamBundledTraycerCliJson).mock.calls[restartCallIndex][0]
+          .args,
+      ).toEqual(["host", "restart", "--if-idle"]);
+
+      // Call-order proof: `waitForHostReady` must run strictly AFTER the
+      // restart spawn, never before it - `completeServiceStart` (which calls
+      // `waitForHostReady`) only runs once the restart has been dispatched.
+      const restartOrder = vi.mocked(streamBundledTraycerCliJson).mock
+        .invocationCallOrder[restartCallIndex];
+      const readyOrder =
+        vi.mocked(waitForHostReady).mock.invocationCallOrder[0];
+      expect(readyOrder).toBeGreaterThan(restartOrder);
+    });
+
+    it("with no running host to restart, fails immediately naming the parked registration and never spawns a restart", async () => {
+      vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+      const controller = newController("production");
+      writeInstallRecord("production", {
+        version: "1.7.0",
+        runtimeVersion: "1.7.0",
+      });
+      // No `writePidMetadata` call: no running host, so `prePid` resolves
+      // `null` and there is nothing to restart onto.
+      vi.mocked(registerHostLoginItem).mockResolvedValue("parked");
+      vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({ data: {} });
+
+      const outcome = await controller.installVersion("1.8.0", false);
+
+      expect(outcome.kind).toBe("failed");
+      if (outcome.kind === "failed") {
+        expect(outcome.message).toContain("no host is running to restart");
+      }
+      const restartCallIndex = vi
+        .mocked(streamBundledTraycerCliJson)
+        .mock.calls.findIndex(
+          ([opts]) => Array.isArray(opts.args) && opts.args[1] === "restart",
+        );
+      expect(restartCallIndex).toBe(-1);
+      expect(waitForHostReady).not.toHaveBeenCalled();
+    });
+
+    it("force:true restarts WITHOUT --if-idle", async () => {
+      vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+      const controller = newController("production");
+      writeInstallRecord("production", {
+        version: "1.7.0",
+        runtimeVersion: "1.7.0",
+      });
+      writePidMetadata("production", { version: "1.7.0", pid: process.pid });
+      vi.mocked(registerHostLoginItem).mockResolvedValue("parked");
+      vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({ data: {} });
+      vi.mocked(waitForHostReady).mockResolvedValue({
+        ready: true,
+        version: "1.7.0",
+        pid: process.pid,
+        startedAt: "2026-01-01T00:00:00.000Z",
+        reason: "ready",
+      });
+
+      const outcome = await controller.installVersion("1.8.0", true);
+
+      expect(outcome.kind).toBe("ok");
+      const restartCallIndex = vi
+        .mocked(streamBundledTraycerCliJson)
+        .mock.calls.findIndex(
+          ([opts]) => Array.isArray(opts.args) && opts.args[1] === "restart",
+        );
+      expect(restartCallIndex).toBeGreaterThanOrEqual(0);
+      expect(
+        vi.mocked(streamBundledTraycerCliJson).mock.calls[restartCallIndex][0]
+          .args,
+      ).toEqual(["host", "restart"]);
+    });
+  });
+
   // Fixup B6: `convergeReadyPackagedMac`'s "already reachable, skip
   // activation" fast-path used to key off reachability ALONE - a live OLD
   // process still answering pings made "reachable" true regardless of what

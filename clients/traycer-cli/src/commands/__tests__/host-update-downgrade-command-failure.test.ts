@@ -36,6 +36,14 @@ vi.mock("../../installer/download-stage", () => ({
   downloadAndStageHost: vi.fn(),
 }));
 
+// SAFETY: `buildHostUpdateCommand` now probes the REAL `~/.traycer/host/
+// pid.json` for activation debt, and an unmocked read on a developer machine
+// could classify the developer's live host as debt and restart it. Every test
+// that invokes the command mocks the probe to "no running host".
+vi.mock("../../host/pid-metadata", () => ({
+  readHostPidMetadata: vi.fn(async () => null),
+}));
+
 import { buildHostUpdateCommand } from "../host-update";
 
 const installedRecord: HostInstallRecord = {
