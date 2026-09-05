@@ -1458,6 +1458,22 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // Reading the host-global fallback policy - a pure read, so `latest`.
+  // `poll: null`: the policy changes only through `providers.fallbackPolicy.set`
+  // on this same surface, which invalidates the query directly; the derived
+  // `inFlightCount` is refreshed by the settings panel on its own cadence.
+  "providers.fallbackPolicy.get": {
+    ...LATEST_SCHEDULING,
+    poll: null,
+  },
+  // Saving the fallback policy is a persisted settings write - `fifo` for the
+  // same reason as the classic provider mutations above: two rapid saves must
+  // both land, in order, not be coalesced into one.
+  "providers.fallbackPolicy.set": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Native MCP/plugins/skills mutations write provider config files, so they
   // are `fifo` for the same reason as the classic provider mutations above:
   // two rapid toggles must both land, in order, not be coalesced into one.

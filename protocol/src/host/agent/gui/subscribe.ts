@@ -31,11 +31,13 @@ import {
   chatRunSettingsSchema,
   chatRunSettingsSchemaPreReasonix,
   chatSchema,
+  chatSchemaPreFallback,
   chatSchemaPreInReplyTo,
   chatSchemaV14,
   chatSchemaV15,
   chatSchemaV16,
   interviewDeliveryProjectionSchema,
+  messageSchemaPreFallback,
   userMessagePayloadSchema,
   userMessagePayloadSchemaPreAnnotation,
   userMessageSchema,
@@ -71,6 +73,7 @@ import {
   chatQueueSteerModeSchema,
   runtimeApprovalDecisionSchema,
   runtimeEventSchema,
+  runtimeEventSchemaPreFallback,
   runtimeEventSchemaPreImage,
   runtimeEventSchemaPreInReplyTo,
   runtimeEventSchemaPreSettlement,
@@ -109,10 +112,12 @@ import {
   chatIndexChangeSchema,
   chatLoadRangeRequestSchema,
   chatRangeResponseSchema,
+  chatRangeResponseSchemaPreFallback,
   chatRecordSchema,
   chatSkeletonChunkSchema,
   chatTranscriptDerivedSchema,
   chatTranscriptWindowSchema,
+  chatTranscriptWindowSchemaPreFallback,
 } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
 
 const jsonContentSchema = getRecordSchema(
@@ -177,7 +182,11 @@ export const chatActionSchemaV15 = z.enum([
   "stopAllBackgroundItems",
 ]);
 
-export const chatActionSchema = z.enum([
+// Frozen action set of the released `chat.subscribe@1.7`/`@1.8` lines. Same
+// reason `chatActionSchemaV15`/`V16` exist: `actionAck` echoes the action kind
+// back, so a new literal is a host->client surface change and those two minors
+// are cut for release.
+export const chatActionSchemaV17ToV18 = z.enum([
   ...chatActionSchemaV15.options,
   // `1.6`: the session-scoped escalation for provider builds whose per-item
   // command stop doesn't exist (see `individualStopUnavailable` on command
@@ -187,6 +196,21 @@ export const chatActionSchema = z.enum([
   // `1.7`: requeue an existing detached interview delivery. The action names
   // immutable outbox identities so retry cannot create another settlement.
   "interviewDeliveryRetry",
+]);
+
+export const chatActionSchema = z.enum([
+  ...chatActionSchemaV17ToV18.options,
+  // `1.9`: the fallback grace card's menu open/close.
+  //
+  // STREAM actions, not unary RPCs, and deliberately so: `holdForChoice`
+  // freezes the remaining grace window and acks a lease token, and a lease
+  // has to bind to the subscription that owns it. A unary call cannot name
+  // its owning subscription - it has no `connectionId` on the wire - so two
+  // windows opening the same menu would be indistinguishable. Sent here, the
+  // lease binds to the stream's `connectionId` for free, and subscriber
+  // detach resumes the frozen remainder with no extra message.
+  "fallback.holdForChoice",
+  "fallback.releaseChoice",
 ]);
 export type ChatAction = z.infer<typeof chatActionSchema>;
 
@@ -337,9 +361,18 @@ const mcpBackgroundItemSchema = z.object({
   startedAt: z.number().nullable().default(null),
 });
 
-export const backgroundItemKindSchema = z.enum([
+export const backgroundItemKindSchemaV14ToV18 = z.enum([
   ...backgroundItemKindSchemaV13.options,
   "mcp",
+]);
+
+export const backgroundItemKindSchema = z.enum([
+  ...backgroundItemKindSchemaV14ToV18.options,
+  // `1.9`: a chat parked on a provider's rate-limit reset by the fallback
+  // engine's wait rung. It is background work in the sense that matters to
+  // this panel - the chat is doing something, the user can see when it will
+  // end, and the user can stop it - even though nothing is executing.
+  "fallback-wait",
 ]);
 export type BackgroundItemKind = z.infer<typeof backgroundItemKindSchema>;
 
@@ -387,15 +420,56 @@ const commandBackgroundItemSchema = z.object({
     .default(null),
 });
 
+// ─── Frozen `chat.subscribe@1.6–1.8` background-item shapes ────────────────
+//
+// `1.9` adds the `fallback-wait` kind below. Every line through `1.8` binds
+// this union, which is a literal pre-image rather than an alias for the live
+// one: `1.6` is released and `1.7`/`1.8` are cut for release, and an alias
+// over a schema that grows is not a freeze. A released peer's decoder is a
+// closed discriminated union - an unknown `kind` fails the WHOLE frame, not
+// just the row - so the host degrades a wait item out of those lines'
+// `backgroundItems` rather than sending one.
+export const backgroundItemSchemaPreFallbackWait = z.discriminatedUnion(
+  "kind",
+  [
+    subagentOrMonitorBackgroundItemSchema,
+    commandBackgroundItemSchema,
+    wakeupBackgroundItemSchema,
+    workflowBackgroundItemSchema,
+    mcpBackgroundItemSchema,
+  ],
+);
+
+// ─── Live background-item shapes (`chat.subscribe@1.9`) ────────────────────
+
+/**
+ * A chat parked on a provider rate-limit reset by the fallback engine's wait
+ * rung (`chat.subscribe@1.9`).
+ *
+ * `scheduledFor` is REQUIRED, like a wakeup's: a wait exists because a
+ * verified reset boundary was read, so a wait row without one is a
+ * contradiction, not a degraded row. `providerId` and `profileLabel` name the
+ * account being waited on - the row's identity chip - so the panel never has
+ * to join against a providers list to title itself; `profileLabel` is null for
+ * the ambient (unnamed) profile, which is a real state and not a missing one.
+ */
+const fallbackWaitBackgroundItemSchema = z.object({
+  ...backgroundItemBaseFields,
+  kind: z.literal("fallback-wait"),
+  scheduledFor: z.number(),
+  providerId: z.string(),
+  profileLabel: z.string().nullable(),
+});
+
 export const backgroundItemSchema = z.discriminatedUnion("kind", [
-  subagentOrMonitorBackgroundItemSchema,
-  commandBackgroundItemSchema,
-  wakeupBackgroundItemSchema,
-  workflowBackgroundItemSchema,
-  mcpBackgroundItemSchema,
+  ...backgroundItemSchemaPreFallbackWait.def.options,
+  fallbackWaitBackgroundItemSchema,
 ]);
 export type BackgroundItem = z.infer<typeof backgroundItemSchema>;
 export type CommandBackgroundItem = z.infer<typeof commandBackgroundItemSchema>;
+export type FallbackWaitBackgroundItem = z.infer<
+  typeof fallbackWaitBackgroundItemSchema
+>;
 
 export const chatActionAckStatusSchema = z.enum(["accepted", "rejected"]);
 export type ChatActionAckStatus = z.infer<typeof chatActionAckStatusSchema>;
@@ -1042,6 +1116,7 @@ function buildChatSubscribeCommonServerFrameSchemas<
   ActionSchema extends z.ZodType,
   InterviewAnsweredSchema extends z.ZodType,
   InterviewErroredSchema extends z.ZodType,
+  LeaseFields extends z.ZodRawShape,
 >(schemas: {
   readonly message: MessageSchema;
   readonly queue: QueueSchema;
@@ -1049,6 +1124,21 @@ function buildChatSubscribeCommonServerFrameSchemas<
   readonly action: ActionSchema;
   readonly interviewAnswered: InterviewAnsweredSchema;
   readonly interviewErrored: InterviewErroredSchema;
+  /**
+   * Extra `actionAck` members that exist only on the lines that mint them -
+   * `{}` on every released family, the fallback grace-hold `token` on the live
+   * one.
+   *
+   * Parameterized rather than defaulted onto the shared shape, which is the
+   * mistake this parameter exists to prevent. `backgroundStopTaskIds` above
+   * looks like a precedent for adding a defaulted key here, and is not: it is
+   * in the released baseline already, so it reads as always-present to every
+   * shipped peer. A key added to this factory TODAY lands on all eleven
+   * bindings at once, and `released-baseline-compat` calls that breaking on
+   * each released host→client slot - correctly, since a released host never
+   * emits it and a consumer that assumes it is populated reads undefined.
+   */
+  readonly lease: LeaseFields;
 }) {
   return [
     z.object({
@@ -1066,6 +1156,9 @@ function buildChatSubscribeCommonServerFrameSchemas<
       // parses - it never emits a background-stop ack, so `[]` is the correct
       // reading, not a lossy fallback.
       backgroundStopTaskIds: z.array(z.string()).default([]),
+      // `token` on the lines that mint a lease - see `lease` on the parameter
+      // object above for why it arrives that way and not as a member here.
+      ...schemas.lease,
     }),
     z.object({
       kind: z.literal("messageAccepted"),
@@ -1174,6 +1267,16 @@ const chatSubscribeCommonServerFrameSchemas =
     action: chatActionSchema,
     interviewAnswered: interviewAnsweredServerFrameSchema,
     interviewErrored: interviewErroredServerFrameSchema,
+    // The grace-hold LEASE minted by an accepted `fallback.holdForChoice`,
+    // and the handle a later `chat.fallback.chooseTarget` presents to prove it
+    // is acting on the hold it took. One live lease per traversal; a stale or
+    // foreign token is rejected `CHOICE_LEASE_STALE` (`actionAck.code` is an
+    // open string, so the new rejection codes need no enum growth).
+    //
+    // It rides the ACK rather than a frame of its own so the lease and the
+    // acceptance are one message: a token delivered separately could arrive
+    // after the client had already given up on the hold.
+    lease: { token: z.string().nullable().default(null) },
   });
 
 // Frozen common frames bound to `chat.subscribe@1.0–1.3` (pre-`inReplyTo`).
@@ -1185,6 +1288,7 @@ const chatSubscribeCommonServerFrameSchemasPreInReplyTo =
     action: chatActionSchemaV15,
     interviewAnswered: interviewAnsweredServerFrameSchemaPreSettlement,
     interviewErrored: interviewErroredServerFrameSchemaPreSettlement,
+    lease: {},
   });
 
 // Frozen common frames bound to `chat.subscribe@1.4–1.5`: `inReplyTo` shipped
@@ -1203,6 +1307,7 @@ const chatSubscribeCommonServerFrameSchemasPreManagedCommand =
     action: chatActionSchemaV15,
     interviewAnswered: interviewAnsweredServerFrameSchemaPreSettlement,
     interviewErrored: interviewErroredServerFrameSchemaPreSettlement,
+    lease: {},
   });
 
 // Frozen for `chat.subscribe@1.2` and earlier.
@@ -1615,6 +1720,32 @@ const stopBackgroundSessionClientFrameSchema = z.object({
   ...ownerActionFrameFields,
 });
 
+// `1.9`: the fallback grace card's "Choose differently…" menu opening.
+//
+// Freezes the remaining grace window so the countdown cannot expire under an
+// open menu, and acks a lease token (`actionAck.token`). `traversalId` names
+// what is being held; a hold for a traversal that has already advanced is
+// rejected rather than freezing the wrong thing.
+const fallbackHoldForChoiceClientFrameSchema = z.object({
+  kind: z.literal("fallback.holdForChoice"),
+  ...ownerActionFrameFields,
+  traversalId: z.string(),
+});
+
+// The menu closing. Resumes the frozen remainder - as do subscriber detach,
+// chat close and host restart, none of which send anything, which is why the
+// host can never treat this frame as the only way a hold ends.
+//
+// `token` proves the release belongs to the hold that was taken: a second
+// window that never held the lease must not be able to resume someone else's
+// frozen window.
+const fallbackReleaseChoiceClientFrameSchema = z.object({
+  kind: z.literal("fallback.releaseChoice"),
+  ...ownerActionFrameFields,
+  traversalId: z.string(),
+  token: z.string(),
+});
+
 // Frozen client frame of the `1.6` line as `host-v1.2.0-rc.1` shipped it.
 // Exported for the same reason `chatSubscribeClientFrameSchemaV14ToV15` is:
 // the host's stream resolver must parse a `1.6` connection against the
@@ -1639,14 +1770,23 @@ export const chatSubscribeClientFrameSchemaV16 = z.discriminatedUnion(
   chatSubscribeClientFrameSchemaV16Options,
 );
 
-// Live client frame (`chat.subscribe@1.7`) - the `1.6` composition above with
-// the interview pair swapped for the enhanced one. Variant order is preserved
-// so the two unions differ only where `1.7` genuinely differs.
-const chatSubscribeClientFrameSchemaOptions = [
+// Frozen client frame of the released `chat.subscribe@1.7`/`@1.8` lines - the
+// `1.6` composition with the interview pair swapped for the enhanced one, and
+// nothing else. Variant order is preserved so the two unions differ only where
+// `1.9` genuinely differs.
+//
+// The `1.6` block above warned that "the next action added to the live client
+// frame must pin `1.6` to its own frozen option list FIRST" - `1.6` already
+// has one (`chatSubscribeClientFrameSchemaV16Options`), and this is the same
+// pin one line up, for the same reason: the compat checker's oracle only
+// guards host->client additions, so a new action appended to the LIVE list
+// would otherwise silently join `1.7`/`1.8` and let a stale or crafted peer of
+// those lines dispatch it.
+const chatSubscribeClientFrameSchemaV17ToV18Options = [
   chatSubscribeClientFrameSchemaOptionsBeforeInterview[0].extend({
     worktreeIntent: worktreeIntentSchema.nullable().default(null),
-    // Browser annotations entered on the unreleased live line. Every
-    // released 1.0–1.6 union above stays frozen without this field.
+    // Browser annotations entered on the `1.7` line. Every released 1.0–1.6
+    // union above stays frozen without this field.
     browserAnnotations: z.array(browserAnnotationRecordSchema).default([]),
   }),
   deleteMessageSuffixClientFrameSchema,
@@ -1661,6 +1801,19 @@ const chatSubscribeClientFrameSchemaOptions = [
   pauseQueueClientFrameSchema,
   activeProfileUpdateClientFrameSchema,
   stopBackgroundSessionClientFrameSchema,
+] as const;
+
+export const chatSubscribeClientFrameSchemaV17ToV18 = z.discriminatedUnion(
+  "kind",
+  chatSubscribeClientFrameSchemaV17ToV18Options,
+);
+
+// Live client frame (`chat.subscribe@1.9`) - the `1.7`/`1.8` composition plus
+// the two fallback grace-hold actions.
+const chatSubscribeClientFrameSchemaOptions = [
+  ...chatSubscribeClientFrameSchemaV17ToV18Options,
+  fallbackHoldForChoiceClientFrameSchema,
+  fallbackReleaseChoiceClientFrameSchema,
 ] as const;
 
 export const chatSubscribeClientFrameSchema = z.discriminatedUnion(
@@ -2430,7 +2583,7 @@ const chatSnapshotSchemaV16 = z.object({
   missingWorktreePaths: z.array(z.string()),
   pendingFileEditApprovals: z.array(chatFileEditApprovalStateSchema),
   accumulatedFileChanges: z.array(chatAccumulatedFileChangeSchema),
-  backgroundItems: z.array(backgroundItemSchema).optional(),
+  backgroundItems: z.array(backgroundItemSchemaPreFallbackWait).optional(),
   // The shipped command shape - see the `V16` managedCommandsChanged frame.
   managedCommands: z.array(managedCommandSchemaPreRelaunch).default([]),
   heldUpdates: z.array(heldManagedCommandUpdateSchema).default([]),
@@ -2454,7 +2607,7 @@ const chatSubscribeTurnStateChangedServerFrameSchemaV16 = z.object({
   ...chatReferenceFields,
   runStatus: chatRunStatusSchema,
   activeTurn: chatActiveTurnSchemaPreReasonix.nullable(),
-  backgroundItems: z.array(backgroundItemSchema).optional(),
+  backgroundItems: z.array(backgroundItemSchemaPreFallbackWait).optional(),
   turnInProgress: z.boolean().optional(),
 });
 
@@ -2466,6 +2619,7 @@ const chatSubscribeCommonServerFrameSchemasV16 =
     action: chatActionSchemaV16,
     interviewAnswered: interviewAnsweredServerFrameSchemaPreSettlement,
     interviewErrored: interviewErroredServerFrameSchemaPreSettlement,
+    lease: {},
   });
 
 const chatSubscribeServerFrameSchemaV16 = z.discriminatedUnion("kind", [
@@ -2565,13 +2719,87 @@ export const chatSubscribeSnapshotServerFrameShallowSchemaV16 = z.object({
 //
 // The Reasonix half is the same story in the enum dimension: every
 // harness-bearing leaf on `1.6` is pinned to the nineteen-id set above, and
-// only this line admits `reasonix`.
+// `1.7` and up admit `reasonix`.
+//
+// ─── Frozen `chat.subscribe@1.7` shape (pre-fallback) ─────────────────────
+//
+// `1.7` bound the LIVE server and client frames by reference until this
+// freeze. `release/v1.3.0` pins this protocol commit, so `1.7` ships to the
+// field as it stands here and the `1.6` block's own rule applies to it
+// verbatim: "the moment a `1.8`/`1.9` opens above it, this line must be
+// re-pinned to a hand-written pre-image bundle". This is that re-pin, and it
+// holds back exactly what `1.9` adds - the `fallback-wait` background item,
+// the two fallback stream actions (in the ack's action enum and the client
+// union), and the two fallback provider-notice kinds. Every other leaf stays
+// the live sub-schema, which is what `1.7` genuinely ships.
+//
+// `actionAck.token` is deliberately NOT held back: it is an additive
+// nullable-defaulted field on the shared factory, the same shape
+// `backgroundStopTaskIds` already rides there, and a `1.7` peer that never
+// takes a grace hold reads the correct `null` for it.
+const chatSnapshotSchemaV17 = z.object({
+  chat: chatSchemaPreFallback,
+  access: chatAccessSchema,
+  queue: chatQueueStateSchema,
+  runStatus: chatRunStatusSchema,
+  activeTurn: chatActiveTurnSchema.nullable(),
+  pendingApprovals: z.array(chatApprovalStateSchema),
+  pendingInterviews: z.array(chatPendingInterviewStateSchema),
+  worktreeBinding: worktreeBindingSchema.nullable(),
+  missingWorktreePaths: z.array(z.string()),
+  pendingFileEditApprovals: z.array(chatFileEditApprovalStateSchema),
+  accumulatedFileChanges: z.array(chatAccumulatedFileChangeSchema),
+  backgroundItems: z.array(backgroundItemSchemaPreFallbackWait).optional(),
+  managedCommands: z.array(managedCommandSchema).default([]),
+  heldUpdates: z.array(heldManagedCommandUpdateSchema).default([]),
+  turnInProgress: z.boolean().optional(),
+});
+
+const chatSubscribeSnapshotServerFrameSchemaV17 = z.object({
+  kind: z.literal("snapshot"),
+  ...textFrameFields,
+  ...chatReferenceFields,
+  snapshot: chatSnapshotSchemaV17,
+});
+
+// Shared by `1.7` and `1.8`: the two lines agree on turn state, and both must
+// hold back the `fallback-wait` item.
+const chatSubscribeTurnStateChangedServerFrameSchemaV17ToV18 = z.object({
+  kind: z.literal("turnStateChanged"),
+  ...textFrameFields,
+  ...chatReferenceFields,
+  runStatus: chatRunStatusSchema,
+  activeTurn: chatActiveTurnSchema.nullable(),
+  backgroundItems: z.array(backgroundItemSchemaPreFallbackWait).optional(),
+  turnInProgress: z.boolean().optional(),
+});
+
+const chatSubscribeCommonServerFrameSchemasV17ToV18 =
+  buildChatSubscribeCommonServerFrameSchemas({
+    message: messageSchemaPreFallback,
+    queue: chatQueueStateSchema,
+    event: chatEventSchema,
+    action: chatActionSchemaV17ToV18,
+    interviewAnswered: interviewAnsweredServerFrameSchema,
+    interviewErrored: interviewErroredServerFrameSchema,
+    lease: {},
+  });
+
+const chatSubscribeServerFrameSchemaV17 = z.discriminatedUnion("kind", [
+  chatSubscribeSnapshotServerFrameSchemaV17,
+  chatSubscribeTurnStateChangedServerFrameSchemaV17ToV18,
+  chatSubscribeManagedCommandsChangedServerFrameSchema,
+  chatSubscribeHeldUpdatesChangedServerFrameSchema,
+  ...chatSubscribeCommonServerFrameSchemasV17ToV18,
+  blockDeltaServerFrameSchema(runtimeEventSchemaPreFallback),
+]);
+
 export const chatSubscribeV17 = defineStreamRpcContract({
   method: "chat.subscribe",
   schemaVersion: { major: 1, minor: 7 } as const,
   openRequestSchema: chatSubscribeOpenRequestSchema,
-  serverFrameSchema: chatSubscribeServerFrameSchema,
-  clientFrameSchema: chatSubscribeClientFrameSchema,
+  serverFrameSchema: chatSubscribeServerFrameSchemaV17,
+  clientFrameSchema: chatSubscribeClientFrameSchemaV17ToV18,
 });
 
 /**
@@ -2808,6 +3036,66 @@ export type ChatSubscribeWindowedServerFrame = z.infer<
   typeof chatSubscribeWindowedServerFrameSchema
 >;
 
+// ─── Frozen `chat.subscribe@1.8` shape (pre-fallback) ─────────────────────
+//
+// `1.8` is the released windowed line, and it bound the live windowed frames
+// by reference until this freeze. It holds back exactly what `1.9` adds.
+//
+// The windowed line is the one where "freeze the notice enum" is genuinely
+// THREE bindings, not one: message bodies reach a `1.8` peer on the snapshot's
+// tail, on a `range` response, AND on a live `blockDelta` upsert. That is
+// round-4 finding F1, and it is why `chatTranscriptWindowSchemaPreFallback` /
+// `chatRangeResponseSchemaPreFallback` exist beside the frozen event union
+// rather than the upsert being frozen alone.
+//
+// `chatRecordSchema` needs no freeze: it is `chatSchema` with `messages` and
+// `events` omitted, so no notice kind can reach a `1.8` peer through it.
+const chatWindowedSnapshotSchemaV18 = z.object({
+  chat: chatRecordSchema,
+  access: chatAccessSchema,
+  queue: chatQueueStateSchema,
+  runStatus: chatRunStatusSchema,
+  activeTurn: chatActiveTurnSchema.nullable(),
+  pendingApprovals: z.array(chatApprovalStateSchema),
+  pendingInterviews: z.array(chatPendingInterviewStateSchema),
+  worktreeBinding: worktreeBindingSchema.nullable(),
+  missingWorktreePaths: z.array(z.string()),
+  pendingFileEditApprovals: z.array(chatFileEditApprovalStateSchema),
+  accumulatedFileChangeCount: z.number().int().nonnegative(),
+  backgroundItems: z.array(backgroundItemSchemaPreFallbackWait).optional(),
+  managedCommands: z.array(managedCommandSchema).default([]),
+  heldUpdates: z.array(heldManagedCommandUpdateSchema).default([]),
+  turnInProgress: z.boolean().optional(),
+  transcriptEpoch: z.number().int().nonnegative(),
+  rowCount: z.number().int().nonnegative(),
+  indexRevision: z.number().int().nonnegative().nullable(),
+  tail: chatTranscriptWindowSchemaPreFallback,
+  derived: chatTranscriptDerivedSchema,
+});
+
+const chatSubscribeServerFrameSchemaV18 = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("snapshot"),
+    ...textFrameFields,
+    ...chatReferenceFields,
+    snapshot: chatWindowedSnapshotSchemaV18,
+  }),
+  chatSubscribeSkeletonChunkServerFrameSchema,
+  chatSubscribeAccumulatedChangesServerFrameSchema,
+  chatSubscribeIndexChangedServerFrameSchema,
+  z.object({
+    kind: z.literal("range"),
+    ...textFrameFields,
+    ...chatReferenceFields,
+    range: chatRangeResponseSchemaPreFallback,
+  }),
+  chatSubscribeTurnStateChangedServerFrameSchemaV17ToV18,
+  chatSubscribeManagedCommandsChangedServerFrameSchema,
+  chatSubscribeHeldUpdatesChangedServerFrameSchema,
+  ...chatSubscribeCommonServerFrameSchemasV17ToV18,
+  blockDeltaServerFrameSchema(runtimeEventSchemaPreFallback),
+]);
+
 /**
  * Ask for a span of bodies.
  *
@@ -2848,6 +3136,19 @@ export type ChatSubscribeWindowedClientFrame = z.infer<
   typeof chatSubscribeWindowedClientFrameSchema
 >;
 
+// The frozen `1.8` client union - the pre-fallback action set plus the two
+// windowed reads. Declared here rather than beside the frozen `1.8` server
+// bundle above because the two read frames are `const`s declared between the
+// two, and a frozen union may not reference them before they initialize.
+export const chatSubscribeWindowedClientFrameSchemaV18 = z.discriminatedUnion(
+  "kind",
+  [
+    ...chatSubscribeClientFrameSchemaV17ToV18Options,
+    loadRangeClientFrameSchema,
+    resnapshotClientFrameSchema,
+  ],
+);
+
 /**
  * The windowed line.
  *
@@ -2864,6 +3165,40 @@ export type ChatSubscribeWindowedClientFrame = z.infer<
 export const chatSubscribeV18 = defineStreamRpcContract({
   method: "chat.subscribe",
   schemaVersion: { major: 1, minor: 8 } as const,
+  openRequestSchema: chatSubscribeOpenRequestSchema,
+  serverFrameSchema: chatSubscribeServerFrameSchemaV18,
+  clientFrameSchema: chatSubscribeWindowedClientFrameSchemaV18,
+});
+
+// ─── The live `chat.subscribe@1.9` contract ────────────────────────────────
+//
+// `1.8` plus provider fallback. WINDOWED, like `1.8` and unlike everything
+// below it: registering a full-snapshot line above the windowed one would
+// silently move every up-to-date peer back onto whole-transcript snapshots,
+// which is the regression the windowed line exists to remove. So `1.9` binds
+// the live windowed frames and `chatSubscribeFullSnapshotSchemaVersion` stays
+// at `1.7`, exactly as its own doc says it must.
+//
+// What this line adds, all of it host-gated so a lower peer never observes it:
+//
+//   - the `fallback-wait` background item (a chat parked on a rate-limit
+//     reset), which the host degrades OUT of a `≤1.8` peer's
+//     `backgroundItems` rather than sending;
+//   - the `fallback.holdForChoice` / `fallback.releaseChoice` stream actions
+//     and the lease `token` they ack with;
+//   - the `fallback_applied` / `fallback_wait_resumed` provider-notice kinds,
+//     which `chat-frame-projection.ts` strips for any peer whose negotiated
+//     minor does not bind them - on live upserts, on persisted snapshot
+//     bodies, and on the windowed tail/range bodies.
+//
+// The typed `failure` payload on `error` / `turn.interrupted` and the
+// persisted `error` block is deliberately NOT part of what this line gates: it
+// is an additive-optional member, so a released peer's deep decoder strips it
+// and the shallow/raw paths carry it uninspected. What older lines owe it is
+// tolerance, not stripping.
+export const chatSubscribeV19 = defineStreamRpcContract({
+  method: "chat.subscribe",
+  schemaVersion: { major: 1, minor: 9 } as const,
   openRequestSchema: chatSubscribeOpenRequestSchema,
   serverFrameSchema: chatSubscribeWindowedServerFrameSchema,
   clientFrameSchema: chatSubscribeWindowedClientFrameSchema,

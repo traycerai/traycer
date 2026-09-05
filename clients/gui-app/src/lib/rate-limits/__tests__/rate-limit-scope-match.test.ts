@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
+import {
+  rateLimitFamilyAffectsModel,
+  rateLimitMatchTokens,
+} from "@traycer/protocol/host/rate-limit/semantics";
 import type { ModelOption } from "@/components/home/data/landing-options";
 import {
   assessProfileRateLimit,
@@ -128,6 +132,76 @@ describe("rateLimitScopeAffectsModel", () => {
     expect(
       rateLimitScopeAffectsModel("Claude", model("opus[1m]", "Opus")),
     ).toBe(true);
+  });
+});
+
+// F4 (host/GUI agreement): both peers wrap the SAME shared matcher
+// (`rateLimitFamilyAffectsModel`) rather than each maintaining their own copy
+// - the host's `familyWindowApplies` (private to `rate-limit-gauge-cache.ts`)
+// calls it as `rateLimitFamilyAffectsModel(family, new
+// Set(rateLimitMatchTokens(modelSlug)))` for a non-null family/modelSlug pair,
+// which is reproduced here directly since the private function is not
+// reachable from a GUI test. This table is the reason the matcher was lifted
+// into `@traycer/protocol` at all: a future change to either wrapper's own
+// token derivation would show up here as a disagreement, not as two
+// separately-green suites that quietly stopped meaning the same thing.
+describe("host/GUI rate-limit family agreement (F4)", () => {
+  function hostSideAnswer(family: string | null, modelSlug: string): boolean {
+    if (family === null) return true;
+    return rateLimitFamilyAffectsModel(
+      family,
+      new Set(rateLimitMatchTokens(modelSlug)),
+    );
+  }
+
+  const PAIRS: ReadonlyArray<{
+    readonly family: string | null;
+    readonly modelSlug: string;
+    readonly modelLabel: string;
+  }> = [
+    // The motivating case: a display-name family with a SPACE must gate the
+    // slug it names and must not gate an unrelated one. `includes()` failed
+    // on the space alone - the bug this whole fix is for.
+    {
+      family: "Claude Opus",
+      modelSlug: "claude-opus-4-7",
+      modelLabel: "Claude Opus 4.7",
+    },
+    { family: "Claude Opus", modelSlug: "claude-fable-5", modelLabel: "Fable" },
+    { family: "opus", modelSlug: "opus[1m]", modelLabel: "Opus" },
+    { family: "opus", modelSlug: "claude-fable-5", modelLabel: "Fable" },
+    { family: "Fable", modelSlug: "claude-fable-5[1m]", modelLabel: "Fable" },
+    { family: "sonnet", modelSlug: "sonnet", modelLabel: "Sonnet" },
+    { family: null, modelSlug: "haiku", modelLabel: "Haiku" },
+    // An unresolved alias proves nothing about which model runs - gated by
+    // every family, informative or not.
+    { family: "opus", modelSlug: "default", modelLabel: "Default" },
+    { family: "Fable", modelSlug: "auto", modelLabel: "Auto" },
+    // A family left with no informative token (pure version noise, or only
+    // provider-generic tokens) errs toward matching everything.
+    { family: "5", modelSlug: "opus[1m]", modelLabel: "Opus" },
+    { family: "Claude", modelSlug: "opus[1m]", modelLabel: "Opus" },
+  ];
+
+  it.each(PAIRS)(
+    "family=$family modelSlug=$modelSlug: host and GUI agree",
+    ({ family, modelSlug, modelLabel }) => {
+      const hostAnswer = hostSideAnswer(family, modelSlug);
+      const guiAnswer = rateLimitScopeAffectsModel(
+        family,
+        model(modelSlug, modelLabel),
+      );
+      expect(guiAnswer).toBe(hostAnswer);
+    },
+  );
+
+  it("the motivating case, asserted in both directions so a positive-only pin could not have passed against the bug", () => {
+    const opus = model("claude-opus-4-7", "Claude Opus 4.7");
+    const fable = model("claude-fable-5", "Fable");
+    expect(rateLimitScopeAffectsModel("Claude Opus", opus)).toBe(true);
+    expect(hostSideAnswer("Claude Opus", "claude-opus-4-7")).toBe(true);
+    expect(rateLimitScopeAffectsModel("Claude Opus", fable)).toBe(false);
+    expect(hostSideAnswer("Claude Opus", "claude-fable-5")).toBe(false);
   });
 });
 

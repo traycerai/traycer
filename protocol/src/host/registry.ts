@@ -219,6 +219,7 @@ import {
   chatSubscribeV16,
   chatSubscribeV17,
   chatSubscribeV18,
+  chatSubscribeV19,
 } from "@traycer/protocol/host/agent/gui/contracts";
 import {
   agentTuiGenerateTitleV10,
@@ -255,6 +256,10 @@ import {
   hostRestartV11,
   hostRestartV12,
 } from "@traycer/protocol/host/restart/contracts";
+import {
+  providersFallbackPolicyGetV10,
+  providersFallbackPolicySetV10,
+} from "@traycer/protocol/host/fallback-policy";
 import {
   hostIdentityGetV10,
   hostIdentitySetV10,
@@ -8275,6 +8280,32 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
+  "providers.fallbackPolicy.get": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersFallbackPolicyGetV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "providers.fallbackPolicy.set": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersFallbackPolicySetV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
   "providers.mcpAuth": {
     degrade: { kind: "unsupported" },
     1: {
@@ -9428,7 +9459,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
   ...HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION,
   "chat.subscribe": {
     1: {
-      latestMinor: 8,
+      latestMinor: 9,
       versions: {
         0: {
           contract: chatSubscribeV10,
@@ -9456,6 +9487,9 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
         },
         8: {
           contract: chatSubscribeV18,
+        },
+        9: {
+          contract: chatSubscribeV19,
         },
       },
     },

@@ -7,6 +7,7 @@ export * from "./config";
 export * from "./diagnostics";
 export * from "./editor";
 export * from "./epic";
+export * from "./fallback-policy";
 export * from "./git-asset-stream";
 export * from "./git-contracts";
 export * from "./git-constants";

@@ -1,11 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import {
+  agentFailureSchema,
   contentBlockSchema,
+  contentBlockSchemaPreFallback,
   contentBlockSchemaPreImage,
   contentBlockSchemaPreSettlement,
   decodeAutonomousResumeBlock,
   encodeAutonomousResumeBlock,
+  errorBlockSchema,
+  errorBlockSchemaPreFallback,
+  providerNoticeKindSchemaPreFallback,
   providerNoticeMetadataSchema,
   providerNoticeNormalizedMetadataSchema,
   subAgentBlockSchema,
@@ -1054,5 +1059,152 @@ describe("textBlockSchema providerNotice (no new persisted block type)", () => {
       },
     });
     expect(result.success).toBe(false);
+  });
+});
+
+// ─── errorBlockSchema.failure (ticket 01, chat.subscribe@1.9) ─────────────
+describe("errorBlockSchema.failure round-trip and defaulting", () => {
+  it("round-trips a full failure payload", () => {
+    const block = {
+      type: "error",
+      blockId: "err-1",
+      status: "completed",
+      timestamp: 1,
+      message: "rate limited",
+      recoverable: true,
+      code: "usage_limit_exceeded",
+      failure: {
+        reason: "rate_limit",
+        resetsAt: 1000,
+        resetsAtSource: "provider",
+        scope: "five_hour",
+        providerDetail: "usage_limit_exceeded",
+      },
+    };
+    const parsed = errorBlockSchema.parse(block);
+    expect(parsed.failure).toEqual(block.failure);
+    // Full parse -> serialize -> parse.
+    expect(errorBlockSchema.parse(JSON.parse(JSON.stringify(parsed)))).toEqual(
+      parsed,
+    );
+  });
+
+  it("defaults failure to null (NOT undefined) when the key is absent - the persisted block is .nullable().default(null)", () => {
+    const parsed = errorBlockSchema.parse({
+      type: "error",
+      blockId: "err-2",
+      status: "completed",
+      timestamp: 1,
+      message: "boom",
+      recoverable: false,
+      code: null,
+    });
+    expect(parsed.failure).toBeNull();
+    expect("failure" in parsed).toBe(true);
+  });
+
+  it("agentFailureSchema round-trips every optional field and requires only reason", () => {
+    expect(agentFailureSchema.parse({ reason: "rate_limit" })).toEqual({
+      reason: "rate_limit",
+    });
+    const full = {
+      reason: "rate_limit" as const,
+      resetsAt: 1000,
+      resetsAtSource: "probe" as const,
+      scope: "seven_day",
+      providerDetail: "usage_limit_exceeded",
+    };
+    expect(agentFailureSchema.parse(full)).toEqual(full);
+    expect(agentFailureSchema.safeParse({}).success).toBe(false);
+  });
+});
+
+describe("providerNoticeKindSchemaPreFallback rejects an unknown enum VALUE (not merely an unknown key)", () => {
+  it("rejects fallback_applied and fallback_wait_resumed, and still accepts every pre-fallback kind", () => {
+    expect(
+      providerNoticeKindSchemaPreFallback.safeParse("fallback_applied").success,
+    ).toBe(false);
+    expect(
+      providerNoticeKindSchemaPreFallback.safeParse("fallback_wait_resumed")
+        .success,
+    ).toBe(false);
+    for (const kind of [
+      "model_rerouted",
+      "model_verification",
+      "safety_buffering",
+      "harness_message",
+    ]) {
+      expect(providerNoticeKindSchemaPreFallback.safeParse(kind).success).toBe(
+        true,
+      );
+    }
+  });
+
+  it("contentBlockSchemaPreFallback rejects a text block carrying the new fallback_applied notice kind", () => {
+    const fallbackAppliedBlock = {
+      type: "text",
+      blockId: "notice-fallback-1",
+      status: "completed",
+      timestamp: 1,
+      text: "Switched to the backup profile after a rate limit.",
+      providerNotice: {
+        harnessId: "claude",
+        noticeKind: "fallback_applied",
+        tone: "info",
+        title: "Switched profile",
+        message: null,
+        details: [],
+        metadata: null,
+      },
+    };
+    // Live schema accepts it - this is the whole point of the freeze existing
+    // beside it.
+    expect(contentBlockSchema.safeParse(fallbackAppliedBlock).success).toBe(
+      true,
+    );
+    expect(
+      contentBlockSchemaPreFallback.safeParse(fallbackAppliedBlock).success,
+    ).toBe(false);
+    // The same block on a released kind still parses on the frozen union - the
+    // rejection is the enum value, not the block shape.
+    expect(
+      contentBlockSchemaPreFallback.safeParse({
+        ...fallbackAppliedBlock,
+        providerNotice: {
+          ...fallbackAppliedBlock.providerNotice,
+          noticeKind: "harness_message",
+        },
+      }).success,
+    ).toBe(true);
+  });
+});
+
+describe("errorBlockSchemaPreFallback (released chat.subscribe@1.0-1.8) strips failure as an unknown key", () => {
+  const errorWithFailure = {
+    type: "error",
+    blockId: "err-1",
+    status: "completed",
+    timestamp: 1,
+    message: "rate limited",
+    recoverable: true,
+    code: "usage_limit_exceeded",
+    failure: { reason: "rate_limit" },
+  };
+
+  it("strips failure rather than rejecting the block", () => {
+    const parsed = errorBlockSchemaPreFallback.parse(errorWithFailure);
+    expect("failure" in parsed).toBe(false);
+    expect(parsed).toMatchObject({ type: "error", message: "rate limited" });
+  });
+
+  // The structural pin: contentBlockSchemaPreFallback (what every released
+  // snapshot chat-tree ultimately binds `error` blocks through) must itself
+  // route through the frozen errorBlockSchemaPreFallback member, not the
+  // live, still-growing errorBlockSchema - a discriminated union that lists
+  // its members explicitly but points one of them at a live schema is frozen
+  // in name only.
+  it("contentBlockSchemaPreFallback strips failure from an error block via its frozen member", () => {
+    const parsed = contentBlockSchemaPreFallback.parse(errorWithFailure);
+    expect(parsed.type === "error" && "failure" in parsed).toBe(false);
   });
 });

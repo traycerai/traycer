@@ -1,48 +1,34 @@
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
+import {
+  rateLimitFamilyAffectsModel,
+  rateLimitMatchTokens,
+} from "@traycer/protocol/host/rate-limit/semantics";
 import type { ModelOption } from "@/components/home/data/landing-options";
 
 export type ProfileRateLimitSeverity = "near_limit" | "hard_limit";
 
-function matchTokens(value: string): ReadonlyArray<string> {
-  return value
-    .toLowerCase()
-    .split(/[^a-z0-9]+/)
-    .filter((token) => token.length > 0);
-}
-
-// Provider-generic tokens carry no model-family information: they appear both
-// in family names ("Claude Opus") and in every model slug of the provider
-// (`claude-fable-5[1m]`), so matching through them would gate every model.
-// Stripped from the FAMILY side only - a family that is nothing but generic
-// tokens falls through to the err-toward-matching path below.
-const PROVIDER_GENERIC_TOKENS = new Set(["claude", "anthropic"]);
-
 /**
- * Whether a limited scope's `family` gates `model`. `null` is a shared window
- * that gates every model. Otherwise both sides tokenize on non-alphanumerics
- * and the scope matches when ANY informative family token appears among the
- * model's slug/label tokens ("Fable" -> `claude-fable-5[1m]`, "opus" ->
- * `opus[1m]`, "Claude Opus" -> `claude-opus-4-7` but NOT
- * `claude-fable-5[1m]`). Purely numeric family tokens are version noise and
- * provider-generic tokens ("claude") match every model of the provider, so
- * both are ignored; a family with no informative token left cannot be judged
- * and errs toward matching - every uncertain path here fails toward SHOWING
- * the warning, never hiding a real one.
+ * Whether a limited scope's `family` gates `model`.
+ *
+ * The matching rule itself lives in `@traycer/protocol` and is SHARED with the
+ * host's readiness selector rather than duplicated here. The two peers have to
+ * agree: the host decides from this whether to wait for a window, and this
+ * renders what the user is told about the same window - a divergence shows up
+ * as a chat waiting on a limit the UI says does not apply. This wrapper only
+ * supplies the model side, which differs by peer (a `ModelOption` here, a bare
+ * slug on the host).
  */
 export function rateLimitScopeAffectsModel(
   family: string | null,
   model: ModelOption,
 ): boolean {
-  if (family === null) return true;
-  const familyTokens = matchTokens(family).filter(
-    (token) => /[a-z]/.test(token) && !PROVIDER_GENERIC_TOKENS.has(token),
+  return rateLimitFamilyAffectsModel(
+    family,
+    new Set([
+      ...rateLimitMatchTokens(model.slug),
+      ...rateLimitMatchTokens(model.label),
+    ]),
   );
-  if (familyTokens.length === 0) return true;
-  const modelTokens = new Set([
-    ...matchTokens(model.slug),
-    ...matchTokens(model.label),
-  ]);
-  return familyTokens.some((token) => modelTokens.has(token));
 }
 
 /**

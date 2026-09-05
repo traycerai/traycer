@@ -489,6 +489,7 @@ function acceptLastAction(harness: Harness): string {
     reason: null,
     code: null,
     backgroundStopTaskIds: [],
+    token: null,
   });
   return frame.clientActionId;
 }
@@ -593,6 +594,7 @@ function rejectLastAction(harness: Harness, reason: string): string {
     reason,
     code: null,
     backgroundStopTaskIds: [],
+    token: null,
   });
   return frame.clientActionId;
 }
@@ -1607,6 +1609,7 @@ describe("createChatSessionStore", () => {
           message: "A tool call failed.",
           recoverable: true,
           code: "TOOL_EXECUTION_FAILED",
+          failure: null,
         },
         {
           type: "error",
@@ -1618,6 +1621,7 @@ describe("createChatSessionStore", () => {
             "Send your message again to continue on a fresh session.",
           recoverable: true,
           code: "CLAUDE_RUNTIME_DISPOSED",
+          failure: null,
         },
         {
           type: "error",
@@ -1628,6 +1632,7 @@ describe("createChatSessionStore", () => {
             "1 queued message was held because this turn ended with an error, and it was not sent. Resume the queue to send it.",
           recoverable: true,
           code: "QUEUE_PAUSED_AFTER_ERROR",
+          failure: null,
         },
       ],
     };
@@ -1801,6 +1806,7 @@ describe("createChatSessionStore", () => {
                 "Send your message again to continue on a fresh session.",
               recoverable: true,
               code: "CLAUDE_RUNTIME_DISPOSED",
+              failure: null,
             },
           ],
         },
@@ -1883,6 +1889,7 @@ describe("createChatSessionStore", () => {
                 "Send your message again to continue on a fresh session.",
               recoverable: true,
               code: "CLAUDE_RUNTIME_DISPOSED",
+              failure: null,
             },
           ],
         },
@@ -1978,6 +1985,7 @@ describe("createChatSessionStore", () => {
                 "Send your message again to continue on a fresh session.",
               recoverable: true,
               code: "CLAUDE_RUNTIME_DISPOSED",
+              failure: null,
             },
           ],
         },
@@ -2416,6 +2424,7 @@ describe("createChatSessionStore", () => {
       reason: null,
       code: null,
       backgroundStopTaskIds: [],
+      token: null,
     });
     expect(
       harness.handle.store.getState().acceptedActions[actionId],
@@ -2608,6 +2617,7 @@ describe("createChatSessionStore", () => {
       reason: null,
       code: null,
       backgroundStopTaskIds: [],
+      token: null,
     });
     expect(harness.handle.store.getState().pendingActions).toEqual({});
     expect(harness.handle.store.getState().pendingUserMessages).toEqual([
@@ -2735,6 +2745,7 @@ describe("createChatSessionStore", () => {
       reason: null,
       code: null,
       backgroundStopTaskIds: [],
+      token: null,
     });
     // An ack does not end the bridge: queued sends can be accepted long before
     // their deferred worktree creation begins.
@@ -2829,6 +2840,7 @@ describe("createChatSessionStore", () => {
       reason: "Stop the active chat run before rebinding its worktree.",
       code: "WORKTREE_CREATE_FAILED",
       backgroundStopTaskIds: [],
+      token: null,
     });
 
     expect(
@@ -2910,6 +2922,7 @@ describe("createChatSessionStore", () => {
       reason: "feat already exists; choose a new branch name.",
       code: "WORKTREE_CREATE_FAILED",
       backgroundStopTaskIds: [],
+      token: null,
     });
 
     // The rejected edit puts the selection back, so the chip reflects the
@@ -3080,6 +3093,7 @@ describe("createChatSessionStore", () => {
       reason: null,
       code: null,
       backgroundStopTaskIds: [],
+      token: null,
     });
 
     // The reconnect sweeps the still-pending edit. The accepted send IS in the
@@ -3370,6 +3384,7 @@ describe("createChatSessionStore", () => {
         reason,
         code: null,
         backgroundStopTaskIds: [],
+        token: null,
       });
     };
 
@@ -4387,6 +4402,7 @@ describe("createChatSessionStore", () => {
       reason: null,
       code: null,
       backgroundStopTaskIds: [],
+      token: null,
     });
     acceptLastAction(harness);
 
@@ -5053,6 +5069,7 @@ describe("createChatSessionStore", () => {
       reason: "Stop the active chat run before rebinding its worktree.",
       code: "WORKTREE_CREATE_FAILED",
       backgroundStopTaskIds: [],
+      token: null,
     });
 
     expect(
@@ -5133,6 +5150,7 @@ describe("createChatSessionStore", () => {
       reason: null,
       code: null,
       backgroundStopTaskIds: [],
+      token: null,
     });
 
     expect(
@@ -5574,6 +5592,7 @@ describe("createChatSessionStore", () => {
       reason: "Host refused the edit.",
       code: null,
       backgroundStopTaskIds: [],
+      token: null,
     });
 
     expect(
@@ -5732,6 +5751,7 @@ describe("createChatSessionStore", () => {
       reason: "Host refused the edit.",
       code: null,
       backgroundStopTaskIds: [],
+      token: null,
     });
 
     // It must not take the slot: that mark is the send's outcome to claim,
@@ -5949,6 +5969,7 @@ describe("createChatSessionStore", () => {
         reason: "Host refused the send.",
         code: null,
         backgroundStopTaskIds: [],
+        token: null,
       });
     };
     reject(first.clientActionId);
@@ -7084,6 +7105,7 @@ describe("createChatSessionStore", () => {
       reason: null,
       code: null,
       backgroundStopTaskIds: [],
+      token: null,
     });
     callbacks.onMessageAccepted({
       kind: "messageAccepted",
@@ -7515,6 +7537,7 @@ describe("createChatSessionStore", () => {
       reason: null,
       code: null,
       backgroundStopTaskIds: [],
+      token: null,
     });
     callbacks.onMessageAccepted({
       kind: "messageAccepted",
@@ -7604,6 +7627,7 @@ describe("createChatSessionStore", () => {
       reason: "Attachment upload failed.",
       code: "ATTACHMENT_UPLOAD_FAILED",
       backgroundStopTaskIds: [],
+      token: null,
     });
 
     expect(harness.handle.store.getState().queue.items).toEqual([]);
@@ -7836,6 +7860,7 @@ describe("createChatSessionStore", () => {
       reason: "Only the agent owner can perform this action.",
       code: "NOT_OWNER",
       backgroundStopTaskIds: [],
+      token: null,
     });
 
     expect(harness.handle.store.getState().failedSendRestoration).toMatchObject(
@@ -7873,6 +7898,7 @@ describe("createChatSessionStore", () => {
         reason,
         code: "ACTION_REJECTED",
         backgroundStopTaskIds: [],
+        token: null,
       });
       return frame.clientActionId;
     };
@@ -7962,6 +7988,7 @@ describe("createChatSessionStore", () => {
       reason: "Rejected edit.",
       code: "EDIT_REJECTED",
       backgroundStopTaskIds: [],
+      token: null,
     });
 
     expect(harness.handle.store.getState().failedSendRestoration).toBeNull();
@@ -8095,6 +8122,7 @@ describe("createChatSessionStore", () => {
       reason: "feat already exists; choose a new branch name.",
       code: "WORKTREE_CREATE_FAILED",
       backgroundStopTaskIds: [],
+      token: null,
     });
 
     expect(
@@ -8477,6 +8505,7 @@ describe("createChatSessionStore", () => {
       reason: "Interview answer rejected.",
       code: "INTERVIEW_REJECTED",
       backgroundStopTaskIds: [],
+      token: null,
     });
     expect(harness.handle.store.getState().pendingInterviews).toEqual([
       { blockId: "question-answer", requestedAt: 2 },
@@ -8498,6 +8527,7 @@ describe("createChatSessionStore", () => {
       reason: null,
       code: null,
       backgroundStopTaskIds: [],
+      token: null,
     });
     expect(harness.handle.store.getState().pendingInterviews).toEqual([
       { blockId: "question-answer", requestedAt: 2 },
@@ -8601,6 +8631,7 @@ describe("createChatSessionStore", () => {
       reason: "Interview answer rejected.",
       code: "INTERVIEW_REJECTED",
       backgroundStopTaskIds: [],
+      token: null,
     });
 
     expect(harness.handle.store.getState().pendingInterviews).toEqual([
@@ -8681,6 +8712,7 @@ describe("createChatSessionStore", () => {
       reason: "Interview answer rejected.",
       code: "INTERVIEW_REJECTED",
       backgroundStopTaskIds: [],
+      token: null,
     });
 
     expect(
@@ -9012,6 +9044,7 @@ describe("createChatSessionStore", () => {
       reason: null,
       code: null,
       backgroundStopTaskIds: ["task-1"],
+      token: null,
     });
     expect(harness.handle.store.getState().pendingBackgroundStopAll).toBeNull();
     expect(harness.handle.store.getState().pendingBackgroundStops).toEqual({
@@ -9181,6 +9214,7 @@ describe("createChatSessionStore", () => {
       reason: "Session already stopped.",
       code: "NO_ACTIVE_SESSION",
       backgroundStopTaskIds: [],
+      token: null,
     });
 
     expect(
@@ -9373,6 +9407,7 @@ describe("createChatSessionStore", () => {
       reason: null,
       code: null,
       backgroundStopTaskIds: [],
+      token: null,
     });
     expect(
       harness.handle.store.getState().pendingBackgroundSessionStop,
@@ -9463,6 +9498,7 @@ describe("createChatSessionStore", () => {
       reason: "Turn is still running.",
       code: "TURN_ACTIVE",
       backgroundStopTaskIds: [],
+      token: null,
     });
 
     expect(
@@ -9549,6 +9585,7 @@ describe("createChatSessionStore", () => {
       reason: "No active turn.",
       code: "NO_ACTIVE_TURN",
       backgroundStopTaskIds: [],
+      token: null,
     });
 
     expect(
@@ -11108,6 +11145,7 @@ describe("createChatSessionStore", () => {
       reason: null,
       code: null,
       backgroundStopTaskIds: [],
+      token: null,
     });
     callbacks.onMessageAccepted({
       kind: "messageAccepted",
@@ -12617,6 +12655,7 @@ describe("createChatSessionStore - persisted auth-error provider nudge", () => {
                 message: "Codex is signed out on this machine.",
                 recoverable: true,
                 code,
+                failure: null,
               },
             ],
       startedAt: 4,
@@ -12807,6 +12846,7 @@ describe("createChatSessionStore - persisted auth-error provider nudge", () => {
             message: "Codex is signed out on this machine.",
             recoverable: true,
             code: "auth",
+            failure: null,
           },
         ],
         startedAt: 3,

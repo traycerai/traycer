@@ -1634,6 +1634,7 @@ describe("<ChatTile />", () => {
         reason: null,
         code: null,
         backgroundStopTaskIds: [],
+        token: null,
       });
     });
 
@@ -2670,6 +2671,7 @@ describe("<ChatTile />", () => {
         reason: null,
         code: null,
         backgroundStopTaskIds: [],
+        token: null,
       });
     });
 
@@ -2732,6 +2734,7 @@ describe("<ChatTile />", () => {
         reason: "Only the agent owner can perform this action.",
         code: null,
         backgroundStopTaskIds: [],
+        token: null,
       });
     });
 
@@ -2798,6 +2801,7 @@ describe("<ChatTile />", () => {
         reason: "Only the agent owner can perform this action.",
         code: null,
         backgroundStopTaskIds: [],
+        token: null,
       });
     });
 
@@ -2851,6 +2855,7 @@ describe("<ChatTile />", () => {
         reason: "Only the agent owner can perform this action.",
         code: "NOT_OWNER",
         backgroundStopTaskIds: [],
+        token: null,
       });
     });
 

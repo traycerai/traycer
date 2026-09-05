@@ -2,6 +2,7 @@ import { commonRecordRegistry } from "@traycer/protocol/common/registry";
 import { getRecordSchema } from "@traycer/protocol/framework/versioned-record";
 import {
   contentBlockSchema,
+  contentBlockSchemaPreFallback,
   contentBlockSchemaPreImage,
   contentBlockSchemaPreReasonix,
   contentBlockSchemaPreSettlement,
@@ -553,4 +554,37 @@ export const assistantMessageSchemaPreSettlement = z.object({
 export const messageSchemaPreSettlement = z.discriminatedUnion("role", [
   userMessageSchemaV16,
   assistantMessageSchemaPreSettlement,
+]);
+
+// ── Wire-freeze variant (pre-fallback, `chat.subscribe@1.7`/`@1.8`) ─────────
+// Hand-frozen copy of `assistantMessageSchema` as those two minors ship it:
+// the complete live shape with `blocks` swapped for
+// `contentBlockSchemaPreFallback`, so neither line can observe a
+// `providerNotice.noticeKind` its released decoder would strict-reject. The
+// user branch needs no freeze - user messages carry no provider notice - so
+// the union binds the LIVE `userMessageSchema`, which is what those minors
+// actually ship (browser annotations included).
+//
+// Field-for-field hand copy, NOT `.extend()`: see
+// `assistantMessageSchemaPreImage` for why a released line must not follow the
+// live shape by reference.
+export const assistantMessageSchemaPreFallback = z.object({
+  role: z.literal("assistant"),
+  messageId: z.string().min(1),
+  sender: agentSenderSchema,
+  blocks: z.array(contentBlockSchemaPreFallback),
+  startedAt: z.number().nullable().default(null),
+  blocksVersion: z.number().int().nonnegative().optional(),
+  timestamp: z.number(),
+  turnId: z.string().nullable(),
+  usage: tokenUsageSchema.nullable(),
+  reasoningEffort: z.string().nullable().default(null),
+  serviceTier: z.string().nullable().default(null),
+  envCredentialVar: z.string().nullable().default(null),
+  imageResolutions: z.array(imageResolutionEntrySchema).default([]),
+});
+
+export const messageSchemaPreFallback = z.discriminatedUnion("role", [
+  userMessageSchema,
+  assistantMessageSchemaPreFallback,
 ]);

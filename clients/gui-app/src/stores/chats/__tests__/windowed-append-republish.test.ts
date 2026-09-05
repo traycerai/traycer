@@ -508,6 +508,7 @@ describe("the runtime-disposal card on an already-hydrated windowed row", () => 
             "Send your message again to continue on a fresh session.",
           recoverable: true,
           code: "CLAUDE_RUNTIME_DISPOSED",
+          failure: null,
         },
         {
           type: "error",
@@ -517,6 +518,7 @@ describe("the runtime-disposal card on an already-hydrated windowed row", () => 
           message: "1 queued message was held.",
           recoverable: true,
           code: "QUEUE_PAUSED_AFTER_ERROR",
+          failure: null,
         },
       ],
     };

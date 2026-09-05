@@ -15,6 +15,7 @@ import {
   chatSubscribeV16,
   chatSubscribeV17,
   chatSubscribeV18,
+  chatSubscribeV19,
   createImageResolutionUpdatedFrame,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import {
@@ -2270,18 +2271,40 @@ describe("chat.subscribe@1.6 (image generation)", () => {
 });
 
 describe("chat.subscribe registry membership", () => {
-  it("registers chat.subscribe major 1 latestMinor 8 as chatSubscribeV18", () => {
+  it("registers chat.subscribe major 1 latestMinor 9 as chatSubscribeV19", () => {
     const entry = hostStreamRpcRegistry["chat.subscribe"];
     expect(entry).toBeDefined();
-    // Registering `8` IS the switch to the windowed line: a stream minor
-    // negotiates to the highest the peers share, so this line flipping to `8`
-    // is the moment `1.8`-capable peers start exchanging windowed frames.
-    expect(entry[1].latestMinor).toBe(8);
+    // Registering `8` WAS the switch to the windowed line: a stream minor
+    // negotiates to the highest the peers share, so that line flipping to `8`
+    // is the moment `1.8`-capable peers started exchanging windowed frames.
+    //
+    // `9` carries the fallback surface (the `fallback-wait` background item,
+    // the two `fallback.*` client actions, the ack lease `token`, and the two
+    // new provider-notice kinds), and it is WINDOWED for that reason: this
+    // registry is the negotiation ceiling, so registering a full-snapshot
+    // contract above windowed `1.8` would silently un-window every peer
+    // already capable of `1.8`. That is what these two assertions together
+    // protect - the ceiling, and the line shape at the ceiling.
+    expect(entry[1].latestMinor).toBe(9);
     expect(entry[1].versions[6].contract).toBe(chatSubscribeV16);
     expect(entry[1].versions[7].contract).toBe(chatSubscribeV17);
     expect(entry[1].versions[8].contract).toBe(chatSubscribeV18);
+    expect(entry[1].versions[9].contract).toBe(chatSubscribeV19);
     expect(chatSubscribeV17.schemaVersion).toEqual({ major: 1, minor: 7 });
     expect(chatSubscribeV18.schemaVersion).toEqual({ major: 1, minor: 8 });
+    expect(chatSubscribeV19.schemaVersion).toEqual({ major: 1, minor: 9 });
+  });
+
+  it("keeps the FULL-SNAPSHOT schema version pinned at 1.7 while the ceiling moves", () => {
+    // `chatSubscribeFullSnapshotSchemaVersion` names the newest NON-windowed
+    // line, and it must not drift upward with the registry ceiling. `1.8` and
+    // `1.9` are both windowed, so the last full-snapshot line is still `1.7`;
+    // moving this to `9` would hand a full-snapshot consumer a contract whose
+    // snapshot frame carries a bounded `tail` instead of a whole chat.
+    expect(chatSubscribeFullSnapshotSchemaVersion).toEqual({
+      major: 1,
+      minor: 7,
+    });
   });
 });
 

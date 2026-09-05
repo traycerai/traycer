@@ -7,7 +7,9 @@ import {
   parseHostOperationCommonPayload,
   parseKnownHostNotificationPayloadForKind,
   type HostNotificationKnownPayload,
+  type HostNotificationStoppedReason,
 } from "@traycer/protocol/host/notifications/payloads";
+import type { AgentFailureReason } from "@traycer/protocol/persistence/epic/content-blocks";
 import { providerSignedOutMessage } from "@traycer/protocol/host/provider-display";
 import {
   PROVIDER_DISPLAY_NAMES,
@@ -336,6 +338,57 @@ function knownBackgroundWorkRunning(
     case "browser_human_needed":
       return false;
   }
+}
+
+/**
+ * Short, PROVIDER-INDEPENDENT label for one stopped reason.
+ *
+ * Deliberately a second map beside {@link agentStoppedFailureStatus} rather
+ * than a lift of it. The two surfaces want opposite shapes and must not be
+ * merged:
+ *
+ * - `agentStoppedFailureStatus` is NOTIFICATION copy: sentence-shaped and
+ *   provider-aware ("Provider is temporarily unavailable", "Anthropic rate
+ *   limit reached", and for `auth` it delegates to `providerSignedOutMessage`,
+ *   which gives Reasonix an API-key-specific sentence). It is a `body` line a
+ *   user reads out of context, so it names the provider and tells them what to
+ *   do. Its output must not change.
+ * - This map is a NOUN PHRASE for a settings matrix row and the fallback cards,
+ *   where the provider is already on screen in the identity chip and repeating
+ *   it inside the label is noise.
+ *
+ * Total over the taxonomy by construction (`Record<…, string>`), so a new
+ * stopped reason cannot ship without a label here.
+ */
+export const FALLBACK_REASON_LABELS: Record<
+  HostNotificationStoppedReason,
+  string
+> = {
+  rate_limit: "Rate limit reached",
+  billing: "Billing issue",
+  model_unavailable: "Model unavailable",
+  provider_unavailable: "Temporarily unavailable",
+  auth: "Signed out",
+  provider_connection_failed: "Connection failed",
+  context_exhausted: "Context limit reached",
+  request_rejected: "Provider rejected the request",
+  turn_start_timeout: "Provider did not start in time",
+  missing_terminal_event: "Provider stopped responding",
+  background_work_failed: "Background work stopped",
+};
+
+/**
+ * {@link FALLBACK_REASON_LABELS} keyed by the PERSISTED failure vocabulary.
+ *
+ * Indexing a `Record<HostNotificationStoppedReason, string>` with an
+ * `AgentFailureReason` is the compile-time proof that persisted ⊆ host;
+ * `runtimeFailureReason` (`host/agent/gui/agent-runtime.ts`) proves the other
+ * direction. Between them the two lists cannot drift, which is what lets
+ * `content-blocks.ts` re-declare the taxonomy instead of importing it across a
+ * layer boundary it may not cross.
+ */
+export function fallbackReasonLabel(reason: AgentFailureReason): string {
+  return FALLBACK_REASON_LABELS[reason];
 }
 
 function agentStoppedFailureStatus(

@@ -1280,6 +1280,15 @@ export function accumulateEvent(
 
     case "error": {
       const existing = findBlockOfType(blocks, event.blockId, "error");
+      // The typed failure the emitter stamped. Threaded through BOTH arms
+      // deliberately: this reducer is the only thing that turns an `error`
+      // event into the durable block, so a member it drops here is a member
+      // that never reaches persistence however many times the event carried
+      // it. `?? null` and not `?? existing.failure` on the update arm - an
+      // emitter that re-states an error without a failure is stating that
+      // there is none, and silently retaining an earlier one would make the
+      // block disagree with the event that last wrote it.
+      const failure = event.failure ?? null;
       if (existing) {
         const updated = {
           ...existing,
@@ -1287,6 +1296,7 @@ export function accumulateEvent(
           message: event.message,
           recoverable: event.recoverable,
           code: event.code ?? null,
+          failure,
           timestamp: event.timestamp,
         };
         return replaceBlock(blocks, event.blockId, updated);
@@ -1301,6 +1311,7 @@ export function accumulateEvent(
           message: event.message,
           recoverable: event.recoverable,
           code: event.code ?? null,
+          failure,
         },
       ];
     }

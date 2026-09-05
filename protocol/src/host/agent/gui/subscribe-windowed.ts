@@ -3,7 +3,10 @@ import { z } from "zod";
 import { defineRpcContract } from "@traycer/protocol/framework/index";
 import { chatSchema } from "@traycer/protocol/persistence/epic/chat";
 import { chatEventSchema } from "@traycer/protocol/persistence/epic/chat-events";
-import { messageSchema } from "@traycer/protocol/persistence/epic/messages";
+import {
+  messageSchema,
+  messageSchemaPreFallback,
+} from "@traycer/protocol/persistence/epic/messages";
 import { tokenUsageSchema } from "@traycer/protocol/persistence/epic/foundation";
 import {
   checkpointArtifactTagSchema,
@@ -694,6 +697,27 @@ export const chatTranscriptWindowSchema = z.object({
 export type ChatTranscriptWindow = z.infer<typeof chatTranscriptWindowSchema>;
 
 /**
+ * Wire-freeze copy of the tail bound to `chat.subscribe@1.8`.
+ *
+ * The windowed line is the reason round-4 finding F1 exists: a notice kind is
+ * carried by MESSAGE BODIES, and on this line bodies arrive on three channels,
+ * not one - the snapshot's tail (here), a `range` response
+ * ({@link chatRangeResponseSchemaPreFallback}) and the live `blockDelta`
+ * upsert. Freezing only the upsert would leave a `1.8` peer strict-rejecting a
+ * historical row it scrolled back to.
+ *
+ * Hand-frozen field-for-field, NOT `.extend()` off the live shape.
+ */
+export const chatTranscriptWindowSchemaPreFallback = z.object({
+  fromOrdinal: z.number().int().nonnegative(),
+  rowIds: z.array(z.string()).optional(),
+  incompleteRowIds: z.array(z.string()).optional(),
+  messages: z.array(messageSchemaPreFallback),
+  events: z.array(chatEventSchema),
+  rowContext: z.record(z.string(), transcriptRowContextSchema).optional(),
+});
+
+/**
  * A slice of the skeleton.
  *
  * The skeleton is delivered in chunks rather than inline on the snapshot for
@@ -835,6 +859,26 @@ export const chatRangeResponseSchema = z.object({
   truncatedAtOrdinal: z.number().int().nonnegative().optional(),
 });
 export type ChatRangeResponse = z.infer<typeof chatRangeResponseSchema>;
+
+/**
+ * Wire-freeze copy of the `range` response bound to `chat.subscribe@1.8` -
+ * the second of the windowed line's three body channels. See
+ * {@link chatTranscriptWindowSchemaPreFallback} for why all three are frozen
+ * together. Hand-frozen field-for-field.
+ */
+export const chatRangeResponseSchemaPreFallback = z.object({
+  requestId: rangeRequestIdSchema,
+  epoch: z.number().int().nonnegative(),
+  fromOrdinal: z.number().int().nonnegative(),
+  rowIds: z.array(z.string()),
+  incompleteRowIds: z.array(z.string()).optional(),
+  messages: z.array(messageSchemaPreFallback),
+  events: z.array(chatEventSchema),
+  rowContext: z.record(z.string(), transcriptRowContextSchema).default({}),
+  reachedStart: z.boolean(),
+  reachedEnd: z.boolean(),
+  truncatedAtOrdinal: z.number().int().nonnegative().optional(),
+});
 
 /**
  * A request for a span of bodies.

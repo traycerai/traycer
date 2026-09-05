@@ -4,6 +4,7 @@ import {
   AlarmClock,
   Bot,
   ChevronDown,
+  Hourglass,
   Monitor,
   PauseCircle,
   Plug,
@@ -98,6 +99,11 @@ function backgroundKindLabel(kind: BackgroundItem["kind"]): string {
       return "Workflow";
     case "mcp":
       return "MCP tool";
+    // A chat parked on a provider rate-limit reset by the fallback engine.
+    // "Waiting" and not "Rate limit": the row's job is to say what the chat is
+    // DOING, the same as every label above it.
+    case "fallback-wait":
+      return "Waiting";
   }
   const unreachableKind: never = kind;
   return unreachableKind;
@@ -105,6 +111,10 @@ function backgroundKindLabel(kind: BackgroundItem["kind"]): string {
 
 function backgroundStopLabel(kind: BackgroundItem["kind"]): string {
   if (kind === "wakeup") return "Cancel wake";
+  // Not "Stop Waiting": stopping a wait abandons the reset it was waiting for
+  // and lets the failure stand, which is a decision, not a cancellation of
+  // work in flight.
+  if (kind === "fallback-wait") return "Stop waiting";
   return `Stop ${backgroundKindLabel(kind)}`;
 }
 
@@ -133,6 +143,10 @@ function BackgroundKindIcon(props: { readonly kind: BackgroundItem["kind"] }) {
       );
     case "mcp":
       return <Plug aria-hidden className="size-3.5 shrink-0 text-primary/80" />;
+    case "fallback-wait":
+      return (
+        <Hourglass aria-hidden className="size-3.5 shrink-0 text-primary/80" />
+      );
   }
   const unreachableKind: never = props.kind;
   return unreachableKind;
@@ -203,6 +217,17 @@ function backgroundItemDisplayTitle(item: BackgroundItem): string {
     // The structured MCP identity beats the freeform title (which mirrors the
     // CLI's "server/tool" description and degrades with old hosts).
     return `${item.serverName} · ${item.toolName}`;
+  }
+  if (item.kind === "fallback-wait") {
+    // The account being waited on, from the row's own wire fields, so this
+    // never joins against a providers list to title itself. `profileLabel` is
+    // null for the ambient profile - a real state, not a missing one - and the
+    // provider alone is the honest title then.
+    const account =
+      item.profileLabel === null
+        ? item.providerId
+        : `${item.providerId} · ${item.profileLabel}`;
+    return `Waiting for ${account}'s limit`;
   }
   return item.title;
 }

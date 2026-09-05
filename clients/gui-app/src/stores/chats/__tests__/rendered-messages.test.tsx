@@ -3805,6 +3805,7 @@ describe("useRenderedMessages head/tail partition", () => {
       message: "Claude is signed out. Reconnect your account to continue.",
       recoverable: true,
       code,
+      failure: null,
     };
   }
 
@@ -4146,6 +4147,7 @@ describe("useRenderedMessages turn.stopped", () => {
       message: "The provider stream ended unexpectedly.",
       recoverable: true,
       code: "PROVIDER_STREAM_ERROR",
+      failure: null,
     };
   }
 
