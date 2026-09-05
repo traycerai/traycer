@@ -81,6 +81,12 @@ product role that build does not play. Do not reach for the viewport hook for
 these: a narrow desktop window still has a power bridge and a hardware
 keyboard, and is still the end of a pairing that shows the code.
 
+The test runs the other way too. **Layout's Sidebar PANELS list** is gated on
+the viewport and not the build, because the surface it configures - the epic
+sidebar's panel rail - is itself dropped below `md` by `epic-surface.tsx`. Ask
+which question a row's absence answers, not which list it would be shorter to
+join.
+
 - **Voice input** (`voice-settings-section.tsx`) - the build refuses dictation.
 - **Prevent sleep while running** (`prevent-sleep-settings-section.tsx`) - the
   setting's only consumer, `PreventSleepController`, holds an OS power-save
@@ -957,6 +963,61 @@ header`, which describes `MobileAppHeader`'s own monitor rather than the
     the one `desktopOnly: true` entry in `ACTION_META`, and both the palette
     filter and `StatusBarKeybindingBridge` READ that flag rather than testing
     the build, so the pair follows from the field.
+  - **Sidebar** (`panels/layout/sidebar-layout-group.tsx`, its own file because
+    the group is a list rather than a stack of rows): the relocated `Show
+resource chips on sidebar rows` switch, then **Panels** - one card per
+    `left-panel-store.panelGroups` entry, one row per panel inside it, each row
+    a drag handle, the registry's icon and title
+    (`getLeftPanelDefinition`, shared with the rail), a visibility checkbox and
+    a row menu.
+  - **It is a SECOND VIEW, never a second source of truth.** The checkbox
+    writes the override the rail's right-click menu writes
+    (`setPanelVisibilityOverride`, and the last visible panel is locked the
+    same way), and every reordering resolves through the same pure
+    `moveLeftPanel*` helpers the rail's DnD resolves through
+    (`layout/sidebar-panel-moves.ts`, the settings-side sibling of
+    `resolveLeftPanelGroupsForDrop`) before committing with `applyPanelGroups`.
+    So the page and the rail cannot disagree, and neither can express a
+    grouping the other cannot. Changes apply live - there is no Save, and
+    `Reset panel visibility` / `Reset order` are `clearPanelVisibilityOverrides`
+    and `applyPanelGroups(DEFAULT_LEFT_PANEL_GROUPS)`, each disabled while
+    already at its default. The rail's own reset has no confirmation, so
+    neither do these.
+  - **The checkbox answers `isAutoVisible` against a page with no epic**, so
+    `pull-requests` / `comments` read as off here whatever any one epic
+    contains. Two consequences follow, both deliberate. An unconditional panel
+    clears its override when the box agrees with its rule (re-checking `Agents`
+    goes back to following it) while a presence-gated one always stores the
+    boolean - clearing there would DELETE a `false` set from the rail inside a
+    PR-bearing epic, so an off-then-on-again round trip would silently reverse
+    it, and "never show this" would be unauthorable from this page. And since
+    the rail's last-one-standing lock counts that epic's panels, an epic with
+    PRs permits hiding all eight others; the page then shows nothing checked
+    and nothing locked while the rail still has an icon. Recoverable - `Reset
+panel visibility` is enabled there - and reachable only from the rail.
+  - **What a boundary MEANS is read from where it sits**, which is the one
+    thing the page adds over the rail: a group is a card here, so the boundary
+    above a card's first row places the panel in a card of its own
+    (`moveLeftPanelToGroupPosition`) while a boundary between two rows inside a
+    card nests it there (`moveLeftPanelToPanelPosition`); dropping onto a row
+    combines (`moveLeftPanelToGroup`). Bands come from the rail's own
+    `getLeftPanelRailDropPositionFromPoint`, and the pointer is read from the
+    collision pass rather than the event delta for the reason
+    `queued-message-reorder-dnd.ts` documents. The row menu (Move up / Move
+    down / Group with panel above / Move out of group) is the pointer-free path
+    to the same four outcomes, composed from the same helpers, and each item is
+    disabled where it would change nothing.
+  - **The DnD context here is LOCAL**, like the queued-message list's: it is
+    the second `DndContext` outside `root-dnd-provider.tsx`, because settings
+    rows are not canvas drop targets and must not enter the root drag store.
+  - **Narrow windows** get a "Panel layout needs the sidebar" note in place of
+    the list, and the gate is `useIsMobileViewport()`, NOT `isMobileApp()` -
+    the exception to the rule two sections above, and deliberately so.
+    `epic-surface.tsx` drops the whole sidebar column, rail included, below
+    `md`; that is a pure layout question resizing the window changes, so it is
+    the viewport hook's own case. Gating on the build instead would hide a
+    working list on a tablet running the installed app, which is wide enough to
+    draw the rail. The relocated resource-chips row is unaffected either way.
 - `Providers` Per-provider CLI binary selection (Codex / Claude Code / OpenCode
   / Traycer / Cursor). Left rail picks the provider (brand icons via
   `HarnessIcon`); the

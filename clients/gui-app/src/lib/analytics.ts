@@ -254,6 +254,10 @@ export type AnalyticsSetting =
   // they name a path into one persisted store's slice, not a flat
   // `settings-store` key: the surface is the middle segment, so a second
   // surface's rows read as siblings instead of colliding on a verb.
+  | "layout.sidebar.panelOrder"
+  | "layout.sidebar.panelVisibility"
+  | "layout.sidebar.resetOrder"
+  | "layout.sidebar.resetVisibility"
   | "layout.statusBar.placement"
   | "layout.statusBar.rateLimits.enabled"
   | "layout.statusBar.rateLimits.expandedProvider"
@@ -1138,6 +1142,10 @@ const ANALYTICS_SETTINGS = new Set<string>([
   "defaultSelection",
   "defaultServiceTier",
   "diffViewerPreferences",
+  "layout.sidebar.panelOrder",
+  "layout.sidebar.panelVisibility",
+  "layout.sidebar.resetOrder",
+  "layout.sidebar.resetVisibility",
   "layout.statusBar.placement",
   "layout.statusBar.rateLimits.enabled",
   "layout.statusBar.rateLimits.expandedProvider",

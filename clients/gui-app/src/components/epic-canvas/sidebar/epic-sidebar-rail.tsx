@@ -51,6 +51,7 @@ import {
 } from "@/stores/epics/left-panel-store";
 import { useActiveEpicArtifactId } from "@/stores/epics/canvas/store";
 import {
+  getLeftPanelDefinition,
   isLeftPanelVisible,
   LEFT_PANEL_DEFINITIONS,
   resolveActiveVisibleGroupIndex,
@@ -91,29 +92,19 @@ interface VisibleLeftPanelGroup {
   readonly primaryPanel: LeftPanelMetadataDefinition;
 }
 
-const PANEL_DEFINITION_BY_ID = new Map(
-  LEFT_PANEL_DEFINITIONS.map((definition) => [definition.id, definition]),
-);
-
-function getPanelDefinition(panelId: LeftPanelId): LeftPanelMetadataDefinition {
-  const definition = PANEL_DEFINITION_BY_ID.get(panelId);
-  if (definition !== undefined) return definition;
-  return LEFT_PANEL_DEFINITIONS[0];
-}
-
 function getVisibleLeftPanelGroups(
   groups: ReadonlyArray<LeftPanelGroup>,
   context: LeftPanelAvailabilityContext,
 ): ReadonlyArray<VisibleLeftPanelGroup> {
   return groups.flatMap((group) => {
     const panelIds = group.panelIds.filter((panelId) =>
-      isLeftPanelVisible(getPanelDefinition(panelId), context),
+      isLeftPanelVisible(getLeftPanelDefinition(panelId), context),
     );
     if (panelIds.length === 0) return [];
     return [
       {
         panelIds,
-        primaryPanel: getPanelDefinition(panelIds[0]),
+        primaryPanel: getLeftPanelDefinition(panelIds[0]),
       },
     ];
   });
@@ -235,7 +226,7 @@ function EpicLeftPanelRailContent(props: EpicLeftPanelRailContentProps) {
   const panelSectionDropDefinition =
     panelSectionDragSource === null
       ? null
-      : getPanelDefinition(panelSectionDragSource.panelId);
+      : getLeftPanelDefinition(panelSectionDragSource.panelId);
   const railBoundaryIndex = getRailBoundaryIndex(
     visibleGroups,
     railPanelDropPreview,
@@ -540,9 +531,9 @@ function RailGroupButton(props: RailGroupButtonProps) {
     <RailButton
       buttonRef={setButtonRef}
       handleListeners={listeners}
-      icons={panelIds.map((panelId) => getPanelDefinition(panelId).icon)}
+      icons={panelIds.map((panelId) => getLeftPanelDefinition(panelId).icon)}
       label={panelIds
-        .map((panelId) => getPanelDefinition(panelId).title)
+        .map((panelId) => getLeftPanelDefinition(panelId).title)
         .join(" + ")}
       orientation={orientation}
       active={active}
@@ -586,7 +577,7 @@ function RailButton(props: RailButtonProps) {
     onClick,
     onContextMenu,
   } = props;
-  const Icon = icons[0] ?? getPanelDefinition("chats").icon;
+  const Icon = icons[0] ?? getLeftPanelDefinition("chats").icon;
   const activeClass =
     orientation === "vertical"
       ? "bg-accent text-accent-foreground hover:bg-accent"

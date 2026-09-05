@@ -144,6 +144,23 @@ export const LEFT_PANEL_DEFINITIONS: ReadonlyArray<LeftPanelMetadataDefinition> 
     },
   ];
 
+const PANEL_DEFINITION_BY_ID = new Map(
+  LEFT_PANEL_DEFINITIONS.map((definition) => [definition.id, definition]),
+);
+
+/**
+ * A panel's label and icon by id, for any surface rendering panels in the
+ * user's own order (the rail, and Layout settings' panel list). Falls back to
+ * the first definition rather than widening every caller to a nullable, since
+ * every `LeftPanelId` has a definition by construction and a persisted id this
+ * build does not know is already dropped when the groups are normalized.
+ */
+export function getLeftPanelDefinition(
+  panelId: LeftPanelId,
+): LeftPanelMetadataDefinition {
+  return PANEL_DEFINITION_BY_ID.get(panelId) ?? LEFT_PANEL_DEFINITIONS[0];
+}
+
 /**
  * The one visibility answer every render path uses: the user's explicit choice
  * if they made one, the panel's own rule otherwise.

@@ -1247,4 +1247,27 @@ describe("Layout page settings analytics", () => {
       ).toEqual({ source: "direct_ui", section: "layout", setting });
     }
   });
+
+  it("tracks every layout.sidebar.* setting id through trackSettingChanged", async () => {
+    const { AnalyticsEvent, sanitizeAnalyticsProperties, trackSettingChanged } =
+      await import("@/lib/analytics");
+
+    const sidebarSettings = [
+      "layout.sidebar.panelOrder",
+      "layout.sidebar.panelVisibility",
+      "layout.sidebar.resetOrder",
+      "layout.sidebar.resetVisibility",
+    ] as const;
+
+    for (const setting of sidebarSettings) {
+      trackSettingChanged("layout", setting);
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.SettingChanged, {
+          source: "direct_ui",
+          section: "layout",
+          setting,
+        }),
+      ).toEqual({ source: "direct_ui", section: "layout", setting });
+    }
+  });
 });

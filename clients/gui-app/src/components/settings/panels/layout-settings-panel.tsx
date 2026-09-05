@@ -3,6 +3,7 @@ import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { SettingsRow } from "@/components/settings/settings-row";
 import { SettingsSegmentedControl } from "@/components/settings/controls/settings-segmented-control";
+import { SidebarLayoutGroup } from "@/components/settings/panels/layout/sidebar-layout-group";
 import { isHostScopeUsable } from "@/components/settings/host-scope/host-scope-status";
 import { useScopedHostBinding } from "@/components/settings/host-scope/use-scoped-host-binding";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
@@ -653,7 +654,7 @@ function profileLabelFor(
   );
 }
 
-// ── chat & sidebar ──────────────────────────────────────────────────────────
+// ── chat ────────────────────────────────────────────────────────────────────
 
 /**
  * The message pane's own layout. Both controls describe the pane rather than
@@ -719,42 +720,6 @@ function ChatLayoutGroup(): ReactNode {
               <SelectItem value="hide">Hide</SelectItem>
             </SelectContent>
           </Select>
-        }
-      />
-    </SettingsGroup>
-  );
-}
-
-/**
- * The sidebar's own layout. One row today; panel visibility and order join it
- * from the same store the rail's right-click menu writes.
- */
-function SidebarLayoutGroup(): ReactNode {
-  const showNavigatorResourceStats = useSettingsStore(
-    (state) => state.showNavigatorResourceStats,
-  );
-  const setShowNavigatorResourceStats = useSettingsStore(
-    (state) => state.setShowNavigatorResourceStats,
-  );
-  return (
-    <SettingsGroup
-      title="Sidebar"
-      tone="default"
-      dataTestId="layout-sidebar-group"
-      fill={false}
-    >
-      <SettingsRow
-        label="Show resource chips on sidebar rows"
-        description="Show compact live CPU and memory chips in task navigator rows."
-        control={
-          <Switch
-            checked={showNavigatorResourceStats}
-            onCheckedChange={(value) => {
-              trackLayoutSetting("showNavigatorResourceStats");
-              setShowNavigatorResourceStats(value);
-            }}
-            aria-label="Show resource chips on sidebar rows"
-          />
         }
       />
     </SettingsGroup>
