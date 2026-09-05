@@ -129,6 +129,7 @@ export function observationFromStatus(input: {
     freshUntilMs: Number.POSITIVE_INFINITY,
     operation: input.status.updateOperation,
     transaction: input.status.updateTransaction,
+    coarseProgress: input.status.updateProgress,
   };
   const view = projectFleetUpdateView({
     observation: provisional,
