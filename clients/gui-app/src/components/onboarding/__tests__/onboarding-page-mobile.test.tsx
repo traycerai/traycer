@@ -100,6 +100,15 @@ vi.mock("@/components/onboarding/onboarding-phone-diorama", () => ({
   ),
 }));
 
+// LAYOUT signal, distinct from `isMobileApp()` - see `use-mobile-viewport.ts`.
+// A hoisted mutable box so each describe can flip it per its own beforeEach
+// without re-mocking the module.
+const viewportState = vi.hoisted(() => ({ isMobile: false }));
+vi.mock("@/hooks/ui/use-mobile-viewport", () => ({
+  useIsMobileViewport: () => viewportState.isMobile,
+  isMobileViewport: () => viewportState.isMobile,
+}));
+
 // The real pane is a CodeMirror surface - a `[contenteditable]` div, not a
 // `textarea` - so the mock renders both: the textarea drives the existing
 // value-plumbing tests, and the contenteditable sibling is what exercises the
@@ -224,6 +233,7 @@ function renderPage() {
 /** Which act is on screen, read from its rendered title. */
 function currentStage(): number {
   return onboardingActsFor({
+    phoneLayout: viewportState.isMobile,
     sessionImportAvailable: false,
     loginImportAvailable: false,
   }).findIndex(
@@ -312,7 +322,10 @@ function stage(container: HTMLElement): HTMLElement {
 
 describe("OnboardingPage on the installed mobile app", () => {
   beforeEach(() => {
+    // A phone is the installed app AND a phone-width window; the installed
+    // app on a TABLET is its own describe below, with the layout flag false.
     setMobileApp(true);
+    viewportState.isMobile = true;
     useOnboardingStore.setState({ completedAt: null, step: 0 });
     navigateMock.mockReset();
     historyBackMock.mockReset();
@@ -332,6 +345,7 @@ describe("OnboardingPage on the installed mobile app", () => {
   afterEach(() => {
     cleanup();
     setMobileApp(false);
+    viewportState.isMobile = false;
     useOnboardingStore.setState({ completedAt: null, step: 0 });
   });
 
@@ -430,6 +444,7 @@ describe("OnboardingPage on the installed mobile app", () => {
 
     const lastActIndex =
       onboardingActsFor({
+        phoneLayout: viewportState.isMobile,
         sessionImportAvailable: false,
         loginImportAvailable: false,
       }).length - 1;
@@ -474,6 +489,7 @@ describe("OnboardingPage on the installed mobile app", () => {
 describe("swiping between acts on the installed mobile app", () => {
   beforeEach(() => {
     setMobileApp(true);
+    viewportState.isMobile = true;
     useOnboardingStore.setState({ completedAt: null, step: 0 });
     navigateMock.mockReset();
     trackSpy.mockClear();
@@ -492,6 +508,7 @@ describe("swiping between acts on the installed mobile app", () => {
   afterEach(() => {
     cleanup();
     setMobileApp(false);
+    viewportState.isMobile = false;
     useOnboardingStore.setState({ completedAt: null, step: 0 });
   });
 
@@ -670,6 +687,7 @@ describe("swiping between acts on the installed mobile app", () => {
 
     await advanceToStage(
       onboardingActsFor({
+        phoneLayout: viewportState.isMobile,
         sessionImportAvailable: false,
         loginImportAvailable: false,
       }).length - 1,
@@ -697,9 +715,96 @@ describe("swiping between acts on the installed mobile app", () => {
   });
 });
 
+describe("the installed app on a tablet", () => {
+  beforeEach(() => {
+    // An iPad: the installed app, but at desktop width - the layout signal
+    // stays false, so the acts and miniature follow the desktop tour while
+    // the product-only touches (swipe, thumb-sized controls) stay on.
+    setMobileApp(true);
+    viewportState.isMobile = false;
+    useOnboardingStore.setState({ completedAt: null, step: 0 });
+    navigateMock.mockReset();
+    trackSpy.mockClear();
+    setGlobalGuideMock.mockClear();
+    safeAreaInsetsState = { left: 0, right: 0 };
+    guideQueryState = {
+      data: {
+        content: "saved guide",
+        generatedDefaultContent: "claude guide",
+        providersSettled: true,
+      },
+      isError: false,
+    };
+  });
+
+  afterEach(() => {
+    cleanup();
+    setMobileApp(false);
+    viewportState.isMobile = false;
+    useOnboardingStore.setState({ completedAt: null, step: 0 });
+  });
+
+  it("plays the desktop tour with the desktop miniature, never the drawer act", () => {
+    renderPage();
+
+    expect(screen.getByTestId("onboarding-diorama-stub")).not.toBeNull();
+    expect(screen.queryByTestId("onboarding-phone-diorama-stub")).toBeNull();
+    expect(
+      screen.getByTestId("onboarding-act").getAttribute("data-act-id"),
+    ).toBe("task-tabs");
+    expect(
+      screen.queryByText("The menu, top left", { exact: false }),
+    ).toBeNull();
+  });
+
+  it("keeps the thumb-sized controls and the act swipe", async () => {
+    const { container } = renderPage();
+
+    const advance = screen.getByTestId("onboarding-advance");
+    expect(advance.classList.contains("h-11")).toBe(true);
+    expect(advance.classList.contains("h-9")).toBe(false);
+
+    drag(
+      stage(container),
+      { clientX: 400, clientY: 300 },
+      { clientX: 280, clientY: 300 },
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("onboarding-act").getAttribute("data-act-id"),
+      ).toBe("navigation");
+    });
+    expect(trackSpy).toHaveBeenCalledWith(AnalyticsEvent.OnboardingNavigated, {
+      direction: "continue",
+      step: "navigation",
+    });
+  });
+
+  it("never lists the phone-only acts", () => {
+    const desktopActIds = onboardingActsFor({
+      phoneLayout: false,
+      sessionImportAvailable: true,
+      loginImportAvailable: false,
+    }).map((act) => act.id);
+    expect(desktopActIds).not.toContain("mobile-tasks");
+    expect(desktopActIds).not.toContain("mobile-switcher");
+  });
+
+  it("starts the session scan, since the desktop tour lists the import act", () => {
+    sessionImportScanMock.activeCalls.length = 0;
+    renderPage();
+
+    expect(sessionImportScanMock.activeCalls.some((active) => active)).toBe(
+      true,
+    );
+  });
+});
+
 describe("the desktop tour", () => {
   beforeEach(() => {
     setMobileApp(false);
+    viewportState.isMobile = false;
     useOnboardingStore.setState({ completedAt: null, step: 0 });
     trackSpy.mockClear();
   });

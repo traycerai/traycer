@@ -410,6 +410,8 @@ function createRunnerHost() {
 /** The tour the mocked host actually runs - not always the whole catalog. */
 function visibleActs(): ReadonlyArray<OnboardingAct> {
   return onboardingActsFor({
+    // jsdom's default window is desktop-wide, so the page resolves the same.
+    phoneLayout: false,
     sessionImportAvailable: sessionImportAvailableMock.value,
     loginImportAvailable: loginImportAvailableMock.value,
   });

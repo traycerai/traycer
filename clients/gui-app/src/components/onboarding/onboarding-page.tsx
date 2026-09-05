@@ -61,6 +61,7 @@ import {
 import { isHostScopeUsable } from "@/components/settings/host-scope/host-scope-status";
 import { useScopedHostBinding } from "@/components/settings/host-scope/use-scoped-host-binding";
 import { useScopedStreamBinding } from "@/components/settings/host-scope/use-scoped-stream-binding";
+import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { isMobileApp } from "@/lib/mobile-app";
 import { readSafeAreaInsets } from "@/lib/safe-area-insets";
 import {
@@ -615,32 +616,36 @@ type OnboardingMiniature =
   | { readonly kind: "none" };
 
 /**
- * The tour's ONE diorama branch (the act list itself is the other platform
- * read). Narrowing happens per case, so the desktop miniature only ever
- * receives an id it can draw - no cast, and a new act id fails to compile until
- * it says what it shows.
+ * The tour's ONE diorama branch (the act list itself is the other layout
+ * read, and both take the SAME `phoneLayout` the page resolved once - the
+ * miniature must draw the chrome the act list is describing). Narrowing
+ * happens per case, so the desktop miniature only ever receives an id it can
+ * draw - no cast, and a new act id fails to compile until it says what it
+ * shows.
  *
  * The two acts that do real setup work drop the miniature on a phone: providers
  * already stacked to its list-only layout below `lg`, and the agent guide moves
  * its editor into the copy rail, where a phone keyboard can reach it. Session
- * import and login import are desktop-only (the mobile tour never lists
+ * import and login import are desktop-only (the phone tour never lists
  * them), and show no miniature at all - their stages are the live wizard and
  * the live import flow.
  */
-function miniatureForAct(actId: OnboardingActId): OnboardingMiniature {
-  const mobile = isMobileApp();
+function miniatureForAct(
+  actId: OnboardingActId,
+  phoneLayout: boolean,
+): OnboardingMiniature {
   switch (actId) {
     case "task-tabs":
     case "navigation":
     case "command-theme":
       return { kind: "desktop", actId };
     case "task-context":
-      return mobile
+      return phoneLayout
         ? { kind: "phone", scene: "story" }
         : { kind: "desktop", actId };
     case "providers":
     case "agent-guide":
-      return mobile ? { kind: "none" } : { kind: "desktop", actId };
+      return phoneLayout ? { kind: "none" } : { kind: "desktop", actId };
     case "session-import":
       return { kind: "session-import" };
     case "login-import":
@@ -925,13 +930,13 @@ function useOnboardingSessionImportScan(
 export function OnboardingPage(props: { readonly replay: boolean }) {
   const [scopedHostId, setScopedHostId] = useState<string | null>(null);
   const scope = useHostScopeFor({ scopedHostId, setScopedHostId });
-  // The tour this shell can run, not the full catalog: the installed app plays
-  // the phone tour, an AMBIENT host that cannot scan sessions never reaches the
-  // session-import act, whose stage is the live wizard, and a machine that
-  // cannot import logins (no browser bridge, or saving off) never reaches the
-  // login-import act, whose stage is the live import flow. Everything below
-  // counts acts off this list, so an omitted act is unreachable rather than
-  // merely blank.
+  // The tour this shell can run, not the full catalog: a phone-width window
+  // plays the phone tour, an AMBIENT host that cannot scan sessions never
+  // reaches the session-import act, whose stage is the live wizard, and a
+  // machine that cannot import logins (no browser bridge, or saving off) never
+  // reaches the login-import act, whose stage is the live import flow.
+  // Everything below counts acts off this list, so an omitted act is
+  // unreachable rather than merely blank.
   //
   // Read HERE, above the re-providers, so the tour's length is a fact about
   // this app and not about the machine the picker happens to point at. Read
@@ -940,11 +945,24 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
   // stop. The cost of that choice is that the act can outlive its capability
   // on a PICKED host, so the session-import stage asks the same question again
   // of the client the import would run on and refuses there.
+  //
+  // The layout is the VIEWPORT, the same breakpoint `AppHeader` swaps the
+  // hamburger for the tab strip on - not `isMobileApp()`. An iPad is the
+  // installed app at desktop width: it shows the tab strip and the canvas, so
+  // it must be taught those and not a drawer it never renders. The product
+  // flag keeps only what is true of any touch shell (swipe, thumb-sized
+  // controls) - see `OnboardingTour`.
+  const phoneLayout = useIsMobileViewport();
   const sessionImportAvailable = useSessionImportAvailable();
   const loginImportAvailable = useLoginImportAvailable();
   const acts = useMemo(
-    () => onboardingActsFor({ sessionImportAvailable, loginImportAvailable }),
-    [loginImportAvailable, sessionImportAvailable],
+    () =>
+      onboardingActsFor({
+        phoneLayout,
+        sessionImportAvailable,
+        loginImportAvailable,
+      }),
+    [loginImportAvailable, phoneLayout, sessionImportAvailable],
   );
   const scopedBinding = useScopedHostBinding(scope);
   const ambientBinding = useHostBinding();
@@ -958,6 +976,7 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
         <OnboardingTour
           replay={props.replay}
           acts={acts}
+          phoneLayout={phoneLayout}
           scope={scope}
           scopedHostId={scopedHostId}
           setScopedHostId={setScopedHostId}
@@ -1084,12 +1103,14 @@ function OnboardingTour(props: {
   readonly replay: boolean;
   /** The tour being played - see `OnboardingPage` for why it is decided there. */
   readonly acts: ReadonlyArray<OnboardingAct>;
+  /** The layout `acts` was picked for, so the miniature draws the same chrome. */
+  readonly phoneLayout: boolean;
   readonly scope: HostScope;
   /** `null` while the tour follows the host it opened on. */
   readonly scopedHostId: string | null;
   readonly setScopedHostId: (hostId: string) => void;
 }) {
-  const { acts, scope, scopedHostId, setScopedHostId } = props;
+  const { acts, phoneLayout, scope, scopedHostId, setScopedHostId } = props;
   // Draft + provider-derived default live in one state object so the
   // query-sync effect mirrors them through a single trailing setState call
   // (React's effect-sync rule only permits the final statement to set state).
@@ -1105,9 +1126,11 @@ function OnboardingTour(props: {
   const agentGuideAutoDefaultRef = useRef(false);
   const agentGuideLastDefaultRef = useRef("");
   const stageRef = useRef<HTMLDivElement | null>(null);
-  // The page's other platform read (`miniatureForAct` has the first): the
-  // interaction polish the installed app gets and a desktop window must not -
-  // swipe between acts, and controls a thumb can actually hit.
+  // The page's one PRODUCT read: the interaction polish the installed app
+  // gets and a desktop window must not - swipe between acts, and controls a
+  // thumb can actually hit. Deliberately not the layout signal: an iPad plays
+  // the desktop tour (its acts and miniature follow `phoneLayout`) but is
+  // still driven by a thumb, so it keeps both.
   const mobileApp = isMobileApp();
   const actionHeight = actionHeightClass(mobileApp);
   const navigate = useNavigate();
@@ -1168,7 +1191,7 @@ function OnboardingTour(props: {
   useLayoutEffect(() => {
     seatedActIdRef.current = act.id;
   });
-  const miniature = miniatureForAct(act.id);
+  const miniature = miniatureForAct(act.id, phoneLayout);
   const isAgentGuideAct = act.id === "agent-guide";
   const agentGuideQueryData = agentGuideQuery.data;
   const agentGuideWaitingForProviderSettlement =
