@@ -48,6 +48,13 @@ interface BrowserViewProvisioningOptions {
     webContents: BrowserViewWebContents,
   ) => Promise<BrowserStorageState | null>;
   readonly closeEntry: (entry: BrowserViewEntry) => Promise<void>;
+  /**
+   * The release an entry's close skipped because it was `succeededByReplacement`,
+   * run after all when the successor never came. Consults the registry the
+   * same way the close does, so a sibling that arrived meanwhile still keeps
+   * the partition.
+   */
+  readonly releaseIsolatedSessionStorage: (entry: BrowserViewEntry) => void;
   readonly navigate: (entry: BrowserViewEntry, url: string) => Promise<void>;
   readonly emitStatus: (entry: BrowserViewEntry) => void;
   /**
@@ -90,6 +97,9 @@ export class BrowserViewProvisioning {
     webContents: BrowserViewWebContents,
   ) => Promise<BrowserStorageState | null>;
   private readonly closeEntry: (entry: BrowserViewEntry) => Promise<void>;
+  private readonly releaseIsolatedSessionStorage: (
+    entry: BrowserViewEntry,
+  ) => void;
   private readonly navigate: (
     entry: BrowserViewEntry,
     url: string,
@@ -114,6 +124,7 @@ export class BrowserViewProvisioning {
     this.releaseRendererGuest = options.releaseRendererGuest;
     this.seedStorageState = options.seedStorageState;
     this.closeEntry = options.closeEntry;
+    this.releaseIsolatedSessionStorage = options.releaseIsolatedSessionStorage;
     this.navigate = options.navigate;
     this.emitStatus = options.emitStatus;
     this.notifyNativeTabTransferred = options.notifyNativeTabTransferred;
@@ -384,6 +395,16 @@ export class BrowserViewProvisioning {
    * 3. Re-enter `ensureTab`, which chains behind the close (the entry's
    *    `closePromise` is set synchronously) and then births the replacement
    *    in the new window through the ordinary cold path.
+   *
+   * The session's storage is what the tab keeps across the move, and for an
+   * `isolated` session that is not automatic: its partition is released with
+   * the session's last guest, and the close in step 2 IS the last guest for as
+   * long as the successor has not been born. The old entry is therefore marked
+   * `succeededByReplacement` before it closes, so the close leaves the
+   * partition alone and the replacement is born into the same signed-in
+   * session. Should the replacement never arrive - its birth fails, or a third
+   * window supersedes it - the mark is lifted and the release the close
+   * skipped runs then, against the registry as it stands at that moment.
    */
   private replaceNativeGuestForWindow(
     guestKey: string,
@@ -396,6 +417,7 @@ export class BrowserViewProvisioning {
       previousRegistrationId: entry.identity.registrationId,
       toWindowId: windowId,
     });
+    entry.succeededByReplacement = true;
     const inFlight = this.inFlightEnsures.get(guestKey);
     if (inFlight !== undefined && inFlight.entry === entry) {
       this.supersedeInFlightEnsure(guestKey, inFlight);
@@ -407,7 +429,17 @@ export class BrowserViewProvisioning {
         });
       });
     }
-    return this.ensureTab(windowId, input);
+    const replacement = this.ensureTab(windowId, input);
+    void replacement.catch(() => {
+      // A third window may have taken the move over while this successor was
+      // being born; its own replacement then owns this decision. (The failed
+      // ensure's in-flight record is already gone: its `finally` was attached
+      // before this handler.)
+      if (this.inFlightEnsures.has(guestKey)) return;
+      entry.succeededByReplacement = false;
+      this.releaseIsolatedSessionStorage(entry);
+    });
+    return replacement;
   }
 
   private async initializeNativeTab(

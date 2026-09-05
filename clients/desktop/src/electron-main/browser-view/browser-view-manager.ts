@@ -168,6 +168,13 @@ export class BrowserViewManager {
   private readonly releaseSessionStorage: (
     request: BrowserSessionProfileRequest,
   ) => void;
+  /**
+   * Isolated sessions whose partition has been released and that have had no
+   * guest born since. Two paths can decide "the last guest is gone" for one
+   * session - a guest's own failed birth, and the replacement that guest was
+   * meant to succeed - and the partition is released once, not once each.
+   */
+  private readonly releasedIsolatedSessionKeys = new Set<string>();
   private readonly localHostId: () => string | null;
   private readonly offWindowChange: () => void;
   private readonly offDownloadChange: () => void;
@@ -273,17 +280,24 @@ export class BrowserViewManager {
         identity,
         profile,
         webContents,
-      ) =>
-        this.entryFactory.createFromWebContents(
+      ) => {
+        // A new guest of a released isolated session starts that session's
+        // partition over, so its own last close must release it again.
+        this.releasedIsolatedSessionKeys.delete(nativeSessionKey(identity.key));
+        return this.entryFactory.createFromWebContents(
           requestedUrl,
           identity,
           profile,
           webContents,
-        ),
+        );
+      },
       attachRendererGuest: options.attachRendererGuest,
       releaseRendererGuest: options.releaseRendererGuest,
       seedStorageState: options.seedStorageState,
       closeEntry: (entry) => this.closeEntry(entry),
+      releaseIsolatedSessionStorage: (entry) => {
+        this.releaseIsolatedSessionStorage(entry);
+      },
       navigate: (entry, url) => this.navigate(entry, url),
       emitStatus: (entry) => {
         this.emitStatus(entry);
@@ -1041,14 +1055,18 @@ export class BrowserViewManager {
   /**
    * An isolated session's partition is throwaway by construction, so it dies
    * with the session's last native tab - not with each tab, because siblings
-   * of the same session share the one partition.
+   * of the same session share the one partition. A guest closed to be re-born
+   * in another window is not the last tab either, even though its successor
+   * is not in the registry yet; see `succeededByReplacement`.
    */
   private releaseIsolatedSessionStorage(entry: BrowserViewEntry): void {
-    if (entry.profile !== "isolated") return;
+    if (entry.profile !== "isolated" || entry.succeededByReplacement) return;
     const sessionKey = nativeSessionKey(entry.identity.key);
+    if (this.releasedIsolatedSessionKeys.has(sessionKey)) return;
     for (const remaining of this.entries.guestValues()) {
       if (nativeSessionKey(remaining.identity.key) === sessionKey) return;
     }
+    this.releasedIsolatedSessionKeys.add(sessionKey);
     this.releaseSessionStorage({
       profile: entry.profile,
       sessionId: entry.identity.key.sessionId,
