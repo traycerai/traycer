@@ -1038,6 +1038,36 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
     expect(result.human).toContain("no-op");
   });
 
+  it("debt cleared under the lock on a BUSY host: still the no-op - the busy gate is never consulted and no failed marker is written", async () => {
+    // The host that came up on the committed bytes while this command
+    // waited is already doing work. It owes nothing, so its busyness is not
+    // a reason to fail the command: the debt decision runs before the gate.
+    mocks.downloadAndStageHostMock.mockResolvedValue(upToDate("2.0.0"));
+    mocks.readHostInstallRecordMock.mockResolvedValue(sampleRecord("2.0.0"));
+    mocks.readHostPidMetadataMock
+      .mockResolvedValueOnce(pidRecord("1.0.0", 4242))
+      .mockResolvedValue(pidRecord("2.0.0", 4343));
+    mocks.isProcessAliveMock.mockReturnValue(true);
+    mocks.assertHostNotBusyMock.mockRejectedValue(
+      new Error("host is busy: 1 live session"),
+    );
+
+    const result = await buildHostUpdateCommand({
+      force: false,
+      allowDowngrade: false,
+      ackNonce: null,
+    })(fakeCtx());
+
+    expect(mocks.assertHostNotBusyMock).not.toHaveBeenCalled();
+    expect(mocks.restartHostServiceWithAttemptMock).not.toHaveBeenCalled();
+    expect(mocks.writeUpdateProgressMarkerMock).not.toHaveBeenCalledWith(
+      "production",
+      expect.objectContaining({ state: "failed" }),
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.human).toContain("no-op");
+  });
+
   it("running already equal to the install record: old no-op contract, no restart, no marker", async () => {
     mocks.downloadAndStageHostMock.mockResolvedValue(upToDate("2.0.0"));
     mocks.readHostInstallRecordMock.mockResolvedValue(sampleRecord("2.0.0"));

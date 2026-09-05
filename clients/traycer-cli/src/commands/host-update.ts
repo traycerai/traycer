@@ -395,17 +395,20 @@ async function activateInstalledAndProjectLegacy(
     admission: "legacy-update-shadow",
   };
   return withCliUpdateContender(contenderOptions, async (capability) => {
+    // Re-read under the lock: BOTH halves the debt was computed from may have
+    // moved while this command waited for admission - the record through
+    // another apply, the running version through another actor's restart.
+    // Decided BEFORE the busy gate: a host that is already current owes
+    // nothing, so its live work is no reason to fail the command (and stamp
+    // a failed marker) - it is the no-op, busy or not.
+    const installed = await requireInstalled(environment);
+    const debt = await detectActivationDebt(environment);
+    if (debt === null) return projectNoOp(installed);
     // Same gate `applyHost` runs before it touches anything: a host with
     // live work is not restarted under it unless the caller said `--force`.
     if (!force) {
       await assertHostNotBusy(environment);
     }
-    // Re-read under the lock: BOTH halves the debt was computed from may have
-    // moved while this command waited for admission - the record through
-    // another apply, the running version through another actor's restart.
-    const installed = await requireInstalled(environment);
-    const debt = await detectActivationDebt(environment);
-    if (debt === null) return projectNoOp(installed);
     await restartHostServiceWithAttempt(
       capability,
       contenderOptions,

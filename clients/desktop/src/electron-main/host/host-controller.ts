@@ -2005,24 +2005,20 @@ export class HostController {
       "[host-controller] login-item registration parked - restarting the running host through the CLI to activate the committed install",
       { prePid: step.prePid, force },
     );
-    try {
-      await this.streamBundled<unknown>(
-        force ? ["host", "restart"] : ["host", "restart", "--if-idle"],
-      );
-    } catch (err) {
-      await this.reloadAfterServiceCycleFailure();
-      return this.classifyMutationSubprocessError(err, "retry-with-force");
-    }
-    try {
-      await this.completeServiceStart(
-        step.prePid,
-        step.expectedGeneration,
-        step.expectedRuntimeVersion,
-      );
-    } catch (err) {
-      return this.failedAfterServiceCycle(err);
-    }
-    return { kind: "ok", value: { activated: true } };
+    // The desktop contender lock is released by the time this runs, so the
+    // restart goes through the same attempt-aware cycle every other CLI
+    // restart uses: `--defer-if-parked` makes the CLI classify the record
+    // under ITS lock and refuse (leaving the running host running) if another
+    // contender parked an activation continuation in the gap, instead of
+    // taking its stop-only branch and leaving us waiting on readiness for a
+    // host it deliberately did not relaunch. The cycle also stamps against
+    // the CLI's own attestation rather than the snapshot in `step`.
+    return this.runCliRecoveryServiceCycle(
+      force
+        ? ["host", "restart", "--defer-if-parked"]
+        : ["host", "restart", "--if-idle", "--defer-if-parked"],
+      step.prePid,
+    );
   }
 
   private async runLockedMacActivationCycleOnce(

@@ -3367,7 +3367,7 @@ describe("platform matrix", () => {
       expect(
         vi.mocked(streamBundledTraycerCliJson).mock.calls[restartCallIndex][0]
           .args,
-      ).toEqual(["host", "restart", "--if-idle"]);
+      ).toEqual(["host", "restart", "--if-idle", "--defer-if-parked"]);
 
       // Call-order proof: `waitForHostReady` must run strictly AFTER the
       // restart spawn, never before it - `completeServiceStart` (which calls
@@ -3436,7 +3436,33 @@ describe("platform matrix", () => {
       expect(
         vi.mocked(streamBundledTraycerCliJson).mock.calls[restartCallIndex][0]
           .args,
-      ).toEqual(["host", "restart"]);
+      ).toEqual(["host", "restart", "--defer-if-parked"]);
+    });
+
+    it("the CLI defers for a concurrently parked activation: reports deferred and never waits for readiness of a host it did not relaunch", async () => {
+      vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+      const controller = newController("production");
+      writeInstallRecord("production", {
+        version: "1.7.0",
+        runtimeVersion: "1.7.0",
+      });
+      writePidMetadata("production", { version: "1.7.0", pid: process.pid });
+      vi.mocked(registerHostLoginItem).mockResolvedValue("parked");
+      vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) =>
+        Array.isArray(opts.args) && opts.args[1] === "restart"
+          ? {
+              data: {
+                restarted: false,
+                deferredForParkedActivation: true,
+              },
+            }
+          : { data: {} },
+      );
+
+      const outcome = await controller.installVersion("1.8.0", false);
+
+      expect(outcome.kind).toBe("deferred");
+      expect(waitForHostReady).not.toHaveBeenCalled();
     });
 
     // `registerService` promises a REGISTERED login item, which is a different
@@ -3467,7 +3493,9 @@ describe("platform matrix", () => {
 
       expect(outcome).toEqual({ kind: "ok", value: { registered: true } });
       expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
-        expect.objectContaining({ args: ["host", "restart", "--if-idle"] }),
+        expect.objectContaining({
+          args: ["host", "restart", "--if-idle", "--defer-if-parked"],
+        }),
       );
     });
 
