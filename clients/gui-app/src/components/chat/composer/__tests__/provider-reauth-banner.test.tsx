@@ -262,6 +262,17 @@ const REASONIX_CAP: ProviderLoginCapability = {
   terminalLogin: {},
 };
 
+// Antigravity is an ACP-authenticate provider: the host spawns
+// `agy_acp_server` and drives the ACP `authenticate` method, so its headless
+// sign-in carries no login subcommand at all and its argv is legitimately
+// EMPTY - the one shape `canOauth` used to reject as "no OAuth".
+const ANTIGRAVITY_ACP_AUTH_CAP: ProviderLoginCapability = {
+  oauthArgs: [],
+  token: null,
+  codePaste: null,
+  terminalLogin: null,
+};
+
 // The unreachable case this used to model: an old host's payload cannot
 // decode with `terminalLogin` genuinely absent - the v6 -> v7 upgrade bridge
 // (`registry.ts`) fills it to `null` on that exact hop. What DOES leave
@@ -279,6 +290,12 @@ function reasonixState(
   loginCapability: ProviderLoginCapability | null,
 ): ProviderCliState {
   return { ...claudeState(loginCapability), providerId: "reasonix" };
+}
+
+function antigravityState(
+  loginCapability: ProviderLoginCapability | null,
+): ProviderCliState {
+  return { ...claudeState(loginCapability), providerId: "antigravity" };
 }
 
 function claudeState(
@@ -448,24 +465,19 @@ describe("<ProviderReauthBanner />", () => {
     expect(screen.getByRole("button", { name: /Authenticate/ })).toBeDefined();
   });
 
-  // An ACP-authenticate provider (antigravity) declares no `terminalLogin` and
-  // an EMPTY `oauthArgs`: its headless sign-in needs no login subcommand,
-  // because the host spawns the server and drives the ACP `authenticate`
-  // method. `canOauth` required `oauthArgs.length > 0`, so the banner offered
-  // this provider the API-key paste form and no reconnect button at all - the
-  // one affordance that actually signs it back in.
+  // `canOauth` required `oauthArgs.length > 0`, so the banner offered
+  // antigravity the API-key paste form and no reconnect button at all - the
+  // one affordance that actually signs it back in. Rendered AS antigravity,
+  // not as a stand-in provider: the id reaches `providerDisplayName` and the
+  // setup-guidance lookup, so a future antigravity-specific branch in either
+  // would silently escape a test that claimed to cover it.
   it("offers the OAuth button when oauthArgs is empty but non-null", () => {
     render(
       <ProviderReauthBanner
         epicId={null}
         viewTabId={null}
-        providerId="claude-code"
-        state={claudeState({
-          oauthArgs: [],
-          token: null,
-          codePaste: null,
-          terminalLogin: null,
-        })}
+        providerId="antigravity"
+        state={antigravityState(ANTIGRAVITY_ACP_AUTH_CAP)}
         reason="provider_unauthenticated"
         profileId={null}
         profileLabel={null}
@@ -484,13 +496,8 @@ describe("<ProviderReauthBanner />", () => {
       <ProviderReauthBanner
         epicId={null}
         viewTabId={null}
-        providerId="claude-code"
-        state={claudeState({
-          oauthArgs: [],
-          token: null,
-          codePaste: null,
-          terminalLogin: null,
-        })}
+        providerId="antigravity"
+        state={antigravityState(ANTIGRAVITY_ACP_AUTH_CAP)}
         reason="provider_unauthenticated"
         profileId={null}
         profileLabel={null}

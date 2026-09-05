@@ -86,6 +86,7 @@ describe("providerSignInUnavailableHint", () => {
     expect(
       providerSignInUnavailableHint(
         providerState({
+          providerId: "antigravity",
           loginCapability: {
             oauthArgs: [],
             token: null,
