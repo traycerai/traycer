@@ -465,6 +465,14 @@ function agentStalledStatus(
       return "Provider is taking longer than expected";
     case "provider_reroute":
       return "Provider is rerouting";
+    // The provider-fallback engine's armed-traversal notice. A stalled row
+    // rather than a failure row on purpose: the turn died, but the host is
+    // already acting on it and the user's only decision is whether to let it -
+    // which is the opposite of the "a human must intervene" the failure row
+    // means. `reason` is open text on this payload, so this arm is additive and
+    // an older host simply renders the generic status below.
+    case "fallback_pending":
+      return "Trying a fallback provider";
     default:
       return "Stalled";
   }

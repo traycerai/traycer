@@ -805,6 +805,95 @@ export const chatAccessSchema = z.object({
 });
 export type ChatAccess = z.infer<typeof chatAccessSchema>;
 
+/**
+ * The traversal states a client is ever shown (`chat.subscribe@1.9`).
+ *
+ * A strict SUBSET of the host's own record states, and the omissions are the
+ * contract rather than an oversight. The three terminal states say only that a
+ * traversal has finished, which is exactly when the DTO is absent; and
+ * `completed_awaiting_return` is not a pending fallback at all - the gate is
+ * open, the queue is running, and the chat is merely being asked whether to go
+ * back. It has its own banner.
+ */
+export const pendingFallbackStateSchema = z.enum([
+  "retrying",
+  "hold",
+  "choosing",
+  "switching",
+  "waiting",
+]);
+export type PendingFallbackState = z.infer<typeof pendingFallbackStateSchema>;
+
+/**
+ * The live fallback traversal on this chat, derived from the durable record
+ * (`chat.subscribe@1.9`).
+ *
+ * DERIVED, never authoritative, and the distinction is load-bearing: a
+ * live-lane DTO does not survive idle eviction, so anything a client needs
+ * after a reconnect has to be re-derivable from the record. What arrives here
+ * is a projection of the record as of this frame - never a thing the client
+ * accumulates.
+ *
+ * Additive-optional on the live line only. Every released `1.0`-`1.8` snapshot
+ * and `turnStateChanged` shape is a hand-frozen literal pre-image, so none of
+ * them can grow this key; `undefined` on the live line means "no traversal",
+ * which is the same thing an older host's silence means, so a renderer needs
+ * one code path rather than two.
+ */
+export const pendingFallbackSchema = z.object({
+  traversalId: z.string(),
+  /**
+   * The client's expected-state handle. Every external action carries it back,
+   * and a mismatch is `traversal_advanced` - so a menu rendered from a stale
+   * frame refuses instead of acting on a world that moved.
+   */
+  revision: z.number().int().nonnegative(),
+  state: pendingFallbackStateSchema,
+  /**
+   * Why the attempt failed, as the stopped-reason vocabulary spells it. An
+   * open string rather than an enum: the reason travels from a provider
+   * adapter, and a strict enum here would fail the WHOLE frame on a reason a
+   * released client has not heard of - for a field it only renders as a label.
+   */
+  reason: z.string(),
+  /** The tuple that failed. Never the chat's current settings, which a hop may already have moved. */
+  failedTuple: chatRunSettingsSchema,
+  /** The tuple a switch is heading for, once one is chosen. */
+  targetTuple: chatRunSettingsSchema.nullable(),
+  /**
+   * When the current state's countdown ends, epoch ms.
+   *
+   * `null` covers three genuinely different situations - an effect phase that
+   * is due now, a `choosing` whose countdown a menu has frozen, and a state
+   * with no timer at all - and the client does not need to tell them apart: in
+   * all three there is no time to render. `graceRemainingMs` is what a frozen
+   * countdown shows instead.
+   */
+  deadline: z.number().nullable(),
+  /** The frozen remainder while `choosing`, so the menu can render a paused countdown. */
+  graceRemainingMs: z.number().nullable(),
+  attempt: z.number().int().nonnegative(),
+  maxAttempts: z.number().int().nonnegative(),
+  /**
+   * How many queued items this traversal is holding, and would carry across a
+   * switch. Rendered as "N queued messages will move with it", which is the
+   * one number that makes the consequence of the switch legible.
+   */
+  queuedItemsMoving: z.number().int().nonnegative(),
+  /**
+   * How many OTHER chats on this host are mid-switch right now
+   * (`hold`/`choosing`/`switching`), so a user changing one chat's provider can
+   * see they are not doing it alone.
+   *
+   * Re-derived and re-broadcast to every affected chat whenever any sibling
+   * enters or leaves those states - which is why it is a count on the DTO
+   * rather than something a client could total up from frames it happens to
+   * hold: it has no view of its siblings at all.
+   */
+  siblingSwitching: z.number().int().nonnegative(),
+});
+export type PendingFallback = z.infer<typeof pendingFallbackSchema>;
+
 export const chatSnapshotSchema = z.object({
   chat: chatSchema,
   access: chatAccessSchema,
@@ -881,6 +970,11 @@ export const chatSnapshotSchema = z.object({
   // missing value as either "always active" or "never active" - both would
   // be wrong for the whole session against an older host.
   turnInProgress: z.boolean().optional(),
+  // The live fallback traversal, or absent when there is none
+  // (`chat.subscribe@1.9`). Optional rather than nullable so an older host's
+  // silence and a newer host's "no traversal" are the same value to a
+  // renderer - see `pendingFallbackSchema`.
+  pendingFallback: pendingFallbackSchema.optional(),
 });
 export type ChatSnapshot = z.infer<typeof chatSnapshotSchema>;
 
@@ -915,6 +1009,12 @@ const chatSubscribeTurnStateChangedServerFrameSchema = z.object({
   // See `chatSnapshotSchema.turnInProgress` - same predicate, same
   // optionality, same conservative-fallback contract.
   turnInProgress: z.boolean().optional(),
+  // Rides this broadcast for the same reason `backgroundItems` does: every
+  // transition the DTO describes is a turn-state transition too, so a separate
+  // frame would be a second ordering to get wrong. Absent means "no traversal",
+  // and unlike `backgroundItems` the renderer must NOT keep its last value -
+  // that is how a settled traversal's card would outlive it.
+  pendingFallback: pendingFallbackSchema.optional(),
 });
 
 /**
@@ -2897,6 +2997,16 @@ export const chatWindowedSnapshotSchema = z.object({
   managedCommands: z.array(managedCommandSchema).default([]),
   heldUpdates: z.array(heldManagedCommandUpdateSchema).default([]),
   turnInProgress: z.boolean().optional(),
+  /**
+   * The live fallback traversal (`chat.subscribe@1.9`), same shape and same
+   * optionality as on the full snapshot.
+   *
+   * It has to be on BOTH, and that is not redundancy: a windowed snapshot is
+   * built by `windowedSnapshotPayload` and never passes through the projection
+   * the full snapshot uses, so a field added only to the full shape simply
+   * never reaches a windowed subscriber - which today is every up-to-date peer.
+   */
+  pendingFallback: pendingFallbackSchema.optional(),
   /**
    * The epoch every ordinal in this session is relative to. The host advances
    * it only when an ordinal no longer names the row it named before; appends

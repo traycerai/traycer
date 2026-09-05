@@ -261,6 +261,11 @@ import {
   providersFallbackPolicySetV10,
 } from "@traycer/protocol/host/fallback-policy";
 import {
+  chatFallbackCancelV10,
+  chatFallbackChooseTargetV10,
+  chatFallbackRunManualRungV10,
+} from "@traycer/protocol/host/chat-fallback";
+import {
   hostIdentityGetV10,
   hostIdentitySetV10,
 } from "@traycer/protocol/host/identity/contracts";
@@ -5040,6 +5045,52 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       latestMinor: 0,
       versions: {
         0: { contract: chatLocateRowV10, upgradeFromPreviousVersion: null },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  // The three external fallback actions. All off-floor: a client meeting a host
+  // without the fallback engine must simply not render the affordance, which is
+  // exactly what `unsupported` degradation gives it. Unary rather than stream
+  // actions because they name a traversal rather than a subscription - the two
+  // that DO need to name their subscription (`fallback.holdForChoice` /
+  // `fallback.releaseChoice`) are stream actions for that reason, and the lease
+  // token these carry is the bridge between the two transports.
+  "chat.fallback.cancel": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: chatFallbackCancelV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "chat.fallback.chooseTarget": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: chatFallbackChooseTargetV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "chat.fallback.runManualRung": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: chatFallbackRunManualRungV10,
+          upgradeFromPreviousVersion: null,
+        },
       },
       downgradePathsFromLatest: {},
     },

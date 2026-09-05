@@ -540,6 +540,33 @@ export const HOST_METHOD_POLL_TABLE = {
   // supersedes an older one - and never polled: the answer is a position in a
   // transcript the live subscription is already reporting changes to.
   "chat.locateRow": { ...LATEST_SCHEDULING, poll: null },
+  // The three external fallback actions. All `fifo`, and none polled.
+  //
+  // `fifo` because each carries the traversal revision it expects, so two rapid
+  // sends are not the same request twice - the second names a revision the
+  // first is about to invalidate. Coalescing them would drop the one the user
+  // actually meant and answer with the other one's outcome; dropping the LATER
+  // one is worse still, since that is the one carrying the newer intent.
+  //
+  // Never polled, and that is not merely "these are mutations". A poll would
+  // re-send an action against a revision the host has moved past and get a
+  // `traversal_advanced` for its trouble, which the menu renders as "this chat
+  // already resumed" - a poll would manufacture that message out of nothing.
+  "chat.fallback.cancel": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "chat.fallback.chooseTarget": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "chat.fallback.runManualRung": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   "snapshots.getLocalStorageSize": { ...LATEST_SCHEDULING, poll: null },
   "snapshots.readSnapshotDiff": { ...LATEST_SCHEDULING, poll: null },
   // Clearing snapshots destructively removes locally retained data.
