@@ -14,6 +14,12 @@ import type {
   ProviderRateLimits,
   ProviderRateLimitWindow,
 } from "@traycer/protocol/host";
+import { grokPeriodLabel } from "@/lib/rate-limits/grok-period-label";
+import {
+  MINUTES_PER_DAY,
+  MINUTES_PER_HOUR,
+  namedCadenceForDuration,
+} from "@/lib/rate-limits/window-duration-cadence";
 import type { RateLimitProviderId } from "@/lib/rate-limit-providers";
 
 /**
@@ -99,11 +105,6 @@ export function isWindowedRateLimitProvider(
   }
 }
 
-const MINUTES_PER_HOUR = 60;
-const MINUTES_PER_DAY = MINUTES_PER_HOUR * 24;
-const MINUTES_PER_WEEK = MINUTES_PER_DAY * 7;
-const MINUTES_PER_MONTH = MINUTES_PER_DAY * 30;
-
 /**
  * A duration as the shortest thing that still reads as that duration — `5h`,
  * `1d`, `wk`, `mo`. Deliberately not the popover's `formatWindowDuration`,
@@ -111,15 +112,48 @@ const MINUTES_PER_MONTH = MINUTES_PER_DAY * 30;
  * that shows every visible window of every provider at once cannot afford the
  * words, and a provider-reported duration nobody has a short name for still
  * falls back to the generic form rather than to prose.
+ *
+ * The named cadences come from `namedCadenceForDuration`, shared with that
+ * other formatter, so `mo` and `Monthly` are answers to one question — see the
+ * calendar-month range it exists for.
  */
 export function formatCompactWindowDuration(minutes: number | null): string {
   if (minutes === null || minutes <= 0) return "usage";
-  if (minutes === MINUTES_PER_WEEK) return "wk";
-  if (minutes === MINUTES_PER_MONTH) return "mo";
+  switch (namedCadenceForDuration(minutes)) {
+    case "week":
+      return "wk";
+    case "month":
+      return "mo";
+    case "day":
+      return `${minutes / MINUTES_PER_DAY}d`;
+    case "hours":
+      return `${minutes / MINUTES_PER_HOUR}h`;
+    case null:
+      break;
+  }
   if (minutes % MINUTES_PER_DAY === 0) return `${minutes / MINUTES_PER_DAY}d`;
   if (minutes % MINUTES_PER_HOUR === 0) return `${minutes / MINUTES_PER_HOUR}h`;
   return `${minutes}m`;
 }
+
+/**
+ * Grok's period types in the strip's own vocabulary — the same words the chips
+ * beside them use, never the page's prose. Reached only when the duration named
+ * no cadence, which is why `DAILY` is `1d` rather than "day": a chip row
+ * reading `[5h] [wk] [day]` is exactly the mismatch this table being
+ * caller-owned exists to prevent.
+ *
+ * INFORMATIONAL, not a contract. `periodType` is `z.string().nullable()` on the
+ * wire (`protocol/src/host/rate-limit/schemas.ts`), so xAI may rename these or
+ * add to them without a client release — which is why this is a lookup and not
+ * a parse. An unseen value gets the neutral word instead of a substring that
+ * happens to read as a cadence today.
+ */
+const GROK_PERIOD_TYPE_STRIP_LABELS: ReadonlyMap<string, string> = new Map([
+  ["USAGE_PERIOD_TYPE_DAILY", "1d"],
+  ["USAGE_PERIOD_TYPE_WEEKLY", "wk"],
+  ["USAGE_PERIOD_TYPE_MONTHLY", "mo"],
+]);
 
 /**
  * One entry, or none when the provider reported no such window. Named
@@ -339,13 +373,25 @@ function providerWindowCandidates(
         }),
       ];
     case "grok":
-      // One synthesized billing-period window. xAI names the period itself
-      // ("monthly", "annual", ...), and there is no generic short form for a
-      // period whose length the payload never states - so the name is not a
-      // duration and nothing may take its place.
+      // One synthesized billing-period window, named by `grokPeriodLabel` -
+      // its duration where the payload states one, the known-values table
+      // otherwise, never the raw `periodType` token.
+      //
+      // `labelIsDuration` stays false even when the duration DID name it. That
+      // flag only governs whether a countdown may replace the name, which is a
+      // question about telling one of a provider's readings from another, and
+      // grok reports exactly one window - so nothing here is ever ambiguous
+      // enough for the flag to be read. Claiming otherwise would be asserting
+      // something about the label that the fallback paths do not honour.
       return entry({
         windowKey: "grok:period",
-        label: rateLimits.periodType ?? "period",
+        label: grokPeriodLabel({
+          durationMinutes: rateLimits.period?.durationMinutes ?? null,
+          periodType: rateLimits.periodType,
+          formatDuration: formatCompactWindowDuration,
+          periodTypeLabels: GROK_PERIOD_TYPE_STRIP_LABELS,
+          fallbackLabel: "period",
+        }),
         labelIsDuration: false,
         kind: "period",
         window: rateLimits.period,

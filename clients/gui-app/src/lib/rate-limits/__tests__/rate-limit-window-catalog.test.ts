@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { ProviderRateLimits } from "@traycer/protocol/host";
+import type {
+  ProviderRateLimits,
+  ProviderRateLimitWindow,
+} from "@traycer/protocol/host";
 import {
   providerRateLimitsSchema,
   providerRateLimitWindows,
@@ -99,18 +102,32 @@ const OPENCODE: ProviderRateLimits = wire({
   monthly: { ...windowOf(30, 2_500_000, 43_200), status: "ok" },
 });
 
-const GROK: ProviderRateLimits = wire({
-  provider: "grok",
-  available: true,
-  subscriptionTier: "premium",
-  periodType: "monthly",
-  periodStart: 1_000_000,
-  periodEnd: 2_000_000,
+/**
+ * A grok snapshot varying only the two fields its period label is built from,
+ * so a label test states the payload it is about and nothing else.
+ */
+function grokWire(overrides: {
+  readonly periodType: string | null;
+  readonly period: ProviderRateLimitWindow | null;
+}): ProviderRateLimits {
+  return wire({
+    provider: "grok",
+    available: true,
+    subscriptionTier: "premium",
+    periodType: overrides.periodType,
+    periodStart: 1_000_000,
+    periodEnd: 2_000_000,
+    period: overrides.period,
+    monthlyLimit: null,
+    onDemandCap: null,
+    onDemandUsed: null,
+    prepaidBalance: null,
+  });
+}
+
+const GROK: ProviderRateLimits = grokWire({
+  periodType: "USAGE_PERIOD_TYPE_MONTHLY",
   period: windowOf(44, 2_000_000, null),
-  monthlyLimit: null,
-  onDemandCap: null,
-  onDemandUsed: null,
-  prepaidBalance: null,
 });
 
 const CURSOR: ProviderRateLimits = wire({
@@ -182,6 +199,27 @@ describe("formatCompactWindowDuration", () => {
   ])("renders %i minutes as %s", (minutes, expected) => {
     expect(formatCompactWindowDuration(minutes)).toBe(expected);
   });
+
+  // A calendar month is 28-31 days depending on which one it is, so a month
+  // recognised only at exactly 30 days renames itself every January.
+  it.each([
+    [40_320, "mo"],
+    [41_760, "mo"],
+    [44_640, "mo"],
+  ])("renders a %i-minute calendar month as %s", (minutes, expected) => {
+    expect(formatCompactWindowDuration(minutes)).toBe(expected);
+  });
+
+  // Either side of that range is a day count again, not a month.
+  it.each([
+    [38_880, "27d"],
+    [46_080, "32d"],
+  ])(
+    "renders %i minutes as %s, outside the month range",
+    (minutes, expected) => {
+      expect(formatCompactWindowDuration(minutes)).toBe(expected);
+    },
+  );
 
   it.each([[null], [0], [-5]])(
     "falls back to a generic label for %s minutes",
@@ -483,31 +521,109 @@ describe("providerWindowEntries", () => {
     ]);
   });
 
-  it("labels grok's billing period with the period type it reports", () => {
+  // The GROK fixture states no duration, so these three walk down
+  // `grokPeriodLabel`'s order: duration, then the known-values table, then the
+  // neutral word. What none of them may produce is the wire token itself -
+  // printed raw it reached the strip and the Settings chip verbatim, as
+  // `100% USAGE_PERIOD_TYPE_WEEKLY`.
+  it("names grok's billing period from its duration, ahead of the type it reports", () => {
+    const entries = providerWindowEntries(
+      grokWire({
+        // A weekly duration under a MONTHLY token: typed data wins, and the
+        // label is the one every other provider's weekly window already gets.
+        periodType: "USAGE_PERIOD_TYPE_MONTHLY",
+        period: windowOf(44, 2_000_000, 10_080),
+      }),
+    );
+
+    expect(
+      entries.map((entry) => [entry.windowKey, entry.label, entry.kind]),
+    ).toEqual([["grok:period", "wk", "period"]]);
+  });
+
+  // The duration answers only when it NAMES a cadence. A real monthly period
+  // is 28-31 days, so trusting any duration would print `31d` in January and
+  // `28d` in February for a cadence that never changed - and would leave the
+  // table's MONTHLY row dead in the common case.
+  it.each([
+    [44_640, "mo"],
+    [43_200, "mo"],
+    [40_320, "mo"],
+  ])(
+    "names a %i-minute grok period a month, not a day count",
+    (minutes, expected) => {
+      expect(
+        providerWindowEntries(
+          grokWire({
+            periodType: "USAGE_PERIOD_TYPE_MONTHLY",
+            period: windowOf(44, 2_000_000, minutes),
+          }),
+        ).map((entry) => entry.label),
+      ).toEqual([expected]);
+    },
+  );
+
+  it("prefers the reported period type over a duration that names no cadence", () => {
+    // 14 days is not a cadence anything calls by name, so `WEEKLY` - which xAI
+    // did state - describes the window better than `14d` does.
+    expect(
+      providerWindowEntries(
+        grokWire({
+          periodType: "USAGE_PERIOD_TYPE_WEEKLY",
+          period: windowOf(44, 2_000_000, 20_160),
+        }),
+      ).map((entry) => entry.label),
+    ).toEqual(["wk"]);
+  });
+
+  it("counts an unnamed duration's days when no period type explains it", () => {
+    expect(
+      providerWindowEntries(
+        grokWire({ periodType: null, period: windowOf(44, 2_000_000, 20_160) }),
+      ).map((entry) => entry.label),
+    ).toEqual(["14d"]);
+  });
+
+  it("labels grok's billing period from the known period types when no duration is stated", () => {
     expect(
       providerWindowEntries(GROK).map((entry) => [
         entry.windowKey,
         entry.label,
         entry.kind,
       ]),
-    ).toEqual([["grok:period", "monthly", "period"]]);
+    ).toEqual([["grok:period", "mo", "period"]]);
+
+    // The STRIP's words, not the provider page's: these sit in a chip row
+    // beside `[5h] [wk]`, where "Monthly" would be the prose the compact
+    // formatter's own contract rules out.
+    expect(
+      providerWindowEntries(
+        grokWire({
+          periodType: "USAGE_PERIOD_TYPE_WEEKLY",
+          period: windowOf(44, 2_000_000, null),
+        }),
+      ).map((entry) => entry.label),
+    ).toEqual(["wk"]);
+  });
+
+  it("gives an unrecognised period type the neutral word rather than parsing it", () => {
+    // `periodType` is `z.string().nullable()` on the wire, so a value nobody
+    // has seen is a routine state and not a broken payload. Substring-parsing
+    // this one would print "Fortnightly" from a token that means nothing here.
+    const entries = providerWindowEntries(
+      grokWire({
+        periodType: "USAGE_PERIOD_TYPE_FORTNIGHTLY",
+        period: windowOf(44, 2_000_000, null),
+      }),
+    );
+
+    expect(entries.map((entry) => entry.label)).toEqual(["period"]);
+    expect(entries.map((entry) => entry.labelIsDuration)).toEqual([false]);
   });
 
   it("falls back to a generic period label when grok names no period type", () => {
     const entries = providerWindowEntries(
-      wire({
-        provider: "grok",
-        available: true,
-        subscriptionTier: null,
-        periodType: null,
-        periodStart: null,
-        periodEnd: 2_000_000,
-        period: windowOf(44, 2_000_000, null),
-        monthlyLimit: null,
-        onDemandCap: null,
-        onDemandUsed: null,
-        prepaidBalance: null,
-      }),
+      grokWire({ periodType: null, period: windowOf(44, 2_000_000, null) }),
     );
 
     expect(entries.map((entry) => entry.label)).toEqual(["period"]);
@@ -516,19 +632,7 @@ describe("providerWindowEntries", () => {
   it("has no grok entry when the period went unmeasured", () => {
     expect(
       providerWindowEntries(
-        wire({
-          provider: "grok",
-          available: true,
-          subscriptionTier: "premium",
-          periodType: "monthly",
-          periodStart: 1_000_000,
-          periodEnd: 2_000_000,
-          period: null,
-          monthlyLimit: null,
-          onDemandCap: null,
-          onDemandUsed: null,
-          prepaidBalance: null,
-        }),
+        grokWire({ periodType: "USAGE_PERIOD_TYPE_MONTHLY", period: null }),
       ),
     ).toEqual([]);
   });

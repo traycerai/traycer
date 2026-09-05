@@ -34,6 +34,12 @@ import {
 } from "@/components/settings/panels/opencode-go-actions";
 import { contextUsageTone } from "@/components/chat/context-usage";
 import { creditUsageSeverity } from "@/lib/rate-limits/window-severity";
+import { grokPeriodLabel } from "@/lib/rate-limits/grok-period-label";
+import {
+  MINUTES_PER_DAY,
+  MINUTES_PER_HOUR,
+  namedCadenceForDuration,
+} from "@/lib/rate-limits/window-duration-cadence";
 import {
   formatUnavailableReason,
   resolveProviderRateLimitViewState,
@@ -128,12 +134,9 @@ type OpenCodeRateLimits = Extract<
   { provider: "opencode"; available: true }
 >;
 
-const MINUTES_PER_HOUR = 60;
 // A manual reset expiring inside this window is tinted `text-destructive` in the
 // Settings list - use it or lose it.
 const RESET_CREDIT_WARNING_MS = 48 * 60 * 60 * 1000;
-const MINUTES_PER_DAY = MINUTES_PER_HOUR * 24;
-const MINUTES_PER_WEEK = MINUTES_PER_DAY * 7;
 const MINUTES_PER_SESSION = MINUTES_PER_HOUR * 5;
 const RESET_TIMESTAMP_PLAUSIBLE_WINDOW_MS = 365 * 24 * 60 * 60 * 1000;
 
@@ -147,15 +150,48 @@ const RESET_TIMESTAMP_PLAUSIBLE_WINDOW_MS = 365 * 24 * 60 * 60 * 1000;
  * the well-known 5-hour rolling window both Codex and Claude use reads as
  * "Current session" - a provider-reported 6-hour window still falls back to
  * the generic "6h" form, since that isn't the same known quota.
+ *
+ * The named cadences come from `namedCadenceForDuration`, shared with the
+ * strip's `formatCompactWindowDuration`, so "Monthly" and `mo` are answers to
+ * one question. A calendar month is what makes that worth sharing: recognised
+ * only at exactly 30 days, a January billing period reads "31d" and the
+ * February one "28d".
  */
 function formatWindowDuration(minutes: number | null): string {
   if (minutes === null || minutes <= 0) return "Usage";
-  if (minutes === MINUTES_PER_WEEK) return "Weekly";
+  // Ahead of the cadence: 5 hours IS an hour multiple, and this product name
+  // is the more specific answer for the one quota that carries it.
   if (minutes === MINUTES_PER_SESSION) return "Current session";
+  switch (namedCadenceForDuration(minutes)) {
+    case "week":
+      return "Weekly";
+    case "month":
+      return "Monthly";
+    case "day":
+      return `${minutes / MINUTES_PER_DAY}d`;
+    case "hours":
+      return `${minutes / MINUTES_PER_HOUR}h`;
+    case null:
+      break;
+  }
   if (minutes % MINUTES_PER_DAY === 0) return `${minutes / MINUTES_PER_DAY}d`;
   if (minutes % MINUTES_PER_HOUR === 0) return `${minutes / MINUTES_PER_HOUR}h`;
   return `${minutes}m`;
 }
+
+/**
+ * Grok's period types in the provider page's vocabulary - full words, matching
+ * the "Weekly" / "Current session" rows they sit among. Reached only when the
+ * duration named no cadence.
+ *
+ * INFORMATIONAL, not a contract: `periodType` is `z.string().nullable()` on the
+ * wire, so an unseen value gets the neutral word rather than being parsed.
+ */
+const GROK_PERIOD_TYPE_PAGE_LABELS: ReadonlyMap<string, string> = new Map([
+  ["USAGE_PERIOD_TYPE_DAILY", "Daily"],
+  ["USAGE_PERIOD_TYPE_WEEKLY", "Weekly"],
+  ["USAGE_PERIOD_TYPE_MONTHLY", "Monthly"],
+]);
 
 /** $-denominated value (credits, balance, spend). */
 function formatProviderCurrency(value: number): string {
@@ -1222,24 +1258,6 @@ export function OpenCodeRateLimitView({
 }
 
 /**
- * Grok's period bar label: the billing period's cadence taken from the
- * provider's `periodType` token (e.g. `"USAGE_PERIOD_TYPE_WEEKLY"` -> "Weekly"),
- * falling back to the synthesized window's own duration when the type token is
- * absent. Only the last `_`-segment carries the cadence, so the leading
- * `USAGE_PERIOD_TYPE_` scaffolding is dropped before title-casing.
- */
-function formatGrokPeriodLabel(
-  periodType: string | null,
-  durationMinutes: number | null,
-): string {
-  if (periodType !== null) {
-    const parts = periodType.split("_").filter((part) => part.length > 0);
-    if (parts.length > 0) return titleCaseFromToken(parts[parts.length - 1]);
-  }
-  return formatWindowDuration(durationMinutes);
-}
-
-/**
  * Compact calendar date ("Jul 22, 2026") for a billing-period bound. Shared by
  * grok's billing period and Cursor's billing cycle - both render a plain epoch
  * range, so neither provider owns this formatter.
@@ -1330,10 +1348,15 @@ export function GrokRateLimitView({
     <div className="flex flex-col gap-3">
       {data.period !== null ? (
         <RateLimitWindowRow
-          label={formatGrokPeriodLabel(
-            data.periodType,
-            data.period.durationMinutes,
-          )}
+          label={grokPeriodLabel({
+            durationMinutes: data.period.durationMinutes,
+            periodType: data.periodType,
+            formatDuration: formatWindowDuration,
+            periodTypeLabels: GROK_PERIOD_TYPE_PAGE_LABELS,
+            // What `formatWindowDuration(null)` answered before this helper
+            // existed, so an unmeasured, untyped period keeps its old row.
+            fallbackLabel: "Usage",
+          })}
           window={data.period}
         />
       ) : (

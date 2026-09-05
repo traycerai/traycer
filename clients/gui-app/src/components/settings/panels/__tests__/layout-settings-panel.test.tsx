@@ -242,9 +242,9 @@ function choose(control: string, option: string): void {
   fireEvent.keyDown(item, { key: "Enter" });
 }
 
-/** The window-chip group a provider's "Windows" row renders. */
+/** The window-chip group a provider's "Limits" row renders. */
 function windowsGroup(providerLabel: string): HTMLElement {
-  return screen.getByRole("group", { name: `${providerLabel} windows` });
+  return screen.getByRole("group", { name: `${providerLabel} limits` });
 }
 
 function metricsGroup(): HTMLElement {
@@ -339,7 +339,7 @@ describe("<LayoutSettingsPanel />", () => {
     );
   });
 
-  it("round-trips a provider's 'show all windows' switch to expandedProviders and tracks the analytics id", () => {
+  it("round-trips a provider's 'show all limits' switch to expandedProviders and tracks the analytics id", () => {
     mocks.providers = [configuredProvider("codex")];
     mocks.envelopes = { codex: envelopeFor(codexReady()) };
 
@@ -350,7 +350,7 @@ describe("<LayoutSettingsPanel />", () => {
     ).toEqual([]);
 
     fireEvent.click(
-      screen.getByRole("switch", { name: "Codex show all windows" }),
+      screen.getByRole("switch", { name: "Codex show all limits" }),
     );
 
     expect(
@@ -396,7 +396,7 @@ describe("<LayoutSettingsPanel />", () => {
     expect(chip.getAttribute("aria-pressed")).toBe("true");
   });
 
-  it("collapses a hidden provider's 'show all windows' row and window chips, restores them when re-enabled, and never touches hiddenWindowKeys", () => {
+  it("collapses a hidden provider's 'show all limits' row and limit chips, restores them when re-enabled, and never touches hiddenWindowKeys", () => {
     mocks.providers = [configuredProvider("codex")];
     mocks.envelopes = { codex: envelopeFor(codexReady()) };
 
@@ -420,9 +420,9 @@ describe("<LayoutSettingsPanel />", () => {
       useLayoutStore.getState().statusBar.rateLimits.hiddenWindowKeys,
     ).toEqual(["codex:primary"]);
     expect(
-      screen.queryByRole("switch", { name: "Codex show all windows" }),
+      screen.queryByRole("switch", { name: "Codex show all limits" }),
     ).toBeNull();
-    expect(screen.queryByRole("group", { name: "Codex windows" })).toBeNull();
+    expect(screen.queryByRole("group", { name: "Codex limits" })).toBeNull();
 
     fireEvent.click(screen.getByRole("switch", { name: "Codex" }));
 
@@ -433,12 +433,12 @@ describe("<LayoutSettingsPanel />", () => {
       useLayoutStore.getState().statusBar.rateLimits.hiddenWindowKeys,
     ).toEqual(["codex:primary"]);
     expect(
-      screen.getByRole("switch", { name: "Codex show all windows" }),
+      screen.getByRole("switch", { name: "Codex show all limits" }),
     ).toBeTruthy();
     expect(windowsGroup("Codex")).toBeTruthy();
   });
 
-  it("keeps a provider with no reading toggleable, saying why it lists no windows", () => {
+  it("keeps a provider with no reading toggleable, saying why it lists no limits", () => {
     // Nothing in the shared cache for this provider: the page never fetches,
     // so "no envelope" is a routine state and not an error one. The keys a
     // window toggle is written under are stable, so the row still works.
@@ -448,9 +448,9 @@ describe("<LayoutSettingsPanel />", () => {
     render(<LayoutSettingsPanel />);
 
     expect(screen.getByText("Waiting for first reading")).toBeTruthy();
-    expect(screen.queryByRole("group", { name: "Codex windows" })).toBeNull();
+    expect(screen.queryByRole("group", { name: "Codex limits" })).toBeNull();
     expect(
-      screen.getByRole("switch", { name: "Codex show all windows" }),
+      screen.getByRole("switch", { name: "Codex show all limits" }),
     ).toBeTruthy();
 
     fireEvent.click(screen.getByRole("switch", { name: "Codex" }));

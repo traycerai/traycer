@@ -930,7 +930,7 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     `rateLimits.enabled`) holding **Display** (percentage used / remaining, the
     used / remaining WORD after each percentage, reset timer, mini bar) and a
     `Providers on <hostLabel>` band of one subgroup per provider (title switch =
-    visible, then `Show all windows` and a chip per window); and **Resource
+    visible, then `Show all limits` and a chip per limit); and **Resource
     monitor** (subgroup, title switch = `resources.enabled`) holding Scope
     (Host / Desktop app) and a Metrics chip row.
   - **Nesting is drawn, not indented.** `SettingsSubgroup`
@@ -947,7 +947,7 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
   - **A set of independent on/off choices is a chip row, not a switch per
     choice** (`controls/settings-toggle-chips.tsx`). A switch each is right
     while there are three of them and a sentence to say about each; it is wrong
-    for a provider's rolling windows, whose labels are `5h` / `wk` / `Opus wk`
+    for a provider's rolling limits, whose labels are `5h` / `wk` / `Opus wk`
     and whose count is whatever the account reports. The chips are real toggle
     buttons carrying `aria-pressed`, so Enter and Space come from the element
     rather than from a handler. `RAM share` under the Desktop-app scope is
@@ -956,14 +956,51 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     total-memory denominator to divide by.
   - **Every rate-limit row that hides something is also a rung of the strip's
     collapse ladder**, and the two meet rather than fight. A provider shows its
-    tightest window unless `Show all windows` is on; the window switches prune
+    tightest limit unless `Show all limits` is on; the limit switches prune
     what counts as visible in BOTH modes. When the cluster runs out of room it
     drops the mode word, then the bars, then the timers, then everything but
     the coloured percentage, then everything but the icon, and finally folds
     whole providers into a `+N` chip - skipping any rung whose setting is
     already off, since taking away something invisible would free no width.
     The percentage is severity-coloured at every rung, bar or no bar.
-  - **The strip's right-click menu deliberately has no `Show all windows`
+  - **A limit is NAMED on the strip only when the name disambiguates**
+    (`windowLabelText`, `lib/rate-limits/status-bar-window-text.ts`). A
+    provider with ONE visible limit reads `100% used 6d` - there is nothing
+    to tell that reading apart from, so the countdown is the whole reading, and
+    the short name (`5h`, `wk`, `Weekly`, `Fable`) returns only when there is no
+    countdown to print. With TWO OR MORE visible limits every reading has a
+    sibling: a pure duration name is still replaced by the countdown, while a
+    name that carries identity (`Fable`, `Opus wk`, `Cursor models`, a named
+    Codex limit) is kept and the countdown appended, since several of those
+    share one reset instant and would otherwise print as one string. The count
+    is the provider's VISIBLE limits, not the ones the rung draws - an
+    unexpanded provider draws its tightest alone and still has to say which of
+    several it is. Settings' chip row is not a caller: it lists every limit so
+    each can be toggled, so a name is the point even when there is one.
+  - **Grok's period label never parses the wire token.** `periodType` is
+    `z.string().nullable()`, so `grokPeriodLabel`
+    (`lib/rate-limits/grok-period-label.ts`) names the window from its
+    `durationMinutes` when that duration NAMES a cadence - the same typed
+    source every other provider's window is named from - then from an explicit
+    table of known `USAGE_PERIOD_TYPE_*` values, then from the duration as a
+    plain count (`14d`), then from a neutral word. The table is informational;
+    an unseen value gets the neutral word rather than a substring that looks
+    like a cadence today.
+    - The cadence gate is what keeps the table alive. A calendar month is
+      28-31 days, so a duration trusted unconditionally renders a monthly
+      period as `31d` in January and `28d` in February - the word changing
+      month to month for a cadence that does not.
+      `namedCadenceForDuration` (`lib/rate-limits/window-duration-cadence.ts`)
+      owns that range and BOTH duration formatters ask it, so the strip's `mo`
+      and the page's `Monthly` are answers to one test rather than two
+      thresholds that drift. It is also why a 30-day codex window now reads
+      `Monthly` on the provider page instead of `30d`.
+    - **All three vocabularies are the caller's** - duration formatter, period
+      table and fallback word. The strip passes `1d` / `wk` / `mo` + `period`,
+      the page `Daily` / `Weekly` / `Monthly` + `Usage`. Injecting only the
+      formatter put the page's prose on the strip by the table's back door
+      (`[5h] [wk] [Weekly]`); the module owns the ORDER, never the words.
+  - **The strip's right-click menu deliberately has no `Show all limits`
     item.** Its provider rows are `ContextMenuCheckboxItem`s - a one-click
     visibility toggle each - and a checkbox item cannot also host a sub-menu
     trigger, so offering the second preference there would either demote the

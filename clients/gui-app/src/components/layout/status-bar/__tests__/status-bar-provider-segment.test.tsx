@@ -42,6 +42,20 @@ function windowFixture(overrides: {
   };
 }
 
+/**
+ * A second visible window, so the reading under test has something it has to be
+ * told apart FROM.
+ *
+ * A name is printed only once a provider has two or more visible limits, so a
+ * fixture asserting a name has to state the sibling that earns it. It is not
+ * drawn unexpanded - `tightest` defaults to the first window - which is exactly
+ * the case the rule is about: the count is what the provider HAS visible, not
+ * what this rung draws.
+ */
+function siblingWindow(): StatusBarRateLimitWindow {
+  return windowFixture({ windowKey: "sibling:other", label: "wk" });
+}
+
 function segmentFixture(overrides: {
   readonly providerId?: StatusBarProviderSegmentModel["providerId"];
   readonly state?: StatusBarProviderSegmentState;
@@ -184,6 +198,9 @@ describe("<StatusBarProviderSegment />", () => {
           kind: "model",
           resetsAt,
         }),
+        // The sibling that earns the name. Drawn or not, it is what this
+        // provider's reading has to be distinguishable FROM.
+        siblingWindow(),
       ],
     });
     renderSegment({ segment, showTimer: true });
@@ -193,11 +210,13 @@ describe("<StatusBarProviderSegment />", () => {
     ).toBe("40% used Fable 2h 5m");
   });
 
-  // The regression guard for `windowLabel`'s replace-vs-append rule: a
-  // countdown may only REPLACE a label that says nothing but the window's
-  // length, because several labels are guaranteed to share one `resetsAt`
-  // with a sibling window - dropping the name there would print two
-  // different pools as one indistinguishable string.
+  // The regression guard for `windowLabelText`'s replace-vs-append rule, which
+  // applies once a provider has TWO OR MORE visible limits: a countdown may
+  // only REPLACE a label that says nothing but the window's length, because
+  // several labels are guaranteed to share one `resetsAt` with a sibling
+  // window - dropping the name there would print two different pools as one
+  // indistinguishable string. Every fixture here therefore carries a sibling;
+  // a provider with one visible limit is the block below.
   describe("label rule: countdown replaces a duration, joins everything else", () => {
     const resetsAt = Date.now() + (4 * 60 + 15) * 60_000 + 5_000;
 
@@ -210,6 +229,7 @@ describe("<StatusBarProviderSegment />", () => {
             labelIsDuration: true,
             resetsAt,
           }),
+          siblingWindow(),
         ],
       });
       renderSegment({ segment, showTimer: true });
@@ -229,6 +249,7 @@ describe("<StatusBarProviderSegment />", () => {
             kind: "bucket",
             resetsAt,
           }),
+          siblingWindow(),
         ],
       });
       renderSegment({ segment, showTimer: true });
@@ -275,6 +296,7 @@ describe("<StatusBarProviderSegment />", () => {
             labelIsDuration: false,
             resetsAt,
           }),
+          siblingWindow(),
         ],
       });
       renderSegment({ segment, showTimer: true });
@@ -282,24 +304,6 @@ describe("<StatusBarProviderSegment />", () => {
         screen.getByTestId("status-bar-window-codex:extra:gpt-5-codex:primary")
           .textContent,
       ).toBe("40% used GPT-5 Codex 5h 4h 15m");
-    });
-
-    it("a grok period keeps its periodType name", () => {
-      const segment = segmentFixture({
-        windows: [
-          windowFixture({
-            windowKey: "grok:period",
-            label: "monthly",
-            labelIsDuration: false,
-            kind: "period",
-            resetsAt,
-          }),
-        ],
-      });
-      renderSegment({ segment, showTimer: true });
-      expect(
-        screen.getByTestId("status-bar-window-grok:period").textContent,
-      ).toBe("40% used monthly 4h 15m");
     });
 
     it("'Opus wk' keeps its name", () => {
@@ -312,6 +316,7 @@ describe("<StatusBarProviderSegment />", () => {
             kind: "weekly",
             resetsAt,
           }),
+          siblingWindow(),
         ],
       });
       renderSegment({ segment, showTimer: true });
@@ -382,6 +387,99 @@ describe("<StatusBarProviderSegment />", () => {
       expect(cursorText).not.toBe(otherText);
       expect(cursorText).toBe("60% remaining Cursor models 4h 15m");
       expect(otherText).toBe("60% remaining Other models 4h 15m");
+    });
+  });
+
+  // The other half of the rule above. A name is worth strip width only when it
+  // tells one of a provider's readings from another, so a provider with ONE
+  // visible limit prints none - and gets it straight back the moment there is
+  // no countdown, since a bare percentage under an icon names no limit at all.
+  describe("naming rule: one visible limit prints no name", () => {
+    const resetsAt = Date.now() + (4 * 60 + 15) * 60_000 + 5_000;
+
+    it("a grok period - the one window that provider reports - is the countdown alone", () => {
+      const segment = segmentFixture({
+        windows: [
+          windowFixture({
+            windowKey: "grok:period",
+            // The catalog's compact word for a weekly period - the strip's
+            // vocabulary, not the provider page's "Weekly".
+            label: "wk",
+            labelIsDuration: false,
+            kind: "period",
+            usedPercent: 100,
+            resetsAt,
+          }),
+        ],
+      });
+      renderSegment({ segment, showTimer: true });
+      expect(
+        screen.getByTestId("status-bar-window-grok:period").textContent,
+      ).toBe("100% used 4h 15m");
+    });
+
+    it("the same grok period falls back to its short name with no countdown to print", () => {
+      const segment = segmentFixture({
+        windows: [
+          windowFixture({
+            windowKey: "grok:period",
+            // The catalog's compact word for a weekly period - the strip's
+            // vocabulary, not the provider page's "Weekly".
+            label: "wk",
+            labelIsDuration: false,
+            kind: "period",
+            usedPercent: 100,
+            resetsAt: null,
+          }),
+        ],
+      });
+      renderSegment({ segment, showTimer: true });
+      expect(
+        screen.getByTestId("status-bar-window-grok:period").textContent,
+      ).toBe("100% used wk");
+    });
+
+    it("keeps 'Fable' while Claude has several visible limits", () => {
+      const segment = segmentFixture({
+        windows: [
+          windowFixture({
+            windowKey: "claude-code:model:Fable",
+            label: "Fable",
+            labelIsDuration: false,
+            kind: "model",
+            usedPercent: 57,
+            resetsAt,
+          }),
+          siblingWindow(),
+        ],
+      });
+      renderSegment({ segment, showTimer: true });
+      expect(
+        screen.getByTestId("status-bar-window-claude-code:model:Fable")
+          .textContent,
+      ).toBe("57% used Fable 4h 15m");
+    });
+
+    it("drops 'Fable' once it is the only limit Claude still shows", () => {
+      // Same window, same reading. Hiding its siblings in Settings is what
+      // leaves the name with nothing to disambiguate.
+      const segment = segmentFixture({
+        windows: [
+          windowFixture({
+            windowKey: "claude-code:model:Fable",
+            label: "Fable",
+            labelIsDuration: false,
+            kind: "model",
+            usedPercent: 57,
+            resetsAt,
+          }),
+        ],
+      });
+      renderSegment({ segment, showTimer: true });
+      expect(
+        screen.getByTestId("status-bar-window-claude-code:model:Fable")
+          .textContent,
+      ).toBe("57% used 4h 15m");
     });
   });
 

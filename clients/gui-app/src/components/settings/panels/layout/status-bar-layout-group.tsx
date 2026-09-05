@@ -213,7 +213,7 @@ function StatusBarLayoutGroupContent(): ReactNode {
 
         <SettingsSubgroup
           title="Usage limits"
-          description="One segment per provider with a window still reporting."
+          description="One segment per provider with a limit still reporting."
           icon={null}
           level={3}
           open={rateLimits.enabled}
@@ -305,7 +305,7 @@ function UsageDisplaySubgroup(): ReactNode {
       />
       <SettingsRow
         label="Show reset timer"
-        description="Count down to each window's reset. Off shows the window's name (5h, wk)."
+        description="Count down to each limit's reset. Off shows the limit's name (5h, wk)."
         control={
           <Switch
             checked={rateLimits.showTimer}
@@ -319,7 +319,7 @@ function UsageDisplaySubgroup(): ReactNode {
       />
       <SettingsRow
         label="Show mini bar"
-        description="Draw a small fill bar ahead of each provider's windows."
+        description="Draw a small fill bar ahead of each provider's limits."
         control={
           <Switch
             checked={rateLimits.showBar}
@@ -419,7 +419,7 @@ function ScopedStatusBarRateLimitProviders(): ReactNode {
     return (
       <SettingsRow
         label="Providers"
-        description="No provider on the watched host reports a usage window yet."
+        description="No provider on the watched host reports a usage limit yet."
         control={null}
       />
     );
@@ -457,10 +457,11 @@ function ScopedStatusBarRateLimitProviders(): ReactNode {
         >
           {/* Above the window chips on purpose: it decides how many of them
             reach the strip, while each of them decides whether its window
-            counts as visible at all - in both modes. */}
+            (shown to the user as a limit) counts as visible at all - in both
+            modes. */}
           <SettingsRow
-            label="Show all windows"
-            description="Off: only the tightest window. On: every window not hidden below."
+            label="Show all limits"
+            description="Off: only the tightest limit. On: every limit not hidden below."
             control={
               <Switch
                 checked={expandedProviders.includes(row.providerId)}
@@ -470,13 +471,13 @@ function ScopedStatusBarRateLimitProviders(): ReactNode {
                   );
                   toggleExpandedProvider(row.providerId);
                 }}
-                aria-label={`${row.label} show all windows`}
+                aria-label={`${row.label} show all limits`}
               />
             }
           />
           <SettingsRow
-            label="Windows"
-            description="Which of this provider's windows the strip may show."
+            label="Limits"
+            description="Which of this provider's limits the strip may show."
             control={
               <SettingsToggleChips
                 chips={windowChips(row, hiddenWindowKeys)}
@@ -484,7 +485,7 @@ function ScopedStatusBarRateLimitProviders(): ReactNode {
                   trackLayoutSetting("layout.statusBar.rateLimits.window");
                   toggleWindow(windowKey);
                 }}
-                ariaLabel={`${row.label} windows`}
+                ariaLabel={`${row.label} limits`}
                 emptyLabel="Waiting for first reading"
               />
             }
@@ -512,9 +513,9 @@ function providerRowDescription(row: StatusBarProviderRow): string {
   // chips row says why it lists none rather than the subtitle implying the
   // provider reports none.
   if (row.windows.length === 0) return row.profileLabel;
-  const windows =
-    row.windows.length === 1 ? "1 window" : `${row.windows.length} windows`;
-  return `${row.profileLabel} · ${windows}`;
+  const limits =
+    row.windows.length === 1 ? "1 limit" : `${row.windows.length} limits`;
+  return `${row.profileLabel} · ${limits}`;
 }
 
 /**

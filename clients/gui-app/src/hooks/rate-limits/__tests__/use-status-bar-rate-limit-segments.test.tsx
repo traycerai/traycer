@@ -799,7 +799,7 @@ describe("useStatusBarRateLimitSegments", () => {
       setResult("grok", {
         data: freshEnvelope(
           grokRateLimits({
-            periodType: "monthly",
+            periodType: "USAGE_PERIOD_TYPE_MONTHLY",
             period: rlWindow({
               usedPercent: 44,
               resetsAt: Date.now() + 2_000_000,
@@ -821,7 +821,10 @@ describe("useStatusBarRateLimitSegments", () => {
             windows: [
               expect.objectContaining({
                 windowKey: "grok:period",
-                label: "monthly",
+                // The strip's word for the MONTHLY period type. The payload
+                // states no duration, so the label comes from the catalog's
+                // period-type table, which carries the compact vocabulary.
+                label: "mo",
                 labelIsDuration: false,
               }),
             ],

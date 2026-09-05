@@ -267,6 +267,26 @@ describe("CodexRateLimitView (extended fields)", () => {
     );
   });
 
+  it("names a calendar-month window rather than counting its days", () => {
+    render(
+      <CodexRateLimitView
+        data={{
+          ...codex,
+          limitName: null,
+          extraWindows: [],
+          primary: null,
+          secondary: {
+            usedPercent: 68,
+            resetsAt: NOW + 3 * 24 * 60 * 60 * 1000,
+            durationMinutes: 30 * 24 * 60,
+          },
+        }}
+        variant="settings"
+      />,
+    );
+    expect(screen.getByText("Monthly")).toBeTruthy();
+  });
+
   it("renders a generic day/hour duration for an off-standard window", () => {
     render(
       <CodexRateLimitView
@@ -282,7 +302,9 @@ describe("CodexRateLimitView (extended fields)", () => {
           secondary: {
             usedPercent: 68,
             resetsAt: NOW + 3 * 24 * 60 * 60 * 1000,
-            durationMinutes: 30 * 24 * 60,
+            // 14 days: a real duration that names no cadence, so it is still
+            // counted rather than given a word.
+            durationMinutes: 14 * 24 * 60,
           },
         }}
         variant="settings"
@@ -290,7 +312,7 @@ describe("CodexRateLimitView (extended fields)", () => {
     );
     expect(screen.getByText("6h")).toBeTruthy();
     expect(screen.getByText("4% used")).toBeTruthy();
-    expect(screen.getByText("30d")).toBeTruthy();
+    expect(screen.getByText("14d")).toBeTruthy();
     expect(screen.getByText("68% used")).toBeTruthy();
   });
 
@@ -807,6 +829,46 @@ describe("GrokRateLimitView", () => {
     // Fallback plan/date rows stay off when a real period window exists.
     expect(screen.queryByText("Plan")).toBeNull();
     expect(screen.queryByText("Billing period")).toBeNull();
+  });
+
+  // The period-type table and the fallback word are the CALLER's, so this page
+  // says "Weekly" and "Usage" where the strip says `wk` and `period`.
+  it("names an unmeasured period from its type, in the page's own words", () => {
+    render(
+      <GrokRateLimitView
+        data={{
+          ...grokWithPeriod,
+          periodType: "USAGE_PERIOD_TYPE_MONTHLY",
+          period: {
+            usedPercent: 44,
+            resetsAt: periodEnd,
+            durationMinutes: null,
+          },
+        }}
+        variant="settings"
+      />,
+    );
+    expect(screen.getByText("Monthly")).toBeTruthy();
+  });
+
+  it("falls back to 'Usage' for a period with neither a duration nor a known type", () => {
+    render(
+      <GrokRateLimitView
+        data={{
+          ...grokWithPeriod,
+          periodType: null,
+          period: {
+            usedPercent: 44,
+            resetsAt: periodEnd,
+            durationMinutes: null,
+          },
+        }}
+        variant="settings"
+      />,
+    );
+    // Sentence case, matching the rows it sits among - and the exact string
+    // `formatWindowDuration(null)` answered before the helper existed.
+    expect(screen.getByText("Usage")).toBeTruthy();
   });
 
   it("renders Plan + Billing period fallback when period is null (no bar)", () => {
