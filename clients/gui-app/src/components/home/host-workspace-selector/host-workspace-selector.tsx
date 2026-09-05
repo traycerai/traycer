@@ -2849,9 +2849,6 @@ function InEpicSurface(props: InEpicSurfaceProps) {
     ],
   );
 
-  const remainingVisibleFolders = bindingEntries.filter(
-    (entry) => !editor.pendingRemovedPaths.has(entry.workspacePath),
-  ).length;
   const workspaceRunItems = useMemo<ReadonlyArray<WorkspaceRunItem>>(
     () =>
       workspaces
@@ -2900,10 +2897,10 @@ function InEpicSurface(props: InEpicSurfaceProps) {
               // and `unresolvedWorkspaceRunItem`'s `removeDisabled: false` came
               // through the spread untouched. The lock clears with the turn and
               // the row is retryable again - nothing about it is one-shot.
-              removeDisabled:
-                activeRunLocksBinding ||
-                removePending ||
-                remainingVisibleFolders <= 1,
+              // No last-folder guard: removing the only entry is a legitimate
+              // rebind to folderless (the host writes the explicit folderless
+              // binding on the last `removeEntry`).
+              removeDisabled: activeRunLocksBinding || removePending,
               removeDisabledReason: removeDisabledReasonFor(
                 activeRunLocksBinding,
                 activeRunNotice,
@@ -3017,10 +3014,8 @@ function InEpicSurface(props: InEpicSurfaceProps) {
             modeDisabled: false,
             modeDisabledReason: null,
             hasStagedIntent: stagedEntry !== null,
-            removeDisabled:
-              activeRunLocksBinding ||
-              removePending ||
-              remainingVisibleFolders <= 1,
+            // No last-folder guard - see the absent-row branch above.
+            removeDisabled: activeRunLocksBinding || removePending,
             removeDisabledReason: removeDisabledReasonFor(
               activeRunLocksBinding,
               activeRunNotice,
@@ -3062,7 +3057,6 @@ function InEpicSurface(props: InEpicSurfaceProps) {
       editor.pendingRemovedPaths,
       handleBindingCommitted,
       markBindingDirtyWithoutResume,
-      remainingVisibleFolders,
       requestChatFolderRemoval,
       stageFolderRemoval,
       stagedKey,

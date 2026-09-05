@@ -599,6 +599,34 @@ it("removes a chat folder only after moving it to Recent succeeds", async () => 
   expect(mutationMocks.removeBindingFolder).not.toHaveBeenCalled();
 });
 
+it("lets a chat remove its last folder and commits the folderless rebind", async () => {
+  // The host writes the explicit folderless binding on the last removeEntry,
+  // so the GUI must not hold the row hostage with a last-folder guard.
+  renderBoundSurface("chat", true, null, {
+    entries: [bindingEntry({ workspacePath: "/repo/alpha", isPrimary: true })],
+  });
+  fireEvent.click(screen.getByRole("button", { name: /^alpha/ }));
+  const remove = (
+    await screen.findAllByRole("button", {
+      name: /^(?:Move|Remove) alpha(?: to Recent)?$/,
+    })
+  )[0];
+  expect(remove instanceof HTMLButtonElement && remove.disabled).toBe(false);
+  fireEvent.click(remove);
+
+  await waitFor(() => {
+    expect(mutationMocks.removeBindingFolder).toHaveBeenCalledWith(
+      {
+        epicId: "epic-1",
+        ownerId: "owner-1",
+        ownerKind: "chat",
+        workspacePath: "/repo/alpha",
+      },
+      expect.anything(),
+    );
+  });
+});
+
 it("refuses terminal Update when metadata regresses to unresolved", async () => {
   const key = {
     surface: "owner" as const,
