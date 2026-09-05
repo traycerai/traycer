@@ -88,6 +88,13 @@ interface TestState {
   readonly exportArtifactsMutate: Mock;
   readonly localDeleteArtifact: Mock;
   readonly closeCanvasTab: Mock;
+  /**
+   * What `findOpenArtifactInTab` returns for a content id. Used to prove bulk
+   * chat delete does not close tiles by id (a same-id other-host tab).
+   */
+  openArtifactById: Readonly<
+    Record<string, { readonly paneId: string; readonly instanceId: string }>
+  >;
   readonly markArtifactSelfDeleted: Mock;
   readonly unmarkArtifactSelfDeleted: Mock;
   sessionReady: boolean;
@@ -161,6 +168,7 @@ interface TestState {
     (input: {
       readonly epicId: string;
       readonly chatId: string;
+      readonly hostId: string | null;
       readonly archived: boolean;
     }) => Promise<unknown>
   >;
@@ -192,6 +200,7 @@ const testState = vi.hoisted<TestState>(() => ({
   exportArtifactsMutate: vi.fn(),
   localDeleteArtifact: vi.fn(),
   closeCanvasTab: vi.fn(),
+  openArtifactById: {},
   markArtifactSelfDeleted: vi.fn(),
   unmarkArtifactSelfDeleted: vi.fn(),
   sessionReady: true,
@@ -475,7 +484,10 @@ vi.mock("@/hooks/epic/use-epic-chat-mutations", () => ({
     mutate: (
       variables: {
         readonly epicId: string;
-        readonly chatIds: readonly string[];
+        readonly chats: ReadonlyArray<{
+          readonly chatId: string;
+          readonly hostId: string | null;
+        }>;
         readonly archived: boolean;
       },
       options: {
@@ -486,10 +498,11 @@ vi.mock("@/hooks/epic/use-epic-chat-mutations", () => ({
     ) => {
       testState.archiveBatchPending = true;
       void Promise.allSettled(
-        variables.chatIds.map((chatId) =>
+        variables.chats.map((chat) =>
           testState.archiveMutateAsync({
             epicId: variables.epicId,
-            chatId,
+            chatId: chat.chatId,
+            hostId: chat.hostId,
             archived: variables.archived,
           }),
         ),
@@ -685,7 +698,8 @@ function recordPreparedOpen(
 }
 
 vi.mock("@/stores/epics/canvas/store", () => ({
-  findOpenArtifactInTab: () => null,
+  findOpenArtifactInTab: (_tabId: string, nodeId: string) =>
+    testState.openArtifactById[nodeId] ?? null,
   useActiveEpicArtifactId: () => testState.activeArtifactId,
   useEpicCanvasStore: Object.assign(
     (selector: (state: unknown) => unknown) =>
@@ -794,6 +808,33 @@ vi.mock("@/hooks/epic/use-chat-archive-support", () => ({
   useChatArchiveSupported: () => testState.archiveSupport === true,
   useChatArchiveSupportState: () => testState.archiveSupport,
 }));
+
+vi.mock("@/hooks/host/use-host-supports-method", () => ({
+  useHostSupportsMethod: () => testState.archiveSupport === true,
+  useHostMethodSupport: () => testState.archiveSupport,
+}));
+
+const ARCHIVE_SUPPORTED_METHODS = vi.hoisted(
+  () => new Set(["epic.setChatArchived"]),
+);
+const ARCHIVE_ABSENT_METHODS = vi.hoisted(() => new Set<string>());
+vi.mock(
+  "@traycer-clients/shared/host-transport/negotiated-manifest-registry",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-transport/negotiated-manifest-registry")
+      >();
+    return {
+      ...actual,
+      getNegotiatedHostMethods: () => {
+        if (testState.archiveSupport === null) return null;
+        if (!testState.archiveSupport) return ARCHIVE_ABSENT_METHODS;
+        return ARCHIVE_SUPPORTED_METHODS;
+      },
+    };
+  },
+);
 
 vi.mock("@/hooks/epic/use-chat-sharing-support", () => ({
   SET_CLOUD_CHAT_VISIBILITY_METHOD: "epic.setCloudChatVisibility",
@@ -1128,6 +1169,7 @@ describe("epic sidebar selection mode", () => {
     testState.archiveBatchPending = false;
     testState.archiveRowPending = false;
     testState.archiveMutateAsync = vi.fn();
+    testState.openArtifactById = {};
     testState.rowHostId = "host-1";
     testState.rowHostReachability = "reachable";
     testState.preparedOpenRefs = [];
@@ -1274,11 +1316,13 @@ describe("epic sidebar selection mode", () => {
       expect(testState.deleteChatMutateAsync).toHaveBeenCalledWith({
         epicId: EPIC_ID,
         chatId: "chat-root",
+        hostId: null,
       });
     });
     expect(testState.deleteChatMutateAsync).not.toHaveBeenCalledWith({
       epicId: EPIC_ID,
       chatId: "chat-child",
+      hostId: null,
     });
     expect(testState.deleteTuiAgentMutateAsync).toHaveBeenCalledWith({
       epicId: EPIC_ID,
@@ -1299,17 +1343,20 @@ describe("epic sidebar selection mode", () => {
       expect(testState.archiveMutateAsync).toHaveBeenCalledWith({
         epicId: EPIC_ID,
         chatId: "chat-root",
+        hostId: "host-1",
         archived: true,
       });
       expect(testState.archiveMutateAsync).toHaveBeenCalledWith({
         epicId: EPIC_ID,
         chatId: "agent-root",
+        hostId: "host-1",
         archived: true,
       });
     });
     expect(testState.archiveMutateAsync).not.toHaveBeenCalledWith({
       epicId: EPIC_ID,
       chatId: "chat-child",
+      hostId: "host-1",
       archived: true,
     });
     expect(
@@ -3795,6 +3842,7 @@ describe("chat row archive", () => {
     // named, which reads as the gate under test firing.
     testState.archiveRowPending = false;
     testState.archiveMutateAsync = vi.fn();
+    testState.openArtifactById = {};
     testState.rowHostId = "host-1";
     testState.rowHostReachability = "reachable";
     testState.preparedOpenRefs = [];
@@ -4277,6 +4325,7 @@ describe("chat row archive", () => {
     expect(testState.archiveMutate).toHaveBeenCalledWith({
       epicId: EPIC_ID,
       chatId: "chat-root",
+      hostId: "host-1",
       archived: true,
     });
     // No optimistic write: archivedIds is still empty, so the row stays.
@@ -4293,8 +4342,122 @@ describe("chat row archive", () => {
     expect(testState.archiveMutate).toHaveBeenCalledWith({
       epicId: EPIC_ID,
       chatId: "agent-root",
+      hostId: "host-1",
       archived: true,
     });
+  });
+
+  it("shows a visible archive loader until a delayed request settles", () => {
+    seedChatTree();
+    const view = render(
+      <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />,
+    );
+
+    fireEvent.click(screen.getByTestId("epic-sidebar-archive-chat-root"));
+    expect(testState.archiveMutate).toHaveBeenCalledWith({
+      epicId: EPIC_ID,
+      chatId: "chat-root",
+      hostId: "host-1",
+      archived: true,
+    });
+    expect(
+      screen.queryByTestId("epic-sidebar-archive-pending-chat-root"),
+    ).toBeNull();
+
+    testState.archiveRowPending = true;
+    view.rerender(
+      <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />,
+    );
+
+    const pendingButton = screen.getByTestId("epic-sidebar-archive-chat-root");
+    expect(pendingButton.matches(":disabled")).toBe(true);
+    expect(pendingButton.getAttribute("aria-busy")).toBe("true");
+    expect(
+      screen.getByTestId("epic-sidebar-archive-pending-chat-root"),
+    ).toBeTruthy();
+    expect(pendingButton.className).toContain("opacity-100");
+
+    testState.archiveRowPending = false;
+    view.rerender(
+      <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />,
+    );
+    expect(
+      screen.queryByTestId("epic-sidebar-archive-pending-chat-root"),
+    ).toBeNull();
+    expect(
+      screen.getByTestId("epic-sidebar-archive-chat-root").matches(":disabled"),
+    ).toBe(false);
+  });
+
+  it("clears the archive loader after a delayed request rejects", () => {
+    seedChatTree();
+    testState.archiveMutate.mockImplementation(() => {
+      testState.archiveRowPending = true;
+    });
+    const view = render(
+      <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />,
+    );
+
+    fireEvent.click(screen.getByTestId("epic-sidebar-archive-chat-root"));
+    view.rerender(
+      <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />,
+    );
+    expect(
+      screen.getByTestId("epic-sidebar-archive-pending-chat-root"),
+    ).toBeTruthy();
+
+    testState.archiveRowPending = false;
+    view.rerender(
+      <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />,
+    );
+    expect(
+      screen.queryByTestId("epic-sidebar-archive-pending-chat-root"),
+    ).toBeNull();
+  });
+
+  it("keeps the pending archive loader visible after a menu trigger even when the idle hover button is hidden", () => {
+    seedGuiChatTree();
+    testState.expandedIds = new Set<string>();
+    seedLocalChatFailure("chat-child");
+    const view = render(
+      <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />,
+    );
+    expect(screen.queryByTestId("epic-sidebar-archive-chat-root")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("epic-sidebar-archive-item-chat-root"));
+    testState.archiveRowPending = true;
+    view.rerender(
+      <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />,
+    );
+
+    const pendingButton = screen.getByTestId("epic-sidebar-archive-chat-root");
+    expect(
+      screen.getByTestId("epic-sidebar-archive-pending-chat-root"),
+    ).toBeTruthy();
+    expect(pendingButton.className).toContain("opacity-100");
+    expect(pendingButton.matches(":disabled")).toBe(true);
+  });
+
+  it("shows the pending loader for a menu-triggered unarchive", () => {
+    seedChatTree();
+    testState.archivedIds = ["chat-root"];
+    testState.archiveVisibility = "all";
+    const view = render(
+      <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />,
+    );
+
+    fireEvent.click(screen.getByTestId("epic-sidebar-archive-item-chat-root"));
+    testState.archiveRowPending = true;
+    view.rerender(
+      <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />,
+    );
+
+    expect(
+      screen.getByTestId("epic-sidebar-archive-pending-chat-root"),
+    ).toBeTruthy();
+    expect(
+      screen.getByTestId("epic-sidebar-archive-chat-root").matches(":disabled"),
+    ).toBe(true);
   });
 
   it("removes the idle-time slot from layout when row controls are revealed", () => {
@@ -4454,10 +4617,38 @@ describe("chat row archive", () => {
       expect(testState.deleteChatMutateAsync).toHaveBeenCalledWith({
         epicId: EPIC_ID,
         chatId: "chat-root",
+        hostId: null,
       });
     });
     // Archive hover control is not the delete path.
     expect(testState.archiveMutate).not.toHaveBeenCalled();
+  });
+
+  it("does not close a same-id other-host tab after bulk chat delete", async () => {
+    // Chat tile teardown is hook-owned (`closeConfirmedDeletedChatTiles` is
+    // host-scoped). An id-only `findOpenArtifactInTab` close here would shut
+    // a surviving clone on another host after the hook already closed the
+    // matching tile.
+    seedChatTree();
+    testState.openArtifactById = {
+      "chat-root": { paneId: "pane-1", instanceId: "peer-same-id" },
+    };
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Select agents" }));
+    fireEvent.click(screen.getByTestId("epic-sidebar-select-chat-root"));
+    fireEvent.click(screen.getByTestId("epic-sidebar-delete-selected-chats"));
+    fireEvent.click(screen.getByTestId("confirm-action"));
+
+    await waitFor(() => {
+      expect(testState.deleteChatMutateAsync).toHaveBeenCalledWith({
+        epicId: EPIC_ID,
+        chatId: "chat-root",
+        hostId: null,
+      });
+    });
+    expect(testState.closeCanvasTab).not.toHaveBeenCalled();
   });
 
   it("shows a distinct empty state when every visible agent is archived (B10)", () => {
