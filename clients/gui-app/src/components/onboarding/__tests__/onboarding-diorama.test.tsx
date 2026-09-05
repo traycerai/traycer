@@ -3,6 +3,17 @@ import { render, screen, within } from "@testing-library/react";
 import { LazyMotion, domAnimation } from "motion/react";
 import { OnboardingDiorama } from "@/components/onboarding/onboarding-diorama";
 import type { OnboardingAgentGuideState } from "@/components/onboarding/onboarding-agent-guide-pane";
+import type { OnboardingHostPicker } from "@/components/onboarding/onboarding-host-picker-model";
+import { hostScopeFixture } from "@/components/settings/host-scope/host-scope-fixture";
+
+// Neither scene below draws the guide's title bar, so the picker only has to
+// exist for the prop chain that carries it to the agent-guide scene.
+const hostPicker: OnboardingHostPicker = {
+  scope: hostScopeFixture({}),
+  onSelectHost: vi.fn(),
+  hasExplicitPick: false,
+  streamOnPickedHost: true,
+};
 
 const agentGuide: OnboardingAgentGuideState = {
   value: "",
@@ -18,7 +29,11 @@ describe("OnboardingDiorama", () => {
   it("renders the provider picker in the shared provider order", () => {
     render(
       <LazyMotion features={domAnimation}>
-        <OnboardingDiorama actId="providers" agentGuide={agentGuide} />
+        <OnboardingDiorama
+          actId="providers"
+          agentGuide={agentGuide}
+          hostPicker={hostPicker}
+        />
       </LazyMotion>,
     );
 
@@ -73,7 +88,11 @@ describe("OnboardingDiorama", () => {
   it("renders no mini-app for the act whose stage is the real wizard", () => {
     const { container } = render(
       <LazyMotion features={domAnimation}>
-        <OnboardingDiorama actId="session-import" agentGuide={agentGuide} />
+        <OnboardingDiorama
+          actId="session-import"
+          agentGuide={agentGuide}
+          hostPicker={hostPicker}
+        />
       </LazyMotion>,
     );
 

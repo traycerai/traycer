@@ -558,6 +558,7 @@ describe("<GitDiffPanelBodyLive /> workspace switcher integration", () => {
     pinnedStreamBindingRef.value = {
       wsStreamClient: pinned,
       hostId: "host-1",
+      retain: null,
     };
 
     renderPanel(rootSelected);

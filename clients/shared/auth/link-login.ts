@@ -72,6 +72,12 @@ export type ClaimLinkLoginCodeFetchResult =
       readonly kind: "claimed";
       readonly secret: string;
       readonly pollIntervalSeconds: number;
+      /**
+       * The claim's match code, for the phone to show while it waits; `null`
+       * from a server that predates it, in which case the desktop's prompt
+       * is showing no code either.
+       */
+      readonly matchCode: string | null;
     }
   | { readonly kind: "invalid-code" }
   | { readonly kind: "rate-limited" }
@@ -321,6 +327,13 @@ export async function mintLinkLoginCodeViaHttp(
 }
 
 /**
+ * Declares that this client understands a `matchCode` in the response. The
+ * response schemas are strict, so the server sends the field only to callers
+ * that ask for it — an older client keeps parsing today's exact shape.
+ */
+const ACCEPT_MATCH_CODE = { acceptMatchCode: true } as const;
+
+/**
  * The phone attaches itself to a scanned/typed code. First scan wins and
  * ONLY that response carries the polling secret; claiming grants nothing
  * else. A 401 means the code is unknown, expired, or already
@@ -340,7 +353,9 @@ export async function claimLinkLoginCodeViaHttp(
     authnBaseUrl,
     "api/v3/auth/link/claim",
     null,
-    deviceHint === null ? { code } : { code, device: deviceHint },
+    deviceHint === null
+      ? { code, ...ACCEPT_MATCH_CODE }
+      : { code, device: deviceHint, ...ACCEPT_MATCH_CODE },
     null,
   );
   if (response === null) {
@@ -362,6 +377,7 @@ export async function claimLinkLoginCodeViaHttp(
         kind: "claimed",
         secret: parsed.secret,
         pollIntervalSeconds: parsed.interval,
+        matchCode: parsed.matchCode ?? null,
       };
 }
 
@@ -434,7 +450,7 @@ export async function linkLoginStatusViaHttp(
     authnBaseUrl,
     "api/v3/auth/link/status",
     bearerToken,
-    { code },
+    { code, ...ACCEPT_MATCH_CODE },
     signal,
   );
   if (response === null) {
