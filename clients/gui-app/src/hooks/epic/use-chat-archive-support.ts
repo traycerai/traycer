@@ -19,10 +19,9 @@ export const SET_CHAT_ARCHIVED_METHOD = "epic.setChatArchived";
  * (row hover button, row-menu entry, archive visibility filter) disappears on such
  * a host instead of offering an action that cannot work.
  *
- * Scoped to the surrounding Epic session's owning host, matching
- * `useEpicArchiveChat`. The sidebar is a sibling of the canvas and therefore
- * sits outside every tile-level `TabHostProvider`; its writes belong to the
- * same host that owns the Epic stream, not to any individual chat tile.
+ * Used for epic-wide presentation such as the archive filter. Per-record
+ * actions check the record's owning host, which may differ from the host
+ * serving the epic's replicated list.
  *
  * Fails closed while the host's manifest is still unknown - see
  * {@link useHostSupportsMethod}.

@@ -176,13 +176,12 @@ describe("the bridge vocabulary and its version", () => {
     // the two: editing either union reddens this test, and the comment the
     // reader lands on is the one telling them to bump. That is a prompt, not a
     // proof, and it is named as such rather than dressed up as coverage.
-    // 12 since `main/lane-unary` and the first production emitter of
-    // `stream/manifest`. The event unions below did NOT change for the second
-    // of those, which is exactly the case this prompt is for: the kind was
-    // always declared and always handled, and what moved is that main finally
-    // sends one - a change no vocabulary comparison can see, and one whose
-    // absence pinned every worker-hosted runtime to the legacy arm.
-    expect(RUNTIME_BRIDGE_PROTOCOL_VERSION).toBe(12);
+    // 13 since `apply-confirmed-chat-mutation`. The event unions below did
+    // NOT change: the new kind rides `runtime/command`, which was already
+    // declared and handled. An older worker cannot dispatch the
+    // renderer-local archive/delete reconciliation, a change no event-kind
+    // comparison can see.
+    expect(RUNTIME_BRIDGE_PROTOCOL_VERSION).toBe(13);
     expect(MAIN_TO_WORKER_EVENT_KINDS).toEqual([
       "bootstrap",
       "current-user",

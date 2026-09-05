@@ -55,9 +55,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { HostAvailableManifest } from "@traycer/protocol/host/maintenance/index";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import {
-  recordNegotiatedHostMethods,
+  recordNegotiatedHostManifest,
+  recordNegotiatedHostMethods as recordNegotiatedHostMethodsByName,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import type { ManifestMethodEntry } from "@traycer/protocol/framework/index";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import { resetHostServiceWriteLatchesForTest } from "@/components/settings/panels/host-service-write-latch-store";
@@ -97,6 +99,31 @@ const ALL_OVERVIEW_METHODS = [
   "host.update.install",
   "diagnostics.logs.tail",
 ] as const;
+
+function recordOverviewHostMethods(
+  hostId: string,
+  methods: readonly string[],
+  installMinor: number,
+): void {
+  recordNegotiatedHostMethodsByName(hostId, methods);
+  const manifest: Record<string, ManifestMethodEntry> = {};
+  for (const method of methods) {
+    manifest[method] = {
+      major: 1,
+      minor: method === "host.update.install" ? installMinor : 0,
+    };
+  }
+  recordNegotiatedHostManifest(hostId, manifest);
+}
+
+// Keep existing fixture call sites concise while retaining the negotiated
+// minor needed by explicit downgrade rows.
+function recordNegotiatedHostMethods(
+  hostId: string,
+  methods: readonly string[],
+): void {
+  recordOverviewHostMethods(hostId, methods, 2);
+}
 
 function scopeFrom(
   hostId: string,
@@ -441,34 +468,28 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     });
   });
 
-  it("a row BELOW the installed version is not installable, because the CLI would short-circuit it and report nothing back", async () => {
-    // The picker's premise is that a row means what it says. The CLI computes
-    // `installedAtOrAboveTarget` and returns `installed-up-to-date` for a
-    // target at OR BELOW what is installed (`download-stage.ts`), then skips
-    // the apply and writes no progress marker — while `host.update.install`
-    // has already answered `accepted`, because it returns at spawn. So an
-    // enabled Install on an older row toasts "Updating…" for a host that will
-    // do nothing and then say nothing. Every up-to-date host hits this the
-    // moment "Show all" exposes its history.
+  it("allows an explicit RC-to-stable downgrade, sends the exact target, and freezes the other rows while it is in flight", async () => {
+    let releaseInstall: (() => void) | null = null;
+    const gate = new Promise<void>((resolve) => {
+      releaseInstall = resolve;
+    });
     const attempted: string[] = [];
     const fixture = buildOverviewHostFixture({
       hostId: "host-a",
       isLocalMachine: true,
-      hostVersion: "1.6.0",
+      hostVersion: "1.3.0-rc.1",
       overrideHandlers: {
         "host.update.check": () =>
           Promise.resolve({
             outcome: "ok" as const,
-            effectiveIncludePreReleases: false,
-            includePreReleasesSource: "stable-default" as const,
-            manifest: multiVersionManifest(["1.7.0", "1.6.0", "1.5.0"]),
+            effectiveIncludePreReleases: true,
+            includePreReleasesSource: "installed-rc" as const,
+            manifest: multiVersionManifest(["1.3.0-rc.1", "1.2.0", "1.1.0"]),
           }),
-        "host.update.install": (req) => {
+        "host.update.install": async (req) => {
           attempted.push(req.version);
-          return Promise.resolve({
-            outcome: "accepted" as const,
-            attemptId: null,
-          });
+          await gate;
+          return { outcome: "accepted" as const, attemptId: null };
         },
       },
     });
@@ -478,33 +499,112 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     renderPanel();
 
     fireEvent.click(await waitForButton("Check now"));
-    // The list moved into the Advanced disclosure, which Radix does not mount
-    // while closed — so this is the difference between "no rows" and "no drawer".
     await openHostOverviewAdvanced();
     const picker = await screen.findByTestId("host-version-rows");
     const rows = within(picker).getAllByRole("listitem");
+    const downgrade = within(rowFor(rows, "1.2.0")).getByRole("button", {
+      name: "Install 1.2.0",
+    });
 
-    // Newer than installed — the one row that can actually do something.
+    expect(downgrade.hasAttribute("disabled")).toBe(false);
+    expect(rowFor(rows, "1.2.0").textContent).not.toContain(
+      "Already on v1.3.0-rc.1",
+    );
+
+    fireEvent.click(downgrade);
+    await waitFor(() => expect(attempted).toEqual(["1.2.0"]));
+
+    // The page-wide install latch freezes every other row while the detached
+    // update is in flight, including another older target.
+    await waitFor(() => {
+      expect(
+        within(rowFor(rows, "1.1.0"))
+          .getByRole("button", { name: "Install 1.1.0" })
+          .hasAttribute("disabled"),
+      ).toBe(true);
+      expect(downgrade.hasAttribute("disabled")).toBe(true);
+    });
+
+    await act(async () => {
+      releaseInstall?.();
+      await gate;
+    });
+  });
+
+  it("keeps lower rows disabled on a pre-downgrade host while leaving newer rows installable", async () => {
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.3.0-rc.1",
+      overrideHandlers: {
+        "host.update.check": () =>
+          Promise.resolve({
+            outcome: "ok" as const,
+            effectiveIncludePreReleases: true,
+            includePreReleasesSource: "installed-rc" as const,
+            manifest: multiVersionManifest(["1.4.0", "1.3.0-rc.1", "1.2.0"]),
+          }),
+      },
+    });
+    recordOverviewHostMethods("host-a", ALL_OVERVIEW_METHODS, 1);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    await openHostOverviewAdvanced();
+    const rows = within(await screen.findByTestId("host-version-rows"));
     expect(
-      within(rowFor(rows, "1.7.0"))
-        .getByRole("button", { name: "Install 1.7.0" })
+      within(rowFor(rows.getAllByRole("listitem"), "1.4.0"))
+        .getByRole("button", { name: "Install 1.4.0" })
         .hasAttribute("disabled"),
     ).toBe(false);
-    // Older than installed — dead, and says why rather than leaving a person
-    // to discover it by clicking and watching nothing happen.
+    const olderRow = rowFor(rows.getAllByRole("listitem"), "1.2.0");
+    const older = within(olderRow);
     expect(
-      within(rowFor(rows, "1.5.0"))
-        .getByRole("button", { name: "Install 1.5.0" })
+      older
+        .getByRole("button", { name: "Install 1.2.0" })
         .hasAttribute("disabled"),
     ).toBe(true);
-    expect(rowFor(rows, "1.5.0").textContent).toContain("Already on v1.6.0");
-
-    fireEvent.click(
-      within(rowFor(rows, "1.5.0")).getByRole("button", {
-        name: "Install 1.5.0",
-      }),
+    expect(olderRow.textContent).toContain(
+      "Update this host to a release that supports downgrades from Settings.",
     );
-    expect(attempted).toEqual([]);
+  });
+
+  it("disables a metadata-only equal version while still allowing a genuinely older target", async () => {
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.2.0+build.1",
+      overrideHandlers: {
+        "host.update.check": () =>
+          Promise.resolve({
+            outcome: "ok" as const,
+            effectiveIncludePreReleases: false,
+            includePreReleasesSource: "stable-default" as const,
+            manifest: multiVersionManifest(["1.2.0+build.2", "1.1.0"]),
+          }),
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    await openHostOverviewAdvanced();
+    const rows = within(await screen.findByTestId("host-version-rows"));
+    const equalRow = rowFor(rows.getAllByRole("listitem"), "1.2.0+build.2");
+    const equal = within(equalRow);
+    expect(
+      equal
+        .getByRole("button", { name: "Install 1.2.0+build.2" })
+        .hasAttribute("disabled"),
+    ).toBe(true);
+    expect(equalRow.textContent).toContain("Already on v1.2.0+build.1");
+    expect(
+      within(rowFor(rows.getAllByRole("listitem"), "1.1.0"))
+        .getByRole("button", { name: "Install 1.1.0" })
+        .hasAttribute("disabled"),
+    ).toBe(false);
   });
 
   it("a YANKED latest is never offered by the summary — the row disables it and the CLI's resolveAsset refuses it, so an offer would dispatch a guaranteed rejection", async () => {

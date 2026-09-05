@@ -81,6 +81,14 @@ export type LinkLoginStatusResponse = {
      *   description-only prompt.
      */
     matchCode?: string | null;
+    /**
+     * When the pending claim expires unanswered (epoch ms), while the record
+     * is `claimed` and the request opted in with `acceptClaimExpiry`. Absent
+     * otherwise, and from a server that predates it — a surface without it
+     * shows no countdown. Lets the approver count the window down from the
+     * server's clock instead of carrying a copy of the constant.
+     */
+    claimExpiresAt?: number;
   } | null;
 };
 
@@ -133,6 +141,7 @@ export const linkLoginStatusResponseSchema: z.ZodType<LinkLoginStatusResponse> =
           location: z.string().nullable(),
           claimedAt: z.number().nullable(),
           matchCode: linkLoginMatchCodeSchema.nullable().optional(),
+          claimExpiresAt: z.number().int().positive().optional(),
         })
         .strict()
         .nullable(),

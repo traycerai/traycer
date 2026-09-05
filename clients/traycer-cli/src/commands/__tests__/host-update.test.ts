@@ -23,6 +23,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   downloadAndStageHostMock: vi.fn(),
   applyHostMock: vi.fn(),
+  installHostDowngradeMock: vi.fn(),
   readHostStagedRecordMock: vi.fn(),
   readHostInstallRecordMock: vi.fn(),
   // Cross-mock ordering timeline for the Finding 8 test below (ticket-2
@@ -56,6 +57,10 @@ vi.mock("../../installer/download-stage", () => ({
 
 vi.mock("../../installer/apply", () => ({
   applyHost: mocks.applyHostMock,
+}));
+
+vi.mock("../host-update-downgrade", () => ({
+  installHostDowngrade: mocks.installHostDowngradeMock,
 }));
 
 vi.mock("../../manifest/host-staged", () => ({
@@ -267,7 +272,11 @@ describe("buildHostUpdateCommand composite", () => {
     mocks.downloadAndStageHostMock.mockResolvedValue(outcome);
     mocks.readHostInstallRecordMock.mockResolvedValue(sampleRecord("2.0.0"));
 
-    const command = buildHostUpdateCommand({ force: false, ackNonce: null });
+    const command = buildHostUpdateCommand({
+      force: false,
+      allowDowngrade: false,
+      ackNonce: null,
+    });
     const result = await command(fakeCtx());
 
     expect(mocks.applyHostMock).not.toHaveBeenCalled();
@@ -302,7 +311,11 @@ describe("buildHostUpdateCommand composite", () => {
     } satisfies HostDownloadOutcome);
     mocks.readHostInstallRecordMock.mockResolvedValue(null);
 
-    const command = buildHostUpdateCommand({ force: false, ackNonce: null });
+    const command = buildHostUpdateCommand({
+      force: false,
+      allowDowngrade: false,
+      ackNonce: null,
+    });
     await expect(command(fakeCtx())).rejects.toMatchObject({
       code: CLI_ERROR_CODES.HOST_NOT_INSTALLED,
     });
@@ -318,7 +331,11 @@ describe("buildHostUpdateCommand composite", () => {
       appliedOutcome("local-abc123", "2.0.0", null),
     );
 
-    const command = buildHostUpdateCommand({ force: false, ackNonce: null });
+    const command = buildHostUpdateCommand({
+      force: false,
+      allowDowngrade: false,
+      ackNonce: null,
+    });
     await command(fakeCtx());
 
     expect(mocks.downloadAndStageHostMock).toHaveBeenCalledWith({
@@ -342,6 +359,7 @@ describe("buildHostUpdateCommand composite", () => {
 
     const command = buildHostUpdateCommand({
       force: false,
+      allowDowngrade: false,
       versionRequest: "2.1.0",
       ackNonce: null,
     });
@@ -353,6 +371,70 @@ describe("buildHostUpdateCommand composite", () => {
         automatic: false,
       }),
     );
+  });
+
+  it("uses the owned downgrade installer for an explicit lower target and keeps the normal progress and health flow", async () => {
+    mocks.readHostInstallRecordMock.mockResolvedValue(
+      sampleRecord("1.3.0-rc.1"),
+    );
+    mocks.installHostDowngradeMock.mockResolvedValue(
+      appliedOutcome("1.3.0-rc.1", "1.2.0", null),
+    );
+
+    const result = await buildHostUpdateCommand({
+      force: false,
+      allowDowngrade: true,
+      versionRequest: "1.2.0",
+      ackNonce: null,
+    })(fakeCtx());
+
+    expect(mocks.downloadAndStageHostMock).not.toHaveBeenCalled();
+    expect(mocks.installHostDowngradeMock).toHaveBeenCalledWith({
+      environment: "production",
+      version: "1.2.0",
+      force: false,
+      onProgress: expect.any(Function),
+    });
+    expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenCalledWith(
+      "production",
+      expect.objectContaining({ state: "updating", targetVersion: "1.2.0" }),
+    );
+    expect(mocks.probeHostHealthMock).toHaveBeenCalledTimes(1);
+    expect(mocks.deleteUpdateProgressMarkerMock).toHaveBeenCalledWith(
+      "production",
+    );
+    expect(result.human).toContain("updated host 1.3.0-rc.1 → 1.2.0");
+  });
+
+  it("keeps an explicit lower target on the monotonic stage path unless downgrade is explicitly enabled", async () => {
+    mocks.downloadAndStageHostMock.mockResolvedValue({
+      outcome: "discarded",
+      reason: "not-strictly-newer",
+      targetVersion: "1.2.0",
+    } satisfies HostDownloadOutcome);
+    mocks.applyHostMock.mockResolvedValue({
+      outcome: "no-op",
+      installedVersion: "1.3.0-rc.1",
+    } satisfies ApplyHostOutcome);
+    mocks.readHostInstallRecordMock.mockResolvedValue(
+      sampleRecord("1.3.0-rc.1"),
+    );
+
+    const result = await buildHostUpdateCommand({
+      force: false,
+      allowDowngrade: false,
+      versionRequest: "1.2.0",
+      ackNonce: null,
+    })(fakeCtx());
+
+    expect(mocks.installHostDowngradeMock).not.toHaveBeenCalled();
+    expect(mocks.downloadAndStageHostMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        versionRequest: "1.2.0",
+        automatic: false,
+      }),
+    );
+    expect(result.human).toContain("host already at 1.3.0-rc.1 (no-op)");
   });
 
   it("keeps a null version request for latest semantics", async () => {
@@ -367,6 +449,7 @@ describe("buildHostUpdateCommand composite", () => {
 
     const command = buildHostUpdateCommand({
       force: false,
+      allowDowngrade: false,
       versionRequest: null,
       ackNonce: null,
     });
@@ -392,7 +475,11 @@ describe("buildHostUpdateCommand composite", () => {
       appliedOutcome("1.0.0", "2.0.0", null),
     );
 
-    const command = buildHostUpdateCommand({ force: false, ackNonce: null });
+    const command = buildHostUpdateCommand({
+      force: false,
+      allowDowngrade: false,
+      ackNonce: null,
+    });
     const result = await command(fakeCtx());
 
     expect(mocks.applyHostMock).toHaveBeenCalledWith(
@@ -428,7 +515,11 @@ describe("buildHostUpdateCommand composite", () => {
       appliedOutcome("2.0.0", "3.0.0", null),
     );
 
-    const command = buildHostUpdateCommand({ force: false, ackNonce: null });
+    const command = buildHostUpdateCommand({
+      force: false,
+      allowDowngrade: false,
+      ackNonce: null,
+    });
     const result = await command(fakeCtx());
 
     expect(mocks.downloadAndStageHostMock).toHaveBeenCalled();
@@ -446,7 +537,11 @@ describe("buildHostUpdateCommand composite", () => {
       appliedOutcome("1.0.0", "2.0.0", null),
     );
 
-    const command = buildHostUpdateCommand({ force: true, ackNonce: null });
+    const command = buildHostUpdateCommand({
+      force: true,
+      allowDowngrade: false,
+      ackNonce: null,
+    });
     await command(fakeCtx());
 
     expect(mocks.applyHostMock).toHaveBeenCalledWith(
@@ -464,7 +559,11 @@ describe("buildHostUpdateCommand composite", () => {
       appliedOutcome("1.0.0", "2.0.0", "service failed to start"),
     );
 
-    const command = buildHostUpdateCommand({ force: false, ackNonce: null });
+    const command = buildHostUpdateCommand({
+      force: false,
+      allowDowngrade: false,
+      ackNonce: null,
+    });
     const result = await command(fakeCtx());
 
     expect(result.human).toContain("service did not converge");
@@ -487,7 +586,11 @@ describe("buildHostUpdateCommand composite", () => {
     } satisfies ApplyHostOutcome);
     mocks.readHostInstallRecordMock.mockResolvedValue(sampleRecord("2.0.0"));
 
-    const command = buildHostUpdateCommand({ force: false, ackNonce: null });
+    const command = buildHostUpdateCommand({
+      force: false,
+      allowDowngrade: false,
+      ackNonce: null,
+    });
     const result = await command(fakeCtx());
 
     expect(mocks.applyHostMock).toHaveBeenCalled();
@@ -525,7 +628,11 @@ describe("buildHostUpdateCommand composite", () => {
       arch: "arm64",
     });
 
-    const command = buildHostUpdateCommand({ force: false, ackNonce: null });
+    const command = buildHostUpdateCommand({
+      force: false,
+      allowDowngrade: false,
+      ackNonce: null,
+    });
     await expect(command(fakeCtx())).rejects.toMatchObject({
       code: CLI_ERROR_CODES.HOST_BUSY,
       details: { stagedVersion: "2.0.0" },
@@ -560,7 +667,11 @@ describe("buildHostUpdateCommand composite", () => {
       arch: "arm64",
     });
 
-    const command = buildHostUpdateCommand({ force: false, ackNonce: null });
+    const command = buildHostUpdateCommand({
+      force: false,
+      allowDowngrade: false,
+      ackNonce: null,
+    });
     await expect(command(fakeCtx())).rejects.toMatchObject({
       code: CLI_ERROR_CODES.HOST_BUSY,
       details: { stagedVersion: "2.0.0" },
@@ -588,7 +699,11 @@ describe("buildHostUpdateCommand composite", () => {
       }),
     );
 
-    const command = buildHostUpdateCommand({ force: false, ackNonce: null });
+    const command = buildHostUpdateCommand({
+      force: false,
+      allowDowngrade: false,
+      ackNonce: null,
+    });
     await expect(command(fakeCtx())).rejects.toMatchObject({
       code: CLI_ERROR_CODES.HOST_NOT_INSTALLED,
     });
@@ -605,7 +720,11 @@ describe("buildHostUpdateCommand composite", () => {
       }),
     );
 
-    const command = buildHostUpdateCommand({ force: false, ackNonce: null });
+    const command = buildHostUpdateCommand({
+      force: false,
+      allowDowngrade: false,
+      ackNonce: null,
+    });
     await expect(command(fakeCtx())).rejects.toMatchObject({
       code: CLI_ERROR_CODES.HOST_NOT_INSTALLED,
     });
@@ -644,6 +763,7 @@ describe("buildHostUpdateCommand update-progress marker (T16)", () => {
 
     const result = await buildHostUpdateCommand({
       force: false,
+      allowDowngrade: false,
       ackNonce: null,
     })(fakeCtx());
 
@@ -668,7 +788,11 @@ describe("buildHostUpdateCommand update-progress marker (T16)", () => {
     });
 
     await expect(
-      buildHostUpdateCommand({ force: false, ackNonce: null })(fakeCtx()),
+      buildHostUpdateCommand({
+        force: false,
+        allowDowngrade: false,
+        ackNonce: null,
+      })(fakeCtx()),
     ).rejects.toMatchObject({
       code: CLI_ERROR_CODES.HOST_UPDATE_HEALTH_CHECK_FAILED,
     });
@@ -690,7 +814,11 @@ describe("buildHostUpdateCommand update-progress marker (T16)", () => {
     mocks.applyHostMock.mockRejectedValue(new Error("commit failed"));
 
     await expect(
-      buildHostUpdateCommand({ force: false, ackNonce: null })(fakeCtx()),
+      buildHostUpdateCommand({
+        force: false,
+        allowDowngrade: false,
+        ackNonce: null,
+      })(fakeCtx()),
     ).rejects.toThrow("commit failed");
 
     expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenLastCalledWith(
@@ -712,6 +840,7 @@ describe("buildHostUpdateCommand update-progress marker (T16)", () => {
 
     const result = await buildHostUpdateCommand({
       force: false,
+      allowDowngrade: false,
       ackNonce: null,
     })(fakeCtx());
 
@@ -733,6 +862,7 @@ describe("buildHostUpdateCommand update-progress marker (T16)", () => {
 
     const result = await buildHostUpdateCommand({
       force: false,
+      allowDowngrade: false,
       ackNonce: null,
     })(fakeCtx());
 
