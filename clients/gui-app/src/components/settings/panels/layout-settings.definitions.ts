@@ -201,6 +201,85 @@ export const LAYOUT = defineSettingsSection("layout", {
     availableWhen: isStatusBarControlsAvailable,
     keywords: ["provider", "codex", "claude", "watched host", "unreachable"],
   },
+  composer: {
+    kind: "group",
+    search: { anchor: "layout-composer" },
+    label: "Composer",
+    description: null,
+    breadcrumb: null,
+    availableWhen: alwaysAvailable,
+    keywords: ["prompt", "input", "message box", "toolbar", "chrome"],
+  },
+  composerFilesChanged: {
+    kind: "row",
+    group: "composer",
+    search: { anchor: "layout-composer-files-changed" },
+    label: "Files changed",
+    description:
+      "Compact folds the row into a chip carrying its line counts; clicking the chip opens the full panel.",
+    availableWhen: alwaysAvailable,
+    keywords: ["diff", "changes", "line counts", "chip", "compact"],
+  },
+  composerActiveAgents: {
+    kind: "row",
+    group: "composer",
+    search: { anchor: "layout-composer-active-agents" },
+    label: "Active agents",
+    description:
+      "Compact folds the row - and the responses received from other agents - into a chip counting what is running.",
+    availableWhen: alwaysAvailable,
+    keywords: ["running agents", "responses", "chip", "compact"],
+  },
+  composerBackground: {
+    kind: "row",
+    group: "composer",
+    search: { anchor: "layout-composer-background" },
+    label: "Background",
+    description:
+      "Compact folds the row into a chip counting what is running in the background.",
+    availableWhen: alwaysAvailable,
+    keywords: ["background items", "shells", "chip", "compact"],
+  },
+  composerAttachImage: {
+    kind: "row",
+    group: "composer",
+    search: { anchor: "layout-composer-attach-image" },
+    label: "Attach image",
+    description:
+      "Hidden removes the button. Pasting an image and dropping one on the composer still attach it.",
+    availableWhen: alwaysAvailable,
+    keywords: ["image", "attachment", "paste", "drop", "button", "hidden"],
+  },
+  composerAccess: {
+    kind: "row",
+    group: "composer",
+    search: { anchor: "layout-composer-access" },
+    label: "Access",
+    description:
+      "Compact shows the permission mode as its icon alone, with the name on hover.",
+    availableWhen: alwaysAvailable,
+    keywords: ["permission mode", "permissions", "picker", "compact"],
+  },
+  composerMic: {
+    kind: "row",
+    group: "composer",
+    search: { anchor: "layout-composer-mic" },
+    label: "Microphone",
+    description:
+      "Hidden removes the button. The dictation shortcut still starts voice input, and this does not turn voice input off.",
+    availableWhen: alwaysAvailable,
+    keywords: ["mic", "dictation", "voice input", "button", "hidden"],
+  },
+  composerCompactButton: {
+    kind: "row",
+    group: "composer",
+    search: { anchor: "layout-composer-compact-button" },
+    label: "Compact conversation",
+    description:
+      "Hidden removes the button beside the context reading. The command palette and /compact still compact a conversation.",
+    availableWhen: alwaysAvailable,
+    keywords: ["compact", "context", "summarize", "button", "hidden"],
+  },
   chat: {
     kind: "group",
     search: { anchor: "layout-chat" },

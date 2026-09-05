@@ -201,6 +201,17 @@ describe("settings search", () => {
       expect(labelsFor("layout", DESKTOP)[0]).toBe("Layout");
     });
 
+    it("prefers a composer row over the group and over General's composer group", () => {
+      // "Attach image" is a row under Layout ▸ Composer; General's "Chat &
+      // composer" group shares the word and must not outrank the row.
+      expect(landingFor("attach image", DESKTOP)).toBe(
+        "layout#layout-composer-attach-image",
+      );
+      expect(landingFor("microphone", DESKTOP)).toBe(
+        "layout#layout-composer-mic",
+      );
+    });
+
     it("offers the footer controls on desktop and withholds them in the mobile app", () => {
       for (const label of [
         "Placement",

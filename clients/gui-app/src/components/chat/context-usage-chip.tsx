@@ -25,6 +25,7 @@ import {
   type EffectiveContextUsage,
 } from "@/components/chat/context-usage";
 import { cn } from "@/lib/utils";
+import { useLayoutStore } from "@/stores/settings/layout-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 
 interface ContextUsageChipProps {
@@ -201,8 +202,15 @@ interface CompactActionProps {
  * it outright when there is nothing to wait for. `self-center` because the
  * pinned strip lays its usage figures out on a shared text baseline, which a
  * button box would otherwise be dragged onto.
+ *
+ * Layout ▸ Composer can remove it. The gate is HERE rather than at the chip's
+ * two call sites so the inline chip and the pinned strip can never disagree,
+ * and it removes only this shortcut: the command palette and `/compact` reach
+ * the same compaction.
  */
 function CompactAction({ onCompact }: CompactActionProps) {
+  const compactButton = useLayoutStore((s) => s.composer.compactButton);
+  if (compactButton === "hidden") return null;
   return (
     <TooltipWrapper
       label="Compact conversation"

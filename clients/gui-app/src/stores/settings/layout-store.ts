@@ -70,8 +70,34 @@ export interface StatusBarLayoutPreferences {
   readonly resources: StatusBarResourcePreferences;
 }
 
+/**
+ * An element that shrinks rather than disappears. Its `compact` form still
+ * carries every verb the full form does - a dock row folds to a chip that
+ * opens it, the permission picker to the icon that names the active mode - so
+ * this union has no third member by design.
+ */
+export type ComposerCompactableMode = "visible" | "compact";
+
+/**
+ * An element that can go away entirely, because the thing it does has another
+ * route: paste and drag-drop attach images, the dictation chord starts voice
+ * input, the palette and `/compact` compact a conversation.
+ */
+export type ComposerHideableMode = "visible" | "hidden";
+
+export interface ComposerLayoutPreferences {
+  readonly filesChanged: ComposerCompactableMode;
+  readonly activeAgents: ComposerCompactableMode;
+  readonly background: ComposerCompactableMode;
+  readonly attachImage: ComposerHideableMode;
+  readonly access: ComposerCompactableMode;
+  readonly mic: ComposerHideableMode;
+  readonly compactButton: ComposerHideableMode;
+}
+
 interface LayoutStoreState {
   readonly statusBar: StatusBarLayoutPreferences;
+  readonly composer: ComposerLayoutPreferences;
   // Setters stay flat and are namespaced by their slice, so a call site names
   // the surface it is configuring and two slices can never collide on a verb.
   readonly setStatusBarPlacement: (placement: UsageControlsPlacement) => void;
@@ -91,6 +117,13 @@ interface LayoutStoreState {
   readonly setStatusBarResourcesEnabled: (enabled: boolean) => void;
   readonly toggleStatusBarResourceMetric: (metric: ResourceMetric) => void;
   readonly setStatusBarResourceScope: (scope: ResourceScope) => void;
+  readonly setComposerFilesChanged: (mode: ComposerCompactableMode) => void;
+  readonly setComposerActiveAgents: (mode: ComposerCompactableMode) => void;
+  readonly setComposerBackground: (mode: ComposerCompactableMode) => void;
+  readonly setComposerAttachImage: (mode: ComposerHideableMode) => void;
+  readonly setComposerAccess: (mode: ComposerCompactableMode) => void;
+  readonly setComposerMic: (mode: ComposerHideableMode) => void;
+  readonly setComposerCompactButton: (mode: ComposerHideableMode) => void;
 }
 
 /**
@@ -126,6 +159,17 @@ export const DEFAULT_STATUS_BAR_LAYOUT: StatusBarLayoutPreferences = {
   placement: "header",
   rateLimits: DEFAULT_STATUS_BAR_RATE_LIMITS,
   resources: DEFAULT_STATUS_BAR_RESOURCES,
+};
+
+/** Every element as it renders today, so an untouched install sees no change. */
+export const DEFAULT_COMPOSER_LAYOUT: ComposerLayoutPreferences = {
+  filesChanged: "visible",
+  activeAgents: "visible",
+  background: "visible",
+  attachImage: "visible",
+  access: "visible",
+  mic: "visible",
+  compactButton: "visible",
 };
 
 const LAYOUT_PERSIST_KEY = persistKey(STORE_KEYS.layout);
@@ -273,6 +317,66 @@ function resolvePersistedStatusBar(value: unknown): StatusBarLayoutPreferences {
   };
 }
 
+// ── composer slice ──────────────────────────────────────────────────────────
+
+function isComposerCompactableMode(
+  value: unknown,
+): value is ComposerCompactableMode {
+  return value === "visible" || value === "compact";
+}
+
+function isComposerHideableMode(value: unknown): value is ComposerHideableMode {
+  return value === "visible" || value === "hidden";
+}
+
+function compactable(
+  value: unknown,
+  fallback: ComposerCompactableMode,
+): ComposerCompactableMode {
+  return isComposerCompactableMode(value) ? value : fallback;
+}
+
+function hideable(
+  value: unknown,
+  fallback: ComposerHideableMode,
+): ComposerHideableMode {
+  return isComposerHideableMode(value) ? value : fallback;
+}
+
+/**
+ * Field by field, like the status bar slice above and for the same reason: each
+ * value picks a branch on a render path, and the two unions are NOT
+ * interchangeable - a persisted `"hidden"` on a row that only compacts would
+ * erase a surface whose Stop all / Review all / Undo all have no other home.
+ */
+function resolvePersistedComposer(value: unknown): ComposerLayoutPreferences {
+  const stored: Record<string, unknown> = isRecord(value) ? value : {};
+  return {
+    filesChanged: compactable(
+      stored.filesChanged,
+      DEFAULT_COMPOSER_LAYOUT.filesChanged,
+    ),
+    activeAgents: compactable(
+      stored.activeAgents,
+      DEFAULT_COMPOSER_LAYOUT.activeAgents,
+    ),
+    background: compactable(
+      stored.background,
+      DEFAULT_COMPOSER_LAYOUT.background,
+    ),
+    attachImage: hideable(
+      stored.attachImage,
+      DEFAULT_COMPOSER_LAYOUT.attachImage,
+    ),
+    access: compactable(stored.access, DEFAULT_COMPOSER_LAYOUT.access),
+    mic: hideable(stored.mic, DEFAULT_COMPOSER_LAYOUT.mic),
+    compactButton: hideable(
+      stored.compactButton,
+      DEFAULT_COMPOSER_LAYOUT.compactButton,
+    ),
+  };
+}
+
 function toggledMembership<T>(
   entries: ReadonlyArray<T>,
   entry: T,
@@ -286,6 +390,7 @@ export const useLayoutStore = create<LayoutStoreState>()(
   persist(
     (set, get) => ({
       statusBar: DEFAULT_STATUS_BAR_LAYOUT,
+      composer: DEFAULT_COMPOSER_LAYOUT,
       setStatusBarPlacement: (placement) => {
         const statusBar = get().statusBar;
         if (statusBar.placement === placement) return;
@@ -426,6 +531,41 @@ export const useLayoutStore = create<LayoutStoreState>()(
           },
         });
       },
+      setComposerFilesChanged: (mode) => {
+        const composer = get().composer;
+        if (composer.filesChanged === mode) return;
+        set({ composer: { ...composer, filesChanged: mode } });
+      },
+      setComposerActiveAgents: (mode) => {
+        const composer = get().composer;
+        if (composer.activeAgents === mode) return;
+        set({ composer: { ...composer, activeAgents: mode } });
+      },
+      setComposerBackground: (mode) => {
+        const composer = get().composer;
+        if (composer.background === mode) return;
+        set({ composer: { ...composer, background: mode } });
+      },
+      setComposerAttachImage: (mode) => {
+        const composer = get().composer;
+        if (composer.attachImage === mode) return;
+        set({ composer: { ...composer, attachImage: mode } });
+      },
+      setComposerAccess: (mode) => {
+        const composer = get().composer;
+        if (composer.access === mode) return;
+        set({ composer: { ...composer, access: mode } });
+      },
+      setComposerMic: (mode) => {
+        const composer = get().composer;
+        if (composer.mic === mode) return;
+        set({ composer: { ...composer, mic: mode } });
+      },
+      setComposerCompactButton: (mode) => {
+        const composer = get().composer;
+        if (composer.compactButton === mode) return;
+        set({ composer: { ...composer, compactButton: mode } });
+      },
     }),
     {
       ...basePersistOptions(LAYOUT_PERSIST_KEY),
@@ -439,9 +579,13 @@ export const useLayoutStore = create<LayoutStoreState>()(
         return {
           ...currentState,
           statusBar: resolvePersistedStatusBar(persisted.statusBar),
+          composer: resolvePersistedComposer(persisted.composer),
         };
       },
-      partialize: (state) => ({ statusBar: state.statusBar }),
+      partialize: (state) => ({
+        statusBar: state.statusBar,
+        composer: state.composer,
+      }),
     },
   ),
 );

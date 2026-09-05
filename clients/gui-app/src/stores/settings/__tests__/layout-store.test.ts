@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { CURRENT_PERSIST_VERSION, STORE_KEYS, persistKey } from "@/lib/persist";
 import {
+  DEFAULT_COMPOSER_LAYOUT,
   DEFAULT_STATUS_BAR_LAYOUT,
   useLayoutStore,
 } from "@/stores/settings/layout-store";
@@ -8,7 +9,10 @@ import {
 const PERSIST_KEY = persistKey(STORE_KEYS.layout);
 
 function resetStore(): void {
-  useLayoutStore.setState({ statusBar: DEFAULT_STATUS_BAR_LAYOUT });
+  useLayoutStore.setState({
+    statusBar: DEFAULT_STATUS_BAR_LAYOUT,
+    composer: DEFAULT_COMPOSER_LAYOUT,
+  });
   window.localStorage.clear();
 }
 
@@ -59,6 +63,7 @@ describe("useLayoutStore", () => {
             ...DEFAULT_STATUS_BAR_LAYOUT,
             placement: "status-bar",
           },
+          composer: DEFAULT_COMPOSER_LAYOUT,
         },
         version: CURRENT_PERSIST_VERSION,
       });
@@ -369,6 +374,153 @@ describe("useLayoutStore", () => {
       useLayoutStore.getState().setStatusBarShowModeWord(true);
 
       expect(useLayoutStore.getState().statusBar).toBe(before);
+    });
+  });
+
+  describe("composer slice", () => {
+    it("starts with every element visible", () => {
+      expect(useLayoutStore.getState().composer).toEqual(
+        DEFAULT_COMPOSER_LAYOUT,
+      );
+    });
+
+    it("writes one field per setter and leaves its neighbours alone", () => {
+      const store = useLayoutStore.getState();
+
+      store.setComposerFilesChanged("compact");
+      store.setComposerActiveAgents("compact");
+      store.setComposerBackground("compact");
+      store.setComposerAttachImage("hidden");
+      store.setComposerAccess("compact");
+      store.setComposerMic("hidden");
+      store.setComposerCompactButton("hidden");
+
+      expect(useLayoutStore.getState().composer).toEqual({
+        filesChanged: "compact",
+        activeAgents: "compact",
+        background: "compact",
+        attachImage: "hidden",
+        access: "compact",
+        mic: "hidden",
+        compactButton: "hidden",
+      });
+    });
+
+    it("leaves state untouched when a setter is handed the value already held", () => {
+      const before = useLayoutStore.getState().composer;
+
+      useLayoutStore.getState().setComposerFilesChanged("visible");
+      useLayoutStore.getState().setComposerMic("visible");
+
+      expect(useLayoutStore.getState().composer).toBe(before);
+    });
+
+    it("rehydrates a fully valid slice verbatim", async () => {
+      await rehydrateFrom({
+        composer: {
+          filesChanged: "compact",
+          activeAgents: "compact",
+          background: "compact",
+          attachImage: "hidden",
+          access: "compact",
+          mic: "hidden",
+          compactButton: "hidden",
+        },
+      });
+
+      expect(useLayoutStore.getState().composer).toEqual({
+        filesChanged: "compact",
+        activeAgents: "compact",
+        background: "compact",
+        attachImage: "hidden",
+        access: "compact",
+        mic: "hidden",
+        compactButton: "hidden",
+      });
+    });
+
+    it.each([
+      ["the record is not an object", "layout"],
+      ["the slice is missing", {}],
+      ["the slice is not an object", { composer: 3 }],
+    ])(
+      "falls back to the whole default slice when %s",
+      async (_label, state) => {
+        await rehydrateFrom(state);
+
+        expect(useLayoutStore.getState().composer).toEqual(
+          DEFAULT_COMPOSER_LAYOUT,
+        );
+      },
+    );
+
+    it("falls back per field on a garbage value, without touching its neighbours", async () => {
+      await rehydrateFrom({
+        composer: {
+          filesChanged: "sideways",
+          activeAgents: "compact",
+          background: 7,
+          attachImage: "hidden",
+          access: null,
+          mic: "loud",
+          compactButton: "hidden",
+        },
+      });
+
+      expect(useLayoutStore.getState().composer).toEqual({
+        filesChanged: "visible",
+        activeAgents: "compact",
+        background: "visible",
+        attachImage: "hidden",
+        access: "visible",
+        mic: "visible",
+        compactButton: "hidden",
+      });
+    });
+
+    // The two unions are not interchangeable. `filesChanged` only ever
+    // compacts (never `hidden` - its row carries verbs with no other home),
+    // and `mic` only ever hides (never `compact` - it has no smaller shape).
+    // A value that is valid for the OTHER union must not sneak through as if
+    // it were valid for this field's own union.
+    it("rejects a value from the other union instead of accepting it across fields", async () => {
+      await rehydrateFrom({
+        composer: {
+          filesChanged: "hidden",
+          mic: "compact",
+        },
+      });
+
+      const composer = useLayoutStore.getState().composer;
+      expect(composer.filesChanged).toBe("visible");
+      expect(composer.mic).toBe("visible");
+    });
+
+    it("keeps a corrupt composer slice from disturbing a valid status bar slice", async () => {
+      await rehydrateFrom({
+        statusBar: { placement: "status-bar" },
+        composer: "not an object",
+      });
+
+      expect(useLayoutStore.getState().statusBar.placement).toBe("status-bar");
+      expect(useLayoutStore.getState().composer).toEqual(
+        DEFAULT_COMPOSER_LAYOUT,
+      );
+    });
+
+    it("keeps a corrupt status bar slice from disturbing a valid composer slice", async () => {
+      await rehydrateFrom({
+        statusBar: "not an object",
+        composer: { filesChanged: "compact" },
+      });
+
+      expect(useLayoutStore.getState().statusBar).toEqual(
+        DEFAULT_STATUS_BAR_LAYOUT,
+      );
+      expect(useLayoutStore.getState().composer).toEqual({
+        ...DEFAULT_COMPOSER_LAYOUT,
+        filesChanged: "compact",
+      });
     });
   });
 });
