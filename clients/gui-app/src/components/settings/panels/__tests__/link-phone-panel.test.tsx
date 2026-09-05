@@ -784,8 +784,16 @@ describe("LinkPhonePanel", () => {
     const countdown = () =>
       screen.getByTestId("link-phone-claim-countdown").textContent;
     expect(countdown()).toBe("Expires in 1:59");
-    // Inside the status live region, so it is announced with the prompt.
-    expect(screen.getByRole("status").textContent).toContain("Expires in 1:59");
+    // Beneath the prompt in reading order but OUTSIDE the status live region:
+    // a region announces every change under it, and a once-a-second clock
+    // would have a screen reader talking over the code and the instructions.
+    const live = screen.getByRole("status");
+    expect(live.textContent).not.toContain("Expires in");
+    expect(
+      live.compareDocumentPosition(
+        screen.getByTestId("link-phone-claim-countdown"),
+      ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
     act(() => {
       vi.advanceTimersByTime(60_000);
     });

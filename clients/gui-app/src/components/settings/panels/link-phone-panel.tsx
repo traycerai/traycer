@@ -188,31 +188,38 @@ function ConfirmClaimCard(props: {
       data-testid="link-phone-confirm"
     >
       <QrCode aria-hidden="true" className="text-muted-foreground" />
-      {/* The QR is swapped for this prompt with no user action on this
-          surface, and it is only answerable inside the claim window — a
-          screen-reader user has to hear about it, code included, or the
-          window expires undiscovered. */}
-      <div
-        className="flex flex-col items-center gap-1 text-center"
-        role="status"
-        aria-live="polite"
-      >
-        <ConfirmClaimHeadline claim={props.claim} />
-        <p
-          className="text-ui-xs text-muted-foreground"
-          data-testid="link-phone-claimant"
+      <div className="flex flex-col items-center gap-1 text-center">
+        {/* The QR is swapped for this prompt with no user action on this
+            surface, and it is only answerable inside the claim window — a
+            screen-reader user has to hear about it, code included, or the
+            window expires undiscovered. */}
+        <div
+          className="flex flex-col items-center gap-1"
+          role="status"
+          aria-live="polite"
         >
-          {detailLine}
-        </p>
+          <ConfirmClaimHeadline claim={props.claim} />
+          <p
+            className="text-ui-xs text-muted-foreground"
+            data-testid="link-phone-claimant"
+          >
+            {detailLine}
+          </p>
+          {props.claim.matchCode.kind === "not-presented" ? null : (
+            <p className="text-ui-xs text-muted-foreground">
+              {props.claim.matchCode.kind === "shown"
+                ? "Approve only if the code matches and you just scanned this code yourself."
+                : "These details are approximate. Approve only if you just scanned this code yourself."}
+            </p>
+          )}
+        </div>
+        {/* Outside the live region: a status region announces every change
+            beneath it, and a clock that changes once a second would have a
+            screen reader repeating it over the code and the instructions the
+            person is trying to hear. The countdown is still in the reading
+            order right under the prompt, just never announced on its own. */}
         {props.claim.claimExpiresAt === null ? null : (
           <ClaimCountdown expiresAtMs={props.claim.claimExpiresAt} />
-        )}
-        {props.claim.matchCode.kind === "not-presented" ? null : (
-          <p className="text-ui-xs text-muted-foreground">
-            {props.claim.matchCode.kind === "shown"
-              ? "Approve only if the code matches and you just scanned this code yourself."
-              : "These details are approximate. Approve only if you just scanned this code yourself."}
-          </p>
         )}
       </div>
       {props.respondFailed ? (
