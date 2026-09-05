@@ -14,9 +14,19 @@
  *   afterwards - resizing can never flip it. UX-policy divergence only,
  *   e.g. the single-composer draft model.
  * - "Can this shell physically do X?" -> capability fields on `IRunnerHost`
- *   (e.g. `workspaceFolders.canPickNatively`). Abilities, not identity: a
- *   desktop browser also lacks a native folder dialog without being the
- *   mobile app.
+ *   (e.g. `workspaceFolders.canPickNatively`, `hasLocalHost`, the duck-typed
+ *   desktop bridges). Abilities, not identity: a desktop browser also lacks a
+ *   native folder dialog without being the mobile app. A gate that means "this
+ *   shell cannot keep the promise this UI makes" belongs here, NOT on the
+ *   product flag - dictation and prevent-sleep both keyed on the flag while
+ *   the phone was the only shell without the ability, and both mis-offered the
+ *   moment a browser shell existed.
+ *
+ * Which shell it IS, for telemetry, is a fourth question none of the three can
+ * answer - the browser app and the in-browser dev loop are identical on every
+ * one of them. That answer is DECLARED by the shell's bootstrap
+ * (`setAnalyticsAppSurface` in `lib/analytics.ts`); it is a reporting label
+ * only and must never become a gate.
  */
 
 let mobileApp = false;

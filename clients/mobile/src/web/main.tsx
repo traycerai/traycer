@@ -1,3 +1,8 @@
+// FIRST, ahead of every import that reaches the shared renderer: the tab
+// store reads its persisted layout while its module evaluates, so this
+// entry's answer has to be on the record before that module is reached.
+// See `single-context-tabs.ts`.
+import "./single-context-tabs";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "@capacitor/app";
@@ -15,6 +20,7 @@ import {
   MOBILE_RETENTION_PROFILE,
   TraycerApp,
   hostRpcRegistry,
+  setAnalyticsAppSurface,
   setMobileApp,
   setMobileAppPlatform,
   setRetentionProfile,
@@ -180,6 +186,15 @@ function bootstrap(): void {
   // inherit phone-only affordances like "Scan from desktop", which on the
   // desktop side of that loop is a nonsense offer.
   setMobileApp(Capacitor.isNativePlatform());
+  // Telemetry identity, declared for the same reason and off the same fact -
+  // this one bundle is two products. `browser_dev` keeps the dev loop's
+  // sessions out of the installed app's series instead of inflating it; no
+  // capability could have told the two apart, since the browser entry runs the
+  // same remote-only runner host.
+  setAnalyticsAppSurface(
+    Capacitor.isNativePlatform() ? "mobile" : "browser_dev",
+  );
+
   // MEMORY, not product: the installed app runs under iOS's 2 GB WebContent
   // ceiling, so it keeps fewer hidden tabs mounted and fewer epic / chat /
   // terminal sessions warm than the desktop does. Gated on the same native
@@ -296,7 +311,12 @@ async function mount(input: {
       ? new MobileDeviceDescriber()
       : null,
     linkLoginDeepLinks,
-    // Native-only, like the two above: the share sheet is the OS surface a
+    // Same native gate as everything above: an installed app has one webview
+    // holding every context, so it draws the tabs itself. A browser tab of
+    // this same bundle already sits in a tab bar, and a strip inside it would
+    // be a second row of tabs above the one the person is using.
+    hasAppTabs: Capacitor.isNativePlatform(),
+    // Native-only, like the ones above: the share sheet is the OS surface a
     // phone user saves through, and neither plugin has a web implementation
     // worth preferring over the browser save APIs gui-app already falls back
     // to in a tab.

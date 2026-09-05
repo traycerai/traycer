@@ -4,7 +4,7 @@ import { SettingsRow } from "@/components/settings/settings-row";
 import { Switch } from "@/components/ui/switch";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
-import { isMobileApp } from "@/lib/mobile-app";
+import { useRunnerHost } from "@/providers/use-runner-host";
 
 export function VoiceSettingsSection(): ReactNode {
   const { voiceInputEnabled, setVoiceInputEnabled } = useSettingsStore(
@@ -13,11 +13,14 @@ export function VoiceSettingsSection(): ReactNode {
       setVoiceInputEnabled: s.setVoiceInputEnabled,
     })),
   );
+  const hasLocalHost = useRunnerHost().hasLocalHost;
 
-  // `useDictationAvailability` refuses dictation outright in the mobile app, so
-  // this row would be a toggle for something the build will not do - and the
-  // description below makes a promise that build cannot keep. Hide it there.
-  if (isMobileApp()) return null;
+  // `useDictationAvailability` refuses dictation outright without a local host,
+  // so this row would be a toggle for something the shell will not do - and the
+  // description below promises on-device transcription that a shell whose every
+  // reachable host is a remote machine cannot deliver. Same capability, same
+  // gate: the two must not be able to disagree.
+  if (!hasLocalHost) return null;
 
   return (
     <SettingsRow

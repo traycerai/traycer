@@ -1,0 +1,484 @@
+import {
+  credentialsIdentityFromAuthenticatedUser,
+  exchangeCodeForTokens,
+  validateAuthTokenIdentityAccessOnly,
+  type AuthCodeExchangeResult,
+} from "@traycer-clients/shared/auth/auth-validation";
+import type { AuthIdentityValidationResult } from "@traycer-clients/shared/auth/auth-validation-types";
+import {
+  CODE_CHALLENGE_METHOD,
+  deriveCodeChallenge,
+  generateCodeVerifier,
+} from "@traycer-clients/shared/auth/pkce";
+import type { ITokenStore } from "@traycer-clients/shared/platform/runner-host";
+
+/**
+ * The deployed dashboard route this shell hands off to. Same origin by
+ * construction - this bundle is served from the web dashboard's own origin
+ * (see `vite.config.ts`), which is also the only origin authn's CORS admits.
+ *
+ * The seam is the NAVIGATION, not the session. A tab cannot read the
+ * dashboard's credential: it lives in that app's own storage under a private
+ * schema with no public accessor. `/login/app` is the piece that already knows
+ * how to read it - it calls `issue-code` with its own live session and bounces
+ * back to a validated `redirect_uri` carrying a one-time `code`.
+ */
+const LOGIN_APP_PATH = "/login/app";
+
+/** The query parameter the deployed `/login/app` appends on its way back. */
+const RETURN_CODE_PARAM = "code";
+
+/**
+ * Total silent-mint navigations one tab will ever issue: the first attempt and
+ * exactly one retry.
+ *
+ * This is the loop bound, and it is counted over NAVIGATIONS rather than over
+ * observed failures on purpose. Every way this handoff can disappoint looks
+ * the same from here - a code that is expired, already spent, or never
+ * appended at all because the dashboard resolved a different continuation -
+ * and only a counter that survives the round trip can tell the second landing
+ * from the first. A tab that has spent both lands on the device flow instead,
+ * which needs no dashboard session at all.
+ */
+const MAX_MINT_NAVIGATIONS = 2;
+
+/**
+ * Where the PKCE verifier, the destination and the attempt counter live for
+ * the length of the round trip.
+ *
+ * `sessionStorage`, not `localStorage`: the bundle's own credential is
+ * origin-wide because a browser holds ONE session, but a mint in flight
+ * belongs to the tab that started it. A second tab minting at the same moment
+ * has its own verifier and its own budget, and neither can consume the
+ * other's. It also disposes itself - closing the tab ends the attempt - which
+ * a durable slot would not.
+ *
+ * The destination is stored rather than re-read from the address bar on the
+ * way back, because the way back is lossy by construction: the handoff writes
+ * its `code` INTO the destination, so a destination that had a `code` of its
+ * own comes back with that value replaced. Remembering it is also what makes
+ * "is this `code` auth material?" answerable at all - it is, exactly when this
+ * tab is waiting for one.
+ */
+export const WEB_MINT_VERIFIER_KEY = "traycer.webapp.mint.verifier";
+export const WEB_MINT_TARGET_KEY = "traycer.webapp.mint.target";
+export const WEB_MINT_NAVIGATION_KEY = "traycer.webapp.mint.navigations";
+
+/**
+ * The document's URL and the two ways this flow changes it, as a seam.
+ *
+ * Injected rather than reached for because both writes are unobservable in a
+ * test that owns no browser: `navigate` unloads the document (jsdom refuses
+ * it) and `rewrite` is the history entry the address bar shows. The
+ * distinction between them is load-bearing - one leaves, one does not - so it
+ * is named here rather than left to a call site to get right.
+ */
+export interface MintLocation {
+  /** Absolute href of this document, query and fragment included. */
+  readonly href: string;
+  /** Leaves this document for `url`. Nothing after this call runs to effect. */
+  navigate(url: string): void;
+  /** Replaces the current history entry in place, without navigating. */
+  rewrite(url: string): void;
+}
+
+/** Tab-scoped string slots; `sessionStorage`'s surface, narrowed. */
+export interface MintScratchpad {
+  read(key: string): string | null;
+  write(key: string, value: string): void;
+  remove(key: string): void;
+}
+
+/** The PKCE pair generator, injectable so a test can pin the challenge. */
+export interface MintPkce {
+  generateVerifier(): string;
+  deriveChallenge(verifier: string): Promise<string>;
+}
+
+export interface AppSessionMintOptions {
+  readonly location: MintLocation;
+  readonly scratchpad: MintScratchpad;
+  readonly tokenStore: ITokenStore;
+  readonly authnBaseUrl: string;
+  readonly exchange: (
+    code: string,
+    codeVerifier: string,
+  ) => Promise<AuthCodeExchangeResult>;
+  readonly probeIdentity: (
+    token: string,
+  ) => Promise<AuthIdentityValidationResult>;
+  readonly pkce: MintPkce;
+}
+
+/**
+ * What the boot sequence should do next.
+ *
+ * `navigating` is the one arm that is not a state: the document is on its way
+ * out, so the caller must render nothing rather than mount an app that is
+ * about to be torn down mid-paint.
+ */
+export type AppSessionMintOutcome =
+  | { readonly kind: "stored-credential" }
+  | { readonly kind: "navigating" }
+  | { readonly kind: "minted" }
+  | {
+      readonly kind: "device-flow-fallback";
+      readonly reason: MintGiveUpReason;
+    };
+
+/**
+ * Why a mint stopped short of a credential. Every value here routes to the
+ * same place - the shell's device flow - and exists to be logged, not
+ * branched on.
+ */
+export type MintGiveUpReason =
+  | "no-code-returned"
+  | "verifier-missing"
+  | "code-rejected"
+  | "exchange-unreachable"
+  | "identity-unresolved";
+
+/**
+ * Mints an independent app credential from the dashboard's session, with no
+ * interaction beyond a same-origin redirect bounce.
+ *
+ * The round trip, once:
+ *
+ * 1. Generate a PKCE verifier and its S256 challenge, keep the verifier in
+ *    this tab, and navigate to `/login/app` with the challenge and a RELATIVE
+ *    `redirect_uri` pointing back at the exact page the visitor asked for.
+ * 2. `/login/app` reads its own dashboard session, calls `issue-code`, and
+ *    sends the browser back to that `redirect_uri` with `?code=...`.
+ * 3. This function runs again on that landing, spends the code against
+ *    `exchange-code` with the verifier it kept, and commits the resulting pair
+ *    to the shell's own token store.
+ *
+ * Signed out, step 2 becomes a full sign-in first, and the handoff survives it
+ * ONLY because both parameters travel together - see {@link loginAppUrl}.
+ *
+ * The credential this produces is a sibling of the dashboard's, not a view
+ * onto it: its own family, revoked and refreshed on its own, so signing out of
+ * one leaves the other alone.
+ */
+export async function runAppSessionMint(
+  options: AppSessionMintOptions,
+): Promise<AppSessionMintOutcome> {
+  const pending = readPendingHandoff(options.scratchpad);
+  if (pending !== null) {
+    return completeHandoff(options, pending);
+  }
+  if ((await options.tokenStore.get()) !== null) {
+    return adoptStoredCredential(options);
+  }
+  return beginMint(options, currentTarget(options), "no-code-returned");
+}
+
+/**
+ * A handoff this tab issued and is now landing back from: where the visitor
+ * was going, and the secret that can spend the code they came back with.
+ */
+interface PendingHandoff {
+  readonly target: string;
+  readonly verifier: string | null;
+}
+
+/**
+ * Finishes a round trip this tab started.
+ *
+ * The address bar on a landing is TRANSPORT, not truth. The handoff writes its
+ * `code` into the destination it was given, which means the value of a `code`
+ * that was already part of that destination is gone by the time the browser
+ * arrives - and no inspection of the landing URL can recover it. So the
+ * destination is remembered when the handoff is issued and restored verbatim
+ * here, which also settles the question of what a `code` on the URL MEANS: it
+ * is auth material only because this tab is waiting for one. On any other page
+ * load it is the page's own query, untouched.
+ *
+ * The verifier and the remembered destination are consumed together and up
+ * front. Both are single-use, and the failure that matters is not losing them
+ * - it is keeping them: a reload that re-presents a spent code, or a retry
+ * that pairs a fresh challenge with a stale verifier.
+ */
+async function completeHandoff(
+  options: AppSessionMintOptions,
+  pending: PendingHandoff,
+): Promise<AppSessionMintOutcome> {
+  const code = new URL(options.location.href).searchParams.get(
+    RETURN_CODE_PARAM,
+  );
+  clearHandoff(options.scratchpad);
+
+  if (code === null || code.length === 0) {
+    // Back here with nothing to spend: the visitor returned some other way, or
+    // the sign-in resolved a continuation that hands back no code at all. They
+    // are somewhere by their own account now, so a retry aims at where they
+    // ARE rather than at where they were going.
+    return beginMint(options, currentTarget(options), "no-code-returned");
+  }
+  options.location.rewrite(pending.target);
+
+  // A code with no verifier cannot be spent by this tab - the secret that
+  // matches it is gone. Spending it is not merely futile, it would burn a code
+  // whose round trip may still be live somewhere.
+  if (pending.verifier === null || pending.verifier.length === 0) {
+    return beginMint(options, pending.target, "verifier-missing");
+  }
+  // A credential committed while this tab was away (a sibling's mint, or its
+  // own earlier one) outranks the code: adopt it, spend nothing, and let the
+  // code expire unused.
+  if ((await options.tokenStore.get()) !== null) {
+    return adoptStoredCredential(options);
+  }
+
+  const exchanged = await options.exchange(code, pending.verifier);
+  if (exchanged.kind === "rejected") {
+    return beginMint(options, pending.target, "code-rejected");
+  }
+  if (exchanged.kind === "network-error") {
+    return beginMint(options, pending.target, "exchange-unreachable");
+  }
+
+  // `signIn` needs an identity, and the pair is the only thing the exchange
+  // returns. Read it the way the store's own legacy migration does: an
+  // access-only probe, which cannot spend the refresh token that has just been
+  // minted alongside it.
+  const probe = await options.probeIdentity(exchanged.token);
+  if (probe.kind !== "valid") {
+    return beginMint(options, pending.target, "identity-unresolved");
+  }
+  await options.tokenStore.signIn(
+    { token: exchanged.token, refreshToken: exchanged.refreshToken },
+    credentialsIdentityFromAuthenticatedUser(probe.user),
+  );
+  clearMintState(options.scratchpad);
+  return { kind: "minted" };
+}
+
+/**
+ * The mint is over because a credential exists - whoever put it there.
+ *
+ * The budget is released on THIS arm too, and not only on the arm where this
+ * tab did the minting itself. The counter exists to bound one unsuccessful
+ * stretch of attempts, and a credential in the store ends that stretch however
+ * it arrived. A tab that kept the count would carry it past the sign-out that
+ * follows and go straight to the device flow on its next boot - for attempts
+ * that belong to a session that has since ended.
+ */
+function adoptStoredCredential(
+  options: AppSessionMintOptions,
+): AppSessionMintOutcome {
+  clearMintState(options.scratchpad);
+  return { kind: "stored-credential" };
+}
+
+/**
+ * Starts (or retries) the handoff to `target`, or gives up to the device flow
+ * once this tab has spent its navigation budget.
+ */
+async function beginMint(
+  options: AppSessionMintOptions,
+  target: string,
+  reason: MintGiveUpReason,
+): Promise<AppSessionMintOutcome> {
+  const spent = readNavigationCount(options.scratchpad);
+  if (spent >= MAX_MINT_NAVIGATIONS) {
+    return { kind: "device-flow-fallback", reason };
+  }
+
+  const verifier = options.pkce.generateVerifier();
+  const challenge = await options.pkce.deriveChallenge(verifier);
+  // Re-read after the derivation: a sibling tab of this origin may have
+  // committed a credential while we hashed, and this tab shares that storage.
+  // Navigating anyway would take a signed-in visitor away from the page they
+  // are already entitled to see.
+  if ((await options.tokenStore.get()) !== null) {
+    return adoptStoredCredential(options);
+  }
+
+  options.scratchpad.write(WEB_MINT_VERIFIER_KEY, verifier);
+  options.scratchpad.write(WEB_MINT_TARGET_KEY, target);
+  options.scratchpad.write(WEB_MINT_NAVIGATION_KEY, String(spent + 1));
+  options.location.navigate(
+    loginAppUrl(new URL(options.location.href).origin, target, challenge),
+  );
+  return { kind: "navigating" };
+}
+
+/** Where the visitor is right now, as a destination to come back to. */
+function currentTarget(options: AppSessionMintOptions): string {
+  return relativeReference(new URL(options.location.href));
+}
+
+function readPendingHandoff(scratchpad: MintScratchpad): PendingHandoff | null {
+  const target = scratchpad.read(WEB_MINT_TARGET_KEY);
+  if (target === null || target.length === 0) {
+    return null;
+  }
+  return { target, verifier: scratchpad.read(WEB_MINT_VERIFIER_KEY) };
+}
+
+/** Retires the single-use material, leaving the budget alone. */
+function clearHandoff(scratchpad: MintScratchpad): void {
+  scratchpad.remove(WEB_MINT_VERIFIER_KEY);
+  scratchpad.remove(WEB_MINT_TARGET_KEY);
+}
+
+/** Retires everything, including the budget - the flow is over. */
+function clearMintState(scratchpad: MintScratchpad): void {
+  clearHandoff(scratchpad);
+  scratchpad.remove(WEB_MINT_NAVIGATION_KEY);
+}
+
+/**
+ * The `/login/app` URL for one attempt.
+ *
+ * BOTH PKCE parameters travel with the redirect uri, always, and that is the
+ * whole reason a signed-out visitor completes this flow instead of looping.
+ * The handoff persists what it is given before the auth gate turns a
+ * signed-out visitor around, and the continuation after sign-in reads those
+ * persisted values back to decide where the fresh session goes: a redirect uri
+ * WITH a challenge is this app's handoff, a redirect uri WITHOUT one is the
+ * editor-extension handoff, which returns a token payload in the URL and never
+ * a `code` this shell can spend. So dropping the challenge does not degrade
+ * the flow, it silently selects a different one - and the visitor comes back
+ * to a page that still has no credential.
+ *
+ * The redirect uri is a RELATIVE reference carrying the whole destination -
+ * path, query and fragment. Relative because the handoff's validator admits a
+ * same-origin relative uri directly, and whole because the query and fragment
+ * ARE the page: returning a visitor to the bare path returns them somewhere
+ * else, silently.
+ *
+ * One bounded window is outside this shell's reach: the page on the other side
+ * owns the request it makes, and this tab has no way to time it out from here.
+ * A stalled one leaves the visitor on that page rather than back here, so the
+ * retry budget below is only spendable once the browser actually returns.
+ */
+function loginAppUrl(
+  origin: string,
+  target: string,
+  codeChallenge: string,
+): string {
+  const handoff = new URL(LOGIN_APP_PATH, origin);
+  handoff.searchParams.set("redirect_uri", target);
+  handoff.searchParams.set("code_challenge", codeChallenge);
+  handoff.searchParams.set("code_challenge_method", CODE_CHALLENGE_METHOD);
+  return handoff.toString();
+}
+
+/** `/path?query#fragment` - the destination as the handoff accepts it. */
+function relativeReference(url: URL): string {
+  return `${url.pathname}${url.search}${url.hash}`;
+}
+
+/**
+ * A malformed or absent counter reads as "none spent". The slot is written
+ * only by this module and only with a small integer, so anything else is a
+ * foreign write - and treating it as a spent budget would strand a tab on the
+ * device flow for a value it never wrote.
+ */
+function readNavigationCount(scratchpad: MintScratchpad): number {
+  const raw = scratchpad.read(WEB_MINT_NAVIGATION_KEY);
+  if (raw === null) {
+    return 0;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : 0;
+}
+
+/** `window.location` / `history`, as the seam above. */
+export function createWindowMintLocation(): MintLocation {
+  return {
+    get href(): string {
+      return window.location.href;
+    },
+    navigate: (url) => {
+      // `assign`, not `replace`: the entry being left is the app's own deep
+      // link, and it is where Back should come back to.
+      window.location.assign(url);
+    },
+    rewrite: (url) => {
+      window.history.replaceState(window.history.state, "", url);
+    },
+  };
+}
+
+/**
+ * `sessionStorage`, as the seam above.
+ *
+ * Every operation is guarded, and the PROPERTY ACCESS is guarded with them: a
+ * browser that denies storage for the origin raises `SecurityError` on the
+ * getter itself, not only on the calls. This scratchpad is read on the
+ * pre-render boot path, so an unguarded throw here rejects `bootstrap()` and
+ * leaves the inline boot surface up with nothing behind it.
+ *
+ * A denied scratchpad degrades to "no handoff in flight", which is a state the
+ * mint already has an answer for - it is what a first, unbounced visit looks
+ * like - so the tab falls through to the device flow instead of failing.
+ */
+export function createSessionScratchpad(): MintScratchpad {
+  return {
+    read: (key) => {
+      try {
+        return sessionStorageArea()?.getItem(key) ?? null;
+      } catch {
+        return null;
+      }
+    },
+    write: (key, value) => {
+      try {
+        sessionStorageArea()?.setItem(key, value);
+      } catch {
+        // A scratchpad that cannot be written is one that reads back empty,
+        // which the callers above already treat as "nothing was spent".
+      }
+    },
+    remove: (key) => {
+      try {
+        sessionStorageArea()?.removeItem(key);
+      } catch {
+        // Same bargain as `write`.
+      }
+    },
+  };
+}
+
+/** `window.sessionStorage`, or `null` where the origin has no usable one. */
+function sessionStorageArea(): Storage | null {
+  try {
+    return window.sessionStorage;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The deployed exchange, and the client kind it assigns.
+ *
+ * Nothing in this request names a client: `exchange-code` mints with a
+ * `desktop` client kind of its own accord, so a tab currently appears in
+ * Devices & Sessions as a desktop app. Making it honest is a two-sided change
+ * and BOTH sides are outside this module - authn's mint has to learn a web
+ * kind, and this shell's OTHER sign-in path, the device flow, passes its own
+ * `client_id` (`web-runner-host.ts`). Neither is a constant this file could
+ * flip.
+ */
+export function exchangeAppCode(
+  authnBaseUrl: string,
+): (code: string, codeVerifier: string) => Promise<AuthCodeExchangeResult> {
+  return (code, codeVerifier) =>
+    exchangeCodeForTokens(authnBaseUrl, code, codeVerifier);
+}
+
+/** The access-only identity read, bound to one authn. */
+export function probeAppIdentity(
+  authnBaseUrl: string,
+): (token: string) => Promise<AuthIdentityValidationResult> {
+  return (token) => validateAuthTokenIdentityAccessOnly(authnBaseUrl, token);
+}
+
+/** The real PKCE pair, from the shared browser-safe helpers. */
+export const webCryptoPkce: MintPkce = {
+  generateVerifier: generateCodeVerifier,
+  deriveChallenge: deriveCodeChallenge,
+};

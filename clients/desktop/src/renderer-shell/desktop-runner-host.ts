@@ -666,6 +666,8 @@ export class DesktopRunnerHost implements IRunnerHost {
   readonly authnBaseUrl: string;
   readonly relayBaseUrl: string;
   readonly hasLocalHost: boolean = true;
+  // One window holds every context here, so the app draws its own tabs.
+  readonly hasAppTabs = true;
   // The renderer's own clipboard takes images, and where a MIME type defeats
   // it the main-process nativeImage bridge picks the write up.
   readonly canCopyImages: boolean = true;

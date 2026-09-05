@@ -1,6 +1,7 @@
 import {
   createMemoryHistory,
   createRouter,
+  type NotFoundRouteComponent,
   type Router,
   type RouterHistory,
 } from "@tanstack/react-router";
@@ -32,13 +33,37 @@ export interface AppRouterContext {
 
 export type AppRouter = Router<typeof routeTree>;
 
+/**
+ * `basepath` is the URL prefix this build is SERVED under, or `null` when it
+ * owns the root. Only a shell that is mounted below the root passes one (a
+ * browser build served from a path-scoped static zone); the route ids are
+ * unchanged by it, so `/settings` stays `/settings` to every route guard and
+ * only the URL bar carries the prefix.
+ *
+ * It has to be a router argument rather than a build-time constant because
+ * the prefix is a property of how the bundle is served, and one renderer
+ * serves shells that disagree: the desktop's `app://` renderer has no path
+ * prefix at all.
+ *
+ * `notFoundComponent` replaces the router library's bare fallback for a URL
+ * that matches no route. It is a shell argument for the same reason: only a
+ * shell whose URLs a stranger can type needs one, and only the shell knows
+ * where "back to the app" lives once its own prefix is in play. `null` keeps
+ * the library default, which is right where the address bar is unreachable.
+ * Its type is the router's own, so a shell that wants the props the router
+ * passes a not-found component (`data`, `isNotFound`, `routeId`) can read
+ * them; a zero-argument component stays assignable and ignores them.
+ */
 export function createAppRouter(
   initialRoute: string | null,
   windowId: string | null,
+  basepath: string | null,
+  notFoundComponent: NotFoundRouteComponent | null,
 ): AppRouter {
   const history = createAppHistory(initialRoute, windowId);
   const router = createRouter({
     routeTree,
+    ...(basepath === null ? {} : { basepath }),
     defaultPreload: "intent",
     defaultPreloadStaleTime: 0,
     // Show a neutral loading screen once a navigation has pended past this
@@ -52,6 +77,9 @@ export function createAppRouter(
     // Without it an uncaught render error tears the whole tree down to a blank
     // canvas; with it the failure lands on the shared recovery card.
     defaultErrorComponent: RouteErrorComponent,
+    ...(notFoundComponent === null
+      ? {}
+      : { defaultNotFoundComponent: notFoundComponent }),
     context: {
       queryClient,
       getAuthSnapshot: () => useAuthStore.getState(),
@@ -190,7 +218,7 @@ function normalizeInitialRoute(initialRoute: string | null): string {
   return initialRoute;
 }
 
-export const router = createAppRouter(null, null);
+export const router = createAppRouter(null, null, null, null);
 
 declare module "@tanstack/react-router" {
   interface Register {
