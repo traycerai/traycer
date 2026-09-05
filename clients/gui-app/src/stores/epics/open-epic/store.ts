@@ -1,3 +1,4 @@
+import type { ConfirmedChatMutation } from "@traycer-clients/shared/replica-runtime/worker/bridge-protocol";
 /**
  * The zustand adapter over the epic replica runtime.
  *
@@ -613,6 +614,8 @@ export interface OpenEpicState {
    * host-scoped and covers every open epic, and this store is one of them.
    */
   applyChatRecordDelta: (delta: ChatRecordDelta) => void;
+  /** Reconcile an acknowledged mutation without manufacturing a host-stream event. */
+  applyConfirmedChatMutation: (mutation: ConfirmedChatMutation) => void;
   /**
    * Publishes the host's `epic.listTuiAgents` answer into the terminal-agent
    * record table - the terminal twin of {@link OpenEpicState.applyChatRecords},
@@ -1952,6 +1955,12 @@ export function createOpenEpicStore(
             runtime.command({
               kind: "mark-chat-records-authoritative",
               payload: {},
+            });
+          },
+          applyConfirmedChatMutation: (mutation) => {
+            runtime.command({
+              kind: "apply-confirmed-chat-mutation",
+              payload: { mutation },
             });
           },
           applyChatRecordDelta: (delta) => {

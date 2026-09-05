@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { ReactNode } from "react";
 import { createElement } from "react";
 
@@ -38,6 +38,11 @@ vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => "host-test",
 }));
 
+interface MockNamedHostClient {
+  readonly getActiveHostId: () => string;
+  readonly request: Mock;
+}
+
 const {
   archiveChatMutateAsync,
   epicSessionHostClient,
@@ -47,13 +52,7 @@ const {
   namedHostClients,
   hostBinding,
 } = vi.hoisted(() => {
-  const clients = new Map<
-    string,
-    {
-      readonly getActiveHostId: () => string;
-      readonly request: ReturnType<typeof vi.fn>;
-    }
-  >();
+  const clients = new Map<string, MockNamedHostClient>();
   const namedHostClients = {
     get(hostId: string) {
       const existing = clients.get(hostId);
@@ -201,7 +200,6 @@ function getCapturedMutation(method: string): CapturedMutationArgs {
 interface ArchiveChatContext {
   readonly hostId: string | null;
   readonly viewerHostId: string | null;
-  readonly handle: unknown;
   readonly viewerUserId: string | null;
 }
 
@@ -352,7 +350,6 @@ describe("useEpicDeleteChat", () => {
       {
         hostId: "host-test",
         viewerHostId: "host-test",
-        handle: null,
         viewerUserId: null,
       },
       mutationContext,
@@ -399,7 +396,6 @@ describe("useEpicDeleteChat", () => {
       {
         hostId: null,
         viewerHostId: "host-test",
-        handle: null,
         viewerUserId: null,
       },
       { client: new QueryClient(), meta: undefined },
@@ -562,7 +558,6 @@ describe("useEpicArchiveChat", () => {
     expect(ctx).toEqual({
       hostId: "host-test",
       viewerHostId: "host-test",
-      handle: null,
       viewerUserId: null,
     });
     opts.onSuccess({ updated: false }, variables, ctx, {
@@ -603,7 +598,6 @@ describe("useEpicArchiveChat", () => {
     expect(ctx).toEqual({
       hostId: "remote-host",
       viewerHostId: "host-test",
-      handle: null,
       viewerUserId: null,
     });
     opts.onSuccess({ updated: true }, variables, ctx, {

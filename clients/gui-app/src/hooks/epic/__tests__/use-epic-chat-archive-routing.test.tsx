@@ -42,6 +42,7 @@ import {
   useEpicSyncChatRecords,
 } from "@/hooks/chats/use-epic-chat-records";
 import {
+  __getOpenEpicRegistryForTests,
   EpicSessionContext,
   EpicSessionHostClientContext,
 } from "@/lib/registries/epic-session-registry";
@@ -68,6 +69,7 @@ const EPIC_ID = "epic-routing-test";
 const VIEWER_ID = "viewer-routing";
 const REMOTE_CHAT_ID = "chat-remote";
 const LOCAL_CHAT_ID = "chat-local";
+const STALE_LIST_SENTINEL_ID = "chat-stale-sentinel";
 
 const spineRef = vi.hoisted<{
   value: HostClient<HostRpcRegistry> | null;
@@ -119,6 +121,7 @@ interface RoutingFixture {
   failRemoteArchive: boolean;
   failRemoteList: boolean;
   readonly swapSession: (client: HostClient<HostRpcRegistry>) => void;
+  readonly replaceMountedOnto: (hostId: string) => OpenedStoreForTest;
   readonly wrapper: (props: { readonly children: ReactNode }) => ReactNode;
   readonly dispose: () => void;
 }
@@ -204,6 +207,78 @@ function newSession(): OpenedStoreForTest {
   seed.getMap("epic").set("chats", new Y.Map<unknown>());
   captured.value.onSnapshot(makeMeta(), Y.encodeStateAsUpdate(seed));
   return handle;
+}
+
+function withHostId(
+  handle: OpenedStoreForTest,
+  hostId: string,
+): OpenedStoreForTest {
+  return {
+    ...handle,
+    hostId,
+    get doc() {
+      return handle.doc;
+    },
+    get awareness() {
+      return handle.awareness;
+    },
+  };
+}
+
+function staleViewerReplica(): ChatRecordSummaryV11 {
+  return record({
+    chatId: REMOTE_CHAT_ID,
+    originHostId: REMOTE.hostId,
+    title: "Access X Saved Bookmarks",
+    origin: "foreign",
+  });
+}
+
+function deliverStaleList(
+  handle: OpenedStoreForTest,
+  rows: readonly ChatRecordSummaryV11[],
+): void {
+  const issuedAtSeq = handle.store.getState().peekChatIngestSeq();
+  handle.store.getState().applyChatRecords(rows, issuedAtSeq);
+}
+
+function deliverStaleViewerList(handle: OpenedStoreForTest): void {
+  deliverStaleList(handle, [
+    staleViewerReplica(),
+    record({
+      chatId: STALE_LIST_SENTINEL_ID,
+      originHostId: LOCAL.hostId,
+      title: "Stale list sentinel",
+      origin: "foreign",
+    }),
+  ]);
+}
+
+function deliverStaleTargetHostList(handle: OpenedStoreForTest): void {
+  deliverStaleList(handle, [
+    record({
+      chatId: REMOTE_CHAT_ID,
+      originHostId: REMOTE.hostId,
+      title: "Access X Saved Bookmarks",
+      origin: "own",
+    }),
+    record({
+      chatId: STALE_LIST_SENTINEL_ID,
+      originHostId: REMOTE.hostId,
+      title: "Stale list sentinel",
+      origin: "own",
+    }),
+  ]);
+}
+
+async function waitForStaleListApplied(
+  handle: OpenedStoreForTest,
+): Promise<void> {
+  await waitFor(() => {
+    expect(
+      Object.hasOwn(handle.store.getState().chats.byId, STALE_LIST_SENTINEL_ID),
+    ).toBe(true);
+  });
 }
 
 function lastCallHost(messenger: MockHostMessenger<HostRpcRegistry>): string {
@@ -356,11 +431,32 @@ function createRoutingFixture(): RoutingFixture {
   const otherClient = spine.createRequester(OTHER);
   sessionSlot.current = localClient;
   spineRef.value = spine;
-  const handle = newSession();
+  const registry = __getOpenEpicRegistryForTests();
+  registry.disposeAll();
+  const handle = withHostId(newSession(), LOCAL.hostId);
+  registry.acquireMounted(EPIC_ID, () => handle);
 
   const swapSession = (client: HostClient<HostRpcRegistry>): void => {
     sessionSlot.current = client;
     for (const listener of sessionListeners) listener();
+  };
+
+  const replaceMountedOnto = (hostId: string): OpenedStoreForTest => {
+    const outgoing = registry.peek(EPIC_ID);
+    if (outgoing === null) {
+      throw new Error("expected a mounted epic session");
+    }
+    const incoming = withHostId(newSession(), hostId);
+    const replaced = registry.replaceMounted(EPIC_ID, outgoing, incoming, {
+      hostStamp: outgoing.hostId,
+      ownerIdentityKey: VIEWER_ID,
+      editsTransferredToReplacement: false,
+    });
+    if (!replaced) {
+      incoming.store.getState().dispose();
+      throw new Error("replaceMounted refused the outgoing handle");
+    }
+    return incoming;
   };
 
   const Wrapper = (props: { readonly children: ReactNode }): ReactNode => {
@@ -385,6 +481,7 @@ function createRoutingFixture(): RoutingFixture {
   };
 
   const dispose = (): void => {
+    registry.disposeAll();
     handle.store.getState().dispose();
     spine.dispose();
     spineRef.value = null;
@@ -429,6 +526,7 @@ function createRoutingFixture(): RoutingFixture {
       mutable.failRemoteList = value;
     },
     swapSession,
+    replaceMountedOnto,
     wrapper: Wrapper,
     dispose,
   };
@@ -943,8 +1041,274 @@ describe("delete projection stays removed against a stale foreign list", () => {
     expect(
       Object.hasOwn(fixture.handle.store.getState().chats.byId, REMOTE_CHAT_ID),
     ).toBe(false);
-    expect(fixture.handle.store.getState().chatRetractions).toEqual({
-      [REMOTE_CHAT_ID]: "deleted",
+    expect(fixture.handle.store.getState().chatRetractions).toEqual({});
+  });
+});
+
+describe("replaceMounted during a delayed ACK", () => {
+  it("archives onto an empty replacement and keeps it through a stale viewer list", async () => {
+    seedRemoteChat();
+    let resolveRemote: (value: unknown) => void = () => {
+      throw new Error("remote archive resolver is unavailable");
+    };
+    fixture.holdRemoteArchive = new Promise((resolve) => {
+      resolveRemote = resolve;
     });
+    const invalidateQueries = vi.spyOn(
+      fixture.queryClient,
+      "invalidateQueries",
+    );
+    const { result } = renderHook(() => useEpicArchiveChat(), {
+      wrapper: fixture.wrapper,
+    });
+
+    let pending: Promise<unknown> | undefined;
+    act(() => {
+      pending = result.current.mutateAsync({
+        epicId: EPIC_ID,
+        chatId: REMOTE_CHAT_ID,
+        hostId: REMOTE.hostId,
+        archived: true,
+      });
+    });
+
+    const incoming = fixture.replaceMountedOnto(OTHER.hostId);
+    expect(incoming.store.getState().snapshotLoaded).toBe(true);
+    expect(incoming.store.getState().chats.allIds).toEqual([]);
+
+    resolveRemote(undefined);
+    await act(async () => {
+      await pending;
+    });
+
+    await waitFor(() => {
+      expect(
+        incoming.store.getState().chats.byId[REMOTE_CHAT_ID]?.archivedAt,
+      ).toBe(2);
+    });
+    expect(invalidateQueries).toHaveBeenCalledWith({
+      queryKey: hostQueryKeys.methodScope(OTHER.hostId, "epic.listChatRecords"),
+    });
+
+    deliverStaleViewerList(incoming);
+    await waitForStaleListApplied(incoming);
+    expect(
+      incoming.store.getState().chats.byId[REMOTE_CHAT_ID]?.archivedAt,
+    ).toBe(2);
+  });
+
+  it("applies the owner archive as own when the replacement is the owning host", async () => {
+    seedRemoteChat();
+    let resolveRemote: (value: unknown) => void = () => {
+      throw new Error("remote archive resolver is unavailable");
+    };
+    fixture.holdRemoteArchive = new Promise((resolve) => {
+      resolveRemote = resolve;
+    });
+    const { result } = renderHook(() => useEpicArchiveChat(), {
+      wrapper: fixture.wrapper,
+    });
+
+    let pending: Promise<unknown> | undefined;
+    act(() => {
+      pending = result.current.mutateAsync({
+        epicId: EPIC_ID,
+        chatId: REMOTE_CHAT_ID,
+        hostId: REMOTE.hostId,
+        archived: true,
+      });
+    });
+
+    const incoming = fixture.replaceMountedOnto(REMOTE.hostId);
+    expect(incoming.store.getState().chats.allIds).toEqual([]);
+
+    resolveRemote(undefined);
+    await act(async () => {
+      await pending;
+    });
+
+    await waitFor(() => {
+      expect(
+        incoming.store.getState().chats.byId[REMOTE_CHAT_ID]?.archivedAt,
+      ).toBe(5);
+    });
+
+    deliverStaleViewerList(incoming);
+    await waitForStaleListApplied(incoming);
+    expect(
+      incoming.store.getState().chats.byId[REMOTE_CHAT_ID]?.archivedAt,
+    ).toBe(5);
+  });
+
+  it("does not overwrite a present replacement row that belongs to another host", async () => {
+    seedRemoteChat();
+    let resolveRemote: (value: unknown) => void = () => {
+      throw new Error("remote archive resolver is unavailable");
+    };
+    fixture.holdRemoteArchive = new Promise((resolve) => {
+      resolveRemote = resolve;
+    });
+    const { result } = renderHook(() => useEpicArchiveChat(), {
+      wrapper: fixture.wrapper,
+    });
+
+    let pending: Promise<unknown> | undefined;
+    act(() => {
+      pending = result.current.mutateAsync({
+        epicId: EPIC_ID,
+        chatId: REMOTE_CHAT_ID,
+        hostId: REMOTE.hostId,
+        archived: true,
+      });
+    });
+
+    const incoming = fixture.replaceMountedOnto(OTHER.hostId);
+    incoming.store.getState().applyChatRecordDelta({
+      kind: "upsert",
+      epicId: EPIC_ID,
+      record: record({
+        chatId: REMOTE_CHAT_ID,
+        originHostId: OTHER.hostId,
+        title: "Other-host same id",
+        origin: "own",
+      }),
+    });
+    await waitFor(() => {
+      expect(incoming.store.getState().chats.byId[REMOTE_CHAT_ID]?.hostId).toBe(
+        OTHER.hostId,
+      );
+    });
+
+    resolveRemote(undefined);
+    await act(async () => {
+      await pending;
+    });
+
+    expect(incoming.store.getState().chats.byId[REMOTE_CHAT_ID]?.title).toBe(
+      "Other-host same id",
+    );
+    expect(
+      incoming.store.getState().chats.byId[REMOTE_CHAT_ID]?.archivedAt,
+    ).toBeNull();
+  });
+
+  it("deletes onto an empty replacement and keeps the identity tombstone through a stale viewer list", async () => {
+    seedRemoteChat();
+    let resolveRemote: (value: unknown) => void = () => {
+      throw new Error("remote delete resolver is unavailable");
+    };
+    fixture.holdRemoteDelete = new Promise((resolve) => {
+      resolveRemote = resolve;
+    });
+    const invalidateQueries = vi.spyOn(
+      fixture.queryClient,
+      "invalidateQueries",
+    );
+    const { result } = renderHook(() => useEpicDeleteChat(), {
+      wrapper: fixture.wrapper,
+    });
+
+    let pending: Promise<unknown> | undefined;
+    act(() => {
+      pending = result.current.mutateAsync({
+        epicId: EPIC_ID,
+        chatId: REMOTE_CHAT_ID,
+        hostId: REMOTE.hostId,
+      });
+    });
+
+    const incoming = fixture.replaceMountedOnto(OTHER.hostId);
+    expect(incoming.store.getState().snapshotLoaded).toBe(true);
+    expect(incoming.store.getState().chats.allIds).toEqual([]);
+
+    resolveRemote(undefined);
+    await act(async () => {
+      await pending;
+    });
+
+    expect(invalidateQueries).toHaveBeenCalledWith({
+      queryKey: hostQueryKeys.methodScope(OTHER.hostId, "epic.listChatRecords"),
+    });
+
+    deliverStaleViewerList(incoming);
+    await waitForStaleListApplied(incoming);
+    expect(
+      Object.hasOwn(incoming.store.getState().chats.byId, REMOTE_CHAT_ID),
+    ).toBe(false);
+    expect(incoming.store.getState().chatRetractions).toEqual({});
+
+    incoming.store.getState().applyChatRecordDelta({
+      kind: "upsert",
+      epicId: EPIC_ID,
+      record: record({
+        chatId: REMOTE_CHAT_ID,
+        originHostId: OTHER.hostId,
+        title: "Same-id other host",
+        origin: "own",
+      }),
+    });
+    await waitFor(() => {
+      expect(incoming.store.getState().chats.byId[REMOTE_CHAT_ID]?.hostId).toBe(
+        OTHER.hostId,
+      );
+    });
+    expect(incoming.store.getState().chats.byId[REMOTE_CHAT_ID]?.title).toBe(
+      "Same-id other host",
+    );
+    expect(incoming.store.getState().chatRetractions).toEqual({});
+  });
+
+  it("does not retract a present replacement row that belongs to another host", async () => {
+    seedRemoteChat();
+    let resolveRemote: (value: unknown) => void = () => {
+      throw new Error("remote delete resolver is unavailable");
+    };
+    fixture.holdRemoteDelete = new Promise((resolve) => {
+      resolveRemote = resolve;
+    });
+    const { result } = renderHook(() => useEpicDeleteChat(), {
+      wrapper: fixture.wrapper,
+    });
+
+    let pending: Promise<unknown> | undefined;
+    act(() => {
+      pending = result.current.mutateAsync({
+        epicId: EPIC_ID,
+        chatId: REMOTE_CHAT_ID,
+        hostId: REMOTE.hostId,
+      });
+    });
+
+    const incoming = fixture.replaceMountedOnto(OTHER.hostId);
+    incoming.store.getState().applyChatRecordDelta({
+      kind: "upsert",
+      epicId: EPIC_ID,
+      record: record({
+        chatId: REMOTE_CHAT_ID,
+        originHostId: OTHER.hostId,
+        title: "Other-host same id",
+        origin: "own",
+      }),
+    });
+    await waitFor(() => {
+      expect(incoming.store.getState().chats.byId[REMOTE_CHAT_ID]?.hostId).toBe(
+        OTHER.hostId,
+      );
+    });
+
+    resolveRemote(undefined);
+    await act(async () => {
+      await pending;
+    });
+
+    deliverStaleTargetHostList(incoming);
+    await waitForStaleListApplied(incoming);
+    expect(incoming.store.getState().chats.byId[REMOTE_CHAT_ID]?.hostId).toBe(
+      OTHER.hostId,
+    );
+    expect(incoming.store.getState().chats.byId[REMOTE_CHAT_ID]?.title).toBe(
+      "Other-host same id",
+    );
+    expect(incoming.store.getState().chatRetractions).toEqual({});
   });
 });

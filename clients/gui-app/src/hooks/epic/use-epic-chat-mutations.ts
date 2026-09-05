@@ -27,7 +27,7 @@ import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import { useHostBinding } from "@/lib/host";
 import { resolveNamedHostClient } from "@/lib/host/binding-host-client";
-import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
+import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
 import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { hostQueryKeys, epicMutationKeys } from "@/lib/query-keys";
@@ -101,7 +101,6 @@ export type DeleteChatMutationInput = DeleteChatRequest & ChatMutationTarget;
 interface ChatRecordMutationContext {
   readonly hostId: string | null;
   readonly viewerHostId: string | null;
-  readonly handle: OpenEpicStoreHandle | null;
   readonly viewerUserId: string | null;
 }
 
@@ -126,6 +125,32 @@ function useChatMutationClient(): (
     if (sessionClient?.getActiveHostId() === hostId) return sessionClient;
     return resolveNamedHostClient(binding, hostId);
   };
+}
+
+/** Resolve viewer state independently of the mutation's fixed destination. */
+function getChatMutationViewer(
+  epicId: string,
+  chatId: string,
+  ctx: ChatRecordMutationContext,
+): OpenEpicStoreHandle | null {
+  if (
+    ctx.viewerUserId === null ||
+    ctx.viewerUserId !== currentProfileUserId()
+  ) {
+    return null;
+  }
+  const handle = getOpenEpicRegistry().peek(epicId);
+  if (handle === null) return null;
+  const chats = handle.store.getState().chats.byId;
+  const row = chats[chatId];
+  // A replacement session can mount before its first record list.
+  if (
+    Object.hasOwn(chats, chatId) &&
+    (row.userId !== ctx.viewerUserId ||
+      (row.hostId ?? handle.hostId) !== ctx.hostId)
+  )
+    return null;
+  return handle;
 }
 
 /**
@@ -498,7 +523,6 @@ function useEpicArchiveChatMutation(
 > {
   const client = useChatMutationClient();
   const sessionClient = useEpicSessionHostClient();
-  const handle = useMaybeOpenEpicHandle();
   const queryClient = useQueryClient();
   // An imperative post-write read: the viewer's cloud replica can lag the
   // owner's response. Reuse the record revision instead of inventing an overlay.
@@ -531,52 +555,54 @@ function useEpicArchiveChatMutation(
       onMutate: ({ hostId }) => ({
         hostId,
         viewerHostId: sessionClient?.getActiveHostId() ?? null,
-        handle,
         viewerUserId: currentProfileUserId(),
       }),
       onSuccess: async (_data, variables, ctx) => {
-        // The writer and the viewer cache different lists of the same record.
-        for (const hostId of new Set([ctx.hostId, ctx.viewerHostId])) {
+        const handle = getOpenEpicRegistry().peek(variables.epicId);
+        // The visible session may have been replaced while the write travelled.
+        for (const hostId of new Set([
+          ctx.hostId,
+          ctx.viewerHostId,
+          handle?.hostId ?? null,
+        ])) {
           invalidateEpicChatRecords(queryClient, hostId);
           invalidateEpicTuiAgentRecords(queryClient, hostId);
         }
         if (
-          ctx.hostId === ctx.viewerHostId ||
-          ctx.handle?.epicId !== variables.epicId ||
-          ctx.viewerUserId !== currentProfileUserId()
-        )
-          return;
-        const chats = ctx.handle.store.getState().chats.byId;
-        if (!Object.hasOwn(chats, variables.chatId)) return;
-        if (
-          chats[variables.chatId].hostId !== ctx.hostId ||
-          chats[variables.chatId].userId !== ctx.viewerUserId
+          (ctx.hostId === ctx.viewerHostId && handle?.hostId === ctx.hostId) ||
+          getChatMutationViewer(variables.epicId, variables.chatId, ctx) ===
+            null
         )
           return;
         try {
           const { chats: records } =
             await readOwnerRecords.mutateAsync(variables);
-          if (ctx.viewerUserId !== currentProfileUserId()) return;
-          const currentChats = ctx.handle.store.getState().chats.byId;
-          if (!Object.hasOwn(currentChats, variables.chatId)) return;
-          const currentRow = currentChats[variables.chatId];
-          if (
-            currentRow.hostId !== ctx.hostId ||
-            currentRow.userId !== ctx.viewerUserId
-          )
-            return;
+          const currentHandle = getChatMutationViewer(
+            variables.epicId,
+            variables.chatId,
+            ctx,
+          );
+          if (currentHandle === null) return;
+          invalidateEpicChatRecords(queryClient, currentHandle.hostId);
           const record = records.find(
             (row) =>
               row.chatId === variables.chatId &&
-              row.ownerUserId === currentRow.userId &&
+              row.ownerUserId === ctx.viewerUserId &&
               row.originHostId === ctx.hostId &&
               row.origin === "own",
           );
           if (record === undefined) return;
-          ctx.handle.store.getState().applyChatRecordDelta({
+          currentHandle.store.getState().applyConfirmedChatMutation({
             kind: "upsert",
-            epicId: variables.epicId,
-            record: { ...record, origin: "foreign", archivedAt: null },
+            record:
+              currentHandle.hostId === ctx.hostId
+                ? record
+                : {
+                    ...record,
+                    origin: "foreign",
+                    archivedAt: null,
+                    docResident: false,
+                  },
           });
         } catch (error) {
           // The write succeeded; only its immediate display refresh failed.
@@ -657,7 +683,6 @@ export function useEpicDeleteChat(): UseMutationResult<
 > {
   const client = useChatMutationClient();
   const sessionClient = useEpicSessionHostClient();
-  const handle = useMaybeOpenEpicHandle();
   const queryClient = useQueryClient();
   return useHostMutation<
     HostRpcRegistry,
@@ -678,7 +703,6 @@ export function useEpicDeleteChat(): UseMutationResult<
       onMutate: ({ hostId }) => ({
         hostId,
         viewerHostId: sessionClient?.getActiveHostId() ?? null,
-        handle,
         viewerUserId: currentProfileUserId(),
       }),
       onSuccess: (_data, variables, ctx) => {
@@ -727,28 +751,25 @@ export function useEpicDeleteChat(): UseMutationResult<
         clearPendingChatCreation(variables.epicId, variables.chatId);
         // Retain the confirmed removal across stale replica polls while the
         // owning host's cloud retraction is still travelling to the viewer.
+        const handle = getOpenEpicRegistry().peek(variables.epicId);
         if (
-          ctx.handle?.epicId === variables.epicId &&
+          handle !== null &&
+          ctx.hostId !== null &&
+          ctx.viewerUserId !== null &&
           ctx.viewerUserId === currentProfileUserId()
         ) {
-          const state = ctx.handle.store.getState();
-          const row = Object.hasOwn(state.chats.byId, variables.chatId)
-            ? state.chats.byId[variables.chatId]
-            : undefined;
-          if (
-            row !== undefined &&
-            row.userId === ctx.viewerUserId &&
-            (row.hostId ?? ctx.viewerHostId) === ctx.hostId
-          ) {
-            state.applyChatRecordDelta({
-              kind: "remove",
-              epicId: variables.epicId,
-              chatId: variables.chatId,
-              reason: "deleted",
-            });
-          }
+          handle.store.getState().applyConfirmedChatMutation({
+            kind: "remove",
+            chatId: variables.chatId,
+            ownerUserId: ctx.viewerUserId,
+            originHostId: ctx.hostId,
+          });
         }
-        for (const hostId of new Set([ctx.hostId, ctx.viewerHostId])) {
+        for (const hostId of new Set([
+          ctx.hostId,
+          ctx.viewerHostId,
+          handle?.hostId ?? null,
+        ])) {
           invalidateEpicChatRecords(queryClient, hostId);
         }
       },
