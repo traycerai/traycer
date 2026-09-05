@@ -6,9 +6,23 @@ import {
   permissionFromChatRunSettings,
   selectedModelRejectsImageAttachments,
 } from "@/lib/composer/chat-run-settings";
-import type { ModelOption } from "@/components/home/data/landing-options";
+import {
+  findReasoningOptionsForModel,
+  KIMI_K3_DEFAULT_REASONING_OPTIONS,
+  type ModelOption,
+} from "@/components/home/data/landing-options";
 
-function model(metadata: Record<string, unknown>): ModelOption {
+/**
+ * Helper to construct a test `ModelOption` with metadata and optional property overrides.
+ *
+ * @param metadata - The metadata record for the model option.
+ * @param overrides - Optional field overrides to merge into the default model option shape.
+ * @returns A complete `ModelOption` object for testing.
+ */
+function model(
+  metadata: Record<string, unknown>,
+  overrides: Partial<ModelOption> | undefined = undefined,
+): ModelOption {
   return {
     harnessId: "codex",
     slug: "gpt-test",
@@ -21,6 +35,7 @@ function model(metadata: Record<string, unknown>): ModelOption {
     defaultServiceTier: null,
     supportedServiceTiers: [],
     metadata,
+    ...overrides,
   };
 }
 
@@ -122,7 +137,7 @@ describe("chat run settings", () => {
     ).toBe("full_access");
   });
 
-  it("detects image-capable model metadata", () => {
+  it("detects image-capable model metadata and harness capabilities", () => {
     expect(
       modelSupportsImageAttachments(
         model({ inputModalities: ["text", "image"] }),
@@ -131,7 +146,67 @@ describe("chat run settings", () => {
     expect(modelSupportsImageAttachments(model({ supportsImages: true }))).toBe(
       true,
     );
+
+    // K3 models on kimi, hermes, and omp harnesses support image attachments
+    const kimiK3 = model({}, { harnessId: "kimi", slug: "k3-256k" });
+    const hermesK3 = model(
+      {},
+      { harnessId: "hermes", slug: "kimi-coding:k3-256k" },
+    );
+    const ompK3 = model({}, { harnessId: "omp", slug: "kimi-code/k3-256k" });
+
+    expect(modelSupportsImageAttachments(kimiK3)).toBe(true);
+    expect(modelSupportsImageAttachments(hermesK3)).toBe(true);
+    expect(modelSupportsImageAttachments(ompK3)).toBe(true);
+
+    // Non-K3 model on kimi harness without image metadata stays text-only
+    const kimiTextOnly = model({}, { harnessId: "kimi", slug: "kimi-text-v1" });
+    expect(modelSupportsImageAttachments(kimiTextOnly)).toBe(false);
+
+    // Unrelated generic models are text-only by default
     expect(selectedModelRejectsImageAttachments(model({}))).toBe(true);
     expect(selectedModelRejectsImageAttachments(null)).toBe(false);
+  });
+
+  it("provides fallback reasoning effort options for K3 models with missing metadata", () => {
+    // K3 model on kimi harness with empty reasoning metadata receives fallbacks
+    const kimiK3 = model({}, { harnessId: "kimi", slug: "k3-256k" });
+    expect(findReasoningOptionsForModel(kimiK3)).toEqual(
+      KIMI_K3_DEFAULT_REASONING_OPTIONS,
+    );
+
+    // K3 model on hermes harness receives fallbacks
+    const hermesK3 = model(
+      {},
+      { harnessId: "hermes", slug: "kimi-coding:k3-256k" },
+    );
+    expect(findReasoningOptionsForModel(hermesK3)).toEqual(
+      KIMI_K3_DEFAULT_REASONING_OPTIONS,
+    );
+
+    // Model with explicit reasoning metadata keeps its own options
+    const explicitEffortOption = {
+      id: "low",
+      label: "Low",
+      description: null,
+    };
+    const explicitModel = model(
+      {},
+      {
+        harnessId: "kimi",
+        slug: "k3-256k",
+        supportedReasoningEfforts: [explicitEffortOption],
+      },
+    );
+    expect(findReasoningOptionsForModel(explicitModel)).toEqual([
+      explicitEffortOption,
+    ]);
+
+    // Non-K3 model with empty reasoning metadata returns empty array
+    const nonK3Model = model({}, { harnessId: "codex", slug: "gpt-4o" });
+    expect(findReasoningOptionsForModel(nonK3Model)).toEqual([]);
+
+    // Null model returns empty array
+    expect(findReasoningOptionsForModel(null)).toEqual([]);
   });
 });
