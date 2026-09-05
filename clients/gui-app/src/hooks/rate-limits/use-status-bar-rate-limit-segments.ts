@@ -227,6 +227,18 @@ function resolveTarget(
 }
 
 /**
+ * Whether this reader is allowed to make a reading happen.
+ *
+ * `live` is the strip: the http lane polls, the queue lane takes its cold start,
+ * and the `↻` fans out. `passive` is a reader that must never cause a fetch -
+ * it observes whatever the live readers have already written into the shared
+ * cache and renders that. The two share every query KEY, which is the point: a
+ * passive reader is looking at the same cache entries the strip is, so it cannot
+ * drift from it and cannot warm it either.
+ */
+export type StatusBarRateLimitMode = "live" | "passive";
+
+/**
  * The options one batch of targets shares.
  *
  * `useHostQueriesWithResponseMap` applies ONE options object to every request in
@@ -241,12 +253,19 @@ function resolveTarget(
  * `mountTargets` be a plain index join over the queue batch rather than a filter
  * over a mixed one, and it is what makes the lane split legible at the call site
  * instead of an emergent property of an equality nobody restates.
+ *
+ * `passive` collapses all three onto the disabled shape, LANE INCLUDED - the
+ * http lane is the one that would otherwise fetch, so a mode that only silenced
+ * the queue lane would silence the half that was already silent.
  */
 function batchOptions(
   targets: ReadonlyArray<StatusBarRateLimitTarget>,
+  mode: StatusBarRateLimitMode,
 ): ProviderRateLimitTanstackOptions {
   const first = targets.at(0);
-  if (first === undefined) return PASSIVE_PROVIDER_RATE_LIMIT_OPTIONS;
+  if (mode === "passive" || first === undefined) {
+    return PASSIVE_PROVIDER_RATE_LIMIT_OPTIONS;
+  }
   return providerRateLimitQueryOptions(
     first.provider.providerId,
     first.profileId,
@@ -350,6 +369,9 @@ function visibleWindows(
   });
 }
 
+/** Stable identity for a passive reader's empty refresh handles. */
+const NO_REFETCHES: ReadonlyArray<() => Promise<unknown>> = [];
+
 /** Whether a segment has anything to draw beyond an icon nobody can read. */
 function hasContent(segment: StatusBarProviderSegmentModel): boolean {
   return segment.windows.length > 0 || segment.state !== "live";
@@ -417,11 +439,21 @@ function clusterFor(
  * one-options-per-batch reason: an ineligible target sharing the polling batch's
  * options would inherit `enabled: true` and spend a round trip on a credential
  * the host does not have.
+ *
+ * **`mode` is required, and `passive` is a promise about behaviour rather than
+ * about rendering.** A passive caller gets the same segments off the same cache
+ * entries, and gets them with every observer disabled, no mount targets and no
+ * refresh handles - so there is nothing for it to call that could reach the
+ * host, not merely nothing it happens to render. A `refetch` closure handed out
+ * "unused" is the way that promise would be broken by the next caller, since
+ * refetching a disabled query fetches.
  */
 export function useStatusBarRateLimitSegments(input: {
   readonly providers: ReadonlyArray<ConfiguredRateLimitProvider>;
   readonly profileSelection: RateLimitProfileSelection;
+  readonly mode: StatusBarRateLimitMode;
 }): StatusBarRateLimitSegments {
+  const passive = input.mode === "passive";
   const client = useHostClient();
   const rateLimits = useLayoutStore((state) => state.statusBar.rateLimits);
   // The shared 60s clock, so a window that expires while the strip is on screen
@@ -451,7 +483,7 @@ export function useStatusBarRateLimitSegments(input: {
     client,
     cacheKeyIdentity: undefined,
     requests: requestsFor(queueObserved),
-    options: batchOptions(queueObserved),
+    options: batchOptions(queueObserved, input.mode),
     mapResponse: mapResponseToProviderRateLimitEnvelope,
   });
   const httpPollingQueries = useHostQueriesWithResponseMap<
@@ -462,7 +494,7 @@ export function useStatusBarRateLimitSegments(input: {
     client,
     cacheKeyIdentity: undefined,
     requests: requestsFor(httpPolling),
-    options: batchOptions(httpPolling),
+    options: batchOptions(httpPolling, input.mode),
     mapResponse: mapResponseToProviderRateLimitEnvelope,
   });
   const httpObservedQueries = useHostQueriesWithResponseMap<
@@ -473,7 +505,7 @@ export function useStatusBarRateLimitSegments(input: {
     client,
     cacheKeyIdentity: undefined,
     requests: requestsFor(httpObserved),
-    options: batchOptions(httpObserved),
+    options: batchOptions(httpObserved, input.mode),
     mapResponse: mapResponseToProviderRateLimitEnvelope,
   });
 
@@ -506,9 +538,11 @@ export function useStatusBarRateLimitSegments(input: {
     cluster: clusterFor(input.providers.length, segments),
     // Only the queue lane: an `httpFetch` observer is enabled and fetches its
     // own cold start on mount, so routing it through the mount hook as well
-    // would put two fetches on one key.
+    // would put two fetches on one key. And none of it in `passive`, where a
+    // cold provider stays cold: a preview that warmed the cache would be
+    // reporting on a reading it caused.
     mountTargets: queueObserved.flatMap((target, index) => {
-      if (!target.fetchEligible) return [];
+      if (passive || !target.fetchEligible) return [];
       const envelope = queueObservedQueries[index].data;
       return [
         {
@@ -521,7 +555,7 @@ export function useStatusBarRateLimitSegments(input: {
     }),
     refresh: {
       queueTargets: queueObserved.flatMap((target) =>
-        target.fetchEligible
+        !passive && target.fetchEligible
           ? [
               {
                 providerId: target.provider.providerId,
@@ -530,8 +564,11 @@ export function useStatusBarRateLimitSegments(input: {
             ]
           : [],
       ),
-      httpRefetches: httpPollingQueries.map((query) => query.refetch),
-      httpFetching: httpPollingQueries.some((query) => query.isFetching),
+      httpRefetches: passive
+        ? NO_REFETCHES
+        : httpPollingQueries.map((query) => query.refetch),
+      httpFetching:
+        !passive && httpPollingQueries.some((query) => query.isFetching),
     },
   };
 }

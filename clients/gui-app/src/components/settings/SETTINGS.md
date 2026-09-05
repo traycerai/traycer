@@ -914,18 +914,46 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     | Minimap side                        | Appearance                | Chat       |
     | Show resource chips on sidebar rows | General ▸ Running agents  | Sidebar    |
 
-  - **Status bar** (one `SettingsGroup`, two `h3` bands inside it - the bar is
-    ONE layout slice, and rate limits and the resource monitor are two subjects
-    within it rather than two surfaces). Placement (Header / Status bar);
+  - **One file per group, mounted from the page on one line**
+    (`panels/layout/*.tsx`). A group here grows a preview, a nested list or a
+    host binding of its own, and none of that belongs in a file whose job is
+    the order the groups come in. `trackLayoutSetting`
+    (`panels/layout/track-layout-setting.ts`) is shared so a group added later
+    cannot report under a different analytics section.
+  - **Status bar** (`panels/layout/status-bar-layout-group.tsx`; one
+    `SettingsGroup`, and INSIDE it a `SettingsSubgroup` per subject rather than
+    a flat row list - the bar is ONE layout slice, and its subjects nest two
+    deep). Reading down: the **preview**; Placement (Header / Status bar);
     `Show resource monitor in header`, drawn only while placement is `header`
     because in the other placement the group's own `Show resource monitor`
-    governs the same thing; then Rate limits (enabled, percentage used /
-    remaining, reset timer, usage bar, the used / remaining WORD after each
-    percentage, one switch per provider with a nested `Show all windows` and a
-    nested switch per window, a hidden provider collapsing all of those) and
-    Resource monitor (enabled, scope Host / Desktop app, one switch per
-    metric - RAM share is disabled under the Desktop-app scope, which has no
-    denominator for it).
+    governs the same thing; **Usage limits** (subgroup, title switch =
+    `rateLimits.enabled`) holding **Display** (percentage used / remaining, the
+    used / remaining WORD after each percentage, reset timer, mini bar) and a
+    `Providers on <hostLabel>` band of one subgroup per provider (title switch =
+    visible, then `Show all windows` and a chip per window); and **Resource
+    monitor** (subgroup, title switch = `resources.enabled`) holding Scope
+    (Host / Desktop app) and a Metrics chip row.
+  - **Nesting is drawn, not indented.** `SettingsSubgroup`
+    (`controls/settings-subgroup.tsx`) is an inset card whose title row can host
+    the switch that owns it, because a parent switch and the rows it governs
+    have to be one object on screen or turning it off looks like the page lost
+    rows. **A parent switch off HIDES its children and writes nothing** - the
+    rows below configure something that is switched off, not something the user
+    has stopped meaning, so everything is where it was when it comes back. This
+    is also what closed the earlier complaint that the page offered ~10 controls
+    that changed nothing on screen in `header` placement: they are still
+    reachable (placement is not a switch), but the preview above them now says
+    what they are for.
+  - **A set of independent on/off choices is a chip row, not a switch per
+    choice** (`controls/settings-toggle-chips.tsx`). A switch each is right
+    while there are three of them and a sentence to say about each; it is wrong
+    for a provider's rolling windows, whose labels are `5h` / `wk` / `Opus wk`
+    and whose count is whatever the account reports. The chips are real toggle
+    buttons carrying `aria-pressed`, so Enter and Space come from the element
+    rather than from a handler. `RAM share` under the Desktop-app scope is
+    `aria-disabled` rather than `disabled` - it keeps its place in the tab order,
+    which is what makes the row's hint reachable - and the scope has no
+    total-memory denominator to divide by.
   - **Every rate-limit row that hides something is also a rung of the strip's
     collapse ladder**, and the two meet rather than fight. A provider shows its
     tightest window unless `Show all windows` is on; the window switches prune
@@ -943,6 +971,60 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     provider, doubling a menu's length for the rarer of the two flips. The
     quick menu stays the visibility menu; both live one item away under
     `Status bar settings…`.
+  - **The preview is the strip, not a picture of it**
+    (`panels/layout/status-bar-preview.tsx`). It renders the same
+    `StatusBarUsageReadings` box, the same `StatusBarProviderSegment`, the same
+    `+N` chip and the same `StatusBarResourceSegment` the footer does, off the
+    same store and the same cache entries, so it cannot show a shape the strip
+    cannot produce. What it does NOT do is make a reading happen:
+    `useStatusBarRateLimitSegments` takes a required `mode`, and `passive`
+    disables every observer in all three batches - the http lane included, since
+    that is the one that would otherwise fetch - and hands back no mount
+    targets and no refresh handles at all. That last part is deliberate:
+    "renders no refresh button" would be a promise about markup, while an empty
+    `httpRefetches` is a promise about behaviour, and `refetch` on a disabled
+    query still fetches. It also mounts no popover, no resource stream and no
+    dynamic action handler. The whole frame is `inert` + `aria-hidden`: every
+    control in it is a real one that would be a dead end there, and the rows
+    below are where each is actually configured.
+  - **So the preview is honest rather than idealised.** A provider with no
+    reading yet draws its cold track, an account with none draws the strip's
+    "connect a provider" line, and with no global resource stream mounted (the
+    `header` placement with the header monitor off) the resource segment draws
+    its dashes. In `header` placement the frame is greyed with `Shown when
+placement is Status bar.` rather than hidden - a preview that vanished would
+    read as the settings having no effect.
+  - **`inert` is why the frame's own tooltips are not the explanation.** It
+    removes the subtree from hit testing, so no `TooltipWrapper` inside it can
+    open - and the states those tooltips exist for (three bare dashes, a dimmed
+    reading behind a ⚠) are exactly the ones a preview reads as broken without
+    one. A `status-bar-preview-notes` list under the frame carries them
+    instead: one line per non-live provider segment and ONE line for the
+    resource segment, both from the same builders the tooltips use
+    (`statusBarSegmentTooltip`, `statusBarResourceMetricViews`), so the caption
+    and the strip can never word one state two ways. They are two SIBLINGS
+    rather than one list, because reading the resource reason costs a
+    `useDesktopAppResourceUsage` SUBSCRIPTION and subscribing is what starts
+    the 1 Hz IPC poll - so that half is its own component mounted under `Show
+resource monitor`, never a gated result. Both dim with the frame under
+    `header` placement, and both are absent when there is nothing to explain.
+  - **The width control's three options are the three DENSITY RUNGS**, not
+    three arbitrary widths, and the frame's border is why they land where they
+    do: `max-w-[480px]` measures 478 (`icon-only`), `max-w-[900px]` measures
+    898 (`compact`), and only the uncapped `Wide` can measure past 900 and
+    reach `full`. Density is read from the box the strip's padding sits inside,
+    which is where `AppStatusBar` reads its own. It defaults to **Wide** - at the
+    `compact` ceiling the ladder drops the mode word, the mini bar and the
+    countdown whatever the store says, so opening at Normal would answer "this
+    switch does nothing" to the first three Display switches a user tries. It
+    is component state, never persisted: a way of LOOKING at the strip rather
+    than a preference about it.
+  - **The preview's ladder measures a stretching box**, the same two-box shape
+    the strip uses: the usage slot is `min-w-0 flex-1` and carries `roomRef`,
+    the readings inside stay `shrink-0` under `contentRef`, and there is no
+    separate spacer. A content-sized container would report its own content the
+    moment that content fits, which is a ladder that can only ever go down -
+    Wide → Narrow → Wide would stay collapsed until Settings was reopened.
   - **Composer** (`panels/layout/composer-layout-group.tsx`, its own file - the
     page mounts it with one line, so groups landing beside each other do not
     contend for the panel). Seven elements, a closed list rather than a
@@ -983,8 +1065,12 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     would put them out of reach.
   - **The provider list reads the WATCHED host**, not the app-wide one: the
     page re-provides `HostRuntimeContext` from the scoped binding with the same
-    `scopedToOwnHost` gate `RateLimitIconButton` uses, and an unresolved pick
-    shows a notice instead of another host's providers. Every query on the page
+    `scopedToOwnHost` gate `RateLimitIconButton` uses, once for the whole group
+    so the preview and the list can never describe two machines, and an
+    unresolved pick shows a notice instead of another host's providers (and no
+    preview, which would be the ambient host's readings under the picked host's
+    caption). The band naming the host is what a reader otherwise had no way to
+    see. Every query on the page
     is a passive observer (`PASSIVE_PROVIDER_RATE_LIMIT_OPTIONS`) - opening
     this page, and toggling anything on it, must never spawn a provider read;
     a provider with nothing in the shared cache yet renders a "waiting for

@@ -70,6 +70,7 @@ import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import {
   useStatusBarRateLimitSegments,
   useStatusBarWindowedProviders,
+  type StatusBarRateLimitMode,
 } from "@/hooks/rate-limits/use-status-bar-rate-limit-segments";
 
 const PROFILE_SELECTION = {
@@ -141,11 +142,12 @@ function configuredProvider(
 // both together (rather than hand-building the `providers` array) is what
 // makes this an end-to-end proof of the real composition, not just of the
 // segments hook in isolation.
-function useLaneProbe() {
+function useLaneProbe(mode: StatusBarRateLimitMode) {
   const providers = useStatusBarWindowedProviders();
   return useStatusBarRateLimitSegments({
     providers,
     profileSelection: PROFILE_SELECTION,
+    mode,
   });
 }
 
@@ -165,7 +167,7 @@ describe("status bar rate-limit lane isolation (real query stack)", () => {
       configuredProvider("opencode", "httpFetch"),
     ];
 
-    renderHook(() => useLaneProbe(), {
+    renderHook(() => useLaneProbe("live"), {
       wrapper: createQueryClientWrapper(harness.queryClient),
     });
 
@@ -180,5 +182,42 @@ describe("status bar rate-limit lane isolation (real query stack)", () => {
     // fetch-eligible the target is - a codex read spawns a CLI subprocess, and
     // only the serial queue (never this observer) may trigger one.
     expect(harness.calledProviderIds).not.toContain("codex");
+  });
+
+  it("reads neither lane in passive mode, and hands back nothing that could pull one", async () => {
+    const harness = createLaneHarness();
+    harnessClient = harness.client;
+    configuredProviders = [
+      configuredProvider("codex", "ephemeralProcess"),
+      configuredProvider("opencode", "httpFetch"),
+    ];
+
+    const wrapper = createQueryClientWrapper(harness.queryClient);
+    const passive = renderHook(() => useLaneProbe("passive"), { wrapper });
+
+    // An enabled observer fetches on mount, so give one every chance to: a
+    // macrotask turn is more than the httpFetch batch needs below.
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    expect(harness.calledProviderIds).toEqual([]);
+
+    // Not merely "renders no refresh button": a passive reader is handed no
+    // handle it could pull with. `refetch` on a disabled query still fetches,
+    // and a mount target is a queue enqueue waiting for a component to mount
+    // it.
+    expect(passive.result.current.mountTargets).toEqual([]);
+    expect(passive.result.current.refresh.queueTargets).toEqual([]);
+    expect(passive.result.current.refresh.httpRefetches).toEqual([]);
+    expect(passive.result.current.refresh.httpFetching).toBe(false);
+
+    // The same harness, the same providers, the same query keys - only the
+    // mode changes, and now opencode is read. Without this the empty list
+    // above would also pass for a harness that could never have been called.
+    passive.unmount();
+    renderHook(() => useLaneProbe("live"), { wrapper });
+    await waitFor(() =>
+      expect(harness.calledProviderIds).toContain("opencode"),
+    );
   });
 });

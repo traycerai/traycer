@@ -242,6 +242,15 @@ function choose(control: string, option: string): void {
   fireEvent.keyDown(item, { key: "Enter" });
 }
 
+/** The window-chip group a provider's "Windows" row renders. */
+function windowsGroup(providerLabel: string): HTMLElement {
+  return screen.getByRole("group", { name: `${providerLabel} windows` });
+}
+
+function metricsGroup(): HTMLElement {
+  return screen.getByRole("group", { name: "Metrics" });
+}
+
 describe("<LayoutSettingsPanel />", () => {
   it("writes the placement setting to the store via the segmented control", () => {
     render(<LayoutSettingsPanel />);
@@ -251,6 +260,25 @@ describe("<LayoutSettingsPanel />", () => {
     fireEvent.click(screen.getByRole("button", { name: "Status bar" }));
 
     expect(useLayoutStore.getState().statusBar.placement).toBe("status-bar");
+  });
+
+  it("renders the groups in their fixed order, Status bar first and Sidebar last", () => {
+    // The order a control keeps as groups arrive: Status bar, then Composer
+    // when it has rows, then Chat, then Sidebar. Asserted on the rendered
+    // document rather than trusted to a JSX read, since each group is now its
+    // own file mounted from one line here.
+    render(<LayoutSettingsPanel />);
+
+    const order = ["status-bar", "chat", "sidebar"].map((group) =>
+      screen.getByTestId(`layout-${group}-group`),
+    );
+
+    for (let index = 1; index < order.length; index += 1) {
+      expect(
+        order[index - 1].compareDocumentPosition(order[index]) &
+          Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+    }
   });
 
   it("shows the header resource-monitor row only while placement is header", () => {
@@ -267,7 +295,7 @@ describe("<LayoutSettingsPanel />", () => {
     ).toBeNull();
   });
 
-  it("renders provider rows in ORDERED_PROVIDERS order regardless of input order", () => {
+  it("renders provider subgroups in ORDERED_PROVIDERS order regardless of input order", () => {
     // Fed claude-code before codex; ORDERED_PROVIDERS ranks codex ahead of
     // claude-code, and the panel must sort rather than render input order.
     mocks.providers = [
@@ -281,10 +309,12 @@ describe("<LayoutSettingsPanel />", () => {
 
     render(<LayoutSettingsPanel />);
 
-    const codexRow = screen.getByRole("switch", { name: "Codex" });
-    const claudeRow = screen.getByRole("switch", { name: "Claude Code" });
+    const codexCard = screen.getByTestId("layout-provider-subgroup-codex");
+    const claudeCard = screen.getByTestId(
+      "layout-provider-subgroup-claude-code",
+    );
     expect(
-      codexRow.compareDocumentPosition(claudeRow) &
+      codexCard.compareDocumentPosition(claudeCard) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
   });
@@ -332,7 +362,7 @@ describe("<LayoutSettingsPanel />", () => {
     );
   });
 
-  it("toggles a window's hidden state, updating hiddenWindowKeys", () => {
+  it("toggles a window chip's hidden state, writing hiddenWindowKeys and tracking the analytics id, and the chip's aria-pressed follows the store", () => {
     mocks.providers = [configuredProvider("codex")];
     mocks.envelopes = { codex: envelopeFor(codexReady()) };
 
@@ -342,27 +372,70 @@ describe("<LayoutSettingsPanel />", () => {
       useLayoutStore.getState().statusBar.rateLimits.hiddenWindowKeys,
     ).toEqual([]);
 
-    fireEvent.click(screen.getByRole("switch", { name: "Codex 5h" }));
+    const chip = within(windowsGroup("Codex")).getByRole("button", {
+      name: "5h",
+    });
+    expect(chip.getAttribute("aria-pressed")).toBe("true");
+
+    fireEvent.click(chip);
 
     expect(
       useLayoutStore.getState().statusBar.rateLimits.hiddenWindowKeys,
     ).toEqual(["codex:primary"]);
+    expect(trackSettingChanged).toHaveBeenCalledWith(
+      "layout",
+      "layout.statusBar.rateLimits.window",
+    );
+    expect(chip.getAttribute("aria-pressed")).toBe("false");
+
+    fireEvent.click(chip);
+
+    expect(
+      useLayoutStore.getState().statusBar.rateLimits.hiddenWindowKeys,
+    ).toEqual([]);
+    expect(chip.getAttribute("aria-pressed")).toBe("true");
   });
 
-  it("collapses a hidden provider's window rows", () => {
+  it("collapses a hidden provider's 'show all windows' row and window chips, restores them when re-enabled, and never touches hiddenWindowKeys", () => {
     mocks.providers = [configuredProvider("codex")];
     mocks.envelopes = { codex: envelopeFor(codexReady()) };
 
     render(<LayoutSettingsPanel />);
 
-    expect(screen.getByRole("switch", { name: "Codex 5h" })).toBeTruthy();
+    // Hide a window first, so the deny-list is non-empty going into the
+    // provider toggle below - proving the provider switch never reaches it.
+    fireEvent.click(
+      within(windowsGroup("Codex")).getByRole("button", { name: "5h" }),
+    );
+    expect(
+      useLayoutStore.getState().statusBar.rateLimits.hiddenWindowKeys,
+    ).toEqual(["codex:primary"]);
 
     fireEvent.click(screen.getByRole("switch", { name: "Codex" }));
 
     expect(
       useLayoutStore.getState().statusBar.rateLimits.hiddenProviders,
     ).toEqual(["codex"]);
-    expect(screen.queryByRole("switch", { name: "Codex 5h" })).toBeNull();
+    expect(
+      useLayoutStore.getState().statusBar.rateLimits.hiddenWindowKeys,
+    ).toEqual(["codex:primary"]);
+    expect(
+      screen.queryByRole("switch", { name: "Codex show all windows" }),
+    ).toBeNull();
+    expect(screen.queryByRole("group", { name: "Codex windows" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("switch", { name: "Codex" }));
+
+    expect(
+      useLayoutStore.getState().statusBar.rateLimits.hiddenProviders,
+    ).toEqual([]);
+    expect(
+      useLayoutStore.getState().statusBar.rateLimits.hiddenWindowKeys,
+    ).toEqual(["codex:primary"]);
+    expect(
+      screen.getByRole("switch", { name: "Codex show all windows" }),
+    ).toBeTruthy();
+    expect(windowsGroup("Codex")).toBeTruthy();
   });
 
   it("keeps a provider with no reading toggleable, saying why it lists no windows", () => {
@@ -374,7 +447,11 @@ describe("<LayoutSettingsPanel />", () => {
 
     render(<LayoutSettingsPanel />);
 
-    expect(screen.getByText(/waiting for first reading/)).toBeTruthy();
+    expect(screen.getByText("Waiting for first reading")).toBeTruthy();
+    expect(screen.queryByRole("group", { name: "Codex windows" })).toBeNull();
+    expect(
+      screen.getByRole("switch", { name: "Codex show all windows" }),
+    ).toBeTruthy();
 
     fireEvent.click(screen.getByRole("switch", { name: "Codex" }));
 
@@ -383,33 +460,108 @@ describe("<LayoutSettingsPanel />", () => {
     ).toEqual(["codex"]);
   });
 
-  it("disables the RAM share switch while the resource scope is desktop-app", () => {
+  it("turning off 'Show usage limits' collapses Display and every provider card, leaves Placement and Resource monitor mounted, and restores everything when turned back on", () => {
+    mocks.providers = [configuredProvider("codex")];
+    mocks.envelopes = { codex: envelopeFor(codexReady()) };
+
+    render(<LayoutSettingsPanel />);
+
+    expect(screen.getByTestId("layout-usage-display-subgroup")).toBeTruthy();
+    expect(screen.getByTestId("layout-provider-subgroup-codex")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("switch", { name: "Show usage limits" }));
+
+    expect(useLayoutStore.getState().statusBar.rateLimits.enabled).toBe(false);
+    expect(screen.queryByTestId("layout-usage-display-subgroup")).toBeNull();
+    expect(screen.queryByTestId("layout-provider-subgroup-codex")).toBeNull();
+    expect(screen.getByRole("group", { name: "Placement" })).toBeTruthy();
+    expect(screen.getByTestId("layout-resource-monitor-subgroup")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("switch", { name: "Show usage limits" }));
+
+    expect(useLayoutStore.getState().statusBar.rateLimits.enabled).toBe(true);
+    expect(screen.getByTestId("layout-usage-display-subgroup")).toBeTruthy();
+    expect(screen.getByTestId("layout-provider-subgroup-codex")).toBeTruthy();
+  });
+
+  it("turning off 'Show resource monitor' collapses the Scope row and the Metrics chips", () => {
+    render(<LayoutSettingsPanel />);
+
+    expect(screen.getByRole("group", { name: "Scope" })).toBeTruthy();
+    expect(metricsGroup()).toBeTruthy();
+
+    fireEvent.click(
+      screen.getByRole("switch", { name: "Show resource monitor" }),
+    );
+
+    expect(useLayoutStore.getState().statusBar.resources.enabled).toBe(false);
+    expect(screen.queryByRole("group", { name: "Scope" })).toBeNull();
+    expect(screen.queryByRole("group", { name: "Metrics" })).toBeNull();
+  });
+
+  it("round-trips a metric chip to resources.metrics and tracks the analytics id", () => {
+    render(<LayoutSettingsPanel />);
+
+    expect(useLayoutStore.getState().statusBar.resources.metrics).toEqual([
+      "cpu",
+      "memory",
+      "processes",
+    ]);
+
+    fireEvent.click(
+      within(metricsGroup()).getByRole("button", { name: "CPU" }),
+    );
+
+    expect(useLayoutStore.getState().statusBar.resources.metrics).toEqual([
+      "memory",
+      "processes",
+    ]);
+    expect(trackSettingChanged).toHaveBeenCalledWith(
+      "layout",
+      "layout.statusBar.resources.metric",
+    );
+  });
+
+  it("disables the RAM share chip while the resource scope is desktop-app, no-ops its click, and shows the hint", () => {
     render(<LayoutSettingsPanel />);
 
     const ramShare = () =>
-      screen.getByRole("switch", { name: "RAM share of host" });
-    expect(ramShare().hasAttribute("disabled")).toBe(false);
+      within(metricsGroup()).getByRole("button", { name: "RAM share" });
+    expect(ramShare().getAttribute("aria-disabled")).toBe("false");
+    expect(
+      screen.queryByText("RAM share is only available for the host scope."),
+    ).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Desktop app" }));
 
     expect(useLayoutStore.getState().statusBar.resources.scope).toBe(
       "desktop-app",
     );
-    expect(ramShare().hasAttribute("disabled")).toBe(true);
+    expect(ramShare().getAttribute("aria-disabled")).toBe("true");
+    expect(
+      screen.getByText("RAM share is only available for the host scope."),
+    ).toBeTruthy();
+
+    const before = useLayoutStore.getState().statusBar.resources.metrics;
+    fireEvent.click(ramShare());
+    expect(useLayoutStore.getState().statusBar.resources.metrics).toEqual(
+      before,
+    );
   });
 
-  it("collapses the status bar group to the note in the installed mobile app", () => {
+  it("collapses the status bar group to the note and the header resource-monitor row in the installed mobile app, with no preview", () => {
     setMobileApp(true);
     render(<LayoutSettingsPanel />);
 
     expect(screen.getByText("Status bar is desktop-only")).toBeTruthy();
     expect(screen.queryByRole("group", { name: "Placement" })).toBeNull();
     expect(
-      screen.queryByRole("switch", { name: "Show rate limits" }),
+      screen.queryByRole("switch", { name: "Show usage limits" }),
     ).toBeNull();
     expect(
       screen.queryByRole("switch", { name: "Show resource monitor" }),
     ).toBeNull();
+    expect(screen.queryByTestId("status-bar-preview-frame")).toBeNull();
 
     // Other groups are unaffected - only the status bar surface is dropped.
     expect(
@@ -435,7 +587,7 @@ describe("<LayoutSettingsPanel />", () => {
     expect(useSettingsStore.getState().showGlobalResourceMonitor).toBe(false);
   });
 
-  it("shows the unresolved-host notice and lists no providers for an unusable explicit pick", () => {
+  it("shows the unresolved-host notice, lists no providers, and renders no preview for an unusable explicit pick", () => {
     mocks.hasExplicitPick = true;
     mocks.scope = hostScopeFixture({
       status: "unreachable",
@@ -451,6 +603,7 @@ describe("<LayoutSettingsPanel />", () => {
       screen.getByText(/Can't reach Other Machine right now/),
     ).toBeTruthy();
     expect(screen.queryByRole("switch", { name: "Codex" })).toBeNull();
+    expect(screen.queryByTestId("status-bar-preview-frame")).toBeNull();
   });
 
   describe("relocated rows", () => {

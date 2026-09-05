@@ -1,11 +1,11 @@
 import type { ReactNode } from "react";
+import { trackLayoutSetting } from "@/components/settings/panels/layout/track-layout-setting";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { SettingsRow } from "@/components/settings/settings-row";
 import {
   SettingsSegmentedControl,
   type SettingsSegmentedOption,
 } from "@/components/settings/controls/settings-segmented-control";
-import { trackSettingChanged } from "@/lib/analytics";
 import { cn } from "@/lib/utils";
 import { useSettingsDensity } from "@/providers/settings-density-context";
 import {
@@ -75,7 +75,7 @@ export function ComposerLayoutGroup(): ReactNode {
             value={composer.filesChanged}
             options={COMPACTABLE_OPTIONS}
             onChange={(mode) => {
-              trackSettingChanged("layout", "layout.composer.filesChanged");
+              trackLayoutSetting("layout.composer.filesChanged");
               setFilesChanged(mode);
             }}
             ariaLabel="Files changed"
@@ -90,7 +90,7 @@ export function ComposerLayoutGroup(): ReactNode {
             value={composer.activeAgents}
             options={COMPACTABLE_OPTIONS}
             onChange={(mode) => {
-              trackSettingChanged("layout", "layout.composer.activeAgents");
+              trackLayoutSetting("layout.composer.activeAgents");
               setActiveAgents(mode);
             }}
             ariaLabel="Active agents"
@@ -105,7 +105,7 @@ export function ComposerLayoutGroup(): ReactNode {
             value={composer.background}
             options={COMPACTABLE_OPTIONS}
             onChange={(mode) => {
-              trackSettingChanged("layout", "layout.composer.background");
+              trackLayoutSetting("layout.composer.background");
               setBackground(mode);
             }}
             ariaLabel="Background"
@@ -122,7 +122,7 @@ export function ComposerLayoutGroup(): ReactNode {
             value={composer.attachImage}
             options={HIDEABLE_OPTIONS}
             onChange={(mode) => {
-              trackSettingChanged("layout", "layout.composer.attachImage");
+              trackLayoutSetting("layout.composer.attachImage");
               setAttachImage(mode);
             }}
             ariaLabel="Attach image"
@@ -137,7 +137,7 @@ export function ComposerLayoutGroup(): ReactNode {
             value={composer.access}
             options={COMPACTABLE_OPTIONS}
             onChange={(mode) => {
-              trackSettingChanged("layout", "layout.composer.access");
+              trackLayoutSetting("layout.composer.access");
               setAccess(mode);
             }}
             ariaLabel="Access"
@@ -152,7 +152,7 @@ export function ComposerLayoutGroup(): ReactNode {
             value={composer.mic}
             options={HIDEABLE_OPTIONS}
             onChange={(mode) => {
-              trackSettingChanged("layout", "layout.composer.mic");
+              trackLayoutSetting("layout.composer.mic");
               setMic(mode);
             }}
             ariaLabel="Microphone"
@@ -167,7 +167,7 @@ export function ComposerLayoutGroup(): ReactNode {
             value={composer.compactButton}
             options={HIDEABLE_OPTIONS}
             onChange={(mode) => {
-              trackSettingChanged("layout", "layout.composer.compactButton");
+              trackLayoutSetting("layout.composer.compactButton");
               setCompactButton(mode);
             }}
             ariaLabel="Compact conversation"
