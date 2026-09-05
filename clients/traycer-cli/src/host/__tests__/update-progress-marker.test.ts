@@ -125,18 +125,29 @@ describe("update-progress-marker", () => {
     expect(await readUpdateProgressMarker("production")).toBeNull();
   });
 
+  // Shared by the delete and replace conditional-swap suites: both back
+  // `host update`'s marker reconciliation with the same compare-and-swap
+  // primitive, and a scratch (`.reconcile-`) or staging (`.tmp-`) leftover in
+  // either direction is the same kind of bug.
+  const failed = {
+    state: "failed" as const,
+    error: "host did not become healthy",
+    targetVersion: "1.4.0",
+    updatedAt: "2026-07-03T00:00:00.000Z",
+  };
+
+  function scratchAndStagingFiles(): string[] {
+    const dir = join(workHome, ".traycer", "host");
+    return readdirSync(dir).filter(
+      (name) => name.includes(".reconcile-") || name.includes(".tmp-"),
+    );
+  }
+
   // The conditional delete backs `host update`'s stale-failure reconcile: it
   // decided from a marker it READ, and another updater can replace that
   // marker with a live `updating` before the unlink. Deleting unconditionally
   // there would erase the legacy path's only progress signal.
   describe("deleteUpdateProgressMarkerIfUnchanged", () => {
-    const failed = {
-      state: "failed" as const,
-      error: "host did not become healthy",
-      targetVersion: "1.4.0",
-      updatedAt: "2026-07-03T00:00:00.000Z",
-    };
-
     it("clears the marker when it still reads exactly as expected", async () => {
       const {
         writeUpdateProgressMarker,
@@ -176,7 +187,7 @@ describe("update-progress-marker", () => {
         targetVersion: "1.5.0",
         updatedAt: "2026-07-03T00:00:01.000Z",
       });
-      expect(scratchFiles()).toEqual([]);
+      expect(scratchAndStagingFiles()).toEqual([]);
     });
 
     it("leaves no scratch behind on the cleared path either", async () => {
@@ -186,7 +197,7 @@ describe("update-progress-marker", () => {
       } = await import("../update-progress-marker");
       await writeUpdateProgressMarker("production", failed);
       await deleteUpdateProgressMarkerIfUnchanged("production", failed);
-      expect(scratchFiles()).toEqual([]);
+      expect(scratchAndStagingFiles()).toEqual([]);
     });
 
     it("reports absent when there is no marker to clear", async () => {
@@ -196,10 +207,139 @@ describe("update-progress-marker", () => {
         await deleteUpdateProgressMarkerIfUnchanged("production", failed),
       ).toBe("absent");
     });
+  });
 
-    function scratchFiles(): string[] {
-      const dir = join(workHome, ".traycer", "host");
-      return readdirSync(dir).filter((name) => name.includes(".reconcile-"));
-    }
+  // The conditional replace backs `host update`'s failure stamp: it computes
+  // `next` from a record it already holds (the `updating` marker THIS
+  // invocation wrote), and another updater can land its own `updating` at
+  // the same path before the stamp writes. Replacing unconditionally there
+  // would bury that updater's live progress under a failure that is not
+  // about it.
+  describe("replaceUpdateProgressMarkerIfUnchanged", () => {
+    const expectedUpdating = {
+      state: "updating" as const,
+      error: null,
+      targetVersion: "1.4.0",
+      updatedAt: "2026-07-03T00:00:00.000Z",
+    };
+    const failedNext = {
+      state: "failed" as const,
+      error: "host did not become healthy",
+      targetVersion: "1.4.0",
+      updatedAt: "2026-07-03T00:01:00.000Z",
+    };
+
+    it("replaces the marker when it still reads exactly as expected", async () => {
+      const {
+        writeUpdateProgressMarker,
+        readUpdateProgressMarker,
+        replaceUpdateProgressMarkerIfUnchanged,
+      } = await import("../update-progress-marker");
+      await writeUpdateProgressMarker("production", expectedUpdating);
+      expect(
+        await replaceUpdateProgressMarkerIfUnchanged(
+          "production",
+          expectedUpdating,
+          failedNext,
+        ),
+      ).toBe("replaced");
+      expect(await readUpdateProgressMarker("production")).toEqual(failedNext);
+    });
+
+    it("leaves a marker that changed underneath - another updater's `updating` survives byte-for-byte", async () => {
+      const {
+        writeUpdateProgressMarker,
+        readUpdateProgressMarker,
+        replaceUpdateProgressMarkerIfUnchanged,
+      } = await import("../update-progress-marker");
+      await writeUpdateProgressMarker("production", expectedUpdating);
+      // The race: between the caller's read (of `expectedUpdating`) and its
+      // replace, another updater landed its own `updating` at the same path.
+      const theirs = {
+        state: "updating" as const,
+        error: null,
+        targetVersion: "1.5.0",
+        updatedAt: "2026-07-03T00:00:01.000Z",
+      };
+      await writeUpdateProgressMarker("production", theirs);
+      expect(
+        await replaceUpdateProgressMarkerIfUnchanged(
+          "production",
+          expectedUpdating,
+          failedNext,
+        ),
+      ).toBe("changed");
+      expect(await readUpdateProgressMarker("production")).toEqual(theirs);
+      expect(scratchAndStagingFiles()).toEqual([]);
+    });
+
+    it("lands `next` when no marker exists", async () => {
+      const {
+        readUpdateProgressMarker,
+        replaceUpdateProgressMarkerIfUnchanged,
+      } = await import("../update-progress-marker");
+      expect(
+        await replaceUpdateProgressMarkerIfUnchanged(
+          "production",
+          expectedUpdating,
+          failedNext,
+        ),
+      ).toBe("replaced");
+      expect(await readUpdateProgressMarker("production")).toEqual(failedNext);
+    });
+
+    it("leaves no scratch or staging files behind on the replaced path", async () => {
+      const {
+        writeUpdateProgressMarker,
+        replaceUpdateProgressMarkerIfUnchanged,
+      } = await import("../update-progress-marker");
+      await writeUpdateProgressMarker("production", expectedUpdating);
+      await replaceUpdateProgressMarkerIfUnchanged(
+        "production",
+        expectedUpdating,
+        failedNext,
+      );
+      expect(scratchAndStagingFiles()).toEqual([]);
+    });
+
+    it("never throws even when every rm call rejects", async () => {
+      vi.doMock("node:fs/promises", async (importOriginal) => {
+        const actual =
+          await importOriginal<typeof import("node:fs/promises")>();
+        return {
+          ...actual,
+          rm: async () => {
+            const err = Object.assign(new Error("EACCES"), {
+              code: "EACCES",
+            });
+            throw err;
+          },
+        };
+      });
+      try {
+        const {
+          writeUpdateProgressMarker,
+          deleteUpdateProgressMarkerIfUnchanged,
+          replaceUpdateProgressMarkerIfUnchanged,
+        } = await import("../update-progress-marker");
+        // writeUpdateProgressMarker does not use rm, so it still works with
+        // the mocked module.
+        await writeUpdateProgressMarker("production", failed);
+        await expect(
+          deleteUpdateProgressMarkerIfUnchanged("production", failed),
+        ).resolves.toBe("cleared");
+        // Absent marker (the delete above already vacated it): lands `next`
+        // without throwing despite every `rm` rejecting.
+        await expect(
+          replaceUpdateProgressMarkerIfUnchanged(
+            "production",
+            expectedUpdating,
+            failedNext,
+          ),
+        ).resolves.toBe("replaced");
+      } finally {
+        vi.doUnmock("node:fs/promises");
+      }
+    });
   });
 });

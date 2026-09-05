@@ -11,7 +11,7 @@ import {
 import {
   deleteUpdateProgressMarkerIfUnchanged,
   readUpdateProgressMarker,
-  sameProgress,
+  replaceUpdateProgressMarkerIfUnchanged,
   writeUpdateProgressMarker,
   type HostUpdateProgress,
 } from "../host/update-progress-marker";
@@ -380,10 +380,17 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
         environment,
         writtenMarker,
       );
-      if (cleared !== "cleared") {
+      if (cleared === "changed") {
         ctx.runtime.logger.info(
           "Host update left the progress marker in place - another updater owns it now",
-          { environment, outcome: cleared },
+          { environment },
+        );
+      } else if (cleared === "absent") {
+        // Either this run's own write never landed (already warned) or
+        // something else removed it; nothing is left to report on.
+        ctx.runtime.logger.info(
+          "Host update found no progress marker to clear",
+          { environment },
         );
       }
     }
@@ -741,20 +748,30 @@ async function markUpdateFailed(
   error: string,
   ours: HostUpdateProgress | null,
 ): Promise<void> {
-  const current = await readUpdateProgressMarker(environment);
-  if (current !== null && ours !== null && !sameProgress(current, ours)) {
-    logger.info(
-      "Host update did not stamp its failure - another updater owns the progress marker now",
-      { environment, currentState: current.state },
-    );
-    return;
-  }
-  await writeUpdateProgressMarkerSafely(logger, environment, {
+  const failed: HostUpdateProgress = {
     state: "failed",
     error,
     targetVersion,
     updatedAt: new Date().toISOString(),
-  });
+  };
+  if (ours === null) {
+    await writeUpdateProgressMarkerSafely(logger, environment, failed);
+    return;
+  }
+  // One atomic compare-and-swap, not a read followed by a write: the other
+  // updater's `updating` can land between those two, and the write would then
+  // bury it under this failure for the whole of its update.
+  const outcome = await replaceUpdateProgressMarkerIfUnchanged(
+    environment,
+    ours,
+    failed,
+  );
+  if (outcome !== "replaced") {
+    logger.info(
+      "Host update did not stamp its failure - another updater owns the progress marker now",
+      { environment, outcome },
+    );
+  }
 }
 
 async function applyAndProjectLegacy(

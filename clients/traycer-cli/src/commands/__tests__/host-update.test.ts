@@ -41,6 +41,7 @@ const mocks = vi.hoisted(() => ({
   deleteUpdateProgressMarkerMock: vi.fn(),
   readUpdateProgressMarkerMock: vi.fn(),
   deleteUpdateProgressMarkerIfUnchangedMock: vi.fn(),
+  replaceUpdateProgressMarkerIfUnchangedMock: vi.fn(),
   probeHostHealthMock: vi.fn(),
   readHostPidMetadataMock: vi.fn(),
   identityVerdictMock: vi.fn(),
@@ -55,6 +56,8 @@ vi.mock("../../host/update-progress-marker", () => ({
   readUpdateProgressMarker: mocks.readUpdateProgressMarkerMock,
   deleteUpdateProgressMarkerIfUnchanged:
     mocks.deleteUpdateProgressMarkerIfUnchangedMock,
+  replaceUpdateProgressMarkerIfUnchanged:
+    mocks.replaceUpdateProgressMarkerIfUnchangedMock,
   // Pure comparator; the real one, so the "is this marker still ours"
   // decisions under test compare the way production does.
   sameProgress: (
@@ -169,6 +172,7 @@ import type { CommandContext } from "../../runner/runner";
 import type { HostInstallRecord } from "../../manifest/host-install";
 import type { HostDownloadOutcome } from "../../installer/download-stage";
 import type { ApplyHostOutcome } from "../../installer/apply";
+import type { HostUpdateProgress } from "../../host/update-progress-marker";
 
 // Mirrors host-management-ipc.ts's `projectInstallResult` field-by-field,
 // including its tolerant fallbacks - the contract this suite pins.
@@ -315,6 +319,9 @@ function fakeCtx(): CommandContext {
 function armActivationDefaults(): void {
   mocks.readUpdateProgressMarkerMock.mockResolvedValue(null);
   mocks.deleteUpdateProgressMarkerIfUnchangedMock.mockResolvedValue("cleared");
+  mocks.replaceUpdateProgressMarkerIfUnchangedMock.mockResolvedValue(
+    "replaced",
+  );
   mocks.readHostPidMetadataMock.mockResolvedValue(null);
   mocks.identityVerdictMock.mockResolvedValue("current");
   mocks.assertHostNotBusyMock.mockResolvedValue(undefined);
@@ -894,8 +901,15 @@ describe("buildHostUpdateCommand update-progress marker (T16)", () => {
       code: CLI_ERROR_CODES.HOST_UPDATE_HEALTH_CHECK_FAILED,
     });
 
-    expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenLastCalledWith(
+    expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenCalledTimes(1);
+    const written = mocks.writeUpdateProgressMarkerMock.mock
+      .calls[0][1] as HostUpdateProgress;
+    expect(written.state).toBe("updating");
+    expect(
+      mocks.replaceUpdateProgressMarkerIfUnchangedMock,
+    ).toHaveBeenCalledWith(
       "production",
+      written,
       expect.objectContaining({
         state: "failed",
         targetVersion: "2.0.0",
@@ -918,8 +932,14 @@ describe("buildHostUpdateCommand update-progress marker (T16)", () => {
       })(fakeCtx()),
     ).rejects.toThrow("commit failed");
 
-    expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenLastCalledWith(
+    expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenCalledTimes(1);
+    const written = mocks.writeUpdateProgressMarkerMock.mock
+      .calls[0][1] as HostUpdateProgress;
+    expect(
+      mocks.replaceUpdateProgressMarkerIfUnchangedMock,
+    ).toHaveBeenCalledWith(
       "production",
+      written,
       expect.objectContaining({ state: "failed", error: "commit failed" }),
     );
     expect(mocks.deleteUpdateProgressMarkerMock).not.toHaveBeenCalled();
@@ -1185,14 +1205,12 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
         exitCode: 1,
       }),
     );
-    // By the time the failure is stamped, the marker at the live path is a
-    // third updater's `updating` (written before it waits for the lock).
-    mocks.readUpdateProgressMarkerMock.mockResolvedValue({
-      state: "updating",
-      error: null,
-      targetVersion: "2.1.0",
-      updatedAt: "2026-01-01T00:00:05.000Z",
-    });
+    // By the time the failure is stamped, a third updater has already
+    // landed its own `updating` at the live path - the compare-and-swap
+    // reports "changed" and leaves it alone rather than stamping over it.
+    mocks.replaceUpdateProgressMarkerIfUnchangedMock.mockResolvedValue(
+      "changed",
+    );
 
     await expect(
       buildHostUpdateCommand({
@@ -1202,11 +1220,20 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
       })(fakeCtx()),
     ).rejects.toMatchObject({ code: CLI_ERROR_CODES.HOST_BUSY });
 
-    // Our own `updating` was written; no `failed` was stamped over theirs.
-    const states = mocks.writeUpdateProgressMarkerMock.mock.calls.map(
-      (call) => (call[1] as { state: string }).state,
+    // Our own `updating` was written once; no unconditional `failed` write
+    // ever happens - the failure goes through the compare-and-swap instead,
+    // and a "changed" answer means it never landed.
+    expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenCalledTimes(1);
+    const written = mocks.writeUpdateProgressMarkerMock.mock
+      .calls[0][1] as HostUpdateProgress;
+    expect(written.state).toBe("updating");
+    expect(
+      mocks.replaceUpdateProgressMarkerIfUnchangedMock,
+    ).toHaveBeenCalledWith(
+      "production",
+      written,
+      expect.objectContaining({ state: "failed" }),
     );
-    expect(states).toEqual(["updating"]);
   });
 
   it("the install record moves while waiting for the lock: the restart activates the record as read UNDER the lock and the marker is re-pointed at it", async () => {
@@ -1617,8 +1644,14 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
     ).rejects.toMatchObject({ code: CLI_ERROR_CODES.HOST_BUSY });
 
     expect(mocks.stopHostForRestartWithAttemptMock).not.toHaveBeenCalled();
-    expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenLastCalledWith(
+    expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenCalledTimes(1);
+    const written = mocks.writeUpdateProgressMarkerMock.mock
+      .calls[0][1] as HostUpdateProgress;
+    expect(
+      mocks.replaceUpdateProgressMarkerIfUnchangedMock,
+    ).toHaveBeenCalledWith(
       "production",
+      written,
       expect.objectContaining({ state: "failed", targetVersion: "2.0.0" }),
     );
   });
@@ -1644,8 +1677,14 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
     });
 
     expect(mocks.stopHostForRestartWithAttemptMock).toHaveBeenCalledTimes(1);
-    expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenLastCalledWith(
+    expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenCalledTimes(1);
+    const written = mocks.writeUpdateProgressMarkerMock.mock
+      .calls[0][1] as HostUpdateProgress;
+    expect(
+      mocks.replaceUpdateProgressMarkerIfUnchangedMock,
+    ).toHaveBeenCalledWith(
       "production",
+      written,
       expect.objectContaining({
         state: "failed",
         error: "port never accepted a connection",

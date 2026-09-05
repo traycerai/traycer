@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   readHostInstallRecordMock: vi.fn(),
   writeUpdateProgressMarkerMock: vi.fn(),
   deleteUpdateProgressMarkerMock: vi.fn(),
+  replaceUpdateProgressMarkerMock: vi.fn(),
   probeHostHealthMock: vi.fn(),
   installDispatchAckStamperMock: vi.fn(),
 }));
@@ -24,6 +25,7 @@ vi.mock("../../host/update-progress-marker", () => ({
   deleteUpdateProgressMarker: mocks.deleteUpdateProgressMarkerMock,
   readUpdateProgressMarker: async () => null,
   deleteUpdateProgressMarkerIfUnchanged: async () => "absent",
+  replaceUpdateProgressMarkerIfUnchanged: mocks.replaceUpdateProgressMarkerMock,
   sameProgress: () => true,
 }));
 
@@ -103,6 +105,7 @@ describe("host update explicit downgrade failure", () => {
     mocks.installHostDowngradeMock.mockRejectedValue(
       new Error("downgrade commit failed"),
     );
+    mocks.replaceUpdateProgressMarkerMock.mockResolvedValue("replaced");
 
     await expect(
       buildHostUpdateCommand({
@@ -113,6 +116,9 @@ describe("host update explicit downgrade failure", () => {
       })(fakeCtx()),
     ).rejects.toThrow("downgrade commit failed");
 
+    // Only the initial `updating` write happens unconditionally; the
+    // `failed` stamp goes through the compare-and-swap against it.
+    expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenCalledTimes(1);
     expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenNthCalledWith(
       1,
       "production",
@@ -121,9 +127,12 @@ describe("host update explicit downgrade failure", () => {
         targetVersion: "1.2.0",
       }),
     );
-    expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenNthCalledWith(
-      2,
+    expect(mocks.replaceUpdateProgressMarkerMock).toHaveBeenCalledWith(
       "production",
+      expect.objectContaining({
+        state: "updating",
+        targetVersion: "1.2.0",
+      }),
       expect.objectContaining({
         state: "failed",
         targetVersion: "1.2.0",
