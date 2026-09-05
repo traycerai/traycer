@@ -4939,6 +4939,38 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
     expect(waitForHostReady).not.toHaveBeenCalled();
   });
 
+  // Contrasts with the requires-approval post-cycle case above: "parked"
+  // is a healthy converge (the host this call already confirmed reachable
+  // is untouched, nothing needs restarting) rather than a failure - but the
+  // park is not transient, so it still quarantines for the session.
+  it("registerHostLoginItem returning parked post-cycle returns null (healthy converge), quarantines the refresh for the session, and a second attempt never re-runs the cycle", async () => {
+    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writePidMetadata("production", { version: "1.7.0", pid: process.pid });
+    vi.mocked(hasUnappliedPendingLoginItemRevision).mockResolvedValue(true);
+    vi.mocked(registerHostLoginItem).mockResolvedValue("parked");
+
+    const outcome =
+      await controller.applyPendingLoginItemRevisionIfIdle("outside-lane");
+
+    expect(outcome).toBeNull();
+    expect(controller.isPendingRevisionRefreshQuarantined()).toBe(true);
+    expect(waitForHostReady).not.toHaveBeenCalled();
+    expect(streamBundledTraycerCliJson).not.toHaveBeenCalled();
+    expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
+
+    // Quarantined for the rest of the session - a second attempt (e.g. the
+    // monitor's next tick) never re-runs the disruptive cycle.
+    const second =
+      await controller.applyPendingLoginItemRevisionIfIdle("outside-lane");
+    expect(second).toBeNull();
+    expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
+  });
+
   // Field RCA 2026-07-28: this cycle's leading bootout had just torn down a
   // verified-idle host when SMAppService answered `not-found` for every
   // subsequent call in the session - the old terminal failure stranded the

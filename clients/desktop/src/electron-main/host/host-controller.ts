@@ -2438,10 +2438,20 @@ export class HostController {
       // An opportunistic plist refresh that could not begin. Nothing was torn
       // down, the host this call already confirmed reachable is untouched,
       // and there is no swapped install waiting behind it - so there is
-      // nothing to restart FOR. Leave the revision pending for a later cycle
-      // rather than failing a healthy converge over work that never ran.
-      log.info(
-        "[host-controller] pending LaunchAgent revision skipped - registration parked",
+      // nothing to restart FOR, and a healthy converge is not failed over
+      // work that never ran. But the park is not transient: the guard refused
+      // because the prior registration reads as something it cannot restore
+      // exactly (an unreadable primary status, a legacy manifest that is not
+      // ours), and nothing this process does changes that reading. Returning
+      // a bare `null` would have the monitor treat it as a transient no-op
+      // that spends none of its retry budget, re-running the whole
+      // reachability / busy / lock / snapshot cycle every tick for the life
+      // of the Desktop process. So: quarantine for the session, like the
+      // other non-transient refusals above and below. The marker survives
+      // on disk for the next launch, where the snapshot is read afresh.
+      this.pendingRevisionRefreshQuarantined = true;
+      log.warn(
+        "[host-controller] pending LaunchAgent revision quarantined for this session - registration parked (prior registration cannot be restored exactly)",
       );
       return null;
     }
