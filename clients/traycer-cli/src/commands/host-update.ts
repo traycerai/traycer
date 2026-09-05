@@ -1,3 +1,5 @@
+import { compareHostVersions } from "@traycer-clients/shared/host-version/compare-host-versions";
+import { installHostDowngrade } from "./host-update-downgrade";
 import type { ApplyHostOutcome } from "../installer/apply";
 import {
   downloadAndStageHost,
@@ -32,7 +34,9 @@ import { applyHostWithAttempt } from "../host/update-mutation";
 // network transfer ever runs under `cli-lock` - plan rule 1); only the
 // apply half below acquires the lock, matching `host apply`'s own
 // contract that the caller holds it across reconcile/read/no-op/busy/
-// commit.
+// commit. An explicit `--release X --allow-downgrade` below the installed
+// version uses a private install source instead, with the same progress,
+// mutation authority, busy checks, and post-swap health verification.
 //
 // Busy (D6): the stage is kept - `applyHost`'s busy check runs before it
 // touches the stage - and this command re-throws `E_HOST_BUSY` with the
@@ -75,6 +79,8 @@ import { applyHostWithAttempt } from "../host/update-mutation";
 // compat boundary is scoped to `host update` alone - remove only when
 // Desktop's `host update` invocation is deleted (post ticket-4 cleanup).
 export interface HostUpdateArgs {
+  /** Explicit installs may downgrade; automatic update callers never opt in. */
+  readonly allowDowngrade: boolean;
   readonly force: boolean;
   /** `null` stages the latest registry version; an explicit value is a pin. */
   readonly versionRequest?: string | null;
@@ -151,27 +157,18 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
     // a real dependency of the run rather than a value the compiler can drop.
     void dispatchAckAcknowledgement;
 
-    const downloadOutcome = await downloadAndStageHost({
+    const preparation = await prepareHostUpdate({
       environment,
-      versionRequest: args.versionRequest ?? null,
-      automatic: false,
+      version: args.versionRequest ?? null,
+      allowDowngrade: args.allowDowngrade,
       onProgress: (info) => ctx.progress(info),
-      registryClient: null,
     });
-    ctx.runtime.logger.info("Host update stage phase completed", {
-      environment,
-      outcome: downloadOutcome.outcome,
-    });
-
-    // "Zero fetch beyond the manifest when at latest": already at (or
-    // past) the target, so the apply half never needs to run - still
-    // routed through the same locked projection below (not a bare
-    // early return) so the legacy backfill read is never a racy
-    // unlocked read.
-    const needsApply = !(
-      downloadOutcome.outcome === "short-circuit" &&
-      downloadOutcome.reason === "installed-up-to-date"
-    );
+    const needsApply =
+      preparation.kind === "downgrade" ||
+      !(
+        preparation.download.outcome === "short-circuit" &&
+        preparation.download.reason === "installed-up-to-date"
+      );
 
     // Remote Host Support T16: the daemon polls `update-progress.json` and
     // folds it into `host.status@1.1` / the drain gate, so an update that is
@@ -180,7 +177,10 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
     // and terminated on every exit path below. Marker I/O is deliberately
     // never allowed to fail the update itself - a missing marker degrades
     // the remote progress readout, it must not break the local update.
-    const targetVersion = downloadTargetVersion(downloadOutcome);
+    const targetVersion =
+      preparation.kind === "downgrade"
+        ? preparation.version
+        : downloadTargetVersion(preparation.download);
     if (needsApply) {
       await writeUpdateProgressMarkerSafely(ctx.runtime.logger, environment, {
         state: "updating",
@@ -192,12 +192,22 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
 
     let legacy: LegacyHostUpdateResult;
     try {
-      legacy = await applyAndProjectLegacy(
-        environment,
-        args.force,
-        needsApply,
-        (info) => ctx.progress(info),
-      );
+      legacy =
+        preparation.kind === "staged"
+          ? await applyAndProjectLegacy(
+              environment,
+              args.force,
+              needsApply,
+              (info) => ctx.progress(info),
+            )
+          : projectApplied(
+              await installHostDowngrade({
+                environment,
+                version: preparation.version,
+                force: args.force,
+                onProgress: (info) => ctx.progress(info),
+              }),
+            );
     } catch (err) {
       if (needsApply) {
         await markUpdateFailed(
@@ -245,7 +255,10 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
 
     ctx.runtime.logger.info("Host update command completed", {
       environment,
-      downloadOutcome: downloadOutcome.outcome,
+      downloadOutcome:
+        preparation.kind === "staged"
+          ? preparation.download.outcome
+          : "explicit-downgrade",
       version: legacy.version,
       changed: legacy.previousVersion !== legacy.version,
       hasPostSwapError: legacy.serviceLifecycle.postSwapError !== null,
@@ -255,6 +268,37 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
       human: humanSummary(legacy),
       exitCode: 0,
     };
+  };
+}
+
+type HostUpdatePreparation =
+  | { readonly kind: "downgrade"; readonly version: string }
+  | { readonly kind: "staged"; readonly download: HostDownloadOutcome };
+
+async function prepareHostUpdate(input: {
+  readonly environment: Environment;
+  readonly version: string | null;
+  readonly allowDowngrade: boolean;
+  readonly onProgress: (info: ProgressInfo) => void;
+}): Promise<HostUpdatePreparation> {
+  if (input.allowDowngrade && input.version !== null) {
+    const installed = await requireInstalled(input.environment);
+    const comparison = compareHostVersions(input.version, installed.version);
+    if (comparison.comparable && comparison.ordering === "less") {
+      // Reconciliation deliberately deletes older shared stages. The explicit
+      // install keeps its verified source private until the locked swap.
+      return { kind: "downgrade", version: input.version };
+    }
+  }
+  return {
+    kind: "staged",
+    download: await downloadAndStageHost({
+      environment: input.environment,
+      versionRequest: input.version,
+      automatic: false,
+      onProgress: input.onProgress,
+      registryClient: null,
+    }),
   };
 }
 

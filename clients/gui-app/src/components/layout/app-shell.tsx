@@ -13,6 +13,7 @@ import { useDragToDismissKeyboard } from "@/components/layout/shell/use-drag-to-
 import { SessionConnectivityStrip } from "@/components/layout/session-connectivity-strip";
 import { ClockSkewBanner } from "@/components/layout/clock-skew-banner";
 import { useMobileHistorySwipes } from "@/components/layout/shell/use-mobile-history-swipes";
+import { useSystemBack } from "@/components/layout/shell/use-system-back";
 import { TopLevelTabHost } from "@/components/layout/top-level-tab-host";
 import { TopLevelSurfaceActivationProvider } from "@/components/layout/top-level-surface-activation-provider";
 import { HostScopeReady } from "@/components/layout/host-readiness-controller";
@@ -57,6 +58,11 @@ export function AppShell(props: AppShellProps) {
   // mobile-app product flag, so desktop attaches nothing and keeps its arrows.
   // Renders nothing until a swipe is actually in flight.
   const historySwipeTransition = useMobileHistorySwipes();
+  // The OS back request, where the shell raises one (Android's key and system
+  // gesture, which never reach the swipe above as a touch). Walks the same
+  // history through the same `goBack`. Self-gated on the shell capability, so
+  // every other shell attaches nothing.
+  useSystemBack();
 
   return (
     <PrimaryFocusCoordinatorProvider>
