@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -168,9 +168,25 @@ describe("update-progress-marker", () => {
       expect(
         await deleteUpdateProgressMarkerIfUnchanged("production", failed),
       ).toBe("changed");
-      expect((await readUpdateProgressMarker("production"))?.state).toBe(
-        "updating",
-      );
+      // Restored byte-for-byte, and the scratch the compare-and-delete took
+      // it through is gone.
+      expect(await readUpdateProgressMarker("production")).toEqual({
+        state: "updating",
+        error: null,
+        targetVersion: "1.5.0",
+        updatedAt: "2026-07-03T00:00:01.000Z",
+      });
+      expect(scratchFiles()).toEqual([]);
+    });
+
+    it("leaves no scratch behind on the cleared path either", async () => {
+      const {
+        writeUpdateProgressMarker,
+        deleteUpdateProgressMarkerIfUnchanged,
+      } = await import("../update-progress-marker");
+      await writeUpdateProgressMarker("production", failed);
+      await deleteUpdateProgressMarkerIfUnchanged("production", failed);
+      expect(scratchFiles()).toEqual([]);
     });
 
     it("reports absent when there is no marker to clear", async () => {
@@ -180,5 +196,10 @@ describe("update-progress-marker", () => {
         await deleteUpdateProgressMarkerIfUnchanged("production", failed),
       ).toBe("absent");
     });
+
+    function scratchFiles(): string[] {
+      const dir = join(workHome, ".traycer", "host");
+      return readdirSync(dir).filter((name) => name.includes(".reconcile-"));
+    }
   });
 });
