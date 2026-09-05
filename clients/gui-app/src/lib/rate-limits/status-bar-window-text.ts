@@ -17,6 +17,22 @@ export function windowPercentText(
   usedPercent: number,
   percentMode: PercentMode,
 ): string {
+  return `${windowPercentValueText(usedPercent, percentMode)} ${percentMode}`;
+}
+
+/**
+ * The number alone - `57%` - for the levels of the status bar's collapse ladder
+ * that have dropped the word after it.
+ *
+ * Split out rather than sliced off the sentence above, because the number is
+ * also the part that carries the severity color: the two are one span and the
+ * mode word is another, so a reader still sees one string while only the
+ * percentage is tinted.
+ */
+export function windowPercentValueText(
+  usedPercent: number,
+  percentMode: PercentMode,
+): string {
   const used = Math.round(usedPercent);
-  return `${percentMode === "used" ? used : 100 - used}% ${percentMode}`;
+  return `${percentMode === "used" ? used : 100 - used}%`;
 }

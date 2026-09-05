@@ -1190,9 +1190,11 @@ describe("Layout page settings analytics", () => {
     const statusBarSettings = [
       "layout.statusBar.placement",
       "layout.statusBar.rateLimits.enabled",
+      "layout.statusBar.rateLimits.expandedProvider",
       "layout.statusBar.rateLimits.percentMode",
       "layout.statusBar.rateLimits.provider",
       "layout.statusBar.rateLimits.showBar",
+      "layout.statusBar.rateLimits.showModeWord",
       "layout.statusBar.rateLimits.showTimer",
       "layout.statusBar.rateLimits.window",
       "layout.statusBar.resources.enabled",

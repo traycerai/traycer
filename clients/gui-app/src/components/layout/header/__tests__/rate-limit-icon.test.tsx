@@ -17,6 +17,7 @@ import {
   type KeybindingRouter,
 } from "@/lib/keybindings/dispatch";
 import { formatChordForDisplay } from "@/lib/keybindings/chord";
+import { RUNNING_LOW_TEXT_CLASS_NAME } from "@/lib/rate-limits/window-severity";
 
 const DYNAMIC_ACTION_ROUTER: KeybindingRouter = {
   getPathname: () => "/",
@@ -325,9 +326,13 @@ describe("<RateLimitIconButton />", () => {
     renderIcon();
     const button = screen.getByTestId("rate-limit-header-button");
     expect(hasClass(button, "opacity-[0.55]")).toBe(false);
-    expect(
-      hasClass(screen.getByTestId("rate-limit-gauge-icon"), "text-amber-600"),
-    ).toBe(true);
+    // Checked class by class against the shared token rather than a
+    // hard-coded string, so this stays true if the degraded gauge's shade
+    // ever moves without the two drifting apart unnoticed.
+    const gaugeIcon = screen.getByTestId("rate-limit-gauge-icon");
+    for (const runningLowClass of RUNNING_LOW_TEXT_CLASS_NAME.split(" ")) {
+      expect(hasClass(gaugeIcon, runningLowClass)).toBe(true);
+    }
     // Both bars keep their own severity fill while the gauge carries the
     // degraded-state treatment.
     const fills = within(button).getAllByTestId("rate-limit-bar-fill");

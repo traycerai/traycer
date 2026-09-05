@@ -1,7 +1,10 @@
 import { Fragment, type ReactNode } from "react";
 import { TriangleAlert } from "lucide-react";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
-import type { StatusBarDensity } from "@/components/layout/status-bar/status-bar-density";
+import {
+  statusBarUsageDetailParts,
+  type StatusBarUsageDetail,
+} from "@/components/layout/status-bar/status-bar-usage-ladder";
 import type {
   StatusBarProviderSegmentModel,
   StatusBarRateLimitWindow,
@@ -15,8 +18,10 @@ import { formatUnavailableReason } from "@/lib/provider-rate-limit-content";
 import {
   rateLimitWindowFillPercent,
   rateLimitWindowSeverityBarClassName,
+  rateLimitWindowSeverityTextClassName,
+  RUNNING_LOW_TEXT_CLASS_NAME,
 } from "@/lib/rate-limits/window-severity";
-import { windowPercentText } from "@/lib/rate-limits/status-bar-window-text";
+import { windowPercentValueText } from "@/lib/rate-limits/status-bar-window-text";
 // The same glyph the strip's resource segment prints for a reading it does not
 // have, so one bar never shows two different dashes for one idea.
 import { UNAVAILABLE_DASH } from "@/lib/resources/memory-metric";
@@ -26,8 +31,16 @@ import type { PercentMode } from "@/stores/settings/layout-store";
 
 export interface StatusBarProviderSegmentProps {
   readonly segment: StatusBarProviderSegmentModel;
-  readonly density: StatusBarDensity;
+  /** Which rung of the cluster's collapse ladder this is being drawn at. */
+  readonly detail: StatusBarUsageDetail;
+  /**
+   * Whether this provider shows every visible window rather than its tightest
+   * alone. Off by default: one reading per provider is what makes a strip of
+   * them readable at a glance, and a Max-plan account reports five from one.
+   */
+  readonly expanded: boolean;
   readonly percentMode: PercentMode;
+  readonly showModeWord: boolean;
   readonly showTimer: boolean;
   readonly showBar: boolean;
 }
@@ -83,7 +96,9 @@ export function StatusBarProviderSegment(
           {icon}
           {segment.state === "degraded" ? (
             <TriangleAlert
-              className="size-3 shrink-0 text-amber-600 dark:text-amber-400"
+              // The same amber a `running_low` percentage prints, since one can
+              // sit beside the other on this row.
+              className={cn("size-3 shrink-0", RUNNING_LOW_TEXT_CLASS_NAME)}
               aria-hidden
               data-testid="status-bar-provider-degraded"
             />
@@ -96,14 +111,23 @@ export function StatusBarProviderSegment(
 }
 
 /**
- * `icon-only` is the icon and nothing else; `compact` keeps the tightest window
- * alone, which is the one a glance is for. Both drop the mini bar: at those
- * widths it is the first thing that stops being legible and the last thing that
- * carries information the text does not.
+ * What survives at this rung.
+ *
+ * A preference that already switched something off is honoured on top of the
+ * rung rather than instead of it: the ladder skips a rung that would take away
+ * something invisible, and this AND-s the two so a rung reached from a
+ * shorter ladder still cannot resurrect what Settings hid.
+ *
+ * The window list narrows for two different reasons, and only one of them is a
+ * preference. Unexpanded is the default and shows the tightest window - the one
+ * that decides whether the panel is worth opening. `percent-only` narrows to it
+ * as well whatever the preference says, because several bare percentages under
+ * one icon name which limits exist without naming which is which.
  */
 function SegmentBody(props: StatusBarProviderSegmentProps): ReactNode {
-  const { segment, density } = props;
-  if (density === "icon-only") return null;
+  const { segment } = props;
+  const parts = statusBarUsageDetailParts(props.detail);
+  if (!parts.percent) return null;
   if (segment.state === "unavailable") {
     return (
       <span aria-hidden="true" data-testid="status-bar-provider-unavailable">
@@ -120,13 +144,15 @@ function SegmentBody(props: StatusBarProviderSegmentProps): ReactNode {
       />
     );
   }
-  const windows =
-    density === "compact" && segment.tightest !== null
-      ? [segment.tightest]
-      : segment.windows;
+  const windows = windowsToDraw(segment, props.expanded && parts.label);
+  // The rung and the preference have to agree before anything is drawn: a rung
+  // cannot bring back what Settings hid, and a preference cannot keep what the
+  // strip has run out of room for.
+  const showModeWord = props.showModeWord && parts.modeWord;
+  const showTimer = props.showTimer && parts.timer;
   return (
     <>
-      {props.showBar && density === "full" && segment.tightest !== null ? (
+      {props.showBar && parts.bar && segment.tightest !== null ? (
         <MiniBar window={segment.tightest} />
       ) : null}
       {windows.map((window, index) => (
@@ -139,12 +165,22 @@ function SegmentBody(props: StatusBarProviderSegmentProps): ReactNode {
           <StatusBarWindowText
             window={window}
             percentMode={props.percentMode}
-            showTimer={props.showTimer}
+            showModeWord={showModeWord}
+            showTimer={showTimer}
+            showLabel={parts.label}
           />
         </Fragment>
       ))}
     </>
   );
+}
+
+function windowsToDraw(
+  segment: StatusBarProviderSegmentModel,
+  expanded: boolean,
+): ReadonlyArray<StatusBarRateLimitWindow> {
+  if (expanded) return segment.windows;
+  return segment.tightest === null ? [] : [segment.tightest];
 }
 
 /**
@@ -175,29 +211,47 @@ function MiniBar(props: {
 }
 
 /**
- * One window, as `33% used 4h 15m`.
+ * One window, as `33% used 4h 15m` — or as much of that as the rung allows,
+ * down to `33%` alone.
  *
  * A leaf of its own because the countdown subscribes to the shared 60s clock,
  * the idiom every other countdown in the app follows. It is not what keeps the
  * tick cheap here — the segments hook samples the same clock to expire windows,
  * so the cluster re-renders each minute either way — but it keeps this label
  * the only thing that has to, in every future where that stops being true.
+ *
+ * The percentage is its own span, and the only tinted one. Severity is a fact
+ * about the reading rather than about how much room the strip has, so it
+ * survives every rung of the ladder — including the ones that took the mini bar
+ * away, which is the only other place this colour appears.
  */
 function StatusBarWindowText(props: {
   readonly window: StatusBarRateLimitWindow;
   readonly percentMode: PercentMode;
+  readonly showModeWord: boolean;
   readonly showTimer: boolean;
+  readonly showLabel: boolean;
 }): ReactNode {
   const { window } = props;
   // `null` when the timer is off, and also when the provider reported no reset
   // instant to count down to - both fall back to the catalog's static name.
   const countdown = useResetCountdown(props.showTimer ? window.resetsAt : null);
+  const suffix = [
+    ...(props.showModeWord ? [props.percentMode] : []),
+    ...(props.showLabel ? [windowLabel(window, countdown)] : []),
+  ].join(" ");
   return (
     <span
       className="whitespace-nowrap"
       data-testid={`status-bar-window-${window.windowKey}`}
     >
-      {`${windowPercentText(window.usedPercent, props.percentMode)} ${windowLabel(window, countdown)}`}
+      <span
+        data-testid={`status-bar-window-percent-${window.windowKey}`}
+        className={rateLimitWindowSeverityTextClassName(window.severity)}
+      >
+        {windowPercentValueText(window.usedPercent, props.percentMode)}
+      </span>
+      {suffix === "" ? null : ` ${suffix}`}
     </span>
   );
 }

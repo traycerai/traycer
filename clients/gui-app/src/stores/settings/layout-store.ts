@@ -42,9 +42,19 @@ export interface StatusBarRateLimitPreferences {
    */
   readonly hiddenProviders: ReadonlyArray<RateLimitProviderId>;
   readonly hiddenWindowKeys: ReadonlyArray<string>;
+  /**
+   * An allow-list, unlike the two above, and the asymmetry is the point: a
+   * provider shows its tightest window by default, so "show all of them" is an
+   * opt-in per provider rather than something a new provider inherits. A
+   * provider that is later disconnected keeps its entry, exactly as a hidden
+   * one does.
+   */
+  readonly expandedProviders: ReadonlyArray<RateLimitProviderId>;
   readonly percentMode: PercentMode;
   readonly showTimer: boolean;
   readonly showBar: boolean;
+  /** Whether `used` / `remaining` is spelled out after the percentage. */
+  readonly showModeWord: boolean;
 }
 
 export interface StatusBarResourcePreferences {
@@ -70,9 +80,14 @@ interface LayoutStoreState {
   readonly toggleStatusBarProvider: (providerId: RateLimitProviderId) => void;
   /** Flips one window's membership in the deny-list, keyed by `windowKey`. */
   readonly toggleStatusBarWindow: (windowKey: string) => void;
+  /** Flips whether one provider shows every visible window or just its tightest. */
+  readonly toggleStatusBarExpandedProvider: (
+    providerId: RateLimitProviderId,
+  ) => void;
   readonly setStatusBarPercentMode: (percentMode: PercentMode) => void;
   readonly setStatusBarShowTimer: (showTimer: boolean) => void;
   readonly setStatusBarShowBar: (showBar: boolean) => void;
+  readonly setStatusBarShowModeWord: (showModeWord: boolean) => void;
   readonly setStatusBarResourcesEnabled: (enabled: boolean) => void;
   readonly toggleStatusBarResourceMetric: (metric: ResourceMetric) => void;
   readonly setStatusBarResourceScope: (scope: ResourceScope) => void;
@@ -94,9 +109,11 @@ const DEFAULT_STATUS_BAR_RATE_LIMITS: StatusBarRateLimitPreferences = {
   enabled: true,
   hiddenProviders: [],
   hiddenWindowKeys: [],
+  expandedProviders: [],
   percentMode: "used",
   showTimer: true,
   showBar: true,
+  showModeWord: true,
 };
 
 const DEFAULT_STATUS_BAR_RESOURCES: StatusBarResourcePreferences = {
@@ -169,10 +186,9 @@ function persistedWindowKeys(value: unknown): ReadonlyArray<string> {
  */
 function persistedProviderIds(
   value: unknown,
+  fallback: ReadonlyArray<RateLimitProviderId>,
 ): ReadonlyArray<RateLimitProviderId> {
-  if (!Array.isArray(value)) {
-    return DEFAULT_STATUS_BAR_RATE_LIMITS.hiddenProviders;
-  }
+  if (!Array.isArray(value)) return fallback;
   const providerIds = value.flatMap((entry): RateLimitProviderId[] => {
     const result = rateLimitCapableProviderIdSchema.safeParse(entry);
     return result.success ? [result.data] : [];
@@ -187,8 +203,15 @@ function persistedRateLimits(value: unknown): StatusBarRateLimitPreferences {
       stored.enabled,
       DEFAULT_STATUS_BAR_RATE_LIMITS.enabled,
     ),
-    hiddenProviders: persistedProviderIds(stored.hiddenProviders),
+    hiddenProviders: persistedProviderIds(
+      stored.hiddenProviders,
+      DEFAULT_STATUS_BAR_RATE_LIMITS.hiddenProviders,
+    ),
     hiddenWindowKeys: persistedWindowKeys(stored.hiddenWindowKeys),
+    expandedProviders: persistedProviderIds(
+      stored.expandedProviders,
+      DEFAULT_STATUS_BAR_RATE_LIMITS.expandedProviders,
+    ),
     percentMode: isPercentMode(stored.percentMode)
       ? stored.percentMode
       : DEFAULT_STATUS_BAR_RATE_LIMITS.percentMode,
@@ -199,6 +222,10 @@ function persistedRateLimits(value: unknown): StatusBarRateLimitPreferences {
     showBar: persistedBoolean(
       stored.showBar,
       DEFAULT_STATUS_BAR_RATE_LIMITS.showBar,
+    ),
+    showModeWord: persistedBoolean(
+      stored.showModeWord,
+      DEFAULT_STATUS_BAR_RATE_LIMITS.showModeWord,
     ),
   };
 }
@@ -304,6 +331,21 @@ export const useLayoutStore = create<LayoutStoreState>()(
           },
         });
       },
+      toggleStatusBarExpandedProvider: (providerId) => {
+        const statusBar = get().statusBar;
+        set({
+          statusBar: {
+            ...statusBar,
+            rateLimits: {
+              ...statusBar.rateLimits,
+              expandedProviders: toggledMembership(
+                statusBar.rateLimits.expandedProviders,
+                providerId,
+              ),
+            },
+          },
+        });
+      },
       setStatusBarPercentMode: (percentMode) => {
         const statusBar = get().statusBar;
         if (statusBar.rateLimits.percentMode === percentMode) return;
@@ -331,6 +373,16 @@ export const useLayoutStore = create<LayoutStoreState>()(
           statusBar: {
             ...statusBar,
             rateLimits: { ...statusBar.rateLimits, showBar },
+          },
+        });
+      },
+      setStatusBarShowModeWord: (showModeWord) => {
+        const statusBar = get().statusBar;
+        if (statusBar.rateLimits.showModeWord === showModeWord) return;
+        set({
+          statusBar: {
+            ...statusBar,
+            rateLimits: { ...statusBar.rateLimits, showModeWord },
           },
         });
       },

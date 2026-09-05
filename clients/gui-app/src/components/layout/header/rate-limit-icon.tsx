@@ -21,6 +21,7 @@ import { HostRuntimeContext, useHostBinding } from "@/lib/host";
 import {
   rateLimitWindowFillPercent,
   rateLimitWindowSeverityBarClassName,
+  RUNNING_LOW_TEXT_CLASS_NAME,
 } from "@/lib/rate-limits/window-severity";
 import { cn } from "@/lib/utils";
 import { registerDynamicActionHandler } from "@/lib/keybindings/dispatch";
@@ -193,10 +194,7 @@ function RateLimitGlyph({
     <>
       <Gauge
         data-testid="rate-limit-gauge-icon"
-        className={cn(
-          "size-3.5",
-          isDegraded && "text-amber-600 dark:text-amber-400",
-        )}
+        className={cn("size-3.5", isDegraded && RUNNING_LOW_TEXT_CLASS_NAME)}
         aria-hidden
       />
       <span

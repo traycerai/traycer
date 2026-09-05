@@ -914,11 +914,29 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     `Show resource monitor in header`, drawn only while placement is `header`
     because in the other placement the group's own `Show resource monitor`
     governs the same thing; then Rate limits (enabled, percentage used /
-    remaining, reset timer, usage bar, one switch per provider with a nested
-    switch per window, a hidden provider collapsing its windows) and Resource
-    monitor (enabled, scope Host / Desktop app, one switch per metric - RAM
-    share is disabled under the Desktop-app scope, which has no denominator
-    for it).
+    remaining, reset timer, usage bar, the used / remaining WORD after each
+    percentage, one switch per provider with a nested `Show all windows` and a
+    nested switch per window, a hidden provider collapsing all of those) and
+    Resource monitor (enabled, scope Host / Desktop app, one switch per
+    metric - RAM share is disabled under the Desktop-app scope, which has no
+    denominator for it).
+  - **Every rate-limit row that hides something is also a rung of the strip's
+    collapse ladder**, and the two meet rather than fight. A provider shows its
+    tightest window unless `Show all windows` is on; the window switches prune
+    what counts as visible in BOTH modes. When the cluster runs out of room it
+    drops the mode word, then the bars, then the timers, then everything but
+    the coloured percentage, then everything but the icon, and finally folds
+    whole providers into a `+N` chip - skipping any rung whose setting is
+    already off, since taking away something invisible would free no width.
+    The percentage is severity-coloured at every rung, bar or no bar.
+  - **The strip's right-click menu deliberately has no `Show all windows`
+    item.** Its provider rows are `ContextMenuCheckboxItem`s - a one-click
+    visibility toggle each - and a checkbox item cannot also host a sub-menu
+    trigger, so offering the second preference there would either demote the
+    visibility toggle into a submenu or add a second flat checkbox per
+    provider, doubling a menu's length for the rarer of the two flips. The
+    quick menu stays the visibility menu; both live one item away under
+    `Status bar settings…`.
   - **The provider list reads the WATCHED host**, not the app-wide one: the
     page re-provides `HostRuntimeContext` from the scoped binding with the same
     `scopedToOwnHost` gate `RateLimitIconButton` uses, and an unresolved pick

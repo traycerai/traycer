@@ -187,10 +187,19 @@ function ScopedAppStatusBar(props: {
                 does not shift into place when the segments land - or when the
                 preference that hides them is flipped. The notice for an
                 unresolved pick takes the same slot.
+
+                The slot is also the row's GROWER, which is what lets the usage
+                cluster inside it know how much room it has: a `flex: 0 1 auto`
+                slot is sized by its own content, so a cluster measuring
+                anything inside it would be measuring itself. It replaces the
+                spacer that used to sit between the two clusters - the spare
+                room has to be absorbed by exactly one box, and it may as well
+                be the one that needs to know how much there is. The right-hand
+                cluster is pushed to the far edge either way.
               */}
               <span
                 data-testid="status-bar-rate-limit-slot"
-                className="flex min-w-0 items-center gap-1"
+                className="flex min-w-0 flex-1 items-center gap-1"
               >
                 <StatusBarUsageSlot
                   scopedToOwnHost={scopedToOwnHost}
@@ -211,7 +220,6 @@ function ScopedAppStatusBar(props: {
               hasExplicitPick={props.hasExplicitPick}
             />
           </Popover>
-          <span className="flex-1" />
           {/*
             Gated on the PREFERENCE only, never on the pick - the mirror of the
             usage panel above, and for the same reason. This component is the

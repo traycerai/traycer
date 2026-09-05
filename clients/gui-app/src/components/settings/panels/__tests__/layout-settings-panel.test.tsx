@@ -19,6 +19,18 @@ import {
 } from "@/stores/settings/layout-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 
+// The panel's own `trackLayoutSetting` calls straight into `trackSettingChanged`
+// - mocked here (preserving every other export) so a round-trip test can
+// assert the exact analytics id fired, the same seam the rest of this suite
+// already uses for its other hook mocks.
+vi.mock("@/lib/analytics", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/analytics")>();
+  return {
+    ...actual,
+    trackSettingChanged: vi.fn(),
+  };
+});
+
 // ── module-level mock state ─────────────────────────────────────────────────
 
 interface MockState {
@@ -121,6 +133,7 @@ vi.mock("@/lib/host", async (importOriginal) => {
 });
 
 import { LayoutSettingsPanel } from "@/components/settings/panels/layout-settings-panel";
+import { trackSettingChanged } from "@/lib/analytics";
 
 // ── fixtures ─────────────────────────────────────────────────────────────
 
@@ -210,6 +223,7 @@ function resetAll(): void {
   mocks.scope = hostScopeFixture({});
   mocks.hasExplicitPick = false;
   setMobileApp(false);
+  vi.mocked(trackSettingChanged).mockClear();
 }
 
 beforeEach(resetAll);
@@ -273,6 +287,49 @@ describe("<LayoutSettingsPanel />", () => {
       codexRow.compareDocumentPosition(claudeRow) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
+  });
+
+  it("round-trips 'Show used / remaining label' to showModeWord and tracks the analytics id", () => {
+    render(<LayoutSettingsPanel />);
+
+    expect(useLayoutStore.getState().statusBar.rateLimits.showModeWord).toBe(
+      true,
+    );
+
+    fireEvent.click(
+      screen.getByRole("switch", { name: "Show used / remaining label" }),
+    );
+
+    expect(useLayoutStore.getState().statusBar.rateLimits.showModeWord).toBe(
+      false,
+    );
+    expect(trackSettingChanged).toHaveBeenCalledWith(
+      "layout",
+      "layout.statusBar.rateLimits.showModeWord",
+    );
+  });
+
+  it("round-trips a provider's 'show all windows' switch to expandedProviders and tracks the analytics id", () => {
+    mocks.providers = [configuredProvider("codex")];
+    mocks.envelopes = { codex: envelopeFor(codexReady()) };
+
+    render(<LayoutSettingsPanel />);
+
+    expect(
+      useLayoutStore.getState().statusBar.rateLimits.expandedProviders,
+    ).toEqual([]);
+
+    fireEvent.click(
+      screen.getByRole("switch", { name: "Codex show all windows" }),
+    );
+
+    expect(
+      useLayoutStore.getState().statusBar.rateLimits.expandedProviders,
+    ).toEqual(["codex"]);
+    expect(trackSettingChanged).toHaveBeenCalledWith(
+      "layout",
+      "layout.statusBar.rateLimits.expandedProvider",
+    );
   });
 
   it("toggles a window's hidden state, updating hiddenWindowKeys", () => {
