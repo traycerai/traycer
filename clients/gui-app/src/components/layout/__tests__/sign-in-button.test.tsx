@@ -363,6 +363,12 @@ describe("link-code entry is gated on the mobile-app PRODUCT signal", () => {
     expect(
       screen.getByTestId("link-code-signin-open").hasAttribute("disabled"),
     ).toBe(false);
+    expect(
+      screen.getByTestId("link-code-signin-manual").hasAttribute("disabled"),
+    ).toBe(false);
+    expect(screen.getByTestId("signin-button").hasAttribute("disabled")).toBe(
+      false,
+    );
 
     act(() => {
       emitCode("ABCDEFGHJK");
@@ -373,12 +379,50 @@ describe("link-code entry is gated on the mobile-app PRODUCT signal", () => {
         screen.getByTestId("link-code-signin-open").hasAttribute("disabled"),
       ).toBe(true);
     });
+    // Every way of starting a SECOND attempt is closed while the claim runs:
+    // the manual-entry link (opening it would offer a form with nothing useful
+    // to type - no approver surface shows a code mid-claim) and the browser
+    // device flow beneath it, whose `signIn()` would supersede the claim.
+    expect(
+      screen.getByTestId("link-code-signin-manual").hasAttribute("disabled"),
+    ).toBe(true);
+    expect(screen.getByTestId("signin-button").hasAttribute("disabled")).toBe(
+      true,
+    );
     expect(screen.getByTestId("link-code-signin-waiting")).toBeTruthy();
     // Retry is the device flow's escape hatch from a stalled browser round
     // trip. Offering it here offers to throw away a claim the user's desktop
     // is prompting them to approve: `signIn()` is re-entrant, so tapping it
     // would supersede the camera-launched attempt.
     expect(screen.queryByTestId("signin-retry-link")).toBeNull();
+    outstanding();
+    mobile.cleanupClient();
+  });
+
+  it("locks the compact header's text entry while a camera-launched claim is outstanding", async () => {
+    // The `link` presentation's only control is the line that expands into
+    // the typed-code form; it is the manual-entry link of the compact header
+    // and closes for the same reason.
+    setMobileApp(true);
+    const outstanding = installFetch(
+      () => new Promise<Response>(() => undefined),
+    );
+    const { host, emitCode } = deepLinkHost();
+    const mobile = mountSignInButton(host, "compact");
+    await mobile.waitForAuthService();
+    expect(
+      screen.getByTestId("link-code-signin-open").hasAttribute("disabled"),
+    ).toBe(false);
+
+    act(() => {
+      emitCode("ABCDEFGHJK");
+    });
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("link-code-signin-open").hasAttribute("disabled"),
+      ).toBe(true);
+    });
     outstanding();
     mobile.cleanupClient();
   });

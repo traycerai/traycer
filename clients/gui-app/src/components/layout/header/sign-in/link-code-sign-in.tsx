@@ -298,10 +298,15 @@ export function LinkCodeSignIn(props: {
                 over its backdrop while `outline` sets a surface with no text
                 color of its own, so the label pins its foreground - otherwise
                 it inherits the hero's white onto the light surface. */}
+            {/* Gated like Scan: a claim is one attempt, and opening the
+                entry form mid-claim offers a second one with nothing useful
+                to type — no approver surface shows a code while a claim
+                awaits its decision. */}
             <Button
               type="button"
               size="lg"
               variant="outline"
+              disabled={claimInFlight}
               data-testid="link-code-signin-manual"
               onClick={() => {
                 setOpen(true);
@@ -322,6 +327,7 @@ export function LinkCodeSignIn(props: {
         type="button"
         size={props.isHero ? "default" : "sm"}
         variant="link"
+        disabled={claimInFlight}
         data-testid="link-code-signin-open"
         onClick={() => {
           setOpen(true);
