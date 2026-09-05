@@ -348,6 +348,15 @@ describe("link-code entry is gated on the mobile-app PRODUCT signal", () => {
     };
   }
 
+  /**
+   * The control's own disabled state, not the attribute's presence: the
+   * property is what the browser consults when the user taps, and the two
+   * diverge for anything that sets `disabled` through the DOM property.
+   */
+  function isDisabled(testId: string): boolean {
+    return screen.getByTestId<HTMLButtonElement>(testId).disabled;
+  }
+
   it("locks the in-app scan while a camera-launched claim is still outstanding", async () => {
     // The race the gate closes: the claim POST is in flight, so nothing has
     // published poll progress yet. A tap on the still-live Scan button would
@@ -360,35 +369,23 @@ describe("link-code entry is gated on the mobile-app PRODUCT signal", () => {
     const { host, emitCode } = deepLinkHost();
     const mobile = mountSignInButton(host, "hero");
     await mobile.waitForAuthService();
-    expect(
-      screen.getByTestId("link-code-signin-open").hasAttribute("disabled"),
-    ).toBe(false);
-    expect(
-      screen.getByTestId("link-code-signin-manual").hasAttribute("disabled"),
-    ).toBe(false);
-    expect(screen.getByTestId("signin-button").hasAttribute("disabled")).toBe(
-      false,
-    );
+    expect(isDisabled("link-code-signin-open")).toBe(false);
+    expect(isDisabled("link-code-signin-manual")).toBe(false);
+    expect(isDisabled("signin-button")).toBe(false);
 
     act(() => {
       emitCode("ABCDEFGHJK");
     });
 
     await waitFor(() => {
-      expect(
-        screen.getByTestId("link-code-signin-open").hasAttribute("disabled"),
-      ).toBe(true);
+      expect(isDisabled("link-code-signin-open")).toBe(true);
     });
     // Every way of starting a SECOND attempt is closed while the claim runs:
     // the manual-entry link (opening it would offer a form with nothing useful
     // to type - no approver surface shows a code mid-claim) and the browser
     // device flow beneath it, whose `signIn()` would supersede the claim.
-    expect(
-      screen.getByTestId("link-code-signin-manual").hasAttribute("disabled"),
-    ).toBe(true);
-    expect(screen.getByTestId("signin-button").hasAttribute("disabled")).toBe(
-      true,
-    );
+    expect(isDisabled("link-code-signin-manual")).toBe(true);
+    expect(isDisabled("signin-button")).toBe(true);
     expect(screen.getByTestId("link-code-signin-waiting")).toBeTruthy();
     // Retry is the device flow's escape hatch from a stalled browser round
     // trip. Offering it here offers to throw away a claim the user's desktop
@@ -410,18 +407,14 @@ describe("link-code entry is gated on the mobile-app PRODUCT signal", () => {
     const { host, emitCode } = deepLinkHost();
     const mobile = mountSignInButton(host, "compact");
     await mobile.waitForAuthService();
-    expect(
-      screen.getByTestId("link-code-signin-open").hasAttribute("disabled"),
-    ).toBe(false);
+    expect(isDisabled("link-code-signin-open")).toBe(false);
 
     act(() => {
       emitCode("ABCDEFGHJK");
     });
 
     await waitFor(() => {
-      expect(
-        screen.getByTestId("link-code-signin-open").hasAttribute("disabled"),
-      ).toBe(true);
+      expect(isDisabled("link-code-signin-open")).toBe(true);
     });
     outstanding();
     mobile.cleanupClient();
