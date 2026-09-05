@@ -679,16 +679,27 @@ export function offersForceRestart(view: FleetUpdateView): boolean {
  * absolutely should stop a second install being launched over it — that is the
  * contender boundary's job on the host, and it refuses with `already-updating`.
  * This predicate is only about the surrounding lifecycle controls.
+ *
+ * `updating` — the coarse `updateProgress` marker projected beside a `none`
+ * attempt — is deliberately in the fail-open arm with `unknown`, for the same
+ * reason `unknown` is. The marker is a file the legacy updater writes before
+ * it starts and deletes when it finishes; it carries no liveness, and a host
+ * keeps serving a fresh `{state:"updating"}` for as long as that file exists,
+ * which after an updater crash or hang is forever. A gate held by it would be
+ * the unrecoverable case above with a different name: Restart, Diagnostics
+ * and the service verbs disabled indefinitely by an update nobody is running.
+ * The marker informs (a card, a moving bar); it never stands between a
+ * person and their host.
  */
 export function holdsLifecycleGate(view: FleetUpdateView): boolean {
   switch (view.kind) {
-    case "updating":
     case "downloading":
     case "preparing":
     case "applying":
     case "restarting":
     case "verifying":
       return true;
+    case "updating":
     case "reconnecting":
     case "waiting-for-work":
     case "waiting-to-activate":
@@ -709,11 +720,17 @@ export function holdsLifecycleGate(view: FleetUpdateView): boolean {
  * terminal one is retained for seven days, and a qualified one is evidence we
  * already know we cannot refresh — none of those justify polling a host every
  * two seconds, and doing so would be the retry storm §6 forbids.
+ *
+ * The coarse `updating` kind does not earn it either, and for the same
+ * reason it does not hold the lifecycle gate: the marker proves a file
+ * exists, not that anything is moving, and a marker left behind by a crashed
+ * updater would otherwise keep one host on the 2s cadence for as long as any
+ * surface observing it stays mounted. The `host.status` 10s baseline still
+ * shows the card within one poll of a real legacy update.
  */
 export function warrantsFastPoll(view: FleetUpdateView): boolean {
   if (view.qualified) return false;
   switch (view.kind) {
-    case "updating":
     case "downloading":
     case "preparing":
     case "applying":
@@ -721,6 +738,7 @@ export function warrantsFastPoll(view: FleetUpdateView): boolean {
     case "reconnecting":
     case "verifying":
       return true;
+    case "updating":
     case "unknown":
     case "idle":
     case "waiting-for-work":

@@ -2339,9 +2339,13 @@ aria-live="polite"` carrying the equivalent text for
       path says "no attempt" and "updating" in the same reply, and reading the
       attempt alone rendered a live download → swap → restart as "Host is up to
       date" on the Overview whose own Update now had just started it. The
-      coarse marker projects `updating` (generic sentence, indeterminate bar,
-      holds the lifecycle gate, earns the fast poll) or `failed` with the
-      updater's own cause. A view `isQuietUpdateView` accepts (`idle`, or
+      coarse marker projects `updating` (generic sentence, indeterminate bar)
+      or `failed` with the updater's own cause. Both are INFORMATIONAL: the
+      marker is a file with no liveness (a crashed updater leaves a host
+      serving `updating` forever), so `updating` neither holds the lifecycle
+      gate nor earns the fast poll - Restart, Diagnostics and the service
+      verbs stay usable under it, and the 10s `host.status` baseline is what
+      refreshes it. A view `isQuietUpdateView` accepts (`idle`, or
       `unknown` with no retained phase) renders NO card: "Host is up to date"
       was a sentence about the catalog from a projection that knows only the
       attempt record, and it sat directly above the updates region saying

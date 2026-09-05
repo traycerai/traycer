@@ -896,7 +896,12 @@ describe("preferLiveOverRecord — the record arm fills the host-down window onl
 // this field lets the projector tell that host apart from a genuinely quiet
 // one — see `coarseKind`'s doc.
 describe("projectFleetUpdateView — coarse updateProgress beside {kind:'none'}", () => {
-  it("updating: projects kind 'updating', indeterminate progress, unqualified, and holds the lifecycle gate + fast poll", () => {
+  it("updating: projects kind 'updating', indeterminate progress, unqualified - and is INFORMATIONAL: it neither holds the lifecycle gate nor earns the fast poll", () => {
+    // The marker carries no liveness: a legacy updater that crashed after
+    // writing it leaves a host serving `{state:"updating"}` forever. A gate
+    // held by it would disable Restart / Diagnostics / the service verbs
+    // indefinitely (the fail-open rule `unknown` already follows), and a fast
+    // poll earned by it would be the unbounded cadence the poll policy forbids.
     const view = projectFleetUpdateView({
       observation: observation({
         operation: { kind: "none" },
@@ -912,8 +917,8 @@ describe("projectFleetUpdateView — coarse updateProgress beside {kind:'none'}"
       bytes: null,
       totalBytes: null,
     });
-    expect(holdsLifecycleGate(view)).toBe(true);
-    expect(warrantsFastPoll(view)).toBe(true);
+    expect(holdsLifecycleGate(view)).toBe(false);
+    expect(warrantsFastPoll(view)).toBe(false);
   });
 
   it("failed with an error: projects kind 'failed', progress none, and carries that error message", () => {
