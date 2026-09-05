@@ -14,6 +14,10 @@ import type {
   MigrationStreamCallbacks,
   MigrationStreamClientOptions,
 } from "@traycer-clients/shared/host-transport/migration-stream-client";
+import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
+import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
+
+const HOST = "host-test";
 
 interface MigrationClientHarness {
   callbacks: MigrationStreamCallbacks | null;
@@ -62,16 +66,6 @@ vi.mock("sonner", () => ({
   },
 }));
 
-vi.mock("@/lib/host", () => ({
-  useHostClient: () => ({ getActiveHostId: () => "host-test" }),
-  // The SPINE, a separate export since redesign P2.1.
-  useHostRuntimeClient: () => ({ getActiveHostId: () => "host-test" }),
-}));
-
-vi.mock("@/lib/host/stream-runtime-context", () => ({
-  useWsStreamClient: () => ({ stream: "test" }),
-}));
-
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHost: () => ({ migration: null }),
 }));
@@ -79,10 +73,44 @@ vi.mock("@/providers/use-runner-host", () => ({
 import {
   getMigrationStartHandle,
   setMigrationStartHandle,
+  type MigrationRunTarget,
 } from "@/components/migration/migration-run-handle";
 import { MigrationRunController } from "@/components/migration/migration-run-controller";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { useMigrationRunStore } from "@/stores/migration/migration-run-store";
+
+/**
+ * A stub satisfying `IHostStreamClient` honestly rather than casting - never
+ * exercised by this suite, since `MigrationStreamClient` is itself mocked
+ * above and never calls through to it.
+ */
+function fakeWsStreamClient(): IHostStreamClient<HostStreamRpcRegistry> {
+  return {
+    subscribe: () => {
+      throw new Error("not exercised by this test");
+    },
+    subscribeWithParamsProvider: () => {
+      throw new Error("not exercised by this test");
+    },
+    close: () => undefined,
+    isClosed: () => false,
+    isReady: () => true,
+    notifyBearerRotated: () => undefined,
+    reconnectAll: () => undefined,
+    getMethodSupport: () => "unknown",
+    subscribeMethodSupport: () => () => undefined,
+    getMethodSchemaVersion: () => null,
+    subscribeAvailabilityRecovered: () => () => undefined,
+    getClosedReason: () => null,
+    onClosed: () => () => undefined,
+    instanceId: "fake-ws-stream-client",
+  };
+}
+
+const START_TARGET: MigrationRunTarget = {
+  binding: { wsStreamClient: fakeWsStreamClient(), hostId: HOST, retain: null },
+  hostId: HOST,
+};
 
 beforeEach(() => {
   migrationClient.callbacks = null;
@@ -91,7 +119,7 @@ beforeEach(() => {
   toastSuccess.mockClear();
   toastWarning.mockClear();
   setMigrationStartHandle(null);
-  useMigrationRunStore.getState().reset();
+  useMigrationRunStore.setState({ runs: new Map(), remoteRunning: false });
   useDesktopDialogStore.setState({
     activeDialog: null,
     reportIssueAvailable: false,
@@ -103,7 +131,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   setMigrationStartHandle(null);
-  useMigrationRunStore.getState().reset();
+  useMigrationRunStore.setState({ runs: new Map(), remoteRunning: false });
   useDesktopDialogStore.setState({
     activeDialog: null,
     reportIssueAvailable: false,
@@ -165,7 +193,7 @@ function completeMigration(success: boolean): void {
     throw new Error("Expected a migration start handle.");
   }
   act(() => {
-    startHandle.start();
+    startHandle.start(START_TARGET);
   });
   const callbacks = migrationClient.callbacks;
   if (callbacks === null) {

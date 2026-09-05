@@ -23,6 +23,10 @@ import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
 import type { EpicMentionEntry } from "@/lib/composer/types";
 import type { EpicMentionArtifactSuggestion } from "@traycer/protocol/host/epic/unary-schemas";
 import type { BrowserSessionInfo } from "@traycer/protocol/host/browser/contracts";
+import {
+  sessionInfo,
+  tabInfo,
+} from "@/lib/browser-view/sessions/__tests__/browser-session-test-kit";
 import type { BrowserSessionsState } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
 
 function chat(
@@ -819,24 +823,19 @@ describe("artifactsRefreshTargetKey", () => {
 function browserSession(
   fields: Partial<BrowserSessionInfo> & { sessionId: string; hostId: string },
 ): BrowserSessionInfo {
-  return {
-    epicId: "epic-1",
-    profile: "primary",
+  return sessionInfo({
     lastActivityAt: 0,
     runtime: { kind: "headless", revision: 0 },
     tabs: [
-      {
+      tabInfo({
         tabId: "tab-1",
         url: "https://example.com",
         originTier: "external",
-        status: "ready",
         title: "Example",
-        viewed: false,
-        drivenBy: [],
-      },
+      }),
     ],
     ...fields,
-  };
+  });
 }
 
 function browserSessionsState(
@@ -851,6 +850,8 @@ function browserSessionsState(
     retry: () => {},
     openTab: () => Promise.reject(new Error("not implemented")),
     closeTab: () => Promise.reject(new Error("not implemented")),
+    attachTab: () => Promise.reject(new Error("not implemented")),
+    moveTab: () => Promise.reject(new Error("not implemented")),
     ...fields,
   };
 }
@@ -1009,6 +1010,7 @@ describe("browserTabMentionEntriesFromSessions", () => {
               title: "Example",
               viewed: false,
               drivenBy: [],
+              boundWindowId: null,
             },
           ],
         }),
@@ -1106,6 +1108,7 @@ describe("createBrowserTabMentionEntriesSnapshotCache", () => {
                     title: "Example",
                     viewed: false,
                     drivenBy: [],
+                    boundWindowId: null,
                   },
                 ],
               }),
@@ -1137,6 +1140,7 @@ describe("createBrowserTabMentionEntriesSnapshotCache", () => {
       title: "Example",
       viewed: false,
       drivenBy: [],
+      boundWindowId: null,
     };
     const first = getSnapshot(
       [

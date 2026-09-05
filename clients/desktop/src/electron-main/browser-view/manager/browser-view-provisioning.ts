@@ -9,6 +9,7 @@ import type {
   BrowserViewEnsureTab,
   BrowserViewGuestAttachRequest,
   BrowserViewGuestAttachResult,
+  BrowserViewNativeTabTransfer,
   BrowserViewWebContents,
 } from "../browser-view-port";
 import { browserLocalStorageSeedScript } from "../storage/browser-storage-state";
@@ -49,6 +50,15 @@ interface BrowserViewProvisioningOptions {
   readonly closeEntry: (entry: BrowserViewEntry) => Promise<void>;
   readonly navigate: (entry: BrowserViewEntry, url: string) => Promise<void>;
   readonly emitStatus: (entry: BrowserViewEntry) => void;
+  /**
+   * The transferred-listener set is the manager's own state rather than
+   * provisioning's. An options callback in the `emitStatus` / `closeEntry`
+   * pattern, so the cross-window replacement stays here without this module
+   * reaching into the manager.
+   */
+  readonly notifyNativeTabTransferred: (
+    transfer: BrowserViewNativeTabTransfer,
+  ) => void;
 }
 
 /**
@@ -85,6 +95,9 @@ export class BrowserViewProvisioning {
     url: string,
   ) => Promise<void>;
   private readonly emitStatus: (entry: BrowserViewEntry) => void;
+  private readonly notifyNativeTabTransferred: (
+    transfer: BrowserViewNativeTabTransfer,
+  ) => void;
   /**
    * Occupies a guest key for the whole async mint so a same-window second
    * ensure joins the in-flight incarnation. A later ensure from a different
@@ -103,6 +116,7 @@ export class BrowserViewProvisioning {
     this.closeEntry = options.closeEntry;
     this.navigate = options.navigate;
     this.emitStatus = options.emitStatus;
+    this.notifyNativeTabTransferred = options.notifyNativeTabTransferred;
   }
 
   ensureTab(
@@ -116,6 +130,14 @@ export class BrowserViewProvisioning {
       if (existing.closePromise !== null) {
         return existing.closePromise.then(() =>
           this.ensureTab(windowId, input),
+        );
+      }
+      if (existing.identity.lifecycleWindowId !== windowId) {
+        return this.replaceNativeGuestForWindow(
+          guestKey,
+          existing,
+          windowId,
+          input,
         );
       }
       return this.restoreExistingNativeTab(windowId, input, existing);
@@ -296,7 +318,6 @@ export class BrowserViewProvisioning {
     input: BrowserViewEnsureTab,
     entry: BrowserViewEntry,
   ): Promise<BrowserViewNativeTabCapability> {
-    this.transferNativeLifecycle(entry, windowId);
     await entry.identity.lifecycle.provisioned;
     if (!isNativeTabAvailable(this.entries, entry)) {
       await this.closeEntry(entry);
@@ -320,15 +341,73 @@ export class BrowserViewProvisioning {
     }
   }
 
-  private transferNativeLifecycle(
+  /**
+   * Re-homes a native tab from the window that holds it to the window that
+   * just ensured it - the desktop half of "Show here" - by REPLACING the
+   * guest: the old window's guest is closed and a fresh one is born in the new
+   * window at the same tab identity, which the host's `"move"` create then
+   * navigates to the tab's current URL.
+   *
+   * A replacement rather than a hand-over, and that is not a shortcut. A guest
+   * is a `<webview>` mounted in ONE window's renderer DOM (`attachRendererGuest`
+   * asks that window to mount it; `releaseRendererGuest` asks the same window
+   * to unmount it), and Electron has no way to re-embed a live guest under a
+   * different renderer. What survives a move is therefore the tab - its host
+   * identity, its URL, its session storage in the shared partition - and not
+   * the page's in-memory state (scroll, unsaved form input). That is the same
+   * trade the renderer-owned guest cutover already made for a window reload.
+   *
+   * Unconditional on the window differing, not on the create's reason. Two
+   * callers reach it. The host's `moveTab` is the one it exists for. The other
+   * is a rebind or reconcile that resolves a tab to a different window while
+   * the tab's own window is still open but holds no route - which the host
+   * routes away from today, and which now performs a REAL re-home rather than
+   * the silent adoption it used to. That is correct only because of the
+   * transfer notice: without retiring the old window's birth and the renderer
+   * binding it feeds, the old window would go on believing it owns a guest it
+   * no longer has, refuse the move back as an identity violation, and keep
+   * answering `isTabViewed` and CDP frames for it.
+   *
+   * In order:
+   *
+   * 1. Tell the old window's `ElectronTabs`, which retires its accepted birth
+   *    and releases the renderer's directory entry through the ordinary
+   *    `tabReleased` path. Its `previousRegistrationId` is the only id the old
+   *    window ever held; nothing it sends under that id can touch the new
+   *    guest, whose registration is minted fresh below.
+   * 2. Close the old entry - which detaches its surface, ends its PiP lease,
+   *    releases the old window's renderer guest and drops the reset listener
+   *    if the window has nothing else. A birth still in flight is superseded
+   *    exactly as a competing window's ensure supersedes a cold mint: its
+   *    lifecycle fails with the same error, so the old window's `ensureTab`
+   *    settles instead of waiting on a guest that is gone.
+   * 3. Re-enter `ensureTab`, which chains behind the close (the entry's
+   *    `closePromise` is set synchronously) and then births the replacement
+   *    in the new window through the ordinary cold path.
+   */
+  private replaceNativeGuestForWindow(
+    guestKey: string,
     entry: BrowserViewEntry,
     windowId: string,
-  ): void {
-    const previousWindowId = entry.identity.lifecycleWindowId;
-    if (previousWindowId === windowId) return;
-    entry.identity.lifecycleWindowId = windowId;
-    this.windows.ensureResetListener(windowId);
-    this.windows.detachResetListenerIfUnused(previousWindowId);
+    input: BrowserViewEnsureTab,
+  ): Promise<BrowserViewNativeTabCapability> {
+    this.notifyNativeTabTransferred({
+      key: entry.identity.key,
+      previousRegistrationId: entry.identity.registrationId,
+      toWindowId: windowId,
+    });
+    const inFlight = this.inFlightEnsures.get(guestKey);
+    if (inFlight !== undefined && inFlight.entry === entry) {
+      this.supersedeInFlightEnsure(guestKey, inFlight);
+    } else {
+      void this.closeEntry(entry).catch((cleanupError: unknown) => {
+        log.warn("[browser-view] native tab cleanup failed", {
+          error: describeLogError(cleanupError),
+          guestKey: entry.guestKey,
+        });
+      });
+    }
+    return this.ensureTab(windowId, input);
   }
 
   private async initializeNativeTab(

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
-import type { LandingTerminalTabRef } from "@/stores/home/landing-terminal-store";
+import type { LandingTerminalTabRef } from "@/stores/home/landing-panel-store";
 import { LandingTerminalLegacyBootstrap } from "../landing-terminal-tile";
 
 interface TestReachability {
@@ -44,6 +44,7 @@ vi.mock(
 );
 
 const TAB: LandingTerminalTabRef = {
+  kind: "terminal",
   instanceId: "inst-landing-term-1",
   sessionId: "landing-term-1",
   hostId: "host-a",

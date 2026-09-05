@@ -18,6 +18,10 @@ import type {
   BrowserTabInfo,
 } from "@traycer/protocol/host/browser/contracts";
 import {
+  sessionInfo,
+  tabInfo,
+} from "@/lib/browser-view/sessions/__tests__/browser-session-test-kit";
+import {
   BROWSER_TILE_DND_TYPE,
   readEpicCanvasDragSourceData,
 } from "@/components/epic-canvas/dnd/dnd";
@@ -175,6 +179,8 @@ const sessionsState = vi.hoisted<{
     retry: vi.fn(),
     openTab: forwardOpenTab,
     closeTab: forwardCloseTab,
+    attachTab: () => Promise.reject(new Error("not used")),
+    moveTab: () => Promise.reject(new Error("not used")),
   },
 }));
 
@@ -204,27 +210,18 @@ vi.mock("@/hooks/epic/use-epic-nested-focus-navigation", () => ({
 function tab(
   overrides: Partial<BrowserTabInfo> & Pick<BrowserTabInfo, "tabId" | "url">,
 ): BrowserTabInfo {
-  return {
-    originTier: "dev",
-    status: "ready",
-    title: null,
-    viewed: false,
-    drivenBy: [],
-    ...overrides,
-  };
+  return tabInfo(overrides);
 }
 
 function session(
   overrides: Partial<BrowserSessionInfo> &
     Pick<BrowserSessionInfo, "sessionId" | "profile" | "tabs">,
 ): BrowserSessionInfo {
-  return {
-    epicId: "epic-1",
-    hostId: "host-1",
+  return sessionInfo({
     lastActivityAt: 2,
+    runtime: { kind: "electron", revision: 0 },
     ...overrides,
-    runtime: overrides.runtime ?? { kind: "electron", revision: 0 },
-  };
+  });
 }
 
 // The panel's close action is a TanStack mutation. One client for the file's
@@ -371,6 +368,8 @@ describe("BrowsersPanelBody", () => {
       retry: vi.fn(),
       openTab: forwardOpenTab,
       closeTab: forwardCloseTab,
+      attachTab: () => Promise.reject(new Error("not used")),
+      moveTab: () => Promise.reject(new Error("not used")),
     };
   });
 
@@ -1437,6 +1436,8 @@ describe("BrowsersPanelActions", () => {
       retry: vi.fn(),
       openTab: forwardOpenTab,
       closeTab: forwardCloseTab,
+      attachTab: () => Promise.reject(new Error("not used")),
+      moveTab: () => Promise.reject(new Error("not used")),
     };
   });
 

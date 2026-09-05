@@ -40,8 +40,8 @@ export type BrowserScreencastStreamClientOptions =
   };
 
 /**
- * Typed wrapper over one `browser.screencast` subscription - an
- * epic-authorized, tab-addressed media stream for a single viewer.
+ * Typed wrapper over one `browser.screencast` subscription - a
+ * scope-authorized, tab-addressed media stream for a single viewer.
  *
  * `browser.screencast` serves a single minor (`@1.0`) - when the first
  * additive minor lands, the per-session schema selection belongs in

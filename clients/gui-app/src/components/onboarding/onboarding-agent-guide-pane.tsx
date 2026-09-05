@@ -1,5 +1,10 @@
 import { ArrowRight } from "lucide-react";
 import { AgentSelectionGuideEditorSurface } from "@/components/agent-selection-guide-editor-surface";
+import { OnboardingHostUnavailableNotice } from "@/components/onboarding/onboarding-host-picker";
+import {
+  onboardingHostIsUsable,
+  type OnboardingHostPicker,
+} from "@/components/onboarding/onboarding-host-picker-model";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 
 /**
@@ -20,26 +25,39 @@ export interface OnboardingAgentGuideState {
 
 export function OnboardingAgentGuidePane(props: {
   readonly agentGuide: OnboardingAgentGuideState;
+  readonly hostPicker: OnboardingHostPicker;
 }) {
-  const { agentGuide } = props;
+  const { agentGuide, hostPicker } = props;
   const isAtDefault = agentGuide.value === agentGuide.generatedDefaultContent;
   return (
-    <AgentSelectionGuideEditorSurface
-      titleId="onboarding-agent-selection-guide-heading"
-      value={agentGuide.loading ? "" : agentGuide.value}
-      onValueChange={agentGuide.onValueChange}
-      onBlur={null}
-      disabled={agentGuide.loading || agentGuide.saving}
-      placeholder={agentGuide.loading ? "Loading…" : undefined}
-      ariaLabel="Onboarding agent selection instructions"
-      testId="onboarding-agent-guide-input"
-      editorClassName="flex-1"
-      className="size-full overflow-hidden rounded-lg border border-border bg-card p-4 shadow-2xl"
-      revertDisabled={agentGuide.loading || agentGuide.saving || isAtDefault}
-      onRevert={agentGuide.onRevertToDefault}
-      revertTestId={undefined}
-      status={<OnboardingAgentGuideStatus agentGuide={agentGuide} />}
-    />
+    // No host bar of its own: on desktop the picker is the title of the
+    // mini-app window this card floats in (`DioramaScene`), and on the phone
+    // rail `ActCopy` heads the editor with it. Drawing it here too put the
+    // host's name twice on one screen.
+    <div className="flex size-full min-h-0 flex-col overflow-hidden rounded-lg border border-border bg-card shadow-2xl">
+      {onboardingHostIsUsable(hostPicker) ? (
+        <AgentSelectionGuideEditorSurface
+          titleId="onboarding-agent-selection-guide-heading"
+          value={agentGuide.loading ? "" : agentGuide.value}
+          onValueChange={agentGuide.onValueChange}
+          onBlur={null}
+          disabled={agentGuide.loading || agentGuide.saving}
+          placeholder={agentGuide.loading ? "Loading…" : undefined}
+          ariaLabel="Onboarding agent selection instructions"
+          testId="onboarding-agent-guide-input"
+          editorClassName="flex-1"
+          className="min-h-0 flex-1 overflow-hidden p-4"
+          revertDisabled={
+            agentGuide.loading || agentGuide.saving || isAtDefault
+          }
+          onRevert={agentGuide.onRevertToDefault}
+          revertTestId={undefined}
+          status={<OnboardingAgentGuideStatus agentGuide={agentGuide} />}
+        />
+      ) : (
+        <OnboardingHostUnavailableNotice picker={hostPicker} refusal={null} />
+      )}
+    </div>
   );
 }
 
