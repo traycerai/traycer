@@ -22,10 +22,11 @@ const PROJECTED_NODE_OPEN_WAIT_MS = 30_000;
 
 export interface ProjectedSidebarNodeOpenArgs {
   readonly epicHandle: OpenEpicStoreHandle;
-  readonly tabId: string;
   readonly nodeId: string;
   readonly fallbackHostId: string;
-  readonly openTileInTab: (tabId: string, node: EpicNodeRef) => void;
+  /** Opens the resolved node - the caller builds the whole `openTile` intent
+   * (gesture, placement, target tab) and closes over it. */
+  readonly openNode: (node: EpicNodeRef) => void;
   /** Runs with the resolved node ref right before the tile opens. */
   readonly onBeforeOpen: ((node: EpicNodeRef) => void) | null;
   readonly onOpened: () => void;
@@ -78,7 +79,7 @@ export function openProjectedSidebarNodeInTabWhenAvailable(
     if (args.onBeforeOpen !== null) {
       args.onBeforeOpen(nodeRef);
     }
-    args.openTileInTab(args.tabId, nodeRef);
+    args.openNode(nodeRef);
     opened = true;
     args.onOpened();
     return true;

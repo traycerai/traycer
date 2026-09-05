@@ -6,15 +6,11 @@ import {
   appendTerminalQuoteToNewConversationDraft,
 } from "@/components/chat/quote/append-terminal-quote-to-draft";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
-import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
-import { ACTIVE_TILE_PLACEMENT } from "@/lib/canvas/conversation-tile-placement";
+import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { displayTitle } from "@/lib/display-title";
 import { useOpenEpicHandle } from "@/providers/use-open-epic-handle";
-import {
-  findOpenArtifactInTab,
-  useEpicCanvasStore,
-} from "@/stores/epics/canvas/store";
 import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
+import { tileIntent } from "@/lib/canvas/tile-open/intent";
 
 interface UseTerminalQuoteActionsArgs {
   readonly epicId: string;
@@ -46,52 +42,34 @@ export function useTerminalQuoteActions(
   const { epicId, viewTabId, terminalId, terminalTitle, terminalCwd } = args;
   const handle = useOpenEpicHandle();
   const tabHostId = useTabHostId();
-  const navigateNested = useEpicNestedFocusNavigation();
   const openNewConversationModal = useNewConversationModalOpenStore(
     (state) => state.open,
   );
-  const prepareOpenTileInTabFocusTarget = useEpicCanvasStore(
-    (state) => state.prepareOpenTileInTabFocusTarget,
-  );
-  const prepareSetActiveTileTabFocusTarget = useEpicCanvasStore(
-    (state) => state.prepareSetActiveTileTabFocusTarget,
-  );
+  const { openTile } = useEpicTileNavigation();
 
+  // `dedupe` is the "already on this canvas?" branch: a chat that is open is
+  // brought forward, and only a chat that is not gets a fresh tile.
   const revealChat = useCallback(
     (chatId: string) => {
-      const alreadyOpen = findOpenArtifactInTab(viewTabId, chatId);
-      if (alreadyOpen !== null) {
-        navigateNested(epicId, viewTabId, () =>
-          prepareSetActiveTileTabFocusTarget(
-            viewTabId,
-            alreadyOpen.paneId,
-            alreadyOpen.instanceId,
-          ),
-        );
-        return;
-      }
       const chats = handle.store.getState().chats;
       if (!Object.hasOwn(chats.byId, chatId)) return;
       const chat = chats.byId[chatId];
-      navigateNested(epicId, viewTabId, () =>
-        prepareOpenTileInTabFocusTarget(viewTabId, {
-          id: chat.id,
-          instanceId: uuidv4(),
-          type: "chat",
-          name: displayTitle(chat.title, "agent"),
-          hostId: chat.hostId ?? tabHostId,
-        }),
+      openTile(
+        tileIntent(
+          {
+            id: chat.id,
+            instanceId: uuidv4(),
+            type: "chat",
+            name: displayTitle(chat.title, "agent"),
+            hostId: chat.hostId ?? tabHostId,
+          },
+          { tabId: viewTabId },
+          "explicit",
+          "direct_ui",
+        ),
       );
     },
-    [
-      epicId,
-      handle,
-      navigateNested,
-      prepareOpenTileInTabFocusTarget,
-      prepareSetActiveTileTabFocusTarget,
-      tabHostId,
-      viewTabId,
-    ],
+    [handle, openTile, tabHostId, viewTabId],
   );
 
   const quoteToChat = useCallback(
@@ -125,7 +103,7 @@ export function useTerminalQuoteActions(
       openNewConversationModal({
         epicId,
         tabId: viewTabId,
-        placement: ACTIVE_TILE_PLACEMENT,
+        placement: null,
         parentId: null,
         // This tile is bound to `tabHostId` for life and the quote points at a
         // terminal that only exists on that host, so the chat has to be created

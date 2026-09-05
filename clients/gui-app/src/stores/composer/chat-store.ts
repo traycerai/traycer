@@ -474,8 +474,6 @@ export interface InterviewSegment {
   /** Block status: "streaming" while pending, otherwise resolved/errored. */
   status: "streaming" | "completed" | "errored";
   toolName: string | null;
-  title: string | null;
-  description: string | null;
   questions: ReadonlyArray<InterviewQuestion>;
   answers: ReadonlyArray<InterviewAnswer>;
   draftAnswers: ReadonlyArray<InterviewAnswer>;

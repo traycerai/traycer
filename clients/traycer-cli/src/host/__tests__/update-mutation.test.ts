@@ -39,6 +39,7 @@ import type {
   CommitHostInstallSourceOptions,
   StagedHostInstallSource,
 } from "../../installer/install";
+import { CLI_ERROR_CODES, cliError } from "../../runner/errors";
 
 const roots: string[] = [];
 
@@ -186,6 +187,147 @@ describe("CLI capability-consuming mutation facades", () => {
     );
 
     expect(outcome).toEqual({ kind: "ran", result: "installed" });
+    expect(lease.cancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("waits for the adoption lease before rethrowing a committed-registration error", async () => {
+    const hostHomeDir = await freshHome();
+    homeRef.current = hostHomeDir;
+    const lease = {
+      waitForSpawn: vi.fn(async () => undefined),
+      cancel: vi.fn(async () => undefined),
+    };
+    adoptionMock.publish.mockResolvedValue(lease);
+    const committedError = cliError({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+      message: "registered, but the record could not be committed",
+      details: {
+        label: "ai.traycer.host",
+        phase: "commit",
+        registrationCommitted: true,
+      },
+      exitCode: 1,
+    });
+    const install = vi.fn(async () => {
+      throw committedError;
+    });
+    const hostStartAdoptionLabel = vi.fn(
+      async (label: { id: string }) => label.id,
+    );
+
+    await expect(
+      withUpdateContender(
+        {
+          hostHomeDir,
+          reason: contenderOptions.reason,
+          waitMs: 0,
+          pollIntervalMs: 10,
+          admission: contenderOptions.admission,
+        },
+        async (capability) =>
+          installHostServiceWithAttempt(
+            capability,
+            contenderOptions,
+            { install, hostStartAdoptionLabel },
+            serviceOptions,
+          ),
+      ),
+    ).rejects.toBe(committedError);
+
+    expect(lease.waitForSpawn).toHaveBeenCalledTimes(1);
+    expect(lease.cancel).toHaveBeenCalledTimes(1);
+    // waitForSpawn must be awaited before cancel() runs.
+    expect(lease.waitForSpawn.mock.invocationCallOrder[0]).toBeLessThan(
+      lease.cancel.mock.invocationCallOrder[0] ?? Infinity,
+    );
+  });
+
+  it("does not wait for the adoption lease on an ordinary actuator error", async () => {
+    const hostHomeDir = await freshHome();
+    homeRef.current = hostHomeDir;
+    const lease = {
+      waitForSpawn: vi.fn(async () => undefined),
+      cancel: vi.fn(async () => undefined),
+    };
+    adoptionMock.publish.mockResolvedValue(lease);
+    const osError = new Error("os-failed");
+    const install = vi.fn(async () => {
+      throw osError;
+    });
+    const hostStartAdoptionLabel = vi.fn(
+      async (label: { id: string }) => label.id,
+    );
+
+    await expect(
+      withUpdateContender(
+        {
+          hostHomeDir,
+          reason: contenderOptions.reason,
+          waitMs: 0,
+          pollIntervalMs: 10,
+          admission: contenderOptions.admission,
+        },
+        async (capability) =>
+          installHostServiceWithAttempt(
+            capability,
+            contenderOptions,
+            { install, hostStartAdoptionLabel },
+            serviceOptions,
+          ),
+      ),
+    ).rejects.toBe(osError);
+
+    expect(lease.waitForSpawn).not.toHaveBeenCalled();
+    expect(lease.cancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("still propagates the original committed-registration error when the honoured wait itself rejects", async () => {
+    const hostHomeDir = await freshHome();
+    homeRef.current = hostHomeDir;
+    const lease = {
+      waitForSpawn: vi.fn(async () => {
+        throw new Error("spawn wait transport failed");
+      }),
+      cancel: vi.fn(async () => undefined),
+    };
+    adoptionMock.publish.mockResolvedValue(lease);
+    const committedError = cliError({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+      message: "registered, but the lifecycle generation could not be written",
+      details: {
+        label: "ai.traycer.host",
+        phase: "lifecycle",
+        registrationCommitted: true,
+      },
+      exitCode: 1,
+    });
+    const install = vi.fn(async () => {
+      throw committedError;
+    });
+    const hostStartAdoptionLabel = vi.fn(
+      async (label: { id: string }) => label.id,
+    );
+
+    await expect(
+      withUpdateContender(
+        {
+          hostHomeDir,
+          reason: contenderOptions.reason,
+          waitMs: 0,
+          pollIntervalMs: 10,
+          admission: contenderOptions.admission,
+        },
+        async (capability) =>
+          installHostServiceWithAttempt(
+            capability,
+            contenderOptions,
+            { install, hostStartAdoptionLabel },
+            serviceOptions,
+          ),
+      ),
+    ).rejects.toBe(committedError);
+
+    expect(lease.waitForSpawn).toHaveBeenCalledTimes(1);
     expect(lease.cancel).toHaveBeenCalledTimes(1);
   });
 

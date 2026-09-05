@@ -30,6 +30,10 @@ export interface TileController {
   readonly profile: BrowserSessionProfileKind;
   readonly url: string;
   readonly addressValue: string;
+  /** Callback ref for the address field (a ref OBJECT may not cross render). */
+  readonly setAddressInput: (node: HTMLInputElement | null) => void;
+  /** Put the caret in the address field - Cmd+L over a focused guest. */
+  readonly focusAddress: () => void;
   readonly canGoBack: boolean;
   readonly canGoForward: boolean;
   readonly zoomPercent: number;

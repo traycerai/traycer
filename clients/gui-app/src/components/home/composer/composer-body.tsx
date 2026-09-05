@@ -23,6 +23,7 @@ import type { ComposerMode } from "@/components/home/data/landing-options";
 import type { TerminalAgentLaunch } from "@/components/home/hooks/use-landing-composer-actions";
 import { ComposerToolbar } from "@/components/home/toolbar/composer-toolbar";
 import type { ComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
+import type { ProviderTerminalLoginSurface } from "@/lib/providers/provider-terminal-login-surface";
 import { cn } from "@/lib/utils";
 
 const COMPOSER_PLACEHOLDER = "Ask Traycer anything. @ mention for context";
@@ -87,6 +88,12 @@ export interface ComposerBodyProps {
    * the host it was pinned to.
    */
   readonly hostId: string | null;
+  /**
+   * Where the model pickers' setup terminal lands - the landing page whose
+   * terminal panel opens, or `null` for a composer with no terminal surface
+   * of its own (the in-epic new-conversation modal). See the type's doc.
+   */
+  readonly terminalLoginSurface: ProviderTerminalLoginSurface | null;
   readonly onSubmit: () => void;
   readonly onStartTerminal: (launch: TerminalAgentLaunch) => void;
   readonly onDocumentChange: (
@@ -122,6 +129,7 @@ export function ComposerBody({
   ingestPastedComposerImages,
   onEditorReady,
   hostId,
+  terminalLoginSurface,
   onSubmit,
   onStartTerminal,
   onDocumentChange,
@@ -150,6 +158,7 @@ export function ComposerBody({
     settingsLocked: isSubmitting,
     createProfileHostId: hostId,
     runTargetHostId: hostId,
+    terminalLoginSurface,
   } as const;
 
   return (
@@ -200,6 +209,7 @@ export function ComposerBody({
                   pending={isSubmitting}
                   disabledHint={workspaceDisabledHint}
                   hostId={hostId}
+                  terminalLoginSurface={terminalLoginSurface}
                   onStart={onStartTerminal}
                 />
               </SurfaceActivityProvider>

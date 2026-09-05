@@ -7,6 +7,8 @@ import {
 import { isFastModeEnabled } from "@/components/home/data/landing-options";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { WorkingShimmerText } from "@/components/ui/working-shimmer-text";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import type {
   AssistantTurnMeta,
@@ -734,8 +736,14 @@ function AssistantRunIndicator({
         <HarnessIcon harnessId={meta.provider} className="size-3.5" />
       )}
       <span className="inline-flex items-baseline gap-1">
-        <span className="working-text-shimmer text-ui-sm">{verb}</span>
-        <WorkingDots />
+        <WorkingShimmerText className="text-ui-sm">{verb}</WorkingShimmerText>
+        {/* 3-dot typing loader rather than the braille spinner: three steady,
+            sequentially-pulsing dots instead of a morphing glyph. */}
+        <AgentSpinningDots
+          className={undefined}
+          testId="assistant-run-dots"
+          variant="typing"
+        />
       </span>
       {/* Separate node so the once-per-second tick re-renders ONLY the timer,
           not the shimmering verb, the dots, or the rest of the body. */}
@@ -776,25 +784,6 @@ function RunElapsedTimer({
   return (
     <span className="tabular-nums">
       ({formatClockDuration(elapsedSeconds)})
-    </span>
-  );
-}
-
-/**
- * 3-dot typing loader for the in-progress cue (pure CSS - see the `.working-dots`
- * rules in index.css). Replaces the braille spinner so the indicator shows three
- * steady, sequentially-pulsing dots rather than a morphing glyph.
- */
-function WorkingDots() {
-  return (
-    <span
-      className="working-dots text-current"
-      aria-hidden="true"
-      data-testid="assistant-run-dots"
-    >
-      <span />
-      <span />
-      <span />
     </span>
   );
 }
@@ -1018,9 +1007,6 @@ function AssistantSegment({
         <InterviewSegment
           blockId={segment.id}
           status={segment.status}
-          toolName={segment.toolName}
-          title={segment.title}
-          description={segment.description}
           questions={segment.questions}
           answers={segment.answers}
           draftAnswers={segment.draftAnswers}

@@ -103,14 +103,12 @@ export type WorktreeBusyErrorDetails = z.infer<
 >;
 
 /**
- * Pre-teardown expected-revision mismatch. Same envelope shape as
- * `WORKTREE_BUSY` (`message` + optional `holders` + optional
- * `holdersRevision`); a distinguishable `code` so a current GUI can
- * refresh consent instead of treating it as a generic busy. Old clients
- * see an unknown code and keep the 4xx busy-class refusal. The HOLDERS_CHANGED
- * envelope is the echo path: the GUI reads this revision for re-review
- * and later sends it as `expectedHoldersRevision`, so it uses the same
- * sanitize-to-absent digest field as the failure-frame wire.
+ * Released unary failure envelope retained for wire compatibility. Hosts no
+ * longer emit `WORKTREE_HOLDERS_CHANGED` or its `holdersRevision` because
+ * consent now covers whichever owners are active when deletion runs. Remove
+ * these fields only after the protocol minor-removal window permits it. The
+ * digest still sanitizes to absent so a malformed legacy envelope cannot make
+ * the whole error fail parsing.
  */
 export const worktreeHoldersChangedErrorDetailsSchema = z.object({
   code: z.literal("WORKTREE_HOLDERS_CHANGED"),

@@ -47,6 +47,25 @@ describe("getHostFsLayout", () => {
     );
   });
 
+  // Ticket 03 / plan D3: hand-mirrors `traycer-host/src/paths.ts`'s
+  // `browserTraceLogPath`/`browserTelemetryLogPath` - same filenames, beside
+  // `host.log` in the same slot-resolved `rootDir`, plus the `.1` rotation
+  // siblings the shared writer (plan D2) renames the live file to.
+  it("resolves the browser telemetry/trace files (+ .1 rotation siblings) beside host.log", () => {
+    const layout = getHostFsLayout("production");
+    const root = join(homedir(), ".traycer", "host");
+    expect(layout.browserTelemetryFile).toBe(
+      join(root, "browser-telemetry.jsonl"),
+    );
+    expect(layout.browserTelemetryRotatedFile).toBe(
+      join(root, "browser-telemetry.jsonl.1"),
+    );
+    expect(layout.browserTraceFile).toBe(join(root, "browser-trace.jsonl"));
+    expect(layout.browserTraceRotatedFile).toBe(
+      join(root, "browser-trace.jsonl.1"),
+    );
+  });
+
   it("nests the dev environment one level deeper under ~/.traycer/host/dev/", () => {
     const layout = getHostFsLayout("dev");
     expect(layout.environment).toBe("dev");

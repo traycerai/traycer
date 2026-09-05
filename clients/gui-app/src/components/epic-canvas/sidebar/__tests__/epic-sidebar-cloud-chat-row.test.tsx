@@ -8,6 +8,7 @@ import {
 } from "@/components/epic-canvas/sidebar/chat-tree-surface";
 import type { HostReachabilityStatus } from "@/hooks/agent/use-host-reachability";
 import { DEFAULT_EPIC_NODE_ICON_COLORS } from "@/lib/artifacts/node-display";
+import type { TileOpenIntent } from "@/lib/canvas/tile-open/intent";
 import { publishedChatTileId } from "@/stores/epics/canvas/tile-schema/published-chat-tile";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 
@@ -42,17 +43,22 @@ vi.mock("@/hooks/agent/use-host-reachability", () => ({
   useHostReachability: () => reachability,
 }));
 
-vi.mock("@/hooks/epic/use-epic-nested-focus-navigation", () => ({
-  useEpicNestedFocusNavigation:
-    () => (_epicId: string, _tabId: string, prepare: () => unknown) =>
-      prepare(),
-}));
-
 /**
- * The canvas open actions, captured. The row's whole job on click is to hand a
- * tile ref to one of these, so what it hands over IS the behaviour under test.
+ * The `openTile` seam, captured. The row's whole job on click is to hand a
+ * tile intent to it, so what it hands over IS the behaviour under test.
  */
 const openedRefs: { type: string; id: string; hostId: string }[] = [];
+const openTile = vi.fn((intent: TileOpenIntent) => {
+  openedRefs.push({
+    type: intent.node.type,
+    id: intent.node.id,
+    hostId: intent.node.hostId,
+  });
+});
+
+vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
+  useEpicTileNavigation: () => ({ openTile }),
+}));
 
 /**
  * What the tab's active pane is showing, as the two per-row store selectors
@@ -67,12 +73,6 @@ const activeInTab: { artifactId: string | null; tileId: string | null } = {
 };
 
 vi.mock("@/stores/epics/canvas/store", () => ({
-  // The canvas actions take `(tabId, ref)`; the ref is the second argument.
-  useEpicCanvasStore:
-    () =>
-    (_tabId: string, ref: { type: string; id: string; hostId: string }) => {
-      openedRefs.push({ type: ref.type, id: ref.id, hostId: ref.hostId });
-    },
   useIsActiveEpicArtifact: (_tabId: string | undefined, nodeId: string) =>
     activeInTab.artifactId === nodeId,
   useIsActiveTile: (_tabId: string | undefined, tileId: string | null) =>
@@ -83,6 +83,7 @@ afterEach(() => {
   cleanup();
   reachability.status = "unreachable";
   openedRefs.length = 0;
+  openTile.mockClear();
   activeInTab.artifactId = null;
   activeInTab.tileId = null;
   useSettingsStore.setState({
@@ -113,8 +114,8 @@ const CHAT: CloudChatSummary = {
 };
 
 /**
- * `useEpicNestedFocusNavigation` runs its `prepare` callback, so clicking a row
- * reaches the canvas action with the ref the row chose.
+ * The `openTile` seam mock runs synchronously, so clicking a row reaches it
+ * with the intent the row built.
  */
 function clickRow(): void {
   screen.getByTestId(`epic-sidebar-cloud-item-${CHAT.identity.chatId}`).click();
@@ -126,7 +127,6 @@ describe("EpicSidebarCloudChatRow", () => {
     render(
       <EpicSidebarCloudChatRow
         chat={CHAT}
-        epicId={CHAT.identity.taskId}
         tabId="tab-1"
         depth={0}
         selectionMode={false}
@@ -145,7 +145,6 @@ describe("EpicSidebarCloudChatRow", () => {
     render(
       <EpicSidebarCloudChatRow
         chat={CHAT}
-        epicId={CHAT.identity.taskId}
         tabId="tab-1"
         depth={0}
         selectionMode={false}
@@ -166,7 +165,6 @@ describe("EpicSidebarCloudChatRow", () => {
     render(
       <EpicSidebarCloudChatRow
         chat={CHAT}
-        epicId={CHAT.identity.taskId}
         tabId="tab-1"
         depth={0}
         selectionMode={false}
@@ -184,7 +182,6 @@ describe("EpicSidebarCloudChatRow", () => {
     render(
       <EpicSidebarCloudChatRow
         chat={CHAT}
-        epicId={CHAT.identity.taskId}
         tabId="tab-1"
         depth={0}
         selectionMode={false}
@@ -199,7 +196,6 @@ describe("EpicSidebarCloudChatRow", () => {
     render(
       <EpicSidebarCloudChatRow
         chat={CHAT}
-        epicId={CHAT.identity.taskId}
         tabId="tab-1"
         depth={0}
         selectionMode={false}
@@ -215,7 +211,6 @@ describe("EpicSidebarCloudChatRow", () => {
       render(
         <EpicSidebarCloudChatRow
           chat={CHAT}
-          epicId={CHAT.identity.taskId}
           tabId="tab-1"
           depth={0}
           selectionMode={false}
@@ -252,7 +247,6 @@ describe("EpicSidebarCloudChatRow", () => {
       render(
         <EpicSidebarCloudChatRow
           chat={CHAT}
-          epicId={CHAT.identity.taskId}
           tabId="tab-1"
           depth={0}
           selectionMode
@@ -291,7 +285,6 @@ describe("EpicSidebarCloudChatRow", () => {
       render(
         <EpicSidebarCloudChatRow
           chat={CHAT}
-          epicId={CHAT.identity.taskId}
           tabId="tab-1"
           depth={0}
           selectionMode={false}
@@ -316,7 +309,6 @@ describe("EpicSidebarCloudChatRow", () => {
       render(
         <EpicSidebarCloudChatRow
           chat={CHAT}
-          epicId={CHAT.identity.taskId}
           tabId="tab-1"
           depth={0}
           selectionMode={false}
@@ -351,7 +343,6 @@ describe("EpicSidebarCloudChatRow", () => {
       render(
         <EpicSidebarCloudChatRow
           chat={CHAT}
-          epicId={CHAT.identity.taskId}
           tabId="tab-1"
           depth={0}
           selectionMode={false}
@@ -377,7 +368,6 @@ describe("EpicSidebarCloudChatRow", () => {
       render(
         <EpicSidebarCloudChatRow
           chat={CHAT}
-          epicId={CHAT.identity.taskId}
           tabId="tab-1"
           depth={0}
           selectionMode={false}
@@ -399,7 +389,6 @@ describe("EpicSidebarCloudChatRow", () => {
       render(
         <EpicSidebarCloudChatRow
           chat={CHAT}
-          epicId={CHAT.identity.taskId}
           tabId="tab-1"
           depth={0}
           selectionMode={false}
@@ -419,7 +408,6 @@ describe("EpicSidebarCloudChatRow", () => {
       render(
         <EpicSidebarCloudChatRow
           chat={CHAT}
-          epicId={CHAT.identity.taskId}
           tabId="tab-1"
           depth={0}
           selectionMode={false}
@@ -489,7 +477,6 @@ describe("EpicSidebarCloudChatRow on a mounting surface", () => {
       >
         <EpicSidebarCloudChatRow
           chat={CHAT}
-          epicId={CHAT.identity.taskId}
           tabId="tab-1"
           depth={0}
           selectionMode={false}
@@ -510,7 +497,6 @@ describe("EpicSidebarCloudChatRow on a mounting surface", () => {
     render(
       <EpicSidebarCloudChatRow
         chat={CHAT}
-        epicId={CHAT.identity.taskId}
         tabId="tab-1"
         depth={0}
         selectionMode={false}

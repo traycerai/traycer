@@ -160,6 +160,7 @@ function renderPanel(onStart: (launch: TerminalAgentLaunch) => void) {
       pending={false}
       disabledHint={null}
       hostId={null}
+      terminalLoginSurface={null}
       onStart={onStart}
     />,
   );
@@ -271,6 +272,7 @@ describe("<TerminalLaunchPanel /> terminal-agent args handoff", () => {
           pending={false}
           disabledHint={null}
           hostId={null}
+          terminalLoginSurface={null}
           onStart={onStart}
         />
       </TooltipProvider>,
@@ -294,6 +296,7 @@ describe("<TerminalLaunchPanel /> terminal-agent args handoff", () => {
         pending={false}
         disabledHint={null}
         hostId="host-b"
+        terminalLoginSurface={null}
         onStart={vi.fn()}
       />,
     );

@@ -43,9 +43,9 @@ vi.mock("@/components/epic-canvas/tile-find/tile-find-owner-bridge", () => ({
   TileFindOwnerBridge: () => <div data-testid="tile-find-owner-bridge" />,
 }));
 
-vi.mock("@/components/epic-canvas/browser-overlay-coordinator-bridge", () => ({
-  BrowserOverlayCoordinatorBridge: () => (
-    <div data-testid="browser-overlay-coordinator" />
+vi.mock("@/components/layout/bridges/reserved-browser-chords-bridge", () => ({
+  ReservedBrowserChordsBridge: () => (
+    <div data-testid="reserved-browser-chords" />
   ),
 }));
 
@@ -184,7 +184,7 @@ describe("<AppShell />", () => {
     expect(screen.getByTestId("resource-monitor-header-button")).not.toBeNull();
     expect(screen.getByTestId("app-shell-child")).not.toBeNull();
     expect(screen.getByTestId("tile-find-owner-bridge")).not.toBeNull();
-    expect(screen.getByTestId("browser-overlay-coordinator")).not.toBeNull();
+    expect(screen.getByTestId("reserved-browser-chords")).not.toBeNull();
     const routeLayer = screen.getByTestId("route-adapter-layer");
     expect(routeLayer.className).toContain("pointer-events-none");
     expect(routeLayer.className).toContain("[&>*]:pointer-events-auto");
@@ -211,12 +211,18 @@ describe("<AppShell />", () => {
     // becomes document-level scrollable width and the landing page grows a
     // horizontal scrollbar. `TopLevelTabHost` already clips itself for the same
     // reason - this covers everything mounted beside it.
+    //
+    // `overflow-clip` specifically, not `overflow-hidden`: hidden still makes
+    // the row a scroll container that a stray `focus()` / `scrollIntoView` can
+    // scroll and never scroll back (the epic toolbar rows once vanished under
+    // the header this way). Clip has no scroll offset at all.
     const surfaceRow = screen.getByTestId("route-adapter-layer").parentElement;
     expect(surfaceRow).not.toBeNull();
     expect(
       surfaceRow?.contains(screen.getByTestId("landing-terminal-host")),
     ).toBe(true);
-    expect(surfaceRow?.className).toContain("overflow-hidden");
+    expect(surfaceRow?.className).toContain("overflow-clip");
+    expect(surfaceRow?.className).not.toContain("overflow-hidden");
   });
 
   it("makes the capped tab strip leftover a desktop drag region", async () => {

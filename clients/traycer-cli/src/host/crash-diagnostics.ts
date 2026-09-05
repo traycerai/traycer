@@ -121,11 +121,19 @@ export const REPORT_SUMMARY_MAX_CHARS = 512;
  * Windows exit statuses worth naming. Keyed by the unsigned NTSTATUS value
  * (Node reports them as positive decimals, e.g. 3221226505). Codes below
  * 0x40000000 are ordinary exit codes and are not decoded.
+ *
+ * The 0xC0000409 text points at the {@link FATAL_NEEDLES} signature rather
+ * than at "stderr was empty". Emptiness is the wrong test in both directions:
+ * a native module or the CRT can print an unrelated warning before it
+ * fail-fasts, and the decoder only ever receives the numeric code - it cannot
+ * read the capture at all. What it can do is tell the reader which evidence
+ * decides it, since V8 prints its fatal block BEFORE aborting and a native
+ * fail-fast writes nothing on the way out.
  */
 const WINDOWS_EXIT_MEANINGS: ReadonlyMap<number, string> = new Map([
   [
     0xc0000409,
-    "STATUS_STACK_BUFFER_OVERRUN (fail-fast abort: V8 fatal/OOM, native stack overflow, or CRT abort)",
+    "STATUS_STACK_BUFFER_OVERRUN (fail-fast abort: look for a FATAL ERROR / # Fatal error block in the stderr capture - V8 prints one before aborting, so a capture without it points at a native module or CRT abort)",
   ],
   [0xc0000005, "STATUS_ACCESS_VIOLATION (native crash)"],
   [0xc0000142, "STATUS_DLL_INIT_FAILED (spawn during session shutdown)"],

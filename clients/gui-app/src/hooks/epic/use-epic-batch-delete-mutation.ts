@@ -16,6 +16,7 @@ import { invalidateWorktreeListingAndBindingCaches } from "@/hooks/worktree/inva
 import { useWorktreeDeleteStreamTransportFactory } from "@/lib/host/use-worktree-delete-stream-transport";
 import {
   runWorktreeCleanup,
+  worktreeCleanupFailureDetail,
   type WorktreeCleanupOutcome,
 } from "@/lib/epics/run-worktree-cleanup";
 import { toastFromHostError } from "@/lib/host-error-toast";
@@ -159,7 +160,7 @@ export function useEpicBatchDelete(): UseMutationResult<
           successes,
         );
         if (ctx.hostId === null || eligibleWorktreePaths.length === 0) {
-          emitEpicDeleteToast(epicToast.level, epicToast.message);
+          emitEpicDeleteToast(epicToast.level, epicToast.message, null);
         } else {
           // The Task(s) are already deleted; stream the approved worktree
           // removals and report a single combined summary once they settle.
@@ -174,7 +175,6 @@ export function useEpicBatchDelete(): UseMutationResult<
             source: "task_cleanup",
             epicId: undefined,
             stopOwnersPaths: new Set(),
-            expectedHoldersRevisionByPath: new Map(),
           }).then((outcome) => {
             emitTaskDeleteSummaryToast(epicToast, outcome);
             invalidateWorktreeCachesForHost(queryClient, hostId);
@@ -309,16 +309,28 @@ function epicDeleteToastParts(args: {
   };
 }
 
+/**
+ * `detail` is the toast's on-screen description - the per-path worktree
+ * failure reasons, or `null` when the count line is all there is. It stays out
+ * of the report-issue contexts below: those are public and must carry fixed
+ * product copy, and a reason names an absolute worktree path.
+ */
 export function emitEpicDeleteToast(
   level: EpicDeleteToastLevel,
   message: string,
+  detail: string | null,
 ): void {
   if (level === "success") {
-    toast.success(message);
+    if (detail === null) {
+      toast.success(message);
+    } else {
+      toast.success(message, { description: detail });
+    }
     return;
   }
+  const options = detail === null ? undefined : { description: detail };
   if (level === "warning") {
-    reportableWarningToast(message, undefined, {
+    reportableWarningToast(message, options, {
       title: "Epic deletion incomplete",
       message: null,
       code: null,
@@ -326,7 +338,7 @@ export function emitEpicDeleteToast(
     });
     return;
   }
-  reportableErrorToast(message, undefined, {
+  reportableErrorToast(message, options, {
     title: "Could not delete Epics",
     message: null,
     code: null,
@@ -385,7 +397,7 @@ function emitTaskDeleteSummaryToast(
 ): void {
   const summary = worktreeCleanupSummary(outcome);
   if (summary === null) {
-    emitEpicDeleteToast(epicToast.level, epicToast.message);
+    emitEpicDeleteToast(epicToast.level, epicToast.message, null);
     return;
   }
   // A worktree that couldn't be removed - or whose removal we never saw
@@ -395,7 +407,11 @@ function emitTaskDeleteSummaryToast(
     outcome.failed.length > 0 || outcome.uncertain.length > 0
       ? "warning"
       : epicToast.level;
-  emitEpicDeleteToast(level, `${epicToast.message} · ${summary}`);
+  emitEpicDeleteToast(
+    level,
+    `${epicToast.message} · ${summary}`,
+    worktreeCleanupFailureDetail(outcome.failed),
+  );
 }
 
 // Refresh the host-wide worktree list plus the shared binding-backed caches

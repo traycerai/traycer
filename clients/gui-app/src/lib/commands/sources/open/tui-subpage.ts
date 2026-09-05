@@ -38,7 +38,7 @@ export function useTuiOpenerItems(ctx: CommandContext): OpenerInterfaceItems {
         useNewConversationModalOpenStore.getState().open({
           epicId: ctx.activeEpicId,
           tabId: ctx.activeTabId,
-          placement: { kind: "target-group", groupId: ctx.targetGroupId },
+          placement: { kind: "tab", paneId: ctx.targetGroupId, index: null },
           parentId: null,
           hostId: null,
         });

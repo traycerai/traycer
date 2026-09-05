@@ -2,6 +2,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { useCallback, type MouseEvent } from "react";
 import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
+import { modifiersFromMouseEvent } from "@/lib/canvas/tile-open/intent";
 import { epicNodeRefForNodeId } from "@/lib/epic-selectors";
 import {
   navigateToTabIntent,
@@ -97,7 +98,7 @@ export function useTraycerReferenceOpenHandler(input: {
   const handle = useMaybeOpenEpicHandle();
   const activeHostId = useCanvasHostId();
   const navigate = useNavigate();
-  const tileNavigation = useEpicTileNavigation();
+  const { openTile } = useEpicTileNavigation();
 
   const target = resolveOpenTarget({
     epicId: input.epicId,
@@ -115,9 +116,18 @@ export function useTraycerReferenceOpenHandler(input: {
         case "none":
           return;
         case "same-epic-node": {
-          // Open the resolved node as a replaceable preview tile in the epic's
-          // current tab.
-          tileNavigation.openTilePreviewInEpic(target.epicId, target.ref);
+          // A single click on the reference: the resolver turns that into the
+          // epic's current tab, with the preview/permanent call left to the
+          // placement settings.
+          openTile({
+            node: target.ref,
+            target: { epicId: target.epicId },
+            gesture: "single",
+            modifiers: modifiersFromMouseEvent(event),
+            placement: null,
+            dedupe: true,
+            source: "direct_ui",
+          });
           return;
         }
         case "navigate":
@@ -140,7 +150,7 @@ export function useTraycerReferenceOpenHandler(input: {
           return;
       }
     },
-    [target, navigate, tileNavigation],
+    [target, navigate, openTile],
   );
 
   // Only a resolved `same-epic-node` surfaces a ref; `navigate` and `none`

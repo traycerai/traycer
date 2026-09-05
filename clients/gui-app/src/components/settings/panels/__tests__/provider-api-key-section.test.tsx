@@ -1,10 +1,10 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import { DEFAULT_PROVIDER_NATIVE_CAPABILITIES } from "@traycer/protocol/host/provider-native-schemas";
 import { ProviderApiKeySection } from "@/components/settings/panels/provider-api-key-section";
 
-const openExternalLink = vi.fn();
+const openLink = vi.hoisted(() => vi.fn());
 
 vi.mock("@/hooks/providers/use-providers-set-api-key-mutation", () => ({
   useProvidersSetApiKey: () => ({ mutate: vi.fn(), isPending: false }),
@@ -14,8 +14,8 @@ vi.mock("@/hooks/providers/use-providers-clear-api-key-mutation", () => ({
   useProvidersClearApiKey: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
-vi.mock("@/providers/use-runner-host", () => ({
-  useRunnerHost: () => ({ openExternalLink }),
+vi.mock("@/lib/links/open-link", () => ({
+  useOpenLink: () => openLink,
 }));
 
 function apiKeyState(
@@ -79,8 +79,16 @@ describe("ProviderApiKeySection dashboard link", () => {
     );
 
     expect(screen.getByLabelText("API key")).toBeDefined();
-    expect(
-      screen.getByRole("button", { name: /Create an API key/i }),
-    ).toBeDefined();
+    const button = screen.getByRole("button", {
+      name: /Create an API key/i,
+    });
+    expect(button).toBeDefined();
+
+    fireEvent.click(button);
+    expect(openLink).toHaveBeenCalledWith(
+      "https://cursor.com/dashboard/api?section=user-keys#user-api-keys",
+      "docs",
+      null,
+    );
   });
 });

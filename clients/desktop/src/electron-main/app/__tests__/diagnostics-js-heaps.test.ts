@@ -1,0 +1,755 @@
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest";
+
+vi.mock("electron", () => ({
+  BrowserWindow: { fromWebContents: vi.fn(() => null) },
+  app: {
+    getAppMetrics: vi.fn(
+      (): ReadonlyArray<{
+        readonly pid: number;
+        readonly memory: { readonly workingSetSize: number };
+      }> => [],
+    ),
+  },
+  contentTracing: {
+    startRecording: vi.fn(() => Promise.resolve()),
+    stopRecording: vi.fn(() => Promise.resolve("")),
+  },
+}));
+
+vi.mock("electron-log", () => ({
+  default: {
+    transports: { file: { level: "info" }, console: { level: "info" } },
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+  },
+}));
+
+vi.mock("@sentry/electron/main", () => ({
+  isInitialized: vi.fn((): boolean => false),
+  captureMessage: vi.fn(),
+}));
+
+import type { IpcMainInvokeEvent } from "electron";
+import { app } from "electron";
+import { handleMeasureJsHeaps } from "../diagnostics";
+
+type MessageListener = (
+  event: unknown,
+  method: string,
+  params: unknown,
+  sessionId: string | undefined,
+) => void;
+
+interface HeapUsageResult {
+  readonly usedSize: number;
+  readonly totalSize: number;
+}
+
+/**
+ * What a build that reports the two experimental fields answers with. A
+ * separate shape rather than optional properties (which this repo's lint
+ * bans), so a fixture can genuinely OMIT the keys - the case
+ * `readHeapUsage` has to survive, and a different one from a key that is
+ * present and null.
+ */
+interface HeapUsageResultWithExternal extends HeapUsageResult {
+  readonly embedderHeapUsedSize: number | null;
+  readonly backingStorageSize: number | null;
+}
+
+type HeapUsagePayload = HeapUsageResult | HeapUsageResultWithExternal;
+
+interface FakeWorkerFixture {
+  readonly sessionId: string;
+  readonly type: string;
+  readonly url: string;
+  readonly heapUsage: HeapUsagePayload | "reject" | "pending";
+}
+
+interface FakeDebugger {
+  readonly isAttached: Mock<() => boolean>;
+  readonly attach: Mock<(protocolVersion: string) => void>;
+  readonly detach: Mock<() => void>;
+  readonly on: Mock<(event: "message", listener: MessageListener) => void>;
+  readonly removeListener: Mock<
+    (event: "message", listener: MessageListener) => void
+  >;
+  readonly sendCommand: Mock<
+    (
+      method: string,
+      commandParams: Record<string, unknown> | undefined,
+      sessionId: string | undefined,
+    ) => Promise<unknown>
+  >;
+  /**
+   * Settles a worker's `heapUsage: "pending"` read. Separate from
+   * `sendCommand` because the fixture that registers as "pending" does not
+   * know its own answer yet - the test decides it later, after the timeout
+   * has already fired around it.
+   */
+  readonly resolvePendingHeapUsage: (
+    sessionId: string,
+    payload: HeapUsagePayload,
+  ) => void;
+}
+
+interface FakeSender {
+  readonly isDestroyed: Mock<() => boolean>;
+  readonly getURL: Mock<() => string>;
+  readonly getOSProcessId: Mock<() => number>;
+  readonly debugger: FakeDebugger;
+}
+
+interface FakeEvent {
+  readonly sender: FakeSender;
+}
+
+/**
+ * A prototype-less object asserted to the event type, with the one member
+ * `handleMeasureJsHeaps` reads (`sender`, and off it `isDestroyed` / `getURL`
+ * / `getOSProcessId` / `debugger.*`) assigned onto it. `as unknown as` is
+ * lint-forbidden here, and a one-member literal does not overlap the real
+ * event type enough for a direct `as`.
+ */
+function asIpcMainInvokeEvent(fake: FakeEvent): IpcMainInvokeEvent {
+  return Object.assign(Object.create(null) as IpcMainInvokeEvent, fake);
+}
+
+function buildFakeDebugger(options: {
+  readonly pageHeapUsage: HeapUsagePayload | "reject";
+  readonly workers: ReadonlyArray<FakeWorkerFixture>;
+  readonly isAttachedInitially: boolean;
+  readonly attachThrows: boolean;
+  /**
+   * Rejects the cleanup `Target.setAutoAttach` call (`autoAttach: false`)
+   * only - the arming call (`autoAttach: true`) always succeeds, matching a
+   * session that goes away only after the reads it enabled already landed.
+   */
+  readonly autoAttachFalseRejects: boolean;
+}): FakeDebugger {
+  let attached = options.isAttachedInitially;
+  let messageListener: MessageListener | null = null;
+  const workersBySessionId = new Map(
+    options.workers.map((worker) => [worker.sessionId, worker]),
+  );
+  // One never-resolving-on-its-own promise per "pending" worker, built eagerly
+  // so it exists regardless of call order between the read and the resolve.
+  const pendingHeapUsageResolvers = new Map<
+    string,
+    (payload: HeapUsagePayload) => void
+  >();
+  const pendingHeapUsagePromises = new Map<string, Promise<HeapUsagePayload>>();
+  for (const worker of options.workers) {
+    if (worker.heapUsage !== "pending") continue;
+    const promise = new Promise<HeapUsagePayload>((resolve) => {
+      pendingHeapUsageResolvers.set(worker.sessionId, resolve);
+    });
+    pendingHeapUsagePromises.set(worker.sessionId, promise);
+  }
+
+  const isAttached = vi.fn((): boolean => attached);
+  const attach = vi.fn((protocolVersion: string): void => {
+    void protocolVersion;
+    if (options.attachThrows) {
+      throw new Error("attach failed");
+    }
+    attached = true;
+  });
+  const detach = vi.fn((): void => {
+    attached = false;
+  });
+  const on = vi.fn((event: "message", listener: MessageListener): void => {
+    if (event === "message") messageListener = listener;
+  });
+  const removeListener = vi.fn(
+    (event: "message", listener: MessageListener): void => {
+      void event;
+      if (messageListener === listener) messageListener = null;
+    },
+  );
+  const sendCommand = vi.fn(
+    (
+      method: string,
+      commandParams: Record<string, unknown> | undefined,
+      sessionId: string | undefined,
+    ): Promise<unknown> => {
+      if (method === "Runtime.getHeapUsage") {
+        if (sessionId === undefined) {
+          return options.pageHeapUsage === "reject"
+            ? Promise.reject(new Error("page heap read failed"))
+            : Promise.resolve(options.pageHeapUsage);
+        }
+        const worker = workersBySessionId.get(sessionId);
+        if (worker === undefined) {
+          return Promise.reject(new Error(`unknown session ${sessionId}`));
+        }
+        if (worker.heapUsage === "pending") {
+          const pending = pendingHeapUsagePromises.get(sessionId);
+          if (pending === undefined) {
+            return Promise.reject(
+              new Error(`no pending heap usage registered for ${sessionId}`),
+            );
+          }
+          return pending;
+        }
+        return worker.heapUsage === "reject"
+          ? Promise.reject(new Error("worker heap read failed"))
+          : Promise.resolve(worker.heapUsage);
+      }
+      if (method === "Target.setAutoAttach") {
+        const autoAttach = commandParams?.["autoAttach"];
+        if (autoAttach === false && options.autoAttachFalseRejects) {
+          return Promise.reject(new Error("auto-attach cleanup failed"));
+        }
+        if (autoAttach === true && messageListener !== null) {
+          const listener = messageListener;
+          for (const worker of options.workers) {
+            listener(
+              {},
+              "Target.attachedToTarget",
+              {
+                sessionId: worker.sessionId,
+                targetInfo: { type: worker.type, url: worker.url },
+              },
+              undefined,
+            );
+          }
+        }
+        return Promise.resolve({});
+      }
+      return Promise.resolve({});
+    },
+  );
+
+  const resolvePendingHeapUsage = (
+    sessionId: string,
+    payload: HeapUsagePayload,
+  ): void => {
+    const resolve = pendingHeapUsageResolvers.get(sessionId);
+    if (resolve === undefined) {
+      throw new Error(`no pending heap usage resolver for ${sessionId}`);
+    }
+    resolve(payload);
+  };
+
+  return {
+    isAttached,
+    attach,
+    detach,
+    on,
+    removeListener,
+    sendCommand,
+    resolvePendingHeapUsage,
+  };
+}
+
+function buildFakeEvent(options: {
+  readonly isDestroyed: boolean;
+  readonly pageUrl: string;
+  readonly pid: number;
+  readonly debuggerApi: FakeDebugger;
+}): { readonly event: IpcMainInvokeEvent; readonly sender: FakeSender } {
+  const sender: FakeSender = {
+    isDestroyed: vi.fn((): boolean => options.isDestroyed),
+    getURL: vi.fn((): string => options.pageUrl),
+    getOSProcessId: vi.fn((): number => options.pid),
+    debugger: options.debuggerApi,
+  };
+  return { event: asIpcMainInvokeEvent({ sender }), sender };
+}
+
+function processMetric(
+  pid: number,
+  workingSetKb: number,
+): Electron.ProcessMetric {
+  return {
+    pid,
+    type: "Tab",
+    creationTime: 0,
+    cpu: { percentCPUUsage: 0, idleWakeupsPerSecond: 0 },
+    memory: { workingSetSize: workingSetKb, peakWorkingSetSize: workingSetKb },
+  };
+}
+
+describe("handleMeasureJsHeaps", () => {
+  beforeEach(() => {
+    vi.mocked(app.getAppMetrics).mockReturnValue([]);
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+    vi.useRealTimers();
+  });
+
+  it("returns the page plus every surviving worker isolate, skips non-worker targets, and converts the working set from KB", async () => {
+    const workers: ReadonlyArray<FakeWorkerFixture> = [
+      {
+        sessionId: "session-epic",
+        type: "worker",
+        url: "app://renderer/assets/epic-runtime-worker-entry-abc.js",
+        heapUsage: {
+          usedSize: 5_000_000,
+          totalSize: 8_000_000,
+          embedderHeapUsedSize: 1_500_000,
+          backingStorageSize: 2_500_000,
+        },
+      },
+      {
+        sessionId: "session-service",
+        type: "service_worker",
+        url: "app://renderer/service-worker.js",
+        heapUsage: {
+          usedSize: 1,
+          totalSize: 1,
+          embedderHeapUsedSize: null,
+          backingStorageSize: null,
+        },
+      },
+      {
+        sessionId: "session-flaky",
+        type: "worker",
+        url: "app://renderer/assets/worker-flaky.js",
+        heapUsage: "reject",
+      },
+    ];
+    const debuggerApi = buildFakeDebugger({
+      pageHeapUsage: {
+        usedSize: 40_000_000,
+        totalSize: 60_000_000,
+        embedderHeapUsedSize: 9_000_000,
+        backingStorageSize: 3_000_000,
+      },
+      workers,
+      isAttachedInitially: false,
+      attachThrows: false,
+      autoAttachFalseRejects: false,
+    });
+    const { event, sender } = buildFakeEvent({
+      isDestroyed: false,
+      pageUrl: "app://renderer/index.html",
+      pid: 4242,
+      debuggerApi,
+    });
+    vi.mocked(app.getAppMetrics).mockReturnValue([
+      processMetric(1, 999_999),
+      processMetric(4242, 300_000),
+    ]);
+
+    const result = await handleMeasureJsHeaps(event);
+
+    expect(result).not.toBeNull();
+    expect(result?.workingSetBytes).toBe(300_000 * 1024);
+    expect(result?.isolates).toEqual([
+      {
+        kind: "page",
+        url: "app://renderer/index.html",
+        usedBytes: 40_000_000,
+        totalBytes: 60_000_000,
+        embedderBytes: 9_000_000,
+        backingStorageBytes: 3_000_000,
+      },
+      {
+        kind: "worker",
+        url: "app://renderer/assets/epic-runtime-worker-entry-abc.js",
+        usedBytes: 5_000_000,
+        totalBytes: 8_000_000,
+        embedderBytes: 1_500_000,
+        backingStorageBytes: 2_500_000,
+      },
+    ]);
+    // The service-worker target and the worker whose heap read rejected are
+    // both absent, and their absence did not fail the whole call.
+    expect(
+      result?.isolates.some((isolate) =>
+        isolate.url.includes("service-worker"),
+      ),
+    ).toBe(false);
+    expect(
+      result?.isolates.some((isolate) => isolate.url.includes("worker-flaky")),
+    ).toBe(false);
+
+    expect(debuggerApi.attach).toHaveBeenCalledWith("1.3");
+    expect(debuggerApi.attach).toHaveBeenCalledTimes(1);
+    const autoAttachCalls = debuggerApi.sendCommand.mock.calls.filter(
+      ([method]) => method === "Target.setAutoAttach",
+    );
+    expect(autoAttachCalls).toHaveLength(2);
+    expect(autoAttachCalls[0]?.[1]).toMatchObject({ autoAttach: true });
+    expect(autoAttachCalls[1]?.[1]).toMatchObject({ autoAttach: false });
+    expect(debuggerApi.detach).toHaveBeenCalledTimes(1);
+    expect(debuggerApi.removeListener).toHaveBeenCalledTimes(1);
+    const [, removedListener] = debuggerApi.removeListener.mock.calls[0] ?? [
+      undefined,
+      undefined,
+    ];
+    const [, registeredListener] = debuggerApi.on.mock.calls[0] ?? [
+      undefined,
+      undefined,
+    ];
+    expect(removedListener).toBe(registeredListener);
+    expect(sender.getOSProcessId).toHaveBeenCalled();
+  });
+
+  it("carries null for embedder and backing storage whether the protocol result omits the keys or answers null, and still returns the row", async () => {
+    // `embedderHeapUsedSize` / `backingStorageSize` are experimental CDP
+    // fields. The page here is a build that does not send them AT ALL (the
+    // keys are absent), the worker one that sends them as null; neither may
+    // cost the isolate its row, only those two fields.
+    const workers: ReadonlyArray<FakeWorkerFixture> = [
+      {
+        sessionId: "session-worker",
+        type: "worker",
+        url: "app://renderer/assets/worker-DMI2JaPh.js",
+        heapUsage: {
+          usedSize: 2_000_000,
+          totalSize: 3_000_000,
+          embedderHeapUsedSize: null,
+          backingStorageSize: null,
+        },
+      },
+    ];
+    const debuggerApi = buildFakeDebugger({
+      pageHeapUsage: {
+        usedSize: 10_000_000,
+        totalSize: 20_000_000,
+      },
+      workers,
+      isAttachedInitially: false,
+      attachThrows: false,
+      autoAttachFalseRejects: false,
+    });
+    const { event } = buildFakeEvent({
+      isDestroyed: false,
+      pageUrl: "app://renderer/index.html",
+      pid: 99,
+      debuggerApi,
+    });
+
+    const result = await handleMeasureJsHeaps(event);
+
+    expect(result).not.toBeNull();
+    expect(result?.isolates).toEqual([
+      {
+        kind: "page",
+        url: "app://renderer/index.html",
+        usedBytes: 10_000_000,
+        totalBytes: 20_000_000,
+        embedderBytes: null,
+        backingStorageBytes: null,
+      },
+      {
+        kind: "worker",
+        url: "app://renderer/assets/worker-DMI2JaPh.js",
+        usedBytes: 2_000_000,
+        totalBytes: 3_000_000,
+        embedderBytes: null,
+        backingStorageBytes: null,
+      },
+    ]);
+  });
+
+  it("returns null without attaching when a debugger is already attached to this window", async () => {
+    const debuggerApi = buildFakeDebugger({
+      pageHeapUsage: {
+        usedSize: 1,
+        totalSize: 1,
+        embedderHeapUsedSize: null,
+        backingStorageSize: null,
+      },
+      workers: [],
+      isAttachedInitially: true,
+      attachThrows: false,
+      autoAttachFalseRejects: false,
+    });
+    const { event } = buildFakeEvent({
+      isDestroyed: false,
+      pageUrl: "app://renderer/index.html",
+      pid: 1,
+      debuggerApi,
+    });
+
+    const result = await handleMeasureJsHeaps(event);
+
+    expect(result).toBeNull();
+    expect(debuggerApi.attach).not.toHaveBeenCalled();
+    expect(debuggerApi.detach).not.toHaveBeenCalled();
+  });
+
+  it("returns null and never touches the message listener when attach() throws", async () => {
+    const debuggerApi = buildFakeDebugger({
+      pageHeapUsage: {
+        usedSize: 1,
+        totalSize: 1,
+        embedderHeapUsedSize: null,
+        backingStorageSize: null,
+      },
+      workers: [],
+      isAttachedInitially: false,
+      attachThrows: true,
+      autoAttachFalseRejects: false,
+    });
+    const { event } = buildFakeEvent({
+      isDestroyed: false,
+      pageUrl: "app://renderer/index.html",
+      pid: 1,
+      debuggerApi,
+    });
+
+    const result = await handleMeasureJsHeaps(event);
+
+    expect(result).toBeNull();
+    expect(debuggerApi.attach).toHaveBeenCalledTimes(1);
+    expect(debuggerApi.on).not.toHaveBeenCalled();
+    expect(debuggerApi.detach).not.toHaveBeenCalled();
+  });
+
+  it("returns null and still detaches when a command rejects mid-measurement", async () => {
+    const debuggerApi = buildFakeDebugger({
+      pageHeapUsage: "reject",
+      workers: [],
+      isAttachedInitially: false,
+      attachThrows: false,
+      autoAttachFalseRejects: false,
+    });
+    const { event } = buildFakeEvent({
+      isDestroyed: false,
+      pageUrl: "app://renderer/index.html",
+      pid: 1,
+      debuggerApi,
+    });
+
+    const result = await handleMeasureJsHeaps(event);
+
+    expect(result).toBeNull();
+    expect(debuggerApi.attach).toHaveBeenCalledTimes(1);
+    expect(debuggerApi.detach).toHaveBeenCalledTimes(1);
+    expect(debuggerApi.removeListener).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns null when the sender is destroyed, without reading the debugger at all", async () => {
+    const debuggerApi = buildFakeDebugger({
+      pageHeapUsage: {
+        usedSize: 1,
+        totalSize: 1,
+        embedderHeapUsedSize: null,
+        backingStorageSize: null,
+      },
+      workers: [],
+      isAttachedInitially: false,
+      attachThrows: false,
+      autoAttachFalseRejects: false,
+    });
+    const { event } = buildFakeEvent({
+      isDestroyed: true,
+      pageUrl: "app://renderer/index.html",
+      pid: 1,
+      debuggerApi,
+    });
+
+    const result = await handleMeasureJsHeaps(event);
+
+    expect(result).toBeNull();
+    expect(debuggerApi.isAttached).not.toHaveBeenCalled();
+    expect(debuggerApi.attach).not.toHaveBeenCalled();
+  });
+
+  it("keeps a timed-out measurement's late cleanup from switching off a later measurement's auto-attach", async () => {
+    // CDP commands cannot be cancelled: a timed-out `measureIsolates` keeps
+    // running behind `withTimeout`. Before the `cancellation` guard, its own
+    // stale cleanup (`Target.setAutoAttach` with `autoAttach:false`) would
+    // fire once its stuck worker read finally settled - this pins that it no
+    // longer does, and that a later, ordinary measurement is unaffected.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+
+    const workerSessionId = "session-stuck";
+    const workers: ReadonlyArray<FakeWorkerFixture> = [
+      {
+        sessionId: workerSessionId,
+        type: "worker",
+        url: "app://renderer/assets/worker-DMI2JaPh.js",
+        heapUsage: "pending",
+      },
+    ];
+    const debuggerApi = buildFakeDebugger({
+      pageHeapUsage: { usedSize: 1_000_000, totalSize: 2_000_000 },
+      workers,
+      isAttachedInitially: false,
+      attachThrows: false,
+      autoAttachFalseRejects: false,
+    });
+    const { event } = buildFakeEvent({
+      isDestroyed: false,
+      pageUrl: "app://renderer/index.html",
+      pid: 1,
+      debuggerApi,
+    });
+
+    const resultPromise = handleMeasureJsHeaps(event);
+
+    // `setImmediate` is real (kept out of `toFake` above): production awaits
+    // one between `Target.setAutoAttach: true` and the worker reads, so real
+    // ticks - not fake-clock advancement - are what gets us to the stuck read.
+    const reachedPendingRead = (): boolean =>
+      debuggerApi.sendCommand.mock.calls.some(
+        ([method, , sessionId]) =>
+          method === "Runtime.getHeapUsage" && sessionId === workerSessionId,
+      );
+    for (let tick = 0; tick < 10 && !reachedPendingRead(); tick += 1) {
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+    }
+    expect(reachedPendingRead()).toBe(true);
+
+    // Past the production JS_HEAP_MEASURE_TIMEOUT_MS (10_000ms, not
+    // exported) - `withTimeout` rejects and flips `cancellation.cancelled`
+    // while the worker read above is still outstanding.
+    await vi.advanceTimersByTimeAsync(10_001);
+
+    const result = await resultPromise;
+    expect(result).toBeNull();
+    expect(debuggerApi.detach).toHaveBeenCalledTimes(1);
+
+    // The straggler's read finally answers. Nothing is awaiting its
+    // `measureIsolates` call anymore, but it keeps running behind the
+    // already-settled race - let it reach its own `finally`.
+    debuggerApi.resolvePendingHeapUsage(workerSessionId, {
+      usedSize: 3_000_000,
+      totalSize: 4_000_000,
+    });
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+
+    const autoAttachFalseCalls = debuggerApi.sendCommand.mock.calls.filter(
+      ([method, params]) =>
+        method === "Target.setAutoAttach" && params?.["autoAttach"] === false,
+    );
+    expect(autoAttachFalseCalls).toHaveLength(0);
+
+    vi.useRealTimers();
+
+    // A fresh, ordinary measurement afterward gets the full page + worker
+    // rows and performs its own single autoAttach:false cleanup - the
+    // timed-out run above left nothing behind that spoils it.
+    const freshWorkers: ReadonlyArray<FakeWorkerFixture> = [
+      {
+        sessionId: "session-fresh",
+        type: "worker",
+        url: "app://renderer/assets/worker-DMI2JaPh.js",
+        heapUsage: { usedSize: 6_000_000, totalSize: 7_000_000 },
+      },
+    ];
+    const freshDebuggerApi = buildFakeDebugger({
+      pageHeapUsage: { usedSize: 8_000_000, totalSize: 9_000_000 },
+      workers: freshWorkers,
+      isAttachedInitially: false,
+      attachThrows: false,
+      autoAttachFalseRejects: false,
+    });
+    const { event: freshEvent } = buildFakeEvent({
+      isDestroyed: false,
+      pageUrl: "app://renderer/index.html",
+      pid: 2,
+      debuggerApi: freshDebuggerApi,
+    });
+
+    const freshResult = await handleMeasureJsHeaps(freshEvent);
+
+    expect(freshResult).not.toBeNull();
+    expect(freshResult?.isolates).toEqual([
+      {
+        kind: "page",
+        url: "app://renderer/index.html",
+        usedBytes: 8_000_000,
+        totalBytes: 9_000_000,
+        embedderBytes: null,
+        backingStorageBytes: null,
+      },
+      {
+        kind: "worker",
+        url: "app://renderer/assets/worker-DMI2JaPh.js",
+        usedBytes: 6_000_000,
+        totalBytes: 7_000_000,
+        embedderBytes: null,
+        backingStorageBytes: null,
+      },
+    ]);
+    const freshAutoAttachFalseCalls =
+      freshDebuggerApi.sendCommand.mock.calls.filter(
+        ([method, params]) =>
+          method === "Target.setAutoAttach" && params?.["autoAttach"] === false,
+      );
+    expect(freshAutoAttachFalseCalls).toHaveLength(1);
+  });
+
+  it("still returns the full breakdown, and still detaches, when the cleanup autoAttach:false command rejects", async () => {
+    // CodeRabbit Minor: a `finally` block that throws replaces whatever the
+    // `try` returned. This command can reject for reasons that say nothing
+    // about the rows already read (the page navigated, the session went
+    // away), so the read isolates must survive it rather than turning a
+    // complete breakdown into a failure toast.
+    const workers: ReadonlyArray<FakeWorkerFixture> = [
+      {
+        sessionId: "session-worker",
+        type: "worker",
+        url: "app://renderer/assets/worker-DMI2JaPh.js",
+        heapUsage: { usedSize: 2_000_000, totalSize: 3_000_000 },
+      },
+    ];
+    const debuggerApi = buildFakeDebugger({
+      pageHeapUsage: { usedSize: 10_000_000, totalSize: 20_000_000 },
+      workers,
+      isAttachedInitially: false,
+      attachThrows: false,
+      autoAttachFalseRejects: true,
+    });
+    const { event } = buildFakeEvent({
+      isDestroyed: false,
+      pageUrl: "app://renderer/index.html",
+      pid: 1,
+      debuggerApi,
+    });
+
+    const result = await handleMeasureJsHeaps(event);
+
+    expect(result).not.toBeNull();
+    expect(result?.isolates).toEqual([
+      {
+        kind: "page",
+        url: "app://renderer/index.html",
+        usedBytes: 10_000_000,
+        totalBytes: 20_000_000,
+        embedderBytes: null,
+        backingStorageBytes: null,
+      },
+      {
+        kind: "worker",
+        url: "app://renderer/assets/worker-DMI2JaPh.js",
+        usedBytes: 2_000_000,
+        totalBytes: 3_000_000,
+        embedderBytes: null,
+        backingStorageBytes: null,
+      },
+    ]);
+    expect(debuggerApi.detach).toHaveBeenCalledTimes(1);
+    // The arming call (autoAttach:true) still had to succeed for the worker
+    // row to exist at all - only the cleanup call (autoAttach:false) rejects.
+    const autoAttachCalls = debuggerApi.sendCommand.mock.calls.filter(
+      ([method]) => method === "Target.setAutoAttach",
+    );
+    expect(autoAttachCalls).toHaveLength(2);
+    expect(autoAttachCalls[0]?.[1]).toMatchObject({ autoAttach: true });
+    expect(autoAttachCalls[1]?.[1]).toMatchObject({ autoAttach: false });
+  });
+});

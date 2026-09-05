@@ -6,6 +6,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import type { ProviderTerminalLoginSurface } from "@/lib/providers/provider-terminal-login-surface";
 import { createStore } from "zustand/vanilla";
 import { useStore } from "zustand";
 import type { JsonContent } from "@traycer/protocol/common/registry";
@@ -681,6 +682,69 @@ export function LandingComposer(props: LandingComposerProps) {
     isActive: chatComposerActive,
   });
 
+  /**
+   * The id of this start page's draft, minting it when the page is still
+   * unbound. The ONE mint path for an unbound landing composer: the first
+   * substantive edit calls it, and so does the picker's sign-in button, whose
+   * terminal panel does not exist until a draft anchors it.
+   *
+   * Idempotent per composer - a second call returns the id the first minted -
+   * so pressing the button and then typing does not create two drafts.
+   */
+  const ensureBoundDraftId = useCallback((): string => {
+    // An already-bound page mints nothing. `handleDocumentChange` reaches this
+    // only while unbound (a bound composer returns on its own runtime first),
+    // but the sign-in button calls it from both states.
+    if (draftId !== null) return draftId;
+    const existingDraftId = createdUnboundDraftIdRef.current;
+    if (existingDraftId !== null) return existingDraftId;
+    // Reuse the parent-pre-minted mount key (props.pendingCreateId) as the
+    // new draft's id so activeDraftId's null -> id flip lines up with the
+    // key the parent already mounted under (no editor remount). Falls back
+    // to a fresh id when the caller has not pre-minted one.
+    const createdDraftId = useLandingDraftStore.getState().createDraftWithId(
+      props.pendingCreateId ?? uuidv4(),
+      useComposerRunSettingsStore
+        .getState()
+        // The composer's own resolved placement host - not the app
+        // binding: the seed should describe the machine this draft
+        // will create on.
+        .getGlobalRunSettings(activeHostId),
+    );
+    // `createDraftWithId` has non-composer callers and therefore seeds from
+    // the app-wide active host. This unbound composer can be pinned to a
+    // different placement host, so replace that seed synchronously before
+    // publishing the new draft id or accepting a submit.
+    useLandingDraftStore
+      .getState()
+      .restoreDraftWorkspaceForHost(createdDraftId, activeHostId);
+    createdUnboundDraftIdRef.current = createdDraftId;
+    // The workspace picker's staging key is keyed by this draft id
+    // (`{surface:"landing", draftId}`), so minting it here flips that key
+    // from `landing:` to `landing:<id>` the instant this commits. Carry any
+    // staged worktree intent over synchronously, before React re-renders
+    // the picker on the new key - otherwise it briefly reads as unstaged
+    // and the Environment dialog (keyed off the resolved target's kind)
+    // remounts and drops an in-progress edit.
+    useWorktreeIntentStagingStore
+      .getState()
+      .migrateKeyForAllHosts(
+        { surface: "landing", hostId: activeHostId, draftId: null },
+        { surface: "landing", hostId: activeHostId, draftId: createdDraftId },
+      );
+    return createdDraftId;
+  }, [activeHostId, draftId, props.pendingCreateId]);
+
+  // The start page whose terminal panel a picker-started setup terminal opens
+  // in, keyed exactly as the panel keys its layouts. It BINDS the page rather
+  // than naming it: an unbound start page renders no pane anchor, so its panel
+  // has nowhere to mount and the sign-in terminal would exist unseen. Memoized
+  // because the toolbar and picker are memo'd.
+  const terminalLoginSurface = useMemo<ProviderTerminalLoginSurface>(
+    () => ({ kind: "landing", resolveLandingPageId: ensureBoundDraftId }),
+    [ensureBoundDraftId],
+  );
+
   const handleDocumentChange = useCallback(
     (content: JsonContent, selection: { from: number; to: number }) => {
       if (runtime !== null) {
@@ -694,52 +758,11 @@ export function LandingComposer(props: LandingComposerProps) {
         attachmentRoots: imageHashes(content),
       }));
       if (!contentIsSubmittable(content)) return;
-      const existingDraftId = createdUnboundDraftIdRef.current;
-      if (existingDraftId !== null) {
-        useLandingDraftStore
-          .getState()
-          .setDraftContent(existingDraftId, content, selection);
-        return;
-      }
-      // Reuse the parent-pre-minted mount key (props.pendingCreateId) as the
-      // new draft's id so activeDraftId's null -> id flip lines up with the
-      // key the parent already mounted under (no editor remount). Falls back
-      // to a fresh id when the caller has not pre-minted one.
-      const createdDraftId = useLandingDraftStore.getState().createDraftWithId(
-        props.pendingCreateId ?? uuidv4(),
-        useComposerRunSettingsStore
-          .getState()
-          // The composer's own resolved placement host - not the app
-          // binding: the seed should describe the machine this draft
-          // will create on.
-          .getGlobalRunSettings(activeHostId),
-      );
-      // `createDraftWithId` has non-composer callers and therefore seeds from
-      // the app-wide active host. This unbound composer can be pinned to a
-      // different placement host, so replace that seed synchronously before
-      // publishing the new draft id or accepting a submit.
       useLandingDraftStore
         .getState()
-        .restoreDraftWorkspaceForHost(createdDraftId, activeHostId);
-      createdUnboundDraftIdRef.current = createdDraftId;
-      // The workspace picker's staging key is keyed by this draft id
-      // (`{surface:"landing", draftId}`), so minting it here flips that key
-      // from `landing:` to `landing:<id>` the instant this commits. Carry any
-      // staged worktree intent over synchronously, before React re-renders
-      // the picker on the new key - otherwise it briefly reads as unstaged
-      // and the Environment dialog (keyed off the resolved target's kind)
-      // remounts and drops an in-progress edit.
-      useWorktreeIntentStagingStore
-        .getState()
-        .migrateKeyForAllHosts(
-          { surface: "landing", hostId: activeHostId, draftId: null },
-          { surface: "landing", hostId: activeHostId, draftId: createdDraftId },
-        );
-      useLandingDraftStore
-        .getState()
-        .setDraftContent(createdDraftId, content, selection);
+        .setDraftContent(ensureBoundDraftId(), content, selection);
     },
-    [activeHostId, props.pendingCreateId, runtime, unboundRuntime],
+    [ensureBoundDraftId, runtime, unboundRuntime],
   );
 
   const handleSelectionChange = useCallback(
@@ -905,6 +928,7 @@ export function LandingComposer(props: LandingComposerProps) {
       // only in the ∅ case - nothing usable to create on - which submit
       // re-validation refuses before any create runs.
       hostId={resolvedHostId}
+      terminalLoginSurface={terminalLoginSurface}
       onSubmit={handleSubmit}
       onStartTerminal={handleStartTerminal}
       onDocumentChange={handleDocumentChange}

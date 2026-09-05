@@ -2148,7 +2148,7 @@ describe("adversarial navigation: Resource Monitor nested + Phase completion", (
             name: "Resource chat",
             hostId: "host-resource",
           },
-          preview: false,
+          gesture: "explicit",
         },
         includeNestedFocus: true,
       }),

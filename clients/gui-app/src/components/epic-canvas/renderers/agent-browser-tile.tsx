@@ -5,7 +5,9 @@ import type {
   BrowserTabDriver,
 } from "@traycer/protocol/host/browser/contracts";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { usePublishBrowserGuestTile } from "@/components/epic-canvas/browser-guest/use-publish-browser-guest-tile";
 import { useTileBodyVisible } from "@/components/epic-canvas/hooks/use-tile-body-visible";
 import { useRegisterVisibleBrowserTile } from "@/lib/browser-view/tiles/visible-tile-registry";
 import { BrowserTileFindAdapterBridge } from "@/components/epic-canvas/renderers/browser-tile-find-adapter";
@@ -15,37 +17,39 @@ import {
 } from "@/components/epic-canvas/renderers/browser-tile-status-panels";
 import { BrowserTileToolbar } from "@/components/epic-canvas/renderers/browser-tile-toolbar";
 import { BrowserStartPage } from "@/components/epic-canvas/renderers/browser-start-page";
-import { BrowserViewSnapshotLayer } from "@/components/epic-canvas/renderers/browser-view-snapshot-layer";
 import {
   useMaybeBrowserSessionsContext,
   type BrowserSessionsState,
 } from "@/components/epic-canvas/renderers/browser-sessions-context";
 import { PRIMARY_TILE_CHROME_CAPABILITIES } from "@/components/epic-canvas/renderers/tile-controller";
 import { useBrowserAnnotationSession } from "@/hooks/browser/use-browser-annotation-session";
-import { useBrowserViewSnapshot } from "@/components/epic-canvas/renderers/use-browser-view-snapshot";
 import { useCloseCanvasTileWithNestedFocus } from "@/components/epic-canvas/renderers/use-close-canvas-tile-with-nested-focus";
-import { useBrowserViewBoundsBridge } from "@/components/epic-canvas/renderers/use-browser-view-bounds-bridge";
 import { useElectronTabChrome } from "@/components/epic-canvas/renderers/use-electron-tile-chrome";
-import {
-  BROWSER_VIEW_SURFACE_ATTRIBUTE,
-  type BrowserViewSnapshotState,
-} from "@/lib/browser-view/tiles/browser-overlay-coordinator";
 import { isSameBrowserViewTile } from "@/lib/browser-view/tiles/browser-view-keys";
+import { resolveTileOverlay } from "@/components/epic-canvas/renderers/resolve-tile-overlay";
+import type { TileOverlaySurface } from "@/components/epic-canvas/renderers/resolve-tile-overlay";
 import type {
   BrowserViewStatus,
   BrowserViewTileKey,
   BrowserViewViewportPresetId,
 } from "@traycer-clients/shared/platform/browser-view";
+import { browserSessionsRefusal } from "@traycer-clients/shared/platform/browser-view";
 import type {
   ElectronTabBinding,
   ElectronTabSurfaceLease,
-} from "@/lib/browser-view/sessions/electron-tabs";
-import { openBrowserSessionTileFromPage } from "@/lib/browser-view/link-routing/browser-link-routing-core";
+} from "@/lib/browser-view/sessions/electron-tab-directory";
+import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
+import type { TileOpenTarget } from "@/lib/canvas/tile-open/intent";
 import { cn } from "@/lib/utils";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { convertBrowserTabToPip } from "@/lib/browser-view/pip/pip-store";
-import { DEFAULT_BROWSER_TILE_URL } from "@/stores/epics/canvas/tile-schema/browser-tile";
+import {
+  DEFAULT_BROWSER_TILE_URL,
+  makeBrowserSessionTileRef,
+} from "@/stores/epics/canvas/tile-schema/browser-tile";
+import { claimHostedPaneActivationFocus } from "@/components/epic-canvas/pane-activation";
+import { samePageKey } from "@/lib/links/normalize-url";
 
 interface ElectronTabSurfaceNode {
   readonly id: string;
@@ -98,6 +102,12 @@ function agentTileSessionFacts(
 }
 
 /**
+ * How long a tile may sit at `loading` with no progress report before it
+ * resolves to the stalled/retry surface (see the stall effect below).
+ */
+const NAVIGATION_STALL_TIMEOUT_MS = 30_000;
+
+/**
  * Electron tile used for agent-created pages and native session tabs.
  * Host-owned Electron tabs always use the primary browser partition.
  */
@@ -110,6 +120,12 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
   const [status, setStatus] = useState<BrowserViewStatus>("loading");
   const [statusReason, setStatusReason] = useState<string | null>(null);
   const [statusUrl, setStatusUrl] = useState("");
+  // A wire `loading` with no follow-up settle would spin forever; a silent
+  // stretch resolves to a terminal retry surface instead. `loadingNonce`
+  // bumps on every incoming `loading`, so ongoing progress keeps rearming
+  // the clock and only a genuinely stalled tab trips it.
+  const [stalledNonce, setStalledNonce] = useState<number | null>(null);
+  const [loadingNonce, setLoadingNonce] = useState(0);
   const attemptedNavigationRef = useRef<AttemptedNavigation | null>(null);
   const [canGoBack, setCanGoBack] = useState(false);
   const [canGoForward, setCanGoForward] = useState(false);
@@ -124,6 +140,7 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
     visible,
   });
   const browserSessions = useMaybeBrowserSessionsContext();
+  const { openTile } = useEpicTileNavigation();
   const epicId = useEpicCanvasStore(
     (state) => state.tabsById[props.viewTabId]?.epicId ?? null,
   );
@@ -169,6 +186,15 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
     showStartPage,
     currentSurfaceAttachment,
   );
+  usePublishBrowserGuestTile({
+    surfaceRef,
+    registrationId,
+    instanceId: props.node.instanceId,
+    viewTabId: props.viewTabId,
+    paneId: props.paneId,
+    presented: surfaceReady,
+    tileKey,
+  });
   const surfaceError = visible
     ? (currentSurfaceAttachment?.error ?? null)
     : null;
@@ -180,6 +206,28 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
       status,
       statusReason,
     );
+
+  // Terminal stall is derived, not a synchronously-reset flag: the tile is
+  // stalled only when the current loading episode is the one the timer fired
+  // for. A new episode - a status flip or a `loadingNonce` bump from a fresh
+  // progress report - clears it for free, with no setState in the effect.
+  const navigationStalled =
+    effectiveStatus === "loading" && stalledNonce === loadingNonce;
+
+  // Deterministic terminal transition: a `loading` that neither settles nor
+  // reports further progress within the window trips the stalled surface.
+  // `loadingNonce` restarts the timer on each progress report, so only true
+  // silence trips it. ponytail: fixed 30s ceiling; a page still streaming
+  // status updates keeps rearming, a wedged navigation does not.
+  useEffect(() => {
+    if (effectiveStatus !== "loading") return;
+    const timer = setTimeout(() => {
+      setStalledNonce(loadingNonce);
+    }, NAVIGATION_STALL_TIMEOUT_MS);
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [effectiveStatus, loadingNonce]);
 
   const closeCanvasTile = useCloseCanvasTileWithNestedFocus(
     props.viewTabId,
@@ -197,7 +245,7 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
         return;
       }
       const current = attemptedNavigationRef.current;
-      if (!isStaleSettleBeforeEcho(current, change.status)) {
+      if (!isStaleSettleBeforeEcho(current, change.status, change.url)) {
         setStatus(change.status);
         setStatusReason(change.reason);
         setStatusUrl(change.url);
@@ -205,7 +253,15 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
         setCanGoForward(change.canGoForward);
         setZoomPercent(change.zoomPercent);
       }
-      const next = nextAttemptedNavigationAfterStatus(current, change.status);
+      // Every fresh loading report is progress: rearm the stall clock.
+      if (change.status === "loading") {
+        setLoadingNonce((nonce) => nonce + 1);
+      }
+      const next = nextAttemptedNavigationAfterStatus(
+        current,
+        change.status,
+        change.url,
+      );
       attemptedNavigationRef.current = next;
     });
     return () => {
@@ -218,31 +274,38 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
     props.binding.tabId,
   ]);
 
-  useEffect(() => {
-    if (browserView === null) return;
-    const subscription = browserView.onOpenTileRequest((change) => {
-      if (!isSameBrowserViewTile(change, tileKey)) return;
+  /** Open a tab in this tile's session and place it beside this tile. */
+  const openTabBesideThisTile = useCallback(
+    (url: string, disposition: "foreground" | "background") => {
       if (
         browserSessions === null ||
         browserSessions.lifecycle !== "live" ||
         browserSessions.hostId !== props.node.hostId
       ) {
-        toast.error("Browsers are not connected yet.");
+        toast.error(browserSessionsRefusal(browserSessions));
         return;
       }
       void browserSessions
-        .openTab(props.node.sessionId, change.url)
+        .openTab(props.node.sessionId, url)
         .then((opened) => {
-          openBrowserSessionTileFromPage({
-            viewTabId: props.viewTabId,
-            paneId: props.paneId,
-            hostId: props.node.hostId,
-            sessionId: opened.sessionId,
-            tabId: opened.tabId,
-            url: change.url,
-            // Electron-only surface: a natively-placed tab exists on the
-            // desktop canvas alone, which always has room beside it.
-            placement: "split-right",
+          // Browser semantics, never the placement setting (A4): the popup is
+          // a tab of THIS pane's session, and a background disposition
+          // (middle/ctrl/cmd-click) leaves the current tab active.
+          openTile({
+            node: makeBrowserSessionTileRef({
+              hostId: props.node.hostId,
+              sessionId: opened.sessionId,
+              tabId: opened.tabId,
+            }),
+            // Resolved after the await, not before: the view tab can close
+            // while `openTab` is in flight, and opening into a closed tab id
+            // mutates a canvas with no route (R8).
+            target: currentPopupTarget(props.viewTabId, epicId),
+            gesture: disposition === "background" ? "host" : "explicit",
+            modifiers: null,
+            placement: { kind: "tab", paneId: props.paneId, index: null },
+            dedupe: true,
+            source: "direct_ui",
           });
         })
         .catch((cause: unknown) => {
@@ -252,28 +315,45 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
               : "Couldn't open the browser tab.",
           );
         });
+    },
+    [
+      browserSessions,
+      epicId,
+      openTile,
+      props.node.hostId,
+      props.node.sessionId,
+      props.paneId,
+      props.viewTabId,
+    ],
+  );
+
+  useEffect(() => {
+    if (browserView === null) return;
+    const subscription = browserView.onTileFocused((focusedTile) => {
+      if (!isSameBrowserViewTile(focusedTile, tileKey)) return;
+      claimHostedPaneActivationFocus(props.viewTabId, props.paneId, {
+        defaultPrevented: false,
+        scope: null,
+        target: null,
+      });
     });
     return () => {
       subscription.dispose();
     };
-  }, [
-    browserSessions,
-    browserView,
-    props.node.hostId,
-    props.node.sessionId,
-    props.paneId,
-    props.viewTabId,
-    tileKey,
-  ]);
+  }, [browserView, props.paneId, props.viewTabId, tileKey]);
+
+  useEffect(() => {
+    if (browserView === null) return;
+    const subscription = browserView.onOpenTileRequest((change) => {
+      if (!isSameBrowserViewTile(change, tileKey)) return;
+      openTabBesideThisTile(change.url, change.disposition);
+    });
+    return () => {
+      subscription.dispose();
+    };
+  }, [browserView, openTabBesideThisTile, tileKey]);
 
   const attachedBrowserView = surfaceReady ? browserView : null;
-  useBrowserViewBoundsBridge({
-    browserView: attachedBrowserView,
-    surfaceRef,
-    tileKey,
-    visible,
-  });
-  const snapshot = useBrowserViewSnapshot(tileKey);
   const annotation = useBrowserAnnotationSession({
     browserView: showStartPage ? null : browserView,
     tileKey,
@@ -314,6 +394,73 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
     initialViewportPreset: props.node.viewportPreset,
     onAttemptedUrl: latchAttemptedUrl,
   });
+
+  // Browser-scoped reserved chords: main claimed the keystroke from the guest
+  // page (the app renderer never sees it) and named what the browser should
+  // do. The policy table lives in
+  // `@/lib/browser-view/reserved-chords-registration`.
+  const {
+    controller: chromeController,
+    navigateToUrl,
+    downloads,
+    cancelDownload,
+    certificateError,
+    certificateProceeding,
+    proceedCertificate,
+  } = chrome;
+  const focusAddress = chromeController.focusAddress;
+  const retryNavigation = useCallback(() => {
+    // Bump the episode so the derived stall clears immediately on click,
+    // before the re-driven navigation's own status echoes back.
+    setLoadingNonce((nonce) => nonce + 1);
+    // Re-drive the intended navigation rather than reloading the wedged
+    // about:blank the initial navigation never left.
+    navigateToUrl(props.node.url);
+  }, [navigateToUrl, props.node.url]);
+  useEffect(() => {
+    if (browserView === null) return;
+    const subscription = browserView.onTileCommand((event) => {
+      if (!isSameBrowserViewTile(event, tileKey)) return;
+      switch (event.command) {
+        case "newTab":
+          openTabBesideThisTile(DEFAULT_BROWSER_TILE_URL, "foreground");
+          return;
+        case "focusAddressBar":
+          focusAddress();
+          return;
+        case "closeTab": {
+          if (
+            browserSessions === null ||
+            browserSessions.lifecycle !== "live"
+          ) {
+            return;
+          }
+          // Retire the canvas tile only after the host agrees the tab is
+          // gone - a refused close must not leave a live tab with no tile.
+          void browserSessions
+            .closeTab(props.node.sessionId, props.binding.tabId)
+            .then(closeCanvasTile)
+            .catch(() => {
+              toast.error("Couldn't close the browser tab. Try again.");
+            });
+          return;
+        }
+      }
+    });
+    return () => {
+      subscription.dispose();
+    };
+  }, [
+    focusAddress,
+    browserSessions,
+    browserView,
+    closeCanvasTile,
+    openTabBesideThisTile,
+    props.binding.tabId,
+    props.node.sessionId,
+    tileKey,
+  ]);
+
   useEffect(() => {
     if (!shouldAttachSurface(visible, showStartPage)) return;
     let active = true;
@@ -343,7 +490,7 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
           error:
             cause instanceof Error
               ? cause.message
-              : "The native browser surface could not be attached.",
+              : "The browser surface could not be attached.",
         });
       });
     return () => {
@@ -351,8 +498,15 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
       const lease = surfaceLeaseRef.current;
       surfaceLeaseRef.current = null;
       if (lease !== null) void lease.detach();
+      setSurfaceAttachment(null);
     };
   }, [bindSurface, bindingId, registrationId, showStartPage, tileKey, visible]);
+
+  const overlay = resolveTileOverlay(
+    effectiveStatus,
+    surfaceReady,
+    navigationStalled,
+  );
 
   return (
     <div
@@ -364,7 +518,7 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
         tileKey={tileKey}
       />
       <BrowserTileToolbar
-        controller={chrome.controller}
+        controller={chromeController}
         pictureInPicture={{
           disabled: epicId === null,
           convert: () => {
@@ -383,39 +537,55 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
       />
       <div
         ref={surfaceRef}
-        className="relative min-h-0 flex-1 bg-background"
-        {...{ [BROWSER_VIEW_SURFACE_ATTRIBUTE]: "" }}
+        className={cn(
+          "relative min-h-0 bg-background",
+          props.node.viewportPreset === "responsive"
+            ? "flex-1"
+            : "mx-auto my-auto",
+        )}
+        style={viewportPresetSurfaceStyle(props.node.viewportPreset)}
       >
         <ElectronTabSurfaceBaseLayer
           startPageEpicId={startPageEpicId}
           hostId={hostId}
-          snapshot={snapshot}
-          onNavigate={chrome.navigateToUrl}
+          onNavigate={navigateToUrl}
         />
         <div
           hidden={showStartPage}
+          // Transparent is not hidden: without this a presented, live guest
+          // still exposes the loader's role and "Reconnecting" text to
+          // assistive tech. Hide it from AT whenever it is not the shown layer.
+          aria-hidden={!overlay.visible}
           className={cn(
-            "absolute inset-0 flex min-h-0 flex-col items-center justify-center gap-3 px-4 text-center",
-            effectiveStatus === "ready" && "pointer-events-none opacity-0",
+            "absolute inset-0 z-20 flex min-h-0 flex-col items-center justify-center gap-3 px-4 text-center",
+            overlay.visible ? "opacity-100" : "opacity-0",
+            // Pointer events are gated on the guest not yet being interactive,
+            // NOT on the same flag that hides the overlay: a presented, live
+            // guest must never be click-blocked by a stale loader. A terminal
+            // surface keeps them so its Retry stays clickable.
+            overlay.blocking ? "pointer-events-auto" : "pointer-events-none",
           )}
-          role={effectiveStatus === "dead" ? "alert" : "status"}
-          aria-live={effectiveStatus === "dead" ? "assertive" : "polite"}
-          aria-busy={effectiveStatus === "loading"}
+          role={overlay.surface === "loading" ? "status" : "alert"}
+          aria-live={overlay.surface === "loading" ? "polite" : "assertive"}
+          aria-busy={
+            overlay.visible ? overlay.surface === "loading" : undefined
+          }
         >
           <ElectronTabSurfaceStatus
-            status={effectiveStatus}
+            surface={overlay.surface}
             reason={effectiveStatusReason}
             hostId={hostId}
+            onRetry={retryNavigation}
           />
         </div>
         <BrowserTileDownloadStrip
-          downloads={chrome.downloads}
-          onCancel={chrome.cancelDownload}
+          downloads={downloads}
+          onCancel={cancelDownload}
         />
         <BrowserTileCertificateInterstitial
-          certificateError={chrome.certificateError}
-          proceeding={chrome.certificateProceeding}
-          onProceed={chrome.proceedCertificate}
+          certificateError={certificateError}
+          proceeding={certificateProceeding}
+          onProceed={proceedCertificate}
         />
       </div>
     </div>
@@ -425,20 +595,44 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
 function ElectronTabSurfaceBaseLayer(props: {
   readonly startPageEpicId: string | null;
   readonly hostId: string;
-  readonly snapshot: BrowserViewSnapshotState | null;
   readonly onNavigate: (url: string) => void;
 }) {
-  if (props.startPageEpicId !== null) {
-    return (
-      <BrowserStartPage
-        epicId={props.startPageEpicId}
-        hostId={props.hostId}
-        browserRunsOnHost={false}
-        onNavigate={props.onNavigate}
-      />
-    );
-  }
-  return <BrowserViewSnapshotLayer snapshot={props.snapshot} />;
+  if (props.startPageEpicId === null) return null;
+  return (
+    <BrowserStartPage
+      epicId={props.startPageEpicId}
+      hostId={props.hostId}
+      browserRunsOnHost={false}
+      onNavigate={props.onNavigate}
+    />
+  );
+}
+
+const VIEWPORT_PRESET_SIZES: Readonly<
+  Record<
+    BrowserViewViewportPresetId,
+    { readonly width: number; readonly height: number } | null
+  >
+> = {
+  responsive: null,
+  mobile: { width: 390, height: 844 },
+  tablet: { width: 820, height: 1180 },
+  desktop: { width: 1440, height: 900 },
+};
+
+function viewportPresetSurfaceStyle(
+  preset: BrowserViewViewportPresetId,
+):
+  | { width: number; height: number; maxWidth: string; maxHeight: string }
+  | undefined {
+  const size = VIEWPORT_PRESET_SIZES[preset];
+  if (size === null) return undefined;
+  return {
+    width: size.width,
+    height: size.height,
+    maxWidth: "100%",
+    maxHeight: "100%",
+  };
 }
 
 function resolveStartPageEpicId(
@@ -478,20 +672,37 @@ function resolveCurrentSurfaceAttachment(
 }
 
 interface ElectronTabSurfaceStatusProps {
-  readonly status: BrowserViewStatus;
+  readonly surface: TileOverlaySurface;
   readonly reason: string | null;
   readonly hostId: string;
+  readonly onRetry: () => void;
 }
 
 /** Shows only lifecycle states reported by the native browser owner. */
 function ElectronTabSurfaceStatus(props: ElectronTabSurfaceStatusProps) {
-  if (props.status === "dead") {
+  if (props.surface === "dead") {
     return (
       <>
         <div className="text-ui-base font-medium">
           Agent browser unavailable
         </div>
         <ElectronTabSurfaceReason reason={props.reason} hostId={props.hostId} />
+      </>
+    );
+  }
+  if (props.surface === "stalled") {
+    return (
+      <>
+        <div className="text-ui-base font-medium">This page did not load</div>
+        <ElectronTabSurfaceReason reason={props.reason} hostId={props.hostId} />
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          onClick={props.onRetry}
+        >
+          Retry
+        </Button>
       </>
     );
   }
@@ -558,53 +769,96 @@ interface AttemptedNavigation {
 }
 
 /**
- * Address submit latches {url, echoSeen:false}. navigate() emits a
- * synchronous `loading` echo before loadURL, so the first loading
- * status after a submit is this attempt's echo (echoSeen=true). A
- * later `ready` then clears the latch. A `ready` that arrives before
- * that echo is a stale settle from a previous attempt - ignore it
- * (newest submit wins; do not let it replace the latch or feed
- * the toolbar state).
+ * True when a settle's URL is the latched attempt's own page completing,
+ * tolerating the trailing-slash / hash / http↔https differences a site
+ * introduces between the submitted URL and where the tab commits.
+ * `samePageKey` keys http(s) URLs on host+path+query (scheme-insensitive);
+ * a non-http(s) latch (e.g. `about:blank`) falls back to exact equality.
+ */
+// eslint-disable-next-line react-refresh/only-export-components -- test-only export; the component's own callers use this helper directly, the export exists only for the latch unit tests.
+export function settleMatchesLatch(
+  latchUrl: string,
+  settledUrl: string,
+): boolean {
+  const a = samePageKey(latchUrl);
+  const b = samePageKey(settledUrl);
+  return a !== null && b !== null ? a === b : latchUrl === settledUrl;
+}
+
+/**
+ * Address submit (and back/forward) latches {url, echoSeen:false}.
+ * navigate() emits a synchronous `loading` echo before loadURL, so the
+ * first loading status after such an attempt is its echo (echoSeen=true),
+ * and a later `ready` then clears the latch. A `ready` that arrives before
+ * that echo is normally a stale settle from a previous attempt - ignore it
+ * (newest submit wins; do not let it replace the latch or feed the toolbar
+ * state).
  *
- * A submit whose URL equals the active latch is a no-op (echoSeen
- * stays). That matches the manager skipping navigate when
- * requestedUrl already equals the upsert. Resetting would mint a
- * phantom attempt that never gets an echo.
+ * Exception: a back/forward history nav or a session reconnect re-attach
+ * settles straight to `ready` with NO loading echo. Such a settle whose URL
+ * matches the latch (`settleMatchesLatch`) is that very attempt completing,
+ * not a stale one - accept it and clear the latch. Only an echo-less `ready`
+ * whose URL does NOT match the latch is still dropped as stale.
  *
- * `dead` keeps the latch so a later Retry still upserts the submitted
- * URL rather than the pre-submit page. Residual B: the dead branch
- * currently has no Retry button; if Retry is ever exposed there it
- * must force reload (user-tile `reloadTile`), not rely on upsert
- * identity - manager already set requestedUrl to the attempt before
- * loadURL failed.
+ * That URL-match also closes the "Residual B" resubmit-same-URL cases:
+ * resubmitting B when the manager skips navigate (requestedUrl already B)
+ * emits no echo, but the eventual `ready` for B now matches the latch and
+ * clears it instead of sitting inert.
  *
- * Same root cause (submit-via-upsert-identity): if B settled via
- * redirect to C (latch cleared) and the user resubmits B, the
- * manager may skip navigate (requestedUrl still B) and emit nothing.
- * A fresh {B, echoSeen:false} then sits inert. Do not patch the
- * latch; the honest fix is a force-navigate submit path
- * (reloadTile-style), which is shared manager semantics.
+ * A submit whose URL equals the active latch is a no-op (echoSeen stays) -
+ * see `latchAttemptedUrl`.
+ *
+ * `dead` keeps the latch so a later Retry still upserts the submitted URL
+ * rather than the pre-submit page. The dead branch currently has no Retry
+ * button; if Retry is ever exposed there it must force reload (user-tile
+ * `reloadTile`), not rely on upsert identity - manager already set
+ * requestedUrl to the attempt before loadURL failed.
  */
 function nextAttemptedNavigationAfterStatus(
   current: AttemptedNavigation | null,
   status: BrowserViewStatus,
+  settledUrl: string,
 ): AttemptedNavigation | null {
   if (current === null) return null;
-  // Residual B + redirected-away resubmit: keep latch. Both are
-  // submit-via-upsert-identity. Dead-state Retry, if ever exposed,
-  // must use a forced reload path like the user tile's reloadTile.
+  // Dead-state Retry, if ever exposed, must use a forced reload path like
+  // the user tile's reloadTile rather than upsert identity.
   if (status === "dead") return current;
   if (status === "loading") {
     if (current.echoSeen) return current;
     return { url: current.url, echoSeen: true };
   }
-  if (!current.echoSeen) return current;
+  // Echo-less `ready` for a different page is still a stale pre-echo settle;
+  // keep waiting. Echo seen, or a settle that matches the latch (echo-less
+  // history/reconnect settle), is this attempt completing - clear it.
+  if (!current.echoSeen && !settleMatchesLatch(current.url, settledUrl)) {
+    return current;
+  }
   return null;
 }
 
 function isStaleSettleBeforeEcho(
   current: AttemptedNavigation | null,
   status: BrowserViewStatus,
+  settledUrl: string,
 ): boolean {
-  return current !== null && status === "ready" && !current.echoSeen;
+  return (
+    current !== null &&
+    status === "ready" &&
+    !current.echoSeen &&
+    !settleMatchesLatch(current.url, settledUrl)
+  );
+}
+
+/**
+ * The popup's own canvas tab while it still exists, else the epic - which
+ * lets the resolver pick (or create) a live tab instead of writing a tile
+ * into a tab that closed while `openTab` was in flight (R8).
+ */
+function currentPopupTarget(
+  viewTabId: string,
+  epicId: string | null,
+): TileOpenTarget {
+  const tabs = useEpicCanvasStore.getState().tabsById;
+  if (tabs[viewTabId] !== undefined) return { tabId: viewTabId };
+  return epicId === null ? { tabId: viewTabId } : { epicId };
 }

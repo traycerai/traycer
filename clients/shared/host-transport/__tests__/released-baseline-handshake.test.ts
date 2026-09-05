@@ -333,7 +333,7 @@ describe("host-v1.1.7 permission-mode downgrade protection", () => {
         workspace: null,
         profileSelection: { kind: "ambient" },
       },
-      authority,
+      { idempotencyKey: null, authority: authority, replayMustBeKeyed: false },
     );
     await flush();
     const stub = sockets[0];
@@ -379,7 +379,7 @@ describe("host-v1.1.7 permission-mode downgrade protection", () => {
         fastMode: false,
         permissionMode: "full_access",
       },
-      authority,
+      { idempotencyKey: null, authority: authority, replayMustBeKeyed: false },
     );
     await flush();
     const stub = sockets[0];
@@ -436,7 +436,11 @@ describe.skipIf(baselines.length === 0)(
         const pending = client.request(
           "host.status",
           {},
-          authorityForContext(ctx),
+          {
+            idempotencyKey: null,
+            authority: authorityForContext(ctx),
+            replayMustBeKeyed: false,
+          },
         );
         await flush();
         expect(sockets).toHaveLength(1);
@@ -542,7 +546,11 @@ describe.skipIf(baselines.length === 0)(
           {
             label: "x",
           },
-          authorityForContext(ctx),
+          {
+            idempotencyKey: null,
+            authority: authorityForContext(ctx),
+            replayMustBeKeyed: false,
+          },
         );
         await flush();
         expect(sockets).toHaveLength(1);
@@ -612,7 +620,11 @@ describe.skipIf(baselines.length === 0)(
         const pending = client.request(
           "synthetic.baselineUnsupported",
           {},
-          authorityForContext(ctx),
+          {
+            idempotencyKey: null,
+            authority: authorityForContext(ctx),
+            replayMustBeKeyed: false,
+          },
         );
         await flush();
         expect(sockets).toHaveLength(1);
@@ -673,6 +685,7 @@ describe.skipIf(baselines.length === 0)(
           clientIdentity: TEST_CLIENT_IDENTITY,
           registry: hostStreamRpcRegistry,
           endpoint: () => mockLocalHostEntry,
+          hostId: mockLocalHostEntry.hostId,
           bearer: () => ctx.credentials,
           auth: null,
           clock: null,

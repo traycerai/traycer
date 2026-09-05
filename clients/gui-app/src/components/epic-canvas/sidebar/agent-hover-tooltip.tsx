@@ -76,6 +76,16 @@ export interface AgentHoverTooltipProps {
    * space below it is where the transport bar is.
    */
   readonly side: "top" | "right" | "bottom" | "left";
+  /**
+   * Extra lines to append under the card, for a surface that knows something
+   * about the agent the shared selectors do not - the office floor's posture
+   * ("Working", "At reception") and the size class its desk is drawn at.
+   *
+   * Appended rather than substituted: everything ABOVE it is still the one
+   * shared description, so a surface can add to what an agent says about
+   * itself without being able to contradict it.
+   */
+  readonly extraContent: ReactElement | null;
 }
 
 /** `null` when there are no claims - an empty roles card is worse than none. */
@@ -87,6 +97,40 @@ function agentRoleHoverContent(
   return <AgentRoleHoverContent agentName={agentName} claims={roleClaims} />;
 }
 
+/**
+ * What the plain tooltip shows when there is no owner card to hang content
+ * under.
+ *
+ * The name must survive whatever else is shown: the office's line under it is
+ * "Working · large model", which names nothing, and the floor's own tag is
+ * truncated - so a card that dropped the title for the posture line would take
+ * away the only place the full name was readable. The role content already
+ * carries the name, so it is only added when nothing else does.
+ */
+function fallbackTooltipLabel(
+  nodeName: string,
+  roleContent: ReactNode | null,
+  extraContent: ReactElement | null,
+): ReactNode {
+  if (roleContent !== null) {
+    return (
+      <>
+        {roleContent}
+        {extraContent}
+      </>
+    );
+  }
+  if (extraContent !== null) {
+    return (
+      <div className="flex min-w-0 flex-col gap-0.5">
+        <span className="break-words">{nodeName}</span>
+        {extraContent}
+      </div>
+    );
+  }
+  return nodeName;
+}
+
 export function AgentHoverTooltip(props: AgentHoverTooltipProps): ReactNode {
   const {
     epicId,
@@ -94,11 +138,25 @@ export function AgentHoverTooltip(props: AgentHoverTooltipProps): ReactNode {
     nodeId,
     nodeName,
     ownerHostUnreachable,
+    extraContent,
     ownerKind,
     roleClaims,
     side,
   } = props;
   const roleContent = agentRoleHoverContent(nodeName, roleClaims);
+  // `null` is the ONLY way to say "nothing to add", which is why the prop is
+  // an element and not a `ReactNode`. `ReactNode` admits `undefined`, `false`
+  // and `""`, all of which are absent to a reader and present to a `!== null`
+  // test - and a non-null `supplemental` is what the owner card hangs a
+  // section under, so each of them bought an empty section. The type makes
+  // them unrepresentable instead of guarding for them.
+  const supplemental =
+    roleContent === null && extraContent === null ? null : (
+      <>
+        {roleContent}
+        {extraContent}
+      </>
+    );
 
   if (hostId !== null && ownerKind !== null && !ownerHostUnreachable) {
     return (
@@ -109,7 +167,7 @@ export function AgentHoverTooltip(props: AgentHoverTooltipProps): ReactNode {
         epicId={epicId}
         ownerId={nodeId}
         ownerKind={ownerKind}
-        supplementalContent={roleContent}
+        supplementalContent={supplemental}
         side={side}
       />
     );
@@ -120,7 +178,7 @@ export function AgentHoverTooltip(props: AgentHoverTooltipProps): ReactNode {
   // this for selection mode; the shared component gives it everywhere).
   return (
     <TooltipWrapper
-      label={roleContent ?? nodeName}
+      label={fallbackTooltipLabel(nodeName, roleContent, extraContent)}
       side={side}
       sideOffset={6}
       align="start"

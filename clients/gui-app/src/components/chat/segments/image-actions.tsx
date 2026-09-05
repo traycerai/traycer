@@ -1,14 +1,16 @@
-import type { ReactNode } from "react";
+import type { MouseEvent, ReactNode } from "react";
 import { Copy, Download, ExternalLink, Share2 } from "lucide-react";
 
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import type { ImageAction } from "@/lib/images/perform-image-action";
+import type { LinkClickEvent } from "@/lib/links/open-link";
 
 /** Remote images swap Download for Open-in-browser; local blobs pass null. */
 export interface ImageRemoteOpen {
+  /** True while the OS handoff is in flight - the control disables (R12). */
   readonly pending: boolean;
-  readonly onOpen: () => void;
+  readonly onOpen: (event: LinkClickEvent) => void;
 }
 
 export function ImageActions(props: {
@@ -87,7 +89,7 @@ function ImageActionButton(props: {
   readonly label: string;
   readonly disabled: boolean;
   readonly pending: boolean;
-  readonly onClick: () => void;
+  readonly onClick: (event: MouseEvent<HTMLButtonElement>) => void;
   readonly icon: ReactNode;
 }): ReactNode {
   return (

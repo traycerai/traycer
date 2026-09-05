@@ -6,7 +6,6 @@ import type {
 import {
   type InterviewReviewInput,
   deriveInterviewReviewModel,
-  displayInterviewFraming,
 } from "@/components/chat/segments/interview-review-model";
 
 function question(
@@ -49,9 +48,6 @@ function reviewInput(
   return {
     blockId: "interview-test-block",
     status: "completed",
-    toolName: "AskUserQuestion",
-    title: null,
-    description: null,
     questions: [],
     answers: [],
     draftAnswers: [],
@@ -68,8 +64,6 @@ describe("deriveInterviewReviewModel", () => {
   it("indexes fields with positional ids that never embed rendered text", () => {
     const model = deriveInterviewReviewModel(
       reviewInput({
-        title: "Deployment plan",
-        description: "Pick a safe rollout.",
         questions: [
           {
             questionId: "q1",
@@ -104,20 +98,6 @@ describe("deriveInterviewReviewModel", () => {
     expect(model.searchableFields.map((field) => field.target)).toEqual([
       {
         fieldKind: "summary",
-        questionIndex: null,
-        optionIndex: null,
-        fallbackIndex: null,
-        valueIndex: null,
-      },
-      {
-        fieldKind: "title",
-        questionIndex: null,
-        optionIndex: null,
-        fallbackIndex: null,
-        valueIndex: null,
-      },
-      {
-        fieldKind: "description",
         questionIndex: null,
         optionIndex: null,
         fallbackIndex: null,
@@ -188,8 +168,6 @@ describe("deriveInterviewReviewModel", () => {
     ).toBe(true);
     expect(model.searchableFields.map((field) => field.text)).toEqual([
       "Answered 1 question",
-      "Deployment plan",
-      "Pick a safe rollout.",
       "Environment",
       "Where should this deploy?",
       "Staging",
@@ -828,51 +806,5 @@ describe("deriveInterviewReviewModel", () => {
         draft: false,
       },
     ]);
-  });
-});
-
-describe("displayInterviewFraming", () => {
-  it("suppresses tool and provider boilerplate while retaining question framing", () => {
-    expect(
-      displayInterviewFraming({
-        toolName: "AskUserQuestion",
-        title: "AskUserQuestion",
-        description: "Codex needs your input",
-      }),
-    ).toEqual({ title: null, description: null });
-
-    expect(
-      displayInterviewFraming({
-        toolName: "AskUserQuestion",
-        title: "Deployment strategy",
-        description: "Choose how the rollout should proceed.",
-      }),
-    ).toEqual({
-      title: "Deployment strategy",
-      description: "Choose how the rollout should proceed.",
-    });
-  });
-
-  it("preserves distinct non-ASCII framing", () => {
-    expect(
-      displayInterviewFraming({
-        toolName: "質問ツール",
-        title: "展開戦略",
-        description: "段階的な公開方法を選択してください。",
-      }),
-    ).toEqual({
-      title: "展開戦略",
-      description: "段階的な公開方法を選択してください。",
-    });
-  });
-
-  it("does not equate framing that normalizes to an empty string", () => {
-    expect(
-      displayInterviewFraming({
-        toolName: "🛠️",
-        title: "🚀",
-        description: null,
-      }),
-    ).toEqual({ title: "🚀", description: null });
   });
 });

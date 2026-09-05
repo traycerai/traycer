@@ -353,6 +353,7 @@ function OsServiceSection(props: OsServiceSectionProps): ReactNode {
         )}
       </div>
       <ConfirmDestructiveDialog
+        blockedReason={null}
         open={confirmRegister}
         onOpenChange={(next) => {
           if (!next) setConfirmRegister(false);
@@ -373,6 +374,7 @@ function OsServiceSection(props: OsServiceSectionProps): ReactNode {
         }}
       />
       <ConfirmDestructiveDialog
+        blockedReason={null}
         open={confirmDeregister}
         onOpenChange={(next) => {
           if (!next) setConfirmDeregister(false);

@@ -36,14 +36,21 @@ import {
   SessionImportGroupItem,
 } from "@/components/session-import/session-import-group";
 import { SessionImportProgress } from "@/components/session-import/session-import-progress";
-import { useSessionImportScan } from "@/components/session-import/use-session-import-scan";
+import type { SessionImportScanHandle } from "@/components/session-import/use-session-import-scan";
 import { startSessionImportRun } from "@/components/session-import/session-import-run-handle";
+import { useStreamRuntimeBinding } from "@/lib/host/stream-runtime-context";
 import {
   sessionImportTone,
   type SessionImportTone,
   type SessionImportSurface,
 } from "@/components/session-import/session-import-tone";
-import { useSessionImportRunStore } from "@/stores/session-import/session-import-run-store";
+import {
+  sessionImportRunFor,
+  useSessionImportRun,
+  useSessionImportRunStore,
+  type SessionImportRunStatus,
+} from "@/stores/session-import/session-import-run-store";
+import { useFeatureAnnouncementsStore } from "@/stores/settings/feature-announcements-store";
 
 export interface SessionImportSecondaryAction {
   readonly label: string;
@@ -52,41 +59,64 @@ export interface SessionImportSecondaryAction {
 
 /**
  * The one import surface, used by the onboarding act and the Settings dialog
- * alike (spec D3). It scans while it is open, never before (D13), and hands the
- * user's selection to the app-wide run controller rather than owning the run
- * itself - which is what lets it be closed mid-import.
+ * alike (spec D3). It hands the user's selection to the app-wide run
+ * controller rather than owning the run itself - which is what lets it be
+ * closed mid-import.
  *
- * The two surfaces differ in who presses go. The dialog owns its own "Import"
- * button; the tour has exactly one forward control, so the act's Continue
- * submits through `registerSubmit` and a second button beside it would be a
- * second way to do the same thing.
+ * The scan is the caller's (`useSessionImportScan`), because the two surfaces
+ * start it at different moments: the dialog when it opens, the tour when it
+ * begins - several acts before this wizard is on screen (D13, revised).
+ *
+ * Both surfaces submit through the wizard's own Import button. The tour used
+ * to submit through its Continue instead, which imported the default selection
+ * without an explicit ask; an import now starts only when Import is pressed.
  */
 export function SessionImportWizard(props: {
   readonly surface: SessionImportSurface;
+  readonly scan: SessionImportScanHandle;
   /** Called once a run has been submitted, so the caller can move on. */
   readonly onImportStarted: () => void;
   readonly secondaryAction: SessionImportSecondaryAction | null;
-  /**
-   * Hands the caller the wizard's submit, for a surface whose go-button lives
-   * outside it. Null on a surface that submits itself.
-   */
-  readonly registerSubmit: ((submit: () => void) => void) | null;
 }) {
-  const { surface, onImportStarted, secondaryAction, registerSubmit } = props;
+  const { surface, scan, onImportStarted, secondaryAction } = props;
   const tone = sessionImportTone(surface);
-  const runStatus = useSessionImportRunStore((state) => state.status);
+  // The run this wizard shows and starts is the one on the host it renders
+  // under - transport and host name off the same binding, which is also what
+  // the submission is aimed at.
+  const streamBinding = useStreamRuntimeBinding();
+  const hostId = streamBinding?.hostId ?? null;
+  const runStatus = useSessionImportRun(hostId).status;
   const runIdle = runStatus === "idle";
+  // Meeting the wizard on any surface - the tour act, the Settings dialog,
+  // the release toast's own dialog - is the announcement: the id is consumed
+  // on mount so the toast never follows for a user who has already opened
+  // the feature, whether or not they imported anything. Only reaching the
+  // wizard counts; skipping the tour before its act does not, so a skipper
+  // still gets the toast (unlike `login-import`, which the tour's finish
+  // consumes unconditionally).
+  const consumeAnnouncement = useFeatureAnnouncementsStore(
+    (state) => state.consume,
+  );
+  useEffect(() => {
+    consumeAnnouncement("session-import");
+  }, [consumeAnnouncement]);
 
   // Opening the wizard retires a FINISHED run's summary, so a second visit
-  // scans afresh instead of re-reading last time's result. Mount-only on
-  // purpose: a run that finishes while this is open still shows its summary,
-  // because that summary is what the user is waiting for.
+  // scans afresh instead of re-reading last time's result. It does not re-run
+  // while this wizard is open on one host: a run that finishes here still
+  // shows its summary, because that summary is what the user is waiting for.
+  // A host change is a fresh opening onto a different machine, so the same
+  // retirement applies to it.
   useEffect(() => {
-    const run = useSessionImportRunStore.getState();
-    if (run.status === "complete" || run.status === "error") run.reset();
-  }, []);
+    if (hostId === null) return;
+    const store = useSessionImportRunStore.getState();
+    const run = sessionImportRunFor(store, hostId);
+    if (run.status === "complete" || run.status === "error") {
+      store.reset(hostId);
+    }
+  }, [hostId]);
 
-  const { state, dispatch } = useSessionImportScan(runIdle);
+  const { state, dispatch } = scan;
   const view = useMemo(() => buildSessionImportView(state), [state]);
   // The master checkbox reads the VISIBLE slice: it heads the list exactly as
   // the search and pills have narrowed it, so what it shows and what it moves
@@ -97,8 +127,8 @@ export function SessionImportWizard(props: {
   );
 
   const submit = (): void => {
-    // A run already under way owns the screen; Continue during one is the user
-    // moving on, not a second import.
+    // A run already under way owns the screen, and the button is not rendered
+    // then - this guards a click that raced the store.
     if (!runIdle) return;
     const submission = buildSessionImportSubmission(state);
     if (submission.selections.length === 0) return;
@@ -107,35 +137,18 @@ export function SessionImportWizard(props: {
       session_count: submission.selections.length,
       group_count: submittedGroupCount(state.groups, submission.selections),
     });
-    startSessionImportRun(submission);
+    startSessionImportRun(submission, streamBinding);
     onImportStarted();
   };
 
-  // Re-registered on every render, deliberately: the caller presses Continue
-  // long after this runs, and it has to submit the selection as it stands then,
-  // not the one this mount opened with.
-  useEffect(() => {
-    if (registerSubmit === null) return;
-    registerSubmit(submit);
-  });
-
   if (!runIdle) {
     return (
-      <div className="flex min-h-0 w-full flex-1 flex-col">
-        <SessionImportProgress tone={tone} />
-        {secondaryAction !== null ? (
-          <div className="flex shrink-0 justify-end px-4 py-3">
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={secondaryAction.onSelect}
-            >
-              {secondaryAction.label}
-            </Button>
-          </div>
-        ) : null}
-      </div>
+      <SessionImportRunView
+        tone={tone}
+        hostId={hostId}
+        runStatus={runStatus}
+        secondaryAction={secondaryAction}
+      />
     );
   }
 
@@ -280,9 +293,7 @@ export function SessionImportWizard(props: {
         tone={tone}
         view={view}
         secondaryAction={secondaryAction}
-        // The surface that hands its submit to a caller has no button of its
-        // own; the one that keeps it renders it here.
-        onSubmit={registerSubmit === null ? submit : null}
+        onSubmit={submit}
       />
     </div>
   );
@@ -425,18 +436,15 @@ function ScanWindowSelect(props: {
 
 /**
  * The pinned footer: just the actions that end the conversation. The selection
- * count and the master checkbox live at the head of the list they describe, so
- * a surface with no button of its own (the tour, whose Continue lives outside)
- * has no footer at all.
+ * count and the master checkbox live at the head of the list they describe.
  */
 function SessionImportFooter(props: {
   readonly tone: SessionImportTone;
   readonly view: SessionImportWizardView;
   readonly secondaryAction: SessionImportSecondaryAction | null;
-  readonly onSubmit: (() => void) | null;
+  readonly onSubmit: () => void;
 }) {
   const { tone, view, secondaryAction, onSubmit } = props;
-  if (secondaryAction === null && onSubmit === null) return null;
   return (
     <div
       className={cn(
@@ -454,18 +462,16 @@ function SessionImportFooter(props: {
           {secondaryAction.label}
         </Button>
       ) : null}
-      {onSubmit !== null ? (
-        <Button
-          type="button"
-          size="sm"
-          data-testid="session-import-submit"
-          disabled={view.selectedCount === 0}
-          onClick={onSubmit}
-        >
-          Import {view.selectedCount}{" "}
-          {view.selectedCount === 1 ? "session" : "sessions"}
-        </Button>
-      ) : null}
+      <Button
+        type="button"
+        size="sm"
+        data-testid="session-import-submit"
+        disabled={view.selectedCount === 0}
+        onClick={onSubmit}
+      >
+        Import {view.selectedCount}{" "}
+        {view.selectedCount === 1 ? "session" : "sessions"}
+      </Button>
     </div>
   );
 }
@@ -556,4 +562,59 @@ function emptyMessage(
   }
   if (state.query.trim().length > 0) return "No work matches your search.";
   return "No work from the providers you picked.";
+}
+
+/**
+ * What the wizard shows while a run owns the screen: the live progress or
+ * the summary it leaves behind, over the same action row the list phase ends
+ * in, so the wizard's footer stays where the hand already knows it - the
+ * surface's own exit on the left, this wizard's next step on the right.
+ */
+function SessionImportRunView(props: {
+  readonly tone: SessionImportTone;
+  readonly hostId: string | null;
+  readonly runStatus: SessionImportRunStatus;
+  readonly secondaryAction: SessionImportSecondaryAction | null;
+}) {
+  const { tone, hostId, runStatus, secondaryAction } = props;
+  const runFinished = runStatus === "complete" || runStatus === "error";
+  return (
+    <div className="flex min-h-0 w-full flex-1 flex-col">
+      <SessionImportProgress tone={tone} hostId={hostId} />
+      {secondaryAction !== null || runFinished ? (
+        <div className="flex shrink-0 items-center justify-end gap-2 border-t px-4 py-3">
+          {secondaryAction !== null ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={secondaryAction.onSelect}
+            >
+              {secondaryAction.label}
+            </Button>
+          ) : null}
+          {runFinished && hostId !== null ? (
+            // The way back to the list without leaving the wizard. The
+            // summary holds until this is pressed - it is what the user
+            // waited for, and a screen that rewrites itself on a timer would
+            // pull it away mid-read. Retiring the run is all it takes: the
+            // scan is paused only while a run is in flight and resumes on
+            // idle, so the folder list comes back freshly read, with what
+            // just landed now marked as already imported.
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              data-testid="session-import-more"
+              onClick={() => {
+                useSessionImportRunStore.getState().reset(hostId);
+              }}
+            >
+              {runStatus === "error" ? "Back to sessions" : "Import more"}
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
 }

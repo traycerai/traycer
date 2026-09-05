@@ -77,9 +77,6 @@ describe("InterviewSegment", () => {
         <InterviewSegment
           blockId="interview-1"
           status="completed"
-          toolName="AskUserQuestion"
-          title="Need input"
-          description={null}
           questions={[
             {
               questionId: "q1",
@@ -128,9 +125,6 @@ describe("InterviewSegment", () => {
         <InterviewSegment
           blockId="interview-carried"
           status="completed"
-          toolName="AskUserQuestion"
-          title="Need input"
-          description={null}
           questions={[]}
           answers={[]}
           draftAnswers={[]}
@@ -159,9 +153,6 @@ describe("InterviewSegment", () => {
         <InterviewSegment
           blockId="interview-carried-settled"
           status="completed"
-          toolName="AskUserQuestion"
-          title="Need input"
-          description={null}
           questions={[]}
           answers={[]}
           draftAnswers={[]}
@@ -188,9 +179,6 @@ describe("InterviewSegment", () => {
         <InterviewSegment
           blockId="interview-skipped"
           status="errored"
-          toolName="AskUserQuestion"
-          title="Need input"
-          description={null}
           questions={[
             {
               questionId: "q1",
@@ -218,15 +206,12 @@ describe("InterviewSegment", () => {
     expect(onFork).toHaveBeenCalledWith("ab-worktree", "interview-skipped");
   });
 
-  it("expands into a read-only pager with framing, headers, and static options", () => {
+  it("expands into a read-only pager with headers and static options", () => {
     render(
       <InterviewTestProviders>
         <InterviewSegment
           blockId="interview-exact"
           status="completed"
-          toolName="AskUserQuestion"
-          title="Deployment strategy"
-          description="Choose how the rollout should proceed."
           questions={[
             {
               questionId: "q1",
@@ -294,10 +279,6 @@ describe("InterviewSegment", () => {
     fireEvent.click(disclosure);
 
     expect(disclosure.getAttribute("aria-expanded")).toBe("true");
-    expect(screen.getAllByText("Deployment strategy")).toHaveLength(2);
-    expect(
-      screen.getByText("Choose how the rollout should proceed."),
-    ).toBeTruthy();
     expect(screen.getByText("Scope")).toBeTruthy();
     expect(screen.getByText("Which scope?")).toBeTruthy();
     expect(screen.getByText("Selected answer")).toBeTruthy();
@@ -322,9 +303,6 @@ describe("InterviewSegment", () => {
         <InterviewSegment
           blockId="interview-draft"
           status="completed"
-          toolName="AskUserQuestion"
-          title={null}
-          description={null}
           questions={[
             {
               questionId: "q1",
@@ -379,9 +357,6 @@ describe("InterviewSegment", () => {
         <InterviewSegment
           blockId="interview-unlabelled-draft"
           status="completed"
-          toolName="AskUserQuestion"
-          title={null}
-          description={null}
           questions={[]}
           answers={[]}
           draftAnswers={[
@@ -451,9 +426,6 @@ describe("InterviewSegment", () => {
         <InterviewSegment
           blockId="interview-shrink"
           status="completed"
-          toolName="AskUserQuestion"
-          title={null}
-          description={null}
           questions={questions}
           answers={answers}
           draftAnswers={[]}
@@ -495,9 +467,6 @@ describe("InterviewSegment", () => {
         <InterviewSegment
           blockId="interview-force"
           status="completed"
-          toolName="AskUserQuestion"
-          title={null}
-          description={null}
           questions={[
             {
               questionId: "q1",
@@ -559,9 +528,6 @@ describe("InterviewSegment", () => {
         <InterviewSegment
           blockId="interview-force-valid"
           status="completed"
-          toolName="AskUserQuestion"
-          title={null}
-          description={null}
           questions={[
             {
               questionId: "q1",
@@ -621,9 +587,6 @@ describe("InterviewSegment", () => {
         <InterviewSegment
           blockId="interview-force-rapid"
           status="completed"
-          toolName="AskUserQuestion"
-          title={null}
-          description={null}
           questions={[
             {
               questionId: "q1",
@@ -675,9 +638,6 @@ describe("InterviewSegment", () => {
         <InterviewSegment
           blockId="interview-target-page"
           status="completed"
-          toolName="AskUserQuestion"
-          title={null}
-          description={null}
           questions={[
             {
               questionId: "q1",
@@ -755,9 +715,6 @@ describe("InterviewSegment", () => {
         <InterviewSegment
           blockId="interview-manual-page"
           status="completed"
-          toolName="AskUserQuestion"
-          title={null}
-          description={null}
           questions={[
             {
               questionId: "q1",
@@ -808,9 +765,6 @@ describe("InterviewSegment", () => {
         <InterviewSegment
           blockId="interview-details"
           status="completed"
-          toolName="AskUserQuestion"
-          title={null}
-          description={null}
           questions={[
             {
               questionId: "q1",
@@ -867,9 +821,6 @@ describe("InterviewSegment", () => {
           <InterviewSegment
             blockId={blockId}
             status="completed"
-            toolName="AskUserQuestion"
-            title={null}
-            description={null}
             questions={[
               {
                 questionId: "q1",
@@ -930,9 +881,6 @@ describe("InterviewSegment", () => {
         <InterviewSegment
           blockId="interview-delivery"
           status="completed"
-          toolName="AskUserQuestion"
-          title={null}
-          description={null}
           questions={[
             {
               questionId: "q1",
@@ -984,9 +932,6 @@ describe("InterviewSegment", () => {
         <InterviewSegment
           blockId="interview-delivery-retry"
           status="completed"
-          toolName="AskUserQuestion"
-          title={null}
-          description={null}
           questions={[
             {
               questionId: "q1",

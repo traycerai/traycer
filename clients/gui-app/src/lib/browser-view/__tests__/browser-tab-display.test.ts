@@ -5,6 +5,7 @@ import {
   browserTabHostname,
   disambiguateSecondaryLabels,
   nextSettledTabIdentity,
+  normalizeBrowserAddressInput,
   resolveTabTitle,
 } from "@/lib/browser-view/browser-tab-display";
 
@@ -281,5 +282,39 @@ describe("browser-tab-display", () => {
     ]);
     expect(labels.get("a")).toBe("example.com");
     expect(labels.get("b")).toBe("example.com");
+  });
+});
+
+describe("browser address helpers", () => {
+  it("normalizes address bar input conservatively", () => {
+    expect(normalizeBrowserAddressInput("example.test/docs")).toBe(
+      "https://example.test/docs",
+    );
+    expect(normalizeBrowserAddressInput("localhost:5173")).toBe(
+      "http://localhost:5173",
+    );
+    expect(normalizeBrowserAddressInput("about:blank")).toBe("about:blank");
+    expect(normalizeBrowserAddressInput("   ")).toBe("about:blank");
+  });
+
+  it("leaves an explicit scheme alone, local host names included (C7)", () => {
+    // The scheme test runs BEFORE the local-address heuristic; the other order
+    // prefixed a second scheme onto these.
+    expect(normalizeBrowserAddressInput("https://app.localhost:3000")).toBe(
+      "https://app.localhost:3000",
+    );
+    expect(normalizeBrowserAddressInput("http://127.0.0.1:8080/api")).toBe(
+      "http://127.0.0.1:8080/api",
+    );
+    // A colon followed by digits is a PORT, not a scheme, so these still get
+    // one.
+    // A path does not make it remote: guessing https here would fail against
+    // a plain HTTP dev server.
+    expect(normalizeBrowserAddressInput("app.localhost/path")).toBe(
+      "http://app.localhost/path",
+    );
+    expect(normalizeBrowserAddressInput("app.localhost:3000")).toBe(
+      "http://app.localhost:3000",
+    );
   });
 });

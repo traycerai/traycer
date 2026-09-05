@@ -45,7 +45,7 @@ vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHostOrNull: () => null,
 }));
 
-vi.mock("@/lib/browser-view/sessions/electron-tabs", () => ({
+vi.mock("@/lib/browser-view/sessions/electron-tab-directory", () => ({
   useElectronTabBindingOnHost: () => null,
 }));
 

@@ -6,7 +6,7 @@
  * has no such context - the target tile may not even be mounted yet when the
  * jump is issued. So the request is parked here by chat id and the chat tile
  * picks it up on its next render, whether that is the current one or the first
- * one after `openTileInEpic` mounts it. Host identity is part of the key:
+ * one after `openTile` mounts it. Host identity is part of the key:
  * separate hosts may legitimately expose the same chat id.
  *
  * Session-only and deliberately not persisted: a jump is a navigation intent,

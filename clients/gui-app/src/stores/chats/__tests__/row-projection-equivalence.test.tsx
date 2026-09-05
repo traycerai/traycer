@@ -581,6 +581,48 @@ describe("row projection / renderer equivalence", () => {
           turnId: "turn-2",
           message: "Stop requested by owner.",
         }),
+        event({
+          eventId: "e-import",
+          type: "chat.imported",
+          timestamp: 9000,
+          metadata: {
+            sourceProvider: "claude",
+            nativeSessionId: "native-1",
+            importedAt: 9000,
+            sourceCwd: "/w",
+          },
+        }),
+      ],
+    });
+  });
+
+  it("agrees on an imported chat's provenance marker, pinned above a pinned genesis setup card", () => {
+    expectSameRows({
+      messages: [userMessage("u-1", 1000)],
+      events: [
+        event({
+          eventId: "e-setup",
+          type: "setup.running",
+          timestamp: 500,
+          metadata: { workspacePath: "/w", terminalSessionId: "term-1" },
+        }),
+        event({
+          eventId: "e-import",
+          type: "chat.imported",
+          timestamp: 9000,
+          metadata: {
+            sourceProvider: "claude",
+            nativeSessionId: "native-1",
+            importedAt: 9000,
+            sourceCwd: "/w",
+          },
+        }),
+        event({
+          eventId: "e-import-bad",
+          type: "chat.imported",
+          timestamp: 9001,
+          metadata: { sourceProvider: "claude" },
+        }),
       ],
     });
   });

@@ -1,3 +1,4 @@
+import { isPdfAssetPath } from "@/lib/assets/image-extension-allowlist";
 import { Activity, AlarmClockCheck, CheckCheck, XCircle } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import type { AutonomousResumeTrigger } from "@traycer/protocol/persistence/epic/content-blocks";
@@ -307,7 +308,32 @@ function ResumeOutputPanel(props: {
   readonly outputFile: NonNullable<AutonomousResumeTrigger["outputFile"]>;
   readonly enabled: boolean;
 }) {
-  const outputQuery = useResumeOutputFileQuery(props.outputFile, props.enabled);
+  // A PDF output file would render as raw bytes through the text pipeline -
+  // don't even fetch it. Show the path and nothing more: the output folder is
+  // often outside every bound root, so any "open it from X" instruction would
+  // point somewhere the file cannot be found.
+  const isPdfOutput = isPdfAssetPath(props.outputFile.filePath);
+  const outputQuery = useResumeOutputFileQuery(
+    props.outputFile,
+    props.enabled && !isPdfOutput,
+  );
+  if (isPdfOutput) {
+    return (
+      <SegmentPanel
+        label="Output"
+        copyValue={null}
+        tone="default"
+        bodyChrome="framed"
+        className={undefined}
+      >
+        <div className="px-3 py-2">
+          <p className="m-0 break-all font-mono text-code-sm text-muted-foreground">
+            {props.outputFile.filePath}
+          </p>
+        </div>
+      </SegmentPanel>
+    );
+  }
   const content = outputQuery.data?.content ?? null;
   const readError =
     outputQuery.data?.error ?? outputQuery.error?.message ?? null;

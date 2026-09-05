@@ -50,7 +50,7 @@ function openGlobalStream(
       scope: { kind: "global" },
       streamClientFactory: (_scope, callbacks) => {
         captured = callbacks;
-        return { close: () => undefined };
+        return { close: () => undefined, setDemand: () => undefined };
       },
     }),
   );

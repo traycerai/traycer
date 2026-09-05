@@ -23,6 +23,7 @@ import type { ProfileRowAdmission } from "@/components/providers/provider-profil
 import type { GuiHarnessCatalogEntry } from "@/hooks/harnesses/use-gui-harness-catalog";
 import type { ProviderPackPreparing } from "@/components/providers/provider-pack-readiness";
 import type { HarnessModelRow } from "@/components/home/data/harness-model-search";
+import type { ProviderTerminalLoginSurface } from "@/lib/providers/provider-terminal-login-surface";
 import type { VirtuosoHandle } from "react-virtuoso";
 import {
   useCallback,
@@ -106,6 +107,9 @@ interface HarnessModelPickerPanelProps {
   /** Exact host where the next run executes. Never inferred from the create
    *  profile scope, even though current call sites intentionally pass both. */
   readonly runTargetHostId: string | null;
+  /** Where a provider's setup terminal lands - see `HarnessModelPicker`'s
+   *  prop of the same name. */
+  readonly terminalLoginSurface: ProviderTerminalLoginSurface | null;
   readonly createProfileDisabled: boolean;
   readonly createProfileDisabledReason: string | undefined;
   /** Per-row admission override for the active provider's profile strip -
@@ -166,6 +170,7 @@ export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
     serviceTierFooter,
     createProfileHostId,
     runTargetHostId,
+    terminalLoginSurface,
     createProfileDisabled,
     createProfileDisabledReason,
     profileAdmission,
@@ -284,7 +289,13 @@ export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
               />
             </div>
           ) : (
-            <PickerProviderAuthLine state={activeProviderState} />
+            <PickerProviderAuthLine
+              state={activeProviderState}
+              harness={activeProvider}
+              terminalLoginSurface={terminalLoginSurface}
+              runTargetHostId={runTargetHostId}
+              onClosePicker={onClosePicker}
+            />
           )}
           <div className="min-h-0 flex-1 overflow-hidden">
             <HarnessModelPickerList
@@ -302,10 +313,14 @@ export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
               catalogError={catalogHarnessesError}
               hostUnavailableLabel={hostUnavailableLabel}
               activeProvider={activeProvider}
+              activeProviderState={activeProviderState}
               onHover={onHoverRow}
               onActive={onActiveRow}
               onSelect={onSelectRow}
               onOpenProviderSettings={onOpenProviderSettings}
+              terminalLoginSurface={terminalLoginSurface}
+              runTargetHostId={runTargetHostId}
+              onClosePicker={onClosePicker}
             />
           </div>
           <HarnessModelPickerModelSettingsFooter

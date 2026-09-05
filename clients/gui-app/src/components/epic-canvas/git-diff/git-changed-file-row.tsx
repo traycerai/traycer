@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { MouseEvent, ReactNode } from "react";
 import type { GitChangedFile } from "@traycer/protocol/host";
 import {
   buildGitFileRowMetadata,
@@ -27,8 +27,10 @@ export interface GitChangedFileRowProps {
   readonly showStats: boolean;
   /** Filter match ranges into `file.path`; empty when no filter is active. */
   readonly pathRanges: HighlightRanges;
-  readonly onClick: (() => void) | null;
-  readonly onDoubleClick: (() => void) | undefined;
+  readonly onClick: ((event: MouseEvent<HTMLButtonElement>) => void) | null;
+  readonly onDoubleClick:
+    | ((event: MouseEvent<HTMLButtonElement>) => void)
+    | undefined;
   readonly ariaExpanded: boolean | undefined;
   readonly nested: boolean;
   readonly className: string | undefined;

@@ -2,6 +2,7 @@ import type { InstallHostLifecycle, SwapLockRecovery } from "../installer";
 import { createCliLogger } from "../logger";
 import { CLI_ERROR_CODES, CliError } from "../runner/errors";
 import { resolveServiceCliInvocation, type CliInvocation } from "./cli-binary";
+import { didServiceRegistrationCommit } from "./cli-invocation-record";
 import { isSelfNamingCliInvocation } from "./cli-invocation-shape";
 import {
   createServiceController,
@@ -496,7 +497,21 @@ async function runWithPublishedHostStartAdoption(
   try {
     await start();
     await lease?.waitForSpawn();
+  } catch (error) {
+    // The invocation-record decorator can reject AFTER the service manager
+    // accepted the registration and began launching the supervisor (record
+    // commit, lifecycle write, stale-marker clear). The supervisor is coming
+    // up and will present this lease; cancelling it now would refuse or kill
+    // an admitted child and leave a registered service hostless. So the lease
+    // is honoured first and the record error surfaces afterwards. A spawn
+    // wait that itself fails must not replace the error being reported.
+    if (didServiceRegistrationCommit(error)) {
+      await lease?.waitForSpawn().catch(() => undefined);
+    }
+    throw error;
   } finally {
-    await lease?.cancel();
+    // cancel() propagating out of this `finally` would swap in its own error
+    // for the actuator or record error being reported.
+    await lease?.cancel().catch(() => undefined);
   }
 }

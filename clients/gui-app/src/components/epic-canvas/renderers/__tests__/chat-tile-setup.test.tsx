@@ -85,6 +85,7 @@ import {
   resetRetainedDraftToastsForTests,
   retainedDraftToastCountForTests,
 } from "@/lib/toast/retained-draft-toasts";
+import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 
 const EPIC_ID = "epic-x";
 const CHAT_ID = "chat-x";
@@ -109,6 +110,7 @@ function toastText(message: unknown): string {
 function createHarness(): Harness {
   let callbacks: ChatStreamCallbacks | null = null;
   const handle = createChatSessionStore({
+    environment: CHAT_STORE_TEST_ENVIRONMENT,
     hostId: "host-a",
     epicId: EPIC_ID,
     chatId: CHAT_ID,

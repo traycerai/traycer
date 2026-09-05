@@ -13,9 +13,21 @@ arch-scoped subdirectory:
 - `resources/cli/<platform>-<arch>/version.json` - bundled CLI version metadata
   consumed by Desktop's `readBundledCliVersion()`.
 
-`electron-builder` maps `resources/cli/**` into `process.resourcesPath/cli/**`
-via the `extraResources` entry in `package.json`. At runtime, the Electron main
-process resolves the CLI binary from
+`electron-builder` maps **only the arch being packed** into the bundle: the
+per-platform `extraResources` entries in `package.json` (`build.mac`,
+`build.win`, `build.linux`) use electron-builder's `${arch}` file macro, so
+`resources/cli/darwin-${arch}/` becomes `process.resourcesPath/cli/darwin-<arch>/`
+for that app and nothing else under `resources/cli/` is copied. The macOS
+release job stages `darwin-arm64` and `darwin-x64` side by side before one
+`electron-builder --mac` builds both apps; the macro is what keeps the x86_64
+SEA out of the arm64 bundle (an x86_64-only Mach-O anywhere in the bundle makes
+macOS 26 flag the whole app as Intel - traycerai/traycer#1528). The platform
+prefix is literal per platform because `${os}` expands to `mac`/`win`/`linux`,
+not the `process.platform` value the runtime keys on.
+
+A binary dropped flat at `resources/cli/<binary>` is not packaged;
+`prepack:check-cli` refuses that layout. At runtime, the Electron main process
+resolves the CLI binary from
 `process.resourcesPath/cli/<platform>-<arch>/<binary>` via the discovery layer
 in `src/electron-main/cli/cli-discovery.ts`.
 

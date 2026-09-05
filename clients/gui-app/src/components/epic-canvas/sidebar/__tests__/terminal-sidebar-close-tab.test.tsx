@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  act,
   cleanup,
   createEvent,
   fireEvent,
@@ -256,6 +257,10 @@ import {
 } from "@/lib/terminals/pending-create-identity";
 import { useProviderLoginTerminalsStore } from "@/stores/providers/provider-login-terminals";
 import { useSetupTerminalsStore } from "@/stores/worktree/setup-terminals";
+import {
+  requestSidebarNodeReveal,
+  useSidebarNodeRevealStore,
+} from "@/stores/epics/sidebar-node-reveal-store";
 
 function createTestQueryClient(): QueryClient {
   return new QueryClient({
@@ -401,6 +406,10 @@ describe("terminal sidebar Close", () => {
     durableAuthority.collectionIncludesSession = false;
     terminalSessions.value = [RUNNING_SESSION];
     resetEpicTerminalDurableCreatesForTests();
+    useSidebarNodeRevealStore.setState(
+      { requestsByViewTabId: {}, visibleByViewTabId: {} },
+      true,
+    );
     seedOpenTerminalTab("legacy");
   });
 
@@ -409,6 +418,10 @@ describe("terminal sidebar Close", () => {
     resetOriginStores();
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     resetEpicTerminalDurableCreatesForTests();
+    useSidebarNodeRevealStore.setState(
+      { requestsByViewTabId: {}, visibleByViewTabId: {} },
+      true,
+    );
   });
 
   it("highlights the terminal shown in the active canvas pane", () => {
@@ -421,6 +434,36 @@ describe("terminal sidebar Close", () => {
         " ",
       ),
     ).toContain("bg-accent");
+  });
+
+  it("scrolls to and flash-highlights a revealed terminal row", async () => {
+    const scrollIntoView = vi
+      .spyOn(Element.prototype, "scrollIntoView")
+      .mockImplementation(() => undefined);
+    const { getByTestId, findByTestId } = render(
+      wrapper(<TerminalsPanelBody epicId="epic-1" tabId={TAB_ID} />),
+    );
+    fireEvent.click(getByTestId(`epic-terminal-sidebar-rename-${SESSION_ID}`));
+    const renameInput = await findByTestId(
+      `epic-terminal-sidebar-rename-input-${SESSION_ID}`,
+    );
+    const row = renameInput.closest<HTMLElement>("[data-sidebar-node-id]");
+    expect(row).not.toBeNull();
+
+    act(() => {
+      requestSidebarNodeReveal(
+        TAB_ID,
+        epicTerminalUiIdentityKey("session", "host-1", SESSION_ID),
+      );
+    });
+
+    await waitFor(() => {
+      expect(scrollIntoView.mock.instances).toContain(row);
+    });
+    expect(row?.dataset.sidebarRevealHighlighted).toBe("true");
+    expect(
+      useSidebarNodeRevealStore.getState().requestsByViewTabId[TAB_ID],
+    ).toBeUndefined();
   });
 
   it("closes the open canvas tab and kills the session", () => {

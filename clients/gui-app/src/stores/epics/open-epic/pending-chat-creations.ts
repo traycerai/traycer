@@ -103,6 +103,12 @@ export function chatProjectionFromPendingCreation(
     userId: retained.ownerUserId,
     hostId: retained.pending.hostId,
     isTitleEditedByUser: false,
+    // A creation THIS client just made through `epic.createChat`, which writes
+    // the registry - so the row is store-homed by construction and this is a
+    // fact about the request, not a filled-in default. Stamping `null` here
+    // instead would disable rename on the row the user just created, in exactly
+    // the window the create-then-rename flow lives in.
+    docResident: false,
     settings: null,
     archivedAt: null,
   };

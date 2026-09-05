@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { ActionToastContent } from "@/components/layout/bridges/action-toast-content";
 import { useDesktopAppUpdates } from "@/hooks/runner/use-desktop-app-updates";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import type {
@@ -267,11 +268,14 @@ function showAppUpdateToast(
       // A quiet, dismissible heads-up - the header button is the persistent
       // fallback once it's dismissed.
       toast(
-        <AppUpdateActionToastContent
+        <ActionToastContent
+          toastId={APP_UPDATE_TOAST_ID}
+          eyebrow={null}
           title="Update available"
           description={updateAvailableDescription(snapshot.latestVersion)}
           actionLabel="Download"
           onAction={actions.onDownload}
+          onLater={null}
         />,
         {
           id: APP_UPDATE_TOAST_ID,
@@ -313,18 +317,24 @@ function showAppUpdateToast(
       // attempt. Point at the step-by-step dialog instead.
       toast(
         snapshot.installGuidance === null ? (
-          <AppUpdateActionToastContent
+          <ActionToastContent
+            toastId={APP_UPDATE_TOAST_ID}
+            eyebrow={null}
             title="Update ready to install"
             description="Restart Traycer to finish updating."
             actionLabel="Restart"
             onAction={actions.onRestart}
+            onLater={null}
           />
         ) : (
-          <AppUpdateActionToastContent
+          <ActionToastContent
+            toastId={APP_UPDATE_TOAST_ID}
+            eyebrow={null}
             title="Update downloaded"
             description="One manual step finishes installing it."
             actionLabel="View instructions"
             onAction={actions.onViewInstructions}
+            onLater={null}
           />
         ),
         {
@@ -413,55 +423,6 @@ function isManualFeedbackSnapshot(snapshot: DesktopAppUpdateSnapshot): boolean {
     (snapshot.status === "checking" ||
       snapshot.status === "up-to-date" ||
       snapshot.status === "unavailable")
-  );
-}
-
-function AppUpdateActionToastContent(props: {
-  readonly title: string;
-  readonly description: string;
-  readonly actionLabel: string;
-  readonly onAction: () => void;
-}) {
-  const actionHandledRef = useRef(false);
-  const [actionHandled, setActionHandled] = useState(false);
-
-  function handleAction(): void {
-    if (actionHandledRef.current) return;
-    actionHandledRef.current = true;
-    setActionHandled(true);
-    toast.dismiss(APP_UPDATE_TOAST_ID);
-    props.onAction();
-  }
-
-  return (
-    <div className="flex items-center gap-4">
-      <div className="min-w-0 flex-1">
-        <div className="font-medium">{props.title}</div>
-        <div className="mt-1 text-muted-foreground">{props.description}</div>
-      </div>
-      <div className="grid shrink-0 grid-cols-1 gap-1.5">
-        <Button
-          type="button"
-          size="sm"
-          className="w-full min-w-max"
-          disabled={actionHandled}
-          onClick={handleAction}
-        >
-          {props.actionLabel}
-        </Button>
-        <Button
-          type="button"
-          size="sm"
-          variant="secondary"
-          className="w-full min-w-max"
-          onClick={() => {
-            toast.dismiss(APP_UPDATE_TOAST_ID);
-          }}
-        >
-          Later
-        </Button>
-      </div>
-    </div>
   );
 }
 

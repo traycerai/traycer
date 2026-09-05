@@ -1,4 +1,8 @@
-import type { ChatEvent } from "@traycer/protocol/persistence/epic/chat-events";
+import {
+  chatImportedMetadataSchema,
+  type ChatEvent,
+  type ChatImportedMetadata,
+} from "@traycer/protocol/persistence/epic/chat-events";
 
 /**
  * # Canonical transcript row order
@@ -185,9 +189,31 @@ export function notificationAnchorRowSource(
   };
 }
 
+/**
+ * The imported-chat provenance row's content, or `null` when this event draws
+ * no row.
+ *
+ * Parsed through the metadata schema rather than read field by field: the bag
+ * is untyped on the wire, and a half-written one must produce no row at all
+ * rather than a row that says "Imported from undefined". Shaped like
+ * {@link forkedChatLinkRowSource} for the same reason - the renderer filters on
+ * this rather than on a copy of it. Until this existed the marker was a
+ * renderer-side pin with no ordinal, and the windowed transcript - which serves
+ * only the events some row needs - never delivered the event on reopen, so the
+ * row silently vanished (spec `session-import.md` §8e).
+ */
+export function importedChatMarkerRowSource(
+  event: ChatEvent,
+): ChatImportedMetadata | null {
+  if (event.type !== "chat.imported") return null;
+  const parsed = chatImportedMetadataSchema.safeParse(event.metadata);
+  return parsed.success ? parsed.data : null;
+}
+
 export function eventMaterializesTranscriptRow(event: ChatEvent): boolean {
   return (
     forkedChatLinkRowSource(event) !== null ||
-    notificationAnchorRowSource(event) !== null
+    notificationAnchorRowSource(event) !== null ||
+    importedChatMarkerRowSource(event) !== null
   );
 }

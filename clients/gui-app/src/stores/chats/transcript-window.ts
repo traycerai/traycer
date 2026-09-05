@@ -18,6 +18,7 @@ import {
   assistantRowTurnKey,
   chatTranscriptEventRowId,
   forkedChatLinkRowId,
+  importedChatMarkerRowId,
   isTurnDecoratingEvent,
   projectTranscriptRows,
   queueSteerRowId,
@@ -29,6 +30,10 @@ import type { TranscriptRowContext } from "@traycer/protocol/persistence/chat-tr
 import { utf8ByteLength } from "@traycer/protocol/utils/text/utf8";
 import { assistantTurnKey } from "@traycer/protocol/persistence/chat-transcript/fork-boundary";
 import { isTransientLiveAssistantMessageId } from "@/lib/chat/transient-live-assistant-message-id";
+import type {
+  ProtectedBytes,
+  ProtectedRegionKind,
+} from "@traycer-clients/shared/replica-runtime";
 
 /**
  * # The client half of the windowed transcript
@@ -351,6 +356,19 @@ export interface TranscriptWindow {
    * fresh span demotes its shared records to stale-exclusive and this figure
    * genuinely drops, which is what lets eviction make progress post-rebase
    * when the carry holds every fresh span's records too.
+   *
+   * PLUS the live tail - records the index has not placed in a span yet. Those
+   * used to sit outside this figure, and a session that only sends never seats
+   * a span, so the live set could grow while the budget still read zero: that
+   * is how a huge in-flight turn failed to evict the cold scrollback it was
+   * competing with. They are charged so eviction of *unprotected spans* can
+   * make room; the live records themselves stay, having no ordinal by which
+   * range hydration could recover them.
+   *
+   * The two terms cannot double-count. A record a fresh span references is
+   * removed from the live set by {@link pruneSupersededLiveRecords} - that
+   * filter is what keeps `live` and `span-referenced` disjoint, and it is the
+   * reason this figure can be a plain sum. See {@link chargedWindowBytes}.
    */
   readonly hydratedBytes: number;
   /**
@@ -452,8 +470,13 @@ export interface OrdinalRange {
  * transcript, so this has to be well under that while still being large enough
  * that ordinary scrolling does not thrash: a reader paging back through a long
  * chat should find the rows they just left still hydrated.
+ *
+ * Defined once in `budget-limits.ts` so the process-wide pool and this
+ * per-window unit cannot drift. Imported as well as re-exported: this module
+ * reads it itself, and a bare `export ... from` binds nothing in local scope.
  */
-export const TRANSCRIPT_WINDOW_MAX_BYTES = 8 * 1024 * 1024;
+export { TRANSCRIPT_WINDOW_MAX_BYTES } from "@/stores/replica-memory/budget-limits";
+import { TRANSCRIPT_WINDOW_MAX_BYTES } from "@/stores/replica-memory/budget-limits";
 
 /**
  * How large a span may grow by absorbing the span NEXT to it.
@@ -731,6 +754,90 @@ function freshTierBytes(
 }
 
 /**
+ * How much an in-place rewrite moved the LIVE term of
+ * {@link TranscriptWindow.hydratedBytes} - the symmetric half of
+ * `rewriteWindowMessage`'s `freshReferenced` adjustment, and the only thing
+ * that maintains this term.
+ *
+ * A live-only record (no ledger entry) skips that fresh adjustment entirely
+ * while still being rewritten, so without this the figure would go on
+ * describing the pre-rewrite body. `updateWindowMessage` reaches exactly that
+ * case by design - its contract is "wherever the window holds it, live or
+ * hydrated" - and an image resolving on the in-flight row is the everyday
+ * instance.
+ *
+ * Zero for a `deferred` charge, for the same reason the fresh term is
+ * unmoved by one: that charge leaves the figure untouched BY CONSTRUCTION, or
+ * a streaming row's growth starts tripping the eviction gate the deferred
+ * charge exists to keep it out of.
+ *
+ * Both copies are measured, unlike the ledger path, which gets the old figure
+ * free from `entry.bytes`. A live record has no ledger entry to cache one -
+ * that is what live MEANS here - so a `now` charge pays one extra measure of a
+ * single record, never of the set.
+ */
+function liveRewriteByteDelta(
+  charge: "now" | "deferred",
+  before: readonly Message[],
+  after: readonly Message[],
+  index: number,
+): number {
+  if (charge !== "now" || index < 0) return 0;
+  const previous = before[index];
+  const next = after[index];
+  if (next === previous) return 0;
+  return recordByteLength(next) - recordByteLength(previous);
+}
+
+function recordsByteLength(
+  messages: readonly Message[],
+  events: readonly ChatEvent[],
+): number {
+  let bytes = 0;
+  for (const message of messages) bytes += recordByteLength(message);
+  for (const event of events) bytes += recordByteLength(event);
+  return bytes;
+}
+
+/**
+ * The window's full charge: the fresh tier PLUS the live tail.
+ *
+ * A plain sum, and it is the disjointness that makes it one. A record a fresh
+ * span references is dropped from the live set by
+ * {@link pruneSupersededLiveRecords}, so no record is ever in both terms and
+ * neither term needs to exclude the other. That prune is the load-bearing
+ * mechanism here - not a structural accident - which is why it carries its own
+ * pin rather than a second filter being added on this side to mask it.
+ *
+ * The live term is measured, not looked up: live records have no ledger entry
+ * to carry a cached figure, precisely because nothing has placed them yet.
+ */
+function chargedWindowBytes(
+  ledger: RecordLedger,
+  spans: readonly HydratedSpan[],
+  liveMessages: readonly Message[],
+  liveEvents: readonly ChatEvent[],
+): number {
+  return (
+    freshTierBytes(ledger, spans) + recordsByteLength(liveMessages, liveEvents)
+  );
+}
+
+/**
+ * What the window currently retains, in bytes - the figure
+ * {@link evictTranscriptWindowToBudget} reads, and the one a process-wide
+ * accountant should settle.
+ */
+export function transcriptWindowChargedBytes(window: TranscriptWindow): number {
+  return chargedWindowBytes(
+    window.records,
+    window.spans,
+    window.liveMessages,
+    window.liveEvents,
+  );
+}
+
+/**
  * The stale tier's charge against remaining headroom: stale-EXCLUSIVE record
  * bytes (a record the fresh tier also references is already inside
  * {@link TranscriptWindow.hydratedBytes} - charging it here would bill the
@@ -967,8 +1074,9 @@ export function spanChargeBytes(
 /**
  * Fold one record set's BACKABLE identities into `into` - the derived id
  * shapes every tier produces the same way: a message backs the row carrying
- * its id, an event backs both its transcript row and its forked-chat-link
- * row, and a stopped turn's event backs that turn's assistant row.
+ * its id, an event backs its transcript row, its forked-chat-link row and its
+ * imported-chat-marker row, and a stopped turn's event backs that turn's
+ * assistant row.
  *
  * Lives HERE (not in `transcript-list-rows.ts`, which imports it) because the
  * draws relation above and both tiers' backing channels consume the same fold
@@ -984,6 +1092,7 @@ export function addRecordBackedRowIds(
   for (const event of events) {
     into.add(chatTranscriptEventRowId(event.eventId));
     into.add(forkedChatLinkRowId(event.eventId));
+    into.add(importedChatMarkerRowId(event.eventId));
     if (event.type === "turn.stopped" && event.turnId !== null) {
       into.add(assistantRowId(event.turnId));
     }
@@ -1038,13 +1147,29 @@ export function appendLiveRecords(
   // prune never runs and the row-less events would still accumulate unbounded.
   // This is the append the cap actually has to hold.
   const appendedEvents = [...window.liveEvents, ...events];
+  const overflow = appendedEvents.length - MAX_LIVE_EVENTS;
+  const trimmed = overflow > 0 ? appendedEvents.slice(0, overflow) : [];
+  const liveEvents =
+    overflow > 0 ? appendedEvents.slice(overflow) : appendedEvents;
+  const liveMessages = [...window.liveMessages, ...messages];
   return {
     ...window,
-    liveMessages: [...window.liveMessages, ...messages],
-    liveEvents:
-      appendedEvents.length > MAX_LIVE_EVENTS
-        ? appendedEvents.slice(appendedEvents.length - MAX_LIVE_EVENTS)
-        : appendedEvents,
+    liveMessages,
+    liveEvents,
+    // Delta of the NEW records minus any events the cap just dropped.
+    // Re-measuring the whole live set here would stringify every retained
+    // event on each append - quadratic in the cap. This path does not
+    // populate `unsettledByteMessageIds`, so `settleWindowBytes` will not
+    // remeasure it; the trim's bytes have to leave here.
+    //
+    // Only appended records are measured, and an appended record is by
+    // definition not in any span (the filters above reject anything the
+    // ledger already holds), so this delta cannot double-count against the
+    // fresh term.
+    hydratedBytes:
+      window.hydratedBytes +
+      recordsByteLength(messages, events) -
+      recordsByteLength([], trimmed),
     clock: window.clock + 1,
   };
 }
@@ -1097,8 +1222,10 @@ function pruneSupersededLiveRecords(
   // their siblings are transcript-level signals that materialize no row, so no
   // span will ever name them and no amount of scrolling will evict them. On a
   // tab left connected across many sends they accumulate for the life of the
-  // session - and, because `hydratedBytes` is `totalBytes(spans)`, they are
-  // not charged to the window budget either, so nothing else notices.
+  // session. They ARE charged to `hydratedBytes` - the live tail is a term of
+  // it - so a large live set evicts unprotected spans rather than going
+  // unnoticed; the events themselves stay until this cap, because a row-less
+  // signal has no ordinal by which range hydration could bring it back.
   //
   // The tail is what has any chance of being live-relevant, so the cap keeps
   // the NEWEST. Dropping an older one is safe rather than lossy: anything that
@@ -1114,7 +1241,22 @@ function pruneSupersededLiveRecords(
   ) {
     return window;
   }
-  return { ...window, liveMessages, liveEvents };
+  // THE disjointness seam. Records that just left the live set did so because
+  // a fresh span now references them, so they move from this figure's live
+  // term into its fresh term - and a full recompute is what makes that a
+  // hand-off rather than a double-count. Nothing else in the file re-derives
+  // the figure at the moment membership crosses tiers.
+  return {
+    ...window,
+    liveMessages,
+    liveEvents,
+    hydratedBytes: chargedWindowBytes(
+      window.records,
+      window.spans,
+      liveMessages,
+      liveEvents,
+    ),
+  };
 }
 
 function assistantRenderBodyEqual(
@@ -1490,9 +1632,19 @@ export function mapWindowMessages(
     ...window,
     records,
     liveMessages: liveChanged ? liveMessages : window.liveMessages,
-    hydratedBytes: ledgerChanged
-      ? freshTierBytes(records, window.spans)
-      : window.hydratedBytes,
+    // `liveChanged` counts here, not just `ledgerChanged`: the live tail is a
+    // TERM of this figure, so a remap that rewrote only live rows still moved
+    // it. Gating on the ledger alone would leave the figure describing the
+    // pre-remap live bodies.
+    hydratedBytes:
+      ledgerChanged || liveChanged
+        ? chargedWindowBytes(
+            records,
+            window.spans,
+            liveChanged ? liveMessages : window.liveMessages,
+            window.liveEvents,
+          )
+        : window.hydratedBytes,
   });
 }
 
@@ -1508,19 +1660,41 @@ export function mapWindowMessages(
  */
 export function settleWindowBytes(window: TranscriptWindow): TranscriptWindow {
   if (window.unsettledByteMessageIds.length === 0) return window;
-  let changed = false;
+  let ledgerChanged = false;
+  let liveChanged = false;
   const nextEntries = new Map(window.records.messages);
   for (const id of window.unsettledByteMessageIds) {
     const entry = nextEntries.get(id);
-    if (entry === undefined) continue;
+    if (entry === undefined) {
+      // A LIVE-only record. There is no ledger entry to re-measure into - the
+      // live term is derived at the recompute below, never stored per record -
+      // so marking the window dirty IS its settle.
+      //
+      // A bare `continue` stood here, on the premise that a live-only record
+      // has no bytes to settle. That was TRUE while `hydratedBytes` was the
+      // span term alone. The merged definition killed it: the live tail is a
+      // term of the figure now, and a row that grew in place across a turn's
+      // deferred charges is settled HERE or nowhere - which is exactly the
+      // in-flight turn the budget exists to notice. Restoring the
+      // short-circuit as an obvious optimization reopens that hole silently,
+      // because nothing else re-derives the live term on the streaming path.
+      if (window.liveMessages.some((message) => message.messageId === id)) {
+        liveChanged = true;
+      }
+      continue;
+    }
     const bytes = recordByteLength(entry.record);
     if (bytes === entry.bytes) continue;
-    changed = true;
+    ledgerChanged = true;
     nextEntries.set(id, { ...entry, bytes });
   }
   // No revision bump: a settle changes charges, never membership, serve
   // identity, or anything a (spans, revision)-keyed memo reads.
-  const records = changed
+  //
+  // Keyed on the LEDGER's own flag, so a live-only settle leaves the ledger
+  // object identical - the live term is not in it, and rebuilding the map for
+  // a change it does not hold would churn every consumer keyed on it.
+  const records = ledgerChanged
     ? {
         messages: nextEntries,
         events: window.records.events,
@@ -1533,9 +1707,15 @@ export function settleWindowBytes(window: TranscriptWindow): TranscriptWindow {
   return boundStaleTierToBudget({
     ...window,
     records,
-    hydratedBytes: changed
-      ? freshTierBytes(records, window.spans)
-      : window.hydratedBytes,
+    hydratedBytes:
+      ledgerChanged || liveChanged
+        ? chargedWindowBytes(
+            records,
+            window.spans,
+            window.liveMessages,
+            window.liveEvents,
+          )
+        : window.hydratedBytes,
     unsettledByteMessageIds: [],
   });
 }
@@ -1659,15 +1839,27 @@ function rewriteWindowMessage(
           if (next !== message) witnesses?.carryRewrittenCopy(message, next);
           return next;
         });
+  hydratedBytes += liveRewriteByteDelta(
+    charge,
+    window.liveMessages,
+    liveMessages,
+    liveIndex,
+  );
   const next: TranscriptWindow = {
     ...window,
     records,
     liveMessages,
     hydratedBytes,
+    // A LIVE-only record (`entry === undefined`) is marked too. It used to be
+    // excluded here, correctly: with `hydratedBytes` defined as the span term
+    // alone, such a record contributed nothing and marking it bought a settle
+    // that had nothing to measure. Under the merged definition it contributes
+    // its whole body, and this mark is the ONLY thing that carries a streaming
+    // row's in-place growth to `settleWindowBytes` - the deferred charge
+    // deliberately leaves the figure unmoved, so without the mark that growth
+    // is never charged at all.
     unsettledByteMessageIds:
-      charge === "now" ||
-      entry === undefined ||
-      window.unsettledByteMessageIds.includes(messageId)
+      charge === "now" || window.unsettledByteMessageIds.includes(messageId)
         ? window.unsettledByteMessageIds
         : [...window.unsettledByteMessageIds, messageId],
     clock,
@@ -2564,7 +2756,12 @@ function seatSnapshotTailSpan(input: {
         ...completeBase,
         records,
         spans,
-        hydratedBytes: freshTierBytes(records, spans),
+        hydratedBytes: chargedWindowBytes(
+          records,
+          spans,
+          completeBase.liveMessages,
+          completeBase.liveEvents,
+        ),
       },
       servedAssistantTurns(
         declaredCompleteTailRowIds(tail),
@@ -2682,7 +2879,12 @@ function boundWindowToRowCount(
     skeleton,
     spans,
     staleSpans,
-    hydratedBytes: freshTierBytes(window.records, spans),
+    hydratedBytes: chargedWindowBytes(
+      window.records,
+      spans,
+      window.liveMessages,
+      window.liveEvents,
+    ),
     skeletonStreamCoveredThrough: Math.min(
       window.skeletonStreamCoveredThrough,
       rowCount,
@@ -2711,7 +2913,12 @@ function dropSpansOverlappingFrom(
   return pruneUnreferencedRecords({
     ...window,
     spans: kept,
-    hydratedBytes: freshTierBytes(window.records, kept),
+    hydratedBytes: chargedWindowBytes(
+      window.records,
+      kept,
+      window.liveMessages,
+      window.liveEvents,
+    ),
   });
 }
 
@@ -3104,7 +3311,12 @@ function reconcileSpansWithSkeleton(
     pruneUnreferencedRecords({
       ...window,
       spans: kept,
-      hydratedBytes: freshTierBytes(window.records, kept),
+      hydratedBytes: chargedWindowBytes(
+        window.records,
+        kept,
+        window.liveMessages,
+        window.liveEvents,
+      ),
     }),
     adoptedAssistantTurns,
   );
@@ -4054,7 +4266,12 @@ function dropSpansForUpdatedOrdinals(
     }
   }
   if (dropped.length === 0) return window;
-  const hydratedBytes = freshTierBytes(window.records, kept);
+  const hydratedBytes = chargedWindowBytes(
+    window.records,
+    kept,
+    window.liveMessages,
+    window.liveEvents,
+  );
   return pruneUnreferencedRecords({
     ...window,
     spans: kept,
@@ -4533,7 +4750,12 @@ export function applyRangeResponse(
         ...completeWindow,
         records,
         spans,
-        hydratedBytes: freshTierBytes(records, spans),
+        hydratedBytes: chargedWindowBytes(
+          records,
+          spans,
+          completeWindow.liveMessages,
+          completeWindow.liveEvents,
+        ),
         clock,
       },
       servedAssistantTurns(
@@ -5458,7 +5680,12 @@ export function evictTranscriptWindowToBudget(
     spans,
     // Recomputed from the ledger rather than trusted from the loop's running
     // figure - the loop's arithmetic is control flow, the derivation is truth.
-    hydratedBytes: freshTierBytes(window.records, spans),
+    hydratedBytes: chargedWindowBytes(
+      window.records,
+      spans,
+      window.liveMessages,
+      window.liveEvents,
+    ),
     evictionTerminal,
   });
 }
@@ -5512,4 +5739,71 @@ function evictClosureUnit(
     unionSaving += records.events.get(id)?.bytes ?? 0;
   }
   return unionSaving;
+}
+
+/**
+ * What a post-eviction window still holds that CANNOT be dropped, by kind.
+ *
+ * The classification mirrors `evictTranscriptWindowToBudget`'s own
+ * `isProtected`, predicate for predicate and in the same order, so a span is
+ * reported under the reason that actually saved it. Live records are `"tail"`:
+ * they own no ordinal, so no range hydration can bring them back.
+ *
+ * Each kind's figure is derived from the LEDGER, not summed from a per-span
+ * field - there is no longer such a field, and the derivation is also what
+ * makes each kind internally deduplicated, matching how
+ * {@link TranscriptWindow.hydratedBytes} itself is defined. Records aliased
+ * ACROSS two kinds are counted in both; this is a report for the accountant's
+ * `"over-protected"` reasoning rather than a budget decision, and a kind that
+ * silently absorbed its neighbour's share would be the more misleading of the
+ * two errors.
+ */
+export function transcriptWindowProtectedBytes(
+  window: TranscriptWindow,
+  visible: OrdinalRange | null,
+  required: readonly number[],
+): readonly ProtectedBytes[] {
+  const byKind = new Map<ProtectedRegionKind, HydratedSpan[]>();
+  const classify = (span: HydratedSpan): ProtectedRegionKind | null => {
+    if (spanEnd(span) >= window.rowCount && window.rowCount > 0) return "tail";
+    if (
+      required.some(
+        (ordinal) => span.fromOrdinal <= ordinal && spanEnd(span) > ordinal,
+      )
+    ) {
+      return "required";
+    }
+    if (
+      visible !== null &&
+      span.fromOrdinal < visible.toOrdinal &&
+      spanEnd(span) > visible.fromOrdinal
+    ) {
+      return "visible";
+    }
+    return null;
+  };
+  for (const span of window.spans) {
+    const kind = classify(span);
+    if (kind === null) continue;
+    const group = byKind.get(kind);
+    if (group === undefined) byKind.set(kind, [span]);
+    else group.push(span);
+  }
+  const reported: ProtectedBytes[] = [];
+  for (const [kind, spans] of byKind) {
+    const bytes = freshTierBytes(window.records, spans);
+    if (bytes > 0) reported.push({ kind, bytes });
+  }
+  const liveBytes = recordsByteLength(window.liveMessages, window.liveEvents);
+  if (liveBytes > 0) {
+    const tail = reported.find((entry) => entry.kind === "tail");
+    if (tail === undefined) reported.push({ kind: "tail", bytes: liveBytes });
+    else {
+      reported[reported.indexOf(tail)] = {
+        kind: "tail",
+        bytes: tail.bytes + liveBytes,
+      };
+    }
+  }
+  return reported;
 }

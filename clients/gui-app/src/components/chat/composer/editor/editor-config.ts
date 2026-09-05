@@ -6,6 +6,7 @@ import { Placeholder } from "@tiptap/extensions/placeholder";
 import Link from "@tiptap/extension-link";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import type { ChatComposerSubmitSource } from "@/lib/chats/resolve-steer-submit";
+import { createIsolatedMarked } from "@/lib/markdown/isolated-marked";
 
 import type { ComposerPickerStore } from "../picker/composer-picker-store";
 
@@ -75,7 +76,13 @@ export function buildComposerExtensions(
     }),
     ComposerBlockquote,
     ComposerSourcedQuote,
-    Markdown,
+    // One private `marked` per editor. Without it the extension registers
+    // this editor's tokenizers into the module-level `marked` singleton and
+    // never removes them, which pinned every composer ever mounted (and the
+    // chat-messages render scope behind its callbacks) for the life of the
+    // window - see `createIsolatedMarked`. This function runs once per editor,
+    // so the instance is per editor.
+    Markdown.configure({ marked: createIsolatedMarked() }),
     Link.configure({
       openOnClick: false,
       autolink: true,

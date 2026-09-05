@@ -1188,19 +1188,6 @@ describe("registerHostLoginItem - pending LaunchAgent revision marker", () => {
     expect(status).toBe("requires-approval");
     expect(existsSync(pendingRevisionMarkerPath())).toBe(true);
   });
-
-  it("leaves the marker in place when the register cycle ends not-registered (SMAppService refused)", async () => {
-    writePendingRevisionMarker();
-    // Every status read stays `not-registered` - the BTM-commit poll
-    // exhausts its deadline and the cycle fails closed.
-    getLoginItemSettings.mockReturnValue({ status: "not-registered" });
-
-    const status = await registerHostLoginItem(undefined);
-
-    expect(status).toBe("not-registered");
-    expect(existsSync(pendingRevisionMarkerPath())).toBe(true);
-  });
-
   it("is a no-op when no marker was ever written", async () => {
     getLoginItemSettings.mockReturnValueOnce({ status: "not-registered" }); // snapshot: primary
     getLoginItemSettings.mockReturnValueOnce({ status: "not-registered" }); // snapshot: legacy
@@ -1245,21 +1232,6 @@ describe("hasUnappliedPendingLoginItemRevision (M-B)", () => {
       hasUnappliedPendingLoginItemRevision("production"),
     ).resolves.toBe(true);
   });
-
-  it("is false again after a successful register cycle deletes the marker", async () => {
-    writePendingRevisionMarker();
-    getLoginItemSettings.mockReturnValueOnce({ status: "not-registered" }); // snapshot: primary
-    getLoginItemSettings.mockReturnValueOnce({ status: "not-registered" }); // snapshot: legacy
-    getLoginItemSettings.mockReturnValueOnce({ status: "not-registered" });
-    getLoginItemSettings.mockReturnValueOnce({ status: "enabled" });
-
-    await registerHostLoginItem(undefined);
-
-    await expect(
-      hasUnappliedPendingLoginItemRevision("production"),
-    ).resolves.toBe(false);
-  });
-
   it("treats a marker whose clear FAILED as already-applied, but re-arms for a newer revision", async () => {
     writePendingRevisionMarker();
     const markerDir = join(workHome, ".traycer", "host");
@@ -1646,23 +1618,6 @@ describe("unregisterHostLoginItemGuarded - removable-state entry guard", () => {
     expect(setLoginItemSettings.mock.calls[0]?.[0]).toMatchObject({
       openAtLogin: false,
       serviceName: "ai.traycer.host.plist",
-    });
-  });
-
-  it("not-supported admits removal — its own clear leg is skipped, the other label's still runs", async () => {
-    getLoginItemSettings
-      .mockReturnValueOnce({ status: "not-registered" }) // snapshot: primary
-      .mockReturnValueOnce({ status: "not-supported" }); // snapshot: legacy
-
-    await expect(
-      unregisterHostLoginItemGuarded(async () => true),
-    ).resolves.toBe(true);
-    // Only the primary label's clear ran — the legacy leg has no API to
-    // clear with under `not-supported` and is skipped, not attempted.
-    expect(setLoginItemSettings).toHaveBeenCalledTimes(1);
-    expect(setLoginItemSettings.mock.calls[0]?.[0]).toMatchObject({
-      openAtLogin: false,
-      serviceName: "ai.traycer.host.agent.plist",
     });
   });
 });

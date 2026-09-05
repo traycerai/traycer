@@ -325,12 +325,21 @@ function CooperativeFirstRestartFlow(
   // ordering that guarantees it: `IRunnerHost.onLocalHostChange` fires
   // synchronously on subscribe with the current snapshot (or `null`),
   // `HostDirectoryService` assigns `localEntry` in that callback while
-  // installing the subscription inside `start()`, and the runtime provider
-  // awaits `directory.start()` before publishing the binding this component
-  // renders under. So a real snapshot is in hand by the first render. If that
-  // contract ever turns async, this read silently becomes "unknown" and the
-  // force path turns back into the silent kill this flow exists to remove -
-  // gate it then.
+  // installing the subscription inside `startSeeded()`, and the runtime
+  // provider awaits `directory.startSeeded()` before publishing the binding
+  // this component renders under. So a real snapshot is in hand by the first
+  // render. If that contract ever turns async, this read silently becomes
+  // "unknown" and the force path turns back into the silent kill this flow
+  // exists to remove - gate it then.
+  //
+  // Boot stopped awaiting the REGISTRY LISTING (`start()` -> `startSeeded()`),
+  // which does not touch the contract above: the local half is still awaited,
+  // and it is the only half either source here reads. `resolveLocalEntry`'s
+  // fallback scans `directoryQuery.data` for `kind === "local"`, and the
+  // merged snapshot's only local row IS `getLocalEntry()`'s - so the fallback
+  // is strictly weaker than the live read it backs up, and a listing that has
+  // not landed cannot change what it finds. Remote rows have never been able
+  // to make this answer `null` or non-`null`.
   const localEntry = resolveLocalEntry(
     binding === null ? null : binding.directory.getLocalEntry(),
     directoryQuery.data,

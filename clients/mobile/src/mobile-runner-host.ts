@@ -623,6 +623,10 @@ export class MobileRunnerHost implements IRunnerHost {
     // Mobile microphone permissions are driven by `getUserMedia`.
   }
 
+  async openFullDiskAccessSettings(): Promise<void> {
+    // No Full Disk Access pane, and no login import, on mobile.
+  }
+
   onAuthCallback(handler: () => void): Disposable {
     // The browser-return signal is the app coming back to the FOREGROUND, not
     // a parsed callback URL. The `traycer://auth/callback` deep link the
@@ -670,16 +674,9 @@ export class MobileRunnerHost implements IRunnerHost {
 // The client kind this app signs in as. It labels the minted session on the
 // sessions page, keys the approval-page copy, and gates push-token
 // registration. The cloud /device page fires the return-to-app deep link for
-// either kind, so `return_scheme` behaves the same both ways.
-//
-// Production builds sign in as "desktop": the production authn deployment
-// rejects the "mobile" device client kind, and a build that sends it cannot
-// sign in at all. Every other environment sends the honest kind - dev and
-// staging authn accept it, which is what lets staging exercise the real
-// labeling. When the production authn accepts "mobile", this collapses back
-// to the unconditional kind.
-const DEVICE_FLOW_CLIENT_ID: DeviceClientId =
-  __TRAYCER_MOBILE_CONFIG__.environment === "production" ? "desktop" : "mobile";
+// either kind, so `return_scheme` behaves the same both ways. Every authn
+// deployment accepts it, so every environment sends the honest kind.
+const DEVICE_FLOW_CLIENT_ID: DeviceClientId = "mobile";
 
 class MobileDeviceFlowHost implements IDeviceFlowHost {
   constructor(

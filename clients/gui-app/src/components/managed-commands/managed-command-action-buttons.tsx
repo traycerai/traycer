@@ -12,6 +12,10 @@ import { cn } from "@/lib/utils";
  * `ariaLabel` is separate from the tooltip because a surface that lists several
  * shells at once needs each button to name ITS shell, while the tooltip stays
  * the bare verb.
+ *
+ * `pressed` turns the button into a toggle (`aria-pressed`), for the one
+ * setting a person edits on a command - relaunch after a host restart. Omit it
+ * (`undefined`) for an action, which has no state to press.
  */
 export function ManagedCommandActionButton(props: {
   readonly label: string;
@@ -20,6 +24,7 @@ export function ManagedCommandActionButton(props: {
   readonly isPending: boolean;
   readonly testId: string;
   readonly className: string | undefined;
+  readonly pressed: boolean | undefined;
   readonly onClick: () => void;
 }) {
   return (
@@ -38,6 +43,7 @@ export function ManagedCommandActionButton(props: {
           props.className,
         )}
         aria-label={props.ariaLabel}
+        aria-pressed={props.pressed}
         data-testid={props.testId}
         disabled={props.isPending}
         // The surrounding row opens the output window; a lifecycle press is a
@@ -86,6 +92,7 @@ export function ManagedCommandStopButton(props: {
       isPending={props.isPending}
       testId={`managed-command-stop-${props.commandId}`}
       className={props.className}
+      pressed={undefined}
       onClick={props.onStop}
     />
   );

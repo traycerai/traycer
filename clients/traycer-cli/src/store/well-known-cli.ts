@@ -41,7 +41,8 @@ import {
 // `<cliInstallHomeDir>/bin/traycer[.exe]`.
 //
 // This path is a CONTRACT with the host daemon: the host's
-// `resolveCliExecutablePath` (traycer-host, update-reconciler) shells the
+// `resolveCliExecutablePath` (traycer-host,
+// domain/update/cli-invocation/resolver.ts) shells the
 // CLI for doctor / update / service-status EXCLUSIVELY at this path - it
 // reads neither the CLI manifest nor $PATH. An install whose binary lives
 // anywhere else (npm global, brew cellar, hand-placed `~/.local/bin`) is

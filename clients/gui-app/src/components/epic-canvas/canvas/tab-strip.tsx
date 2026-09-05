@@ -65,6 +65,7 @@ import {
   useTileStripOffsets,
 } from "@/components/epic-canvas/dnd/dnd-store";
 import type {
+  BrowserSessionTileRef,
   EpicCanvasTileRef,
   EpicTerminalRef,
   SplitDirection,
@@ -502,13 +503,38 @@ interface TerminalTabControl {
 }
 
 function TabItem(props: TabItemProps) {
+  if (props.tab.type === "browser-session") {
+    return <BrowserTabItem {...props} tab={props.tab} />;
+  }
   if (props.tab.type !== "terminal") {
-    return <TabItemBody {...props} terminalControl={null} />;
+    return (
+      <TabItemBody
+        {...props}
+        terminalControl={null}
+        browserPresentation={null}
+      />
+    );
   }
   return (
     <TabHostProvider hostId={props.tab.hostId}>
       <TerminalTabItem {...props} tab={props.tab} />
     </TabHostProvider>
+  );
+}
+
+function BrowserTabItem(
+  props: Omit<TabItemProps, "tab"> & { readonly tab: BrowserSessionTileRef },
+) {
+  const browserPresentation = useBrowserTabPresentation(
+    props.tab,
+    props.epicId,
+  );
+  return (
+    <TabItemBody
+      {...props}
+      terminalControl={null}
+      browserPresentation={browserPresentation}
+    />
   );
 }
 
@@ -538,7 +564,13 @@ function TerminalTabItem(
       });
     },
   };
-  return <TabItemBody {...props} terminalControl={control} />;
+  return (
+    <TabItemBody
+      {...props}
+      terminalControl={control}
+      browserPresentation={null}
+    />
+  );
 }
 
 function useTabRenameControl(args: {
@@ -547,10 +579,18 @@ function useTabRenameControl(args: {
   readonly groupId: string;
   readonly canRenameTabs: boolean;
   readonly terminalControl: TerminalTabControl | null;
+  readonly browserPresentation: BrowserTabPresentation | null;
   readonly onRename: TabItemProps["menuProps"]["onRename"];
 }) {
-  const { tab, epicId, groupId, canRenameTabs, terminalControl, onRename } =
-    args;
+  const {
+    tab,
+    epicId,
+    groupId,
+    canRenameTabs,
+    terminalControl,
+    browserPresentation,
+    onRename,
+  } = args;
   const isTerminalTab = tab.type === "terminal";
   const resolvedHostClient = useHostClientForHostId(
     isTerminalTab ? tabHostId(tab) : null,
@@ -569,7 +609,6 @@ function useTabRenameControl(args: {
     epicId,
     terminalHostClient,
   );
-  const browserPresentation = useBrowserTabPresentation(tab);
   const displayTitle =
     browserPresentation?.title ??
     (terminalControl?.mode === "capable" || terminalControl?.mode === "unknown"
@@ -618,6 +657,7 @@ function canRenameCanvasTab(
 function TabItemBody(
   props: TabItemProps & {
     readonly terminalControl: TerminalTabControl | null;
+    readonly browserPresentation: BrowserTabPresentation | null;
   },
 ) {
   const {
@@ -694,6 +734,7 @@ function TabItemBody(
       groupId,
       canRenameTabs,
       terminalControl: props.terminalControl,
+      browserPresentation: props.browserPresentation,
       onRename,
     });
   const isArchived = useRegisteredEpicNodeArchived(epicId, tab.id);

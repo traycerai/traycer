@@ -27,7 +27,12 @@ import { createElement, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, renderHook, waitFor } from "@testing-library/react";
 import * as Y from "yjs";
-import type { ChatRecordSummary } from "@traycer/protocol/host/epic/chat-records";
+// The `@1.1` row, which is what the negotiated contract actually returns. Typing
+// the fixture against the LATEST row rather than a hand-picked field list is what
+// makes the next field added to this response fail HERE, at compile time, instead
+// of silently leaving the mock a shape no host can produce - which is exactly how
+// `docResident` slipped past this file.
+import type { ChatRecordSummaryV11 } from "@traycer/protocol/host/epic/chat-records";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -41,11 +46,11 @@ import {
   EpicSessionContext,
   EpicSessionHostClientContext,
 } from "@/lib/registries/epic-session-registry";
+import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import {
-  createOpenEpicStore,
-  type EpicStreamClientFactory,
-  type OpenEpicStoreHandle,
-} from "@/stores/epics/open-epic/store";
+  openStoreForTest,
+  type OpenedStoreForTest,
+} from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   invalidateEpicChatRecords,
@@ -82,13 +87,15 @@ vi.mock("@/lib/host/runtime", async (importOriginal) => ({
 interface Fixture {
   readonly client: HostClient<HostRpcRegistry>;
   readonly queryClient: QueryClient;
-  readonly handle: OpenEpicStoreHandle;
+  readonly handle: OpenedStoreForTest;
   readonly listCalls: { value: number };
-  readonly records: ChatRecordSummary[];
+  readonly records: ChatRecordSummaryV11[];
   readonly Wrapper: (props: { readonly children: ReactNode }) => ReactNode;
 }
 
-function record(overrides: Partial<ChatRecordSummary>): ChatRecordSummary {
+function record(
+  overrides: Partial<ChatRecordSummaryV11>,
+): ChatRecordSummaryV11 {
   return {
     chatId: "chat-1",
     ownerUserId: VIEWER_ID,
@@ -104,6 +111,11 @@ function record(overrides: Partial<ChatRecordSummary>): ChatRecordSummary {
     revision: 1,
     visibility: "private",
     origin: "own",
+    // Registry-backed, which is what this fixture's rows are: they are minted
+    // through the `epic.createChat` handler below. A `true` row would be one
+    // read out of the epic doc's `chats` subtree, which this fixture never
+    // exercises.
+    docResident: false,
     ...overrides,
   };
 }
@@ -140,7 +152,7 @@ function makeMeta(): SnapshotMetaEpic {
 }
 
 /** A real open-epic session with an empty doc `chats` map (the post-sweep steady state). */
-function newSession(): OpenEpicStoreHandle {
+function newSession(): OpenedStoreForTest {
   const captured: { value: EpicStreamCallbacks | null } = { value: null };
   const factory: EpicStreamClientFactory = (_id, callbacks) => {
     captured.value = callbacks;
@@ -153,11 +165,21 @@ function newSession(): OpenEpicStoreHandle {
       close: () => undefined,
     };
   };
-  const handle = createOpenEpicStore({
+  const handle = openStoreForTest({
     epicId: EPIC_ID,
-    streamClientFactory: factory,
     userId: VIEWER_ID,
-    onAuthError: null,
+    // The factories go to the COMPOSITION now, not the store:
+    // `createOpenEpicStore` stopped constructing a runtime, so a
+    // suite that used to hand it a `streamClientFactory` has nothing
+    // to hand it. `handle.doc` still resolves because this harness
+    // builds the runtime in THIS thread.
+    factories: {
+      streamClientFactory: factory,
+      laneSelection: null,
+    },
+    // Explicit: `null` means this suite never writes, so a write in
+    // one that said so fails rather than resolving quietly.
+    writeCommand: null,
   });
   if (captured.value === null) throw new Error("stream factory not invoked");
   const seed = new Y.Doc();
@@ -167,7 +189,7 @@ function newSession(): OpenEpicStoreHandle {
 }
 
 function createFixture(listFailureCode: "E_HOST_UNSUPPORTED" | null): Fixture {
-  const records: ChatRecordSummary[] = [];
+  const records: ChatRecordSummaryV11[] = [];
   const listCalls = { value: 0 };
   const requestSeq = { value: 0 };
   const queryClient = new QueryClient({

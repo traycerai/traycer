@@ -21,6 +21,7 @@ export const providersMutationKeys = {
   removePackVersion: () => ["providers.removePackVersion"] as const,
   usePackVersion: () => ["providers.usePackVersion"] as const,
   setPackPolicy: () => ["providers.setPackPolicy"] as const,
+  refreshPackDiscovery: () => ["providers.refreshPackDiscovery"] as const,
   renameProfile: () => ["providers.renameProfile"] as const,
   recolorProfile: () => ["providers.recolorProfile"] as const,
   removeProfile: () => ["providers.removeProfile"] as const,

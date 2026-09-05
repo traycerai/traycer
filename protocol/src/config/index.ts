@@ -13,3 +13,4 @@ export * from "./paths";
 export * from "./store";
 export * from "./installation";
 export * from "./host-stop-intent";
+export * from "./cli-invocation-record";

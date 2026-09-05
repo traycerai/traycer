@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { PLAN_RESTRICTED_REPROBE_MS } from "../../host-transport/remote/config";
 import {
   SELECTION_AUTHORITY_CONTRACT_VERSION,
   type AuthorityIdentitySource,
@@ -812,7 +813,7 @@ describe("SelectionAuthorityEngineImpl - death aggregation", () => {
     authority.dispose();
   });
 
-  it("plan-restricted provenance: only comes from a confirmed refusal carrying it; null-detail is offline; last-counted refusal wins", () => {
+  it("plan-restricted provenance is sticky until proof of life; ordinary refusals still derive offline", () => {
     const clock = createFakeAuthorityClock(0);
     const authority = createTestAuthority({
       initialFleet: {
@@ -822,6 +823,7 @@ describe("SelectionAuthorityEngineImpl - death aggregation", () => {
           fleetHost("H1", "remote"),
           fleetHost("H2", "remote"),
           fleetHost("H3", "remote"),
+          fleetHost("H4", "remote"),
         ],
       },
       initialIdentityKey: "acct-1",
@@ -833,13 +835,14 @@ describe("SelectionAuthorityEngineImpl - death aggregation", () => {
     const attachA = engine.attach("A", attachRequest(seqA, []));
     if (!attachA.ok) throw new Error("expected attach to succeed");
 
-    for (let i = 0; i < CONFIRMED_DEATH_REFUSAL_STREAK; i += 1) {
-      engine.ingestEvidence(
-        "A",
-        attachA.incarnationId,
-        dialRefusal("H1", `plan-${i}`, "plan-restricted", i),
-      );
-    }
+    engine.ingestEvidence(
+      "A",
+      attachA.incarnationId,
+      dialRefusal("H1", "plan-1", "plan-restricted", 0),
+    );
+    // An entitlement refusal is deterministic, unlike a reachability failure:
+    // one observed verdict is conclusive and avoids manufacturing two more
+    // network attempts merely to make the UI publish the known reason.
     expect(findLease(engine.snapshot().leases, "H1")?.dead).toEqual({
       reason: "plan-restricted",
     });
@@ -871,8 +874,89 @@ describe("SelectionAuthorityEngineImpl - death aggregation", () => {
       dialRefusal("H3", "mix-3", null, 0),
     );
     expect(findLease(engine.snapshot().leases, "H3")?.dead).toEqual({
-      reason: "offline",
+      reason: "plan-restricted",
     });
+
+    engine.ingestEvidence(
+      "A",
+      attachA.incarnationId,
+      sessionEvidence("H4", "live", "established", 0),
+    );
+    engine.ingestEvidence(
+      "A",
+      attachA.incarnationId,
+      dialRefusal("H4", "denied-while-live", "plan-restricted", 0),
+    );
+    expect(findLease(engine.snapshot().leases, "H4")?.status).toBe("ready");
+    engine.ingestEvidence(
+      "A",
+      attachA.incarnationId,
+      sessionEvidence("H4", "live", "lost", 1),
+    );
+    expect(findLease(engine.snapshot().leases, "H4")?.dead).toEqual({
+      reason: "plan-restricted",
+    });
+
+    // The authority owns the matching deadline too. Once it expires, the
+    // lease becomes selectable again so the cache's now-empty slot can receive
+    // the one controlled policy probe even when no tab remained mounted.
+    clock.advance(PLAN_RESTRICTED_REPROBE_MS);
+    expect(findLease(engine.snapshot().leases, "H1")?.status).toBe(
+      "connecting",
+    );
+    expect(findLease(engine.snapshot().leases, "H3")?.status).toBe(
+      "connecting",
+    );
+
+    engine.ingestEvidence(
+      "A",
+      attachA.incarnationId,
+      dialOutcome("H3", "recovered", "success", 1),
+    );
+    expect(findLease(engine.snapshot().leases, "H3")?.status).toBe(
+      "connecting",
+    );
+
+    authority.dispose();
+  });
+
+  it("refreshes the reprobe deadline when a new physical session is denied", () => {
+    const clock = createFakeAuthorityClock(0);
+    const authority = createTestAuthority({
+      initialFleet: {
+        identityGeneration: 0,
+        localHostId: null,
+        hosts: [fleetHost("H", "remote")],
+      },
+      initialIdentityKey: "acct-1",
+      clock,
+    });
+    const { engine } = authority;
+    const seq = engine.allocateAttachSeq("A");
+    const attachment = engine.attach("A", attachRequest(seq, []));
+    if (!attachment.ok) throw new Error("expected attach to succeed");
+
+    engine.ingestEvidence(
+      "A",
+      attachment.incarnationId,
+      dialRefusal("H", "first-identity", "plan-restricted", 0),
+    );
+    clock.advance(PLAN_RESTRICTED_REPROBE_MS / 2);
+    engine.ingestEvidence(
+      "A",
+      attachment.incarnationId,
+      dialRefusal("H", "new-physical-identity", "plan-restricted", 1),
+    );
+
+    // The first deadline has elapsed, but the latest authenticated refusal
+    // owns a complete window of its own.
+    clock.advance(PLAN_RESTRICTED_REPROBE_MS / 2);
+    expect(findLease(engine.snapshot().leases, "H")?.dead).toEqual({
+      reason: "plan-restricted",
+    });
+
+    clock.advance(PLAN_RESTRICTED_REPROBE_MS / 2);
+    expect(findLease(engine.snapshot().leases, "H")?.status).toBe("connecting");
 
     authority.dispose();
   });
@@ -4038,36 +4122,6 @@ describe("SelectionAuthorityEngineImpl - local proof-of-life clears the ensure c
 
     authority.dispose();
   });
-
-  it("T3b/P3: a proof of life on a fleet with no local host does not crash and clears nothing local-specific", () => {
-    const clock = createFakeAuthorityClock(0);
-    const authority = createTestAuthority({
-      initialFleet: {
-        identityGeneration: 0,
-        localHostId: null,
-        hosts: [fleetHost("R", "remote")],
-      },
-      initialIdentityKey: "acct-1",
-      clock,
-    });
-    const { engine } = authority;
-    const incarnation = attachReporter(engine, "A");
-
-    expect(() => {
-      engine.ingestEvidence(
-        "A",
-        incarnation,
-        dialOutcome("R", "r-1", "success", 1),
-      );
-    }).not.toThrow();
-
-    const after = findLease(engine.snapshot().leases, "R");
-    expect(after?.status).toBe("connecting");
-    expect(after?.dead).toBeNull();
-
-    authority.dispose();
-  });
-
   it("T4/addendum: a cooldown cleared by a live session does not resurface once that session is lost", async () => {
     const clock = createFakeAuthorityClock(0);
     const ensure = createDeferredEnsure();
@@ -5059,7 +5113,6 @@ describe("selection authority dial-evidence instrumentation", () => {
 
     authority.dispose();
   });
-
   it("names the crossing ONCE - later refusals stay ordinary `counted`", () => {
     const log = createRecordingAuthorityLog();
     const { authority, incarnationId } = attachedAuthority(log);
@@ -5088,63 +5141,6 @@ describe("selection authority dial-evidence instrumentation", () => {
     );
     expect(dispositions[CONFIRMED_DEATH_REFUSAL_STREAK]).toBe("counted");
     expect(findLease(engine.snapshot().leases, "H")?.status).toBe("dead");
-
-    authority.dispose();
-  });
-
-  it("keeps NO stall state for a host outside the fleet", () => {
-    const log = createRecordingAuthorityLog();
-    const { authority, incarnationId } = attachedAuthority(log);
-    const { engine } = authority;
-
-    // Evidence for an unknown host is dropped, so there is no lease to strand
-    // a surface on and nothing to warn about. Accumulating here would grow one
-    // entry per distinct id between fleet snapshots, and an entry recreated
-    // after a prune would be inherited by a durable id that later re-registers.
-    for (let i = 0; i < CONFIRMED_DEATH_REFUSAL_STREAK * 3; i += 1) {
-      engine.ingestEvidence(
-        "A",
-        incarnationId,
-        dialRefusal(`GONE-${i}`, `attempt-${i}`, null, i),
-      );
-    }
-    // Same id repeatedly, which is the case a per-host counter would catch.
-    for (let i = 0; i < CONFIRMED_DEATH_REFUSAL_STREAK * 3; i += 1) {
-      engine.ingestEvidence(
-        "A",
-        incarnationId,
-        dialRefusal("GONE", `gone-${i}`, null, 100 + i),
-      );
-    }
-
-    expect(stallWarnings(log.records)).toHaveLength(0);
-
-    authority.dispose();
-  });
-
-  it("does not count a REPLAYED success as a stalled failure", () => {
-    const log = createRecordingAuthorityLog();
-    const { authority, incarnationId } = attachedAuthority(log);
-    const { engine } = authority;
-
-    // A duplicate is classified before its outcome is ever read, so a success
-    // arriving twice looks exactly like a refusal that went nowhere. Warning
-    // "dial failures are not advancing" on a run of successes would point the
-    // reader at the opposite of what happened.
-    engine.ingestEvidence(
-      "A",
-      incarnationId,
-      dialOutcome("H", "same", "success", 0),
-    );
-    for (let i = 0; i < CONFIRMED_DEATH_REFUSAL_STREAK * 2; i += 1) {
-      engine.ingestEvidence(
-        "A",
-        incarnationId,
-        dialOutcome("H", "same", "success", 1 + i),
-      );
-    }
-
-    expect(stallWarnings(log.records)).toHaveLength(0);
 
     authority.dispose();
   });

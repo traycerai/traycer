@@ -354,8 +354,6 @@ const VALID_ATTACH_PAYLOAD = {
       tagName: "BUTTON",
       elementId: "go",
       classNames: ["primary"],
-      outerHtml: "<button>Go</button>",
-      outerHtmlTruncated: false,
       textPreview: "Go",
       ariaRole: "button",
       accessibleName: "Go",

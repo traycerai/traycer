@@ -7,7 +7,7 @@ import {
   type ExpandedImageState,
 } from "@/components/chat/expanded-image-dialog";
 import type { ComposerImageAtom } from "@/lib/composer/image-atoms";
-import { type ImageBytesFetcher } from "@/lib/attachments/image-blob-cache";
+import { type ScopedImageBytesFetcher } from "@/lib/attachments/image-blob-cache";
 import { useImageBlobUrlState } from "@/lib/attachments/use-image-blob-url";
 import type { ImageAttachmentDisplayLabel } from "@/lib/composer/image-attachment-labels";
 import { fallbackImageAttachmentDisplayLabel } from "@/lib/composer/image-attachment-labels";
@@ -17,8 +17,8 @@ export interface ImageAttachmentChipProps {
   atom: ComposerImageAtom;
   displayLabel: ImageAttachmentDisplayLabel | undefined;
   onRemove: (id: string) => void;
-  /** Streams a hash's bytes when no synchronous source is available. */
-  fetcher: ImageBytesFetcher;
+  /** Streams a hash's bytes when no synchronous source is available, scoped to the subject those bytes are authorized against. */
+  fetcher: ScopedImageBytesFetcher;
   /** Same-session synchronous object-URL for a hash, or null if unseen. */
   sessionObjectUrl: (hash: string) => string | null;
 }

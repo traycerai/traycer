@@ -22,7 +22,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { GenericModelProviderIcon } from "@/components/home/pickers/model-provider-icons";
-import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link-mutation";
+import { useOpenLink } from "@/lib/links/open-link";
 import { cn } from "@/lib/utils";
 import {
   customProviderDraftFrom,
@@ -130,7 +130,7 @@ export function ProviderCustomModelProviderDialog(props: {
 
   useRelockAgainstCatalog({ stored: props.stored, setDraft });
 
-  const openExternalLink = useRunnerOpenExternalLink();
+  const openLink = useOpenLink();
   const fieldId = useId();
   const propTakenIds = props.takenIds;
   const initialId = initialValues?.modelProviderId ?? null;
@@ -204,7 +204,7 @@ export function ProviderCustomModelProviderDialog(props: {
               // dialog's authorization link takes.
               className="underline underline-offset-2 hover:text-foreground"
               onClick={() => {
-                openExternalLink.mutate(CUSTOM_PROVIDER_DOCS_URL);
+                void openLink(CUSTOM_PROVIDER_DOCS_URL, "docs", null);
               }}
             >
               provider config docs
