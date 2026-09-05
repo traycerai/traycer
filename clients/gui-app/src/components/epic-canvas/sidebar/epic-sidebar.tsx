@@ -129,6 +129,7 @@ import {
   useEpicArtifactRecords,
   useEpicConnectionStatus,
   useEpicPermissionRole,
+  useEpicNodeHostIds,
   useEpicSnapshotMeta,
   useEpicTreeIndex,
   useRootIds,
@@ -148,7 +149,14 @@ import {
   useEpicArchiveChats,
   useEpicDeleteChat,
 } from "@/hooks/epic/use-epic-chat-mutations";
-import { useChatArchiveSupported } from "@/hooks/epic/use-chat-archive-support";
+import {
+  useChatArchiveSupported,
+  SET_CHAT_ARCHIVED_METHOD,
+} from "@/hooks/epic/use-chat-archive-support";
+import {
+  getNegotiatedHostMethods,
+  subscribeNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import {
   useEpicCreateArtifact,
   useEpicDeleteArtifact,
@@ -198,6 +206,7 @@ import {
   Fragment,
   useEffect,
   useLayoutEffect,
+  useSyncExternalStore,
   useMemo,
   useRef,
   useState,
@@ -1510,6 +1519,7 @@ function SidebarBulkDeleteController(props: {
             return deleteChat.mutateAsync({
               epicId: props.epicId,
               chatId: target.id,
+              hostId: chatsById[target.id]?.hostId ?? sessionHostId,
             });
           case "terminal-agent":
             return deleteTerminalAgent.mutateAsync({
@@ -1532,8 +1542,11 @@ function SidebarBulkDeleteController(props: {
         // still-being-deleted tab) get pushed as a route entry. Instead,
         // close every successfully-deleted open tab raw, then compute and
         // commit the post-batch focus target exactly once.
-        const openTargets = successfulIds.flatMap((id) => {
-          const found = findOpenArtifactInTab(props.tabId, id);
+        // The chat mutation already closed exactly the owning host's tiles.
+        const openTargets = targets.flatMap((target, index) => {
+          if (target.kind === "chat" || results[index].status !== "fulfilled")
+            return [];
+          const found = findOpenArtifactInTab(props.tabId, target.id);
           return found === null ? [] : [found];
         });
         if (openTargets.length > 0) {
@@ -1562,6 +1575,8 @@ function SidebarBulkDeleteController(props: {
       });
   }, [
     blockedDeleteReason,
+    chatsById,
+    sessionHostId,
     cancelSelection,
     clearSelectedIds,
     closeCanvasTab,
@@ -1624,7 +1639,6 @@ interface SelectedChatArchiveAction {
 
 function useSelectedChatArchive(canMutate: boolean): SelectedChatArchiveAction {
   const selection = useSidebarBulkSelection();
-  const supported = useChatArchiveSupported();
   const archiveChats = useEpicArchiveChats();
   const activeAgentIds = useEpicActiveAgentIds();
   const tree = useEpicTreeIndex();
@@ -1633,6 +1647,7 @@ function useSelectedChatArchive(canMutate: boolean): SelectedChatArchiveAction {
     latestTreeRef.current = tree;
   }, [tree]);
   const epicId = useOpenEpicHandle().epicId;
+  const sessionHostId = useEpicSessionHostId();
   const selectedRootIds = useMemo(
     () =>
       rootmostSelectedSidebarIds({
@@ -1640,6 +1655,19 @@ function useSelectedChatArchive(canMutate: boolean): SelectedChatArchiveAction {
         tree,
       }),
     [selection.selectedVisibleIds, tree],
+  );
+  const ownerHostIds = useEpicNodeHostIds(selectedRootIds);
+  const supported = useSyncExternalStore(subscribeNegotiatedManifests, () =>
+    (ownerHostIds.length === 0 ? [sessionHostId] : ownerHostIds).every(
+      (ownerHostId) => {
+        const hostId = ownerHostId ?? sessionHostId;
+        return (
+          hostId !== null &&
+          getNegotiatedHostMethods(hostId)?.has(SET_CHAT_ARCHIVED_METHOD) ===
+            true
+        );
+      },
+    ),
   );
   const selectedHasActiveAgent =
     sidebarIdsWithinRoots({
@@ -1659,7 +1687,14 @@ function useSelectedChatArchive(canMutate: boolean): SelectedChatArchiveAction {
       return;
     }
     archiveChats.mutate(
-      { epicId, chatIds: selectedRootIds, archived: true },
+      {
+        epicId,
+        chats: selectedRootIds.map((chatId, index) => ({
+          chatId,
+          hostId: ownerHostIds[index] ?? sessionHostId,
+        })),
+        archived: true,
+      },
       {
         onSuccess: (results) => {
           const successfulRootIds = selectedRootIds.filter(
@@ -1694,6 +1729,8 @@ function useSelectedChatArchive(canMutate: boolean): SelectedChatArchiveAction {
     archiveChats,
     canMutate,
     epicId,
+    ownerHostIds,
+    sessionHostId,
     selectedHasActiveAgent,
     selectedRootIds,
     selection,
