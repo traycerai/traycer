@@ -1,6 +1,6 @@
 /**
  * What the Link mobile app panel SHOWS for each state the watch reports: the
- * tile's frame drains with the same clock as the countdown text, a rotation
+ * countdown text counts down to the next code on a local clock, a rotation
  * mounts a fresh tile, and every terminal state states plainly what happened
  * and what the user can do next. The watch itself is faked here — its
  * behaviour is covered by link-phone-panel.test.tsx, and duplicating it would
@@ -72,14 +72,6 @@ function showing(nowMs: number, code: string) {
   };
 }
 
-function remainingFraction(): number {
-  return Number(
-    screen
-      .getByTestId("link-phone-expiry-frame")
-      .getAttribute("data-remaining-fraction"),
-  );
-}
-
 beforeEach(() => {
   vi.useFakeTimers();
   mocks.useRespondLinkLoginMutation.mockReturnValue({
@@ -95,34 +87,48 @@ afterEach(() => {
 });
 
 describe("LinkPhonePanel presentation", () => {
-  it("drains the tile's frame in step with the countdown text", () => {
+  it("counts the text line down to the next code and holds at zero", () => {
     mocks.useLinkLoginWatch.mockReturnValue(showing(Date.now(), "ABCDE-FGHJK"));
     render(<LinkPhonePanel />);
     const secondsLeft = () =>
       screen.getByTestId("link-phone-countdown").textContent;
 
     expect(secondsLeft()).toBe(`New code in ${REMINT_SECONDS}s`);
-    expect(remainingFraction()).toBe(1);
 
     act(() => {
       vi.advanceTimersByTime(25_000);
     });
     expect(secondsLeft()).toBe("New code in 25s");
-    expect(remainingFraction()).toBe(0.5);
 
     act(() => {
       vi.advanceTimersByTime(20_000);
     });
     expect(secondsLeft()).toBe("New code in 5s");
-    expect(remainingFraction()).toBe(0.1);
 
-    // The frame empties with the clock and stays empty while the refetch is
-    // in flight, rather than wrapping back around.
+    // The clock stops at zero while the refetch is in flight, rather than
+    // wrapping back around or going negative.
     act(() => {
       vi.advanceTimersByTime(30_000);
     });
     expect(secondsLeft()).toBe("New code in 0s");
-    expect(remainingFraction()).toBe(0);
+  });
+
+  it("frames the tile with a static band that does not track the countdown", () => {
+    mocks.useLinkLoginWatch.mockReturnValue(showing(Date.now(), "ABCDE-FGHJK"));
+    render(<LinkPhonePanel />);
+    const frame = () => screen.getByTestId("link-phone-tile-frame");
+    const before = frame().outerHTML;
+
+    act(() => {
+      vi.advanceTimersByTime(25_000);
+    });
+    // The text moved; the band did not. A frame that drained with the clock
+    // read as a warning, and the rotation needs none.
+    expect(screen.getByTestId("link-phone-countdown").textContent).toBe(
+      "New code in 25s",
+    );
+    expect(frame().outerHTML).toBe(before);
+    expect(frame().getAttribute("stroke-dashoffset")).toBeNull();
   });
 
   it("mounts a fresh tile when the code rotates", () => {
