@@ -7,7 +7,7 @@ import {
   type HistoryNavRouter,
 } from "@/lib/commands/actions";
 import { getHistoryController } from "@/lib/persistent-history";
-import { useRunnerHost } from "@/providers/use-runner-host";
+import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import { useMobileNavStore } from "@/stores/layout/mobile-nav-store";
 
 /**
@@ -24,13 +24,15 @@ import { useMobileNavStore } from "@/stores/layout/mobile-nav-store";
  * 4. With nothing behind, the shell is asked to step out of the way.
  *
  * Gated on the capability alone: shells with no OS back request pass `null`
- * and this attaches nothing. No platform is named here.
+ * and this attaches nothing. No platform is named here. A missing runner host
+ * (route-level tests that mount the shell bare) reads the same way - no shell,
+ * no request to answer - rather than as an error.
  */
 export function useSystemBack(): void {
   const router = useRouter();
-  const runnerHost = useRunnerHost();
+  const runnerHost = useRunnerHostOrNull();
   useEffect(() => {
-    const systemBack = runnerHost.systemBack;
+    const systemBack = runnerHost?.systemBack ?? null;
     if (systemBack === null) return;
     const subscription = systemBack.onBack(() => {
       const nav = useMobileNavStore.getState();

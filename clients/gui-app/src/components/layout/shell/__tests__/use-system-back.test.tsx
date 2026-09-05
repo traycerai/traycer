@@ -79,6 +79,23 @@ afterEach(() => {
 });
 
 describe("useSystemBack", () => {
+  // The shell mounts under every route-level test, and not all of them stand
+  // up a runner host. No host is the same answer as a host with no capability:
+  // nothing to attach to, nothing attached.
+  it("attaches nothing when mounted outside a runner host provider", () => {
+    const router = makeRouter(createMemoryHistory({ initialEntries: ["/"] }));
+
+    expect(() =>
+      renderHook(() => useSystemBack(), {
+        wrapper: ({ children }) => (
+          <RouterContextProvider router={router}>
+            {children}
+          </RouterContextProvider>
+        ),
+      }),
+    ).not.toThrow();
+  });
+
   it("steps the app's history back on an OS back press", () => {
     const history = createMemoryHistory({ initialEntries: ["/", "/epics"] });
     const backSpy = vi.spyOn(history, "back");
