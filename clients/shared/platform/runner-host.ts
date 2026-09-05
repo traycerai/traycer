@@ -638,6 +638,33 @@ export interface IRunnerHost {
    * (desktop, dev web, tests), where the GUI hides the surface entirely.
    */
   readonly pushPermission: IPushPermissionHost | null;
+
+  /**
+   * The OS "back" request - Android's hardware key and its system back
+   * gesture, which the OS delivers as one event and which never reach the
+   * WebView as a touch. Present only on shells whose OS raises such a request
+   * (the Android shell) and `null` everywhere else: iOS has no back button
+   * and its edge swipe is the GUI's own recognizer; desktop and the browser
+   * have their own back affordances.
+   *
+   * The signal is payload-free. What "back" MEANS - close a drawer, dismiss a
+   * dialog, step the app's history - is the GUI's decision, made against the
+   * same in-app history the edge swipe and the desktop arrows walk. The
+   * shell's only other contribution is `minimize`, for a press with nothing
+   * left to go back to: the platform's answer is to step out of the way, not
+   * to sit on a press that visibly did nothing.
+   */
+  readonly systemBack: ISystemBackHost | null;
+}
+
+/**
+ * The OS back request, where one exists. See `IRunnerHost.systemBack`.
+ */
+export interface ISystemBackHost {
+  /** Fires once per OS back request; carries nothing. */
+  onBack(handler: () => void): Disposable;
+  /** Sends the app to the background, leaving it warm for the next resume. */
+  minimize(): Promise<void>;
 }
 
 /**
