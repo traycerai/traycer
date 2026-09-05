@@ -2013,9 +2013,15 @@ export class HostController {
     // taking its stop-only branch and leaving us waiting on readiness for a
     // host it deliberately did not relaunch. The cycle also stamps against
     // the CLI's own attestation rather than the snapshot in `step`.
+    //
+    // `--force` here means the CLI's `--force` (skip the cooperative shutdown
+    // claim, kill the host), not merely the absence of `--if-idle`: a plain
+    // `host restart` still makes the claim, and a busy host still denies it,
+    // so a forced activation would commit the bytes and then fail to bring
+    // them up - the same gap the CLI's own activation path had.
     return this.runCliRecoveryServiceCycle(
       force
-        ? ["host", "restart", "--defer-if-parked"]
+        ? ["host", "restart", "--force", "--defer-if-parked"]
         : ["host", "restart", "--if-idle", "--defer-if-parked"],
       step.prePid,
     );

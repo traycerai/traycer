@@ -1052,6 +1052,74 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
     expect(result.human).toContain("no-op");
   });
 
+  it("debt cleared under the lock while the health probe would FAIL: no probe, no failed marker, the updating marker is cleared, exit 0", async () => {
+    // The marker was written pre-lock because work was owed then; the work
+    // was paid by another actor under the lock. Probing a host this command
+    // never touched, and stamping the no-op `failed` on a miss, would report
+    // a failure for an update that did not happen. The stale `updating`
+    // marker still has to go.
+    mocks.downloadAndStageHostMock.mockResolvedValue(upToDate("2.0.0"));
+    mocks.readHostInstallRecordMock.mockResolvedValue(sampleRecord("2.0.0"));
+    mocks.readHostPidMetadataMock
+      .mockResolvedValueOnce(pidRecord("1.0.0", 4242))
+      .mockResolvedValue(pidRecord("2.0.0", 4343));
+    mocks.isProcessAliveMock.mockReturnValue(true);
+    mocks.probeHostHealthMock.mockResolvedValue({
+      healthy: false,
+      detail: "tcp refused",
+    });
+
+    const result = await buildHostUpdateCommand({
+      force: false,
+      allowDowngrade: false,
+      ackNonce: null,
+    })(fakeCtx());
+
+    expect(mocks.probeHostHealthMock).not.toHaveBeenCalled();
+    expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenCalledTimes(1);
+    expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenCalledWith(
+      "production",
+      expect.objectContaining({ state: "updating" }),
+    );
+    expect(mocks.deleteUpdateProgressMarkerMock).toHaveBeenCalledWith(
+      "production",
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.human).toContain("no-op");
+  });
+
+  it("the install record moves while waiting for the lock: the restart activates the record as read UNDER the lock and the marker is re-pointed at it", async () => {
+    // Pre-lock the record says 2.0.0 (marker target 2.0.0). Another contender
+    // installs 2.1.0 before this command is admitted. The under-lock read is
+    // what gets activated and what a `failed` stamp would have to name.
+    mocks.downloadAndStageHostMock.mockResolvedValue(upToDate("2.0.0"));
+    mocks.readHostInstallRecordMock
+      .mockResolvedValueOnce(sampleRecord("2.0.0"))
+      .mockResolvedValue(sampleRecord("2.1.0"));
+    mocks.readHostPidMetadataMock.mockResolvedValue(pidRecord("1.0.0", 4242));
+    mocks.isProcessAliveMock.mockReturnValue(true);
+
+    const result = await buildHostUpdateCommand({
+      force: false,
+      allowDowngrade: false,
+      ackNonce: null,
+    })(fakeCtx());
+
+    const markerTargets = mocks.writeUpdateProgressMarkerMock.mock.calls.map(
+      (call) => {
+        const progress = call[1] as { targetVersion: string; state: string };
+        return `${progress.state}:${progress.targetVersion}`;
+      },
+    );
+    expect(markerTargets).toEqual(["updating:2.0.0", "updating:2.1.0"]);
+    expect(mocks.stopHostForRestartWithAttemptMock).toHaveBeenCalledTimes(1);
+    expect(mocks.probeHostHealthMock).toHaveBeenCalledTimes(1);
+    const projected = projectInstallResultLikeDesktop(result.data);
+    expect(projected.previousVersion).toBe("1.0.0");
+    expect(projected.version).toBe("2.1.0");
+    expect(result.human).toContain("updated host 1.0.0 → 2.1.0");
+  });
+
   it("debt cleared under the lock on a BUSY host: still the no-op - the busy gate is never consulted and no failed marker is written", async () => {
     // The host that came up on the committed bytes while this command
     // waited is already doing work. It owes nothing, so its busyness is not

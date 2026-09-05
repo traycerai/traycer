@@ -3406,7 +3406,7 @@ describe("platform matrix", () => {
       expect(waitForHostReady).not.toHaveBeenCalled();
     });
 
-    it("force:true restarts WITHOUT --if-idle", async () => {
+    it("force:true restarts with the CLI's --force (skips the cooperative shutdown claim a busy host would deny), never merely without --if-idle", async () => {
       vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
       const controller = newController("production");
       writeInstallRecord("production", {
@@ -3436,7 +3436,7 @@ describe("platform matrix", () => {
       expect(
         vi.mocked(streamBundledTraycerCliJson).mock.calls[restartCallIndex][0]
           .args,
-      ).toEqual(["host", "restart", "--defer-if-parked"]);
+      ).toEqual(["host", "restart", "--force", "--defer-if-parked"]);
     });
 
     it("the CLI defers for a concurrently parked activation: reports deferred and never waits for readiness of a host it did not relaunch", async () => {

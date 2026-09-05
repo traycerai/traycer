@@ -231,11 +231,45 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
     }
 
     let legacy: LegacyHostUpdateResult;
+    // What was decided BEFORE the lock is whether to enter the activation
+    // path; what happened UNDER it is a separate fact, because the debt can
+    // clear (another actor restarted the host) or the record can move
+    // (another actor installed) while this command waits for admission. The
+    // health probe and the failed-marker stamp below belong to work that was
+    // actually performed: probing a host this command never touched, and
+    // stamping the no-op `failed` when that probe misses, would report a
+    // failure for an update that did not happen.
+    let activationPerformed = false;
+    // The version the progress marker names. Written pre-lock from the
+    // record as it stood; re-pointed when the activation path finds the
+    // record moved under the lock, so a `failed` stamp names the version
+    // that was actually being activated.
+    let markerTargetVersion = targetVersion;
     try {
-      legacy =
-        activationDebt !== null
-          ? await activateInstalledAndProjectLegacy(environment, args.force)
-          : preparation.kind === "staged"
+      if (activationDebt !== null) {
+        const activation = await activateInstalledAndProjectLegacy(
+          environment,
+          args.force,
+          async (installedVersion) => {
+            if (installedVersion === markerTargetVersion) return;
+            markerTargetVersion = installedVersion;
+            await writeUpdateProgressMarkerSafely(
+              ctx.runtime.logger,
+              environment,
+              {
+                state: "updating",
+                error: null,
+                targetVersion: installedVersion,
+                updatedAt: new Date().toISOString(),
+              },
+            );
+          },
+        );
+        legacy = activation.legacy;
+        activationPerformed = activation.activated;
+      } else {
+        legacy =
+          preparation.kind === "staged"
             ? await applyAndProjectLegacy(
                 environment,
                 args.force,
@@ -250,19 +284,21 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
                   onProgress: (info) => ctx.progress(info),
                 }),
               );
+      }
     } catch (err) {
       if (needsWork) {
         await markUpdateFailed(
           ctx.runtime.logger,
           environment,
-          targetVersion,
+          markerTargetVersion,
           err instanceof Error ? err.message : String(err),
         );
       }
       throw err;
     }
 
-    if (needsWork) {
+    const workPerformed = needsApply || activationPerformed;
+    if (workPerformed) {
       // Verify the host the swap just installed actually comes back before
       // reporting success: a binary that commits cleanly but never listens
       // is exactly the failure the marker exists to surface remotely.
@@ -292,6 +328,12 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
           exitCode: 1,
         });
       }
+    }
+    if (needsWork) {
+      // Written above whenever work was OWED, so it is cleared whenever it
+      // was - including the activation debt that another actor paid while
+      // this command waited, which leaves nothing to probe but a marker
+      // that still says `updating`.
       await deleteUpdateProgressMarker(environment);
     }
 
@@ -303,7 +345,8 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
           : "explicit-downgrade",
       version: legacy.version,
       changed: legacy.previousVersion !== legacy.version,
-      activatedInstalled: needsActivate,
+      activatedInstalled: activationPerformed,
+      activationClearedWhileWaiting: needsActivate && !activationPerformed,
       hasPostSwapError: legacy.serviceLifecycle.postSwapError !== null,
     });
     return {
@@ -406,11 +449,22 @@ async function detectActivationDebt(
  * the committed bytes - costing it its connections and reporting a
  * `rc.1 → rc.2` transition that the other actor performed. The debt is
  * re-derived under the lock and a cleared debt is the plain no-op.
+ *
+ * `activated` tells the caller which of the two happened, because the two
+ * need different aftercare (a health probe for a restart, none for a no-op).
+ * `onInstalledVersionUnderLock` is called with the record's version as read
+ * under the lock, before anything is restarted, so the caller can re-point a
+ * progress marker it wrote from the pre-lock record if another actor
+ * installed a different version in between.
  */
 async function activateInstalledAndProjectLegacy(
   environment: Environment,
   force: boolean,
-): Promise<LegacyHostUpdateResult> {
+  onInstalledVersionUnderLock: (installedVersion: string) => Promise<void>,
+): Promise<{
+  readonly legacy: LegacyHostUpdateResult;
+  readonly activated: boolean;
+}> {
   const contenderOptions: WithCliUpdateContenderOptions = {
     environment,
     reason: "host-update-activate",
@@ -427,7 +481,10 @@ async function activateInstalledAndProjectLegacy(
     // a failed marker) - it is the no-op, busy or not.
     const installed = await requireInstalled(environment);
     const debt = await detectActivationDebt(environment);
-    if (debt === null) return projectNoOp(installed);
+    if (debt === null) {
+      return { legacy: projectNoOp(installed), activated: false };
+    }
+    await onInstalledVersionUnderLock(installed.version);
     // Same gate `applyHost` runs before it touches anything: a host with
     // live work is not restarted under it unless the caller said `--force`.
     if (!force) {
@@ -458,14 +515,17 @@ async function activateInstalledAndProjectLegacy(
       stopped,
     );
     return {
-      ...projectNoOp(installed),
-      previousVersion: debt.runningVersion,
-      serviceLifecycle: {
-        priorServiceState: "running",
-        stoppedBeforeSwap: false,
-        postSwapAction: "restart",
-        postSwapError: null,
+      legacy: {
+        ...projectNoOp(installed),
+        previousVersion: debt.runningVersion,
+        serviceLifecycle: {
+          priorServiceState: "running",
+          stoppedBeforeSwap: false,
+          postSwapAction: "restart",
+          postSwapError: null,
+        },
       },
+      activated: true,
     };
   });
 }
