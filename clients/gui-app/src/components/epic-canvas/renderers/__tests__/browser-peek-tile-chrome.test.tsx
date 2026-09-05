@@ -11,11 +11,12 @@ import {
   liveStream as fixtureLiveStream,
   streamAuthRevalidatorModule,
   tabHostIdModule,
+  tileBodyVisibleModule,
   runnerOpenExternalLinkModule,
   tileRoleRunnerHostModule,
   type FakeStreamSession,
 } from "@/components/epic-canvas/renderers/__tests__/browser-peek-tile-stream-fixture";
-import { BrowserPeekTile } from "@/components/browser-tile/browser-peek-tile";
+import { BrowserPeekTile } from "@/components/epic-canvas/renderers/browser-peek-tile";
 import { useScreencastArmedStore } from "@/stores/screencast-armed-store";
 
 const toast = vi.hoisted(() => vi.fn());
@@ -37,6 +38,10 @@ vi.mock("sonner", () => ({
 
 vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () =>
   tabHostIdModule(),
+);
+
+vi.mock("@/components/epic-canvas/hooks/use-tile-body-visible", () =>
+  tileBodyVisibleModule(hookState),
 );
 
 vi.mock("@/hooks/host/use-host-directory-entry", () =>
@@ -146,9 +151,9 @@ describe("BrowserPeekTile toolbar chrome", () => {
   it("hides the controlling chip until armed and release disarms that epoch", async () => {
     renderPeekTile(
       <BrowserPeekTile
-        scope={{ kind: "epic", epicId: "epic-1" }}
-        visible={hookState.visible}
-        onConvertToPip={() => {}}
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -186,9 +191,9 @@ describe("BrowserPeekTile toolbar chrome", () => {
   it("toasts once per unsupportedInteraction feature", () => {
     renderPeekTile(
       <BrowserPeekTile
-        scope={{ kind: "epic", epicId: "epic-1" }}
-        visible={hookState.visible}
-        onConvertToPip={() => {}}
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -207,9 +212,9 @@ describe("BrowserPeekTile toolbar chrome", () => {
   it("keeps the focused address draft when the agent navigates", async () => {
     renderPeekTile(
       <BrowserPeekTile
-        scope={{ kind: "epic", epicId: "epic-1" }}
-        visible={hookState.visible}
-        onConvertToPip={() => {}}
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -240,9 +245,9 @@ describe("BrowserPeekTile toolbar chrome", () => {
   it("auto-arms from a cold toolbar back click and sends goBack only after confirmation", async () => {
     renderPeekTile(
       <BrowserPeekTile
-        scope={{ kind: "epic", epicId: "epic-1" }}
-        visible={hookState.visible}
-        onConvertToPip={() => {}}
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -297,9 +302,9 @@ describe("BrowserPeekTile toolbar chrome", () => {
   it("flushes every pending cold toolbar nav after arm confirmation", async () => {
     renderPeekTile(
       <BrowserPeekTile
-        scope={{ kind: "epic", epicId: "epic-1" }}
-        visible={hookState.visible}
-        onConvertToPip={() => {}}
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -356,9 +361,9 @@ describe("BrowserPeekTile toolbar chrome", () => {
   it("drops a pending arm and cold nav when revoked before confirmation", async () => {
     renderPeekTile(
       <BrowserPeekTile
-        scope={{ kind: "epic", epicId: "epic-1" }}
-        visible={hookState.visible}
-        onConvertToPip={() => {}}
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -417,9 +422,9 @@ describe("BrowserPeekTile toolbar chrome", () => {
   it("replaces a submitted address with the next live url", () => {
     renderPeekTile(
       <BrowserPeekTile
-        scope={{ kind: "epic", epicId: "epic-1" }}
-        visible={hookState.visible}
-        onConvertToPip={() => {}}
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -445,9 +450,9 @@ describe("BrowserPeekTile toolbar chrome", () => {
   it("keeps control after leaving the tile from the address bar", async () => {
     renderPeekTile(
       <BrowserPeekTile
-        scope={{ kind: "epic", epicId: "epic-1" }}
-        visible={hookState.visible}
-        onConvertToPip={() => {}}
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
         node={PEEK_NODE}
         completeMeans="ended"
       />,

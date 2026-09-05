@@ -17,7 +17,6 @@ import {
 } from "@/stores/epics/canvas/__tests__/canvas-test-fixtures";
 import { buildSyntheticTileSurfaceEnvironment } from "@/components/epic-canvas/surface-host/__tests__/synthetic-tile-surface-fixture";
 import type { ReadyTileSurfaceEnvironment } from "@/components/epic-canvas/surface-host/tile-surface-environment-registry";
-import type { HostResourceScope } from "@traycer/protocol/host/resource-scope";
 import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
 import { EpicViewTabContext } from "@/components/epic-canvas/view-tab-context";
 import { useOpenEpicHandle } from "@/providers/use-open-epic-handle";
@@ -90,13 +89,12 @@ vi.mock(
       await import("@/components/epic-canvas/renderers/browser-sessions-context");
     return {
       BrowserSessionsHostProvider: (props: {
-        readonly scope: HostResourceScope;
+        readonly epicId: string;
         readonly hostClient: ReadyTileSurfaceEnvironment["services"]["hostClient"];
         readonly hostId: string | null;
         readonly children: ReactNode;
       }) => {
-        capture.lastBrowserSessionsEpicId =
-          props.scope.kind === "epic" ? props.scope.epicId : null;
+        capture.lastBrowserSessionsEpicId = props.epicId;
         capture.lastBrowserSessionsHostClient = props.hostClient;
         return createElement(
           Context.Provider,
@@ -111,8 +109,6 @@ vi.mock(
               retry: () => undefined,
               openTab: () => Promise.reject(new Error("not used")),
               closeTab: () => Promise.resolve(),
-              attachTab: () => Promise.reject(new Error("not used")),
-              moveTab: () => Promise.reject(new Error("not used")),
             },
           },
           props.children,

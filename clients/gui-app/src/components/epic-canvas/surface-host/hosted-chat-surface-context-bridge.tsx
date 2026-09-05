@@ -42,7 +42,7 @@ export function HostedChatSurfaceContextBridge(props: {
             <BrowserSessionsHostProvider
               hostId={hostId}
               hostClient={environment.services.hostClient}
-              scope={{ kind: "epic", epicId: environment.placement.epicId }}
+              epicId={environment.placement.epicId}
             >
               <PaneActivationFocusIntentContext.Provider
                 value={environment.paneActivation.focusIntent}

@@ -5,10 +5,6 @@ import type { BrowserSessionInfo } from "@traycer/protocol/host/browser/contract
 import { TabSurfaceActivityProvider } from "@/components/layout/tab-surface-activity";
 import type { BrowserSessionsState } from "@/components/epic-canvas/renderers/browser-sessions-context";
 import {
-  epicScope,
-  sessionInfo,
-} from "@/lib/browser-view/sessions/__tests__/browser-session-test-kit";
-import {
   epicTabRightActionsKey,
   useMobileHeaderStore,
 } from "@/stores/layout/mobile-header-store";
@@ -106,8 +102,6 @@ vi.mock(
           retry: () => undefined,
           openTab: () => Promise.reject(new Error("not used")),
           closeTab: () => Promise.resolve(),
-          attachTab: () => Promise.reject(new Error("not used")),
-          moveTab: () => Promise.reject(new Error("not used")),
         };
         return (
           <BrowserSessionsContext.Provider value={value}>
@@ -191,13 +185,15 @@ vi.mock("@/components/epic-canvas/sidebar/epic-sidebar-column", async () => {
 
 import { EpicSurface } from "@/components/epic-tabs/epic-surface";
 
-const SAMPLE_SESSION: BrowserSessionInfo = sessionInfo({
+const SAMPLE_SESSION: BrowserSessionInfo = {
   sessionId: "sess-1",
-  scope: epicScope("epic-a"),
+  epicId: "epic-a",
   hostId: "host-test",
+  profile: "primary",
   lastActivityAt: 2,
   runtime: { kind: "electron", revision: 0 },
-});
+  tabs: [],
+};
 
 function renderEpicSurface(tabId: string, epicId: string) {
   return render(

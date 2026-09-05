@@ -14,12 +14,11 @@ import {
   type PlainTerminalCollection,
 } from "@/lib/terminals/plain-terminal-authority";
 import {
-  landingPanelLayoutFor,
-  landingTerminalTabs,
-  useLandingPanelStore,
+  landingTerminalLayoutFor,
+  useLandingTerminalStore,
   type LandingTerminalPendingKill,
   type LandingTerminalTabRef,
-} from "@/stores/home/landing-panel-store";
+} from "@/stores/home/landing-terminal-store";
 import {
   drainLegacyLandingTombstones,
   reconcileCapableLandingTerminals,
@@ -42,7 +41,6 @@ function tab(input: {
   readonly name: string;
 }): LandingTerminalTabRef {
   return {
-    kind: "terminal",
     instanceId: input.instanceId,
     sessionId: input.terminalId,
     hostId: HOST_ID,
@@ -128,7 +126,7 @@ describe("capable landing-terminal reconciliation", () => {
   beforeEach(() => {
     queryClient = new QueryClient();
     window.localStorage.clear();
-    useLandingPanelStore.getState().resetForTests();
+    useLandingTerminalStore.getState().resetForTests();
   });
 
   it("imports legacy evidence once and adopts the host's canonical winner", async () => {
@@ -143,8 +141,8 @@ describe("capable landing-terminal reconciliation", () => {
       revision: 4,
       runtime: "running",
     });
-    useLandingPanelStore.getState().addTab(legacy);
-    useLandingPanelStore
+    useLandingTerminalStore.getState().addTab(legacy);
+    useLandingTerminalStore
       .getState()
       .setPanelWidthFraction(LANDING_PAGE_ID, 0.51);
     queryClient.setQueryData(
@@ -169,6 +167,7 @@ describe("capable landing-terminal reconciliation", () => {
 
     await reconcileCapableLandingTerminals({
       activeHostId: HOST_ID,
+      landingPageId: LANDING_PAGE_ID,
       capability: CAPABILITY,
       canMutate: true,
       closeTerminal: () => Promise.resolve(),
@@ -178,7 +177,7 @@ describe("capable landing-terminal reconciliation", () => {
     });
 
     expect(importLegacy).toHaveBeenCalledTimes(1);
-    const state = useLandingPanelStore.getState();
+    const state = useLandingTerminalStore.getState();
     expect(state.tabs).toEqual([
       {
         ...legacy,
@@ -190,7 +189,7 @@ describe("capable landing-terminal reconciliation", () => {
       },
     ]);
     expect(state.activeInstanceId).toBe("local-instance");
-    expect(landingPanelLayoutFor(state, LANDING_PAGE_ID)).toMatchObject({
+    expect(landingTerminalLayoutFor(state, LANDING_PAGE_ID)).toMatchObject({
       panelWidthFraction: 0.51,
     });
   });
@@ -208,7 +207,7 @@ describe("capable landing-terminal reconciliation", () => {
       terminalId: "signin-terminal",
       name: "legacy · New Terminal",
     });
-    useLandingPanelStore.getState().addTab(unmarked);
+    useLandingTerminalStore.getState().addTab(unmarked);
     queryClient.setQueryData(
       hostQueryKeys.plainTerminals(HOST_ID, SCOPE),
       freshCollection([]),
@@ -219,6 +218,7 @@ describe("capable landing-terminal reconciliation", () => {
 
     const outcome = await reconcileCapableLandingTerminals({
       activeHostId: HOST_ID,
+      landingPageId: LANDING_PAGE_ID,
       capability: CAPABILITY,
       canMutate: true,
       closeTerminal: () => Promise.resolve(),
@@ -232,7 +232,7 @@ describe("capable landing-terminal reconciliation", () => {
     expect(importLegacy).not.toHaveBeenCalled();
     // Reclassified in the store too, so every downstream reader - the tile's
     // adopt-only branch, the panel's kill-instead-of-close path - agrees.
-    expect(useLandingPanelStore.getState().tabs).toEqual([
+    expect(useLandingTerminalStore.getState().tabs).toEqual([
       {
         ...unmarked,
         name: "Reasonix sign-in",
@@ -251,7 +251,7 @@ describe("capable landing-terminal reconciliation", () => {
       terminalId: "signin-terminal",
       name: "legacy · New Terminal",
     });
-    useLandingPanelStore.getState().addTab(legacy);
+    useLandingTerminalStore.getState().addTab(legacy);
     queryClient.setQueryData(
       hostQueryKeys.plainTerminals(HOST_ID, SCOPE),
       freshCollection([]),
@@ -275,6 +275,7 @@ describe("capable landing-terminal reconciliation", () => {
 
     await reconcileCapableLandingTerminals({
       activeHostId: HOST_ID,
+      landingPageId: LANDING_PAGE_ID,
       capability: CAPABILITY,
       canMutate: true,
       closeTerminal: () => Promise.resolve(),
@@ -284,13 +285,11 @@ describe("capable landing-terminal reconciliation", () => {
     });
 
     expect(importLegacy).toHaveBeenCalledTimes(1);
-    expect(useLandingPanelStore.getState().tabs[0]).toMatchObject({
+    expect(useLandingTerminalStore.getState().tabs[0]).toMatchObject({
       instanceId: "local-instance",
       hostAuthorityAcknowledged: true,
     });
-    expect(
-      landingTerminalTabs(useLandingPanelStore.getState().tabs)[0]?.origin,
-    ).toBeUndefined();
+    expect(useLandingTerminalStore.getState().tabs[0]?.origin).toBeUndefined();
   });
 
   it("preserves unacknowledged evidence when import fails", async () => {
@@ -299,7 +298,7 @@ describe("capable landing-terminal reconciliation", () => {
       terminalId: "terminal-failure",
       name: "Keep me",
     });
-    useLandingPanelStore.getState().addTab(legacy);
+    useLandingTerminalStore.getState().addTab(legacy);
     queryClient.setQueryData(
       hostQueryKeys.plainTerminals(HOST_ID, SCOPE),
       freshCollection([]),
@@ -308,6 +307,7 @@ describe("capable landing-terminal reconciliation", () => {
     await expect(
       reconcileCapableLandingTerminals({
         activeHostId: HOST_ID,
+        landingPageId: LANDING_PAGE_ID,
         capability: CAPABILITY,
         canMutate: true,
         closeTerminal: () => Promise.resolve(),
@@ -317,7 +317,7 @@ describe("capable landing-terminal reconciliation", () => {
       }),
     ).rejects.toThrow("offline");
 
-    expect(useLandingPanelStore.getState().tabs).toEqual([legacy]);
+    expect(useLandingTerminalStore.getState().tabs).toEqual([legacy]);
   });
 
   it("retires a capable-host pending kill only after close acknowledgement", async () => {
@@ -335,8 +335,8 @@ describe("capable landing-terminal reconciliation", () => {
       revision: 3,
       runtime: "running",
     });
-    useLandingPanelStore.getState().addTab(canonical);
-    useLandingPanelStore
+    useLandingTerminalStore.getState().addTab(canonical);
+    useLandingTerminalStore
       .getState()
       .closeTab(LANDING_PAGE_ID, canonical.instanceId);
     queryClient.setQueryData(
@@ -353,6 +353,7 @@ describe("capable landing-terminal reconciliation", () => {
 
     await reconcileCapableLandingTerminals({
       activeHostId: HOST_ID,
+      landingPageId: LANDING_PAGE_ID,
       capability: CAPABILITY,
       canMutate: true,
       closeTerminal,
@@ -365,8 +366,8 @@ describe("capable landing-terminal reconciliation", () => {
     expect(closeTerminal).toHaveBeenCalledWith({
       terminalId: "terminal-close",
     });
-    expect(useLandingPanelStore.getState().pendingKills).toEqual([]);
-    expect(useLandingPanelStore.getState().tabs).toEqual([]);
+    expect(useLandingTerminalStore.getState().pendingKills).toEqual([]);
+    expect(useLandingTerminalStore.getState().tabs).toEqual([]);
   });
 
   it("joins an in-flight close instead of racing the recovery bridge", async () => {
@@ -390,8 +391,8 @@ describe("capable landing-terminal reconciliation", () => {
       revision: 4,
       runtime: "running",
     });
-    useLandingPanelStore.getState().addTab(canonical);
-    useLandingPanelStore
+    useLandingTerminalStore.getState().addTab(canonical);
+    useLandingTerminalStore
       .getState()
       .closeTab(LANDING_PAGE_ID, canonical.instanceId);
     queryClient.setQueryData(
@@ -414,6 +415,7 @@ describe("capable landing-terminal reconciliation", () => {
     const closeTerminal = vi.fn(() => Promise.resolve());
     const pass = reconcileCapableLandingTerminals({
       activeHostId: HOST_ID,
+      landingPageId: LANDING_PAGE_ID,
       capability: CAPABILITY,
       canMutate: true,
       closeTerminal,
@@ -438,7 +440,7 @@ describe("capable landing-terminal reconciliation", () => {
     // `terminal.kill` - which answers an already-gone session with
     // `killed: false` as data, the one answer a `pendingCreate` tombstone is
     // deliberately kept for. Whoever owns the request owns that decision.
-    expect(useLandingPanelStore.getState().pendingKills).toHaveLength(1);
+    expect(useLandingTerminalStore.getState().pendingKills).toHaveLength(1);
   });
 
   it("joins an in-flight kill on the legacy arm too", async () => {
@@ -448,7 +450,6 @@ describe("capable landing-terminal reconciliation", () => {
     // to keep treating as ambiguous, so an unmediated duplicate is both two
     // `terminal.list` invalidations and a wasted reprieve answer.
     const pending: LandingTerminalPendingKill = {
-      kind: "terminal",
       hostId: HOST_ID,
       sessionId: "terminal-legacy-shared",
       hostAuthorityAcknowledged: false,
@@ -481,20 +482,18 @@ describe("capable landing-terminal reconciliation", () => {
     // The other half of the legacy arm, and the rule the whole PR turns on:
     // absence from the list retires an ACKNOWLEDGED record and nothing else.
     const acknowledged: LandingTerminalPendingKill = {
-      kind: "terminal",
       hostId: HOST_ID,
       sessionId: "terminal-legacy-acked",
       hostAuthorityAcknowledged: true,
       pendingCreate: false,
     };
     const unsettledCreate: LandingTerminalPendingKill = {
-      kind: "terminal",
       hostId: HOST_ID,
       sessionId: "terminal-legacy-creating",
       hostAuthorityAcknowledged: false,
       pendingCreate: true,
     };
-    useLandingPanelStore.setState({
+    useLandingTerminalStore.setState({
       pendingKills: [acknowledged, unsettledCreate],
     });
 
@@ -506,7 +505,7 @@ describe("capable landing-terminal reconciliation", () => {
     });
 
     expect(killTerminal).not.toHaveBeenCalled();
-    expect(useLandingPanelStore.getState().pendingKills).toEqual([
+    expect(useLandingTerminalStore.getState().pendingKills).toEqual([
       unsettledCreate,
     ]);
   });
@@ -517,7 +516,7 @@ describe("capable landing-terminal reconciliation", () => {
       terminalId: "terminal-1",
       name: "Late evidence",
     });
-    useLandingPanelStore.getState().addTab(legacy);
+    useLandingTerminalStore.getState().addTab(legacy);
     queryClient.setQueryData(
       hostQueryKeys.plainTerminals(HOST_ID, SCOPE),
       deletePlainTerminal(
@@ -532,6 +531,7 @@ describe("capable landing-terminal reconciliation", () => {
 
     await reconcileCapableLandingTerminals({
       activeHostId: HOST_ID,
+      landingPageId: LANDING_PAGE_ID,
       capability: CAPABILITY,
       canMutate: true,
       closeTerminal: () => Promise.resolve(),
@@ -541,7 +541,7 @@ describe("capable landing-terminal reconciliation", () => {
     });
 
     expect(importLegacy).not.toHaveBeenCalled();
-    expect(useLandingPanelStore.getState().tabs).toEqual([]);
+    expect(useLandingTerminalStore.getState().tabs).toEqual([]);
     expect(
       queryClient.getQueryData<PlainTerminalCollection>(
         hostQueryKeys.plainTerminals(HOST_ID, SCOPE),
@@ -558,6 +558,7 @@ describe("capable landing-terminal reconciliation", () => {
     await expect(
       reconcileCapableLandingTerminals({
         activeHostId: HOST_ID,
+        landingPageId: LANDING_PAGE_ID,
         capability: CAPABILITY,
         canMutate: true,
         closeTerminal: () => Promise.resolve(),
@@ -568,7 +569,7 @@ describe("capable landing-terminal reconciliation", () => {
       }),
     ).resolves.toBe("snapshot-not-fresh");
     // A wait, not a failure: nothing in the store should be touched.
-    expect(useLandingPanelStore.getState().tabs).toEqual([]);
+    expect(useLandingTerminalStore.getState().tabs).toEqual([]);
   });
 
   it("returns snapshot-not-fresh before closing a pending kill against a stale collection", async () => {
@@ -586,12 +587,12 @@ describe("capable landing-terminal reconciliation", () => {
       revision: 3,
       runtime: "running",
     });
-    useLandingPanelStore.getState().addTab(canonical);
-    useLandingPanelStore
+    useLandingTerminalStore.getState().addTab(canonical);
+    useLandingTerminalStore
       .getState()
       .closeTab(LANDING_PAGE_ID, canonical.instanceId);
-    const tabsBefore = useLandingPanelStore.getState().tabs;
-    const pendingKillsBefore = useLandingPanelStore.getState().pendingKills;
+    const tabsBefore = useLandingTerminalStore.getState().tabs;
+    const pendingKillsBefore = useLandingTerminalStore.getState().pendingKills;
     queryClient.setQueryData(
       hostQueryKeys.plainTerminals(HOST_ID, SCOPE),
       staleCollection([projection]),
@@ -601,6 +602,7 @@ describe("capable landing-terminal reconciliation", () => {
     await expect(
       reconcileCapableLandingTerminals({
         activeHostId: HOST_ID,
+        landingPageId: LANDING_PAGE_ID,
         capability: CAPABILITY,
         canMutate: true,
         closeTerminal,
@@ -612,8 +614,8 @@ describe("capable landing-terminal reconciliation", () => {
     ).resolves.toBe("snapshot-not-fresh");
 
     expect(closeTerminal).not.toHaveBeenCalled();
-    expect(useLandingPanelStore.getState().tabs).toEqual(tabsBefore);
-    expect(useLandingPanelStore.getState().pendingKills).toEqual(
+    expect(useLandingTerminalStore.getState().tabs).toEqual(tabsBefore);
+    expect(useLandingTerminalStore.getState().pendingKills).toEqual(
       pendingKillsBefore,
     );
   });
@@ -624,9 +626,9 @@ describe("capable landing-terminal reconciliation", () => {
       terminalId: "terminal-1",
       name: "Local title",
     });
-    useLandingPanelStore.getState().addTab(legacy);
-    const tabsBefore = useLandingPanelStore.getState().tabs;
-    const pendingKillsBefore = useLandingPanelStore.getState().pendingKills;
+    useLandingTerminalStore.getState().addTab(legacy);
+    const tabsBefore = useLandingTerminalStore.getState().tabs;
+    const pendingKillsBefore = useLandingTerminalStore.getState().pendingKills;
     queryClient.setQueryData(
       hostQueryKeys.plainTerminals(HOST_ID, SCOPE),
       staleCollection([]),
@@ -638,6 +640,7 @@ describe("capable landing-terminal reconciliation", () => {
     await expect(
       reconcileCapableLandingTerminals({
         activeHostId: HOST_ID,
+        landingPageId: LANDING_PAGE_ID,
         capability: CAPABILITY,
         canMutate: true,
         closeTerminal: () => Promise.resolve(),
@@ -648,8 +651,8 @@ describe("capable landing-terminal reconciliation", () => {
     ).resolves.toBe("snapshot-not-fresh");
 
     expect(importLegacy).not.toHaveBeenCalled();
-    expect(useLandingPanelStore.getState().tabs).toEqual(tabsBefore);
-    expect(useLandingPanelStore.getState().pendingKills).toEqual(
+    expect(useLandingTerminalStore.getState().tabs).toEqual(tabsBefore);
+    expect(useLandingTerminalStore.getState().pendingKills).toEqual(
       pendingKillsBefore,
     );
   });
@@ -674,7 +677,7 @@ describe("capable landing-terminal reconciliation", () => {
       revision: 3,
       runtime: "running",
     });
-    const store = useLandingPanelStore.getState();
+    const store = useLandingTerminalStore.getState();
     store.addTab(canonical);
     store.addTab(legacy);
     store.closeTab(LANDING_PAGE_ID, canonical.instanceId);
@@ -690,6 +693,7 @@ describe("capable landing-terminal reconciliation", () => {
 
     const reconciliation = reconcileCapableLandingTerminals({
       activeHostId: HOST_ID,
+      landingPageId: LANDING_PAGE_ID,
       capability: CAPABILITY,
       canMutate: true,
       closeTerminal,
@@ -708,9 +712,10 @@ describe("capable landing-terminal reconciliation", () => {
     await expect(reconciliation).resolves.toBe("snapshot-not-fresh");
     expect(importLegacy).not.toHaveBeenCalled();
     expect(
-      landingTerminalTabs(useLandingPanelStore.getState().tabs).find(
-        (candidate) => candidate.instanceId === legacy.instanceId,
-      )?.hostAuthorityAcknowledged,
+      useLandingTerminalStore
+        .getState()
+        .tabs.find((candidate) => candidate.instanceId === legacy.instanceId)
+        ?.hostAuthorityAcknowledged,
     ).not.toBe(true);
   });
 
@@ -729,8 +734,8 @@ describe("capable landing-terminal reconciliation", () => {
       origin: "provider-login",
       originProviderId: "reasonix",
     };
-    useLandingPanelStore.getState().addTab(ordinary);
-    useLandingPanelStore.getState().addTab(signIn);
+    useLandingTerminalStore.getState().addTab(ordinary);
+    useLandingTerminalStore.getState().addTab(signIn);
     queryClient.setQueryData(
       hostQueryKeys.plainTerminals(HOST_ID, SCOPE),
       freshCollection([]),
@@ -750,6 +755,7 @@ describe("capable landing-terminal reconciliation", () => {
 
     await reconcileCapableLandingTerminals({
       activeHostId: HOST_ID,
+      landingPageId: LANDING_PAGE_ID,
       capability: CAPABILITY,
       canMutate: true,
       closeTerminal: () => Promise.resolve(),
@@ -764,7 +770,7 @@ describe("capable landing-terminal reconciliation", () => {
     expect(importLegacy).toHaveBeenCalledWith(
       expect.objectContaining({ terminalId: "terminal-ordinary" }),
     );
-    const signInAfter = useLandingPanelStore
+    const signInAfter = useLandingTerminalStore
       .getState()
       .tabs.find((candidate) => candidate.instanceId === signIn.instanceId);
     expect(signInAfter).toEqual(signIn);
@@ -796,6 +802,7 @@ describe("capable landing-terminal reconciliation", () => {
     };
     const adoption = reconcileLandingTerminalTabs({
       tabs: [],
+      activeInstanceId: null,
       activeHostId: HOST_ID,
       sessions: [signInSession],
       excludedSessionKeys: new Set(),
@@ -815,8 +822,8 @@ describe("capable landing-terminal reconciliation", () => {
       terminalId: "terminal-ordinary-2",
       name: "Ordinary title",
     });
-    useLandingPanelStore.getState().addTab(ordinary);
-    useLandingPanelStore.getState().addTab(signIn);
+    useLandingTerminalStore.getState().addTab(ordinary);
+    useLandingTerminalStore.getState().addTab(signIn);
     queryClient.setQueryData(
       hostQueryKeys.plainTerminals(HOST_ID, SCOPE),
       freshCollection([]),
@@ -836,6 +843,7 @@ describe("capable landing-terminal reconciliation", () => {
 
     await reconcileCapableLandingTerminals({
       activeHostId: HOST_ID,
+      landingPageId: LANDING_PAGE_ID,
       capability: CAPABILITY,
       canMutate: true,
       closeTerminal: () => Promise.resolve(),
@@ -850,7 +858,7 @@ describe("capable landing-terminal reconciliation", () => {
     expect(importLegacy).toHaveBeenCalledWith(
       expect.objectContaining({ terminalId: "terminal-ordinary-2" }),
     );
-    const signInAfterAdoption = useLandingPanelStore
+    const signInAfterAdoption = useLandingTerminalStore
       .getState()
       .tabs.find((candidate) => candidate.instanceId === signIn.instanceId);
     expect(signInAfterAdoption).toEqual(signIn);
@@ -865,6 +873,7 @@ describe("capable landing-terminal reconciliation", () => {
     await expect(
       reconcileCapableLandingTerminals({
         activeHostId: HOST_ID,
+        landingPageId: LANDING_PAGE_ID,
         capability: CAPABILITY,
         canMutate: true,
         closeTerminal: () => Promise.resolve(),
