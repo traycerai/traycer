@@ -611,14 +611,16 @@ describe("post-v3.0 Devin/Pi downgrade bridges (agent.gui.listHarnesses/agent.li
   });
 });
 
-describe("post-v6.0 Hugging Face/Reasonix non-breaking downgrade bridges", () => {
+describe("post-v6.0 Hugging Face/Reasonix/Antigravity non-breaking downgrade bridges", () => {
   // These three catalog methods each opened a new major when a release froze
   // their previous line: `huggingface` could not ride v6.0 and opened v7.0,
-  // and `reasonix` cannot ride ANY minor of major 7 - the v1.2.0 tags shipped
-  // 7.0, and `versioned-rpc.ts` refuses a minor that grows a response enum
-  // over its predecessor - so the live shape now sits on v8.0 and every older
-  // caller gets the ids it predates filtered out.
-  it("drops Hugging Face/Reasonix from agent.gui.listHarnesses for every released caller down to v1.0", () => {
+  // and neither `reasonix` nor `antigravity` can ride ANY minor of major 7 -
+  // the v1.2.0 tags shipped 7.0, and `versioned-rpc.ts` refuses a minor that
+  // grows a response enum over its predecessor - so the live shape now sits
+  // on v8.0 and every older caller gets the ids it predates filtered out.
+  // Antigravity joined the live union alongside Reasonix without opening a
+  // new major, so it rides the exact same v8 -> v7 boundary.
+  it("drops Hugging Face/Reasonix/Antigravity from agent.gui.listHarnesses for every released caller down to v1.0", () => {
     const v8Response = listGuiHarnessesResponseSchema.parse({
       harnesses: [
         harnessOption("claude"),
@@ -630,11 +632,13 @@ describe("post-v6.0 Hugging Face/Reasonix non-breaking downgrade bridges", () =>
         harnessOption("omp"),
         harnessOption("huggingface"),
         harnessOption("reasonix"),
+        harnessOption("antigravity"),
       ],
     });
 
-    // Major 7 shipped with Hugging Face, so it keeps it and loses only
-    // Reasonix. The bridge lands on 7.1, major 7's latest installed minor.
+    // Major 7 shipped with Hugging Face, so it keeps it and loses Reasonix
+    // and Antigravity alike. The bridge lands on 7.1, major 7's latest
+    // installed minor.
     const toV7 =
       agentGuiListHarnessesDowngradeV8ToV7.downgradeResponse(v8Response);
     expect(toV7.ok).toBe(true);
@@ -653,7 +657,8 @@ describe("post-v6.0 Hugging Face/Reasonix non-breaking downgrade bridges", () =>
       listGuiHarnessesResponseSchemaV71.parse(toV7.value),
     ).not.toThrow();
 
-    // v6.0 shipped with omp, so it keeps omp and loses Hugging Face/Reasonix.
+    // v6.0 shipped with omp, so it keeps omp and loses Hugging Face,
+    // Reasonix and Antigravity.
     const toV6 =
       agentGuiListHarnessesDowngradeV8ToV6.downgradeResponse(v8Response);
     expect(toV6.ok).toBe(true);
@@ -740,7 +745,7 @@ describe("post-v6.0 Hugging Face/Reasonix non-breaking downgrade bridges", () =>
     ).not.toThrow();
   });
 
-  it("drops Hugging Face/Reasonix agents from agent.list for every released caller down to v1.0", () => {
+  it("drops Hugging Face/Reasonix/Antigravity agents from agent.list for every released caller down to v1.0", () => {
     const v8Response = listAgentsResponseSchema.parse({
       caller: { agentId: "self", canSendMessages: true },
       scope: "all",
@@ -753,13 +758,15 @@ describe("post-v6.0 Hugging Face/Reasonix non-breaking downgrade bridges", () =>
         agentSummary("a-omp", "omp"),
         agentSummary("a-hf", "huggingface"),
         agentSummary("a-reasonix", "reasonix"),
+        agentSummary("a-antigravity", "antigravity"),
         agentSummary("a-null", null),
       ],
     });
 
-    // v7.0 shipped with Hugging Face, so that row survives; only Reasonix
-    // goes. `runConfig` survives too - it is a v7.0 field, unlike every hop
-    // below, where the frozen shape predates it and the reparse drops it.
+    // v7.0 shipped with Hugging Face, so that row survives; only Reasonix and
+    // Antigravity go. `runConfig` survives too - it is a v7.0 field, unlike
+    // every hop below, where the frozen shape predates it and the reparse
+    // drops it.
     const toV7 = agentListDowngradeV8ToV7.downgradeResponse(v8Response);
     expect(toV7.ok).toBe(true);
     if (!toV7.ok) return;
@@ -776,8 +783,8 @@ describe("post-v6.0 Hugging Face/Reasonix non-breaking downgrade bridges", () =>
     expect(toV7.value.agents.every((agent) => "runConfig" in agent)).toBe(true);
     expect(() => listAgentsResponseSchemaV70.parse(toV7.value)).not.toThrow();
 
-    // v6.0 shipped with omp, so an omp agent row survives; Hugging Face and
-    // Reasonix go.
+    // v6.0 shipped with omp, so an omp agent row survives; Hugging Face,
+    // Reasonix, and Antigravity go.
     const toV6 = agentListDowngradeV8ToV6.downgradeResponse(v8Response);
     expect(toV6.ok).toBe(true);
     if (!toV6.ok) return;
@@ -864,11 +871,11 @@ describe("post-v6.0 Hugging Face/Reasonix non-breaking downgrade bridges", () =>
     expect(() => listAgentsResponseSchemaV10.parse(toV1.value)).not.toThrow();
   });
 
-  it("drops Hugging Face/Reasonix from providers.list for every released caller down to v1.0", () => {
-    // `cli-v1.1.9` shipped v6.0 and `cli-v1.2.0` shipped v7.0, so neither
-    // `huggingface` nor `reasonix` could join the line below it. Driven from
-    // v8.0, the newest line, which carries both because it is still
-    // unreleased.
+  it("drops Hugging Face/Reasonix/Antigravity from providers.list for every released caller down to v1.0", () => {
+    // `cli-v1.1.9` shipped v6.0 and `cli-v1.2.0` shipped v7.0, so none of
+    // `huggingface`, `reasonix`, or `antigravity` could join the line below
+    // it. Driven from v8.0, the newest line, which carries all three because
+    // it is still unreleased.
     const v8Response = providersListResponseSchema.parse({
       providers: [
         providerState("cursor", "unknown"),
@@ -879,11 +886,13 @@ describe("post-v6.0 Hugging Face/Reasonix non-breaking downgrade bridges", () =>
         providerState("omp", "unknown"),
         providerState("huggingface", "unknown"),
         providerState("reasonix", "unknown"),
+        providerState("antigravity", "unknown"),
       ],
     });
 
-    // Major 7 keeps Hugging Face and loses only Reasonix; the bridge lands on
-    // 7.0, major 7's only (and therefore latest) installed minor.
+    // Major 7 keeps Hugging Face and loses Reasonix and Antigravity alike;
+    // the bridge lands on 7.0, major 7's only (and therefore latest)
+    // installed minor.
     const toV7 = providersListDowngradeV8ToV7.downgradeResponse(v8Response);
     expect(toV7.ok).toBe(true);
     if (!toV7.ok) return;

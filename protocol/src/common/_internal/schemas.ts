@@ -73,4 +73,5 @@ export const harnessIdSchemaPreReasonix = z.enum([
 export const harnessIdSchema = z.enum([
   ...harnessIdSchemaPreReasonix.options,
   "reasonix",
+  "antigravity",
 ]);
