@@ -161,9 +161,18 @@ function renderableMarks(
   ];
 }
 
-type TextRunEscape = (text: string, marks: RenderableMark[]) => string;
+interface TextRunEscaping {
+  text: (text: string, marks: RenderableMark[]) => string;
+  // Applied to every mark delimiter. The only delimiter carrying variable
+  // content is a link's `](href)`; the fixed ones (`**`, `` ` ``, `~~`, `[`)
+  // contain nothing a cell escape touches, so this is a no-op for them.
+  delimiter: (delimiter: string) => string;
+}
 
-const keepText: TextRunEscape = (text) => text;
+const noEscaping: TextRunEscaping = {
+  text: (text) => text,
+  delimiter: (delimiter) => delimiter,
+};
 
 // GFM table cells escape a literal `|` as `\|`. The parser (marked's
 // `splitCells`) decides whether a pipe is escaped by the PARITY of the
@@ -196,10 +205,16 @@ function escapeTableCellCode(text: string): string {
   );
 }
 
-const escapeTableCellRun: TextRunEscape = (text, marks) =>
-  marks.some((mark) => mark.type === "code")
-    ? escapeTableCellCode(text)
-    : escapeTableCellText(text);
+const tableCellEscaping: TextRunEscaping = {
+  text: (text, marks) =>
+    marks.some((mark) => mark.type === "code")
+      ? escapeTableCellCode(text)
+      : escapeTableCellText(text),
+  // A link destination is parsed with CommonMark escapes (and marked strips
+  // the `\|`), so the plain-text escape round-trips it exactly as the whole
+  // cell used to.
+  delimiter: escapeTableCellText,
+};
 
 // Node types whose serializer renders its inline content through
 // `serializeChildren` and therefore escapes it per text node while
@@ -240,15 +255,15 @@ const TABLE_CELL_CONTAINER_TYPES: ReadonlySet<string> = new Set([
  * after "b" would force italic closed and reopened, doubling delimiters.
  */
 export function serializeTextRun(nodes: JsonContent[]): string {
-  return serializeTextRunWith(nodes, keepText);
+  return serializeTextRunWith(nodes, noEscaping);
 }
 
-// `escapeText` sees each node's text together with its renderable marks, so
-// a table cell can escape plain text and code text differently (see
-// `escapeTableCellRun`). It runs on the text only - never on the delimiters.
+// `escaping.text` sees each node's text together with its renderable marks,
+// so a table cell can escape plain text and code text differently (see
+// `tableCellEscaping`); `escaping.delimiter` sees each mark delimiter.
 function serializeTextRunWith(
   nodes: JsonContent[],
-  escapeText: TextRunEscape,
+  escaping: TextRunEscaping,
 ): string {
   const textNodes = nodes.filter((node) => Boolean(node.text));
   const nodeMarks = textNodes.map((node) => renderableMarks(node.marks));
@@ -269,7 +284,7 @@ function serializeTextRunWith(
 
   const closeDownTo = (depth: number): void => {
     for (let i = open.length - 1; i >= depth; i--) {
-      out += open[i].close;
+      out += escaping.delimiter(open[i].close);
     }
     open = open.slice(0, depth);
   };
@@ -302,10 +317,10 @@ function serializeTextRunWith(
       ...toOpen.filter((mark) => mark.type === "code"),
     ];
     for (const mark of ordered) {
-      out += mark.open;
+      out += escaping.delimiter(mark.open);
       open.push(mark);
     }
-    out += escapeText(node.text ?? "", marks);
+    out += escaping.text(node.text ?? "", marks);
   });
 
   closeDownTo(0);
@@ -937,10 +952,10 @@ function serializeChildren(
   // hardBreak, …) end the run and close any open marks.
   const parts: string[] = [];
   let textRun: JsonContent[] = [];
-  const escapeText = ctx.inTableCell ? escapeTableCellRun : keepText;
+  const escaping = ctx.inTableCell ? tableCellEscaping : noEscaping;
   const flushTextRun = (): void => {
     if (textRun.length > 0) {
-      parts.push(serializeTextRunWith(textRun, escapeText));
+      parts.push(serializeTextRunWith(textRun, escaping));
       textRun = [];
     }
   };

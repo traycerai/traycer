@@ -139,6 +139,24 @@ describe("table cell escaping outside inline code (unchanged)", () => {
       bodyRow(toMarkdown(tableDoc([text("a|b", [{ type: "bold" }])]))),
     ).toBe("| **a\\|b** |");
   });
+
+  it("escapes a pipe and a backslash inside a link destination", () => {
+    const doc = tableDoc([
+      text("a|b", [{ type: "link", attrs: { href: "http://x/p|q\\r" } }]),
+    ]);
+
+    expect(bodyRow(toMarkdown(doc))).toBe("| [a\\|b](http://x/p\\|q\\\\r) |");
+  });
+
+  it("does not escape a code span's backticks or a link's brackets", () => {
+    const doc = tableDoc([
+      text("x", [{ type: "code" }]),
+      text(" ", undefined),
+      text("docs", [{ type: "link", attrs: { href: "http://x/" } }]),
+    ]);
+
+    expect(bodyRow(toMarkdown(doc))).toBe("| `x` [docs](http://x/) |");
+  });
 });
 
 describe("controls: the same code text outside a table is not escaped", () => {
