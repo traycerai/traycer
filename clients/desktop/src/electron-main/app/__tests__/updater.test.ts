@@ -51,6 +51,7 @@ function setPlatform(value: string): void {
 const originalPrivateUpdateRepo = process.env.VITE_TRAYCER_DESKTOP_UPDATE_REPO;
 const originalPrivateUpdateToken =
   process.env.VITE_TRAYCER_DESKTOP_UPDATE_TOKEN;
+const originalStagingReleaseToken = process.env.TRAYCER_STAGING_RELEASE_TOKEN;
 
 beforeEach(() => {
   Reflect.deleteProperty(process.env, "VITE_TRAYCER_DESKTOP_UPDATE_REPO");
@@ -83,6 +84,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.doUnmock("electron");
   vi.doUnmock("electron-updater");
+  vi.doUnmock("../../../config");
   vi.doUnmock("node:fs/promises");
   vi.doUnmock("../logger");
   vi.doUnmock("../linux-update-guidance");
@@ -94,6 +96,7 @@ afterEach(() => {
     "VITE_TRAYCER_DESKTOP_UPDATE_TOKEN",
     originalPrivateUpdateToken,
   );
+  restoreEnvValue("TRAYCER_STAGING_RELEASE_TOKEN", originalStagingReleaseToken);
   // Only the architecture-selection test sets this; clean up unconditionally
   // so it can never leak into a later test's `platformChannelFile()` call.
   Reflect.deleteProperty(process.env, "TEST_UPDATER_ARCH");
@@ -2737,6 +2740,414 @@ describe("implicit RC-line following", () => {
   });
 });
 
+describe("staging updater release authentication and channel", () => {
+  async function loadStagingUpdater(): Promise<LoadedUpdater> {
+    return loadUpdaterWithControls(
+      NOT_LINUX_GUIDANCE,
+      { kind: "immediate" },
+      null,
+      STABLE_APP_VERSION,
+      "staging",
+    );
+  }
+
+  it("uses explicit-prerelease mode and treats a channel change as unchanged", async () => {
+    process.env.TRAYCER_STAGING_RELEASE_TOKEN = "staging-token";
+    const { updater } = await loadStagingUpdater();
+    await updater.installAutoUpdater(true, makeDeps(true));
+
+    expect(updater.getAppUpdateSnapshot().allowPrerelease).toBe(true);
+    await expect(
+      updater.setAllowPrereleaseUpdates(false),
+    ).resolves.toMatchObject({
+      outcome: "unchanged",
+    });
+  });
+
+  it("discovers a staging-tagged release through the staging selector", async () => {
+    process.env.TRAYCER_STAGING_RELEASE_TOKEN = "staging-token";
+    const { autoUpdater, updater } = await loadStagingUpdater();
+    const tag = "desktop-v2.0.0-staging.1.gabcdef0";
+    vi.stubGlobal(
+      "fetch",
+      fetchRouter([macReleaseFixture(tag, true)], {
+        [tag]: manifestYamlForTag(tag, macZipAssetName(tag)),
+      }),
+    );
+    autoUpdater.checkForUpdates.mockImplementation(() => {
+      autoUpdater.emit("update-available", { version: "2.0.0-staging.1" });
+      return Promise.resolve(null);
+    });
+    await updater.installAutoUpdater(true, makeDeps(true));
+    await updater.checkForUpdatesNow(false, "manual");
+
+    expect(updater.getAppUpdateSnapshot().status).toBe("available");
+    expect(autoUpdater.setFeedURL).toHaveBeenCalled();
+    expect(JSON.stringify(autoUpdater.setFeedURL.mock.calls[0]?.[0])).toContain(
+      "staging",
+    );
+  });
+
+  it("discards the token and reports unavailable without logging token bytes on a 401 check", async () => {
+    const token = "staging-token-401";
+    process.env.TRAYCER_STAGING_RELEASE_TOKEN = token;
+    const { updater, logger } = await loadStagingUpdater();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("Unauthorized", { status: 401 })),
+    );
+    await updater.installAutoUpdater(true, makeDeps(true));
+    await updater.checkForUpdatesNow(false, "manual");
+
+    expect(updater.getAppUpdateSnapshot()).toMatchObject({
+      status: "unavailable",
+      errorMessage: "Updates are not available for this build.",
+    });
+    expect(JSON.stringify(logger.warn.mock.calls)).not.toContain(token);
+  });
+
+  it("discards the token and reports unavailable without logging token bytes on a 403 download", async () => {
+    const token = "staging-token-403";
+    process.env.TRAYCER_STAGING_RELEASE_TOKEN = token;
+    const { autoUpdater, updater, logger } = await loadStagingUpdater();
+    const tag = "desktop-v2.0.0-staging.2.gabcdef1";
+    vi.stubGlobal(
+      "fetch",
+      fetchRouter([macReleaseFixture(tag, true)], {
+        [tag]: manifestYamlForTag(tag, macZipAssetName(tag)),
+      }),
+    );
+    autoUpdater.checkForUpdates.mockImplementation(() => {
+      autoUpdater.emit("update-available", { version: "2.0.0-staging.2" });
+      return Promise.resolve(null);
+    });
+    await updater.installAutoUpdater(true, makeDeps(true));
+    await updater.checkForUpdatesNow(false, "manual");
+    autoUpdater.downloadUpdate.mockImplementation(() => {
+      const error = new Error(`HttpError: 403 Forbidden ${token}`);
+      autoUpdater.emit("error", error);
+      return Promise.reject(error);
+    });
+    updater.startUpdateDownload();
+    await vi.waitFor(() => {
+      expect(updater.getAppUpdateSnapshot().status).toBe("unavailable");
+    });
+    expect(updater.getAppUpdateSnapshot().errorMessage).toBe(
+      "Updates are not available for this build.",
+    );
+
+    // A second electron-updater failure can arrive after the first auth event
+    // has already cleared the live token. Re-surface the same candidate without
+    // another check so this specifically exercises the retained-token path.
+    autoUpdater.emit("update-available", { version: "2.0.0-staging.2" });
+    expect(updater.getAppUpdateSnapshot().status).toBe("available");
+    updater.startUpdateDownload();
+    await vi.waitFor(() => {
+      expect(updater.getAppUpdateSnapshot().status).toBe("unavailable");
+    });
+
+    expect(JSON.stringify(logger.warn.mock.calls)).not.toContain(token);
+  });
+
+  // GitHub masks "credential cannot see this repository" as 404 rather than
+  // 403 on the release-listing endpoint. `isStagingAuthFailure` only matches
+  // 401/403, so before the repository-visibility probe this masked 404 raised
+  // a generic discovery error that never discarded the rejected lease - every
+  // later check in the process kept reusing it, even after the user
+  // re-authenticated.
+  it("treats a masked listing 404 as an authentication failure when the repository is also invisible, and discards the lease", async () => {
+    process.env.TRAYCER_STAGING_RELEASE_TOKEN = "first-token";
+    const { updater, logger } = await loadStagingUpdater();
+    const calls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: unknown) => {
+        calls.push(String(input));
+        return new Response("Not Found", { status: 404 });
+      }),
+    );
+    await updater.installAutoUpdater(true, makeDeps(true));
+    await updater.checkForUpdatesNow(false, "manual");
+
+    expect(updater.getAppUpdateSnapshot()).toMatchObject({
+      status: "unavailable",
+      errorMessage: "Updates are not available for this build.",
+    });
+    // Both the listing walk AND the repository-visibility probe ran.
+    expect(calls.filter((url) => url.includes("per_page"))).toHaveLength(1);
+    expect(
+      calls.filter((url) => url.endsWith("/repos/traycerai/traycer-internal")),
+    ).toHaveLength(1);
+    expect(JSON.stringify(logger.warn.mock.calls)).not.toContain("first-token");
+
+    // The lease was discarded: a later check picks up a fresh env token
+    // instead of replaying the rejected one.
+    process.env.TRAYCER_STAGING_RELEASE_TOKEN = "second-token";
+    const authorizations: Array<string | null> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: unknown, init: RequestInit | undefined) => {
+        authorizations.push(new Headers(init?.headers).get("authorization"));
+        const url = new URL(String(input));
+        if (url.searchParams.has("per_page")) {
+          return new Response(JSON.stringify([]), { status: 200 });
+        }
+        return new Response("Not Found", { status: 404 });
+      }),
+    );
+    await updater.checkForUpdatesNow(false, "manual");
+    expect(authorizations[0]).toBe("token second-token");
+  });
+
+  it("leaves the original discovery error and the lease alone when a masked listing 404 probes to a visible repository", async () => {
+    process.env.TRAYCER_STAGING_RELEASE_TOKEN = "first-token";
+    const { updater } = await loadStagingUpdater();
+    function fetchWithVisibleRepoProbe(): Mock {
+      return vi.fn(async (input: unknown, init: RequestInit | undefined) => {
+        const url = new URL(String(input));
+        if (url.searchParams.has("per_page")) {
+          return new Response("Not Found", { status: 404 });
+        }
+        if (url.pathname.endsWith("/repos/traycerai/traycer-internal")) {
+          return new Response(JSON.stringify({}), { status: 200 });
+        }
+        return new Response("Not Found", { status: 404 });
+      });
+    }
+    vi.stubGlobal("fetch", fetchWithVisibleRepoProbe());
+    await updater.installAutoUpdater(true, makeDeps(true));
+    await updater.checkForUpdatesNow(false, "manual");
+
+    // The repository IS visible, so the 404 belonged to the listing itself:
+    // the original generic discovery error stands rather than being
+    // reinterpreted as an authentication failure.
+    expect(updater.getAppUpdateSnapshot()).toMatchObject({
+      status: "error",
+      errorMessage:
+        "Traycer couldn't reach the update service right now. Please try again in a little while.",
+    });
+
+    // The lease was NOT discarded: changing the env token has no effect until
+    // something actually rejects the current lease, so the next check still
+    // authenticates with the original token.
+    process.env.TRAYCER_STAGING_RELEASE_TOKEN = "second-token";
+    const authorizations: Array<string | null> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: unknown, init: RequestInit | undefined) => {
+        authorizations.push(new Headers(init?.headers).get("authorization"));
+        const url = new URL(String(input));
+        if (url.searchParams.has("per_page")) {
+          return new Response("Not Found", { status: 404 });
+        }
+        if (url.pathname.endsWith("/repos/traycerai/traycer-internal")) {
+          return new Response(JSON.stringify({}), { status: 200 });
+        }
+        return new Response("Not Found", { status: 404 });
+      }),
+    );
+    await updater.checkForUpdatesNow(false, "manual");
+    expect(authorizations[0]).toBe("token first-token");
+  });
+
+  // The DOWNLOAD-path counterparts of the two masked-listing-404 tests above.
+  // `ExactReleaseAssetProvider` hands its token straight to electron-updater's
+  // downloader and never passes through `fetchStagingGitHubRelease`, so a
+  // masked 404 surfacing from `downloadUpdate()` cannot resolve its own
+  // ambiguity the way discovery does - `handleUpdaterError` routes it through
+  // the same repository-visibility probe instead. Driven through the
+  // `autoUpdater.emit("error", …)` event (not a rejected `downloadUpdate()`
+  // promise) so `handleUpdaterError` runs exactly once per attempt, the same
+  // shape the pre-existing "emits an error instead of staying stuck when a
+  // download fails" test above uses.
+  it("treats a masked download-time 404 as an authentication failure when the repository is invisible, and discards the lease", async () => {
+    process.env.TRAYCER_STAGING_RELEASE_TOKEN = "first-token";
+    const { autoUpdater, updater, logger } = await loadStagingUpdater();
+    const tag = "desktop-v2.0.0-staging.1.gabcdef0";
+    vi.stubGlobal(
+      "fetch",
+      fetchRouter([macReleaseFixture(tag, true)], {
+        [tag]: manifestYamlForTag(tag, macZipAssetName(tag)),
+      }),
+    );
+    autoUpdater.checkForUpdates.mockImplementation(() => {
+      autoUpdater.emit("update-available", { version: "2.0.0-staging.1" });
+      return Promise.resolve(null);
+    });
+    await updater.installAutoUpdater(true, makeDeps(true));
+    await updater.checkForUpdatesNow(false, "manual");
+    expect(updater.getAppUpdateSnapshot().status).toBe("available");
+
+    const calls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: unknown) => {
+        calls.push(String(input));
+        return new Response("Not Found", { status: 404 });
+      }),
+    );
+    updater.startUpdateDownload();
+    expect(updater.getAppUpdateSnapshot().status).toBe("downloading");
+
+    autoUpdater.emit("error", new Error("HttpError: 404 Not Found"));
+
+    await vi.waitFor(() => {
+      expect(updater.getAppUpdateSnapshot().status).toBe("unavailable");
+    });
+    expect(updater.getAppUpdateSnapshot().errorMessage).toBe(
+      "Updates are not available for this build.",
+    );
+    // The download path never walks the release listing - only the
+    // repository-visibility probe ran.
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toContain("/repos/traycerai/traycer-internal");
+    expect(JSON.stringify(logger.warn.mock.calls)).not.toContain("first-token");
+
+    // The lease was discarded: a later check picks up a fresh env token
+    // instead of replaying the rejected one.
+    process.env.TRAYCER_STAGING_RELEASE_TOKEN = "second-token";
+    const authorizations: Array<string | null> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: unknown, init: RequestInit | undefined) => {
+        authorizations.push(new Headers(init?.headers).get("authorization"));
+        const url = new URL(String(input));
+        if (url.searchParams.has("per_page")) {
+          return new Response(JSON.stringify([]), { status: 200 });
+        }
+        return new Response("Not Found", { status: 404 });
+      }),
+    );
+    await updater.checkForUpdatesNow(false, "manual");
+    expect(authorizations[0]).toBe("token second-token");
+  });
+
+  it("leaves the original download error and the lease alone when a masked download-time 404 probes to a visible repository", async () => {
+    process.env.TRAYCER_STAGING_RELEASE_TOKEN = "first-token";
+    const { autoUpdater, updater } = await loadStagingUpdater();
+    const tag = "desktop-v2.0.0-staging.1.gabcdef0";
+    vi.stubGlobal(
+      "fetch",
+      fetchRouter([macReleaseFixture(tag, true)], {
+        [tag]: manifestYamlForTag(tag, macZipAssetName(tag)),
+      }),
+    );
+    autoUpdater.checkForUpdates.mockImplementation(() => {
+      autoUpdater.emit("update-available", { version: "2.0.0-staging.1" });
+      return Promise.resolve(null);
+    });
+    await updater.installAutoUpdater(true, makeDeps(true));
+    await updater.checkForUpdatesNow(false, "manual");
+    expect(updater.getAppUpdateSnapshot().status).toBe("available");
+
+    const calls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: unknown) => {
+        calls.push(String(input));
+        return new Response(JSON.stringify({}), { status: 200 });
+      }),
+    );
+    updater.startUpdateDownload();
+    expect(updater.getAppUpdateSnapshot().status).toBe("downloading");
+
+    autoUpdater.emit("error", new Error("HttpError: 404 Not Found"));
+
+    await vi.waitFor(() => {
+      expect(updater.getAppUpdateSnapshot().status).toBe("error");
+    });
+    // The repository IS visible, so the 404 belonged to the download itself:
+    // the original generic error stands rather than being reinterpreted as
+    // an authentication failure.
+    expect(updater.getAppUpdateSnapshot().errorMessage).toBe(
+      "Traycer couldn't reach the update service right now. Please try again in a little while.",
+    );
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toContain("/repos/traycerai/traycer-internal");
+
+    // The lease was NOT discarded (both halves): changing the env token has
+    // no effect until something actually rejects the current lease, so the
+    // next check still authenticates with the original token rather than the
+    // new one.
+    process.env.TRAYCER_STAGING_RELEASE_TOKEN = "second-token";
+    const authorizations: Array<string | null> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: unknown, init: RequestInit | undefined) => {
+        authorizations.push(new Headers(init?.headers).get("authorization"));
+        const url = new URL(String(input));
+        if (url.searchParams.has("per_page")) {
+          return new Response(JSON.stringify([]), { status: 200 });
+        }
+        return new Response("Not Found", { status: 404 });
+      }),
+    );
+    await updater.checkForUpdatesNow(false, "manual");
+    expect(authorizations[0]).toBe("token first-token");
+  });
+
+  it("does not probe repository visibility during download when no staging token is configured", async () => {
+    const { autoUpdater, updater } = await loadStagingUpdater();
+    const calls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: unknown) => {
+        calls.push(String(input));
+        return new Response("Not Found", { status: 404 });
+      }),
+    );
+    await updater.installAutoUpdater(true, makeDeps(true));
+
+    // Surface a candidate without running a check, so the staging lease is
+    // never resolved and `currentPrivateUpdateToken()` stays empty - the
+    // guard this test exercises.
+    autoUpdater.emit("update-available", { version: "2.0.0-staging.1" });
+    expect(updater.getAppUpdateSnapshot().status).toBe("available");
+
+    updater.startUpdateDownload();
+    expect(updater.getAppUpdateSnapshot().status).toBe("downloading");
+
+    autoUpdater.emit("error", new Error("HttpError: 404 Not Found"));
+
+    expect(updater.getAppUpdateSnapshot().status).toBe("error");
+    expect(updater.getAppUpdateSnapshot().errorMessage).toBe(
+      "Traycer couldn't reach the update service right now. Please try again in a little while.",
+    );
+    // No token means the masked-404 discriminator never runs - a good-faith
+    // absent/public repository 404s the same way with or without one, so no
+    // request is worth spending on it.
+    expect(calls).toHaveLength(0);
+  });
+});
+
+describe("masked 404 in release discovery: no probe without a token", () => {
+  it("does not probe repository visibility when no token is configured", async () => {
+    setPlatform("darwin");
+    const { updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
+    const calls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: unknown) => {
+        calls.push(String(input));
+        return new Response("Not Found", { status: 404 });
+      }),
+    );
+    await updater.installAutoUpdater(true, makeDeps(true));
+
+    const plan = await updater.resolveCompatRecovery({
+      minimumEpoch: 2,
+      hostAllowsRcRecovery: true,
+    });
+
+    expect(plan.route).toBe("manual");
+    // Only the listing was fetched - no token means the masked-404 discriminator
+    // never runs, since a good-faith absent/public repository 404s the same way
+    // with or without one.
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toContain("per_page");
+  });
+});
+
 interface LinuxGuidanceTestConfig {
   readonly packageType: "deb" | "rpm" | null;
   readonly silentInstallSupported: boolean;
@@ -2755,6 +3166,7 @@ const NOT_LINUX_GUIDANCE: LinuxGuidanceTestConfig = {
 interface LoadedUpdater {
   readonly autoUpdater: FakeAutoUpdater;
   readonly notify: Mock;
+  readonly logger: Record<string, Mock>;
   readonly preferences: { allowPrerelease: boolean };
   readonly updater: UpdaterModule;
 }
@@ -2811,6 +3223,7 @@ async function loadUpdater(
     { kind: "immediate" },
     null,
     STABLE_APP_VERSION,
+    "dev",
   );
 }
 
@@ -2826,6 +3239,7 @@ async function loadUpdaterForVersion(
     { kind: "immediate" },
     null,
     appVersion,
+    "dev",
   );
 }
 
@@ -2838,6 +3252,7 @@ async function loadUpdaterWithHydration(
     hydration,
     null,
     STABLE_APP_VERSION,
+    "dev",
   );
 }
 
@@ -2850,6 +3265,7 @@ async function loadUpdaterWithPersistControl(
     { kind: "immediate" },
     persistControl,
     STABLE_APP_VERSION,
+    "dev",
   );
 }
 
@@ -2858,16 +3274,33 @@ async function loadUpdaterWithControls(
   hydration: HydrationBehavior,
   persistControl: PersistPrereleaseControl | null,
   appVersion: string,
+  releaseChannel: "dev" | "staging",
 ): Promise<LoadedUpdater> {
   vi.resetModules();
   const autoUpdater = new FakeAutoUpdater();
   const notify = vi.fn();
+  const logger = {
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  };
   const preferences = { allowPrerelease: false };
   vi.doMock("electron", () => ({
     app: {
       getVersion: () => appVersion,
     },
   }));
+  if (releaseChannel === "staging") {
+    vi.doMock("../../../config", () => ({
+      config: {
+        environment: "staging",
+        releaseRepo: "traycerai/traycer-internal",
+      },
+      configuredDesktopReleaseRepo: () => "traycerai/traycer-internal",
+      DESKTOP_RELEASE_CHANNEL: "staging",
+    }));
+  }
   vi.doMock("electron-updater", () => ({
     autoUpdater,
   }));
@@ -2881,12 +3314,7 @@ async function loadUpdaterWithControls(
     },
   }));
   vi.doMock("../logger", () => ({
-    log: {
-      debug: vi.fn(),
-      info: vi.fn(),
-      warn: vi.fn(),
-      error: vi.fn(),
-    },
+    log: logger,
   }));
   vi.doMock("../update-preferences", () => ({
     hydrateUpdatePreferences: vi.fn(
@@ -2940,6 +3368,7 @@ async function loadUpdaterWithControls(
   return {
     autoUpdater,
     notify,
+    logger,
     preferences,
     updater: await import("../updater"),
   };

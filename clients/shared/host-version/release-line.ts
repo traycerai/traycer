@@ -46,6 +46,26 @@ type HostReleaseLine = string;
 
 const CANONICAL_RC_PATTERN = /^(\d+\.\d+\.\d+)-rc\.(\d+)$/;
 const STABLE_PATTERN = /^\d+\.\d+\.\d+$/;
+// The staging release train's version grammar: the next patch above the
+// latest stable, then the train's run number and the short build commit.
+// Numeric identifiers carry no leading zeros and the commit is lowercase hex,
+// exactly as the internal allocator writes them.
+const CANONICAL_STAGING_PATTERN =
+  /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)-staging\.(?:0|[1-9]\d*)\.g[0-9a-f]{7,40}$/;
+
+/**
+ * Whether `version` is a canonical staging-train version. A staging client
+ * only ever reads the staging feeds, where EVERY row has this shape: it is
+ * that client's release line, not a pre-release of it, which is why
+ * {@link isHiddenFromDefaultCatalog} exempts it from the DEFAULT listing.
+ * {@link isPreReleaseVersion} still reports it as a pre-release by shape,
+ * because it is one - an explicit `--no-include-pre-releases` is entitled to
+ * that answer. It never activates implicit RC following either: a staging
+ * install updates through its own feeds' `latest`.
+ */
+export function isCanonicalStagingVersion(version: string): boolean {
+  return CANONICAL_STAGING_PATTERN.test(version);
+}
 
 /**
  * The release line of a canonical `X.Y.Z-rc.N`, or `null` for every other
@@ -78,30 +98,57 @@ export function isCanonicalReleaseCandidate(version: string): boolean {
 }
 
 /**
- * THE BROAD one: would the default `host available` catalog hide this version
- * behind `--include-pre-releases`?
+ * THE BROAD one: is this a pre-release at all, by shape, with no exemptions?
  *
  * Deliberately not {@link isCanonicalReleaseCandidate}, and the two are not
- * interchangeable in either direction. This one answers a CATALOG question and
- * covers every pre-release shape — `rc`, `beta`, `alpha`, `nightly`, a
+ * interchangeable in either direction. This one answers a SHAPE question and
+ * covers every pre-release form — `rc`, `beta`, `alpha`, `nightly`, a
  * leading-zero `-rc.01`, anything after the `-`. The canonical predicate
  * answers a POLICY question ("may this build follow a release line") and is
  * narrow on purpose.
- *
- * Two processes ask this, which is why it is here rather than in either of
- * them: the CLI's `filterHostAvailableVersions` decides which rows to return,
- * and Desktop's `HostController` has to PREDICT that decision — a staged build
- * whose row is missing from the listing reads as yanked and gets purged. A
- * second copy in either place is a purge waiting for the day the two spellings
- * diverge.
  *
  * Anchored on a full `X.Y.Z-` triplet rather than a bare `includes("-")`: the
  * substring test also matched the `local-<basename>-<timestamp>` version a
  * local-file install records, which is not a registry row at all. Build
  * metadata alone (`1.8.0+build.4`) is not a pre-release, per SemVer.
+ *
+ * This is the predicate an EXPLICIT `--no-include-pre-releases` needs. For the
+ * default catalog's question, which exempts the staging train, use
+ * {@link isHiddenFromDefaultCatalog}.
  */
 export function isPreReleaseVersion(version: string): boolean {
   return /^\d+\.\d+\.\d+-/.test(version);
+}
+
+/**
+ * Would the DEFAULT `host available` catalog hide this version behind
+ * `--include-pre-releases`?
+ *
+ * Two processes ask this, which is why it is here rather than in either of
+ * them: the CLI's `filterHostAvailableVersions` decides which rows to return
+ * when the user stated no preference, and Desktop's `HostController` has to
+ * PREDICT that decision — a staged build whose row is missing from the
+ * listing reads as yanked and gets purged. A second copy in either place is a
+ * purge waiting for the day the two spellings diverge.
+ *
+ * A canonical staging-train version is NOT hidden: it is the only shape the
+ * staging feeds publish, so hiding it would leave a staging client with an
+ * empty default listing and would make Desktop purge every staged staging
+ * host as "yanked". Production feeds never carry the shape, so the exemption
+ * is inert there.
+ *
+ * WHY THIS IS A SEPARATE PREDICATE and not that exemption folded into
+ * {@link isPreReleaseVersion}. It was folded in, and the exemption then
+ * applied to EVERY caller — including a user who typed
+ * `--no-include-pre-releases` explicitly, who kept receiving every
+ * `-staging.*` row while the JSON and human output both reported that
+ * pre-releases had been excluded. The exemption exists to keep an UNSTATED
+ * default useful, so it belongs to the question about the default and nowhere
+ * else. An explicit exclusion is an instruction, not a default to be improved
+ * on.
+ */
+export function isHiddenFromDefaultCatalog(version: string): boolean {
+  return isPreReleaseVersion(version) && !isCanonicalStagingVersion(version);
 }
 
 /**

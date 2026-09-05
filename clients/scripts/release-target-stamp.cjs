@@ -1,0 +1,376 @@
+/* eslint-disable @typescript-eslint/no-require-imports */
+"use strict";
+
+// Reads the small client projection emitted by the internal release-target
+// descriptor. This is intentionally a shape check, not an attestation layer:
+// the payload is produced from reviewed repository bytes by the same release
+// workflow that consumes it.
+const fs = require("node:fs");
+const path = require("node:path");
+
+const KNOWN_TARGETS = ["production", "staging"];
+// The desktop `releaseChannel` each target must stamp. Mirrors the
+// `desktop.releaseChannel` values in the build repo's `release-targets.json`;
+// see the check in `readClientTargetStamp` for why this one is pinned to an
+// exact value rather than merely required to be a string.
+const REQUIRED_RELEASE_CHANNEL = {
+  production: "stable",
+  staging: "staging",
+};
+// Scalar keys must be non-empty strings; structured keys are checked by shape
+// below. Keeping the two sets apart is what makes a `null` scalar fail here
+// instead of being packaged as `appId: null` or `schemes: [null]`.
+const COMMON_SCALAR_KEYS = [
+  "target",
+  "environment",
+  "sentryEnvironment",
+  "cliFeedTag",
+  "hostDiscoveryTag",
+  "credentialEnvironmentVariable",
+];
+const COMMON_STRUCTURED_KEYS = [
+  "cloud",
+  "credentialSources",
+  "authorizedOrigins",
+];
+const COMPONENT_KEYS = {
+  cli: {
+    scalar: [
+      "cliInstallRoot",
+      "hostInstallRoot",
+      "serviceLabelId",
+      "windowsTaskName",
+    ],
+    structured: [],
+  },
+  desktop: {
+    scalar: [
+      "appId",
+      "productName",
+      "protocolScheme",
+      "releaseChannel",
+      "updaterPackageName",
+      "updaterCacheDirName",
+      "updaterChannel",
+      // The NSIS uninstaller removes the CLI-installed host autostart, so the
+      // desktop stamp carries the CLI's install identity too.
+      "cliInstallRoot",
+      "windowsTaskName",
+    ],
+    structured: ["mac", "windows", "linux", "updaterChannelFiles"],
+  },
+};
+
+class ClientTargetStampError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "ClientTargetStampError";
+  }
+}
+
+function requireRecord(value, where) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new ClientTargetStampError(`${where} must be an object`);
+  }
+  return value;
+}
+
+function requireKeys(value, keys, where) {
+  const record = requireRecord(value, where);
+  for (const key of keys) {
+    if (!(key in record)) {
+      throw new ClientTargetStampError(`${where} is missing ${key}`);
+    }
+  }
+  return record;
+}
+
+function requireString(value, where) {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new ClientTargetStampError(`${where} must be a non-empty string`);
+  }
+}
+
+/**
+ * Every named key must be present AND hold a non-empty string.
+ *
+ * `requireKeys` checks presence only, which is not enough for the NESTED
+ * records: the stampers interpolate these leaves straight into `config.ts`, so
+ * a `cloud.authnApiUrl: null` is baked as the literal string `"null"` and the
+ * release ships with an unusable authentication endpoint that nothing fails on
+ * until a user tries to sign in.
+ */
+function requireScalarKeys(value, keys, where) {
+  const record = requireKeys(value, keys, where);
+  for (const key of keys) {
+    requireString(record[key], `${where}.${key}`);
+  }
+  return record;
+}
+
+/**
+ * An install root the consumers may treat as home-relative.
+ *
+ * `windowsLauncherPath` in `release-target-electron-builder.cjs` does
+ * `cliInstallRoot.slice(2)` to drop a leading `~/` before joining it onto
+ * `$PROFILE`. An absolute value such as `/opt/traycer/cli` survives every
+ * other check here and then loses its first two characters instead, producing
+ * `$PROFILE\pt\traycer\cli\...` - so the NSIS uninstaller deletes nothing and
+ * leaves the registered launcher behind. Refuse the shape rather than let a
+ * consumer assume it.
+ *
+ * The prefix alone is not the whole property: `~/../shared` also starts with
+ * `~/` and still resolves outside the home directory, which is the same escape
+ * by a different spelling, and a bare `~/` names the home directory itself
+ * rather than a root under it. A guard called "home-relative" has to mean it.
+ *
+ * SEGMENTS ARE ALLOWLISTED RATHER THAN SCREENED, because the two escapes this
+ * has to stop are not reachable by enumerating spellings of `..`:
+ *
+ *   - `windowsLauncherPath` converts `/` to `\`, so a BACKSLASH in the value is
+ *     already a separator on the Windows side. `~/..\shared` is a single
+ *     segment to `split("/")`, passes a `..` check, and lands as
+ *     `$PROFILE\..\shared\...` - outside the profile.
+ *   - the result is interpolated into `!define TRAYCER_HOST_LAUNCHER "<here>"`,
+ *     and NSIS has no escape for its own delimiter, so a `"` in the value ends
+ *     the string early and the remainder is parsed as installer script.
+ *
+ * A blocklist would have to anticipate both, plus whatever the next consumer
+ * treats as special. `[A-Za-z0-9._-]` covers every value the descriptor has
+ * ever carried (`.traycer`, `cli`, `host`, `staging`) and cannot express a
+ * separator, a quote, or a shell metacharacter at all. If a real path ever
+ * needs a wider charset, this fails loudly at build time with the offending
+ * segment named - which is the right place to have that argument.
+ */
+const HOME_RELATIVE_SEGMENT = /^[A-Za-z0-9._-]+$/u;
+
+function requireHomeRelativePath(value, where) {
+  requireString(value, where);
+  if (!value.startsWith("~/")) {
+    throw new ClientTargetStampError(
+      `${where} must be home-relative and start with "~/", got ${JSON.stringify(value)}`,
+    );
+  }
+  const segments = value.slice(2).split("/");
+  if (segments.some((segment) => segment.length === 0)) {
+    throw new ClientTargetStampError(
+      `${where} must name a directory under the home directory, got ${JSON.stringify(value)}`,
+    );
+  }
+  if (segments.includes("..")) {
+    throw new ClientTargetStampError(
+      `${where} must stay inside the home directory, got ${JSON.stringify(value)}`,
+    );
+  }
+  const offending = segments.find(
+    (segment) => !HOME_RELATIVE_SEGMENT.test(segment),
+  );
+  if (offending !== undefined) {
+    throw new ClientTargetStampError(
+      `${where} path segment ${JSON.stringify(offending)} is not a plain name; only [A-Za-z0-9._-] is allowed, so that a consumer converting "/" to "\\" or quoting the value cannot be made to leave the install root. Got ${JSON.stringify(value)}`,
+    );
+  }
+}
+
+/** A non-empty array whose every entry is a non-empty string. */
+function requireStringArray(value, where) {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new ClientTargetStampError(`${where} must be a non-empty array`);
+  }
+  value.forEach((entry, index) => requireString(entry, `${where}[${index}]`));
+}
+
+function readClientTargetStamp(inputPath, expectedTarget, component) {
+  const componentKeys = COMPONENT_KEYS[component];
+  if (componentKeys === undefined) {
+    throw new ClientTargetStampError(`unknown client component ${component}`);
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(fs.readFileSync(inputPath, "utf8"));
+  } catch (error) {
+    throw new ClientTargetStampError(
+      `cannot read target stamp ${inputPath}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  const stamp = requireKeys(
+    parsed,
+    [
+      ...COMMON_SCALAR_KEYS,
+      ...COMMON_STRUCTURED_KEYS,
+      ...componentKeys.scalar,
+      ...componentKeys.structured,
+    ],
+    "client target stamp",
+  );
+  for (const key of [...COMMON_SCALAR_KEYS, ...componentKeys.scalar]) {
+    requireString(stamp[key], `client target stamp.${key}`);
+  }
+  for (const key of ["credentialSources", "authorizedOrigins"]) {
+    requireStringArray(stamp[key], `client target stamp.${key}`);
+  }
+  // Both components carry `cliInstallRoot`; only the CLI stamp carries
+  // `hostInstallRoot`. Every consumer of either treats them as home-relative.
+  for (const key of ["cliInstallRoot", "hostInstallRoot"]) {
+    if (key in stamp) {
+      requireHomeRelativePath(stamp[key], `client target stamp.${key}`);
+    }
+  }
+  if (
+    !KNOWN_TARGETS.includes(stamp.target) ||
+    stamp.target !== expectedTarget
+  ) {
+    throw new ClientTargetStampError(
+      `client target stamp target ${JSON.stringify(stamp.target)} does not match ${JSON.stringify(expectedTarget)}`,
+    );
+  }
+  if (stamp.environment !== stamp.target) {
+    throw new ClientTargetStampError(
+      "client target stamp environment must equal target",
+    );
+  }
+  requireScalarKeys(
+    stamp.cloud,
+    ["traycerServerBaseUrl", "authnApiUrl", "cloudUiBaseUrl", "relayAttachUrl"],
+    "client target stamp.cloud",
+  );
+  if (component === "desktop") {
+    // `releaseChannel` is the one stamped value the updater compares against a
+    // LITERAL rather than merely carrying: `effectiveChannelMode()` returns
+    // `explicit-prerelease` for exactly `"staging"` and falls through to the
+    // stable path for anything else. So a staging descriptor that said
+    // `"stable"` - or `"Staging"`, or a typo - would pass every other check
+    // here, bake verbatim, and produce a build that authenticates against a
+    // private repository while looking for stable releases in it. Being a
+    // non-empty string is not enough for a value with that consequence.
+    const requiredReleaseChannel = REQUIRED_RELEASE_CHANNEL[stamp.target];
+    if (stamp.releaseChannel !== requiredReleaseChannel) {
+      throw new ClientTargetStampError(
+        `client target stamp releaseChannel ${JSON.stringify(stamp.releaseChannel)} is not the ${JSON.stringify(stamp.target)} channel ${JSON.stringify(requiredReleaseChannel)}`,
+      );
+    }
+    requireStringArray(
+      stamp.updaterChannelFiles,
+      "client target stamp.updaterChannelFiles",
+    );
+    requireScalarKeys(
+      stamp.mac,
+      ["bundleName", "helperBundleId", "launchAgentLabel"],
+      "client target stamp.mac",
+    );
+    requireScalarKeys(
+      stamp.windows,
+      ["appUserModelId", "executableName", "installerDisplayName"],
+      "client target stamp.windows",
+    );
+    const linux = requireKeys(
+      stamp.linux,
+      ["deb", "rpm", "executableName", "desktopEntryName"],
+      "client target stamp.linux",
+    );
+    requireString(
+      linux.executableName,
+      "client target stamp.linux.executableName",
+    );
+    requireString(
+      linux.desktopEntryName,
+      "client target stamp.linux.desktopEntryName",
+    );
+    requireScalarKeys(
+      linux.deb,
+      ["packageName"],
+      "client target stamp.linux.deb",
+    );
+    requireScalarKeys(
+      linux.rpm,
+      ["packageName"],
+      "client target stamp.linux.rpm",
+    );
+  }
+  return stamp;
+}
+
+function targetInputFromArg(argv, expectedTarget, required, component) {
+  const arg = argv.find((value) => value.startsWith("--target-input="));
+  if (arg === undefined) {
+    if (required) {
+      throw new ClientTargetStampError(
+        `--target-input=<path> is required for ${expectedTarget} release builds`,
+      );
+    }
+    return null;
+  }
+  const inputPath = arg.slice("--target-input=".length);
+  if (inputPath.length === 0) {
+    throw new ClientTargetStampError("--target-input requires a path");
+  }
+  return readClientTargetStamp(
+    path.resolve(inputPath),
+    expectedTarget,
+    component,
+  );
+}
+
+/**
+ * The publish/update coordinate a build is stamped with, resolved ONCE so the
+ * three stampers cannot disagree about what a staging build is allowed to
+ * point at.
+ *
+ * Three ways this refuses, and each one is a shipped-and-broken release
+ * otherwise:
+ *
+ *   - ABSENT on staging. A staging client stamps staging-only feed tags; against
+ *     the production repository every discovery lookup 404s at runtime.
+ *   - THE PRODUCTION COORDINATE on staging, spelled explicitly. Rejecting only
+ *     the absent case leaves the misconfiguration that actually reaches the
+ *     public repository - a staging build resolving updates from, or publishing
+ *     into, production. Compared case-insensitively, because GitHub treats
+ *     `owner/repo` that way and `TraycerAI/Traycer` is the same destination.
+ *   - MALFORMED, on any target. A full clone URL or an `owner/repo/extra` typo
+ *     is baked as-is; the CLI then builds invalid manifest URLs and a null
+ *     authentication policy, and the failure only surfaces after the release
+ *     has shipped. Only the desktop packaging path validated the shape before.
+ *
+ * Returns a result rather than throwing so each caller can phrase its own exit;
+ * `--restore` paths need no coordinate at all and never call this.
+ */
+const PRODUCTION_RELEASE_REPO = "traycerai/traycer";
+const REPO_COORDINATE = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
+
+function resolveReleaseRepoForTarget(raw, releaseTarget) {
+  const trimmed = typeof raw === "string" ? raw.trim() : "";
+  if (trimmed.length === 0) {
+    if (releaseTarget === "staging") {
+      return {
+        ok: false,
+        reason:
+          "TRAYCER_RELEASE_REPO (or RELEASE_REPO) is required for a staging build; the production repository is never a staging destination.",
+      };
+    }
+    return { ok: true, repo: PRODUCTION_RELEASE_REPO };
+  }
+  if (!REPO_COORDINATE.test(trimmed)) {
+    return {
+      ok: false,
+      reason: `TRAYCER_RELEASE_REPO (or RELEASE_REPO) must be an owner/repo coordinate, got ${JSON.stringify(trimmed)}.`,
+    };
+  }
+  if (
+    releaseTarget === "staging" &&
+    trimmed.toLowerCase() === PRODUCTION_RELEASE_REPO
+  ) {
+    return {
+      ok: false,
+      reason: `TRAYCER_RELEASE_REPO (or RELEASE_REPO) resolved to the production repository ${JSON.stringify(trimmed)}, which is never a staging destination.`,
+    };
+  }
+  return { ok: true, repo: trimmed };
+}
+
+module.exports = {
+  ClientTargetStampError,
+  PRODUCTION_RELEASE_REPO,
+  readClientTargetStamp,
+  resolveReleaseRepoForTarget,
+  targetInputFromArg,
+};

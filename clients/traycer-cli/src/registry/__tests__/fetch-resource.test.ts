@@ -16,7 +16,7 @@ import {
   type NetworkHeartbeat,
   waitForWriterDrain,
 } from "../fetch-resource";
-import { CliError } from "../../runner/errors";
+import { CLI_ERROR_CODES, cliError, CliError } from "../../runner/errors";
 import {
   closeFaultServer,
   sha256,
@@ -468,6 +468,49 @@ describe("downloadToFile resume and integrity policy", () => {
       ).rejects.toBeInstanceOf(CliError);
 
       expect(readFileSync(destPath, "utf8")).toBe("abc");
+    },
+    SETTLE_RETRY_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "keeps a resumable partial when staging authentication fails",
+    async () => {
+      const destPath = join(workDir, "auth-failure.tar.gz");
+      writeFileSync(destPath, "abc");
+      globalThis.fetch = vi.fn(async () => {
+        throw cliError({
+          code: CLI_ERROR_CODES.RELEASE_AUTHENTICATION_REQUIRED,
+          message: "staging release authentication required",
+          details: null,
+          exitCode: 1,
+        });
+      }) as typeof globalThis.fetch;
+
+      await expect(
+        settleRetryTimers(downloadToFile(downloadOptions(destPath, "abcdef"))),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.RELEASE_AUTHENTICATION_REQUIRED,
+      });
+
+      expect(readFileSync(destPath, "utf8")).toBe("abc");
+    },
+    SETTLE_RETRY_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "deletes the partial when the streaming size cap is exceeded",
+    async () => {
+      const destPath = join(workDir, "oversized.tar.gz");
+      writeFileSync(destPath, "abc");
+      globalThis.fetch = vi.fn(async () =>
+        response("a".repeat(1031), 200, {}),
+      ) as typeof globalThis.fetch;
+
+      await expect(
+        settleRetryTimers(downloadToFile(downloadOptions(destPath, "abcdef"))),
+      ).rejects.toBeInstanceOf(CliError);
+
+      expect(() => readFileSync(destPath, "utf8")).toThrow();
     },
     SETTLE_RETRY_TEST_TIMEOUT_MS,
   );

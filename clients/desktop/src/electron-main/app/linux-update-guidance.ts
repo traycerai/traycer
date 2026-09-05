@@ -4,13 +4,16 @@ import { realpath } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { isWsl } from "./wsl";
+import { configuredDesktopReleaseRepo } from "../../config";
 import type { DesktopAppUpdateGuidance } from "../../ipc-contracts/app-update-types";
 
 const execFileAsync = promisify(execFile);
 
 export type LinuxPackageType = "deb" | "rpm";
 
-const DESKTOP_RELEASES_URL = "https://github.com/traycerai/traycer/releases";
+function desktopReleasesUrl(): string {
+  return `https://github.com/${configuredDesktopReleaseRepo()}/releases`;
+}
 
 // Bounds `dpkg -S`/`rpm -qf` in `isRegisteredAtRunningLocation`, which runs
 // unconditionally on every cold Linux launch before update listeners are
@@ -105,7 +108,7 @@ export function buildLinuxUpdateGuidance(
       "Restart Traycer once it completes.",
     ],
     command,
-    releaseUrl: DESKTOP_RELEASES_URL,
+    releaseUrl: desktopReleasesUrl(),
   };
 }
 

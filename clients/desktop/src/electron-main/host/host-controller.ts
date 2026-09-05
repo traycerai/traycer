@@ -3,6 +3,7 @@ import { constants } from "node:fs";
 import { access } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { encodeStageFingerprint } from "@traycer-clients/shared/host-version/stage-fingerprint";
+import { DESKTOP_RELEASE_CHANNEL } from "../../config";
 import { log } from "../app/logger";
 import { prereleaseUpdatesEnabled } from "../app/update-preferences";
 import {
@@ -2751,7 +2752,8 @@ export class HostController {
     const installed = await readDesktopHostInstallRecord(this.layout);
     const installedVersion = installed?.version ?? null;
     const mode = resolveHostChannelMode({
-      explicitPrerelease: prereleaseUpdatesEnabled(),
+      explicitPrerelease:
+        DESKTOP_RELEASE_CHANNEL === "staging" || prereleaseUpdatesEnabled(),
       installedVersion,
     });
     // THE ORDINARY `--automatic` PATH IS CLOSED WHILE FOLLOWING A LINE.

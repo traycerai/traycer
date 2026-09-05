@@ -37,6 +37,23 @@ import {
 } from "./desktop-release-feed";
 import { isCanonicalReleaseCandidate } from "@traycer-clients/shared/host-version/release-line";
 import {
+  AuthenticationRequiredError,
+  isAuthenticationRequiredError,
+} from "@traycer-clients/shared/github-release-auth";
+import {
+  config,
+  configuredDesktopReleaseRepo,
+  DESKTOP_RELEASE_CHANNEL,
+} from "../../config";
+import {
+  AUTHENTICATION_REQUIRED_MESSAGE,
+  discardStagingUpdateToken,
+  fetchStagingGitHubRelease,
+  prepareStagingUpdateToken,
+  stagingAuthLogMessage,
+  stagingReleaseAuthRequired,
+} from "./staging-release-auth";
+import {
   isSelectableCandidate,
   modeAllowsPrerelease,
   resolveUpdateChannelMode,
@@ -115,9 +132,39 @@ export interface AppUpdaterDeps {
 
 const AUTOMATIC_RESUME_CHECK_DEBOUNCE_MS = 30_000;
 const CURRENT_VERSION = app.getVersion();
-const PRIVATE_UPDATE_REPO = process.env.VITE_TRAYCER_DESKTOP_UPDATE_REPO ?? "";
-const PRIVATE_UPDATE_TOKEN =
+const PRIVATE_UPDATE_REPO =
+  process.env.VITE_TRAYCER_DESKTOP_UPDATE_REPO ??
+  (config.environment === "staging" ? configuredDesktopReleaseRepo() : "");
+const BAKED_PRIVATE_UPDATE_TOKEN =
   process.env.VITE_TRAYCER_DESKTOP_UPDATE_TOKEN ?? "";
+let stagingUpdateToken = "";
+// The token most recently discarded after an auth failure. electron-updater
+// can both emit `error` and reject `downloadUpdate()` for one failure; the
+// event handler clears `stagingUpdateToken` first, so the later catch still
+// needs the secret to scrub from its own log line.
+let discardedStagingUpdateToken = "";
+
+function discardStagingUpdateTokenForLog(): string {
+  const rejectedToken = stagingUpdateToken;
+  discardStagingUpdateToken();
+  stagingUpdateToken = "";
+  // Only a real secret replaces the retained one. The `error` event and the
+  // `downloadUpdate()` rejection are TWO calls for ONE failure, and the second
+  // finds `stagingUpdateToken` already cleared - so an unconditional assignment
+  // here would overwrite the retained token with `""` and leave the second
+  // warning with nothing to scrub against, which is the exact leak the retained
+  // copy exists to prevent.
+  if (rejectedToken.length > 0) {
+    discardedStagingUpdateToken = rejectedToken;
+  }
+  return rejectedToken;
+}
+
+function currentPrivateUpdateToken(): string {
+  return config.environment === "staging"
+    ? stagingUpdateToken
+    : BAKED_PRIVATE_UPDATE_TOKEN;
+}
 
 // User-facing copy for the update failure classes. Deliberately generic and
 // reassuring - users shouldn't see release-feed internals, HTTP bodies, or be
@@ -561,7 +608,7 @@ async function configureAutoUpdater(deps: AppUpdaterDeps): Promise<void> {
     notifyUpdateWhenUnfocused("ready", info.version);
   });
   autoUpdater.on("error", (err) => {
-    log.error("[updater] error", err);
+    log.error("[updater] error", credentialSafeLogValue(err));
     handleUpdaterError(err);
   });
 }
@@ -576,6 +623,9 @@ async function configureAutoUpdater(deps: AppUpdaterDeps): Promise<void> {
  * while the preference and the app version are always authoritative.
  */
 function effectiveChannelMode(): DesktopUpdateChannelMode {
+  if (DESKTOP_RELEASE_CHANNEL === "staging") {
+    return "explicit-prerelease";
+  }
   return resolveUpdateChannelMode(prereleaseUpdatesEnabled(), CURRENT_VERSION);
 }
 
@@ -661,6 +711,14 @@ export async function checkForUpdatesNow(
     }
     return currentSnapshot;
   }
+  if (stagingReleaseAuthRequired()) {
+    const token = await prepareStagingUpdateToken();
+    if (token === null) {
+      emitStagingAuthUnavailable(intent, AUTHENTICATION_REQUIRED_MESSAGE, "");
+      return currentSnapshot;
+    }
+    stagingUpdateToken = token;
+  }
   if (checkInFlight) {
     // A check is already running. If it belongs to an older channel generation
     // it will abort without publishing, so queue a fresh check for the newest
@@ -735,8 +793,13 @@ export async function checkForUpdatesNow(
     }
     await autoUpdater.checkForUpdates();
   } catch (err) {
-    log.warn("[updater] check failed", err);
-    emitCheckErrorFromCatch(err, checkIntent ?? intent);
+    if (isStagingAuthFailure(err)) {
+      const rejectedToken = discardStagingUpdateTokenForLog();
+      emitStagingAuthUnavailable(checkIntent ?? intent, err, rejectedToken);
+    } else {
+      log.warn("[updater] check failed", credentialSafeLogValue(err));
+      emitCheckErrorFromCatch(err, checkIntent ?? intent);
+    }
   } finally {
     checkInFlight = false;
     settleCheck?.();
@@ -747,6 +810,55 @@ export async function checkForUpdatesNow(
     runPendingRecheck();
   }
   return currentSnapshot;
+}
+
+function emitStagingAuthUnavailable(
+  intent: DesktopAppUpdateCheckIntent,
+  reason: unknown,
+  rejectedToken: string,
+): void {
+  if (checkInFlight && checkErrorEmitted) return;
+  if (checkInFlight) checkErrorEmitted = true;
+  log.warn(
+    "[updater] staging update unavailable",
+    // All three, because on a SECOND auth event the first two are already
+    // empty: the live token was cleared by the first, and this call's
+    // `rejectedToken` is what that clearing returned. Only the retained copy
+    // still holds the secret the error message may be carrying.
+    stagingAuthLogMessage(reason, [
+      rejectedToken,
+      stagingUpdateToken,
+      discardedStagingUpdateToken,
+    ]),
+  );
+  if (intent === "manual") {
+    emitSnapshot({
+      status: "unavailable",
+      errorMessage: "Updates are not available for this build.",
+      lastCheckedAt: new Date().toISOString(),
+      lastCheckIntent: intent,
+    });
+  }
+}
+
+function credentialSafeLogValue(error: unknown): unknown {
+  return stagingReleaseAuthRequired()
+    ? stagingAuthLogMessage(error, [
+        stagingUpdateToken,
+        discardedStagingUpdateToken,
+      ])
+    : error;
+}
+
+function isStagingAuthFailure(error: unknown): boolean {
+  if (!stagingReleaseAuthRequired()) return false;
+  if (isAuthenticationRequiredError(error)) return true;
+  const message = rawErrorMessage(error).toLowerCase();
+  return (
+    /\b401\b/.test(message) ||
+    (/\b403\b/.test(message) &&
+      (message.includes("forbidden") || message.includes("credentials")))
+  );
 }
 
 // Runs the check queued while a stale (older-generation) check was resolving.
@@ -793,6 +905,13 @@ async function performChannelChange(
   // feed/listener set (finding 1). The barrier always settles, so this never
   // hangs; the preference persistence below is independent of updater health.
   await updaterInitialized;
+  // Staging is its own prerelease line, not a production RC preference.
+  if (DESKTOP_RELEASE_CHANNEL === "staging") {
+    return {
+      outcome: "unchanged",
+      snapshot: emitSnapshot({ allowPrerelease: true }),
+    };
+  }
   // The mode this request asks for. Read inside the serialized section so the
   // persisted value it is compared against reflects any preceding queued change.
   const requestedMode = resolveUpdateChannelMode(
@@ -1228,7 +1347,10 @@ async function probeRcRecoveryCandidate(
     // out". Route it exactly like "nothing found": the manual link. Surfacing
     // a discovery error on top of "your app is too old" adds noise to a state
     // that already has one clear instruction.
-    log.warn("[updater] RC recovery probe failed", error);
+    log.warn(
+      "[updater] RC recovery probe failed",
+      credentialSafeLogValue(error),
+    );
     return null;
   });
   rcRecoveryProbesInFlight.set(minimumEpoch, probe);
@@ -1285,7 +1407,7 @@ async function runRcRecoveryProbe(
   const releaseCandidates = [...all].sort((a, b) =>
     compareHostVersions(b.version, a.version),
   );
-  const token = PRIVATE_UPDATE_TOKEN.trim();
+  const token = currentPrivateUpdateToken().trim();
   const channelFile = platformChannelFile();
   const currentOsRelease = osRelease();
   const isArm64Mac = process.platform === "darwin" ? isArm64MacTarget() : false;
@@ -1421,7 +1543,7 @@ export function startUpdateDownload(): DesktopAppUpdateSnapshot {
   void (async () => {
     await autoUpdater.downloadUpdate();
   })().catch((err: unknown) => {
-    log.warn("[updater] download failed", err);
+    log.warn("[updater] download failed", credentialSafeLogValue(err));
     handleUpdaterError(err);
   });
   return currentSnapshot;
@@ -1469,7 +1591,7 @@ export function installDownloadedUpdate(): DesktopAppUpdateSnapshot {
     // as an async failure - its `installingUpdate` branch lowers the flag and
     // emits the error. Call it BEFORE clearing the flag; that branch is
     // selected by it.
-    log.warn("[updater] install handoff threw", err);
+    log.warn("[updater] install handoff threw", credentialSafeLogValue(err));
     handleUpdaterError(err);
   }
   return currentSnapshot;
@@ -1529,7 +1651,7 @@ async function canCheckForUpdates(isDev: boolean): Promise<boolean> {
 }
 
 function configurePrivateGitHubUpdateFeed(): void {
-  const token = PRIVATE_UPDATE_TOKEN.trim();
+  const token = currentPrivateUpdateToken().trim();
   if (token.length === 0) {
     return;
   }
@@ -1560,7 +1682,7 @@ function configurePrivateGitHubUpdateFeed(): void {
 // feed (review finding 2).
 function resolveUpdateRepo(): GitHubRepoCoordinate | null {
   const parsed = parseGitHubRepoCoordinate(PRIVATE_UPDATE_REPO);
-  if (PRIVATE_UPDATE_TOKEN.trim().length > 0) {
+  if (currentPrivateUpdateToken().trim().length > 0) {
     return parsed;
   }
   return parsed ?? { owner: "traycerai", repo: "traycer" };
@@ -1572,7 +1694,7 @@ function resolveUpdateRepo(): GitHubRepoCoordinate | null {
 // public feed.
 function invalidPrivateConfig(): boolean {
   return (
-    PRIVATE_UPDATE_TOKEN.trim().length > 0 &&
+    currentPrivateUpdateToken().trim().length > 0 &&
     parseGitHubRepoCoordinate(PRIVATE_UPDATE_REPO) === null
   );
 }
@@ -1596,7 +1718,7 @@ function invalidPrivateConfig(): boolean {
  */
 function configureStableGitHubUpdateFeed(): void {
   const coordinate = resolveUpdateRepo();
-  const token = PRIVATE_UPDATE_TOKEN.trim();
+  const token = currentPrivateUpdateToken().trim();
   if (coordinate === null) {
     // Token set + invalid coordinate: fail closed. Leave the existing feed in
     // place rather than point an authenticated build at the public repo.
@@ -1644,7 +1766,7 @@ async function resolveDesktopReleaseFeed(
   }
   const release = await findNewestDesktopRelease(coordinate, mode);
   if (release === null) return null;
-  const token = PRIVATE_UPDATE_TOKEN.trim();
+  const token = currentPrivateUpdateToken().trim();
   log.debug("[updater] configured desktop release feed", {
     version: release.version,
     private: token.length > 0,
@@ -1654,6 +1776,17 @@ async function resolveDesktopReleaseFeed(
     coordinate.repo,
     release,
     token,
+    // The private provider resolves installers through opaque asset URLs, so it
+    // needs the running package's format to keep `findFile` from falling
+    // through to `files[0]` and handing `dpkg -i` an AppImage. This is the same
+    // value discovery filters candidates with, resolved once at install time.
+    linuxPackageType,
+    // Same reason, for the other filename-dependent selector: with no filename
+    // in the URL, `MacUpdater.filterFilesForArch` cannot tell the arm64 ZIP
+    // from the x64 one. Resolved exactly as discovery resolves it, so the
+    // provider and `releaseHasApplicableInstaller` cannot disagree about which
+    // build this Mac can run.
+    process.platform === "darwin" ? isArm64MacTarget() : false,
   );
 }
 
@@ -1703,7 +1836,7 @@ async function findNewestDesktopRelease(
       candidates: ordered.map((candidate) => candidate.version),
     });
   }
-  const token = PRIVATE_UPDATE_TOKEN.trim();
+  const token = currentPrivateUpdateToken().trim();
   const channelFile = platformChannelFile();
   const currentOsRelease = osRelease();
   // Resolved consistently with MacUpdater so discovery filters manifests by the
@@ -1767,7 +1900,7 @@ async function collectDesktopReleaseCandidates(
   coordinate: GitHubRepoCoordinate,
   signal: AbortSignal | undefined,
 ): Promise<DesktopReleaseCandidate[]> {
-  const token = PRIVATE_UPDATE_TOKEN.trim();
+  const token = currentPrivateUpdateToken().trim();
   const headers: Record<string, string> = {
     accept: "application/vnd.github+json",
   };
@@ -1776,8 +1909,25 @@ async function collectDesktopReleaseCandidates(
   const candidates: DesktopReleaseCandidate[] = [];
   for (let page = 1; page <= MAX_DISCOVERY_PAGES; page += 1) {
     const url = `https://api.github.com/repos/${coordinate.owner}/${coordinate.repo}/releases?per_page=100&page=${page}`;
-    const response = await fetch(url, { headers, signal });
+    const response = await fetchStagingGitHubRelease(url, { headers, signal });
     if (!response.ok) {
+      // A 404 here is AMBIGUOUS, and the ambiguity is GitHub's: rather than
+      // 403, it masks "this credential cannot see this repository" as "this
+      // repository does not exist". A syntactically valid token without access
+      // to the private staging repo therefore lands on this line, and the
+      // generic Error it used to raise matched neither arm of
+      // `isStagingAuthFailure` (401/403 only) - so the rejected lease was kept
+      // and every later check in this process reused it, even after the user
+      // re-authenticated.
+      //
+      // Resolved the same way the shared release-asset path resolves it, and
+      // deliberately NOT by treating every 404 as an auth failure: a genuinely
+      // absent repository and an unpublished tag both 404 with a perfectly
+      // good token. The discriminator is the one request whose 404 cannot mean
+      // anything else.
+      if (response.status === 404 && token.length > 0) {
+        await assertStagingRepositoryVisible(coordinate, headers, signal);
+      }
       throw new Error(
         `GitHub release discovery failed with HTTP ${response.status}`,
       );
@@ -1786,13 +1936,40 @@ async function collectDesktopReleaseCandidates(
     if (!Array.isArray(raw)) {
       throw new Error("GitHub release discovery returned a malformed response");
     }
-    candidates.push(...raw.flatMap(projectDesktopRelease));
+    candidates.push(
+      ...raw.flatMap((value) =>
+        projectDesktopRelease(value, DESKTOP_RELEASE_CHANNEL),
+      ),
+    );
     // A short page is GitHub's signal that no releases remain.
     if (raw.length < 100) return candidates;
   }
   throw new Error(
     `GitHub release discovery exceeded the ${MAX_DISCOVERY_PAGES}-page safety limit`,
   );
+}
+
+/**
+ * Turns a masked 404 from the release listing into an authentication verdict,
+ * or leaves it alone.
+ *
+ * The repository coordinate is baked at build time, so `GET /repos/<o>/<r>`
+ * returning 404 means the credential cannot see it - there is no other reading.
+ * A visible repository means the 404 belonged to the listing itself and the
+ * caller's original error stands, so nothing is thrown and no lease is
+ * discarded. Costs one extra request, on the 404 path only.
+ */
+async function assertStagingRepositoryVisible(
+  coordinate: GitHubRepoCoordinate,
+  headers: Record<string, string>,
+  signal: AbortSignal | undefined,
+): Promise<void> {
+  const probe = await fetchStagingGitHubRelease(
+    `https://api.github.com/repos/${encodeURIComponent(coordinate.owner)}/${encodeURIComponent(coordinate.repo)}`,
+    { headers, signal },
+  );
+  if (probe.status !== 404) return;
+  throw new AuthenticationRequiredError(AUTHENTICATION_REQUIRED_MESSAGE);
 }
 
 // Fetches a candidate's channel manifest bytes for validation. An HTTP error
@@ -1807,7 +1984,7 @@ async function fetchDesktopReleaseManifest(
   },
   signal: AbortSignal | undefined,
 ): Promise<string | null> {
-  const response = await fetch(request.url, {
+  const response = await fetchStagingGitHubRelease(request.url, {
     headers: request.headers,
     signal,
   });
@@ -2053,6 +2230,119 @@ function handleUpdaterError(error: unknown): void {
   if (currentSnapshot.status === "ready") {
     return;
   }
+  if (isStagingAuthFailure(error)) {
+    emitStagingAuthRejection(error);
+    return;
+  }
+  // The MASKED-404 half of the same question, asked on behalf of the paths
+  // that cannot ask it themselves.
+  //
+  // GitHub answers "this credential cannot see this repository" with 404
+  // rather than 403, and `isStagingAuthFailure` matches only 401/403. Release
+  // discovery already resolves that ambiguity itself, with the
+  // repository-visibility probe in `collectDesktopReleaseCandidates`. The
+  // DOWNLOAD cannot: `ExactReleaseAssetProvider` hands its copied token
+  // straight to electron-updater's downloader via `fileExtraDownloadHeaders`
+  // and never passes through `fetchStagingGitHubRelease`, so a token that
+  // lost access between discovery and `downloadUpdate()` arrived here as a
+  // generic error - reported as a plain failure AND leaving the rejected
+  // lease cached, which every later check in the process then reused, even
+  // after the user re-authenticated.
+  //
+  // Routed through the SAME probe rather than by widening the message match:
+  // a genuinely absent repository, an unpublished tag and an asset deleted
+  // mid-flight all 404 with a perfectly good token, and only the probe
+  // distinguishes those from a revoked one. Costs one request, on the 404
+  // path only, and only when a staging token is actually configured.
+  if (isStagingMasked404Candidate(error)) {
+    // The only asynchronous branch in this handler, so it is also the only one
+    // that can turn a throwing listener into an unhandled rejection instead of
+    // propagating to the emitter. Terminate the chain here.
+    void settleMasked404(error).catch((settleError: unknown) => {
+      log.warn(
+        "[updater] masked-404 settle failed",
+        credentialSafeLogValue(settleError),
+      );
+    });
+    return;
+  }
+  emitOrdinaryUpdaterError(error);
+}
+
+// The rejected-credential outcome, shared by the synchronous 401/403 verdict
+// and the asynchronous masked-404 one so both discard the lease identically.
+function emitStagingAuthRejection(error: unknown): void {
+  const intent =
+    downloadIntent ??
+    checkIntent ??
+    currentSnapshot.lastCheckIntent ??
+    "automatic";
+  const rejectedToken = discardStagingUpdateTokenForLog();
+  downloadInProgress = false;
+  downloadIntent = null;
+  emitStagingAuthUnavailable(intent, error, rejectedToken);
+}
+
+/**
+ * Whether `error` could be GitHub masking a lost credential as "not found".
+ *
+ * Only a CANDIDATE: it selects which errors are worth one probe, and never
+ * decides the verdict on its own. Gated on a configured staging token because
+ * without one a 404 carries no ambiguity at all - an absent or public
+ * repository answers exactly the same way.
+ */
+function isStagingMasked404Candidate(error: unknown): boolean {
+  if (!stagingReleaseAuthRequired()) return false;
+  if (currentPrivateUpdateToken().trim().length === 0) return false;
+  return /\b404\b/u.test(rawErrorMessage(error));
+}
+
+/**
+ * Resolves a candidate masked 404 against the repository, then emits exactly
+ * one outcome - never both. A probe that fails for its own reasons (offline,
+ * rate limited) leaves the original error standing and the lease untouched,
+ * which is the same fail-safe direction discovery takes.
+ */
+async function settleMasked404(error: unknown): Promise<void> {
+  const rejected = await stagingCredentialRejected();
+  // Re-checked AFTER the probe, not before. `handleUpdaterError` applies this
+  // guard on entry so a late error cannot clobber a finished download; putting
+  // a request in front of the decision widens exactly that window, so the
+  // guard has to be re-asserted on the far side of it rather than inherited
+  // from a check made before the await.
+  if (currentSnapshot.status === "ready") {
+    return;
+  }
+  if (rejected) {
+    emitStagingAuthRejection(error);
+    return;
+  }
+  emitOrdinaryUpdaterError(error);
+}
+
+async function stagingCredentialRejected(): Promise<boolean> {
+  const coordinate = resolveUpdateRepo();
+  if (coordinate === null) return false;
+  const token = currentPrivateUpdateToken().trim();
+  if (token.length === 0) return false;
+  try {
+    await assertStagingRepositoryVisible(
+      coordinate,
+      {
+        accept: "application/vnd.github+json",
+        authorization: `token ${token}`,
+      },
+      undefined,
+    );
+    return false;
+  } catch (probeError) {
+    return isAuthenticationRequiredError(probeError);
+  }
+}
+
+// The ordinary (non-authentication) error path, extracted so the masked-404
+// probe can fall back to it after the fact instead of duplicating it.
+function emitOrdinaryUpdaterError(error: unknown): void {
   const errorMessage = readErrorMessage(error);
   const lastCheckedAt = new Date().toISOString();
   if (downloadInProgress || currentSnapshot.status === "downloading") {
