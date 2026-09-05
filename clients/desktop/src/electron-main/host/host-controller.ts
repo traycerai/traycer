@@ -1984,10 +1984,12 @@ export class HostController {
    * restart`, `--if-idle` unless forced, so live work still refuses), then
    * confirm readiness against `prePid` the way every other cycle does.
    *
-   * With NO running host there is nothing to restart and the register cycle
-   * was the only way to start one, so that case stays a failure — but an
-   * immediate one that names the parked registration, not a two-minute
-   * timeout that names the wrong cause.
+   * With NO running host the login item's status decides: `enabled` is
+   * started through the same CLI cycle (its relaunch half kickstarts the
+   * registered agent, which needs no live pid); `requires-approval` fails
+   * with the System Settings guidance, since nothing but the user can
+   * re-enable it; anything else fails immediately naming the parked
+   * registration, not with a two-minute timeout that names the wrong cause.
    */
   private async activateAroundParkedRegistration(
     step: Extract<LockedMacActivationStep, { phase: "parked" }>,
@@ -2008,18 +2010,31 @@ export class HostController {
         );
         return this.failedAfterServiceCycle(approvalRequiredMessage());
       }
+      if (loginItemStatus !== "enabled") {
+        log.warn(
+          "[host-controller] login-item registration parked with no running host to restart",
+          { loginItemStatus },
+        );
+        return this.failedAfterServiceCycle(
+          "Traycer Host's login item could not be re-registered and no host is running to restart - run `traycer host doctor` to recover.",
+        );
+      }
+      // ENABLED and down - the ordinary startup / crash window, or a park on
+      // legacy evidence alone. An enabled launchd agent does not need a live
+      // pid to be restarted: the CLI's stop half reports `no-host` and its
+      // relaunch half kickstarts the registered agent label, which is exactly
+      // what starts it. Falls through to the same CLI cycle as a running
+      // host, with no pre-pid for readiness to distinguish from.
       log.warn(
-        "[host-controller] login-item registration parked with no running host to restart",
-        { loginItemStatus },
+        "[host-controller] login-item registration parked with no running host but an enabled login item - kickstarting it through the CLI to activate the committed install",
+        { force },
       );
-      return this.failedAfterServiceCycle(
-        "Traycer Host's login item could not be re-registered and no host is running to restart - run `traycer host doctor` to recover.",
+    } else {
+      log.warn(
+        "[host-controller] login-item registration parked - restarting the running host through the CLI to activate the committed install",
+        { prePid: step.prePid, force },
       );
     }
-    log.warn(
-      "[host-controller] login-item registration parked - restarting the running host through the CLI to activate the committed install",
-      { prePid: step.prePid, force },
-    );
     // The desktop contender lock is released by the time this runs, so the
     // restart goes through the same attempt-aware cycle every other CLI
     // restart uses: `--defer-if-parked` makes the CLI classify the record

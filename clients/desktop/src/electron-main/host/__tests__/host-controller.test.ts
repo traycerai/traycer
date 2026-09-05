@@ -3379,7 +3379,7 @@ describe("platform matrix", () => {
       expect(readyOrder).toBeGreaterThan(restartOrder);
     });
 
-    it("with no running host to restart, fails immediately naming the parked registration and never spawns a restart", async () => {
+    it("with no running host and a login item that is not enabled, fails immediately naming the parked registration and never spawns a restart", async () => {
       vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
       const controller = newController("production");
       writeInstallRecord("production", {
@@ -3389,6 +3389,7 @@ describe("platform matrix", () => {
       // No `writePidMetadata` call: no running host, so `prePid` resolves
       // `null` and there is nothing to restart onto.
       vi.mocked(registerHostLoginItem).mockResolvedValue("parked");
+      vi.mocked(readHostLoginItemStatus).mockReturnValue("not-found");
       vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({ data: {} });
 
       const outcome = await controller.installVersion("1.8.0", false);
@@ -3404,6 +3405,88 @@ describe("platform matrix", () => {
         );
       expect(restartCallIndex).toBe(-1);
       expect(waitForHostReady).not.toHaveBeenCalled();
+    });
+
+    // An enabled login item is not "down" in the way the failure branch
+    // above is - launchd can restart an enabled agent without a live pid to
+    // distinguish readiness from, so this falls through to the same CLI
+    // restart cycle a running host uses instead of failing immediately.
+    it("with no running host but an ENABLED login item, kickstarts it through the CLI restart and reports activated", async () => {
+      vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+      const controller = newController("production");
+      writeInstallRecord("production", {
+        version: "1.7.0",
+        runtimeVersion: "1.7.0",
+      });
+      // No `writePidMetadata` call: no running host, so `prePid` resolves
+      // `null` - but the login item still reads `enabled`.
+      vi.mocked(registerHostLoginItem).mockResolvedValue("parked");
+      vi.mocked(readHostLoginItemStatus).mockReturnValue("enabled");
+      vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+        data: { restarted: true },
+      });
+      vi.mocked(waitForHostReady).mockResolvedValue({
+        ready: true,
+        version: "1.7.0",
+        pid: process.pid,
+        startedAt: "2026-01-01T00:00:00.000Z",
+        reason: "ready",
+      });
+
+      const outcome = await controller.installVersion("1.8.0", false);
+
+      expect(outcome.kind).toBe("ok");
+      if (outcome.kind === "ok") {
+        expect(outcome.value.runningActivated).toBe(true);
+      }
+      const restartCallIndex = vi
+        .mocked(streamBundledTraycerCliJson)
+        .mock.calls.findIndex(
+          ([opts]) => Array.isArray(opts.args) && opts.args[1] === "restart",
+        );
+      expect(restartCallIndex).toBeGreaterThanOrEqual(0);
+      expect(
+        vi.mocked(streamBundledTraycerCliJson).mock.calls[restartCallIndex][0]
+          .args,
+      ).toEqual(["host", "restart", "--if-idle", "--defer-if-parked"]);
+      expect(waitForHostReady).toHaveBeenCalled();
+    });
+
+    it("with no running host but an ENABLED login item, force:true restarts with --force instead of --if-idle", async () => {
+      vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+      const controller = newController("production");
+      writeInstallRecord("production", {
+        version: "1.7.0",
+        runtimeVersion: "1.7.0",
+      });
+      // No `writePidMetadata` call: no running host, so `prePid` resolves
+      // `null` - but the login item still reads `enabled`.
+      vi.mocked(registerHostLoginItem).mockResolvedValue("parked");
+      vi.mocked(readHostLoginItemStatus).mockReturnValue("enabled");
+      vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+        data: { restarted: true },
+      });
+      vi.mocked(waitForHostReady).mockResolvedValue({
+        ready: true,
+        version: "1.7.0",
+        pid: process.pid,
+        startedAt: "2026-01-01T00:00:00.000Z",
+        reason: "ready",
+      });
+
+      const outcome = await controller.installVersion("1.8.0", true);
+
+      expect(outcome.kind).toBe("ok");
+      const restartCallIndex = vi
+        .mocked(streamBundledTraycerCliJson)
+        .mock.calls.findIndex(
+          ([opts]) => Array.isArray(opts.args) && opts.args[1] === "restart",
+        );
+      expect(restartCallIndex).toBeGreaterThanOrEqual(0);
+      expect(
+        vi.mocked(streamBundledTraycerCliJson).mock.calls[restartCallIndex][0]
+          .args,
+      ).toEqual(["host", "restart", "--force", "--defer-if-parked"]);
     });
 
     // A host that is DOWN because its login item is toggled off is a
