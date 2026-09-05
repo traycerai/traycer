@@ -438,4 +438,33 @@ describe("claimant device label", () => {
     // kind - "device" typed by a phone does not become a proper name.
     expect(claimantDeviceLabel("device")).toBe("a device");
   });
+
+  it("treats an inherited property name as a proper name, not a kind", () => {
+    // The claim is unauthenticated: a phone can call itself anything. A name
+    // that is also an Object.prototype key must not read the prototype's
+    // function as its article.
+    for (const name of [
+      "constructor",
+      "toString",
+      "__proto__",
+      "hasOwnProperty",
+    ]) {
+      expect(claimantDeviceName(name)).toBe(name);
+      expect(claimantDeviceLabel(name)).toBe(name);
+    }
+  });
+
+  it("refuses a self-reported name carrying terminal control characters", () => {
+    // Short, UA-free, and aimed at the CLI's prompt: an escape sequence is
+    // not a device name, and it buckets like any other unusable value.
+    expect(claimantDeviceName("\u001b[2Jevil")).toBe("device");
+    expect(claimantDeviceLabel("\u001b[31mPixel\u001b[0m")).toBe("a device");
+    expect(claimantDeviceName("Pixel\u0007")).toBe("device");
+    expect(claimantDeviceName("Pixel\u007f")).toBe("device");
+    expect(claimantDeviceName("Pixel\u009b")).toBe("device");
+    // A family survives its own control characters, on the bucket path.
+    expect(claimantDeviceName("\u001bc iPhone")).toBe("iPhone");
+    // Ordinary non-ASCII is a name.
+    expect(claimantDeviceName("Téléphone de Léa")).toBe("Téléphone de Léa");
+  });
 });

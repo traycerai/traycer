@@ -307,6 +307,7 @@ describe("runLinkPhoneFlow", () => {
     // The footer is transient stderr, rewritten in place: it bypasses the
     // line-oriented output sink, and it is the ONLY line under the code - the
     // hint and the clock are one line, not a static sentence plus a counter.
+    const restoreStderr = setTty(process.stderr, true);
     const stderrWrite = vi
       .spyOn(process.stderr, "write")
       .mockImplementation(() => true);
@@ -325,6 +326,40 @@ describe("runLinkPhoneFlow", () => {
       expect(printed(ctx)).not.toContain("one phone per code");
     } finally {
       stderrWrite.mockRestore();
+      restoreStderr();
+    }
+  });
+
+  it("states the footer's facts once when stderr is not a terminal", async () => {
+    // A carriage return does not rewrite a file or a pipe, it appends: a
+    // 50-second code would otherwise leave fifty copies of the line in a log.
+    const restoreStderr = setTty(process.stderr, false);
+    const stderrWrite = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation(() => true);
+    try {
+      const ctx = makeCtx({ json: false, quiet: false, nonInteractive: false });
+      const settled = Promise.allSettled([
+        runLinkPhoneFlow(ctx, { showQr: true }),
+      ]);
+      // Several ticks' worth of waiting on an unclaimed code.
+      await vi.advanceTimersByTimeAsync(POLL_MS * 3);
+      statusMock.mockResolvedValue(CLAIMED);
+      await vi.advanceTimersByTimeAsync(POLL_MS);
+      await settled;
+
+      const footers = stderrWrite.mock.calls
+        .map((call) => String(call[0]))
+        .filter((line) => line.includes("one phone per code"));
+      expect(footers).toEqual(["  one phone per code · you approve here\n"]);
+      expect(
+        stderrWrite.mock.calls.some((call) =>
+          String(call[0]).includes("New code in"),
+        ),
+      ).toBe(false);
+    } finally {
+      stderrWrite.mockRestore();
+      restoreStderr();
     }
   });
 
@@ -526,6 +561,47 @@ describe("runLinkPhoneFlow", () => {
       expect(answer.redraws).toHaveLength(1);
     } finally {
       stderrWrite.mockRestore();
+      restoreStderr();
+    }
+  });
+
+  it("does not ask readline to repaint on a dumb terminal", async () => {
+    // A TTY whose TERM is `dumb`: readline's `prompt()` skips its refresh and
+    // prints the prompt verbatim, so a repaint per tick would stack copies of
+    // the question beside a half-typed answer exactly as a raw write would.
+    const restoreStderr = setTty(process.stderr, true);
+    const originalTerm = process.env.TERM;
+    process.env.TERM = "dumb";
+    try {
+      statusMock.mockResolvedValue({
+        kind: "ok" as const,
+        response: {
+          status: "claimed" as const,
+          claimant: {
+            ...CLAIMED.response.claimant,
+            claimExpiresAt: Date.now() + 90_000,
+          },
+        },
+      });
+      answer.current = "y";
+      answer.hold = true;
+      const settled = Promise.allSettled([
+        runLinkPhoneFlow(
+          makeCtx({ json: false, quiet: false, nonInteractive: false }),
+          { showQr: true },
+        ),
+      ]);
+      await vi.advanceTimersByTimeAsync(POLL_MS + 3_000);
+      expect(answer.lastPrompt).toContain("Approve within 1:28");
+      expect(answer.redraws).toEqual([]);
+      answer.release?.();
+      await settled;
+    } finally {
+      if (originalTerm === undefined) {
+        delete process.env.TERM;
+      } else {
+        process.env.TERM = originalTerm;
+      }
       restoreStderr();
     }
   });

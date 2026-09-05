@@ -209,15 +209,30 @@ export function parseLinkLoginInput(text: string): string | null {
  * The generic device kinds a claimant can be bucketed into, with the article
  * each takes in running prose. A self-reported name is never one of these.
  */
-const CLAIMANT_DEVICE_KINDS: Readonly<Record<string, string>> = {
-  iPhone: "an",
-  iPad: "an",
-  "Android device": "an",
-  device: "a",
-};
+const CLAIMANT_DEVICE_KINDS: ReadonlyMap<string, string> = new Map([
+  ["iPhone", "an"],
+  ["iPad", "an"],
+  ["Android device", "an"],
+  ["device", "a"],
+]);
 
 /** A self-reported name longer than this is UA-shaped, not a device name. */
 const CLAIMANT_DEVICE_NAME_MAX = 40;
+
+/**
+ * C0 and C1 control characters, DEL included. A self-reported name carrying
+ * one is not a name: it is a terminal control sequence aimed at the CLI's
+ * approval prompt, and it buckets to a family like any other unusable value.
+ */
+function hasControlCharacter(value: string): boolean {
+  for (const character of value) {
+    const code = character.codePointAt(0) ?? 0;
+    if (code < 0x20 || (code >= 0x7f && code <= 0x9f)) {
+      return true;
+    }
+  }
+  return false;
+}
 
 /**
  * What the claimant is, as a bare noun phrase: "iPhone", "Pixel 8",
@@ -229,16 +244,19 @@ const CLAIMANT_DEVICE_NAME_MAX = 40;
  * since Apple exposes no marketing-name API. A self-reported model name
  * ("Pixel 8") is short and UA-free, and reads best verbatim. A browser or
  * CFNetwork User-Agent is long and structured, and is only good for a family
- * bucket.
+ * bucket. The kinds live in a Map rather than an object so a claimant naming
+ * itself "constructor" or "__proto__" is a proper name, never an inherited
+ * property.
  */
 export function claimantDeviceName(userAgent: string | null): string {
   const value = userAgent ?? "";
-  if (value in CLAIMANT_DEVICE_KINDS) {
+  if (CLAIMANT_DEVICE_KINDS.has(value)) {
     return value;
   }
   if (
     value.length > 0 &&
     value.length <= CLAIMANT_DEVICE_NAME_MAX &&
+    !hasControlCharacter(value) &&
     !value.includes("Mozilla/") &&
     !value.includes("CFNetwork") &&
     !value.includes("(")
@@ -264,7 +282,7 @@ export function claimantDeviceName(userAgent: string | null): string {
  */
 export function claimantDeviceLabel(userAgent: string | null): string {
   const name = claimantDeviceName(userAgent);
-  const article = CLAIMANT_DEVICE_KINDS[name];
+  const article = CLAIMANT_DEVICE_KINDS.get(name);
   return article === undefined ? name : `${article} ${name}`;
 }
 

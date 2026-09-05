@@ -116,15 +116,38 @@ const CODE_FOOTER = "one phone per code · you approve here";
 const TICKER_BLANK = " ".repeat(64);
 
 /**
+ * Whether stderr is a terminal a carriage return rewrites in place. On a file
+ * or a pipe `\r` appends rather than rewrites, and a line meant to be redrawn
+ * once a second would land fifty times in a log.
+ */
+function stderrRewritesInPlace(): boolean {
+  return process.stderr.isTTY === true;
+}
+
+/**
+ * Whether readline will REPAINT a prompt on stderr rather than print it
+ * again: its refresh needs a terminal AND cursor controls, and it skips both
+ * on `TERM=dumb` even when the stream is a TTY.
+ */
+function readlineRepaintsPrompt(): boolean {
+  return stderrRewritesInPlace() && process.env.TERM !== "dumb";
+}
+
+/**
  * The footer under the code: one stderr line rewritten in place until the
  * code rotates, carrying the rotation clock and the two facts a person needs
  * while they wait. It bypasses the output sink on purpose - that sink is
  * line-oriented and feeds the NDJSON stream, and a carriage-returned counter
  * is neither a log line nor an event. Only started on a non-quiet run; the
- * caller prints the same facts once, statically, when quiet.
+ * caller prints the same facts once, statically, when quiet - and so does
+ * this, on a stderr that is not a terminal, where there is no line to rewrite.
  */
 function startCodeFooter(ctx: CommandContext, rotateAtMs: number): () => void {
   const c = stderrColors(ctx);
+  if (!stderrRewritesInPlace()) {
+    process.stderr.write(`  ${c.dim(CODE_FOOTER)}\n`);
+    return () => {};
+  }
   const tick = (): void => {
     process.stderr.write(
       `\r  ${c.dim(`New code in ${secondsUntil(rotateAtMs)}s · ${CODE_FOOTER}`)}   `,
@@ -151,9 +174,10 @@ function startCodeFooter(ctx: CommandContext, rotateAtMs: number): () => void {
  * the answer typed so far with the cursor where it was. Writing the clock to
  * the stream directly would land on readline's own line and walk over the
  * question, or over a half-typed answer, on a prompt whose whole point is
- * being read carefully. The redraw is only asked for on a terminal: on any
- * other output readline would print the prompt again per tick instead of
- * repainting it, and the first line then simply states the window once.
+ * being read carefully. The redraw is only asked for where readline will
+ * repaint (a terminal that is not `TERM=dumb`): anywhere else readline prints
+ * the prompt again per tick instead, and the first line then simply states
+ * the window once.
  */
 async function askApproval(
   ctx: CommandContext,
@@ -170,7 +194,7 @@ async function askApproval(
     output: process.stderr,
   });
   const redraw =
-    deadline === null || process.stderr.isTTY !== true
+    deadline === null || !readlineRepaintsPrompt()
       ? null
       : setInterval(() => {
           rl.setPrompt(render());
