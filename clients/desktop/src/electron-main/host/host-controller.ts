@@ -35,7 +35,10 @@ import {
 import {
   readUpdateAttemptRecord,
   commitAttemptMutationWithCapability,
+  deriveAttemptLiveness,
   isTerminalRetentionExpired,
+  probeAttemptHolder,
+  RECOMMENDED_ATTEMPT_STALENESS_MS,
   type HostUpdateAttemptIdentity,
   type HostUpdateAttemptRecord,
   type UpdateMutationCapability,
@@ -101,6 +104,7 @@ import {
   type HostControllerIntent,
   type HostControllerStatus,
   type LocalAttemptFacts,
+  type LocalAttemptLiveness,
   type InstallVersionOk,
   type LifecycleAdmissionBlock,
   type MutationKind,
@@ -157,6 +161,44 @@ const CLI_LOCK_BUSY_CODE = "E_CLI_LOCK_BUSY";
 const HOST_BUSY_CODE = "E_HOST_BUSY";
 const HOST_UPDATE_ATTEMPT_ACTIVE_CODE = "E_HOST_UPDATE_ATTEMPT_ACTIVE";
 const LOCK_BUSY_MESSAGE = "Another Traycer process is managing the host.";
+
+/**
+ * How long `readLocalAttemptFacts` may reuse a holder verdict for an UNCHANGED
+ * lock file (D13: "the probe cache TTL is bounded").
+ *
+ * Bounded on BOTH sides, and both bounds matter:
+ *
+ *   - above the broadcaster's 750 ms live cadence, so a status read during an
+ *     update does not spawn a liveness probe per tick (`tasklist` on Windows);
+ *   - well under the renderer's 5 s proof window, so a cached POSITIVE cannot
+ *     outlive the proof it feeds — a stale `live` served from here would extend
+ *     the gate the proof deadline exists to bound.
+ *
+ * Only a crashed holder can be served stale at all: the cache is fingerprinted
+ * on the holder's identity and dropped outright when the lock file is gone, so
+ * a normal release (executor finishes, unlinks) is observed on the next read
+ * however warm the entry is.
+ */
+const LOCAL_ATTEMPT_HOLDER_CACHE_TTL_MS = 2_000;
+
+/** The published shape, built in one place so its three call sites cannot drift. */
+function localAttemptFacts(
+  record: HostUpdateAttemptRecord,
+  liveness: LocalAttemptLiveness,
+  livenessObservedAtMs: number | null,
+): LocalAttemptFacts {
+  return {
+    attemptId: record.attemptId,
+    generation: record.generation,
+    sequence: record.sequence,
+    targetVersion: record.targetVersion,
+    phase: record.phase,
+    continuation: record.continuation,
+    updatedAt: record.updatedAt,
+    liveness,
+    livenessObservedAtMs,
+  };
+}
 
 class HostReadinessError extends Error {
   constructor(message: string) {
@@ -979,16 +1021,24 @@ export class HostController {
    * has no observation at all — so a mid-flight update renders as a blank
    * "state unknown" and the user cannot tell it from an idle machine.
    *
-   * Facts only. This method deliberately does NOT decide whether the attempt is
-   * live, stale, or progressing: that judgement belongs to the renderer's
-   * existing qualified-stale projector, and a second copy of it here would
-   * drift from the one the live path uses.
+   * Facts only, plus ONE probed observation. This method deliberately does NOT
+   * decide whether the attempt is stale or progressing: that judgement belongs
+   * to the renderer's existing qualified-stale projector, and a second copy of
+   * it here would drift from the one the live path uses. `liveness` is the one
+   * thing the projector cannot derive from the record — a file saying
+   * `restarting` proves an executor once wrote that, never that one is still
+   * carrying it — so it is gathered here, where the lock is, and gathered as
+   * EVIDENCE (D13).
    *
    * An unreadable or absent record both answer `null`, and the field's contract
    * says `null` means "cannot say" rather than "nothing running" — the caller
    * must not turn a failed read into a claim of idleness.
    */
   private async readLocalAttemptFacts(): Promise<LocalAttemptFacts | null> {
+    // ONE clock for the whole read: the retention bound, the probe and the
+    // published `livenessObservedAtMs` must describe the same instant, or the
+    // renderer ages a proof against a deadline computed from a different one.
+    const nowMs = Date.now();
     const read = await readUpdateAttemptRecord(this.layout.rootDir);
     if (read.kind !== "valid") return null;
     const record = read.value;
@@ -1001,16 +1051,73 @@ export class HostController {
     // same as absent) rather than resurfacing a week-old failure as the
     // freshest available fact. The record file itself is left for the next
     // contender's prune; a facts read must not grow a write path.
-    if (isTerminalRetentionExpired(record, Date.now())) return null;
-    return {
-      attemptId: record.attemptId,
-      generation: record.generation,
-      sequence: record.sequence,
-      targetVersion: record.targetVersion,
-      phase: record.phase,
-      continuation: record.continuation,
-      updatedAt: record.updatedAt,
-    };
+    if (isTerminalRetentionExpired(record, nowMs)) return null;
+
+    // Parked and terminal records are not probed at all. `deriveAttemptLiveness`
+    // resolves both without consulting a holder — a park is DEFINED by the
+    // absence of one — so a probe cannot change the answer, and neither maps to
+    // `live` under any evidence. Skipping it keeps the steady state (no
+    // attempt, or a terminal one) at zero probes per poll.
+    if (record.execution !== "active") {
+      return localAttemptFacts(record, "unknown", null);
+    }
+
+    const holder = await probeAttemptHolder({
+      hostHomeDir: this.layout.rootDir,
+      nowMs,
+      cacheTtlMs: LOCAL_ATTEMPT_HOLDER_CACHE_TTL_MS,
+    });
+
+    // ---- Join the record to the lock -------------------------------------
+    //
+    // The record and the lock are two files read at two different instants,
+    // and the window between them is exactly when a finishing executor is
+    // busiest: it writes its terminal record and THEN releases the lock, and a
+    // continuing one advances the record while holding it. Pair the pre-probe
+    // record with the post-probe lock state and the evidence describes two
+    // different worlds.
+    //
+    // This is the host observer's own rule, re-implemented rather than
+    // imported (`traycer-host` is not reachable from this package): re-read,
+    // and require the record to have held STILL across the probe. Ordering is
+    // by identity (`attemptId + generation + sequence`), never by timestamp — a
+    // reader must not be able to win, or lose, a race on a clock.
+    const confirmed = await readUpdateAttemptRecord(this.layout.rootDir);
+    if (confirmed.kind !== "valid") return null;
+    const fresh = confirmed.value;
+    if (
+      fresh.attemptId !== record.attemptId ||
+      fresh.generation !== record.generation ||
+      fresh.sequence !== record.sequence
+    ) {
+      // It moved. The re-read is the newer record, but the holder evidence was
+      // gathered against the older one, so this pairing establishes nothing:
+      // publish the FRESHER facts with an explicitly unknown liveness rather
+      // than pairing mismatched evidence or looping. The next poll is
+      // milliseconds away, and `unknown` can never hold the lifecycle gate.
+      if (isTerminalRetentionExpired(fresh, nowMs)) return null;
+      return localAttemptFacts(fresh, "unknown", nowMs);
+    }
+
+    const derived = deriveAttemptLiveness({
+      current: read,
+      holder,
+      nowMs,
+      stalenessMs: RECOMMENDED_ATTEMPT_STALENESS_MS,
+    });
+    // `live` is minted from the PROBE, never from the derivation's `active`
+    // arm. That arm is also reached for a recent — or future-dated — record
+    // whose holder is dead or absent, which is a grace period that keeps a
+    // young attempt from reading as interrupted, not proof that anything is
+    // running. Promoting it here would put an indeterminate bar and a
+    // lifecycle gate behind a record nobody is carrying.
+    const liveness: LocalAttemptLiveness =
+      holder.kind === "holder-live"
+        ? "live"
+        : derived.kind === "interrupted"
+          ? "interrupted"
+          : "unknown";
+    return localAttemptFacts(record, liveness, nowMs);
   }
 
   async getStatus(): Promise<HostControllerStatus> {

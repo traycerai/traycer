@@ -19,6 +19,11 @@ function facts(overrides: Partial<LocalAttemptFacts>): LocalAttemptFacts {
     phase: "preparing",
     continuation: null,
     updatedAt: "2026-08-27T00:00:00.000Z",
+    // Desktop's probed liveness (D13). `unknown` is the base fixture because
+    // these cases are about the RECORD's facts; a case about liveness overrides
+    // it explicitly.
+    liveness: "unknown",
+    livenessObservedAtMs: null,
     ...overrides,
   };
 }

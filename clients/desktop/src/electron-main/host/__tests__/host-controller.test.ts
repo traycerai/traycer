@@ -2333,6 +2333,10 @@ describe("canonical status: localAttempt retention (Ticket 07 §5.2.7)", () => {
       phase: "failed",
       continuation: null,
       updatedAt: oneHourAgo,
+      // A terminal record is never probed (D13), so there is no observation
+      // to timestamp and nothing that could make it `live`.
+      liveness: "unknown",
+      livenessObservedAtMs: null,
     });
   });
 });
