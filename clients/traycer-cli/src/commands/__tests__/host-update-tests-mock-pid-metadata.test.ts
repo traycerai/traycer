@@ -36,20 +36,31 @@ function testFilesUnder(dir: string): string[] {
   return found;
 }
 
-describe("every test that executes buildHostUpdateCommand mocks host/pid-metadata", () => {
+// The cutover MOVED the hazard this gate exists for. `readActivationState`
+// now lives in `host/update-run.ts`, so `runHostUpdate` is the function that
+// reads the real `pid.json` and can restart a developer's own host; the
+// command file is a thin shell that calls it. Both entry points are therefore
+// scanned, and the pid-metadata mock is recognised at either depth
+// (`../../host/pid-metadata` from `commands/__tests__`, `../pid-metadata`
+// from `host/__tests__`).
+const EXECUTES = ["buildHostUpdateCommand(", "runHostUpdate("];
+
+// A file that mocks the module under test never executes the real thing.
+const MOCKS_ENTRY_POINT =
+  /vi\.mock\(\s*["'](?:\.\.\/)*(?:commands\/)?host-update["']|vi\.mock\(\s*["'](?:\.\.\/)*(?:host\/)?update-run["']/;
+
+const MOCKS_PID_METADATA =
+  /vi\.mock\(\s*["'](?:\.\.\/)+(?:host\/)?pid-metadata["']/;
+
+describe("every test that executes host update mocks host/pid-metadata", () => {
   it("no test file under src runs the real command against the real pid.json", () => {
     const offenders = testFilesUnder(SRC_ROOT)
       .filter((path) => {
         const source = readFileSync(path, "utf8");
-        const executesCommand =
-          source.includes("buildHostUpdateCommand(") &&
-          // A file that mocks the command module itself never executes it.
-          !/vi\.mock\(\s*["'](?:\.\.\/)*(?:commands\/)?host-update["']/.test(
-            source,
-          );
-        const mocksPidMetadata =
-          /vi\.mock\(\s*["'](?:\.\.\/)+host\/pid-metadata["']/.test(source);
-        return executesCommand && !mocksPidMetadata;
+        const executes =
+          EXECUTES.some((marker) => source.includes(marker)) &&
+          !MOCKS_ENTRY_POINT.test(source);
+        return executes && !MOCKS_PID_METADATA.test(source);
       })
       .map((path) => relative(SRC_ROOT, path));
     expect(offenders).toEqual([]);
@@ -57,13 +68,19 @@ describe("every test that executes buildHostUpdateCommand mocks host/pid-metadat
 
   it("the gate sees the files it guards", () => {
     // A predicate that matches nothing passes vacuously; pin that the scan
-    // reaches the command's own suite so an empty offender list means
-    // "every caller mocks", not "no caller was found".
-    const guarded = testFilesUnder(SRC_ROOT).filter((path) =>
-      readFileSync(path, "utf8").includes("buildHostUpdateCommand("),
-    );
-    expect(guarded.map((path) => relative(SRC_ROOT, path))).toContain(
-      join("commands", "__tests__", "host-update.test.ts"),
+    // reaches BOTH entry points' own suites, so an empty offender list means
+    // "every caller mocks", not "no caller was found". The legacy
+    // `commands/__tests__/host-update.test.ts` this used to name was retired
+    // by the executor cutover and its pins live in `update-run.test.ts`.
+    const guarded = testFilesUnder(SRC_ROOT)
+      .filter((path) => {
+        const source = readFileSync(path, "utf8");
+        return EXECUTES.some((marker) => source.includes(marker));
+      })
+      .map((path) => relative(SRC_ROOT, path));
+    expect(guarded).toContain(join("host", "__tests__", "update-run.test.ts"));
+    expect(guarded).toContain(
+      join("commands", "__tests__", "host-update-dispatch-ack-guard.test.ts"),
     );
   });
 });

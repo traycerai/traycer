@@ -2,9 +2,11 @@ import { rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   isValidUpdateDispatchAckNonce,
+  isValidUpdateDispatchAckReason,
   updateDispatchAckPath,
   UPDATE_DISPATCH_ACK_VERSION,
   type UpdateDispatchAck,
+  type UpdateDispatchAckResult,
 } from "@traycer/protocol/config/host-update-ack";
 import type { HostUpdateAttemptIdentity } from "@traycer-clients/shared/host-update";
 
@@ -36,12 +38,27 @@ import type { HostUpdateAttemptIdentity } from "@traycer-clients/shared/host-upd
 // an ACK only if the nonce matches one IT minted for a child IT spawned. That
 // is categorically different from a token, which must never be an argument.
 
+/**
+ * The decision this run is attesting: exactly one of "here is the attempt I
+ * claimed" and "there is no attempt, and here is why".
+ *
+ * The `no-attempt` arm's only producer is `host update`'s selector — a no-op,
+ * a recovery that owed nothing further, a refused bound intent, or a throw
+ * that happened before any claim.
+ */
+export type UpdateDispatchAckDecision =
+  | {
+      readonly kind: "claimed";
+      readonly identity: HostUpdateAttemptIdentity;
+      readonly claimedAtIso: string;
+    }
+  | { readonly kind: "no-attempt"; readonly reason: string };
+
 /** Written atomically, so a reader never sees a partial ACK. */
 export async function stampUpdateDispatchAck(input: {
   readonly hostHomeDir: string;
   readonly nonce: string;
-  readonly identity: HostUpdateAttemptIdentity;
-  readonly claimedAtIso: string;
+  readonly decision: UpdateDispatchAckDecision;
 }): Promise<void> {
   if (!isValidUpdateDispatchAckNonce(input.nonce)) {
     // Refused rather than written. A nonce this build considers illegal cannot
@@ -53,17 +70,7 @@ export async function stampUpdateDispatchAck(input: {
   const ack: UpdateDispatchAck = {
     v: UPDATE_DISPATCH_ACK_VERSION,
     nonce: input.nonce,
-    // The v2 `claimed` arm — the same facts v1 carried at the top level. The
-    // `no-attempt` arm has no producer here yet: the decision that reaches it
-    // is made by `host update`'s selector, which lands with the executor
-    // cutover; this writer is still only ever invoked after a durable claim.
-    result: {
-      kind: "claimed",
-      attemptId: input.identity.attemptId,
-      generation: input.identity.generation,
-      sequence: input.identity.sequence,
-      claimedAt: input.claimedAtIso,
-    },
+    result: resultFor(input.decision),
   };
   const target = updateDispatchAckPath(input.hostHomeDir);
   // Agent-scoped temp name: pid AND a monotonic-ish suffix, so two children of
@@ -93,6 +100,29 @@ export async function stampUpdateDispatchAck(input: {
   }
 }
 
+function resultFor(
+  decision: UpdateDispatchAckDecision,
+): UpdateDispatchAckResult {
+  if (decision.kind === "claimed") {
+    // The v2 `claimed` arm — the same facts v1 carried at the top level.
+    return {
+      kind: "claimed",
+      attemptId: decision.identity.attemptId,
+      generation: decision.identity.generation,
+      sequence: decision.identity.sequence,
+      claimedAt: decision.claimedAtIso,
+    };
+  }
+  if (!isValidUpdateDispatchAckReason(decision.reason)) {
+    // Refused for the same reason an illegal nonce is: the reason crosses a
+    // repository boundary, and the host re-checks it against this exact
+    // grammar before it reaches a log line or an RPC response. A value this
+    // contract cannot produce must not be written in the first place.
+    throw new Error("update dispatch ack reason is not a legal reason");
+  }
+  return { kind: "no-attempt", reason: decision.reason };
+}
+
 /**
  * The executor acknowledgement callback for a dispatched run, or `null` when
  * this run carries no nonce.
@@ -103,18 +133,31 @@ export async function stampUpdateDispatchAck(input: {
  * private positive acknowledgement boundary". Handing it the stamper is what
  * puts the write on the right side of the claim without a new call site.
  *
- * Pre-cutover the legacy `host update` path never reaches an executor claim
- * (its contender admission is `legacy-update-shadow`, disposition `yield`, and
- * it creates no schema-v2 attempt), so the callback is installed and not
- * invoked. That junction is the cutover, and it is the same one the resolver's
- * gated wait is waiting on.
+ * `noAttempt` is the other half of the same contract, and the reason it is on
+ * the SAME object: a run stamps exactly one of the two, and a caller that has
+ * to reach for a second factory to report "no attempt" is a caller that can
+ * forget to. Every exit `host update` has - a claim, a release, a rejection,
+ * and a throw that happened before any claim - goes through one of these.
  */
 export type DispatchAckAcknowledgement = (claim: {
   readonly identity: HostUpdateAttemptIdentity;
 }) => Promise<void>;
 
+export interface DispatchAckStamper {
+  /**
+   * The executor segment's `acknowledge` hook - the seam the executor invokes
+   * immediately after the claim commits, and describes as "the private
+   * positive acknowledgement boundary". Handing it the stamper is what puts
+   * the write on the right side of the claim without a new call site.
+   */
+  readonly acknowledge: DispatchAckAcknowledgement;
+  /** No attempt was claimed, and here is why (the ACK's reason grammar). */
+  readonly noAttempt: (reason: string) => Promise<void>;
+}
+
 /**
- * Validate the nonce and build the acknowledgement.
+ * Validate the nonce and build the stamper, or `null` when this run carries no
+ * nonce.
  *
  * **Throws on an illegal nonce, and callers must invoke this BEFORE anything
  * is written.** A dispatched run that carries a nonce this build cannot honour
@@ -125,17 +168,29 @@ export type DispatchAckAcknowledgement = (claim: {
 export function installDispatchAckStamper(
   hostHomeDir: string,
   nonce: string | null,
-): DispatchAckAcknowledgement | null {
+): DispatchAckStamper | null {
   if (nonce === null) return null;
   if (!isValidUpdateDispatchAckNonce(nonce)) {
     throw new Error("update dispatch ack nonce is not a legal nonce");
   }
-  return async (claim) => {
-    await stampUpdateDispatchAck({
-      hostHomeDir,
-      nonce,
-      identity: claim.identity,
-      claimedAtIso: new Date().toISOString(),
-    });
+  return {
+    acknowledge: async (claim) => {
+      await stampUpdateDispatchAck({
+        hostHomeDir,
+        nonce,
+        decision: {
+          kind: "claimed",
+          identity: claim.identity,
+          claimedAtIso: new Date().toISOString(),
+        },
+      });
+    },
+    noAttempt: async (reason) => {
+      await stampUpdateDispatchAck({
+        hostHomeDir,
+        nonce,
+        decision: { kind: "no-attempt", reason },
+      });
+    },
   };
 }

@@ -225,6 +225,17 @@ function mockCohortEligible(platform: "linux" | "win32"): void {
   );
 }
 
+// The cutover made `eligible` the shipped verdict for every platform, so the
+// REFUSAL arm of every gate below is now only reachable through the mock. That
+// is the whole reason `decideUpdateExecutorCohort` survived as a function: a
+// deleted gate takes its tests with it, while a narrowed one keeps them.
+function mockCohortShadow(): void {
+  cohortMock.decide.mockImplementation(() => ({
+    kind: "shadow",
+    reason: "disabled",
+  }));
+}
+
 // ---- dispatchAttemptExecutor -------------------------------------------------
 //
 // The parent/child dispatch boundary: the parent reports "accepted" only
@@ -286,7 +297,11 @@ function childWithAck(
 }
 
 describe("dispatchAttemptExecutor - cohort gate is derived internally, never caller-supplied", () => {
-  it("returns disabled without spawning while the cohort is shadow (the production default)", async () => {
+  it("returns disabled without spawning while the cohort is shadow", async () => {
+    // Shadow is MOCKED here: since the cutover the shipped policy answers
+    // `eligible` for every platform, so this arm is reachable only by forcing
+    // the verdict. The block below pins the shipped default itself.
+    mockCohortShadow();
     let spawnCalls = 0;
     const outcome = await dispatchAttemptExecutor(
       dispatchOptions({
@@ -333,10 +348,39 @@ describe("dispatchAttemptExecutor - cohort gate is derived internally, never cal
   });
 });
 
-describe("decideUpdateExecutorCohort - static shadow-only production default, unmocked in this describe block", () => {
+describe("decideUpdateExecutorCohort - the shipped default, unmocked in this describe block", () => {
+  // Inverted by the cutover, and deliberately kept rather than deleted: the
+  // question this block answers ("what does the SHIPPED policy do, with no
+  // mock in the way") is the same one, and its answer moved. Before the
+  // cutover every platform was refused before any spawn; now every platform
+  // is admitted and dispatch proceeds to the transport.
   it.each(["darwin", "win32", "linux"] as const)(
-    "dispatchAttemptExecutor stays disabled for %s with zero spawn/reconcile side effects against the real (beforeEach-reset) implementation",
+    "dispatchAttemptExecutor is ADMITTED for %s against the real (beforeEach-reset) implementation - it spawns rather than answering disabled",
     async (platform) => {
+      let spawnCalls = 0;
+      const outcome = await dispatchAttemptExecutor(
+        dispatchOptions({
+          platform,
+          spawn: () => {
+            spawnCalls += 1;
+            return Promise.reject(new Error("spawn refused by the fixture"));
+          },
+          reconcile: () => Promise.resolve(null),
+        }),
+      );
+      // The gate did not refuse: the run reached the transport, whose fixture
+      // spawn then failed, which is `indeterminate` and never `disabled`.
+      expect(outcome).toEqual({ kind: "indeterminate", canonical: null });
+      expect(spawnCalls).toBe(1);
+    },
+  );
+
+  // The control the inversion needs: without it, deleting the gate entirely
+  // would satisfy every assertion above.
+  it.each(["darwin", "win32", "linux"] as const)(
+    "a SHADOW verdict still disables dispatch for %s with zero spawn/reconcile side effects",
+    async (platform) => {
+      mockCohortShadow();
       let spawnCalls = 0;
       let reconcileCalls = 0;
       const outcome = await dispatchAttemptExecutor(
@@ -791,7 +835,11 @@ describe("runAttemptExecutorSegment - acknowledge runs before execute, and only 
     }
   });
 
-  it("never calls acknowledge or execute when the cohort is shadow (the production default)", async () => {
+  it("never calls acknowledge or execute when the cohort is shadow", async () => {
+    // The CONTROL half of the Finding-2 pair below. Shadow is mocked since the
+    // cutover; what it controls is unchanged - "skip the gate whenever a
+    // record exists", or deleting the gate, must not satisfy the trace.
+    mockCohortShadow();
     const hostHomeDir = await freshHome();
     let acknowledgeCalls = 0;
     let executeCalls = 0;
@@ -1003,8 +1051,11 @@ describe("runAttemptExecutorSegment - the dispatch ACK is stamped AFTER the clai
         await stampUpdateDispatchAck({
           hostHomeDir,
           nonce: "nonce-abcdefgh",
-          identity: claim.identity,
-          claimedAtIso: "2026-01-01T00:00:00.000Z",
+          decision: {
+            kind: "claimed",
+            identity: claim.identity,
+            claimedAtIso: "2026-01-01T00:00:00.000Z",
+          },
         });
       },
       async () => "ran",
@@ -1103,7 +1154,8 @@ describe("runAttemptExecutorSegment - the cohort gate is scoped to ADMISSION (Ti
   // runs `runLocalAttemptExecutorSegment` -> here. Refusing an already-adopted
   // continuation on that path abandons the attempt the verification exists to
   // conclude - the Finding-2 stranding, on the verify route.
-  it("does NOT reject an ADOPTED continuation under the shipped shadow cohort", async () => {
+  it("does NOT reject an ADOPTED continuation under a shadow cohort", async () => {
+    mockCohortShadow();
     const hostHomeDir = await freshHome();
     const identity = await seedAdoptedActivationContinuation(hostHomeDir);
 
@@ -1135,11 +1187,16 @@ describe("runAttemptExecutorSegment - the cohort gate is scoped to ADMISSION (Ti
   });
 
   // The CONTROL half already exists above - "never calls acknowledge or
-  // execute when the cohort is shadow (the production default)" runs against a
-  // `freshHome()` with NOTHING adopted, and still expects
-  // `{rejected, cohort-disabled}`. Named here so the pair is discoverable
-  // together: that test is what stops "skip the gate whenever a record exists"
-  // - or deleting the gate - from satisfying the trace above.
+  // execute when the cohort is shadow" runs against a `freshHome()` with
+  // NOTHING adopted, and still expects `{rejected, cohort-disabled}`. Named
+  // here so the pair is discoverable together: that test is what stops "skip
+  // the gate whenever a record exists" - or deleting the gate - from
+  // satisfying the trace above.
+  //
+  // Both halves now MOCK the shadow verdict. Since the cutover the shipped
+  // policy is `eligible` on every platform, so the pair would otherwise pass
+  // with the gate disconnected: the trace would be admitted for the wrong
+  // reason and the control would never refuse.
 });
 
 describe("runAttemptExecutorSegment - recovery path runs the injected reader under the real capability/CLI-lock ordering", () => {
@@ -1817,8 +1874,11 @@ describe("runAttemptExecutorSegment - lock-scoped claim selection, reselect-vs-r
           await stampUpdateDispatchAck({
             hostHomeDir,
             nonce: "nonce-a3",
-            identity: claim.identity,
-            claimedAtIso: "2026-01-01T00:00:00.000Z",
+            decision: {
+              kind: "claimed",
+              identity: claim.identity,
+              claimedAtIso: "2026-01-01T00:00:00.000Z",
+            },
           });
         },
         async () => {
@@ -2974,20 +3034,31 @@ describe("execute()'s complete() closure - fault points around the terminal writ
 // such owner - `host/update-verify.ts`, the post-restart verification claim -
 // so the authorized set is now an exact singleton rather than empty.
 //
+// The cutover adds the SECOND owner the same ruling anticipated:
+// `host/update-run.ts`, which is what `host update` now runs on. The
+// `commands/` half of the fence moves with it rather than being relaxed:
+// `commands/host-update.ts` reaches the executor transitively, through its
+// dedicated owner, and must still never import it DIRECTLY - that separation
+// is the admission fence the CLI wiring names, and it is what keeps every
+// claim decision inside `host/`.
+//
 // Three invariants, deliberately three separate loud failures:
 //
-//   1. `host/update-verify.ts` is the ONLY module that may import the executor
-//      directly. Against every other module this is exactly as strong as the
-//      empty set was.
-//   2. No command surface may REACH it, even transitively, except the thin
-//      dispatch caller `commands/host-update-verify.ts`. In particular the
-//      released `commands/host-update.ts` must have no path - that is the case
-//      this fence exists to stop.
+//   1. Only the dedicated host-layer owners may import the executor directly:
+//      `host/update-run.ts` and `host/update-verify.ts`, an exact set.
+//      Against every other module this is exactly as strong as the empty set
+//      was.
+//   2. No command surface may REACH it, even transitively, except the two thin
+//      shells that own a claim route: `commands/host-update.ts` and
+//      `commands/host-update-verify.ts`. Neither may import it directly, and
+//      `commands/host-update.ts` is stated separately because that direct
+//      import is the case this fence exists to stop.
 //   3. Rollout eligibility is NOT this gate's business. It belongs exclusively
-//      to `decideUpdateExecutorCohort` and Ticket 07's cutover. An authorized
-//      importer is reachable-but-INERT until then, because
-//      `runLocalAttemptExecutorSegment` refuses with `cohort-disabled` before
-//      performing any work. Do not re-encode rollout policy here.
+//      to `decideUpdateExecutorCohort`, which the cutover flipped to
+//      `eligible`: an authorized importer is now reachable AND live, where
+//      before it was reachable-but-inert. That change is deliberately
+//      invisible here - this gate answers "who may reach the executor", never
+//      "is the executor on". Do not re-encode rollout policy here.
 //
 // Mechanics are the shared architecture gate's, reused rather than reinvented:
 // a stat-based walker that deliberately follows repo-committed symlinks, and
@@ -3002,8 +3073,14 @@ describe("execute()'s complete() closure - fault points around the terminal writ
 const CLI_SRC_ROOT = join(__dirname, "..", "..");
 const FENCE_SOURCE_EXTENSIONS = new Set([".ts", ".js", ".cjs", ".mjs"]);
 const EXECUTOR_MODULE = join(CLI_SRC_ROOT, "host", "update-executor.ts");
-const AUTHORIZED_EXECUTOR_OWNER = "host/update-verify.ts";
-const AUTHORIZED_DISPATCH_COMMAND = "commands/host-update-verify.ts";
+const AUTHORIZED_EXECUTOR_OWNERS = [
+  "host/update-run.ts",
+  "host/update-verify.ts",
+];
+const AUTHORIZED_EXECUTOR_COMMANDS = [
+  "commands/host-update-verify.ts",
+  "commands/host-update.ts",
+];
 const RELEASED_UPDATE_COMMAND = "commands/host-update.ts";
 
 interface ExecutorProvenance {
@@ -3231,19 +3308,22 @@ async function executorProvenance(): Promise<ExecutorProvenance> {
 }
 
 describe("update-executor.ts - shadow fence source boundary (structural)", () => {
-  it("only the dedicated host-layer owner imports update-executor directly - folded over static, re-export, type, require and dynamic specifiers", async () => {
+  it("only the dedicated host-layer owners import update-executor directly - folded over static, re-export, type, require and dynamic specifiers", async () => {
     const provenance = await executorProvenance();
-    expect(provenance.directImporters).toEqual([AUTHORIZED_EXECUTOR_OWNER]);
+    expect(provenance.directImporters).toEqual(
+      [...AUTHORIZED_EXECUTOR_OWNERS].sort(),
+    );
   });
 
-  it("no command surface reaches update-executor except the thin dispatch caller - the RELEASED host-update command has no path, direct or transitive", async () => {
+  it("no command surface reaches update-executor except the two thin shells, and NEITHER imports it directly - the host-update command reaches it only through host/update-run.ts", async () => {
     const provenance = await executorProvenance();
     expect(
       provenance.reachers.filter((file) => file.startsWith("commands/")),
-    ).toEqual([AUTHORIZED_DISPATCH_COMMAND]);
+    ).toEqual([...AUTHORIZED_EXECUTOR_COMMANDS].sort());
     // Stated separately from the set equality above so that the case this
-    // fence exists to stop names itself in the failure output.
-    expect(provenance.reachers).not.toContain(RELEASED_UPDATE_COMMAND);
+    // fence exists to stop names itself in the failure output: the released
+    // command may reach the executor through its owner, never by importing it.
+    expect(provenance.directImporters).not.toContain(RELEASED_UPDATE_COMMAND);
   });
 
   // F9: the specifier-extension bypass, pinned per written form.

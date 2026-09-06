@@ -19,11 +19,17 @@ import {
 // THE SEAM WARNING (see the ticket): a mock that looks right can silently
 // fail to intercept the code path production actually calls. The dedicated
 // "SEAM PROOF" test below forces the cohort mock to a distinctive verdict
-// and confirms the OBSERVABLE outcome changes from the real shipped
-// shadow-disabled default (`cohort-disabled`) to something only reachable
-// past the gate (`stale-expectation`) - proving this mock is the exact thing
-// `runLocalAttemptExecutorSegment` calls, not a look-alike at the wrong
-// specifier. Every test here also runs against a REAL temp-dir
+// and confirms the OBSERVABLE outcome changes - proving this mock is the
+// exact thing `runLocalAttemptExecutorSegment` calls, not a look-alike at the
+// wrong specifier.
+//
+// The cutover INVERTED that proof's two arms, and the inversion is
+// load-bearing rather than cosmetic. The shipped default is now `eligible`,
+// so a proof that still mocked `eligible` would answer `stale-expectation` on
+// BOTH arms and pass with the mock disconnected - exactly the silent failure
+// it exists to catch. It therefore forces `shadow` (`cohort-disabled`, only
+// reachable at the gate) against the real default (`stale-expectation`, only
+// reachable past it). Every test here also runs against a REAL temp-dir
 // `hostHomeDir` (never the operator's real `~/.traycer`), confirmed via
 // `currentHome.value` below - never a real installed host, never a
 // subprocess.
@@ -236,39 +242,42 @@ function argsFor(targetVersion: string): HostUpdateVerifyArgs {
 }
 
 describe("verifyHostUpdateAttempt / reportFor - the four HostUpdateVerifyReport arms", () => {
-  it("SEAM PROOF: the cohort mock is the exact module runLocalAttemptExecutorSegment calls through - forcing it eligible changes the observable outcome away from the real shipped shadow-disabled default", async () => {
+  it("SEAM PROOF: the cohort mock is the exact module runLocalAttemptExecutorSegment calls through - forcing it SHADOW changes the observable outcome away from the real shipped eligible default", async () => {
     const hostHomeDir = await freshHome();
     currentHome.value = hostHomeDir;
 
-    // Real (unmocked-override) shadow-disabled default: no record exists,
-    // but the cohort gate refuses before that would ever matter.
+    // Real (unmocked-override) default, which the cutover made `eligible`:
+    // the gate admits, and the claim is refused for a reason only reachable
+    // PAST it - `decideAttemptClaim`'s `stale-expectation` for a non-null
+    // `expected` against an absent record.
     const withRealCohort = await verifyHostUpdateAttempt(
       "production",
       argsFor("1.2.3"),
     );
     expect(withRealCohort).toEqual({
       outcome: "indeterminate",
-      reason: "cohort-disabled",
+      reason: "stale-expectation",
     });
 
-    // Force a distinctive verdict this exact test controls. If this mock
-    // were NOT the module `runLocalAttemptExecutorSegment` actually
-    // imports, the outcome would stay `cohort-disabled` above. Instead it
-    // must change to a verdict only reachable past the gate -
-    // `decideAttemptClaim`'s `stale-expectation` refusal for a
-    // non-null `expected` against an absent record.
-    cohortMock.decide.mockReturnValue({ kind: "eligible", platform: "linux" });
+    // Force a distinctive verdict this exact test controls. If this mock were
+    // NOT the module `runLocalAttemptExecutorSegment` actually imports, the
+    // outcome would stay `stale-expectation` above. Instead it must change to
+    // the one verdict only the gate itself can produce.
+    cohortMock.decide.mockReturnValue({ kind: "shadow", reason: "disabled" });
     const withMockedCohort = await verifyHostUpdateAttempt(
       "production",
       argsFor("1.2.3"),
     );
     expect(withMockedCohort).toEqual({
       outcome: "indeterminate",
-      reason: "stale-expectation",
+      reason: "cohort-disabled",
     });
   });
 
-  it("reports indeterminate/cohort-disabled - the real, unmocked production default - without seeding any fixture", async () => {
+  it("reports indeterminate/stale-expectation - the real, unmocked production default now that the cohort ships eligible - without seeding any fixture", async () => {
+    // Kept rather than deleted as a duplicate of the stale-expectation test
+    // below: that one MOCKS the cohort, this one does not, so together they
+    // pin that the shipped policy and the mocked-eligible policy agree.
     const hostHomeDir = await freshHome();
     currentHome.value = hostHomeDir;
     const report = await verifyHostUpdateAttempt(
@@ -277,7 +286,7 @@ describe("verifyHostUpdateAttempt / reportFor - the four HostUpdateVerifyReport 
     );
     expect(report).toEqual({
       outcome: "indeterminate",
-      reason: "cohort-disabled",
+      reason: "stale-expectation",
     });
   });
 

@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-// Ticket 07 §5.2.8 — `buildHostUpdateCommand` installs the dispatch-ack
-// stamper via `installDispatchAckStamper(hostHomeDir(environment),
-// args.ackNonce)` as its first action. `host-update-dispatch-ack-guard.test.ts`
+// `host update` installs the dispatch-ack stamper via
+// `installDispatchAckStamper(hostHomeDir(environment), args.ackNonce)` as its
+// first action. `host-update-dispatch-ack-guard.test.ts`
 // proves the REAL validator refuses an illegal nonce before anything is
 // written; this suite proves the WIRING itself — that the command actually
 // calls the installer, with the nonce it was given (or `null` when it was
@@ -13,22 +13,23 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 // `buildHostUpdateCommand`.
 
 const mocks = vi.hoisted(() => ({
-  downloadAndStageHostMock: vi.fn(),
+  resolveUpdatePlanMock: vi.fn(),
   installDispatchAckStamperMock: vi.fn(),
 }));
 
 vi.mock("../../installer/download-stage", () => ({
-  downloadAndStageHost: mocks.downloadAndStageHostMock,
+  resolveUpdatePlan: mocks.resolveUpdatePlanMock,
+  downloadAndStageHostInSegment: vi.fn(),
 }));
 
 vi.mock("../../host/update-dispatch-ack", () => ({
   installDispatchAckStamper: mocks.installDispatchAckStamperMock,
 }));
 
-// SAFETY: `buildHostUpdateCommand` now probes the REAL `~/.traycer/host/
-// pid.json` for activation debt, and an unmocked read on a developer machine
-// could classify the developer's live host as debt and restart it. Every test
-// that invokes the command mocks the probe to "no running host".
+// SAFETY: `host update` probes the REAL `~/.traycer/host/pid.json` for
+// activation debt, and an unmocked read on a developer machine could classify
+// the developer's live host as debt and restart it. Every test that invokes
+// the command mocks the probe to "no running host".
 vi.mock("../../host/pid-metadata", () => ({
   readHostPidMetadata: vi.fn(async () => null),
 }));
@@ -71,7 +72,7 @@ afterEach(() => {
 describe("buildHostUpdateCommand — dispatch ACK stamper is installed as the FIRST action", () => {
   it("is called with the caller's nonce", async () => {
     mocks.installDispatchAckStamperMock.mockReturnValue(null);
-    mocks.downloadAndStageHostMock.mockRejectedValue(
+    mocks.resolveUpdatePlanMock.mockRejectedValue(
       new Error("stopped after the stamper install was observed"),
     );
     const command = buildHostUpdateCommand({
@@ -79,6 +80,8 @@ describe("buildHostUpdateCommand — dispatch ACK stamper is installed as the FI
       allowDowngrade: false,
       versionRequest: null,
       ackNonce: "nonce-abcdefgh",
+      intent: null,
+      expectAttempt: null,
     });
 
     await expect(command(fakeCtx())).rejects.toThrow(
@@ -96,7 +99,7 @@ describe("buildHostUpdateCommand — dispatch ACK stamper is installed as the FI
   // run.
   it("is called with null when no nonce was passed", async () => {
     mocks.installDispatchAckStamperMock.mockReturnValue(null);
-    mocks.downloadAndStageHostMock.mockRejectedValue(
+    mocks.resolveUpdatePlanMock.mockRejectedValue(
       new Error("stopped after the stamper install was observed"),
     );
     const command = buildHostUpdateCommand({
@@ -104,6 +107,8 @@ describe("buildHostUpdateCommand — dispatch ACK stamper is installed as the FI
       allowDowngrade: false,
       versionRequest: null,
       ackNonce: null,
+      intent: null,
+      expectAttempt: null,
     });
 
     await expect(command(fakeCtx())).rejects.toThrow(
