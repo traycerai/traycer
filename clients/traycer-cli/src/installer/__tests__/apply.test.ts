@@ -10,6 +10,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { HostStartAdoptionPublisher } from "../../host/host-start-adoption";
 
 type Environment = "dev" | "production";
 
@@ -54,6 +55,11 @@ const mocks = vi.hoisted(() => ({
   // - proof that a test went through the real `applyHostWithAttempt`
   // wrapper (`host/update-mutation.ts`), not a bypassed `applyHost` call.
   verifyCapabilityCalls: 0,
+  // Whatever `apply.ts` handed the lifecycle through
+  // `setHostStartAdoptionPublisher`. Non-null only when the caller supplied
+  // a publisher at all, which is exactly what the contender wrapper does
+  // and a direct `applyHost` call does not.
+  hostStartAdoptionPublisher: null as HostStartAdoptionPublisher | null,
 }));
 
 // `store/paths` computes `TRAYCER_HOME` from `os.homedir()` once at module
@@ -103,6 +109,17 @@ vi.mock("../../service/install-lifecycle", () => ({
     return {
       state,
       lifecycle: {
+        // Present so `apply.ts`'s optional-chained
+        // `setHostStartAdoptionPublisher?.(...)` is a real call rather than
+        // a silent no-op - without it the wrapper's adoption wiring is
+        // unobservable from this suite. Recording only; the four
+        // `onWillCommitStaged` pins call `applyHost` directly, pass no
+        // publisher, and therefore never reach this.
+        setHostStartAdoptionPublisher: (
+          publish: HostStartAdoptionPublisher,
+        ) => {
+          mocks.hostStartAdoptionPublisher = publish;
+        },
         beforeSwap: async () => {
           if (mocks.lifecycleBeforeSwapShouldThrow) {
             throw new Error("simulated stop failure");
@@ -275,6 +292,7 @@ describe("applyHost", () => {
     mocks.lifecyclePostSwapError = null;
     mocks.callOrder = [];
     mocks.verifyCapabilityCalls = 0;
+    mocks.hostStartAdoptionPublisher = null;
     rmSync(sandboxRoot, { recursive: true, force: true });
   });
 
@@ -792,6 +810,7 @@ describe("applyHostWithAttempt (through the real host/update-mutation wrapper)",
     mocks.lifecyclePostSwapError = null;
     mocks.callOrder = [];
     mocks.verifyCapabilityCalls = 0;
+    mocks.hostStartAdoptionPublisher = null;
     rmSync(sandboxRoot, { recursive: true, force: true });
   });
 
@@ -861,11 +880,16 @@ describe("applyHostWithAttempt (through the real host/update-mutation wrapper)",
       "afterSwap",
     ]);
     // Proof the REAL wrapper ran (not a call to `applyHost` that skipped
-    // it): its capability verifier fires at least once.
+    // it): its capability verifier fires at least once, and the adoption
+    // publisher it builds around the capability reached the lifecycle. Both
+    // are things only `applyHostWithAttempt` supplies - `applyHost` called
+    // directly leaves `publishHostStartAdoption` undefined, so `apply.ts`'s
+    // optional-chained `setHostStartAdoptionPublisher?.(...)` never runs.
     expect(mocks.verifyCapabilityCalls).toBeGreaterThan(0);
+    expect(mocks.hostStartAdoptionPublisher).not.toBeNull();
     // Falsification: call `applyHost` directly instead of
-    // `applyHostWithAttempt` and `verifyCapabilityCalls` stays 0 while
-    // every other assertion above still passes.
+    // `applyHostWithAttempt` and `verifyCapabilityCalls` stays 0 and the
+    // publisher stays null, while every other assertion above still passes.
   });
 
   it("denies the stop after onWillCommitStaged and never reaches beforeSwapCommit, even through the wrapper", async () => {
