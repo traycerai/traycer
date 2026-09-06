@@ -173,6 +173,20 @@ const writeAdoptionProofMock = vi.hoisted(() => ({
   restoreShipped: (): void => {},
 }));
 
+// Ticket 05 (D13): `readLocalAttemptFacts` probes the attempt lock through
+// `probeAttemptHolder` for an `execution: "active"` record only. Mocked the
+// same way as `writeAdoptionProofMock` above - hoisted, defaulting to the
+// REAL shared implementation so every other test in this file that reaches
+// an active record (there are several, elsewhere in this suite) keeps
+// exercising the genuine probe against a real (holder-absent) temp HOME
+// rather than silently going through a stub. Only the D13 describe block
+// below overrides it, per test, to drive `holder-live` / `no-holder` /
+// `indeterminate`.
+const probeAttemptHolderMock = vi.hoisted(() => ({
+  probe: vi.fn(),
+  restoreShipped: (): void => {},
+}));
+
 // F3 terminal-with-diagnostics contract (round 5, item #1): the tombstone
 // must be withdrawn BEFORE the record's own `failed` commit lands, not
 // merely gone by the time a test reads final state (both orderings produce
@@ -197,9 +211,14 @@ vi.mock("@traycer-clients/shared/host-update", async () => {
     writeAdoptionProofMock.write.mockImplementation(actual.writeAdoptionProof);
   };
   writeAdoptionProofMock.restoreShipped();
+  probeAttemptHolderMock.restoreShipped = (): void => {
+    probeAttemptHolderMock.probe.mockImplementation(actual.probeAttemptHolder);
+  };
+  probeAttemptHolderMock.restoreShipped();
   return {
     ...actual,
     writeAdoptionProof: writeAdoptionProofMock.write,
+    probeAttemptHolder: probeAttemptHolderMock.probe,
     commitAttemptMutationWithCapability: async (
       capability: Parameters<
         typeof actual.commitAttemptMutationWithCapability
@@ -263,6 +282,7 @@ import {
 import {
   HOST_REMOVED_BY_USER_MESSAGE,
   type LifecycleAdmissionBlock,
+  type LocalAttemptFacts,
   type MutationLaneStatus,
   type MutationProgress,
   type ReprovisionGuardVerdict,
@@ -288,10 +308,13 @@ import type {
 import {
   acquireUpdateAttemptLock,
   commitAttemptMutationWithCapability,
+  probeAttemptHolder,
   readUpdateAttemptRecord,
   withUpdateContender,
   writeAdoptionProof,
+  type AttemptHolderEvidence,
   type HostUpdateAttemptIdentity,
+  type LockMetadata,
 } from "@traycer-clients/shared/host-update";
 
 const ORIGINAL_HOME = process.env.HOME;
@@ -352,6 +375,7 @@ afterEach(() => {
   // this, one `eligibleDesktopCohort()` leaks into every subsequent test.
   desktopExecutorCohortMock.restoreShippedCohort();
   writeAdoptionProofMock.restoreShipped();
+  probeAttemptHolderMock.restoreShipped();
   terminalOrderEvents.reset();
 });
 
@@ -2338,6 +2362,253 @@ describe("canonical status: localAttempt retention (Ticket 07 §5.2.7)", () => {
       liveness: "unknown",
       livenessObservedAtMs: null,
     });
+  });
+});
+
+// Ticket 05 (D13): `readLocalAttemptFacts` probes the attempt lock for an
+// `execution: "active"` record only, brackets the probe with a second record
+// read, and joins the two under the host observer's own rule (identity held
+// STILL across the bracket, never a timestamp race). Direct JSON writes,
+// mirroring `writeTerminalAttemptRecord` above - a record's shape, not the
+// legal claim/commit path, is what this method reads. `probeAttemptHolder`
+// is mocked per-test via the hoisted `probeAttemptHolderMock`; every field
+// this describe block does not vary is held fixed so each pin isolates the
+// one seam it is named for.
+describe("readLocalAttemptFacts: probed liveness (D13, Ticket 05)", () => {
+  const ATTEMPT_ID = "local-attempt-d13";
+
+  function writeActiveAttemptRecord(overrides: {
+    readonly generation: number;
+    readonly sequence: number;
+    readonly updatedAt: string;
+  }): void {
+    const layout = getHostFsLayout("production");
+    mkdirSync(layout.rootDir, { recursive: true });
+    writeFileSync(
+      updateAttemptRecordPath(layout.rootDir),
+      JSON.stringify({
+        schemaVersion: 2,
+        attemptId: ATTEMPT_ID,
+        generation: overrides.generation,
+        sequence: overrides.sequence,
+        trigger: "manual",
+        targetVersion: "2.0.0",
+        phase: "restarting",
+        execution: "active",
+        continuation: null,
+        progress: null,
+        startedAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: overrides.updatedAt,
+        completedAt: null,
+        error: null,
+      }),
+    );
+  }
+
+  function writeParkedAttemptRecord(): void {
+    const layout = getHostFsLayout("production");
+    mkdirSync(layout.rootDir, { recursive: true });
+    writeFileSync(
+      updateAttemptRecordPath(layout.rootDir),
+      JSON.stringify({
+        schemaVersion: 2,
+        attemptId: ATTEMPT_ID,
+        generation: 1,
+        sequence: 1,
+        trigger: "manual",
+        targetVersion: "2.0.0",
+        phase: "waiting-for-work",
+        execution: "parked",
+        continuation: "resume-apply",
+        progress: null,
+        startedAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: new Date().toISOString(),
+        completedAt: null,
+        error: null,
+      }),
+    );
+  }
+
+  const FAKE_HOLDER: LockMetadata = {
+    pid: 4242,
+    reason: "update",
+    startedAt: "2026-01-01T00:00:00.000Z",
+    hostname: "test-host",
+    token: "tok-1",
+    processStartedAtMs: null,
+    processStartIdentity: null,
+  };
+
+  function holderLive(): AttemptHolderEvidence {
+    return { kind: "holder-live", holder: FAKE_HOLDER };
+  }
+
+  function noHolder(): AttemptHolderEvidence {
+    return { kind: "no-holder" };
+  }
+
+  async function getLocalAttempt(): Promise<LocalAttemptFacts | null> {
+    const status = await newController("production").getStatus();
+    return status.localAttempt;
+  }
+
+  // A1: `live` is minted ONLY from `holder-live` joined to an identity that
+  // held still across the bracket. Ablation (a) - mapping the derivation's
+  // grace-period `active` to `live` - does not touch this pin (the holder
+  // genuinely is live here); it is A3 below that catches that ablation.
+  it("publishes `live` from `holder-live` with an unchanged identity across the bracket", async () => {
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    removePidMetadata("production");
+    writeActiveAttemptRecord({
+      generation: 1,
+      sequence: 1,
+      updatedAt: new Date().toISOString(),
+    });
+    probeAttemptHolderMock.probe.mockResolvedValueOnce(holderLive());
+
+    const localAttempt = await getLocalAttempt();
+
+    expect(localAttempt?.liveness).toBe("live");
+    expect(localAttempt?.attemptId).toBe(ATTEMPT_ID);
+    expect(localAttempt?.generation).toBe(1);
+    expect(localAttempt?.sequence).toBe(1);
+    expect(localAttempt?.livenessObservedAtMs).toEqual(expect.any(Number));
+  });
+
+  // A2: the probe runs BETWEEN the two record reads, so a record that moved
+  // during the bracket must publish the FRESHER facts (making the bracket
+  // observable, not just its verdict) with an explicitly unknown liveness -
+  // pairing the pre-probe record with post-probe holder evidence would
+  // describe two different worlds. Ablation (b) - dropping the bracket
+  // entirely and publishing the first read's verdict - reddens this pin: a
+  // dropped bracket would report `live` (the probe's own answer) at
+  // generation/sequence 1/1, never the fresher 1/2 this pin asserts.
+  it("publishes the FRESHER record with `unknown` when identity changes across the bracket", async () => {
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    removePidMetadata("production");
+    writeActiveAttemptRecord({
+      generation: 1,
+      sequence: 1,
+      updatedAt: new Date().toISOString(),
+    });
+    const advancedUpdatedAt = new Date().toISOString();
+    probeAttemptHolderMock.probe.mockImplementationOnce(async () => {
+      // The probe runs between the two reads - rewrite the record to a new
+      // identity from INSIDE it, exactly where a genuinely advancing
+      // executor would.
+      writeActiveAttemptRecord({
+        generation: 1,
+        sequence: 2,
+        updatedAt: advancedUpdatedAt,
+      });
+      return holderLive();
+    });
+
+    const localAttempt = await getLocalAttempt();
+
+    expect(localAttempt?.liveness).toBe("unknown");
+    expect(localAttempt?.generation).toBe(1);
+    expect(localAttempt?.sequence).toBe(2);
+    expect(localAttempt?.updatedAt).toBe(advancedUpdatedAt);
+    expect(localAttempt?.livenessObservedAtMs).toEqual(expect.any(Number));
+  });
+
+  // A3: the shared derivation's grace-period `active` arm (a recent record
+  // with a dead/absent holder) is NOT liveness - it exists to keep a young
+  // attempt from reading as interrupted, not to prove anything is running.
+  // Ablation (a) - mapping that grace-period `active` to `live` - reddens
+  // this exact pin.
+  it("publishes `unknown` for a recent record with a dead/absent holder (grace period, not liveness)", async () => {
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    removePidMetadata("production");
+    writeActiveAttemptRecord({
+      generation: 1,
+      sequence: 1,
+      updatedAt: new Date().toISOString(),
+    });
+    probeAttemptHolderMock.probe.mockResolvedValueOnce(noHolder());
+
+    const localAttempt = await getLocalAttempt();
+
+    expect(localAttempt?.liveness).toBe("unknown");
+    expect(localAttempt?.livenessObservedAtMs).toEqual(expect.any(Number));
+  });
+
+  // A4: the derivation fails TOWARD `active` for a future-dated `updatedAt`
+  // (a clock step or skewed writer, not staleness) - still a grace period,
+  // never proof of liveness, with no holder to back it.
+  it("publishes `unknown` for a future-dated record with no holder", async () => {
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    removePidMetadata("production");
+    const futureUpdatedAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    writeActiveAttemptRecord({
+      generation: 1,
+      sequence: 1,
+      updatedAt: futureUpdatedAt,
+    });
+    probeAttemptHolderMock.probe.mockResolvedValueOnce(noHolder());
+
+    const localAttempt = await getLocalAttempt();
+
+    expect(localAttempt?.liveness).toBe("unknown");
+    expect(localAttempt?.livenessObservedAtMs).toEqual(expect.any(Number));
+  });
+
+  // A5: once the record is stale past `RECOMMENDED_ATTEMPT_STALENESS_MS`
+  // (120s) AND positively unheld, the derivation's `interrupted` verdict is
+  // carried through as itself - the one non-`unknown`, non-`live` outcome
+  // this method publishes.
+  it("publishes `interrupted` when the derivation says so (stale, active, unheld)", async () => {
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    removePidMetadata("production");
+    const staleUpdatedAt = new Date(Date.now() - 130_000).toISOString();
+    writeActiveAttemptRecord({
+      generation: 1,
+      sequence: 1,
+      updatedAt: staleUpdatedAt,
+    });
+    probeAttemptHolderMock.probe.mockResolvedValueOnce(noHolder());
+
+    const localAttempt = await getLocalAttempt();
+
+    expect(localAttempt?.liveness).toBe("interrupted");
+    expect(localAttempt?.livenessObservedAtMs).toEqual(expect.any(Number));
+  });
+
+  // A6: parked records are never probed at all - a park is DEFINED by the
+  // absence of a holder, so a probe cannot change the answer. Skipping it
+  // keeps the steady state (an idle park) at zero probes per poll.
+  // `livenessObservedAtMs` stays `null` here specifically because no
+  // observation happened - this is the un-probed arm of that contract, the
+  // dual of every probed arm's finite stamp above.
+  it("does not probe a parked record and publishes `unknown`", async () => {
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    removePidMetadata("production");
+    writeParkedAttemptRecord();
+
+    const localAttempt = await getLocalAttempt();
+
+    expect(probeAttemptHolderMock.probe).not.toHaveBeenCalled();
+    expect(localAttempt?.liveness).toBe("unknown");
+    expect(localAttempt?.livenessObservedAtMs).toBeNull();
   });
 });
 
