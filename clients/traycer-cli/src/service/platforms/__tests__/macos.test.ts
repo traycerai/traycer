@@ -2111,15 +2111,29 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       "/Applications/Traycer.app/Contents/Library/LaunchAgents/ai.traycer.host.agent.plist";
     const agentTarget = `gui/${process.getuid?.() ?? 0}/${label.id}.agent`;
 
+    // `cliLabelLoadedAsCliOrOther`, when set, stages the CLI label as a
+    // raw `~/Library/LaunchAgents/<label>.plist` load (`cli-or-other`, NOT
+    // an in-bundle SMAppService path, and with NO pid - the idle-job case)
+    // rather than the plain owned/not-loaded pair `cliLabelOwned` controls.
+    // Three non-`.agent` prints matter here: the FIRST (the initial
+    // `cliProbe`) and the SECOND (the fresh re-probe `takeoverDesktopRegistration`
+    // runs after the agent is retired) both answer loaded; the THIRD (the
+    // post-bootout re-probe `unloadCliLabelJob` runs) answers per
+    // `afterBootout` - "absent" is launchd's not-found output, "still-loaded"
+    // repeats the loaded answer.
     function stageTakeoverRunner(input: {
       cliLabelOwned: boolean;
       agentLoadedAfterBootout: boolean;
+      cliLabelLoadedAsCliOrOther?: {
+        afterBootout: "absent" | "still-loaded";
+      };
     }): {
       calls: RecordedCall[];
       controller: ServiceController;
     } {
       const calls: RecordedCall[] = [];
       let agentPrints = 0;
+      let cliLabelPrints = 0;
       const runner: ProcessRunner = async (command, args) => {
         calls.push({ command, args });
         if (args[0] === "print") {
@@ -2134,6 +2148,24 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
                   stderr: "Could not find specified service\n",
                   exitCode: 113,
                 };
+          }
+          cliLabelPrints += 1;
+          if (input.cliLabelLoadedAsCliOrOther !== undefined) {
+            const cliOrOther = input.cliLabelLoadedAsCliOrOther;
+            const loadedResult = {
+              stdout: `\tpath = /Users/me/Library/LaunchAgents/${label.id}.plist\n\ttype = LaunchAgent\n`,
+              stderr: "",
+              exitCode: 0,
+            };
+            const notFoundResult = {
+              stdout: "",
+              stderr: "Could not find specified service\n",
+              exitCode: 113,
+            };
+            if (cliLabelPrints <= 2) return loadedResult;
+            return cliOrOther.afterBootout === "still-loaded"
+              ? loadedResult
+              : notFoundResult;
           }
           return input.cliLabelOwned
             ? {
@@ -2177,6 +2209,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         "print",
         "print",
         "bootout",
+        "print",
         "print",
       ]);
       expect(calls[2]?.args).toEqual(["bootout", "--wait", agentTarget]);
@@ -2225,6 +2258,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         "print",
         "print",
         "bootout",
+        "print",
         "print",
       ]);
       expect(MOCKS.cliLoggerWarn).toHaveBeenCalledWith(
@@ -2294,7 +2328,10 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         message: expect.stringContaining("traycer host service uninstall"),
       });
       expect(MOCKS.requestCooperativeShutdown).not.toHaveBeenCalled();
-      expect(calls.map((c) => c.args[0])).toEqual(["print"]);
+      // The agent is probed FIRST (it reads loaded/smappservice here too,
+      // via `smAgentPath`) and only THEN the CLI label, whose smappservice
+      // read is what trips the refusal.
+      expect(calls.map((c) => c.args[0])).toEqual(["print", "print"]);
     });
 
     it("reports not-applicable when Desktop owns nothing", async () => {
@@ -2381,6 +2418,287 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         expect(bootout?.args).toEqual(["bootout", "--wait", agentTarget]);
       },
     );
+
+    // A dual-registered machine: Desktop's agent AND the raw CLI-label
+    // plist are both loaded. `takeoverDesktopRegistration` boots out the
+    // agent first (the claim above went through `pid.json`), then - under
+    // the same lock - also unloads the CLI label so launchd cannot start
+    // it while `installService` writes its files underneath this takeover.
+    const cliTarget = `gui/${process.getuid?.() ?? 0}/${label.id}`;
+
+    it("also unloads a CLI-label job loaded beside Desktop's agent, with --wait and a positive re-probe", async () => {
+      // The FIRST cli print is `standDownLiveCliLabelHost`'s no-agent probe
+      // above (a `cliProbe` reading loaded-idle also short-circuits that
+      // check, since only a positive pid trips it); the takeover then reads
+      // the CLI label a SECOND time, fresh, after the agent is retired -
+      // that fresh read is what this test is pinning.
+      const { calls, controller } = stageTakeoverRunner({
+        cliLabelOwned: false,
+        agentLoadedAfterBootout: false,
+        cliLabelLoadedAsCliOrOther: { afterBootout: "absent" },
+      });
+      MOCKS.requestCooperativeShutdown.mockResolvedValue({ kind: "stopped" });
+
+      await expect(
+        controller.takeoverDesktopRegistration(label),
+      ).resolves.toEqual({
+        kind: "took-over",
+        agentLabelId: `${label.id}.agent`,
+        cooperativeStop: "stopped",
+      });
+      expect(calls.map((c) => c.args[0])).toEqual([
+        "print",
+        "print",
+        "bootout",
+        "print",
+        "print",
+        "bootout",
+        "print",
+      ]);
+      expect(calls[5]?.args).toEqual(["bootout", "--wait", cliTarget]);
+      expect(calls[6]?.args[1]).toEqual(cliTarget);
+      // `standDownLiveCliLabelHost`'s pid-null branch logs the same generic
+      // message whether or not an agent was just retired - there is no
+      // agent-specific copy any more, so this pins the message it does log.
+      expect(MOCKS.cliLoggerInfo).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "the CLI label is loaded with no running process",
+        ),
+        expect.objectContaining({ label: label.id }),
+      );
+    });
+
+    it("rejects with SERVICE_INSTALL_FAILED ('did not take effect') when the CLI-label job loaded beside Desktop's agent does not unload", async () => {
+      const { controller } = stageTakeoverRunner({
+        cliLabelOwned: false,
+        agentLoadedAfterBootout: false,
+        cliLabelLoadedAsCliOrOther: { afterBootout: "still-loaded" },
+      });
+      MOCKS.requestCooperativeShutdown.mockResolvedValue({ kind: "stopped" });
+
+      // Re-assert against the SAME already-settled promise (not a fresh
+      // call): `stageTakeoverRunner`'s print counters are shared, mutable
+      // state, and a second invocation would keep incrementing them into a
+      // completely different scenario rather than repeating this one.
+      const takeover = controller.takeoverDesktopRegistration(label);
+      await expect(takeover).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+        message: expect.stringContaining(
+          "did not take effect (the job is still loaded)",
+        ),
+      });
+      await expect(takeover).rejects.toMatchObject({
+        message: expect.stringContaining("is already deregistered"),
+      });
+    });
+
+    it("rejects before any bootout when the CLI label has a live pid beside the agent and the claim finds no endpoint (pre-check)", async () => {
+      const calls: RecordedCall[] = [];
+      const runner: ProcessRunner = async (command, args) => {
+        calls.push({ command, args });
+        if (args[0] === "print") {
+          if (args[1]?.endsWith(".agent") === true) {
+            return {
+              stdout: `path = ${smAgentPath}\n`,
+              stderr: "",
+              exitCode: 0,
+            };
+          }
+          return {
+            stdout: `\tpath = /Users/me/Library/LaunchAgents/${label.id}.plist\n\ttype = LaunchAgent\n\tpid = 4242\n`,
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+        return buildSuccessResult();
+      };
+      MOCKS.requestCooperativeShutdown.mockResolvedValue({
+        kind: "no-metadata",
+      });
+
+      const takeover =
+        createMacosController(runner).takeoverDesktopRegistration(label);
+      await expect(takeover).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+        message: expect.stringContaining(
+          "has not published a live endpoint yet",
+        ),
+      });
+      await expect(takeover).rejects.toMatchObject({
+        message: expect.not.stringContaining("already deregistered"),
+      });
+      expect(calls.some((c) => c.args[0] === "bootout")).toBe(false);
+    });
+
+    // `agentBootout` shared by the two tests below: `bootout --wait`
+    // resolving a NON-ZERO exit is what the runner reports for its own
+    // timeout (`tolerateNonZeroExit` turns a hang into exit -1) - the
+    // process-alive check below is gated on exactly that, since after a
+    // clean exit 0 the pid launchd reported can already have been recycled.
+    function stageAgentAliveAfterBootoutRunner(input: {
+      bootoutExitCode: number;
+    }): ProcessRunner {
+      let agentPrints = 0;
+      return async (command, args) => {
+        if (args[0] === "print") {
+          if (args[1]?.endsWith(".agent") === true) {
+            agentPrints += 1;
+            // First probe establishes Desktop ownership with a live pid; the
+            // verification probe after `bootout --wait` reads the label
+            // gone - the process (checked separately via `isProcessAlive`)
+            // is what has not actually exited.
+            return agentPrints === 1
+              ? {
+                  stdout: `path = ${smAgentPath}\n\tpid = 777\n`,
+                  stderr: "",
+                  exitCode: 0,
+                }
+              : {
+                  stdout: "",
+                  stderr: "Could not find specified service\n",
+                  exitCode: 113,
+                };
+          }
+          return {
+            stdout: "",
+            stderr: "Could not find specified service\n",
+            exitCode: 113,
+          };
+        }
+        if (args[0] === "bootout") {
+          return { stdout: "", stderr: "", exitCode: input.bootoutExitCode };
+        }
+        return buildSuccessResult();
+      };
+    }
+
+    it("rejects with SERVICE_INSTALL_FAILED ('is still running after the wait') when the agent's process survives the bootout wait", async () => {
+      const runner = stageAgentAliveAfterBootoutRunner({ bootoutExitCode: -1 });
+      MOCKS.requestCooperativeShutdown.mockResolvedValue({
+        kind: "unreachable",
+        cause: "x",
+      });
+      MOCKS.isProcessAlive.mockImplementation((pid: number) => pid === 777);
+
+      await expect(
+        createMacosController(runner).takeoverDesktopRegistration(label),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+        message: expect.stringContaining("is still running after the wait"),
+        details: expect.objectContaining({
+          agentLabel: `${label.id}.agent`,
+          pid: 777,
+          verification: "process-alive",
+        }),
+      });
+    });
+
+    it("does not refuse the takeover when the agent's bootout exits cleanly even though `isProcessAlive` reports the reported pid alive (a recycled pid)", async () => {
+      const runner = stageAgentAliveAfterBootoutRunner({ bootoutExitCode: 0 });
+      MOCKS.requestCooperativeShutdown.mockResolvedValue({
+        kind: "unreachable",
+        cause: "x",
+      });
+      MOCKS.isProcessAlive.mockImplementation((pid: number) => pid === 777);
+
+      await expect(
+        createMacosController(runner).takeoverDesktopRegistration(label),
+      ).resolves.toMatchObject({ kind: "took-over" });
+    });
+
+    // Staging for the two pins below: the CLI label is absent on the FIRST
+    // print (so the initial `standDownLiveCliLabelHost(..., null)` call from
+    // the no-agent branch never fires here - the agent IS loaded), but
+    // loaded with a live pid on the SECOND, fresh print the takeover runs
+    // after retiring the agent. That live pid means a real cooperative claim
+    // is made (a SECOND `requestCooperativeShutdown` call), unlike the
+    // idle-job case above.
+    function stageCliAbsentThenLoadedRunner(input: {
+      cliVerifyAfterBootout: "absent" | "still-loaded";
+    }): {
+      calls: RecordedCall[];
+      controller: ServiceController;
+    } {
+      const calls: RecordedCall[] = [];
+      let agentPrints = 0;
+      let cliPrints = 0;
+      const loadedWithPid = {
+        stdout: `\tpath = /Users/me/Library/LaunchAgents/${label.id}.plist\n\ttype = LaunchAgent\n\tpid = 4242\n`,
+        stderr: "",
+        exitCode: 0,
+      };
+      const notFound = {
+        stdout: "",
+        stderr: "Could not find specified service\n",
+        exitCode: 113,
+      };
+      const runner: ProcessRunner = async (command, args) => {
+        calls.push({ command, args });
+        if (args[0] === "print") {
+          if (args[1]?.endsWith(".agent") === true) {
+            agentPrints += 1;
+            return agentPrints === 1
+              ? { stdout: `path = ${smAgentPath}\n`, stderr: "", exitCode: 0 }
+              : notFound;
+          }
+          cliPrints += 1;
+          if (cliPrints === 1) return notFound;
+          if (cliPrints === 2) return loadedWithPid;
+          return input.cliVerifyAfterBootout === "still-loaded"
+            ? loadedWithPid
+            : notFound;
+        }
+        return buildSuccessResult();
+      };
+      return { calls, controller: createMacosController(runner) };
+    }
+
+    it("rejects when the CLI label appears with a live pid after the agent is retired and the fresh claim finds no endpoint", async () => {
+      const { calls, controller } = stageCliAbsentThenLoadedRunner({
+        cliVerifyAfterBootout: "absent",
+      });
+      MOCKS.requestCooperativeShutdown
+        .mockResolvedValueOnce({ kind: "stopped" })
+        .mockResolvedValueOnce({ kind: "no-metadata" });
+
+      await expect(
+        controller.takeoverDesktopRegistration(label),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+        message: expect.stringContaining(
+          "is already deregistered; re-run the command in a moment",
+        ),
+      });
+      expect(MOCKS.requestCooperativeShutdown).toHaveBeenCalledTimes(2);
+      expect(calls.some((c) => c.args[0] === "bootout")).toBe(true);
+    });
+
+    it("also unloads a CLI-label job that appears with a live pid after the agent is retired, once the fresh claim succeeds", async () => {
+      const { calls, controller } = stageCliAbsentThenLoadedRunner({
+        cliVerifyAfterBootout: "absent",
+      });
+      MOCKS.requestCooperativeShutdown
+        .mockResolvedValueOnce({ kind: "stopped" })
+        .mockResolvedValueOnce({ kind: "stopped" });
+
+      await expect(
+        controller.takeoverDesktopRegistration(label),
+      ).resolves.toEqual({
+        kind: "took-over",
+        agentLabelId: `${label.id}.agent`,
+        cooperativeStop: "stopped",
+      });
+      expect(calls.map((c) => c.args[0])).toEqual([
+        "print",
+        "print",
+        "bootout",
+        "print",
+        "print",
+        "bootout",
+        "print",
+      ]);
+      expect(MOCKS.requestCooperativeShutdown).toHaveBeenCalledTimes(2);
+    });
   });
 
   describe("takeoverDesktopRegistration - standing down a live CLI-label host", () => {
@@ -2400,6 +2718,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
     function stageStandDownRunner(input: {
       pid: number | null;
       postBootout?: "absent" | "still-loaded" | "spawn-failure";
+      bootoutExitCode?: number;
     }): {
       calls: RecordedCall[];
       controller: ServiceController;
@@ -2442,6 +2761,13 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
             exitCode: 113,
           };
         }
+        if (args[0] === "bootout") {
+          return {
+            stdout: "",
+            stderr: "",
+            exitCode: input.bootoutExitCode ?? 0,
+          };
+        }
         return buildSuccessResult();
       };
       return { calls, controller: createMacosController(runner) };
@@ -2477,7 +2803,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       expect(calls.some((c) => c.args[0] === "bootout")).toBe(false);
     });
 
-    it("rejects with SERVICE_INSTALL_FAILED the same way, and never boots out, when launchd's pid names a host that already exited (no-host)", async () => {
+    it("rejects with SERVICE_INSTALL_FAILED a distinct message, and never boots out, when launchd's pid names a host that already exited (no-host)", async () => {
       const { calls, controller } = stageStandDownRunner({ pid: 4242 });
       MOCKS.requestCooperativeShutdown.mockResolvedValue({
         kind: "no-host",
@@ -2488,7 +2814,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       ).rejects.toMatchObject({
         code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
         message: expect.stringContaining(
-          "has not published a live endpoint yet",
+          "names a host that has already exited",
         ),
       });
       expect(calls.some((c) => c.args[0] === "bootout")).toBe(false);
@@ -2545,6 +2871,82 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       expect(calls.some((c) => c.args[0] === "bootout")).toBe(true);
     });
 
+    it("resolves cli-host-stopped/skipped-unreachable and warns when the live CLI-label host is hung, after booting it out and verifying it is gone", async () => {
+      const { calls, controller } = stageStandDownRunner({ pid: 4242 });
+      MOCKS.requestCooperativeShutdown.mockResolvedValue({
+        kind: "hung",
+        pid: 4242,
+      });
+
+      await expect(
+        controller.takeoverDesktopRegistration(label),
+      ).resolves.toEqual({
+        kind: "cli-host-stopped",
+        cooperativeStop: "skipped-unreachable",
+      });
+      expect(MOCKS.cliLoggerWarn).toHaveBeenCalledWith(
+        expect.stringContaining("could not be stopped cooperatively"),
+        expect.objectContaining({
+          cause: "pid 4242 outlived the shutdown grace",
+        }),
+      );
+      const bootout = calls.find((c) => c.args[0] === "bootout");
+      expect(bootout?.args).toEqual([
+        "bootout",
+        "--wait",
+        `gui/${process.getuid?.() ?? 0}/${label.id}`,
+      ]);
+      const prints = calls.filter(
+        (c) => c.args[0] === "print" && c.args[1]?.endsWith(".agent") !== true,
+      );
+      expect(prints).toHaveLength(2);
+    });
+
+    it("rejects with SERVICE_INSTALL_FAILED ('is still running after the wait') when a hung live CLI-label host's process survives the bootout wait", async () => {
+      // The liveness refusal fires only when `bootout --wait` itself did
+      // NOT exit cleanly (the runner-timeout case) - stage that explicitly.
+      const { calls, controller } = stageStandDownRunner({
+        pid: 4242,
+        bootoutExitCode: -1,
+      });
+      MOCKS.requestCooperativeShutdown.mockResolvedValue({
+        kind: "hung",
+        pid: 4242,
+      });
+      MOCKS.isProcessAlive.mockImplementation((pid: number) => pid === 4242);
+
+      await expect(
+        controller.takeoverDesktopRegistration(label),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+        message: expect.stringContaining("is still running after the wait"),
+        details: expect.objectContaining({
+          pid: 4242,
+          verification: "process-alive",
+        }),
+      });
+      expect(calls.some((c) => c.args[0] === "bootout")).toBe(true);
+    });
+
+    it("does not refuse the takeover when the CLI-label bootout exits cleanly even though `isProcessAlive` reports the reported pid alive (a recycled pid)", async () => {
+      const { controller } = stageStandDownRunner({
+        pid: 4242,
+        bootoutExitCode: 0,
+      });
+      MOCKS.requestCooperativeShutdown.mockResolvedValue({
+        kind: "hung",
+        pid: 4242,
+      });
+      MOCKS.isProcessAlive.mockImplementation((pid: number) => pid === 4242);
+
+      await expect(
+        controller.takeoverDesktopRegistration(label),
+      ).resolves.toEqual({
+        kind: "cli-host-stopped",
+        cooperativeStop: "skipped-unreachable",
+      });
+    });
+
     it("rejects with SERVICE_INSTALL_FAILED ('did not take effect') when the post-bootout probe still finds the CLI-label job loaded", async () => {
       const { controller } = stageStandDownRunner({
         pid: 4242,
@@ -2580,12 +2982,46 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       });
     });
 
-    it("reports not-applicable and never calls requestCooperativeShutdown when the CLI label is loaded but has no live pid", async () => {
-      const { controller } = stageStandDownRunner({ pid: null });
+    it("resolves cli-host-stopped/no-host, logs, and unloads the job when the CLI label is loaded but has no live pid, never calling requestCooperativeShutdown", async () => {
+      const { calls, controller } = stageStandDownRunner({ pid: null });
 
       await expect(
         controller.takeoverDesktopRegistration(label),
-      ).resolves.toEqual({ kind: "not-applicable" });
+      ).resolves.toEqual({
+        kind: "cli-host-stopped",
+        cooperativeStop: "no-host",
+      });
+      expect(MOCKS.requestCooperativeShutdown).not.toHaveBeenCalled();
+      expect(MOCKS.cliLoggerInfo).toHaveBeenCalledWith(
+        expect.stringContaining("loaded with no running process"),
+        expect.objectContaining({ label: label.id }),
+      );
+      const bootout = calls.find((c) => c.args[0] === "bootout");
+      expect(bootout?.args).toEqual([
+        "bootout",
+        "--wait",
+        `gui/${process.getuid?.() ?? 0}/${label.id}`,
+      ]);
+      const prints = calls.filter(
+        (c) => c.args[0] === "print" && c.args[1]?.endsWith(".agent") !== true,
+      );
+      expect(prints).toHaveLength(2);
+    });
+
+    it("rejects with SERVICE_INSTALL_FAILED ('did not take effect') when the CLI label has no live pid and the post-bootout probe still finds it loaded", async () => {
+      const { controller } = stageStandDownRunner({
+        pid: null,
+        postBootout: "still-loaded",
+      });
+
+      await expect(
+        controller.takeoverDesktopRegistration(label),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+        message: expect.stringContaining(
+          "did not take effect (the job is still loaded)",
+        ),
+      });
       expect(MOCKS.requestCooperativeShutdown).not.toHaveBeenCalled();
     });
 
@@ -2606,10 +3042,20 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
     // must abort the takeover rather than fall through to "not applicable"
     // and let `installService`'s later plain bootout run with no claim.
     it("rejects when the CLI-label print exits non-zero with unrelated output, naming the CLI label and never touching cooperative shutdown or launchd", async () => {
+      // The agent is probed FIRST now; it must read cleanly (not-loaded)
+      // here so the indeterminate CLI-label read - not the agent read - is
+      // what this test pins.
       const calls: RecordedCall[] = [];
       const runner: ProcessRunner = async (command, args) => {
         calls.push({ command, args });
         if (args[0] === "print") {
+          if (args[1]?.endsWith(".agent") === true) {
+            return {
+              stdout: "",
+              stderr: "Could not find specified service\n",
+              exitCode: 113,
+            };
+          }
           return {
             stdout: "",
             stderr: "launchctl: some unrecognized internal error\n",
@@ -2631,12 +3077,15 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       });
       expect(MOCKS.requestCooperativeShutdown).not.toHaveBeenCalled();
       expect(calls.some((c) => c.args[0] === "bootout")).toBe(false);
-      // Only the CLI-label probe should have run; an indeterminate CLI-label
-      // read must abort before the `.agent` probe is even attempted.
-      expect(calls.map((c) => c.args[0])).toEqual(["print"]);
+      // The agent probe runs first and reads cleanly; only then does the
+      // indeterminate CLI-label read abort the takeover.
+      expect(calls.map((c) => c.args[0])).toEqual(["print", "print"]);
     });
 
-    it("rejects when the CLI label is absent but the .agent print fails to spawn, naming the agent label and never touching cooperative shutdown or launchd", async () => {
+    it("rejects when the .agent print fails to spawn, naming the agent label, before the CLI label is ever probed", async () => {
+      // The agent is probed FIRST, so a failure there aborts the takeover
+      // before the CLI label is read at all - unlike the sibling test
+      // above, there is no second print to stage.
       const calls: RecordedCall[] = [];
       const runner: ProcessRunner = async (command, args) => {
         calls.push({ command, args });
@@ -2665,7 +3114,56 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       });
       expect(MOCKS.requestCooperativeShutdown).not.toHaveBeenCalled();
       expect(calls.some((c) => c.args[0] === "bootout")).toBe(false);
-      expect(calls.map((c) => c.args[0])).toEqual(["print", "print"]);
+      expect(calls.map((c) => c.args[0])).toEqual(["print"]);
+    });
+
+    it("rejects when the fresh CLI probe after the agent's retirement fails to spawn, naming both the CLI label and the already-deregistered agent", async () => {
+      const agentPlistPath =
+        "/Applications/Traycer.app/Contents/Library/LaunchAgents/ai.traycer.host.agent.plist";
+      let agentPrints = 0;
+      let cliPrints = 0;
+      const runner: ProcessRunner = async (command, args) => {
+        if (args[0] === "print") {
+          if (args[1]?.endsWith(".agent") === true) {
+            agentPrints += 1;
+            return agentPrints === 1
+              ? {
+                  stdout: `path = ${agentPlistPath}\n`,
+                  stderr: "",
+                  exitCode: 0,
+                }
+              : {
+                  stdout: "",
+                  stderr: "Could not find specified service\n",
+                  exitCode: 113,
+                };
+          }
+          cliPrints += 1;
+          if (cliPrints === 1) {
+            return {
+              stdout: "",
+              stderr: "Could not find specified service\n",
+              exitCode: 113,
+            };
+          }
+          throw new Error("launchctl could not be spawned");
+        }
+        return buildSuccessResult();
+      };
+      MOCKS.requestCooperativeShutdown.mockResolvedValue({ kind: "stopped" });
+
+      const takeover =
+        createMacosController(runner).takeoverDesktopRegistration(label);
+      await expect(takeover).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+        message: expect.stringContaining(
+          `could not read launchd's state for '${label.id}'`,
+        ),
+        details: expect.objectContaining({ agentLabel: `${label.id}.agent` }),
+      });
+      await expect(takeover).rejects.toMatchObject({
+        message: expect.stringContaining("is already deregistered"),
+      });
     });
   });
 

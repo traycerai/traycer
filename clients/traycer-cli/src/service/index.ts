@@ -136,17 +136,21 @@ export type DesktopRegistrationTakeover =
       // out underneath it.
       readonly cooperativeStop: "stopped" | "no-host" | "skipped-unreachable";
     }
-  // No Desktop agent to retire, but the CLI label itself was loaded with a
-  // live process - a host this install's own reload would otherwise bootout
-  // with no cooperative claim (a KeepAlive respawn that started after the
-  // caller's probe). It was asked to stand down first, on the same terms as
-  // a Desktop-managed host.
-  // "stopped" through its own lifecycle RPCs, or "skipped-unreachable" when
-  // a published endpoint could not be asked (the reload boots it out). A
-  // process with no live endpoint is refused, never proceeded past.
+  // No Desktop agent to retire, but the CLI label itself was loaded - a job
+  // this install's own reload would otherwise bootout with no cooperative
+  // claim (a KeepAlive respawn that started after the caller's probe, or an
+  // idle job launchd could start while the install writes its files). The
+  // takeover unloaded it under its own lock first, and waited for it.
+  // "stopped": a live process stood down through its own lifecycle RPCs;
+  // "skipped-unreachable": a published endpoint could not be asked (the
+  // job was booted out underneath it); "no-host": launchd reported no
+  // process under the job, so no claim was made (the `took-over` arm's
+  // "no-host" is the claim's own answer - metadata naming a host that has
+  // exited; here nothing was there to name one). A process with no live
+  // endpoint is refused, never proceeded past.
   | {
       readonly kind: "cli-host-stopped";
-      readonly cooperativeStop: "stopped" | "skipped-unreachable";
+      readonly cooperativeStop: "stopped" | "skipped-unreachable" | "no-host";
     }
   | { readonly kind: "not-applicable" };
 

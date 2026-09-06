@@ -1409,6 +1409,46 @@ describe("readParkedRegistrationTakeover", () => {
     expect(printRunner).toHaveBeenCalledTimes(2);
   });
 
+  // `pid = 0` is launchd's idle-job marker, not a live process: the shared
+  // parser still reports it as `observed` (it is a finite number), so a
+  // reader that treated ANY observed pid as running would park every boot
+  // cycle on a job with nothing left to interrupt. Only a positive pid or an
+  // explicit `running` job state may call it live - see
+  // `probeLaunchdJobProcess` in `host-login-item.ts`.
+  it("a `pid = 0` line with no running state on the agent label is an idle job: the CLI label is probed next and the verdict is takeover", async () => {
+    getLoginItemSettings
+      .mockReturnValueOnce({ status: "not-found" }) // primary
+      .mockReturnValueOnce({ status: "not-registered" }); // legacy
+    printRunner.mockImplementation(async (target: string) =>
+      agentPrintTarget(target) === "agent"
+        ? observedPrintResult(["state = waiting", "pid = 0"])
+        : notLoadedPrintResult(),
+    );
+
+    await expect(readParkedRegistrationTakeover()).resolves.toEqual({
+      kind: "takeover",
+      status: "not-found",
+    });
+    expect(printRunner).toHaveBeenCalledTimes(2);
+  });
+
+  it("a `pid = 0` line with no running state on the CLI label (agent label absent) is an idle job, and the verdict is takeover", async () => {
+    getLoginItemSettings
+      .mockReturnValueOnce({ status: "not-found" }) // primary
+      .mockReturnValueOnce({ status: "not-registered" }); // legacy
+    printRunner.mockImplementation(async (target: string) =>
+      agentPrintTarget(target) === "agent"
+        ? notLoadedPrintResult()
+        : observedPrintResult(["state = waiting", "pid = 0"]),
+    );
+
+    await expect(readParkedRegistrationTakeover()).resolves.toEqual({
+      kind: "takeover",
+      status: "not-found",
+    });
+    expect(printRunner).toHaveBeenCalledTimes(2);
+  });
+
   it("a spawn-failed print is no-takeover/job-indeterminate", async () => {
     getLoginItemSettings
       .mockReturnValueOnce({ status: "not-found" }) // primary

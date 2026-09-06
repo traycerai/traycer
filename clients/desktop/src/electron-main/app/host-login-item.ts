@@ -228,19 +228,21 @@ export function readHostLoginItemStatus(): HostLoginItemStatus {
  *   - `manifest-unreadable`: `~/Library/LaunchAgents/<cli-label>.plist` could
  *     not be probed - the same input the entry guard refuses on.
  *   - `job-running` / `job-indeterminate`: launchd reports a live process
- *     under either label, or could not be asked. This is the down-host proof
- *     the callers' `prePid === null` is NOT: that is a structural read of
- *     `pid.json`, and a host in its first seconds after a `KeepAlive` respawn
- *     (or one whose metadata tore) has none - while the takeover's install
- *     boots a loaded CLI label out with no cooperative claim, and the CLI's
- *     own takeover treats missing metadata as a reason to boot the job out
- *     underneath a host it could not ask. A job that is loaded but has no
- *     process is fine: the install re-registers and kickstarts it, which is
+ *     (a positive `pid`, or `state = running`) under either label, or could
+ *     not be asked. This is the down-host proof the callers'
+ *     `prePid === null` is NOT: that is a structural read of `pid.json`, and
+ *     a host in its first seconds after a `KeepAlive` respawn (or one whose
+ *     metadata tore) has none - while the takeover's install boots a loaded
+ *     CLI label out with no cooperative claim, and the CLI's own takeover
+ *     treats missing metadata as a reason to boot the job out underneath a
+ *     host it could not ask. A job that is loaded but has no process is
+ *     fine: the CLI unloads it under its lock and re-registers it, which is
  *     the start this exists to perform. This read is a snapshot, not a
  *     lock: a job that starts between it and the CLI taking its contender
  *     lock is caught THERE - `takeoverDesktopRegistration` asks a live
- *     CLI-label process to stand down before its reload and refuses one
- *     that has no endpoint to ask yet.
+ *     CLI-label process to stand down before its reload, refuses one that
+ *     has no endpoint to ask yet, and unloads an idle one itself so launchd
+ *     cannot start it under the install.
  */
 export type ParkedRegistrationTakeover =
   | {
@@ -305,8 +307,13 @@ async function probeLaunchdJobProcess(
   if (probe.kind === "absent") return "none";
   if (probe.kind === "indeterminate") return "job-indeterminate";
   const { pid, jobState } = probe.runState;
+  // `pid = 0` is launchd's idle job, not a process: the shared parser keeps
+  // every finite number as observed, and the CLI's ownership classifier and
+  // `wedge.ts` both read only a positive pid as live. Reading 0 as running
+  // would park this boot cycle, and every retry after it, on a job that has
+  // nothing to interrupt.
   if (
-    pid.kind === "observed" ||
+    (pid.kind === "observed" && pid.value > 0) ||
     (jobState.kind === "observed" && jobState.value.toLowerCase() === "running")
   ) {
     return "job-running";
