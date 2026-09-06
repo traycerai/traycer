@@ -51,6 +51,10 @@ import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { buildOverviewHostFixture } from "@/components/settings/panels/__tests__/host-overview-test-support";
 import { createFakeRunnerHost } from "../../../../__tests__/create-fake-runner-host";
 import { useLocalHostUpdateOperation } from "../use-local-host-update-operation";
+import {
+  LOCAL_LIVENESS_PROOF_MS,
+  holdsLifecycleGate,
+} from "@/lib/host/fleet-update/fleet-update-view";
 
 const LOCAL_HOST_ID = "local-1";
 
@@ -281,5 +285,82 @@ describe("useLocalHostUpdateOperation — F1 host-down window (Ticket 07 §5.2.7
     expect(result.current.view.kind).toBe("unknown");
     expect(result.current.view.lastKnownKind).toBeNull();
     expect(result.current.view.attemptId).toBeNull();
+  });
+});
+
+/**
+ * The 1s renderer-tick clock (Ticket 06 D13), exercised on the REAL hook. The
+ * suite above fakes only `Date` (`toFake: ["Date"]`) because it never needs to
+ * drive a timer; this pin needs the 1s `useNowMs` interval to actually fire on
+ * a deadline it controls, so it fakes every timer instead
+ * (`shouldAdvanceTime: true` so `waitFor`'s own real-timer-shaped polling
+ * still makes progress against the fake clock).
+ *
+ * Falsifies: feeding `useLocalHostUpdateOperation`'s `nowMs` from
+ * `statusQuery.dataUpdatedAt` again instead of `useNowMs` — the pure
+ * `fleet-update-view.test.ts` suite cannot see this regression because it
+ * supplies `nowMs` directly; only a real mounted hook, with a real 1s tick
+ * racing a real (frozen) `dataUpdatedAt` that never advances because
+ * `host.status` never resolves, can catch it.
+ */
+describe("useLocalHostUpdateOperation — the 1s renderer tick ages the live-restarting proof out (Ticket 06 D13)", () => {
+  // Mirrors the hook's own private `LOCAL_RECORD_TICK_MS`, which is not
+  // exported — the tick interval is an implementation detail the hook is free
+  // to change; this test only needs a duration long enough for at least one
+  // tick to land.
+  const LOCAL_RECORD_TICK_MS = 1_000;
+
+  it("flips restarting -> unknown on the first 1s tick after the 5s deadline, and a backward clock step does not revive it", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(CONTROLLER_READ_AT_MS);
+    try {
+      bindUnreachableLocalHost();
+      const livenessObservedAtMs = CONTROLLER_READ_AT_MS;
+      const management = notImplementedManagement({
+        ...CONTROLLER_STATUS_BASE,
+        localAttempt: localAttempt({
+          phase: "restarting",
+          liveness: "live",
+          livenessObservedAtMs,
+        }),
+      });
+
+      const { result } = renderOperation(management);
+
+      // First projection: the proof is fresh, so the live `restarting` kind
+      // holds the lifecycle gate — exactly as a live wire `restarting` would.
+      await waitFor(() => {
+        expect(result.current.view.kind).toBe("restarting");
+      });
+      expect(holdsLifecycleGate(result.current.view)).toBe(true);
+
+      // No new publication lands — `getHostControllerStatus` is called once
+      // and the query's `staleTime: Infinity` means it is event-sourced, not
+      // re-read — and `host.status` keeps failing throughout. Advancing the
+      // clock past the 5s deadline is the ONLY thing that changes.
+      vi.setSystemTime(
+        livenessObservedAtMs + LOCAL_LIVENESS_PROOF_MS + LOCAL_RECORD_TICK_MS,
+      );
+      await vi.advanceTimersByTimeAsync(LOCAL_RECORD_TICK_MS * 2);
+
+      await waitFor(() => {
+        expect(result.current.view.kind).toBe("unknown");
+      });
+      expect(holdsLifecycleGate(result.current.view)).toBe(false);
+      // The retained phase, not a bare unknown — the record is still on disk
+      // even though its liveness proof has expired.
+      expect(result.current.view.lastKnownKind).toBe("reconnecting");
+
+      // A wall-clock step BACKWARD, well past the deadline that just fired,
+      // must not make the stamp look fresh again (`localLivenessProofHolds`'s
+      // lower bound).
+      vi.setSystemTime(livenessObservedAtMs - 20_000);
+      await vi.advanceTimersByTimeAsync(LOCAL_RECORD_TICK_MS * 2);
+
+      expect(result.current.view.kind).not.toBe("restarting");
+      expect(holdsLifecycleGate(result.current.view)).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

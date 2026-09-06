@@ -12,6 +12,8 @@ import {
   projectFleetUpdateView,
   warrantsFastPoll,
   preferLiveOverRecord,
+  LOCAL_LIVENESS_PROOF_MS,
+  LOCAL_LIVENESS_CLOCK_SLACK_MS,
   type FleetUpdateRecordObservation,
   type FleetUpdateWireObservation,
   type FleetUpdateView,
@@ -1026,6 +1028,231 @@ describe("preferLiveOverRecord — the record arm fills the host-down window onl
   it("returns the record when there is no wire read at all, and null when there is neither", () => {
     expect(preferLiveOverRecord(null, record, NOW_MS)).toBe(record);
     expect(preferLiveOverRecord(null, null, NOW_MS)).toBeNull();
+  });
+});
+
+describe("projectFleetUpdateView — probed local liveness on a `restarting` record (Ticket 06 D13)", () => {
+  it("live liveness with a fresh stamp projects the live restarting kind, gate held, no retained phase", () => {
+    // Falsifies: `localLivenessProofHolds` returning false for a fresh, valid
+    // stamp, or `recordObservationView` not routing a holding proof to the
+    // live `restarting` arm.
+    const view = projectFleetUpdateView({
+      observation: recordObservation({
+        phase: "restarting",
+        liveness: "live",
+        livenessObservedAtMs: NOW_MS - LOCAL_LIVENESS_PROOF_MS / 2,
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(view.kind).toBe("restarting");
+    expect(view.qualified).toBe(false);
+    expect(view.progress.kind).toBe("indeterminate");
+    expect(holdsLifecycleGate(view)).toBe(true);
+    expect(view.lastKnownKind).toBeNull();
+  });
+
+  it("the SAME observation, once nowMs advances past the 5s proof window, decays to unknown with the gate released", () => {
+    // Falsifies: dropping the upper bound (`ageMs <= LOCAL_LIVENESS_PROOF_MS`)
+    // in `localLivenessProofHolds` — a proof that never expires would hold this
+    // host's lifecycle gate open forever on a payload nothing is refreshing.
+    const livenessObservedAtMs = NOW_MS;
+    // Deliberately DISTINCT from the liveness stamp. The builder defaults
+    // `observedAtMs` to `NOW_MS` too, so leaving it alone would make the
+    // `lastObservedAtMs` assertion below pass whichever of the two fields the
+    // record arm retained — and the two are different facts: when this
+    // renderer READ the record, versus when the holder probe stamped it.
+    const observedAtMs = NOW_MS - 250;
+    const nowAfterDeadline = livenessObservedAtMs + LOCAL_LIVENESS_PROOF_MS + 1;
+    const view = projectFleetUpdateView({
+      observation: recordObservation({
+        phase: "restarting",
+        liveness: "live",
+        livenessObservedAtMs,
+        observedAtMs,
+      }),
+      nowMs: nowAfterDeadline,
+      connected: true,
+    });
+    expect(view.kind).toBe("unknown");
+    expect(holdsLifecycleGate(view)).toBe(false);
+    // The record arm's phase->kind mapping calls `phaseKind(phase, false)` —
+    // never `input.connected` — because reading a record IS the disconnected
+    // vantage, and `restarting` under `connected: false` maps to
+    // `reconnecting`. Asserting what the code actually produces, not what a
+    // naive reading of "restarting expired" might guess ("restarting" or
+    // "unknown").
+    expect(view.lastKnownKind).toBe("reconnecting");
+    expect(view.lastObservedAtMs).toBe(observedAtMs);
+  });
+
+  it("a NEGATIVE age beyond the clock-slack bound projects unknown, gate released", () => {
+    // Falsifies: dropping the lower bound entirely from
+    // `localLivenessProofHolds` (the ticket's own ablation) — a wall-clock
+    // step backward would otherwise read as "even fresher than new" to a
+    // check that only looks at the upper bound. Stepped back well past
+    // `LOCAL_LIVENESS_CLOCK_SLACK_MS` (1s) rather than by ~500ms, because a
+    // step inside the slack is the ordinary quantisation case this bound is
+    // deliberately built to tolerate, not the defect it guards against.
+    const livenessObservedAtMs = NOW_MS;
+    const nowBeforeStamp =
+      livenessObservedAtMs - LOCAL_LIVENESS_CLOCK_SLACK_MS - 9_000;
+    const view = projectFleetUpdateView({
+      observation: recordObservation({
+        phase: "restarting",
+        liveness: "live",
+        livenessObservedAtMs,
+      }),
+      nowMs: nowBeforeStamp,
+      connected: true,
+    });
+    expect(view.kind).toBe("unknown");
+    expect(holdsLifecycleGate(view)).toBe(false);
+  });
+
+  it("an absent or NaN liveness stamp projects unknown even with liveness:'live'", () => {
+    // Falsifies: `localLivenessProofHolds` treating a missing/unparseable
+    // stamp as "nothing to compare, so allow it" instead of refusing.
+    const nullStamp = projectFleetUpdateView({
+      observation: recordObservation({
+        phase: "restarting",
+        liveness: "live",
+        livenessObservedAtMs: null,
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(nullStamp.kind).toBe("unknown");
+
+    const nanStamp = projectFleetUpdateView({
+      observation: recordObservation({
+        phase: "restarting",
+        liveness: "live",
+        livenessObservedAtMs: Number.NaN,
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(nanStamp.kind).toBe("unknown");
+  });
+
+  it("'interrupted' and 'unknown' liveness on a restarting record never reach the live arm, regardless of the stamp", () => {
+    // Falsifies: `localLivenessProofHolds` checking only the stamp's age and
+    // forgetting the `liveness !== "live"` guard.
+    for (const liveness of ["interrupted", "unknown"] as const) {
+      const view = projectFleetUpdateView({
+        observation: recordObservation({
+          phase: "restarting",
+          liveness,
+          livenessObservedAtMs: NOW_MS,
+        }),
+        nowMs: NOW_MS,
+        connected: true,
+      });
+      expect(view.kind).toBe("unknown");
+      expect(view.lastKnownKind).toBe("reconnecting");
+      expect(holdsLifecycleGate(view)).toBe(false);
+    }
+  });
+});
+
+describe("preferLiveOverRecord — same-attempt ordering and the different-attempt bound (Ticket 06 D13)", () => {
+  it("a repeated read of ONE unchanged record never outranks a HEALTHY wire frame of the same attempt, across three reads", () => {
+    // Falsifies: comparing on read time / recency instead of freshness — see
+    // the module's own invariant doc at `preferLiveOverRecord`.
+    const wire = observation({
+      freshUntilMs: NOW_MS + 30_000,
+      operation: attemptOperation({
+        attemptId: "attempt-1",
+        generation: 1,
+        sequence: 1,
+      }),
+    });
+    const unchangedRecord = recordObservation({
+      attemptId: "attempt-1",
+      generation: 1,
+      sequence: 1,
+    });
+    for (let read = 0; read < 3; read += 1) {
+      expect(preferLiveOverRecord(wire, unchangedRecord, NOW_MS)).toBe(wire);
+    }
+  });
+
+  it("a record with a HIGHER sequence outranks a STALE wire frame of the same attempt", () => {
+    // Falsifies: `recordIsBehind` treating equality or a higher sequence as
+    // "behind", or the caller only consulting `preferLiveOverRecord` while the
+    // wire is fresh.
+    const staleWire = observation({
+      freshUntilMs: NOW_MS - 1,
+      operation: attemptOperation({
+        attemptId: "attempt-1",
+        generation: 1,
+        sequence: 1,
+      }),
+    });
+    const aheadRecord = recordObservation({
+      attemptId: "attempt-1",
+      generation: 1,
+      sequence: 2,
+    });
+    expect(preferLiveOverRecord(staleWire, aheadRecord, NOW_MS)).toBe(
+      aheadRecord,
+    );
+  });
+
+  it("a FUTURE-dated updatedAt on a DIFFERENT attempt loses to a stale wire — the wire must be stale for this to prove anything", () => {
+    // A fresh wire always wins unconditionally (see the healthy-frame pin
+    // above), so this pin deliberately stales the wire first: only then
+    // does `recordTimestampIsSane`'s future-allowance become the deciding
+    // factor. "Future" exceeds LOCAL_LIVENESS_CLOCK_SLACK_MS by a full day, far
+    // past the one-tick slack the bound tolerates.
+    // Falsifies: `recordTimestampIsSane` accepting an unbounded future
+    // timestamp instead of comparing against `LOCAL_LIVENESS_CLOCK_SLACK_MS`.
+    const staleWire = observation({
+      freshUntilMs: NOW_MS - 1,
+      operation: attemptOperation({ attemptId: "attempt-1" }),
+    });
+    const futureRecord = recordObservation({
+      attemptId: "attempt-2",
+      updatedAt: new Date(NOW_MS + 24 * 60 * 60 * 1000).toISOString(),
+    });
+    expect(preferLiveOverRecord(staleWire, futureRecord, NOW_MS)).toBe(
+      staleWire,
+    );
+  });
+
+  it("mirror: a different-attempt record with a SANE updatedAt beats a stale wire", () => {
+    // Falsifies: `recordTimestampIsSane` refusing an ordinary, plausible
+    // timestamp (over-tightening the bound would make this fail alongside the
+    // future-dated pin above).
+    const staleWire = observation({
+      freshUntilMs: NOW_MS - 1,
+      operation: attemptOperation({ attemptId: "attempt-1" }),
+    });
+    const saneRecord = recordObservation({
+      attemptId: "attempt-2",
+      updatedAt: new Date(NOW_MS - 60_000).toISOString(),
+    });
+    expect(preferLiveOverRecord(staleWire, saneRecord, NOW_MS)).toBe(
+      saneRecord,
+    );
+  });
+
+  it("an unparseable updatedAt on a different attempt loses to a stale wire", () => {
+    // Falsifies: `recordTimestampIsSane` treating `Date.parse`'s `NaN` as
+    // "unknown, so allow it" instead of refusing — the doc's explicit
+    // "invalid loses" vs. "invalid silently wins" distinction.
+    const staleWire = observation({
+      freshUntilMs: NOW_MS - 1,
+      operation: attemptOperation({ attemptId: "attempt-1" }),
+    });
+    const unparseableRecord = recordObservation({
+      attemptId: "attempt-2",
+      updatedAt: "not-a-date",
+    });
+    expect(preferLiveOverRecord(staleWire, unparseableRecord, NOW_MS)).toBe(
+      staleWire,
+    );
   });
 });
 
