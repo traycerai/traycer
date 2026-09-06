@@ -908,8 +908,79 @@ describe("HostOverviewPanel — a host without the two methods keeps the legacy 
     await screen.findByTestId("confirm-destructive-dialog");
   });
 
+  it("an ATTEMPT-reporting host whose manifest lacks the methods offers NO activation route at all — no control, no dialog, no dispatch", async () => {
+    // The cohort the method gate actually exists for, and the one the two
+    // pins around it cannot reach: a host new enough to report a schema-v2
+    // attempt (so `deriveAttemptControl` HAS an `attemptId` to work with) but
+    // whose handshake never negotiated `host.update.activate`. The
+    // legacy-facts cases beside this one return `null` from
+    // `deriveAttemptControl` before the gate is consulted at all, so they stay
+    // green whether or not it exists.
+    //
+    // What this host correctly offers is NOTHING. The frame declares
+    // `authority: "attempt"`, which suppresses the legacy activation-debt
+    // route the previous pin uses (the install record below is present and
+    // deliberately ignored), and the bound route is gated off — so the card
+    // renders no Restart control rather than one that leads somewhere the
+    // transport would refuse.
+    //
+    // Falsifies: carrying the intent as a REQUEST FIELD instead of as its own
+    // method (the ticket's own ablation). With nothing to negotiate, every
+    // host reads as capable, `deriveAttemptControl` names the activation, and
+    // `onRestart` becomes `openBoundOffer` — the control reappears and this
+    // pin's first assertion reddens.
+    const activateCalls: unknown[] = [];
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.2.0",
+      installation: managedInstallation(installRecord("1.2.1"), null),
+      overrideHandlers: {
+        "host.status": () => ({
+          ready: true,
+          hostVersion: "1.2.0",
+          protocolVersion: { major: 1, minor: 3 },
+          busy: false,
+          busySessionCount: 2,
+          updateProgress: null,
+          busyBreakdown: null,
+          updateOperation: attempt({
+            phase: "waiting-to-activate",
+            execution: "parked",
+            targetVersion: "1.2.1",
+            busySessionCount: 2,
+          }),
+          updateTransaction: {
+            recordSchemaVersion: 2 as const,
+            authority: "attempt" as const,
+          },
+        }),
+        // Registered so "never called" is a fact about the page's routing and
+        // not about a handler that was missing anyway.
+        "host.update.activate": (request) => {
+          activateCalls.push(request);
+          return { outcome: "accepted" as const, attemptId: "a1" };
+        },
+      },
+    });
+    record("host-a", METHODS_WITHOUT_BOUND);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    await screen.findByTestId("host-overview-operation-phase");
+    expect(screen.queryByTestId("host-overview-operation-restart")).toBeNull();
+    expect(screen.queryByTestId("host-busy-force-defer-dialog")).toBeNull();
+    expect(activateCalls).toEqual([]);
+  });
+
   it("a staged wait still dispatches host.update.install {force: true} through the legacy Force route", async () => {
-    const installCalls: Array<{ version: string; force: boolean }> = [];
+    // The WHOLE request, not a projection of it. `toEqual` against the exact
+    // two-field shape is what makes this pin falsify "carry the intent as a
+    // request field instead of a method": an added `intent` (or any other
+    // field smuggled onto the legacy install) reddens here, where recording
+    // only `version` and `force` would have swallowed it.
+    const installCalls: unknown[] = [];
     const fixture = buildOverviewHostFixture({
       hostId: "host-a",
       isLocalMachine: true,
@@ -928,7 +999,7 @@ describe("HostOverviewPanel — a host without the two methods keeps the legacy 
           manifest: updateCheckManifest("1.3.0"),
         }),
         "host.update.install": (request) => {
-          installCalls.push({ version: request.version, force: request.force });
+          installCalls.push(request);
           return { outcome: "accepted" as const, attemptId: null };
         },
       },
