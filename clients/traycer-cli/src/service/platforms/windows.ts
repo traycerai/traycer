@@ -400,12 +400,16 @@ async function stopService(
 // dead it matches nothing by path and hangs off a pid nobody is walking. (An
 // old `/T` could still find it, enumerating at kill time.) So the kill runs
 // in bounded PASSES: every pass hands the scan the pids it has already killed
-// and their creation stamps, and the scan adopts as further roots the
-// processes whose recorded parent is one of those - provided that parent pid
-// is no longer present (a present one is a reused pid, and its children are
-// nobody's business) and the child was born no earlier than the parent it
-// claims. The loop ends the first time a pass finds nothing new, or at the
-// pass bound; the updater exclusion holds throughout.
+// with the LIFETIME each had - its creation stamp and the moment its kill
+// returned - and the scan adopts as further roots the processes whose recorded
+// parent is one of those, provided that parent pid is no longer present (a
+// present one is a reused pid, and its children are nobody's business) and
+// the child was born INSIDE that lifetime. The upper bound is what makes
+// absence safe: a pid handed to an unrelated launcher between passes, which
+// started something and exited, is absent too - but everything it started
+// was born after the kill, and is refused. A process with no creation stamp
+// is never adopted on inference. The loop ends the first time a pass finds
+// nothing new, or at the pass bound; the updater exclusion holds throughout.
 //
 // The raw recorded pid is used only when the scan itself is unavailable: a
 // host that died without cleanup leaves pid.json behind, and Windows may have
@@ -419,7 +423,7 @@ async function killHostProcessTree(
   label: ServiceLabel,
   run: ProcessRunner,
 ): Promise<void> {
-  const killed = new Map<number, number | null>();
+  const killed = new Map<number, KilledProcess>();
   for (let pass = 0; pass < WINDOWS_KILL_TREE_MAX_PASSES; pass += 1) {
     const scanned = await findSlotProcesses(
       label,
@@ -432,26 +436,32 @@ async function killHostProcessTree(
     }
     const fresh = scanned.filter((entry) => !killed.has(entry.pid));
     if (fresh.length === 0) return;
-    for (const entry of fresh) killed.set(entry.pid, entry.creationMs);
     await Promise.all(
-      fresh.map((entry) =>
-        run("taskkill", ["/F", "/PID", String(entry.pid)], {
+      fresh.map(async (entry) => {
+        await run("taskkill", ["/F", "/PID", String(entry.pid)], {
           env: undefined,
           cwd: undefined,
           timeoutMs: WINDOWS_TASKKILL_TIMEOUT_MS,
           tolerateNonZeroExit: true,
         }).catch((cause) => {
           if (isServiceMutationAuthorityError(cause)) throw cause;
-        }),
-      ),
+        });
+        // Stamped AFTER the kill returns: nothing this process was the parent
+        // of can have been born later than this, so it bounds its orphans.
+        killed.set(entry.pid, {
+          pid: entry.pid,
+          creationMs: entry.creationMs,
+          killedAtMs: Date.now(),
+        });
+      }),
     );
   }
 }
 
 function killedProcesses(
-  killed: ReadonlyMap<number, number | null>,
+  killed: ReadonlyMap<number, KilledProcess>,
 ): readonly KilledProcess[] {
-  return Array.from(killed, ([pid, creationMs]) => ({ pid, creationMs }));
+  return Array.from(killed.values());
 }
 
 async function killRecordedPidUnverified(
@@ -704,11 +714,13 @@ async function findSlotProcesses(
   }
 }
 
-/** A process an earlier pass killed: its pid and the creation stamp it had. */
+/** A process an earlier pass killed, with the lifetime its orphans must fit. */
 export interface KilledProcess {
   readonly pid: number;
   /** `CreationDate` as epoch milliseconds, or `null` when the scan had none. */
   readonly creationMs: number | null;
+  /** Epoch milliseconds when its `taskkill` returned. */
+  readonly killedAtMs: number;
 }
 
 /** A process the scan says to kill, with the stamp a later pass adopts by. */
@@ -743,20 +755,30 @@ function buildSlotProcessScanScript(options: SlotProcessScanOptions): string {
     "foreach ($p in $all) { $byId[[int]$p.ProcessId] = $p }",
     "$stamp = { param($p) if ($null -eq $p -or $null -eq $p.CreationDate) { $null } else { [long](($p.CreationDate.ToUniversalTime() - [datetime]'1970-01-01').TotalMilliseconds) } }",
     "$killed = @{}",
-    ...options.killed.map(
-      (entry) =>
-        `$killed[${String(entry.pid)}] = ${entry.creationMs === null ? "$null" : `[long]${String(entry.creationMs)}`}`,
-    ),
+    // Only a parent with a known creation stamp can vouch for orphans: the
+    // lifetime window needs both ends, and an unknown stamp must never turn
+    // into an inferred kill.
+    ...options.killed
+      .filter((entry) => entry.creationMs !== null)
+      .map(
+        (entry) =>
+          `$killed[${String(entry.pid)}] = @{ born = [long]${String(entry.creationMs)}; died = [long]${String(entry.killedAtMs)} }`,
+      ),
     // Orphans of an earlier pass: their recorded parent is a pid we killed,
     // that pid is not present now (present = reused, unrelated), and they
-    // were born no earlier than the parent they name.
+    // were born inside that parent's lifetime - after its creation and no
+    // later than its kill. A child of whatever the pid was handed to next
+    // was born after the kill and is refused; a child with no stamp is
+    // refused too.
     "$orphans = $all | Where-Object {",
     "  $parentId = [int]$_.ParentProcessId",
     "  if (-not $killed.ContainsKey($parentId)) { return $false }",
     "  if ($byId.ContainsKey($parentId)) { return $false }",
     "  if ($excluded -contains [int]$_.ProcessId) { return $false }",
     "  $born = & $stamp $_",
-    "  ($null -eq $killed[$parentId]) -or ($null -eq $born) -or ($born -ge $killed[$parentId])",
+    "  if ($null -eq $born) { return $false }",
+    "  $life = $killed[$parentId]",
+    "  ($born -ge $life.born) -and ($born -le $life.died)",
     "}",
     "$children = @{}",
     "foreach ($p in $all) {",

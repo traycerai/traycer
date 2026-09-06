@@ -172,14 +172,18 @@ describe("Windows service stale host cleanup", () => {
       hostHome: "C:\\Users\\Traycer Dev\\.traycer\\host",
       currentPid: 1234,
       killed: [
-        { pid: 401, creationMs: 1788000000000 },
-        { pid: 402, creationMs: null },
+        { pid: 401, creationMs: 1788000000000, killedAtMs: 1788000005000 },
+        { pid: 402, creationMs: null, killedAtMs: 1788000005000 },
       ],
     });
-    expect(script).toContain("$killed[401] = [long]1788000000000");
-    expect(script).toContain("$killed[402] = $null");
+    expect(script).toContain(
+      "$killed[401] = @{ born = [long]1788000000000; died = [long]1788000005000 }",
+    );
+    // A killed parent with no creation stamp cannot vouch for anyone.
+    expect(script).not.toContain("$killed[402]");
     // Recorded parent among the killed, that pid gone (present = reused),
-    // never this CLI's own pid, and born no earlier than the parent.
+    // never this CLI's own pid, a known birth, and born inside the parent's
+    // lifetime - a pid handed on after the kill vouches for nothing.
     expect(script).toContain(
       "if (-not $killed.ContainsKey($parentId)) { return $false }",
     );
@@ -189,7 +193,10 @@ describe("Windows service stale host cleanup", () => {
     expect(script).toContain(
       "if ($excluded -contains [int]$_.ProcessId) { return $false }",
     );
-    expect(script).toContain("($born -ge $killed[$parentId])");
+    expect(script).toContain("if ($null -eq $born) { return $false }");
+    expect(script).toContain(
+      "($born -ge $life.born) -and ($born -le $life.died)",
+    );
     expect(script).toContain(
       "+ @($orphans | ForEach-Object { [int]$_.ProcessId })",
     );
@@ -312,8 +319,9 @@ describe("Windows service stale host cleanup", () => {
     // and ended the loop - no third scan.
     const scans = calls.filter((call) => call.command === "powershell.exe");
     expect(scans).toHaveLength(2);
-    expect(scans[1]?.args.at(-1)).toContain("$killed[401] = $null");
-    expect(scans[1]?.args.at(-1)).toContain("$killed[402] = $null");
+    // Bare-pid scan output carries no stamps, so nothing is vouched for.
+    expect(scans[1]?.args.at(-1)).toContain("$killed = @{}");
+    expect(scans[1]?.args.at(-1)).not.toContain("$killed[401]");
   });
 
   it("reaps a child that appeared after the first snapshot through the follow-up pass", async () => {
@@ -342,8 +350,12 @@ describe("Windows service stale host cleanup", () => {
     ]);
     const scans = calls.filter((call) => call.command === "powershell.exe");
     expect(scans).toHaveLength(3);
-    expect(scans[1]?.args.at(-1)).toContain("$killed[401] = [long]100");
-    expect(scans[2]?.args.at(-1)).toContain("$killed[777] = [long]150");
+    expect(scans[1]?.args.at(-1)).toMatch(
+      /\$killed\[401\] = @\{ born = \[long\]100; died = \[long\]\d+ \}/,
+    );
+    expect(scans[2]?.args.at(-1)).toMatch(
+      /\$killed\[777\] = @\{ born = \[long\]150; died = \[long\]\d+ \}/,
+    );
   });
 
   it("bounds the follow-up passes even when every pass finds something new", async () => {
