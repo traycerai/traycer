@@ -773,10 +773,10 @@ describe("update-progress-marker", () => {
   // The pre-lock publish: claim the live path for `next` without overwriting
   // a marker whose writer may still be acting on it. Backs `host update`'s
   // `publishUpdating` (see the production comment on
-  // `claimUpdateProgressMarkerBeforeLock`). Returns
-  // `{outcome, displaced}` - `displaced` carries the record a
-  // "replaced-stale" claim replaced (so the caller can put it back on a
-  // park), and is `null` for every other outcome.
+  // `claimUpdateProgressMarkerBeforeLock`). Returns `{outcome}` - a
+  // "replaced-stale" claim's replaced record is gone, not returned: see
+  // `updateProgressRecordHasLiveWriter` for why putting a record no writer
+  // is acting on back would be worse than the blind publish it replaces.
   describe("claimUpdateProgressMarkerBeforeLock", () => {
     const next = {
       state: "updating" as const,
@@ -791,11 +791,11 @@ describe("update-progress-marker", () => {
         await import("../update-progress-marker");
       expect(
         await claimUpdateProgressMarkerBeforeLock("production", next),
-      ).toEqual({ outcome: "published", displaced: null });
+      ).toEqual({ outcome: "published" });
       expect(await readUpdateProgressMarker("production")).toEqual(next);
     });
 
-    it("replaces a `failed` record regardless of its writerId - no writer is acting on a stamped failure - and returns it as `displaced`", async () => {
+    it("replaces a `failed` record regardless of its writerId - no writer is acting on a stamped failure - the replaced record is gone", async () => {
       const {
         writeUpdateProgressMarker,
         claimUpdateProgressMarkerBeforeLock,
@@ -804,7 +804,7 @@ describe("update-progress-marker", () => {
       await writeUpdateProgressMarker("production", failed);
       expect(
         await claimUpdateProgressMarkerBeforeLock("production", next),
-      ).toEqual({ outcome: "replaced-stale", displaced: failed });
+      ).toEqual({ outcome: "replaced-stale" });
       expect(await readUpdateProgressMarker("production")).toEqual(next);
     });
 
@@ -813,7 +813,7 @@ describe("update-progress-marker", () => {
     // `store/__tests__/cli-lock.test.ts` skips its own real-process tests
     // there.
     it.skipIf(process.platform === "win32")(
-      "replaces an `updating` record whose writer process is dead, and returns it as `displaced`",
+      "replaces an `updating` record whose writer process is dead - the replaced record is gone",
       async () => {
         const {
           writeUpdateProgressMarker,
@@ -831,7 +831,7 @@ describe("update-progress-marker", () => {
         await writeUpdateProgressMarker("production", deadWriterRecord);
         expect(
           await claimUpdateProgressMarkerBeforeLock("production", next),
-        ).toEqual({ outcome: "replaced-stale", displaced: deadWriterRecord });
+        ).toEqual({ outcome: "replaced-stale" });
         expect(await readUpdateProgressMarker("production")).toEqual(next);
       },
     );
@@ -852,7 +852,7 @@ describe("update-progress-marker", () => {
       await writeUpdateProgressMarker("production", theirs);
       expect(
         await claimUpdateProgressMarkerBeforeLock("production", next),
-      ).toEqual({ outcome: "deferred", displaced: null });
+      ).toEqual({ outcome: "deferred" });
       expect(await readUpdateProgressMarker("production")).toEqual(theirs);
       expect(scratchAndStagingFiles()).toEqual([]);
     });
@@ -873,7 +873,7 @@ describe("update-progress-marker", () => {
       writeFileSync(path, `${JSON.stringify(legacyRecord, null, 2)}\n`, "utf8");
       expect(
         await claimUpdateProgressMarkerBeforeLock("production", next),
-      ).toEqual({ outcome: "deferred", displaced: null });
+      ).toEqual({ outcome: "deferred" });
       expect(await readUpdateProgressMarker("production")).toEqual({
         ...legacyRecord,
         writerId: null,
@@ -896,7 +896,7 @@ describe("update-progress-marker", () => {
       await writeUpdateProgressMarker("production", theirs);
       expect(
         await claimUpdateProgressMarkerBeforeLock("production", next),
-      ).toEqual({ outcome: "deferred", displaced: null });
+      ).toEqual({ outcome: "deferred" });
       expect(await readUpdateProgressMarker("production")).toEqual(theirs);
       expect(scratchAndStagingFiles()).toEqual([]);
     });
@@ -1058,7 +1058,7 @@ describe("update-progress-marker", () => {
       }
     });
 
-    it('returns {outcome: "failed", displaced: null} when its internal replace cannot land the claim', async () => {
+    it('returns {outcome: "failed"} when its internal replace cannot land the claim', async () => {
       mockUnlandableWrites();
       try {
         const {
@@ -1072,11 +1072,91 @@ describe("update-progress-marker", () => {
         await writeUpdateProgressMarker("production", failed);
         expect(
           await claimUpdateProgressMarkerBeforeLock("production", next),
-        ).toEqual({ outcome: "failed", displaced: null });
+        ).toEqual({ outcome: "failed" });
         expect(await readUpdateProgressMarker("production")).toBeNull();
       } finally {
         vi.doUnmock("node:fs/promises");
       }
+    });
+  });
+
+  // `updateProgressRecordHasLiveWriter`: the one predicate behind every
+  // "is this record mine to replace/restore?" decision (see its own doc
+  // comment). Direct pins, independent of the claim/replace/delete
+  // primitives that consult it.
+  describe("updateProgressRecordHasLiveWriter", () => {
+    it("a `failed` record is never live, even with a live pid's writerId", async () => {
+      const { updateProgressRecordHasLiveWriter } =
+        await import("../update-progress-marker");
+      expect(
+        updateProgressRecordHasLiveWriter({
+          state: "failed",
+          error: "host did not become healthy",
+          targetVersion: "1.4.0",
+          updatedAt: "2026-07-03T00:00:00.000Z",
+          writerId: `${process.pid}-abcdef`,
+        }),
+      ).toBe(false);
+    });
+
+    it("an `updating` record whose writer is this very (live) process is live", async () => {
+      const { updateProgressRecordHasLiveWriter } =
+        await import("../update-progress-marker");
+      expect(
+        updateProgressRecordHasLiveWriter({
+          state: "updating",
+          error: null,
+          targetVersion: "1.4.0",
+          updatedAt: "2026-07-03T00:00:00.000Z",
+          writerId: `${process.pid}-abcdef`,
+        }),
+      ).toBe(true);
+    });
+
+    it.skipIf(process.platform === "win32")(
+      "an `updating` record whose writer process is dead is not live",
+      async () => {
+        const { updateProgressRecordHasLiveWriter } =
+          await import("../update-progress-marker");
+        const pid = await deadPid();
+        expect(
+          updateProgressRecordHasLiveWriter({
+            state: "updating",
+            error: null,
+            targetVersion: "1.4.0",
+            updatedAt: "2026-07-03T00:00:00.000Z",
+            writerId: `${pid}-abcdef`,
+          }),
+        ).toBe(false);
+      },
+    );
+
+    it("an `updating` record with writerId null (an older CLI's marker) fails open as live - unprovable as abandoned", async () => {
+      const { updateProgressRecordHasLiveWriter } =
+        await import("../update-progress-marker");
+      expect(
+        updateProgressRecordHasLiveWriter({
+          state: "updating",
+          error: null,
+          targetVersion: "1.4.0",
+          updatedAt: "2026-07-03T00:00:00.000Z",
+          writerId: null,
+        }),
+      ).toBe(true);
+    });
+
+    it("an `updating` record with an unparseable writerId fails open as live", async () => {
+      const { updateProgressRecordHasLiveWriter } =
+        await import("../update-progress-marker");
+      expect(
+        updateProgressRecordHasLiveWriter({
+          state: "updating",
+          error: null,
+          targetVersion: "1.4.0",
+          updatedAt: "2026-07-03T00:00:00.000Z",
+          writerId: "not-a-pid",
+        }),
+      ).toBe(true);
     });
   });
 });

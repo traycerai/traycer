@@ -185,14 +185,27 @@ vi.mock("../../installer/apply", () => ({
 // restart it - and leaves a `failed` marker in the real host home when the
 // service mock cannot. Every test here that runs `host update` sees "no
 // running host" and an in-memory marker.
-vi.mock("../../host/pid-metadata", () => ({
+//
+// Both factories SPREAD the real module rather than hand-list every export:
+// a hand-listed factory silently omits whatever the module adds later, and
+// vitest throws only on ACCESS of a missing mocked export - so the gap stays
+// invisible until some other registered module imports the omission
+// (CodeRabbit r3944370766 caught `isValidLocalHostWebsocketUrl` and
+// `removeHostPidMetadata` missing here) or a new export like
+// `updateProgressRecordHasLiveWriter` lands. Overriding on top of the spread
+// keeps every export this suite does not care about wired to the real
+// implementation instead of silently `undefined`.
+vi.mock("../../host/pid-metadata", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../host/pid-metadata")>()),
   readHostPidMetadata: vi.fn(async () => null),
 }));
 
-vi.mock("../../host/update-progress-marker", () => ({
+vi.mock("../../host/update-progress-marker", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../../host/update-progress-marker")
+  >()),
   claimUpdateProgressMarkerBeforeLock: vi.fn(async () => ({
     outcome: "published",
-    displaced: null,
   })),
   createUpdateProgressMarkerIfAbsent: vi.fn(async () => "created"),
   readUpdateProgressMarker: vi.fn(async () => null),

@@ -34,6 +34,11 @@ vi.mock("../../host/update-progress-marker", () => ({
   deleteUpdateProgressMarkerIfUnchanged:
     mocks.deleteUpdateProgressMarkerIfUnchangedMock,
   replaceUpdateProgressMarkerIfUnchanged: mocks.replaceUpdateProgressMarkerMock,
+  // No writer-liveness fixture here (this suite never exercises the
+  // takeover/pre-lock-replace paths that consult it) - a `failed` has no
+  // writer by construction, everything else is treated as live.
+  updateProgressRecordHasLiveWriter: (record: HostUpdateProgress) =>
+    record.state !== "failed",
   progressRecord: (fields: {
     state: "updating" | "failed";
     error: string | null;
@@ -124,7 +129,6 @@ describe("host update explicit downgrade failure", () => {
     );
     mocks.claimUpdateProgressMarkerBeforeLockMock.mockResolvedValue({
       outcome: "published",
-      displaced: null,
     });
     mocks.replaceUpdateProgressMarkerMock.mockResolvedValue("replaced");
 
@@ -181,7 +185,6 @@ describe("host update explicit downgrade failure", () => {
     );
     mocks.claimUpdateProgressMarkerBeforeLockMock.mockResolvedValue({
       outcome: "published",
-      displaced: null,
     });
     mocks.deleteUpdateProgressMarkerIfUnchangedMock.mockResolvedValue(
       "cleared",

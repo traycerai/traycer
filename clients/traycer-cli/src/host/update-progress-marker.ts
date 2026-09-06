@@ -360,6 +360,27 @@ function progressWriterMayBeLive(record: HostUpdateProgress): boolean {
 }
 
 /**
+ * Whether some writer is still acting on the record: an `updating` whose
+ * writer process may be alive (`progressWriterMayBeLive`, fail-open). A
+ * `failed` has no writer by construction - its writer stamped it and
+ * exited - whatever its `writerId` says. This is the one predicate behind
+ * every "is this record mine to replace?" decision `host update` makes: the
+ * pre-lock claim replaces a record without a live writer and defers to one
+ * with; the takeover under the lock replaces either, but retains only a
+ * live writer's record for the restore that a busy park or a
+ * pre-disruption failure performs. A record no writer is acting on is
+ * replaced and gone, exactly as the blind publish once treated it: putting
+ * it back would re-plant a dead writer's `updating` that no one will ever
+ * clear (a host without dead-writer suppression renders it forever), or an
+ * earlier attempt's `failed` over the newer attempt's own outcome.
+ */
+export function updateProgressRecordHasLiveWriter(
+  record: HostUpdateProgress,
+): boolean {
+  return record.state !== "failed" && progressWriterMayBeLive(record);
+}
+
+/**
  * The pre-lock publish: claim the live path for `next` WITHOUT overwriting
  * an update that may be in progress.
  *
@@ -374,19 +395,17 @@ function progressWriterMayBeLive(record: HostUpdateProgress): boolean {
  * blind.
  *
  * - `published`: the path was empty and `next` is now there;
- * - `replaced-stale`: the path held a record no writer is acting on - a
- *   `failed` (its writer stamped and exited) or an `updating` whose writer
- *   process is gone - and `next` replaced it by compare-and-swap;
+ * - `replaced-stale`: the path held a record no writer is acting on
+ *   (`updateProgressRecordHasLiveWriter` false - a `failed`, or an
+ *   `updating` whose writer process is gone) and `next` replaced it by
+ *   compare-and-swap. The replaced record is gone, not kept for a later
+ *   restore: see `updateProgressRecordHasLiveWriter` for why putting it
+ *   back would be worse than the blind publish it replaces;
  * - `deferred`: the path holds another writer's live `updating`. Nothing
  *   was written; the caller runs without a marker of its own until it
  *   takes the marker over under the lock. Also the answer when concurrent
  *   writers kept winning the bounded retry - someone live is writing;
  * - `failed`: an I/O failure that landed nothing, reported by log.
- *
- * `displaced` is the record a `replaced-stale` claim replaced, returned so
- * the caller can put it back if it then does no disruptive work (a busy
- * park, a failure before the host is touched): a `failed` that was still
- * exactly true is not this run's to remove. Null for every other outcome.
  *
  * The liveness check is synchronous (`isProcessAlive`; on Windows a
  * `tasklist` spawn with a bounded timeout) and runs once per record read,
@@ -394,7 +413,6 @@ function progressWriterMayBeLive(record: HostUpdateProgress): boolean {
  */
 export interface UpdateProgressMarkerClaim {
   readonly outcome: "published" | "replaced-stale" | "deferred" | "failed";
-  readonly displaced: HostUpdateProgress | null;
 }
 
 export async function claimUpdateProgressMarkerBeforeLock(
@@ -408,20 +426,19 @@ export async function claimUpdateProgressMarkerBeforeLock(
         environment,
         next,
       );
-      if (created === "created")
-        return { outcome: "published", displaced: null };
-      if (created === "failed") return { outcome: "failed", displaced: null };
+      if (created === "created") return { outcome: "published" };
+      if (created === "failed") return { outcome: "failed" };
       continue;
     }
-    if (onDisk.state !== "failed" && progressWriterMayBeLive(onDisk)) {
-      return { outcome: "deferred", displaced: null };
+    if (updateProgressRecordHasLiveWriter(onDisk)) {
+      return { outcome: "deferred" };
     }
     const replaced = await replaceUpdateProgressMarkerIfUnchanged(
       environment,
       onDisk,
       next,
     );
-    if (replaced === "failed") return { outcome: "failed", displaced: null };
+    if (replaced === "failed") return { outcome: "failed" };
     if (replaced === "replaced") {
       createCliLogger(environment).info(
         "Host update progress marker replaced a record no writer is acting on",
@@ -432,10 +449,10 @@ export async function claimUpdateProgressMarkerBeforeLock(
           targetVersion: next.targetVersion,
         },
       );
-      return { outcome: "replaced-stale", displaced: onDisk };
+      return { outcome: "replaced-stale" };
     }
   }
-  return { outcome: "deferred", displaced: null };
+  return { outcome: "deferred" };
 }
 
 /**

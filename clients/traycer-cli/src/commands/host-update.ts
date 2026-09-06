@@ -10,6 +10,8 @@ import {
 } from "../installer/download-stage";
 import {
   claimUpdateProgressMarkerBeforeLock,
+  type ConditionalMarkerDelete,
+  type ConditionalMarkerReplace,
   createUpdateProgressMarkerIfAbsent,
   deleteUpdateProgressMarkerIfUnchanged,
   progressRecord,
@@ -17,6 +19,7 @@ import {
   replaceUpdateProgressMarkerIfUnchanged,
   type HostUpdateProgress,
   sameProgress,
+  updateProgressRecordHasLiveWriter,
 } from "../host/update-progress-marker";
 import { probeHostHealth } from "../service/health-probe";
 import {
@@ -219,26 +222,50 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
     // whatever it holds by then - by conditional replace or conditional
     // create, never by a blind write.
     const ownMarker: { current: HostUpdateProgress | null } = { current: null };
-    // The record `reassertMarkerUnderLock` displaced when it took the marker
-    // over, kept for one purpose: an exit that follows the takeover WITHOUT
-    // this run having disturbed the host - a busy park (the stop's
-    // cooperative stand-down claim can still be denied past the busy gate)
-    // or a failure before the stop - puts it back. The displaced writer's
-    // marker, or a dead writer's `failed` that may still be exactly true, is
-    // not this run's to remove when this run ends up doing nothing. The
-    // restore is not loss-free in one corner: a writer that finished while
-    // its record was displaced found the path changed, left it, and exited,
-    // so the restored record has no writer left to clear it. The host side
-    // suppresses an `updating` whose writer is dead, which is what makes
-    // the restore the lesser harm; removing the record outright would hide
-    // a live writer's whole update.
+    // A LIVE writer's record that `reassertMarkerUnderLock` displaced when
+    // it took the marker over, kept for one purpose: an exit that follows
+    // the takeover WITHOUT this run having disturbed the host - a busy park
+    // (the stop's cooperative stand-down claim can still be denied past the
+    // busy gate) or a failure before the stop - puts it back, because that
+    // writer's update is the one still in progress and removing its record
+    // would hide the whole update until its own re-assert. Only a record
+    // some writer is acting on (`updateProgressRecordHasLiveWriter`) is
+    // retained here. A record no writer is acting on - a `failed`, or an
+    // `updating` whose writer is dead - is replaced and GONE, at the
+    // pre-lock claim and at the takeover alike, exactly as the blind
+    // publish treated it: put back on a park it re-plants a dead writer's
+    // `updating` that nobody will ever clear (a host without dead-writer
+    // suppression renders it for as long as the park lives) or paints an
+    // earlier attempt's `failed` over the staged-wait park the GUI derives
+    // from the records; put back on a failure it reports the earlier
+    // attempt's cause, and target, over this run's own. The one thing a
+    // dropped `failed` could still have told a reader - an earlier
+    // attempt's post-swap probe miss, say - is carried by the records
+    // the park is derived from: a park means the host is up and answering,
+    // and the install record beside the running version is what the GUI
+    // renders as activation debt or a staged wait. That loss is accepted
+    // here, and the takeover logs the record's state and target. The
+    // restore is not loss-free in one corner: a live writer that finished
+    // while its record was displaced found the path changed, left it, and
+    // exited, so the restored record has no writer left to clear it. The
+    // host side suppresses an `updating` whose writer is dead, which is
+    // what makes that corner the lesser harm.
     const displacedMarker: { current: HostUpdateProgress | null } = {
       current: null,
     };
+    // The record as the park and failure arms consume it: retained at the
+    // takeover while its writer was live, and live STILL at the moment of
+    // the restore - otherwise treated as no record at all.
+    const liveDisplacedRecord = (
+      record: HostUpdateProgress | null,
+    ): HostUpdateProgress | null =>
+      record !== null && updateProgressRecordHasLiveWriter(record)
+        ? record
+        : null;
     // The version this run is working toward, as last announced to the
     // marker (pre-lock claim, or the re-point under the lock). Kept apart
     // from `ownMarker` because a run whose claim DEFERRED holds no record
-    // and still has a target to name if it fails after disturbing the host.
+    // and still has a target to name if it fails.
     const intendedTarget: { current: string | null } = { current: null };
     // The pre-lock publish. NOT a blind write: the path may hold the marker
     // of the updater currently holding the contender lock, mid-swap, and a
@@ -264,11 +291,9 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
         fresh,
       );
       if (claim.outcome === "published" || claim.outcome === "replaced-stale") {
+        // A stale record the claim replaced is not retained: see
+        // `displacedMarker`.
         ownMarker.current = fresh;
-        // What a stale-record replace displaced is kept for the same reason
-        // a takeover under the lock keeps it: a park or a pre-disruption
-        // failure puts it back.
-        displacedMarker.current = claim.displaced;
         return;
       }
       ownMarker.current = null;
@@ -306,7 +331,10 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
     // write wins that round and is read again; nothing is ever overwritten
     // blind. The displaced updater's later stamp/clear are CAS'd against ITS
     // record and degrade to no-ops - correct, because the marker now
-    // describes the update that is actually in progress.
+    // describes the update that is actually in progress. A displaced record
+    // whose writer is live is retained in `displacedMarker` for the restore
+    // a park or a pre-disruption failure performs; one no writer is acting
+    // on is gone (see `displacedMarker`).
     //
     // WHEN it runs matters as much as what it does: every arm calls it only
     // once that arm has committed to the disruptive half - after the apply's
@@ -343,9 +371,12 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
           if (replaced === "replaced") {
             ownMarker.current = fresh;
             if (!isOwn) {
-              displacedMarker.current = onDisk;
+              const writerLive = updateProgressRecordHasLiveWriter(onDisk);
+              displacedMarker.current = writerLive ? onDisk : null;
               ctx.runtime.logger.info(
-                "Host update took over the progress marker under the lock - its writer is not doing disruptive work",
+                writerLive
+                  ? "Host update took over the progress marker under the lock - its writer is not doing disruptive work"
+                  : "Host update replaced the progress marker under the lock - no writer is acting on it",
                 {
                   environment,
                   targetVersion,
@@ -414,17 +445,18 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
     let activationAttempted = false;
     // Whether this run has begun to disturb the host: the stop before a swap
     // (or a swap with no service to stop), or the activation arm's stop. It
-    // decides what a failure AFTER a marker takeover leaves behind. Before
-    // this point the host is exactly as the displaced writer left it, so its
-    // record goes back (a `failed` stamped there would stand over that
-    // writer's live update, which could never repair it - its stamp and
-    // clear CAS against a record that is gone). From this point on the
-    // host's state is this run's doing, and its `failed` is the truth the
-    // next updater takes over in turn. The apply and downgrade arms report
-    // the boundary through the progress stream - `commitInstallFromSource`
-    // emits `service-stop` immediately before the stop and `swap` before
-    // the rename - and the activation arm's hook runs immediately before
-    // its stop (see `reassertMarkerThenDisrupt` for the one check between).
+    // decides what a failure AFTER a takeover of a LIVE writer's marker
+    // leaves behind. Before this point the host is exactly as the displaced
+    // writer left it, so its record goes back (a `failed` stamped there
+    // would stand over that writer's live update, which could never repair
+    // it - its stamp and clear CAS against a record that is gone). From
+    // this point on the host's state is this run's doing, and its `failed`
+    // is the truth the next updater takes over in turn. The apply and
+    // downgrade arms report the boundary through the progress stream -
+    // `commitInstallFromSource` emits `service-stop` immediately before the
+    // stop and `swap` before the rename - and the activation arm's hook
+    // runs immediately before its stop (see `reassertMarkerThenDisrupt` for
+    // the one check between).
     let disruptionStarted = false;
     const reportProgress = (info: ProgressInfo): void => {
       if (info.stage === "service-stop" || info.stage === "swap") {
@@ -620,68 +652,146 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
         // staged-and-waiting - from the records, and the marker's job is only
         // to get out of the way. Withdrawn CONDITIONALLY, like the clear
         // below: a newer updater's marker is not this run's to remove. And
-        // a marker this run took over under the lock is put BACK rather than
-        // removed: the park means this run did no disruptive work after all,
-        // so the record it displaced - another updater's live `updating`, or
-        // a `failed` whose failure may still be exactly true - is what the
-        // path should hold.
+        // a LIVE writer's marker this run took over under the lock is put
+        // BACK rather than removed: the park means this run did no
+        // disruptive work after all, so that writer's `updating` is what
+        // the path should hold. A stale record this run replaced is not put
+        // back (see `displacedMarker`): the path is left empty, and the
+        // GUI derives the park from the records.
         if (ownMarker.current !== null) {
-          const displaced = displacedMarker.current;
-          const withdrawn =
-            displaced === null
-              ? await deleteUpdateProgressMarkerIfUnchanged(
-                  environment,
-                  ownMarker.current,
-                )
-              : await replaceUpdateProgressMarkerIfUnchanged(
-                  environment,
-                  ownMarker.current,
-                  displaced,
-                );
-          ctx.runtime.logger.info(
-            displaced === null
-              ? "Host update parked - the host has work in progress; the progress marker was withdrawn"
-              : "Host update parked - the host has work in progress; the progress marker it took over was restored to its previous writer",
-            { environment, withdrawn },
-          );
+          // Liveness is re-read HERE, not trusted from the takeover: the
+          // displaced writer had the whole stop attempt to die in between,
+          // and a park that restored its now-dead `updating` would re-plant
+          // exactly the record the retain rule exists to drop.
+          const displaced = liveDisplacedRecord(displacedMarker.current);
+          if (displaced === null) {
+            const withdrawn = await deleteUpdateProgressMarkerIfUnchanged(
+              environment,
+              ownMarker.current,
+            );
+            logConditionalMarkerOutcome(ctx.runtime.logger, environment, {
+              outcome: withdrawn,
+              done: "Host update parked - the host has work in progress; the progress marker was withdrawn",
+              moved:
+                "Host update parked - the host has work in progress; the progress marker was left in place - another updater owns it now",
+              gone: "Host update parked - the host has work in progress; found no progress marker to withdraw",
+              failed:
+                "Host update parked - the host has work in progress; its progress marker could not be withdrawn and stays until the next update supersedes it",
+            });
+          } else {
+            const restored = await replaceUpdateProgressMarkerIfUnchanged(
+              environment,
+              ownMarker.current,
+              displaced,
+            );
+            logConditionalMarkerOutcome(ctx.runtime.logger, environment, {
+              outcome: restored,
+              done: "Host update parked - the host has work in progress; the progress marker it took over was restored to its previous writer",
+              moved:
+                "Host update parked - the host has work in progress; the progress marker it took over was not restored - another updater owns it now",
+              gone: "Host update parked - the host has work in progress; the progress marker it took over was not restored - the path is empty",
+              failed:
+                "Host update parked - the host has work in progress; the progress marker it took over could not be restored and stays until the next update supersedes it",
+            });
+          }
         }
         throw err;
       }
       if (ownMarker.current === null) {
-        // No record of this run's on disk (the pre-lock claim deferred, or
-        // no conditional write ever landed). A failure BEFORE the host was
-        // disturbed then has nothing to report on the marker - the update
-        // it deferred to is the one in progress. A failure AFTER is this
-        // run's doing and must be visible remotely: `markUpdateFailed`
-        // lands it into an EMPTY path only, never over a live record.
-        if (disruptionStarted) {
+        // No record of this run's on disk (the pre-lock claim deferred to
+        // another writer's live marker, or no conditional write ever
+        // landed). The failure is still this run's to report whenever it
+        // announced a target: `markUpdateFailed` with no record lands the
+        // `failed` by create-if-absent, into an EMPTY path only. While the
+        // other writer's marker is still live that is the no-op it should
+        // be - its update is the one in progress - but that writer may have
+        // finished and cleared while this run was still downloading, and
+        // a lost download then has nothing on the path to defer to. A run
+        // that never announced a target (failed before `onWillDownload`)
+        // has nothing to name and stamps nothing, as before.
+        // ...unless the host is already RUNNING that target: the other
+        // writer's update to the same version succeeded while this one was
+        // still downloading (its reconcile consumed the shared stage, which
+        // is the usual way this download fails), and "update to X failed"
+        // over a host that is serving X reports a failure that did not
+        // happen - persistently, since only a later no-work `host update`
+        // reconciles a stale `failed`, and only a host with target-running
+        // suppression hides it. Same observed-state rule as
+        // `clearStaleFailedMarker`.
+        if (
+          intendedTarget.current !== null &&
+          !(await targetObservedRunning(environment, intendedTarget.current))
+        ) {
           await markUpdateFailed(
             ctx.runtime.logger,
             environment,
-            // Every arm announces its target before it can disturb the host,
-            // so this is set whenever `disruptionStarted` is; the fallback
-            // is a type-level courtesy, not a reachable branch.
-            intendedTarget.current ?? "unknown",
+            intendedTarget.current,
             err instanceof Error ? err.message : String(err),
             null,
           );
+        } else if (intendedTarget.current !== null) {
+          ctx.runtime.logger.info(
+            "Host update did not stamp its failure - the running host has been observed at the target it announced",
+            { environment, targetVersion: intendedTarget.current },
+          );
         }
       } else {
-        const displaced = displacedMarker.current;
+        // Liveness re-read here for the same reason as in the park arm.
+        const displaced = liveDisplacedRecord(displacedMarker.current);
         if (displaced !== null && !disruptionStarted) {
-          // Failed after taking the marker over but before touching the
-          // host (a lost mutation capability, a stop that could not be
-          // issued): the host is as the displaced writer left it, and so is
-          // its marker. See `disruptionStarted`.
+          // Failed after taking a LIVE writer's marker over but before
+          // touching the host (a lost mutation capability, a stop that
+          // could not be issued): the host is as that writer left it, and
+          // so is its marker. See `disruptionStarted`. Every other failure
+          // with a record of this run's on disk - a lost download over a
+          // stale record the claim replaced included - stamps this run's
+          // own cause over its own record: a retry's second failure
+          // reports the second failure, not the first.
           const restored = await replaceUpdateProgressMarkerIfUnchanged(
             environment,
             ownMarker.current,
             displaced,
           );
-          ctx.runtime.logger.info(
-            "Host update failed before disturbing the host; the progress marker it took over was restored to its previous writer",
-            { environment, restored },
+          logConditionalMarkerOutcome(ctx.runtime.logger, environment, {
+            outcome: restored,
+            done: "Host update failed before disturbing the host; the progress marker it took over was restored to its previous writer",
+            moved:
+              "Host update failed before disturbing the host; the progress marker it took over was not restored - another updater owns it now",
+            gone: "Host update failed before disturbing the host; the progress marker it took over was not restored - the path is empty",
+            failed:
+              "Host update failed before disturbing the host; the progress marker it took over could not be restored and stays until the next update supersedes it",
+          });
+        } else if (
+          !disruptionStarted &&
+          (await targetObservedRunning(
+            environment,
+            ownMarker.current.targetVersion,
+          ))
+        ) {
+          // Same observed-state rule as the null arm above, reached with a
+          // record of this run's own on disk: an actor that writes no
+          // marker at all - `host apply --no-service`, Desktop's launch
+          // converge - can commit and activate the very target this run
+          // announced underneath its live `updating`, consuming the shared
+          // stage its download then fails on. The record describes an
+          // update another actor completed, so it is WITHDRAWN, not
+          // stamped: "update to X failed" over a host serving X is the
+          // false report the rule exists to withhold. Pre-disruption only:
+          // past the stop, the host's state is this run's doing and its
+          // failure is reported whatever the host now serves.
+          const withdrawn = await deleteUpdateProgressMarkerIfUnchanged(
+            environment,
+            ownMarker.current,
           );
+          logConditionalMarkerOutcome(ctx.runtime.logger, environment, {
+            outcome: withdrawn,
+            done: "Host update failed before disturbing the host, and the running host has been observed at the target it announced; the progress marker was withdrawn",
+            moved:
+              "Host update failed before disturbing the host, and the running host has been observed at the target it announced; the progress marker was left in place - another updater owns it now",
+            gone: "Host update failed before disturbing the host, and the running host has been observed at the target it announced; found no progress marker to withdraw",
+            failed:
+              "Host update failed before disturbing the host, and the running host has been observed at the target it announced; its progress marker could not be withdrawn and stays until the next update supersedes it",
+          });
         } else {
           await markUpdateFailed(
             ctx.runtime.logger,
@@ -815,14 +925,16 @@ interface ActivationDebt {
  *   version. A record WITH a runtime stamp never reads this way: the stamp is
  *   whatever the archive reported about itself (a staging host's is
  *   `staging.<epoch>.<sha>`), and equality with it is the whole test;
- * - `activated`: the committed archive is what is running;
+ * - `activated`: the committed archive is what is running, carrying the
+ *   record's catalog `version` so a caller can ask WHICH archive
+ *   (`targetObservedRunning`; the other readers only ask whether);
  * - `debt`: the record and the process disagree.
  */
 type ActivationReading =
   | { readonly kind: "no-install" }
   | { readonly kind: "no-live-host"; readonly installedVersion: string }
   | { readonly kind: "foreign-runtime" }
-  | { readonly kind: "activated" }
+  | { readonly kind: "activated"; readonly installedVersion: string }
   | ActivationDebt;
 
 /**
@@ -885,7 +997,7 @@ async function readActivationState(
     // comparison would classify every staging host as foreign and turn both
     // its activated and its indebted states into no-ops.
     return running.version === installed.runtimeVersion
-      ? { kind: "activated" }
+      ? { kind: "activated", installedVersion: installed.version }
       : {
           kind: "debt",
           installedVersion: installed.version,
@@ -898,13 +1010,42 @@ async function readActivationState(
   if (!isValidHostVersion(running.version)) return { kind: "foreign-runtime" };
   const comparison = compareHostVersions(running.version, installed.version);
   if (!comparison.comparable || comparison.ordering === "equal") {
-    return { kind: "activated" };
+    return { kind: "activated", installedVersion: installed.version };
   }
   return {
     kind: "debt",
     installedVersion: installed.version,
     runningVersion: running.version,
   };
+}
+
+/**
+ * Whether the running host has been OBSERVED serving `targetVersion`: the
+ * install record names it and the live process is at the record
+ * (`readActivationState` → `activated`, with its identity verdict). Used by
+ * the failure path of a run that holds no marker of its own to withhold a
+ * `failed` for a target another updater has since delivered. Never throws:
+ * a reading that cannot be taken is "not observed", and the stamp lands -
+ * a failure that cannot be contradicted is reported, not swallowed.
+ */
+async function targetObservedRunning(
+  environment: Environment,
+  targetVersion: string,
+): Promise<boolean> {
+  try {
+    const reading = await readActivationState(environment);
+    if (reading.kind !== "activated") return false;
+    // The catalog-domain comparator `readActivationState` itself uses, not
+    // `===`: it ignores build metadata, so `1.3.0+abc` and `1.3.0` are one
+    // release to it and must be one release here.
+    const comparison = compareHostVersions(
+      reading.installedVersion,
+      targetVersion,
+    );
+    return comparison.comparable && comparison.ordering === "equal";
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -1030,7 +1171,7 @@ async function activateInstalledAndProjectLegacy(
     // not before: the caller takes the progress marker over here, and a park
     // must not follow a takeover for work never done. The stop below is the
     // only thing that can still park, and the caller's park path restores
-    // the displaced record for that case.
+    // a live writer's displaced record for that case.
     await onInstalledVersionUnderLock(installed.version);
     // The stop → relaunch pair `host restart` drives, with `force` threaded
     // into the stop half. The busy gate above is only the pre-check: on a
@@ -1110,6 +1251,41 @@ function downloadTargetVersion(outcome: HostDownloadOutcome): string {
     : outcome.targetVersion;
 }
 
+/**
+ * One log line per conditional-marker outcome, so a withdrawal or restore
+ * that did NOT happen is never reported as if it had: `cleared` /
+ * `replaced` is the operation done; `changed` is a record that moved under
+ * this run (another updater's, left alone); `absent` (a delete only) is a
+ * path already empty, nothing left to report on; `failed` is an I/O
+ * failure the marker layer already warned about, named here so the
+ * CLI's own log shows why a marker outlived the run that wrote it. All
+ * INFO: none of these fails the update, and the marker layer owns the WARN.
+ * (`replaceUpdateProgressMarkerIfUnchanged` reports an empty path as
+ * `changed`, so `gone` is reachable from the delete sites only.)
+ */
+function logConditionalMarkerOutcome(
+  logger: ILogger,
+  environment: Environment,
+  lines: {
+    readonly outcome: ConditionalMarkerDelete | ConditionalMarkerReplace;
+    readonly done: string;
+    readonly moved: string;
+    readonly gone: string;
+    readonly failed: string;
+  },
+): void {
+  const { outcome } = lines;
+  const message =
+    outcome === "cleared" || outcome === "replaced"
+      ? lines.done
+      : outcome === "failed"
+        ? lines.failed
+        : outcome === "absent"
+          ? lines.gone
+          : lines.moved;
+  logger.info(message, { environment, outcome });
+}
+
 // Terminates the "updating" marker with the real cause so the daemon reports
 // a failed update instead of an update that appears to still be running.
 /**
@@ -1125,10 +1301,20 @@ function downloadTargetVersion(outcome: HostDownloadOutcome): string {
  * still reported by exit code and log. `ours` is `null` when this run has no
  * record of its own on disk - the pre-lock claim deferred to another
  * writer's live marker, or no conditional write ever landed - and the
- * caller asks for a stamp anyway only when it DID disturb the host: the
- * failure is then real and must reach the remote surfaces, so it lands by
- * create-if-absent - into an empty path only, never over a live record,
- * which is the one blind write the conditional primitives exist to refuse.
+ * failure is still this run's to report, so it lands by create-if-absent -
+ * into a path that READS empty. Against another writer's live marker that
+ * is the correct no-op; against the empty path that writer's clear left
+ * behind, it is the only record of what went wrong. One residual race is
+ * accepted and named: create-if-absent has no record to compare against,
+ * so it cannot tell an empty path from the few milliseconds in which
+ * another writer's conditional swap holds ITS record in scratch (see
+ * `replaceUpdateProgressMarkerIfUnchanged`, which maps that same "absent"
+ * reading to `changed` for exactly this reason). A stamp that lands in that
+ * window wins the other writer's `link` with EEXIST; its swap reports
+ * `failed`, warned about by the marker layer, and this run's `failed`
+ * stands until the next update supersedes it. The caller narrows the
+ * window's cost by not stamping at all when the running host has been
+ * observed at the very target this run announced (`targetObservedRunning`).
  * A stamp over a TAKEN-OVER record is right when it happens: this run did
  * the disruptive work, so its failure is the host's current state, and the
  * next updater takes the `failed` over in turn.

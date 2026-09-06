@@ -1229,11 +1229,15 @@ describe("HostOverviewOperationCard — installation query keyed by running vers
     vi.useRealTimers();
   });
 
-  it("a failed installation read hides the record-derived facts", async () => {
-    // Falsification: remove `|| installationQuery.isError` from the
-    // `legacyFacts` gate in `host-overview-panel.tsx` and the card keeps
-    // showing the LAST successful record's debt through a read that has
-    // since started failing.
+  it("a failed installation read withdraws the activation-debt park and its Restart - the status leg alone is projected", async () => {
+    // Falsification: drop `!installationLive` from the `legacyFacts`
+    // derivation in `host-overview-panel.tsx` (back to a bare data check)
+    // and the card keeps showing the LAST successful record's debt, with a
+    // live Restart, through a read that has since started failing.
+    // `canonicalReadIsLive` withdraws on `isError` too, so this pin
+    // exercises that arm specifically; the "activation debt + staged wait:
+    // an UNUSABLE scope…" pin above exercises the status-leg demotion via
+    // `usable`, which is the one that keeps a qualified sentence.
     vi.useFakeTimers({ shouldAdvanceTime: true });
     let installationCalls = 0;
     const fixture = buildOverviewHostFixture({
@@ -1257,21 +1261,315 @@ describe("HostOverviewOperationCard — installation query keyed by running vers
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
-    // Debt visible: record rc.3 ahead of the running rc.2.
+    // Debt visible: record rc.3 ahead of the running rc.2 - live, unqualified.
     await screen.findByTestId("host-overview-operation-restart");
+    expect(
+      screen.getByTestId("host-overview-operation-card").textContent,
+    ).not.toContain("Last seen:");
 
     // The next installation poll throws - the status read keeps succeeding
-    // beside it, so this failure is the installation leg's alone.
+    // beside it, so this failure is the installation leg's alone. The
+    // record leg is WITHDRAWN, not demoted: `host.status` reports no
+    // operation, so with no facts there is nothing for the card to show -
+    // no "Last seen" sentence, no Restart. (An UNUSABLE scope is the case
+    // that keeps the sentence qualified; that demotion travels through the
+    // status leg - see the unusable-scope pins. Expiring the whole
+    // observation here instead would demote a live attempt on one failed
+    // record read.)
     await vi.advanceTimersByTimeAsync(11_000);
     await waitFor(() => expect(installationCalls).toBe(2));
     await waitFor(() => {
       expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
     });
+    expect(screen.queryByTestId("host-overview-operation-restart")).toBeNull();
 
-    // The next successful poll brings the debt card back.
+    // The next successful poll restores the live park and its control.
     await vi.advanceTimersByTimeAsync(11_000);
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("host-overview-operation-phase").textContent,
+      ).toBe("Update installed — restart host to finish");
+    });
     await screen.findByTestId("host-overview-operation-restart");
 
     vi.useRealTimers();
+  });
+
+  it("a failed installation read withdraws the staged-wait park and Force update…, not merely the debt row", async () => {
+    // The sibling of the activation-debt pin above, for the OTHER row
+    // `legacyFacts` feeds: `deriveLegacyUpdateFacts` computes `activationDebt`
+    // and `stagedWait` off the SAME object, so an isError read must withdraw
+    // both, not just whichever one an earlier pin happened to check.
+    // `host.status` keeps answering the whole time - the busy/session-count
+    // sentence and the Force offer both come from ONE `legacyFacts`
+    // derivation, so this is still the installation leg's own
+    // `!installationLive` gate, not a `host.status`-side demotion (the
+    // production doc's other two `canonicalReadIsLive` arms - `paused` and
+    // `isStale` - are exercised directly against the function in
+    // `canonical-status-observation.test.ts`; this app's queries run with
+    // `networkMode: "always"`, so a real installation-read outage always
+    // surfaces as `isError` here, per the production comment above
+    // `installationLive`).
+    //
+    // Falsification: drop `!installationLive` from the `legacyFacts`
+    // derivation and the card keeps offering Force update… through a read
+    // that has started failing.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let installationCalls = 0;
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.3.0-rc.2",
+      overrideHandlers: {
+        "host.status": () =>
+          statusWithBusy("1.3.0-rc.2", { kind: "none" }, true, 2),
+        "host.getInstallationInfo": () => {
+          installationCalls += 1;
+          if (installationCalls === 2) {
+            throw new Error("host unreachable");
+          }
+          return managedInstallation(
+            installRecord("1.3.0-rc.2", "1.3.0-rc.2"),
+            stagedRecord("1.3.0-rc.3"),
+          );
+        },
+        "host.update.check": () => ({
+          outcome: "ok" as const,
+          effectiveIncludePreReleases: true,
+          includePreReleasesSource: "explicit-include" as const,
+          manifest: clearStagedManifest("1.3.0-rc.3"),
+        }),
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    // Positive control: the installation read is fresh, the staged-wait
+    // park and Force update… both show, live and unqualified.
+    await screen.findByTestId("host-overview-operation-force-update");
+    expect(
+      screen.getByTestId("host-overview-operation-phase").textContent,
+    ).toBe("Update will continue when 2 sessions finish");
+
+    // The next installation poll throws - `host.status` keeps succeeding
+    // beside it, so this failure is the installation leg's alone. The
+    // sentence is retained and qualified; Force update… is withdrawn.
+    await vi.advanceTimersByTimeAsync(11_000);
+    await waitFor(() => expect(installationCalls).toBe(2));
+    // Withdrawn, not demoted - see the sibling pin above.
+    await waitFor(() => {
+      expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
+    });
+    expect(
+      screen.queryByTestId("host-overview-operation-force-update"),
+    ).toBeNull();
+
+    // The next successful poll restores the live park and Force update….
+    await vi.advanceTimersByTimeAsync(11_000);
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("host-overview-operation-phase").textContent,
+      ).toBe("Update will continue when 2 sessions finish");
+    });
+    await screen.findByTestId("host-overview-operation-force-update");
+
+    vi.useRealTimers();
+  });
+
+  it("an OPEN force-update offer stays open while the installation read is merely unobserved - only an OBSERVED record leg that drops the stage closes it", async () => {
+    // Companion to "(c4)" (which closes the dialog on `!usable`): a demoted
+    // installation read is a DIFFERENT signal from scope reachability. The
+    // panel's close guard is `legacyFacts !== null && stagedVersion
+    // mismatch` - an unobserved read (`legacyFacts === null`) fails that
+    // first clause and leaves the dialog alone, because "we don't know
+    // right now" is not "the stage is gone".
+    //
+    // "Unobserved" is `installationQuery.data === undefined` - which, per
+    // the production comment above `installationLive`
+    // (`host-overview-panel.tsx`), only arises on first load or when the
+    // RUNNING version moves and the install query re-keys onto a fresh,
+    // still-pending read (`cacheKeyIdentity: [runningVersion]`). A read that
+    // has merely started failing is NOT this: `canonicalReadIsLive` demotes
+    // it, but the cache still carries its last successful payload, so
+    // `legacyFacts` stays non-null (retained) - the case the sibling pins
+    // above pin as a DEMOTION of the sentence, not an absence of facts. This
+    // pin therefore drives "unobserved" through a running-version bump
+    // whose fresh key is left pending, not through an `isError` read.
+    //
+    // Falsification: drop the `legacyFacts !== null` guard (close whenever
+    // `(legacyFacts?.stagedWait ?? null)?.stagedVersion !== offer.stagedVersion`,
+    // treating null facts as a mismatch) and the dialog closes as soon as
+    // the running version moves, before the fresh read ever answers.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let statusCalls = 0;
+    let installationCalls = 0;
+    const secondRead = deferredInstallationResponse();
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      overrideHandlers: {
+        "host.status": () => {
+          statusCalls += 1;
+          return statusWithBusy(
+            statusCalls === 1 ? "1.3.0-rc.2" : "1.3.0-rc.3",
+            { kind: "none" },
+            true,
+            2,
+          );
+        },
+        "host.getInstallationInfo": () => {
+          installationCalls += 1;
+          if (installationCalls === 1) {
+            return managedInstallation(
+              installRecord("1.3.0-rc.2", "1.3.0-rc.2"),
+              stagedRecord("1.3.0-rc.3"),
+            );
+          }
+          // The running version moved (rc.2 -> rc.3) - the install query
+          // re-keys onto a fresh key with no cached data, and this read is
+          // left pending: "not observed", not failed.
+          return secondRead.promise;
+        },
+        "host.update.check": () => ({
+          outcome: "ok" as const,
+          effectiveIncludePreReleases: true,
+          includePreReleasesSource: "explicit-include" as const,
+          manifest: clearStagedManifest("1.3.0-rc.3"),
+        }),
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    fireEvent.click(
+      await screen.findByTestId("host-overview-operation-force-update"),
+    );
+    await screen.findByTestId("host-busy-force-defer-dialog");
+
+    // The next `host.status` poll reports the running version moved - the
+    // install query re-keys onto a fresh, still-pending read. The dialog
+    // stays open through it.
+    await vi.advanceTimersByTimeAsync(11_000);
+    await waitFor(() => expect(installationCalls).toBe(2));
+    // Give any (incorrect) close a render cycle to have taken effect
+    // before asserting the dialog is still there.
+    await waitFor(() => {
+      expect(screen.getByTestId("host-busy-force-defer-dialog")).toBeTruthy();
+    });
+
+    // The pending read now answers - an OBSERVED record leg, under the new
+    // running version, that no longer carries the offer's stage. THIS is
+    // what closes the dialog.
+    await act(async () => {
+      secondRead.resolve(
+        managedInstallation(installRecord("1.3.0-rc.3", "1.3.0-rc.3"), null),
+      );
+      await secondRead.promise;
+    });
+    await waitFor(() => {
+      expect(screen.queryByTestId("host-busy-force-defer-dialog")).toBeNull();
+    });
+
+    vi.useRealTimers();
+  });
+});
+
+// `HostOverviewOperationCard` — `onForceRestart` (an ATTEMPT park's Force
+// restart…, as opposed to a legacy staged wait's Force update…): gated on
+// `legacyFacts !== null && legacyFacts.stagedWait === null` in
+// `host-overview-panel.tsx` - an attempt park offers no route to activate a
+// stage the records still describe, and an UNOBSERVED record leg does not
+// vouch that no stage waits either.
+describe("HostOverviewOperationCard — onForceRestart (attempt park)", () => {
+  function attemptParkStatus(
+    busySessionCount: number,
+  ): ResponseOfMethod<HostRpcRegistry, "host.status"> {
+    return statusWith(
+      attemptOperation({
+        phase: "waiting-for-work",
+        execution: "active",
+        liveness: "active",
+        busySessionCount,
+      }),
+    );
+  }
+
+  it("an attempt park with an UNOBSERVED installation read offers no Force restart…", async () => {
+    // Falsification: drop the `legacyFacts !== null` half of the gate
+    // (offer whenever `stagedWait === null`, treating an unobserved read as
+    // "no stage") and the button below appears despite the installation
+    // read never having answered.
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.5.0",
+      overrideHandlers: {
+        "host.status": () => attemptParkStatus(2),
+        // Never answers - `legacyFacts` stays "not observed" (`undefined`
+        // data), same gate `installationQuery.data === undefined` already
+        // gives it, no isError/isStale needed to prove this half.
+        "host.getInstallationInfo": () => new Promise(() => {}),
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    await screen.findByTestId("host-overview-operation-card");
+    expect(
+      screen.queryByTestId("host-overview-operation-force-restart"),
+    ).toBeNull();
+  });
+
+  it("an attempt park with an OBSERVED installation read carrying no staged wait offers Force restart…", async () => {
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.5.0",
+      // Default `host.getInstallationInfo` answers `{status: "unmanaged"}` -
+      // an OBSERVED read whose `deriveLegacyUpdateFacts` carries a null
+      // `stagedWait` (nothing to force-activate a stage into).
+      overrideHandlers: {
+        "host.status": () => attemptParkStatus(2),
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    await screen.findByTestId("host-overview-operation-force-restart");
+  });
+
+  it("an attempt park with an OBSERVED staged wait offers no Force restart… - Restart cannot activate a stage", async () => {
+    // The staged wait is a LEGACY fact from the records, independent of
+    // this attempt's own park - Force restart would relaunch the host
+    // without ever installing what the stage still waits to apply.
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.5.0",
+      installation: managedInstallation(
+        installRecord("1.5.0", "1.5.0"),
+        stagedRecord("1.6.0"),
+      ),
+      overrideHandlers: {
+        "host.status": () => attemptParkStatus(2),
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    await screen.findByTestId("host-overview-operation-card");
+    expect(
+      screen.queryByTestId("host-overview-operation-force-restart"),
+    ).toBeNull();
   });
 });

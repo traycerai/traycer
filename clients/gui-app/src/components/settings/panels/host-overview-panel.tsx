@@ -80,7 +80,10 @@ import {
   projectFleetUpdateView,
   UNKNOWN_FLEET_UPDATE_VIEW,
 } from "@/lib/host/fleet-update/fleet-update-view";
-import { observationFromCanonicalRead } from "@/lib/host/fleet-update/canonical-status-observation";
+import {
+  canonicalReadIsLive,
+  observationFromCanonicalRead,
+} from "@/lib/host/fleet-update/canonical-status-observation";
 import { deriveLegacyUpdateFacts } from "@/lib/host/fleet-update/legacy-update-facts";
 import { useActiveUpdatePollAccelerator } from "@/hooks/host/use-active-update-poll-accelerator";
 import {
@@ -543,14 +546,45 @@ export function HostOverviewPanel(props: {
   // Two reads, one snapshot: the installation query is keyed by the running
   // version the status read reported (`useHostInstallationInfoQuery`), so a
   // record fetched under the previous version is never compared against the
-  // new one - it is a different key with no data yet. And a read that has
-  // FAILED keeps its last payload in the cache; a comparison built on it
-  // would carry the status read's freshness while the record leg is
-  // anyone's guess, so it is "not observed" until the next poll answers.
+  // new one - it is a different key with no data yet. And the record leg is
+  // held to the SAME liveness rule the status leg is projected under
+  // (`canonicalReadIsLive` - not "has not failed" alone, and not a second
+  // staleness rule with its own timestamp arithmetic): a read that has
+  // failed, is paused, or has aged past its own staleness keeps its last
+  // payload in the cache, and a comparison built on it would carry the
+  // status read's freshness while the record leg is anyone's guess - a park
+  // derived from a record the host has since consumed or purged, still
+  // offering Force for a stage that is gone. Such a read yields NO facts:
+  // the parks it fed are withdrawn, the offers keyed on them with them,
+  // and the projector falls through to whatever the status leg says. The
+  // demotion is scoped to the record leg on purpose. Expiring the whole
+  // observation instead would demote a live attempt the status leg is
+  // reporting - progress bar, lifecycle gate, fast poll - on one failed
+  // `host.getInstallationInfo` poll, which is likeliest exactly during the
+  // swap; the record leg feeds only the two record-derived rows, so only
+  // those go. An in-flight refetch is live under the shared rule, and a
+  // request whose response never arrives ends as an error rather than as
+  // an indefinitely retained payload - each attempt is bounded by the
+  // transport's 30 s response timeout (`DEFAULT_HOST_RPC_FRAME_TIMEOUT_MS`
+  // on the local leg, `UNARY_RESPONSE_TIMEOUT_MS` on the remote one) and
+  // the query client retries once, so a silent poll withdraws after about
+  // a minute. (`paused` is part of the shared rule; this app's queries run
+  // with `networkMode: "always"`, so it does not arise here.) The source
+  // here is the query's own enablement, not the scope's: an unusable scope
+  // demotes the whole observation through the status leg already and keeps
+  // its retained sentence qualified, whereas a support flip that disables
+  // the query over a cached payload would otherwise read as live forever -
+  // a disabled query never ages (`isStale` is false while `enabled` is).
+  const installationLive = canonicalReadIsLive({
+    isError: installationQuery.isError,
+    fetchStatus: installationQuery.fetchStatus,
+    isStale: installationQuery.isStale,
+    hasLiveSource: installInfoDegrade === null,
+  });
   const legacyFacts =
     statusQuery.data === undefined ||
     installationQuery.data === undefined ||
-    installationQuery.isError
+    !installationLive
       ? null
       : deriveLegacyUpdateFacts({
           installation: installationQuery.data,
@@ -749,6 +783,11 @@ export function HostOverviewPanel(props: {
     runningVersion: view.hostVersion,
     activationDebt: legacyFacts?.activationDebt ?? null,
     platformKey: host?.platform ?? null,
+    // Deliberately NOT held to `installationLive`: the manifest describes
+    // the CLI installed on the host - a property of the installation, not
+    // of its stage - and the floor remedy it feeds belongs to Update now as
+    // much as to Force. The Force offer itself is gated through
+    // `stagedVersion`, which comes from the observed record leg only.
     cliManifest:
       managedInstallation(installationQuery.data)?.cliManifest ?? null,
     isLocalMachine: host?.isLocalMachine ?? false,
@@ -788,9 +827,17 @@ export function HostOverviewPanel(props: {
   // actor, or the host went idle and the next run is about to take it. A
   // force over a stage that no longer waits would install something the
   // dialog never described.
+  // "Gone" means OBSERVED gone: a record leg that is not live (`legacyFacts`
+  // null - not answered yet, failed, or aged) says nothing about the stage,
+  // and an open confirm closing itself on a poll that merely aged is the
+  // defect `canonicalReadIsLive` was written against. The one window this
+  // leaves - the running version moved, which re-keys the installation
+  // query and is itself evidence the stage was consumed - is closed by the
+  // `!usable` rule below: a restarted host drops reachability first.
   if (
     forceUpdateOffer !== null &&
-    (legacyFacts?.stagedWait ?? null)?.stagedVersion !==
+    legacyFacts !== null &&
+    (legacyFacts.stagedWait?.stagedVersion ?? null) !==
       forceUpdateOffer.stagedVersion
   ) {
     setForceUpdateOffer(null);
@@ -1051,15 +1098,17 @@ export function HostOverviewPanel(props: {
             view={operationView}
             hostName={displayName}
             // Restart cannot activate a stage. A floor gate must not turn a
-            // staged wait's Force update into a different, ineffective force.
+            // staged wait's Force update into a different, ineffective force
+            // - and a record leg that is not live does not vouch that no
+            // stage waits, so it offers nothing either.
             onForceRestart={
-              (legacyFacts?.stagedWait ?? null) !== null
-                ? null
-                : () => {
+              legacyFacts !== null && legacyFacts.stagedWait === null
+                ? () => {
                     // Attempt parks keep the existing cooperative restart
                     // confirmation and its fresh live-work check.
                     setRestartConfirmOpen(true);
                   }
+                : null
             }
             // Keyed on the FACT, not the view kind: a retained `failed`
             // marker beside real debt keeps its failure text and still gets

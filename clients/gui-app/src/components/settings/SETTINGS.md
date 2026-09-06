@@ -2389,7 +2389,30 @@ aria-live="polite"` carrying the equivalent text for
       newer than what is already on disk. Because the facts live in records
       that change under a mounted page, `host.getInstallationInfo` polls at the
       `host.status` cadence (10s) and an accepted install invalidates it beside
-      `host.status`. The Overview is the only leg that derives: the landing
+      `host.status`. The record leg is held to the SAME liveness rule the
+      status leg is projected under (`canonicalReadIsLive`: not errored, not
+      paused, not aged past its staleness while not fetching, and the query
+      itself enabled) - not "has not failed" alone, and not a second
+      staleness rule with its own timestamp arithmetic: a read that is not
+      live yields NO facts, so the two record-derived rows and every offer
+      keyed on them (Restart on the debt fact, the installed-version
+      comparison under debt, Force update… and the confirm it opens) are
+      withdrawn until the next live read, and the projector falls through
+      to the status leg. The withdrawal is scoped to the record leg on
+      purpose: expiring the whole observation would demote a live attempt
+      the status leg is reporting (progress bar, lifecycle gate, fast poll)
+      on one failed `host.getInstallationInfo` poll - likeliest exactly
+      during a swap. An unusable scope, by contrast, demotes through the
+      status leg and keeps the record-derived sentence qualified ("Last
+      seen: …"). An in-flight refetch is live (still looking); a request
+      whose response never arrives ends as an error - each attempt bounded
+      by the transport's 30 s response timeout, one query retry - never as
+      an indefinitely retained payload. And a record leg that is not live is
+      not "gone": an open Force confirm closes only when a live leg no
+      longer carries its stage (the running version moving re-keys the
+      query, and the `usable` rule closes the confirm there), and an attempt
+      park's Restart is offered only when a live leg vouches that no stage
+      waits (Restart cannot activate a stage). The Overview is the only leg that derives: the landing
       banner keeps its desktop-status debt arm, and the fleet legs pass
       `legacyFacts: null`, which the projector reads as "not observed".
     - **A CLI requirement has a remedy in the card.** The best target's
