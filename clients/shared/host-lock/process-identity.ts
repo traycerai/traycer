@@ -287,7 +287,16 @@ export function computeProcessIdentityVerdict(
 // point of it). Backs the own-pid identity check below; unlike the general
 // cross-pid path there is nothing to gain from re-probing on every call.
 let cachedOwnStartIdentity: ProcessStartIdentity | null | "unread" = "unread";
-function ownProcessStartIdentity(): ProcessStartIdentity | null {
+/**
+ * This process's own creation stamp, or `null` when the platform probe could
+ * not produce one. Exported for a writer that stamps its own identity into a
+ * record another process will later hold against `verifyProcessIdentity`
+ * (the CLI's update-progress marker): stamping from the cached read that the
+ * own-pid verdict compares against keeps "what we wrote" and "what we are"
+ * one value, and a first call that fails stays `null` for the life of the
+ * process rather than flipping between reads.
+ */
+export function ownProcessStartIdentity(): ProcessStartIdentity | null {
   if (cachedOwnStartIdentity === "unread") {
     cachedOwnStartIdentity = readProcessStartIdentity(process.pid);
   }

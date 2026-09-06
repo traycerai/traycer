@@ -1,8 +1,16 @@
 import { randomBytes } from "node:crypto";
 import { link, readFile, rename, rm, writeFile } from "node:fs/promises";
+import {
+  isProcessStartIdentity,
+  type ProcessStartIdentity,
+} from "@traycer/protocol/host/lifecycle";
 import type { Environment } from "../runner/environment";
 import { createCliLogger, errorFromUnknown } from "../logger";
-import { probeProcessLiveness } from "../store/process-identity";
+import {
+  ownProcessStartIdentity,
+  probeProcessLiveness,
+  verifyProcessIdentity,
+} from "../store/process-identity";
 import {
   ensureHostHomeDir,
   hostUpdateProgressMarkerPath,
@@ -42,6 +50,18 @@ export interface HostUpdateProgress {
    * reads back as `null`.
    */
   readonly writerId: string | null;
+  /**
+   * The writer process's creation stamp (`ProcessStartIdentity`, the same
+   * token the CLI lock and the host's `pid.json` carry), what lets a reader
+   * tell the writer from an unrelated process the OS later handed the same
+   * pid: a pid the OS reports alive is only the writer if the process
+   * behind it was created when the writer was. `null` when the platform
+   * probe could not produce a stamp at the write, and on a marker written
+   * by a CLI before the field existed - both read by pid alone
+   * (`writerLiveness`). Additive like `writerId`: the host daemon ignores
+   * it.
+   */
+  readonly writerStartIdentity: ProcessStartIdentity | null;
 }
 
 // One identity per process. Two `host update` invocations racing for the
@@ -51,7 +71,14 @@ export interface HostUpdateProgress {
 // never clear, because the stamp no longer matches what IT wrote.
 const PROGRESS_WRITER_ID = `${process.pid}-${randomBytes(6).toString("hex")}`;
 
-/** A marker record stamped with the current time and this process's identity. */
+/**
+ * A marker record stamped with the current time and this process's identity:
+ * the per-process writer id, and the creation stamp a later reader holds the
+ * pid against. The stamp is read lazily (the first record this process
+ * builds - a `ps`/`powershell` spawn on macOS and Windows) and cached by the
+ * shared module for the life of the process, so it is never paid by a CLI
+ * invocation that writes no marker.
+ */
 export function progressRecord(fields: {
   readonly state: HostUpdateProgressState;
   readonly error: string | null;
@@ -63,6 +90,7 @@ export function progressRecord(fields: {
     targetVersion: fields.targetVersion,
     updatedAt: new Date().toISOString(),
     writerId: PROGRESS_WRITER_ID,
+    writerStartIdentity: ownProcessStartIdentity(),
   };
 }
 
@@ -143,7 +171,8 @@ export function sameProgress(
     a.targetVersion === b.targetVersion &&
     a.updatedAt === b.updatedAt &&
     a.error === b.error &&
-    a.writerId === b.writerId
+    a.writerId === b.writerId &&
+    a.writerStartIdentity === b.writerStartIdentity
   );
 }
 
@@ -383,19 +412,44 @@ async function landMarkerAtomically(
 }
 
 // `writerId` is `<pid>-<hex>`; the pid half is what a reader on the same
-// machine can check for liveness. The host daemon applies the same rule
-// (`isStaleUpdateProgress`) when it decides whether an `updating` marker
-// still describes a live update.
+// machine can check for liveness. The shape is fixed: the host daemon parses
+// it with the same expression (`isStaleUpdateProgress`) to suppress an
+// `updating` whose pid is dead. The random half is never verified by anyone
+// - it only keeps two writers in one process generation apart.
 const WRITER_ID_PID = /^(\d+)-[0-9a-f]+$/;
 
 /**
- * What is known about the record's writer: `live` is positive evidence (a
- * parseable pid the OS reports alive), `dead` is positive evidence of the
- * opposite, and `unknown` is everything the probe cannot settle - no writer
- * id (an older CLI), an id in another shape, or a probe that failed
- * (`tasklist` missing on Windows). The two predicates below read this from
- * opposite sides: what cannot be proven abandoned is not replaced outside
- * the lock, and what cannot be proven live is not put back.
+ * What is known about the record's writer: `live` is positive evidence,
+ * `dead` is positive evidence of the opposite, and `unknown` is everything
+ * the probes cannot settle - no writer id (an older CLI), an id in another
+ * shape, a liveness probe that failed (`tasklist` missing on Windows), or a
+ * creation stamp that could not be read back. The two predicates below read
+ * this from opposite sides: what cannot be proven abandoned is not replaced
+ * outside the lock, and what cannot be proven live is not put back.
+ *
+ * A pid alone is not the writer. The OS reuses pids, so an updater that
+ * crashed after publishing its marker can leave a pid that some unrelated
+ * process holds by the time the next `host update` reads it - and a
+ * liveness probe then vouches for a writer that no longer exists (the
+ * pre-lock claim defers to it, and a park restores its marker as a proven
+ * live one). A record that carries the writer's creation stamp is therefore
+ * held to `verifyProcessIdentity`, the same verdict the CLI lock and the
+ * host's `pid.json` are judged by: `alive-same` (the pid is alive AND was
+ * created when the writer was) is `live`; `dead` and `alive-different` (an
+ * impostor behind a recycled pid) are `dead`; `indeterminate` is `unknown`.
+ * A record without a stamp - written by a CLI before the field existed, or
+ * by one whose probe failed at the write - is judged by the pid alone,
+ * which is the most that record can be held to; the host daemon judges
+ * every record that way today. That residual retires with those CLIs: a
+ * marker lives for one update attempt.
+ *
+ * The stamped path is strictly NARROWER than the pid-only one, on purpose:
+ * a pid the OS proves alive whose stamp cannot be read back (`powershell`
+ * refused or past its timeout, `ps` past its) is `unknown`, not `live` -
+ * the claim still defers to it, but the takeover does not retain it and a
+ * park does not put it back, and its writer, if live, re-asserts its own
+ * marker under the lock. Do not re-widen it "for safety": `live` is what
+ * authorises re-planting a record over an empty path.
  */
 function writerLiveness(
   record: HostUpdateProgress,
@@ -405,16 +459,37 @@ function writerLiveness(
   if (match === null) return "unknown";
   const pid = Number.parseInt(match[1], 10);
   if (!Number.isSafeInteger(pid) || pid <= 0) return "unknown";
-  const verdict = probeProcessLiveness(pid);
-  if (verdict === "alive") return "live";
-  if (verdict === "dead") return "dead";
-  return "unknown";
+  if (record.writerStartIdentity === null) {
+    const verdict = probeProcessLiveness(pid);
+    if (verdict === "alive") return "live";
+    if (verdict === "dead") return "dead";
+    return "unknown";
+  }
+  // `startedAtMs` is a legacy field no verdict reads (the stamp replaced
+  // it); the marker never recorded one.
+  switch (
+    verifyProcessIdentity({
+      pid,
+      startedAtMs: null,
+      startIdentity: record.writerStartIdentity,
+    })
+  ) {
+    case "alive-same":
+      return "live";
+    case "dead":
+    case "alive-different":
+      return "dead";
+    case "indeterminate":
+      return "unknown";
+  }
 }
 
 /**
  * Whether some writer MAY still be acting on the record: an `updating`
- * whose writer is not proven dead (fail-open, the same reading the host
- * daemon takes for a parseable id). A `failed` has no writer by
+ * whose writer is not proven dead (fail-open; for a record without a
+ * creation stamp, the reading the host daemon takes for a parseable id -
+ * a stamped record is held to `writerLiveness`'s identity rule, which the
+ * host does not apply). A `failed` has no writer by
  * construction - its writer stamped it and exited - whatever its `writerId`
  * says. This is the predicate behind the pre-lock claim: it replaces a
  * record without a live writer and defers to one that may have. A record no
@@ -431,7 +506,9 @@ export function updateProgressRecordHasLiveWriter(
 
 /**
  * Whether a writer is PROVEN to be acting on the record: an `updating`
- * whose pid the OS reports alive. The takeover under the lock retains a
+ * whose writer `writerLiveness` reports `live` - the pid is alive and, for
+ * a record that carries the writer's creation stamp, is the process that
+ * wrote it. The takeover under the lock retains a
  * displaced record for the restore a busy park or a pre-disruption failure
  * performs only on this evidence. The fail-open reading is wrong there: a
  * record with no writer id is one the host daemon renders FOREVER (its
@@ -480,9 +557,14 @@ export function updateProgressRecordHasProvenLiveWriter(
  *   either way.
  *
  * The liveness check is synchronous (`probeProcessLiveness`; on Windows a
- * `tasklist` spawn with a bounded timeout) and runs once per record read:
- * at most three times per claim call. Per `host update` that is at most
- * eight - the claim can run twice (a claim that deferred at
+ * `tasklist` spawn with a bounded timeout - and, for a record that carries
+ * a creation stamp whose pid is not proven dead, one more bounded spawn to
+ * read the stamp back: `ps` on macOS, `powershell` on Windows) and runs
+ * once per record read: at most three times per claim call. Per `host
+ * update` that is at most eight checks - at most sixteen bounded spawns on
+ * Windows, eight on macOS, none on Linux (`/proc` reads), plus one to read
+ * this process's own stamp - the claim can run twice (a claim that
+ * deferred at
  * `onWillDownload` claims again before the work), the takeover under the
  * lock reads once (only on the iteration that replaces), and the restore a
  * park or a pre-disruption failure performs reads once. Never throws.
@@ -899,6 +981,14 @@ async function readMarkerState(
       // Absent on markers written before the field existed; carried through
       // so a conditional swap compares what was actually written.
       writerId: typeof obj.writerId === "string" ? obj.writerId : null,
+      // Absent on markers written before the field existed, and `null` when
+      // the writer's own probe failed; a value that is not a well-formed
+      // token reads as "not recorded" at this boundary, the way
+      // `pid-metadata` reads the host's, so the comparator only ever sees
+      // tokens or `null`.
+      writerStartIdentity: isProcessStartIdentity(obj.writerStartIdentity)
+        ? obj.writerStartIdentity
+        : null,
     },
   };
 }

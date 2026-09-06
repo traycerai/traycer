@@ -47,6 +47,7 @@ vi.mock("../../host/update-progress-marker", () => ({
     ...fields,
     updatedAt: new Date().toISOString(),
     writerId: "test-writer",
+    writerStartIdentity: null,
   }),
   sameProgress: () => true,
 }));

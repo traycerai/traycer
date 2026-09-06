@@ -232,10 +232,12 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
     // writer's update is the one still in progress and removing its record
     // would hide the whole update until its own re-assert. Only a record
     // with a PROVEN live writer (`updateProgressRecordHasProvenLiveWriter`:
-    // the probe answered alive) is retained here. Every other record -
-    // a `failed`, an `updating` whose writer is dead, or one whose writer
-    // is UNKNOWN (no id, an unparseable id, a probe that could not answer)
-    // - is replaced and GONE at the takeover. The pre-lock claim treats
+    // the pid is alive and, where the record carries the writer's creation
+    // stamp, belongs to the process that wrote it) is retained here. Every
+    // other record - a `failed`, an `updating` whose writer is dead (or
+    // whose pid the OS recycled onto an unrelated process), or one whose
+    // writer is UNKNOWN (no id, an unparseable id, a probe that could not
+    // answer) - is replaced and GONE at the takeover. The pre-lock claim treats
     // the unknown-writer case the other way round (it DEFERS, fail-open,
     // since it holds no lock and may not stamp over a possibly-live
     // update); under the lock this run is the owner and a record it

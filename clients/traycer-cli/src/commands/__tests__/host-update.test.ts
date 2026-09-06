@@ -93,6 +93,7 @@ vi.mock("../../host/update-progress-marker", () => ({
     ...fields,
     updatedAt: new Date().toISOString(),
     writerId: "test-writer",
+    writerStartIdentity: null,
   }),
   // Pure comparator; the real one, so the "is this marker still ours"
   // decisions under test compare the way production does.
@@ -103,6 +104,7 @@ vi.mock("../../host/update-progress-marker", () => ({
       updatedAt: string;
       error: string | null;
       writerId: string | null;
+      writerStartIdentity: string | null;
     },
     b: {
       state: string;
@@ -110,13 +112,15 @@ vi.mock("../../host/update-progress-marker", () => ({
       updatedAt: string;
       error: string | null;
       writerId: string | null;
+      writerStartIdentity: string | null;
     },
   ) =>
     a.state === b.state &&
     a.targetVersion === b.targetVersion &&
     a.updatedAt === b.updatedAt &&
     a.error === b.error &&
-    a.writerId === b.writerId,
+    a.writerId === b.writerId &&
+    a.writerStartIdentity === b.writerStartIdentity,
 }));
 
 vi.mock("../../service/health-probe", () => ({
@@ -1381,6 +1385,7 @@ describe("buildHostUpdateCommand update-progress marker (T16)", () => {
       targetVersion: "9.9.9",
       updatedAt: "2026-01-01T00:00:00.000Z",
       writerId: "999999-abc",
+      writerStartIdentity: null,
     };
     mocks.disk.current = foreignRecord;
     mocks.downloadAndStageHostMock.mockImplementation(
@@ -1463,6 +1468,7 @@ describe("buildHostUpdateCommand update-progress marker (T16)", () => {
       targetVersion: "9.9.9",
       updatedAt: "2026-01-01T00:00:00.000Z",
       writerId: "foreign-writer",
+      writerStartIdentity: null,
     };
     mocks.disk.current = foreignRecord;
     mocks.downloadAndStageHostMock.mockImplementation(
@@ -1522,6 +1528,7 @@ describe("buildHostUpdateCommand update-progress marker (T16)", () => {
       targetVersion: "9.9.9",
       updatedAt: "2026-01-01T00:00:00.000Z",
       writerId: "foreign-writer",
+      writerStartIdentity: null,
     };
     mocks.disk.current = foreignRecord;
     mocks.downloadAndStageHostMock.mockImplementation(
@@ -1736,6 +1743,7 @@ describe("buildHostUpdateCommand update-progress marker (T16)", () => {
       targetVersion: "2.0.0",
       updatedAt: "2026-01-01T00:00:00.000Z",
       writerId: "foreign-writer",
+      writerStartIdentity: null,
     };
     mocks.disk.current = foreignRecord;
     mocks.downloadAndStageHostMock.mockImplementation(
@@ -1974,6 +1982,7 @@ describe("buildHostUpdateCommand update-progress marker (T16)", () => {
       targetVersion: "1.9.0",
       updatedAt: "2026-01-01T00:00:00.000Z",
       writerId: "dead-writer",
+      writerStartIdentity: null,
     };
     mocks.claimUpdateProgressMarkerBeforeLockMock.mockImplementation(
       async (
@@ -2031,6 +2040,7 @@ describe("buildHostUpdateCommand update-progress marker (T16)", () => {
       targetVersion: "1.9.0",
       updatedAt: "2026-01-01T00:00:00.000Z",
       writerId: "424242-dead",
+      writerStartIdentity: null,
     };
     mocks.deadWriterIds.add("424242-dead");
     mocks.claimUpdateProgressMarkerBeforeLockMock.mockImplementation(
@@ -2083,6 +2093,7 @@ describe("buildHostUpdateCommand update-progress marker (T16)", () => {
       targetVersion: "1.9.0",
       updatedAt: "2026-01-01T00:00:00.000Z",
       writerId: "dead-writer",
+      writerStartIdentity: null,
     };
     mocks.claimUpdateProgressMarkerBeforeLockMock.mockImplementation(
       async (
@@ -2827,6 +2838,7 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
       targetVersion: "2.0.0",
       updatedAt: "2026-01-01T00:00:00.000Z",
       writerId: null,
+      writerStartIdentity: null,
     });
 
     const result = await buildHostUpdateCommand({
@@ -2867,6 +2879,7 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
       targetVersion: "2.0.0",
       updatedAt: "2026-01-01T00:00:00.000Z",
       writerId: null,
+      writerStartIdentity: null,
     });
     mocks.deleteUpdateProgressMarkerIfUnchangedMock.mockResolvedValue("failed");
 
@@ -2903,6 +2916,7 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
       targetVersion: "2.0.0",
       updatedAt: "2026-01-01T00:00:00.000Z",
       writerId: null,
+      writerStartIdentity: null,
     });
 
     const result = await buildHostUpdateCommand({
@@ -2949,6 +2963,7 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
       targetVersion: "2.0.0",
       updatedAt: "2026-01-01T00:00:00.000Z",
       writerId: null,
+      writerStartIdentity: null,
     });
 
     await buildHostUpdateCommand({
@@ -2975,6 +2990,7 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
       targetVersion: "2.1.0",
       updatedAt: "2026-01-01T00:00:00.000Z",
       writerId: null,
+      writerStartIdentity: null,
     });
 
     await buildHostUpdateCommand({
@@ -3197,6 +3213,7 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
       targetVersion: "2.0.0",
       updatedAt: "2026-01-01T00:00:00.000Z",
       writerId: null,
+      writerStartIdentity: null,
     });
 
     const result = await buildHostUpdateCommand({
@@ -3866,6 +3883,7 @@ describe("buildHostUpdateCommand — reassertMarkerUnderLock under the lock", ()
       targetVersion: "2.0.0",
       updatedAt: "2026-01-01T00:00:00.000Z",
       writerId: "foreign-writer",
+      writerStartIdentity: null,
     };
     mocks.downloadAndStageHostMock.mockImplementation(
       async (opts: DownloadAndStageHostOptions) => {
@@ -3950,6 +3968,7 @@ describe("buildHostUpdateCommand — reassertMarkerUnderLock under the lock", ()
       targetVersion: "1.9.0",
       updatedAt: "2026-01-01T00:00:00.000Z",
       writerId: "dead-writer",
+      writerStartIdentity: null,
     };
     mocks.downloadAndStageHostMock.mockImplementation(
       async (opts: DownloadAndStageHostOptions) => {
@@ -4034,6 +4053,7 @@ describe("buildHostUpdateCommand — reassertMarkerUnderLock under the lock", ()
       targetVersion: "2.0.0",
       updatedAt: "2026-01-01T00:00:00.000Z",
       writerId: "will-die-writer",
+      writerStartIdentity: null,
     };
     mocks.downloadAndStageHostMock.mockImplementation(
       async (opts: DownloadAndStageHostOptions) => {
@@ -4101,6 +4121,7 @@ describe("buildHostUpdateCommand — reassertMarkerUnderLock under the lock", ()
       targetVersion: "2.0.0",
       updatedAt: "2026-01-01T00:00:00.000Z",
       writerId: "will-die-writer",
+      writerStartIdentity: null,
     };
     mocks.downloadAndStageHostMock.mockImplementation(
       async (opts: DownloadAndStageHostOptions) => {
@@ -4180,6 +4201,7 @@ describe("buildHostUpdateCommand — reassertMarkerUnderLock under the lock", ()
       targetVersion: "2.0.0",
       updatedAt: "2026-01-01T00:00:00.000Z",
       writerId: "foreign-writer",
+      writerStartIdentity: null,
     };
     mocks.downloadAndStageHostMock.mockImplementation(
       async (opts: DownloadAndStageHostOptions) => {
@@ -4250,6 +4272,7 @@ describe("buildHostUpdateCommand — reassertMarkerUnderLock under the lock", ()
       targetVersion: "2.0.0",
       updatedAt: "2026-01-01T00:00:00.000Z",
       writerId: "foreign-writer",
+      writerStartIdentity: null,
     };
     mocks.downloadAndStageHostMock.mockImplementation(
       async (opts: DownloadAndStageHostOptions) => {
@@ -4331,6 +4354,7 @@ describe("buildHostUpdateCommand — reassertMarkerUnderLock under the lock", ()
       targetVersion: "2.0.0",
       updatedAt: "2026-01-01T00:00:00.000Z",
       writerId: "foreign-writer",
+      writerStartIdentity: null,
     };
     mocks.downloadAndStageHostMock.mockImplementation(
       async (opts: DownloadAndStageHostOptions) => {
@@ -4399,6 +4423,7 @@ describe("buildHostUpdateCommand — reassertMarkerUnderLock under the lock", ()
       targetVersion: "2.0.0",
       updatedAt: "2026-01-01T00:00:00.000Z",
       writerId: "foreign-writer",
+      writerStartIdentity: null,
     };
     mocks.downloadAndStageHostMock.mockImplementation(
       async (opts: DownloadAndStageHostOptions) => {
@@ -4497,6 +4522,7 @@ describe("buildHostUpdateCommand — reassertMarkerUnderLock under the lock", ()
       targetVersion: "2.0.0",
       updatedAt: "2026-01-01T00:00:00.000Z",
       writerId: "foreign-writer",
+      writerStartIdentity: null,
     };
     // Debt on both reads (out of the lock, and again under the activation
     // arm's own lock) - the SECOND read's side effect is what lands the
@@ -4593,6 +4619,7 @@ describe("buildHostUpdateCommand — reassertMarkerUnderLock under the lock", ()
       targetVersion: "2.0.0",
       updatedAt: "2026-01-01T00:00:00.000Z",
       writerId: "foreign-writer",
+      writerStartIdentity: null,
     };
     // Debt on both reads (out of the lock, and again under the activation
     // arm's own lock) - the SECOND read's side effect is what lands the
@@ -4738,6 +4765,7 @@ describe("buildHostUpdateCommand — reassertMarkerUnderLock under the lock", ()
       targetVersion: "2.0.0",
       updatedAt: "2026-01-01T00:00:00.000Z",
       writerId: "foreign-writer",
+      writerStartIdentity: null,
     };
     // A marker lands at the live path in the gap between
     // reassertMarkerUnderLock's read and its create-if-absent call, so the
@@ -4915,6 +4943,7 @@ describe("buildHostUpdateCommand — reassertMarkerUnderLock under the lock", ()
       targetVersion: "2.0.0",
       updatedAt: "2026-01-01T00:00:00.000Z",
       writerId: "foreign-writer",
+      writerStartIdentity: null,
     };
     mocks.disk.current = foreignRecord;
     mocks.downloadAndStageHostMock.mockImplementation(
@@ -4933,6 +4962,7 @@ describe("buildHostUpdateCommand — reassertMarkerUnderLock under the lock", ()
       targetVersion: "2.0.0",
       updatedAt: "2026-01-01T00:00:01.000Z",
       writerId: "newer-writer",
+      writerStartIdentity: null,
     };
     // The FIRST replace attempt (against `foreignRecord`) reports "changed"
     // AND lands a DIFFERENT, even newer updater's record on the disk fixture
@@ -4998,6 +5028,7 @@ describe("buildHostUpdateCommand — reassertMarkerUnderLock under the lock", ()
       targetVersion: "9.9.9",
       updatedAt: "2026-01-01T00:00:00.000Z",
       writerId: "foreign-writer",
+      writerStartIdentity: null,
     };
     mocks.downloadAndStageHostMock.mockImplementation(
       async (opts: DownloadAndStageHostOptions) => {
@@ -5176,6 +5207,7 @@ describe("buildHostUpdateCommand — reassertMarkerUnderLock under the lock", ()
       targetVersion: "3.0.0",
       updatedAt: "2026-01-01T00:00:00.000Z",
       writerId: null,
+      writerStartIdentity: null,
     });
 
     const ctx = fakeCtx();
@@ -5270,6 +5302,7 @@ describe("buildHostUpdateCommand — reassertMarkerUnderLock under the lock", ()
       targetVersion: "2.0.0",
       updatedAt: "2026-01-01T00:00:00.000Z",
       writerId: null,
+      writerStartIdentity: null,
     };
     mocks.downloadAndStageHostMock.mockImplementation(
       async (opts: DownloadAndStageHostOptions) => {

@@ -78,6 +78,7 @@ describe("update-progress-marker", () => {
       targetVersion: "1.4.0",
       updatedAt: "2026-07-03T00:00:00.000Z",
       writerId: "writer-a",
+      writerStartIdentity: null,
     });
     const raw = readFileSync(
       hostUpdateProgressMarkerPath("production"),
@@ -89,6 +90,7 @@ describe("update-progress-marker", () => {
       targetVersion: "1.4.0",
       updatedAt: "2026-07-03T00:00:00.000Z",
       writerId: "writer-a",
+      writerStartIdentity: null,
     });
   });
 
@@ -101,6 +103,7 @@ describe("update-progress-marker", () => {
       targetVersion: "1.4.0",
       updatedAt: "2026-07-03T00:00:00.000Z",
       writerId: "writer-a",
+      writerStartIdentity: null,
     });
     await writeUpdateProgressMarker("production", {
       state: "failed",
@@ -108,6 +111,7 @@ describe("update-progress-marker", () => {
       targetVersion: "1.4.0",
       updatedAt: "2026-07-03T00:01:00.000Z",
       writerId: "writer-a",
+      writerStartIdentity: null,
     });
     const progress = await readUpdateProgressMarker("production");
     expect(progress).toEqual({
@@ -116,6 +120,7 @@ describe("update-progress-marker", () => {
       targetVersion: "1.4.0",
       updatedAt: "2026-07-03T00:01:00.000Z",
       writerId: "writer-a",
+      writerStartIdentity: null,
     });
   });
 
@@ -131,6 +136,7 @@ describe("update-progress-marker", () => {
       targetVersion: "1.4.0",
       updatedAt: "2026-07-03T00:00:00.000Z",
       writerId: "writer-a",
+      writerStartIdentity: null,
     });
     await deleteUpdateProgressMarker("production");
     expect(await readUpdateProgressMarker("production")).toBeNull();
@@ -145,6 +151,7 @@ describe("update-progress-marker", () => {
       targetVersion: "1.0.0",
       updatedAt: "2026-07-03T00:00:00.000Z",
       writerId: "writer-a",
+      writerStartIdentity: null,
     });
     await writeUpdateProgressMarker("dev", {
       state: "failed",
@@ -152,6 +159,7 @@ describe("update-progress-marker", () => {
       targetVersion: "2.0.0",
       updatedAt: "2026-07-03T00:00:00.000Z",
       writerId: "writer-b",
+      writerStartIdentity: null,
     });
     expect((await readUpdateProgressMarker("production"))?.state).toBe(
       "updating",
@@ -181,6 +189,7 @@ describe("update-progress-marker", () => {
     expect(await readUpdateProgressMarker("production")).toEqual({
       ...legacyRecord,
       writerId: null,
+      writerStartIdentity: null,
     });
   });
 
@@ -200,6 +209,19 @@ describe("update-progress-marker", () => {
     expect(a.writerId).toMatch(/^\d+-[0-9a-f]{12}$/);
     expect(b.writerId).toBe(a.writerId);
     expect(sameProgress(a, { ...a, writerId: "someone-else" })).toBe(false);
+    // The creation stamp is this process's own, as the shared reader
+    // reports it (every CI platform produces one - the shared suite pins
+    // that), and the comparator holds it like every other field.
+    const { readProcessStartIdentity } =
+      await import("../../store/process-identity");
+    const own = readProcessStartIdentity(process.pid);
+    expect(own).not.toBeNull();
+    expect(a.writerStartIdentity).toBe(own);
+    expect(b.writerStartIdentity).toBe(own);
+    expect(
+      sameProgress(a, { ...a, writerStartIdentity: `${own} recycled` }),
+    ).toBe(false);
+    expect(sameProgress(a, { ...a, writerStartIdentity: null })).toBe(false);
   });
 
   // Shared by the delete and replace conditional-swap suites: both back
@@ -212,6 +234,7 @@ describe("update-progress-marker", () => {
     targetVersion: "1.4.0",
     updatedAt: "2026-07-03T00:00:00.000Z",
     writerId: "writer-a",
+    writerStartIdentity: null,
   };
 
   function scratchAndStagingFiles(): string[] {
@@ -268,6 +291,7 @@ describe("update-progress-marker", () => {
         targetVersion: "1.5.0",
         updatedAt: "2026-07-03T00:00:01.000Z",
         writerId: "writer-b",
+        writerStartIdentity: null,
       });
       expect(
         await deleteUpdateProgressMarkerIfUnchanged("production", failed),
@@ -280,6 +304,7 @@ describe("update-progress-marker", () => {
         targetVersion: "1.5.0",
         updatedAt: "2026-07-03T00:00:01.000Z",
         writerId: "writer-b",
+        writerStartIdentity: null,
       });
       expect(scratchAndStagingFiles()).toEqual([]);
     });
@@ -314,6 +339,7 @@ describe("update-progress-marker", () => {
         await deleteUpdateProgressMarkerIfUnchanged("production", {
           ...theirRecord,
           writerId: "writer-a",
+          writerStartIdentity: null,
         }),
       ).toBe("changed");
       expect(await readUpdateProgressMarker("production")).toEqual(theirRecord);
@@ -343,6 +369,7 @@ describe("update-progress-marker", () => {
           targetVersion: "1.4.0",
           updatedAt: "2026-07-03T00:00:00.000Z",
           writerId: "writer-a",
+          writerStartIdentity: null,
         };
         const b = {
           state: "updating" as const,
@@ -350,6 +377,7 @@ describe("update-progress-marker", () => {
           targetVersion: "1.5.0",
           updatedAt: "2026-07-03T00:00:01.000Z",
           writerId: "writer-b",
+          writerStartIdentity: null,
         };
         await writeUpdateProgressMarker("production", a);
         await writeUpdateProgressMarker("production", b);
@@ -404,6 +432,7 @@ describe("update-progress-marker", () => {
           targetVersion: "1.4.0",
           updatedAt: "2026-07-03T00:00:00.000Z",
           writerId: "writer-a",
+          writerStartIdentity: null,
         };
         const b = {
           state: "updating" as const,
@@ -411,6 +440,7 @@ describe("update-progress-marker", () => {
           targetVersion: "1.5.0",
           updatedAt: "2026-07-03T00:00:01.000Z",
           writerId: "writer-b",
+          writerStartIdentity: null,
         };
         await writeUpdateProgressMarker("production", a);
         await writeUpdateProgressMarker("production", b);
@@ -453,6 +483,7 @@ describe("update-progress-marker", () => {
         targetVersion: "1.6.0",
         updatedAt: "2026-07-03T00:00:00.000Z",
         writerId: "writer-a",
+        writerStartIdentity: null,
       };
       expect(await createUpdateProgressMarkerIfAbsent("production", next)).toBe(
         "created",
@@ -475,6 +506,7 @@ describe("update-progress-marker", () => {
         targetVersion: "1.7.0",
         updatedAt: "2026-07-03T00:02:00.000Z",
         writerId: "writer-b",
+        writerStartIdentity: null,
       };
       expect(await createUpdateProgressMarkerIfAbsent("production", next)).toBe(
         "exists",
@@ -494,6 +526,7 @@ describe("update-progress-marker", () => {
         targetVersion: "1.6.0",
         updatedAt: "2026-07-03T00:00:00.000Z",
         writerId: "writer-a",
+        writerStartIdentity: null,
       };
       // Absent path: the create outcome.
       expect(
@@ -529,6 +562,7 @@ describe("update-progress-marker", () => {
         targetVersion: "1.6.0",
         updatedAt: "2026-07-03T00:00:00.000Z",
         writerId: "writer-a",
+        writerStartIdentity: null,
       };
       expect(await createUpdateProgressMarkerIfAbsent("production", next)).toBe(
         "created",
@@ -559,6 +593,7 @@ describe("update-progress-marker", () => {
           targetVersion: "1.6.0",
           updatedAt: "2026-07-03T00:00:00.000Z",
           writerId: "writer-a",
+          writerStartIdentity: null,
         }),
       ).toBe("exists");
       expect(readFileSync(path, "utf8")).toBe(foreign);
@@ -603,6 +638,7 @@ describe("update-progress-marker", () => {
           targetVersion: "1.4.0",
           updatedAt: "2026-07-03T00:00:00.000Z",
           writerId: "writer-a",
+          writerStartIdentity: null,
         };
         expect(
           await createUpdateProgressMarkerIfAbsent("production", next),
@@ -622,6 +658,7 @@ describe("update-progress-marker", () => {
       targetVersion: "1.4.0",
       updatedAt: "2026-07-03T00:00:00.000Z",
       writerId: "writer-a",
+      writerStartIdentity: null,
     };
     const failedNext = {
       state: "failed" as const,
@@ -629,6 +666,7 @@ describe("update-progress-marker", () => {
       targetVersion: "1.4.0",
       updatedAt: "2026-07-03T00:01:00.000Z",
       writerId: "writer-a",
+      writerStartIdentity: null,
     };
 
     it("replaces the marker when it still reads exactly as expected", async () => {
@@ -663,6 +701,7 @@ describe("update-progress-marker", () => {
         targetVersion: "1.5.0",
         updatedAt: "2026-07-03T00:00:01.000Z",
         writerId: "writer-b",
+        writerStartIdentity: null,
       };
       await writeUpdateProgressMarker("production", theirs);
       expect(
@@ -886,6 +925,7 @@ describe("update-progress-marker", () => {
       targetVersion: "1.8.0",
       updatedAt: "2026-07-03T00:03:00.000Z",
       writerId: "writer-next",
+      writerStartIdentity: null,
     };
 
     it("publishes into an empty path", async () => {
@@ -949,6 +989,7 @@ describe("update-progress-marker", () => {
           targetVersion: "1.4.0",
           updatedAt: "2026-07-03T00:00:00.000Z",
           writerId: `${pid}-abcdef`,
+          writerStartIdentity: null,
         };
         await writeUpdateProgressMarker("production", deadWriterRecord);
         expect(
@@ -970,6 +1011,7 @@ describe("update-progress-marker", () => {
         targetVersion: "1.4.0",
         updatedAt: "2026-07-03T00:00:00.000Z",
         writerId: `${process.pid}-abcdef`,
+        writerStartIdentity: null,
       };
       await writeUpdateProgressMarker("production", theirs);
       expect(
@@ -999,6 +1041,7 @@ describe("update-progress-marker", () => {
       expect(await readUpdateProgressMarker("production")).toEqual({
         ...legacyRecord,
         writerId: null,
+        writerStartIdentity: null,
       });
     });
 
@@ -1014,6 +1057,7 @@ describe("update-progress-marker", () => {
         targetVersion: "1.4.0",
         updatedAt: "2026-07-03T00:00:00.000Z",
         writerId: "not-a-pid",
+        writerStartIdentity: null,
       };
       await writeUpdateProgressMarker("production", theirs);
       expect(
@@ -1128,6 +1172,7 @@ describe("update-progress-marker", () => {
           targetVersion: "1.4.0",
           updatedAt: "2026-07-03T00:00:00.000Z",
           writerId: "writer-a",
+          writerStartIdentity: null,
         };
         await writeUpdateProgressMarker("production", expected);
         expect(
@@ -1161,6 +1206,7 @@ describe("update-progress-marker", () => {
           targetVersion: "1.4.0",
           updatedAt: "2026-07-03T00:00:00.000Z",
           writerId: "writer-a",
+          writerStartIdentity: null,
         };
         await writeUpdateProgressMarker("production", expected);
         expect(
@@ -1217,6 +1263,7 @@ describe("update-progress-marker", () => {
           targetVersion: "1.4.0",
           updatedAt: "2026-07-03T00:00:00.000Z",
           writerId: `${process.pid}-abcdef`,
+          writerStartIdentity: null,
         }),
       ).toBe(false);
     });
@@ -1231,6 +1278,7 @@ describe("update-progress-marker", () => {
           targetVersion: "1.4.0",
           updatedAt: "2026-07-03T00:00:00.000Z",
           writerId: `${process.pid}-abcdef`,
+          writerStartIdentity: null,
         }),
       ).toBe(true);
     });
@@ -1248,6 +1296,7 @@ describe("update-progress-marker", () => {
             targetVersion: "1.4.0",
             updatedAt: "2026-07-03T00:00:00.000Z",
             writerId: `${pid}-abcdef`,
+            writerStartIdentity: null,
           }),
         ).toBe(false);
       },
@@ -1263,6 +1312,7 @@ describe("update-progress-marker", () => {
           targetVersion: "1.4.0",
           updatedAt: "2026-07-03T00:00:00.000Z",
           writerId: null,
+          writerStartIdentity: null,
         }),
       ).toBe(true);
     });
@@ -1277,6 +1327,7 @@ describe("update-progress-marker", () => {
           targetVersion: "1.4.0",
           updatedAt: "2026-07-03T00:00:00.000Z",
           writerId: "not-a-pid",
+          writerStartIdentity: null,
         }),
       ).toBe(true);
     });
@@ -1297,6 +1348,7 @@ describe("update-progress-marker", () => {
         targetVersion: "1.4.0",
         updatedAt: "2026-07-03T00:00:00.000Z",
         writerId: null,
+        writerStartIdentity: null,
       };
       expect(updateProgressRecordHasProvenLiveWriter(record)).toBe(false);
       expect(updateProgressRecordHasLiveWriter(record)).toBe(true);
@@ -1312,6 +1364,7 @@ describe("update-progress-marker", () => {
           targetVersion: "1.4.0",
           updatedAt: "2026-07-03T00:00:00.000Z",
           writerId: "not-a-pid",
+          writerStartIdentity: null,
         }),
       ).toBe(false);
     });
@@ -1324,6 +1377,7 @@ describe("update-progress-marker", () => {
         targetVersion: "1.4.0",
         updatedAt: "2026-07-03T00:00:00.000Z",
         writerId: `${process.pid}-abcdef`,
+        writerStartIdentity: null,
       };
       expect(
         updateProgressRecordHasProvenLiveWriter({
@@ -1353,6 +1407,7 @@ describe("update-progress-marker", () => {
             targetVersion: "1.4.0",
             updatedAt: "2026-07-03T00:00:00.000Z",
             writerId: `${pid}-abcdef`,
+            writerStartIdentity: null,
           }),
         ).toBe(false);
       },
@@ -1379,6 +1434,7 @@ describe("update-progress-marker", () => {
       targetVersion: "1.6.0",
       updatedAt: "2026-07-03T00:00:00.000Z",
       writerId: "writer-a",
+      writerStartIdentity: null,
     };
     const contents =
       '{"state":"updating","error":null,"targetVersion":"1.5.0","updatedAt":"2026-07-03T00:00:00.000Z","writerId":"7-ab"}';
@@ -1423,5 +1479,207 @@ describe("update-progress-marker", () => {
       expect(readFileSync(path, "utf8")).toBe(contents);
       expect(scratchAndStagingFiles()).toEqual([]);
     });
+  });
+
+  // A pid alone is not the writer: the OS reuses pids, so a record whose
+  // pid is alive is the writer's only if the process behind the pid was
+  // created when the writer was. The record carries the writer's creation
+  // stamp (`writerStartIdentity`) and both predicates hold the pid against
+  // it. Every pin here uses THIS process's pid with a stamp that is, or is
+  // not, this process's own - the recycled-pid case made real without
+  // waiting for the OS to recycle one. Falsification: judge the pid alone
+  // (the pre-round rule) and every "recycled" pin reports live; map a
+  // mismatch to `unknown` instead of `dead` and the claim pin defers.
+  describe("writer identity - a live pid with another process's creation stamp is not the writer", () => {
+    const next = {
+      state: "updating" as const,
+      error: null,
+      targetVersion: "1.8.0",
+      updatedAt: "2026-07-03T00:03:00.000Z",
+      writerId: "writer-next",
+      writerStartIdentity: null,
+    };
+    const ownWriterId = `${process.pid}-abcdef`;
+
+    async function ownStamp(): Promise<string> {
+      const { readProcessStartIdentity } =
+        await import("../../store/process-identity");
+      const own = readProcessStartIdentity(process.pid);
+      expect(own).not.toBeNull();
+      if (own === null) throw new Error("unreachable");
+      return own;
+    }
+
+    // A well-formed token on this platform whose canonical payload differs
+    // from this process's: the shape of a token some OTHER process, created
+    // at another moment, would have stamped before the OS handed its pid to
+    // us.
+    async function recycledStamp(): Promise<string> {
+      return `${await ownStamp()} recycled`;
+    }
+
+    it("this process's pid with its own stamp is live and proven live (control)", async () => {
+      const {
+        updateProgressRecordHasLiveWriter,
+        updateProgressRecordHasProvenLiveWriter,
+      } = await import("../update-progress-marker");
+      const record = {
+        state: "updating" as const,
+        error: null,
+        targetVersion: "1.4.0",
+        updatedAt: "2026-07-03T00:00:00.000Z",
+        writerId: ownWriterId,
+        writerStartIdentity: await ownStamp(),
+      };
+      expect(updateProgressRecordHasLiveWriter(record)).toBe(true);
+      expect(updateProgressRecordHasProvenLiveWriter(record)).toBe(true);
+    });
+
+    it("this process's pid with another process's stamp is a recycled pid: not live, not proven live", async () => {
+      const {
+        updateProgressRecordHasLiveWriter,
+        updateProgressRecordHasProvenLiveWriter,
+      } = await import("../update-progress-marker");
+      const record = {
+        state: "updating" as const,
+        error: null,
+        targetVersion: "1.4.0",
+        updatedAt: "2026-07-03T00:00:00.000Z",
+        writerId: ownWriterId,
+        writerStartIdentity: await recycledStamp(),
+      };
+      expect(updateProgressRecordHasLiveWriter(record)).toBe(false);
+      expect(updateProgressRecordHasProvenLiveWriter(record)).toBe(false);
+    });
+
+    // The own-pid arm above compares against a cached self-read and maps a
+    // mismatch straight to `dead`; ANOTHER live pid goes through the
+    // liveness probe and a fresh stamp read (`alive-different`). This
+    // worker's parent (the vitest main process) is a live pid that is not
+    // us. Falsification: map `alive-different` to `unknown` and the
+    // recycled pin here still passes the fail-open predicate.
+    it("another live process's pid with a stamp that is not that process's own is a recycled pid; with its own stamp it is live (control)", async () => {
+      const {
+        updateProgressRecordHasLiveWriter,
+        updateProgressRecordHasProvenLiveWriter,
+      } = await import("../update-progress-marker");
+      const { readProcessStartIdentity } =
+        await import("../../store/process-identity");
+      const parentStamp = readProcessStartIdentity(process.ppid);
+      expect(parentStamp).not.toBeNull();
+      const base = {
+        state: "updating" as const,
+        error: null,
+        targetVersion: "1.4.0",
+        updatedAt: "2026-07-03T00:00:00.000Z",
+        writerId: `${process.ppid}-abcdef`,
+      };
+      const recycled = {
+        ...base,
+        writerStartIdentity: `${parentStamp} recycled`,
+      };
+      expect(updateProgressRecordHasLiveWriter(recycled)).toBe(false);
+      expect(updateProgressRecordHasProvenLiveWriter(recycled)).toBe(false);
+      const theirs = { ...base, writerStartIdentity: parentStamp };
+      expect(updateProgressRecordHasLiveWriter(theirs)).toBe(true);
+      expect(updateProgressRecordHasProvenLiveWriter(theirs)).toBe(true);
+    });
+
+    it("the pre-lock claim replaces an `updating` whose live pid carries another process's stamp, instead of deferring to it", async () => {
+      const {
+        writeUpdateProgressMarker,
+        claimUpdateProgressMarkerBeforeLock,
+        readUpdateProgressMarker,
+      } = await import("../update-progress-marker");
+      await writeUpdateProgressMarker("production", {
+        state: "updating",
+        error: null,
+        targetVersion: "1.4.0",
+        updatedAt: "2026-07-03T00:00:00.000Z",
+        writerId: ownWriterId,
+        writerStartIdentity: await recycledStamp(),
+      });
+      expect(
+        await claimUpdateProgressMarkerBeforeLock("production", next),
+      ).toEqual({ outcome: "replaced-stale" });
+      expect(await readUpdateProgressMarker("production")).toEqual(next);
+      expect(scratchAndStagingFiles()).toEqual([]);
+    });
+
+    it("a record whose stamp survives the file round trip is still held to it", async () => {
+      // The on-disk bytes are what a later `host update` reads; a stamp
+      // that did not survive the write or the parse would silently fall
+      // back to the pid-alone rule and call the recycled pid live.
+      const { writeUpdateProgressMarker, readUpdateProgressMarker } =
+        await import("../update-progress-marker");
+      const stamp = await recycledStamp();
+      await writeUpdateProgressMarker("production", {
+        state: "updating",
+        error: null,
+        targetVersion: "1.4.0",
+        updatedAt: "2026-07-03T00:00:00.000Z",
+        writerId: ownWriterId,
+        writerStartIdentity: stamp,
+      });
+      const onDisk = await readUpdateProgressMarker("production");
+      expect(onDisk).not.toBeNull();
+      expect(onDisk?.writerStartIdentity).toBe(stamp);
+    });
+
+    // A record with NO stamp (an older CLI's, or a writer whose probe
+    // failed) is judged by the pid alone - the documented residual. The
+    // `updateProgressRecordHasLiveWriter` / `...ProvenLiveWriter` suites
+    // above pin it: every `${process.pid}-abcdef` record there carries
+    // `writerStartIdentity: null` and reads live.
+
+    it("a stamp that is not a well-formed token reads back as `null` at the parse boundary and the record is judged by the pid alone", async () => {
+      const { readUpdateProgressMarker, updateProgressRecordHasLiveWriter } =
+        await import("../update-progress-marker");
+      const { hostUpdateProgressMarkerPath } =
+        await import("../../store/paths");
+      const path = hostUpdateProgressMarkerPath("production");
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(
+        path,
+        `${JSON.stringify(
+          {
+            state: "updating",
+            error: null,
+            targetVersion: "1.4.0",
+            updatedAt: "2026-07-03T00:00:00.000Z",
+            writerId: ownWriterId,
+            writerStartIdentity: "not-a-token",
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+      const onDisk = await readUpdateProgressMarker("production");
+      expect(onDisk?.writerStartIdentity).toBeNull();
+      expect(onDisk !== null && updateProgressRecordHasLiveWriter(onDisk)).toBe(
+        true,
+      );
+    });
+
+    it.skipIf(process.platform === "win32")(
+      "a dead pid is dead whatever stamp the record carries - liveness is read before identity",
+      async () => {
+        const {
+          updateProgressRecordHasLiveWriter,
+          updateProgressRecordHasProvenLiveWriter,
+        } = await import("../update-progress-marker");
+        const record = {
+          state: "updating" as const,
+          error: null,
+          targetVersion: "1.4.0",
+          updatedAt: "2026-07-03T00:00:00.000Z",
+          writerId: `${await deadPid()}-abcdef`,
+          writerStartIdentity: await ownStamp(),
+        };
+        expect(updateProgressRecordHasLiveWriter(record)).toBe(false);
+        expect(updateProgressRecordHasProvenLiveWriter(record)).toBe(false);
+      },
+    );
   });
 });
