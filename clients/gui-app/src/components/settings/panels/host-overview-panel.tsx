@@ -291,6 +291,7 @@ export function HostOverviewPanel(props: {
   const installationQuery = useHostInstallationInfoQuery({
     client,
     enabled: usable && installInfoDegrade === null,
+    runningVersion: statusQuery.data?.hostVersion ?? null,
   });
 
   const identitySet = useHostIdentitySet(client);
@@ -537,8 +538,18 @@ export function HostOverviewPanel(props: {
   // them: the banner keeps its desktop-status debt arm and the fleet legs
   // read no installation info. `null` until both reads have answered, which
   // the projector treats as "not observed", never as "no park".
+  //
+  // Two reads, one snapshot: the installation query is keyed by the running
+  // version the status read reported (`useHostInstallationInfoQuery`), so a
+  // record fetched under the previous version is never compared against the
+  // new one - it is a different key with no data yet. And a read that has
+  // FAILED keeps its last payload in the cache; a comparison built on it
+  // would carry the status read's freshness while the record leg is
+  // anyone's guess, so it is "not observed" until the next poll answers.
   const legacyFacts =
-    statusQuery.data === undefined || installationQuery.data === undefined
+    statusQuery.data === undefined ||
+    installationQuery.data === undefined ||
+    installationQuery.isError
       ? null
       : deriveLegacyUpdateFacts({
           installation: installationQuery.data,

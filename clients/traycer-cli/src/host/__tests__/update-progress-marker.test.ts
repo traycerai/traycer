@@ -408,6 +408,80 @@ describe("update-progress-marker", () => {
     });
   });
 
+  // `host update`'s republish-under-the-lock (the empty-path arm of
+  // `reassertMarkerUnderLock`): land `next` only into a still-empty live
+  // path, refusing rather than overwriting a marker another updater landed
+  // first. Unlike a read-then-rename, the refusal leaves the existing
+  // marker's bytes completely untouched.
+  describe("createUpdateProgressMarkerIfAbsent", () => {
+    it("creates the marker when none exists, and the file decodes to `next`", async () => {
+      const { createUpdateProgressMarkerIfAbsent, readUpdateProgressMarker } =
+        await import("../update-progress-marker");
+      const next = {
+        state: "updating" as const,
+        error: null,
+        targetVersion: "1.6.0",
+        updatedAt: "2026-07-03T00:00:00.000Z",
+        writerId: "writer-a",
+      };
+      expect(await createUpdateProgressMarkerIfAbsent("production", next)).toBe(
+        "created",
+      );
+      expect(await readUpdateProgressMarker("production")).toEqual(next);
+      expect(scratchAndStagingFiles()).toEqual([]);
+    });
+
+    it("reports `exists` when a marker already stands, leaving its bytes byte-identical - the read-then-rename could not guarantee this", async () => {
+      const { writeUpdateProgressMarker, createUpdateProgressMarkerIfAbsent } =
+        await import("../update-progress-marker");
+      const { hostUpdateProgressMarkerPath } =
+        await import("../../store/paths");
+      await writeUpdateProgressMarker("production", failed);
+      const path = hostUpdateProgressMarkerPath("production");
+      const before = readFileSync(path, "utf8");
+      const next = {
+        state: "updating" as const,
+        error: null,
+        targetVersion: "1.7.0",
+        updatedAt: "2026-07-03T00:02:00.000Z",
+        writerId: "writer-b",
+      };
+      expect(await createUpdateProgressMarkerIfAbsent("production", next)).toBe(
+        "exists",
+      );
+      // Byte-identical, not merely equivalent JSON - the old read-then-rename
+      // could still land its own write over what it read.
+      expect(readFileSync(path, "utf8")).toBe(before);
+      expect(scratchAndStagingFiles()).toEqual([]);
+    });
+
+    it("leaves no stray `.tmp-*` staging file behind after either outcome", async () => {
+      const { createUpdateProgressMarkerIfAbsent } =
+        await import("../update-progress-marker");
+      const created = {
+        state: "updating" as const,
+        error: null,
+        targetVersion: "1.6.0",
+        updatedAt: "2026-07-03T00:00:00.000Z",
+        writerId: "writer-a",
+      };
+      // Absent path: the create outcome.
+      expect(
+        await createUpdateProgressMarkerIfAbsent("production", created),
+      ).toBe("created");
+      expect(scratchAndStagingFiles()).toEqual([]);
+
+      // Present path: the refuse outcome, against the marker just created.
+      expect(
+        await createUpdateProgressMarkerIfAbsent("production", {
+          ...created,
+          targetVersion: "1.7.0",
+        }),
+      ).toBe("exists");
+      expect(scratchAndStagingFiles()).toEqual([]);
+    });
+  });
+
   // The conditional replace backs `host update`'s failure stamp: it computes
   // `next` from a record it already holds (the `updating` marker THIS
   // invocation wrote), and another updater can land its own `updating` at

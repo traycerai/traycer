@@ -42,6 +42,7 @@ const mocks = vi.hoisted(() => ({
   readUpdateProgressMarkerMock: vi.fn(),
   deleteUpdateProgressMarkerIfUnchangedMock: vi.fn(),
   replaceUpdateProgressMarkerIfUnchangedMock: vi.fn(),
+  createUpdateProgressMarkerIfAbsentMock: vi.fn(),
   probeHostHealthMock: vi.fn(),
   readHostPidMetadataMock: vi.fn(),
   identityVerdictMock: vi.fn(),
@@ -69,6 +70,8 @@ vi.mock("../../host/update-progress-marker", () => ({
     mocks.deleteUpdateProgressMarkerIfUnchangedMock,
   replaceUpdateProgressMarkerIfUnchanged:
     mocks.replaceUpdateProgressMarkerIfUnchangedMock,
+  createUpdateProgressMarkerIfAbsent:
+    mocks.createUpdateProgressMarkerIfAbsentMock,
   progressRecord: (fields: {
     state: "updating" | "failed";
     error: string | null;
@@ -395,6 +398,17 @@ function armActivationDefaults(): void {
         return "cleared";
       }
       return "changed";
+    },
+  );
+  // Create-if-absent: `"exists"` when the fixture already holds a marker
+  // (the live path is not empty), else stores `next` and reports
+  // `"created"` - mirrors the real module's create-vs-refuse contract
+  // against the same shared disk fixture the other four primitives use.
+  mocks.createUpdateProgressMarkerIfAbsentMock.mockImplementation(
+    async (_environment: string, next: HostUpdateProgress) => {
+      if (mocks.disk.current !== null) return "exists";
+      mocks.disk.current = next;
+      return "created";
     },
   );
   mocks.readHostPidMetadataMock.mockResolvedValue(null);
@@ -2226,8 +2240,8 @@ describe("buildHostUpdateCommand — reassertMarkerUnderLock under the lock", ()
 
   it("marker withdrawn while waiting: republished under the lock before the apply", async () => {
     // Falsification: stub `reassertMarkerUnderLock` to return early instead
-    // of republishing on an empty disk, and `writeUpdateProgressMarker`
-    // below is called once instead of twice.
+    // of republishing on an empty disk, and `createUpdateProgressMarkerIfAbsent`
+    // below is never called (the second-write assertion drops to zero).
     mocks.downloadAndStageHostMock.mockImplementation(
       async (opts: DownloadAndStageHostOptions) => {
         await requireHook(opts)("2.0.0");
@@ -2251,23 +2265,30 @@ describe("buildHostUpdateCommand — reassertMarkerUnderLock under the lock", ()
       ackNonce: null,
     })(fakeCtx());
 
-    expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenCalledTimes(2);
+    // The pre-lock publish is the only unconditional write; the empty-path
+    // republish under the lock goes through the create-if-absent primitive
+    // instead, never through `writeUpdateProgressMarker` again.
+    expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenCalledTimes(1);
     const firstWrite = mocks.writeUpdateProgressMarkerMock.mock
       .calls[0][1] as HostUpdateProgress;
-    const secondWrite = mocks.writeUpdateProgressMarkerMock.mock
-      .calls[1][1] as HostUpdateProgress;
+    expect(mocks.createUpdateProgressMarkerIfAbsentMock).toHaveBeenCalledTimes(
+      1,
+    );
+    const republished = mocks.createUpdateProgressMarkerIfAbsentMock.mock
+      .calls[0][1] as HostUpdateProgress;
     expect(firstWrite.targetVersion).toBe("2.0.0");
-    expect(secondWrite.targetVersion).toBe("2.0.0");
+    expect(republished.targetVersion).toBe("2.0.0");
     // The republish happens under the lock, strictly before the apply half
     // - `invocationCallOrder` gives a global ordering across every mock.
-    const secondWriteOrder =
-      mocks.writeUpdateProgressMarkerMock.mock.invocationCallOrder[1];
+    const createOrder =
+      mocks.createUpdateProgressMarkerIfAbsentMock.mock.invocationCallOrder[0];
     const applyOrder = mocks.applyHostMock.mock.invocationCallOrder[0];
-    expect(secondWriteOrder).toBeLessThan(applyOrder);
-    // The final clear follows the republished record, not the withdrawn one.
+    expect(createOrder).toBeLessThan(applyOrder);
+    // The final clear follows the republished record, not the withdrawn one -
+    // `ownMarker.current` was adopted from the create call's own argument.
     expect(
       mocks.deleteUpdateProgressMarkerIfUnchangedMock,
-    ).toHaveBeenCalledWith("production", secondWrite);
+    ).toHaveBeenCalledWith("production", republished);
     expect(result.exitCode).toBe(0);
   });
 
@@ -2337,8 +2358,8 @@ describe("buildHostUpdateCommand — reassertMarkerUnderLock under the lock", ()
   it("downgrade arm passes onBeforeCommit and it re-asserts", async () => {
     // Falsification: pass a no-op callback as `onBeforeCommit` from the
     // downgrade arm in `host-update.ts` instead of
-    // `() => reassertMarkerUnderLock(downgradeTarget)`, and the second
-    // write below never happens.
+    // `() => reassertMarkerUnderLock(downgradeTarget)`, and the create call
+    // below never happens.
     mocks.readHostInstallRecordMock.mockResolvedValue(
       sampleRecord("1.3.0-rc.1"),
     );
@@ -2362,9 +2383,126 @@ describe("buildHostUpdateCommand — reassertMarkerUnderLock under the lock", ()
     expect(mocks.installHostDowngradeMock).toHaveBeenCalledWith(
       expect.objectContaining({ onBeforeCommit: expect.any(Function) }),
     );
-    expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenCalledTimes(2);
-    expect(mocks.writeUpdateProgressMarkerMock.mock.calls[1][1]).toEqual(
+    // The pre-lock publish is the only `writeUpdateProgressMarker` call; the
+    // empty-path republish under the lock lands through the create-if-absent
+    // primitive instead.
+    expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenCalledTimes(1);
+    expect(mocks.createUpdateProgressMarkerIfAbsentMock).toHaveBeenCalledTimes(
+      1,
+    );
+    expect(
+      mocks.createUpdateProgressMarkerIfAbsentMock.mock.calls[0][1],
+    ).toEqual(
       expect.objectContaining({ state: "updating", targetVersion: "1.2.0" }),
     );
+  });
+
+  it("empty path, but a marker lands between the read and the republish \u2192 the create refuses and this run proceeds under the other updater's marker", async () => {
+    // Falsification: revert the empty arm to `publishUpdating` and this pin
+    // reddens on the write assertion.
+    mocks.downloadAndStageHostMock.mockImplementation(
+      async (opts: DownloadAndStageHostOptions) => {
+        await requireHook(opts)("2.0.0");
+        // Another updater's run cleared our marker while this run waited
+        // for admission - reassertMarkerUnderLock's disk read sees an
+        // empty path.
+        mocks.disk.current = null;
+        return {
+          outcome: "promoted",
+          stagedVersion: "2.0.0",
+          installedVersion: "1.0.0",
+        } satisfies HostDownloadOutcome;
+      },
+    );
+    mocks.applyHostMock.mockResolvedValue(
+      appliedOutcome("1.0.0", "2.0.0", null),
+    );
+    const foreignRecord: HostUpdateProgress = {
+      state: "updating",
+      error: null,
+      targetVersion: "2.0.0",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      writerId: "foreign-writer",
+    };
+    // A marker lands at the live path in the gap between
+    // reassertMarkerUnderLock's read and its create-if-absent call, so the
+    // create itself refuses rather than overwriting it.
+    mocks.createUpdateProgressMarkerIfAbsentMock.mockImplementationOnce(
+      async () => {
+        mocks.disk.current = foreignRecord;
+        return "exists";
+      },
+    );
+
+    const ctx = fakeCtx();
+    const result = await buildHostUpdateCommand({
+      force: false,
+      allowDowngrade: false,
+      ackNonce: null,
+    })(ctx);
+
+    // No second unconditional write - the refusal is the create call
+    // itself, never a `writeUpdateProgressMarker`.
+    expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenCalledTimes(1);
+    const firstWrite = mocks.writeUpdateProgressMarkerMock.mock
+      .calls[0][1] as HostUpdateProgress;
+    expect(mocks.createUpdateProgressMarkerIfAbsentMock).toHaveBeenCalledTimes(
+      1,
+    );
+    expect(ctx.runtime.logger.info).toHaveBeenCalledWith(
+      "Host update proceeds under another updater's progress marker; it landed while this run re-asserted its own",
+      expect.objectContaining({
+        environment: "production",
+        targetVersion: "2.0.0",
+      }),
+    );
+    // `ownMarker` was never replaced - the later conditional clear/stamp is
+    // still CAS'd against THIS run's ORIGINAL pre-lock record, not the
+    // foreign one that won the race.
+    expect(
+      mocks.deleteUpdateProgressMarkerIfUnchangedMock,
+    ).toHaveBeenCalledWith("production", firstWrite);
+    expect(result.exitCode).toBe(0);
+  });
+
+  it("the create fails \u2192 nothing changes, the update continues", async () => {
+    // Falsification: revert the empty arm to `publishUpdating` and this pin
+    // reddens on the write assertion.
+    mocks.downloadAndStageHostMock.mockImplementation(
+      async (opts: DownloadAndStageHostOptions) => {
+        await requireHook(opts)("2.0.0");
+        mocks.disk.current = null;
+        return {
+          outcome: "promoted",
+          stagedVersion: "2.0.0",
+          installedVersion: "1.0.0",
+        } satisfies HostDownloadOutcome;
+      },
+    );
+    mocks.applyHostMock.mockResolvedValue(
+      appliedOutcome("1.0.0", "2.0.0", null),
+    );
+    mocks.createUpdateProgressMarkerIfAbsentMock.mockImplementationOnce(
+      async () => "failed",
+    );
+
+    const result = await buildHostUpdateCommand({
+      force: false,
+      allowDowngrade: false,
+      ackNonce: null,
+    })(fakeCtx());
+
+    // The apply still runs to completion - a failed create is advisory
+    // state, never a reason to abort or throw.
+    expect(mocks.applyHostMock).toHaveBeenCalled();
+    expect(result.exitCode).toBe(0);
+    expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenCalledTimes(1);
+    const firstWrite = mocks.writeUpdateProgressMarkerMock.mock
+      .calls[0][1] as HostUpdateProgress;
+    // `ownMarker` was never adopted from a failed create - the final clear
+    // is still CAS'd against this run's ORIGINAL pre-lock record.
+    expect(
+      mocks.deleteUpdateProgressMarkerIfUnchangedMock,
+    ).toHaveBeenCalledWith("production", firstWrite);
   });
 });

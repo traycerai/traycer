@@ -190,17 +190,32 @@ function scopedSessionMembershipSignature(hostId: string): string {
  * run, the desktop's launch converge - and a 60s staleTime with no interval
  * observed neither until the page was remounted. `staleTime` still exceeds
  * the interval so a healthy poll never reads as stale.
+ *
+ * Keyed by the RUNNING version the caller has observed. The facts derived
+ * from this read are comparisons against that version, and a version change
+ * is exactly the moment the install record moved under the page (the host
+ * restarted onto new bytes): a payload fetched under the old version is not
+ * a stale answer to the same question, it is an answer to a different one,
+ * and TanStack would otherwise keep serving it - "installed X, running Y,
+ * restart to finish" for a host that just finished. A new key has no data
+ * until the fresh read answers, which the derivation reads as "not observed".
+ * Disabled until a running version is known for the same reason.
  */
 export function useHostInstallationInfoQuery(input: {
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly enabled: boolean;
+  readonly runningVersion: string | null;
 }) {
   return useHostQuery<HostRpcRegistry, "host.getInstallationInfo">({
-    cacheKeyIdentity: undefined,
+    cacheKeyIdentity: [input.runningVersion],
     client: input.client,
     method: "host.getInstallationInfo",
     params: EMPTY_PARAMS,
-    options: { enabled: input.enabled, staleTime: 60_000, poll: true },
+    options: {
+      enabled: input.enabled && input.runningVersion !== null,
+      staleTime: 60_000,
+      poll: true,
+    },
   });
 }
 

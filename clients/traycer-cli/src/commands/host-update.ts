@@ -9,6 +9,7 @@ import {
   type HostDownloadOutcome,
 } from "../installer/download-stage";
 import {
+  createUpdateProgressMarkerIfAbsent,
   deleteUpdateProgressMarkerIfUnchanged,
   progressRecord,
   readUpdateProgressMarker,
@@ -204,10 +205,11 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
     // it names is the one a `failed` stamp has to name too, which is why the
     // re-point under the lock replaces the whole record rather than one field.
     //
-    // It is a CLAIM about the disk, not a fact: the one write that is not
-    // conditional on it is `reassertMarkerUnderLock` below, which republishes
-    // only into an EMPTY path - the case where a faster updater cleared this
-    // run's marker while it waited - and erases nothing.
+    // It is a CLAIM about the disk, not a fact: every write after the
+    // pre-lock publish is conditional on it, including the republish in
+    // `reassertMarkerUnderLock` below, which lands only into a path that is
+    // STILL empty at the write (create-if-absent) - the case where a faster
+    // updater cleared this run's marker while it waited - and erases nothing.
     const ownMarker: { current: HostUpdateProgress | null } = { current: null };
     const publishUpdating = async (targetVersion: string): Promise<void> => {
       ownMarker.current = progressRecord({
@@ -274,7 +276,34 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
         );
         return;
       }
-      await publishUpdating(targetVersion);
+      // The path read empty - but the read is not the write. A second
+      // updater publishes its marker BEFORE its own lock wait, so one can
+      // land here between that read and this republish; a plain write would
+      // overwrite it with this run's record, and this run's conditional
+      // clear after the apply - CAS'd against exactly that record - would
+      // then erase what stood in the other updater's place, hiding its whole
+      // download from every remote surface until it re-asserted under the
+      // lock. Create-if-absent lands only into a still-empty path; losing the
+      // race is the same answer as the non-empty arm above.
+      const republished = progressRecord({
+        state: "updating",
+        error: null,
+        targetVersion,
+      });
+      const created = await createUpdateProgressMarkerIfAbsent(
+        environment,
+        republished,
+      );
+      if (created === "created") {
+        ownMarker.current = republished;
+        return;
+      }
+      if (created === "exists") {
+        ctx.runtime.logger.info(
+          "Host update proceeds under another updater's progress marker; it landed while this run re-asserted its own",
+          { environment, targetVersion },
+        );
+      }
     };
 
     let preparation: HostUpdatePreparation;

@@ -233,6 +233,119 @@ export async function replaceUpdateProgressMarkerIfUnchanged(
  * or pid would be one more concurrent actor in a directory whose whole
  * difficulty is concurrent actors, for a few hundred bytes per crash.
  */
+async function dropMarkerFile(
+  environment: Environment,
+  path: string,
+  step: string,
+): Promise<void> {
+  try {
+    await rm(path, { force: true });
+  } catch (err) {
+    createCliLogger(environment).warn(
+      "Host update progress marker scratch cleanup failed",
+      {
+        environment,
+        step,
+        errorName: errorFromUnknown(err).name,
+        errorMessage: errorFromUnknown(err).message,
+      },
+    );
+  }
+}
+
+// `link(from → target)` lands `from` at the live path only if that path is
+// empty; EEXIST means a newer marker is there and wins. A filesystem that
+// refuses hard links falls back to an exclusive create (`wx`) of the same
+// bytes - still create-if-absent, so a marker landed in between still wins
+// with EEXIST. A plain rename is never the fallback: it would overwrite
+// that marker and reopen exactly the race the conditional operations exist
+// to close. The cost of the `wx` path is a non-atomic content write - a
+// reader polling in that instant may see a partial file, which it parses as
+// "no marker" for one poll. Returns whether `from` is now the live marker.
+async function landMarkerAtomically(
+  environment: Environment,
+  target: string,
+  from: string,
+  step: string,
+): Promise<boolean> {
+  try {
+    await link(from, target);
+    await dropMarkerFile(environment, from, `${step}-unlink-source`);
+    return true;
+  } catch (err) {
+    if (errnoCode(err) === "EEXIST") {
+      await dropMarkerFile(environment, from, `${step}-newer-exists`);
+      return false;
+    }
+    try {
+      const bytes = await readFile(from);
+      await writeFile(target, bytes, { flag: "wx", mode: 0o600 });
+      await dropMarkerFile(environment, from, `${step}-unlink-source`);
+      return true;
+    } catch (createErr) {
+      if (errnoCode(createErr) === "EEXIST") {
+        await dropMarkerFile(environment, from, `${step}-newer-exists`);
+        return false;
+      }
+      // Neither route could land `from` (no hard links AND the create
+      // failed - ENOSPC, EIO). `from` may be the only complete copy of
+      // another updater's live marker, taken out of the live path in a
+      // swap's step 1; deleting it here would erase that marker while
+      // reporting `changed`. It is RETAINED and named in the log so an
+      // operator can find it. For a stamp or a create the leftover is this
+      // run's own staged record - harmless garbage next to the marker.
+      createCliLogger(environment).warn(
+        "Host update progress marker conditional swap failed - displaced file retained",
+        {
+          environment,
+          step,
+          retainedPath: from,
+          errorName: errorFromUnknown(createErr).name,
+          errorMessage: errorFromUnknown(createErr).message,
+        },
+      );
+      return false;
+    }
+  }
+}
+
+/**
+ * Create-if-absent: land `next` at the live path ONLY if no marker stands
+ * there, through the same `link` / `wx` landing the conditional swap uses.
+ * `"exists"` means a marker was there - possibly one that landed between the
+ * caller's read and this call, which is exactly the write this exists to
+ * refuse: a read-then-`rename` would have overwritten it. Never throws;
+ * `"failed"` is an I/O failure that landed nothing, reported by log.
+ */
+export async function createUpdateProgressMarkerIfAbsent(
+  environment: Environment,
+  next: HostUpdateProgress,
+): Promise<"created" | "exists" | "failed"> {
+  const logger = createCliLogger(environment);
+  try {
+    await ensureHostHomeDir(environment);
+    const target = hostUpdateProgressMarkerPath(environment);
+    const staged = await stageMarkerFile(target, next);
+    if (!(await landMarkerAtomically(environment, target, staged, "create"))) {
+      return "exists";
+    }
+    logger.info("Host update progress marker created (conditional)", {
+      environment,
+      state: next.state,
+      targetVersion: next.targetVersion,
+      hasError: next.error !== null,
+    });
+    return "created";
+  } catch (err) {
+    logger.warn("Host update progress marker conditional create failed", {
+      environment,
+      errorName: errorFromUnknown(err).name,
+      errorMessage: errorFromUnknown(err).message,
+    });
+    return "failed";
+  }
+}
+
 async function swapMarkerIfUnchanged(
   environment: Environment,
   expected: HostUpdateProgress,
@@ -241,71 +354,10 @@ async function swapMarkerIfUnchanged(
   const logger = createCliLogger(environment);
   const target = hostUpdateProgressMarkerPath(environment);
   const scratch = `${target}.reconcile-${process.pid}-${Date.now()}`;
-  const dropFile = async (path: string, step: string): Promise<void> => {
-    try {
-      await rm(path, { force: true });
-    } catch (err) {
-      logger.warn("Host update progress marker scratch cleanup failed", {
-        environment,
-        step,
-        errorName: errorFromUnknown(err).name,
-        errorMessage: errorFromUnknown(err).message,
-      });
-    }
-  };
-  // `link(from → target)` lands `from` at the live path only if that path is
-  // empty; EEXIST means a newer marker is there and wins. A filesystem that
-  // refuses hard links falls back to an exclusive create (`wx`) of the same
-  // bytes - still create-if-absent, so a marker landed in between still wins
-  // with EEXIST. A plain rename is never the fallback: it would overwrite
-  // that marker and reopen exactly the race this swap exists to close. The
-  // cost of the `wx` path is a non-atomic content write - a reader polling in
-  // that instant may see a partial file, which it parses as "no marker" for
-  // one poll. Returns whether `from` is now the live marker.
-  const landAtomically = async (
-    from: string,
-    step: string,
-  ): Promise<boolean> => {
-    try {
-      await link(from, target);
-      await dropFile(from, `${step}-unlink-source`);
-      return true;
-    } catch (err) {
-      if (errnoCode(err) === "EEXIST") {
-        await dropFile(from, `${step}-newer-exists`);
-        return false;
-      }
-      try {
-        const bytes = await readFile(from);
-        await writeFile(target, bytes, { flag: "wx", mode: 0o600 });
-        await dropFile(from, `${step}-unlink-source`);
-        return true;
-      } catch (createErr) {
-        if (errnoCode(createErr) === "EEXIST") {
-          await dropFile(from, `${step}-newer-exists`);
-          return false;
-        }
-        // Neither route could land `from` (no hard links AND the create
-        // failed - ENOSPC, EIO). `from` may be the only complete copy of
-        // another updater's live marker, taken out of the live path in step
-        // 1; deleting it here would erase that marker while reporting
-        // `changed`. It is RETAINED and named in the log so an operator can
-        // find it. For a stamp the leftover is this run's own staged record -
-        // harmless garbage next to the marker.
-        logger.warn(
-          "Host update progress marker conditional swap failed - displaced file retained",
-          {
-            environment,
-            step,
-            retainedPath: from,
-            errorName: errorFromUnknown(createErr).name,
-            errorMessage: errorFromUnknown(createErr).message,
-          },
-        );
-        return false;
-      }
-    }
-  };
+  const dropFile = (path: string, step: string): Promise<void> =>
+    dropMarkerFile(environment, path, step);
+  const landAtomically = (from: string, step: string): Promise<boolean> =>
+    landMarkerAtomically(environment, target, from, step);
   const changed = (currentState: HostUpdateProgressState | null): "changed" => {
     logger.info(
       "Host update progress marker changed under a conditional swap",

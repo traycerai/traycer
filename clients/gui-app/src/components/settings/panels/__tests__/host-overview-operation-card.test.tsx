@@ -40,6 +40,7 @@ vi.mock("sonner", () => ({
 
 import type { ReactNode } from "react";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -840,5 +841,144 @@ describe("HostOverviewOperationCard — record-derived parks", () => {
     await waitFor(() => {
       expect(screen.queryByTestId("host-busy-force-defer-dialog")).toBeNull();
     });
+  });
+});
+
+/**
+ * A settable promise, so a fixture handler can hold `host.getInstallationInfo`
+ * pending until the test is ready to resolve it - the deferred install read
+ * these two pins each gate on a call count.
+ */
+function deferredInstallationResponse(): {
+  readonly promise: Promise<HostGetInstallationInfoResponseV11>;
+  readonly resolve: (value: HostGetInstallationInfoResponseV11) => void;
+} {
+  let resolve: (value: HostGetInstallationInfoResponseV11) => void = () => {
+    throw new Error("resolve called before assignment");
+  };
+  const promise = new Promise<HostGetInstallationInfoResponseV11>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
+// `useHostInstallationInfoQuery` (`host-overview-rpc.ts`): keyed by the
+// RUNNING version the caller has observed (`cacheKeyIdentity: [runningVersion]`)
+// and disabled until one is known. Both pins ablate by reverting to the OLD
+// shape - no key, no gate - which is exactly what let a record fetched under
+// the PREVIOUS running version answer a comparison against a version that has
+// since moved.
+describe("HostOverviewOperationCard — installation query keyed by running version", () => {
+  it("a running-version change does not compare the OLD install record against the NEW version", async () => {
+    // Falsification: drop `cacheKeyIdentity: [runningVersion]` from
+    // `useHostInstallationInfoQuery` (set `undefined`) and the SAME query
+    // keeps serving the rc.2 install record while `host.status` already
+    // reports rc.3 - the debt card renders "v1.3.0-rc.2 is installed" for a
+    // host that has already moved past it.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let statusCalls = 0;
+    let installationCalls = 0;
+    const secondRead = deferredInstallationResponse();
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      overrideHandlers: {
+        "host.status": () => {
+          statusCalls += 1;
+          return statusWithBusy(
+            statusCalls === 1 ? "1.3.0-rc.2" : "1.3.0-rc.3",
+            { kind: "none" },
+            false,
+            0,
+          );
+        },
+        "host.getInstallationInfo": () => {
+          installationCalls += 1;
+          if (installationCalls === 1) {
+            return managedInstallation(installRecord("1.3.0-rc.2", null), null);
+          }
+          // The read for the NEW key (running = rc.3) is slow/pending -
+          // exactly the window a stale, unkeyed cache entry would otherwise
+          // paper over with the rc.2 answer.
+          return secondRead.promise;
+        },
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    // Baseline: install matches the running rc.2 - no debt.
+    await screen.findByText(/1\.3\.0-rc\.2/);
+    expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
+
+    // Advance past the 10s `host.status` poll: the host reports rc.3, and the
+    // installation query re-keys onto a fresh, still-pending read.
+    await vi.advanceTimersByTimeAsync(11_000);
+    await screen.findByText(/1\.3\.0-rc\.3/);
+    await waitFor(() => expect(installationCalls).toBe(2));
+
+    // While that fresh read is pending, there is nothing to compare against -
+    // "not observed", never a debt derived from the OLD rc.2 record.
+    expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
+
+    // Resolve it with the record a real host would now report - matching the
+    // new running version - and the card stays absent.
+    await act(async () => {
+      secondRead.resolve(
+        managedInstallation(installRecord("1.3.0-rc.3", null), null),
+      );
+      await secondRead.promise;
+    });
+    expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
+
+    vi.useRealTimers();
+  });
+
+  it("a failed installation read hides the record-derived facts", async () => {
+    // Falsification: remove `|| installationQuery.isError` from the
+    // `legacyFacts` gate in `host-overview-panel.tsx` and the card keeps
+    // showing the LAST successful record's debt through a read that has
+    // since started failing.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let installationCalls = 0;
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.3.0-rc.2",
+      overrideHandlers: {
+        "host.status": () =>
+          statusWithBusy("1.3.0-rc.2", { kind: "none" }, false, 0),
+        "host.getInstallationInfo": () => {
+          installationCalls += 1;
+          if (installationCalls === 2) {
+            throw new Error("host unreachable");
+          }
+          return managedInstallation(installRecord("1.3.0-rc.3", null), null);
+        },
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    // Debt visible: record rc.3 ahead of the running rc.2.
+    await screen.findByTestId("host-overview-operation-restart");
+
+    // The next installation poll throws - the status read keeps succeeding
+    // beside it, so this failure is the installation leg's alone.
+    await vi.advanceTimersByTimeAsync(11_000);
+    await waitFor(() => expect(installationCalls).toBe(2));
+    await waitFor(() => {
+      expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
+    });
+
+    // The next successful poll brings the debt card back.
+    await vi.advanceTimersByTimeAsync(11_000);
+    await screen.findByTestId("host-overview-operation-restart");
+
+    vi.useRealTimers();
   });
 });
