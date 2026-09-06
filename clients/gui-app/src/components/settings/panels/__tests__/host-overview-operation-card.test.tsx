@@ -723,6 +723,12 @@ describe("HostOverviewOperationCard — record-derived parks", () => {
       "Traycer couldn't determine how its command-line tools were installed on host-a.",
     );
     await screen.findByTestId("host-overview-operation-card");
+    // The negatives below are half a pin on their own: a card rendered in some
+    // other view would also have no force controls. Anchor them to the
+    // staged-wait phase they are about.
+    expect(
+      screen.getByTestId("host-overview-operation-phase").textContent,
+    ).toBe("Update will continue when 2 sessions finish");
     // Removing the stagedFloor gate would expose Force update for a CLI-floor
     // refusal; this negative affordance pin must turn RED under that ablation.
     expect(
@@ -771,6 +777,11 @@ describe("HostOverviewOperationCard — record-derived parks", () => {
     await screen.findByTestId("host-overview-operation-card");
     await screen.findByText("This host is running the latest version.");
     await waitFor(() => expect(checkCalls).toBeGreaterThan(0));
+    // Same anchor as above: the absent controls must be absent FROM the
+    // staged-wait card, not from some other view.
+    expect(
+      screen.getByTestId("host-overview-operation-phase").textContent,
+    ).toBe("Update will continue when 2 sessions finish");
     // Treating an absent staged entry as clear would make Force reachable while
     // its floor is unknown; this negative unknown-evidence pin must turn RED.
     expect(
