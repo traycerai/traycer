@@ -6,6 +6,7 @@ import type { BrowserSessionsState } from "@/lib/browser-view/sessions/browser-s
 import { consumeIndependentPageOpenedTab } from "@/lib/browser-view/sessions/independent-page-open-registry";
 import { useDesktopWindowId } from "@/lib/windows/desktop-window-id";
 import {
+  activeLandingBrowserTab,
   landingBrowserTabs,
   landingTabRefKey,
   useLandingPanelStore,
@@ -90,31 +91,74 @@ export function useLandingBrowserReconciliation(args: {
     // every subscriber of the device's independent stream, so each desktop
     // window records the same popup in its own registry and would move its own
     // panel onto it - a popup raised in one window stealing the selection in
-    // all of them. The popup is a native guest born in the window its opener
-    // lives in, and the device says which through `boundWindowId`; only that
-    // window's reader made the gesture. A popup bound nowhere (a headless
-    // session, watched from a shell with no window id) has one viewer to land.
-    const pageOpened = reconciliation.adoptedTabs
-      .filter((tab) =>
-        consumeIndependentPageOpenedTab({
-          hostId: tab.hostId,
-          sessionId: tab.sessionId,
-          tabId: tab.tabId,
-        }),
-      )
-      .filter((tab) => {
-        const boundWindowId = boundWindowIdOf(items, tab);
-        return boundWindowId === null || boundWindowId === desktopWindowId;
+    // all of them. Which window's reader made the gesture is answered by
+    // `raisedInThisWindow`, from where the popup and its opener are on screen.
+    // The active row is read from the snapshot taken ABOVE the apply, which is
+    // what the reader had in front of them when the popup arrived.
+    const pageOpened = reconciliation.adoptedTabs.filter((tab) => {
+      const opened = consumeIndependentPageOpenedTab({
+        hostId: tab.hostId,
+        sessionId: tab.sessionId,
+        tabId: tab.tabId,
       });
+      if (opened === null) return false;
+      return raisedInThisWindow({
+        popup: tab,
+        openerTabId: opened.openerTabId,
+        sessions: items,
+        activeTab: activeLandingBrowserTab(store),
+        desktopWindowId,
+      });
+    });
     const landed = pageOpened.at(-1);
     if (landed !== undefined) store.activateTab(landed.instanceId);
   }, [desktopWindowId, enabled, hostId, inventoryReady, items]);
 }
 
+/**
+ * Was a page-opened tab this window's reader's doing?
+ *
+ * A NATIVE popup is a guest born in the window its opener lives in, and the
+ * device says which through `boundWindowId`: only that window's reader could
+ * have clicked in it. A HEADLESS popup - a remote device's tab, or a device
+ * with no desktop - is bound nowhere and its pixels reach every window that
+ * watches, so the question moves to the opener: the gesture was made where the
+ * opener was on screen, which is the window whose active row it was (or, for a
+ * native opener, the window it is bound in). When the device could not name
+ * the opener, the reader looking at that session here is the best answer left;
+ * a window on a terminal, or on another session, did not raise it.
+ */
+function raisedInThisWindow(args: {
+  readonly popup: LandingBrowserTabRef;
+  readonly openerTabId: string | null;
+  readonly sessions: readonly BrowserSessionInfo[];
+  readonly activeTab: LandingBrowserTabRef | null;
+  readonly desktopWindowId: string | null;
+}): boolean {
+  const { popup, openerTabId, sessions, activeTab, desktopWindowId } = args;
+  const popupBoundWindowId = boundWindowIdOf(sessions, popup);
+  if (popupBoundWindowId !== null) {
+    return popupBoundWindowId === desktopWindowId;
+  }
+  const onThisSessionHere =
+    activeTab !== null &&
+    activeTab.hostId === popup.hostId &&
+    activeTab.sessionId === popup.sessionId;
+  if (openerTabId === null) return onThisSessionHere;
+  const openerBoundWindowId = boundWindowIdOf(sessions, {
+    sessionId: popup.sessionId,
+    tabId: openerTabId,
+  });
+  if (openerBoundWindowId !== null) {
+    return openerBoundWindowId === desktopWindowId;
+  }
+  return onThisSessionHere && activeTab.tabId === openerTabId;
+}
+
 /** The window a tab's native guest is bound in, per the device; `null` if none. */
 function boundWindowIdOf(
   sessions: readonly BrowserSessionInfo[],
-  tab: LandingBrowserTabRef,
+  tab: Pick<LandingBrowserTabRef, "sessionId" | "tabId">,
 ): string | null {
   return (
     sessions

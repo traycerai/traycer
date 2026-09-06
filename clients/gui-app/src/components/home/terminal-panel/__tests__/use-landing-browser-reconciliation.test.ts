@@ -431,6 +431,7 @@ describe("useLandingBrowserReconciliation", () => {
       hostId: HOST_ID,
       sessionId: "session-1",
       tabId: "popup-tab",
+      openerTabId: "tab-1",
     });
     const session = sessionInfo({
       sessionId: "session-1",
@@ -463,39 +464,82 @@ describe("useLandingBrowserReconciliation", () => {
   });
 
   // `tabOpened` reaches every window's stream, so every window records the
-  // popup. Only the window whose reader raised it - the one its native guest
-  // is bound in - moves its panel onto it; the others adopt it quietly.
-  it("activates a page-opened tab only in the window its guest is bound in", () => {
-    const pass = (
-      boundWindowId: string | null,
-      thisWindowId: string | null,
-    ): boolean => {
+  // popup and adopts it. Only the window whose reader raised it moves its
+  // panel onto it, and which window that is depends on where the popup - or,
+  // for a headless one, its opener - is on screen.
+  it("activates a page-opened tab only in the window whose reader raised it", () => {
+    interface Pass {
+      readonly thisWindowId: string | null;
+      /** The row this window's panel is on when the popup arrives. */
+      readonly activeRow: "opener" | "other-tab" | "other-session";
+      readonly popupBoundWindowId: string | null;
+      readonly openerBoundWindowId: string | null;
+      /** `false`: the device could not name the opener (`noopener`, gone). */
+      readonly openerNamed: boolean;
+    }
+    const pass = (input: Pass): boolean => {
       useLandingPanelStore.getState().resetForTests();
-      storedBrowserTab("browser-1", "tab-1");
-      useLandingPanelStore.getState().activateTab("browser-1");
-      windowIdHarness.windowId = thisWindowId;
+      windowIdHarness.windowId = input.thisWindowId;
+      storedBrowserTab("browser-opener", "opener-tab");
+      storedBrowserTab("browser-other", "other-tab");
+      useLandingPanelStore.getState().addTab({
+        kind: "browser",
+        instanceId: "browser-elsewhere",
+        hostId: HOST_ID,
+        sessionId: "session-2",
+        tabId: "elsewhere-tab",
+        name: "elsewhere.example",
+        titleSource: "default",
+      });
+      const rowInstanceIds: Record<Pass["activeRow"], string> = {
+        opener: "browser-opener",
+        "other-tab": "browser-other",
+        "other-session": "browser-elsewhere",
+      };
+      useLandingPanelStore
+        .getState()
+        .activateTab(rowInstanceIds[input.activeRow]);
       recordIndependentPageOpenedTab({
         hostId: HOST_ID,
         sessionId: "session-1",
         tabId: "popup-tab",
+        openerTabId: input.openerNamed ? "opener-tab" : null,
       });
-      const session = sessionInfo({
-        sessionId: "session-1",
-        hostId: HOST_ID,
-        scope: independentScope(),
-        tabs: [
-          tabInfo({ tabId: "tab-1", url: "https://example.com/" }),
-          tabInfo({
-            tabId: "popup-tab",
-            url: "https://example.com/next",
-            boundWindowId,
-          }),
-        ],
-      });
+      const sessions = [
+        sessionInfo({
+          sessionId: "session-1",
+          hostId: HOST_ID,
+          scope: independentScope(),
+          tabs: [
+            tabInfo({
+              tabId: "opener-tab",
+              url: "https://example.com/",
+              boundWindowId: input.openerBoundWindowId,
+            }),
+            tabInfo({ tabId: "other-tab", url: "https://other.example/" }),
+            tabInfo({
+              tabId: "popup-tab",
+              url: "https://example.com/next",
+              boundWindowId: input.popupBoundWindowId,
+            }),
+          ],
+        }),
+        sessionInfo({
+          sessionId: "session-2",
+          hostId: HOST_ID,
+          scope: independentScope(),
+          tabs: [
+            tabInfo({
+              tabId: "elsewhere-tab",
+              url: "https://elsewhere.example/",
+            }),
+          ],
+        }),
+      ];
       const view = renderHook(() =>
         useLandingBrowserReconciliation({
           hostId: HOST_ID,
-          sessions: sessionsState({ items: [session] }),
+          sessions: sessionsState({ items: sessions }),
           enabled: true,
         }),
       );
@@ -509,12 +553,67 @@ describe("useLandingBrowserReconciliation", () => {
       view.unmount();
       return state.activeInstanceId === popup?.instanceId;
     };
+    const native = (
+      thisWindowId: string | null,
+      activeRow: Pass["activeRow"],
+    ): boolean =>
+      pass({
+        thisWindowId,
+        activeRow,
+        popupBoundWindowId: "window-a",
+        openerBoundWindowId: "window-a",
+        openerNamed: true,
+      });
+    const headless = (
+      thisWindowId: string | null,
+      activeRow: Pass["activeRow"],
+      openerNamed: boolean,
+    ): boolean =>
+      pass({
+        thisWindowId,
+        activeRow,
+        popupBoundWindowId: null,
+        openerBoundWindowId: null,
+        openerNamed,
+      });
 
-    expect(pass("window-a", "window-a")).toBe(true);
-    expect(pass("window-a", "window-b")).toBe(false);
-    // Unbound - a headless popup - lands in the one window watching it.
-    expect(pass(null, "window-b")).toBe(true);
-    expect(pass(null, null)).toBe(true);
+    // A native popup is born in its opener's window; that window follows it
+    // whatever row its panel was on, and no other window does.
+    expect(native("window-a", "other-tab")).toBe(true);
+    expect(native("window-b", "opener")).toBe(false);
+
+    // A headless popup reaches every window. The one whose reader was on the
+    // opener raised it; a window on another tab of the same device did not.
+    expect(headless("window-a", "opener", true)).toBe(true);
+    expect(headless("window-b", "other-tab", true)).toBe(false);
+    // A shell with no window id (the browser build) is still a reader.
+    expect(headless(null, "opener", true)).toBe(true);
+
+    // A headless popup from a NATIVE opener: the opener's window raised it,
+    // even if that window's panel had moved on to another row.
+    expect(
+      pass({
+        thisWindowId: "window-a",
+        activeRow: "other-tab",
+        popupBoundWindowId: null,
+        openerBoundWindowId: "window-a",
+        openerNamed: true,
+      }),
+    ).toBe(true);
+    expect(
+      pass({
+        thisWindowId: "window-b",
+        activeRow: "opener",
+        popupBoundWindowId: null,
+        openerBoundWindowId: "window-a",
+        openerNamed: true,
+      }),
+    ).toBe(false);
+
+    // Opener unknown: the window looking at that session is the best answer
+    // left; one on another session did not raise it.
+    expect(headless("window-a", "other-tab", false)).toBe(true);
+    expect(headless("window-a", "other-session", false)).toBe(false);
   });
 
   it("leaves the selection alone for tabs nobody at this keyboard opened", () => {

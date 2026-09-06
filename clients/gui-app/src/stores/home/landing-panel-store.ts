@@ -183,6 +183,22 @@ export function activeLandingTerminalInstanceId(
 }
 
 /**
+ * The active row when it is a BROWSER tab, else `null`: the panel's answer to
+ * "which page is the reader looking at here", for the one caller that has to
+ * decide whether a page-opened tab was this window's reader's doing.
+ */
+export function activeLandingBrowserTab(
+  state: Pick<LandingPanelStoreState, "tabs" | "activeInstanceId">,
+): LandingBrowserTabRef | null {
+  const active = state.activeInstanceId;
+  if (active === null) return null;
+  return (
+    landingBrowserTabs(state.tabs).find((tab) => tab.instanceId === active) ??
+    null
+  );
+}
+
+/**
  * A kill that is still owed for a session whose tab is already gone.
  *
  * The provenance fields exist because the drain cannot otherwise tell an absent

@@ -234,13 +234,14 @@ describe("browser.screencast@1.0 control frames", () => {
 });
 
 describe("browser.sessions@1.0 epic-scoped open + tab-shaped session info", () => {
-  it("parses tabOpened as a one-way tab lifecycle event carrying source", () => {
+  it("parses tabOpened as a one-way tab lifecycle event carrying source and opener", () => {
     const opened = {
       kind: "tabOpened",
       hasBinaryPayload: false,
       sessionId: "session-1",
       tabId: "tab-2",
       source: "agent",
+      openerTabId: null,
     };
     expect(browserSessionsServerFrameSchema.safeParse(opened).success).toBe(
       true,
@@ -249,6 +250,7 @@ describe("browser.sessions@1.0 epic-scoped open + tab-shaped session info", () =
       browserSessionsServerFrameSchema.safeParse({
         ...opened,
         source: "page",
+        openerTabId: "tab-1",
       }).success,
     ).toBe(true);
     // `source` is required, and the frame is closed - the retired
@@ -259,6 +261,19 @@ describe("browser.sessions@1.0 epic-scoped open + tab-shaped session info", () =
         hasBinaryPayload: false,
         sessionId: "session-1",
         tabId: "tab-2",
+        openerTabId: null,
+      }).success,
+    ).toBe(false);
+    // `openerTabId` is required too: a producer that cannot name the opener
+    // says `null`, so a consumer never has to guess between "unknown" and
+    // "not sent".
+    expect(
+      browserSessionsServerFrameSchema.safeParse({
+        kind: "tabOpened",
+        hasBinaryPayload: false,
+        sessionId: "session-1",
+        tabId: "tab-2",
+        source: "page",
       }).success,
     ).toBe(false);
     expect(

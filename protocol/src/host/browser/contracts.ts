@@ -599,6 +599,15 @@ export const browserSessionsServerFrameSchema = z.discriminatedUnion("kind", [
       ...browserSessionReferenceFields,
       tabId: z.string(),
       source: browserTabOpenedSourceSchema,
+      /**
+       * The tab whose page opened this one, when the runtime can name it;
+       * `null` for an agent open, a `noopener` popup, or an opener already
+       * gone. A `page` open is a gesture the reader made IN the opener, so a
+       * surface deciding whether to follow the new tab asks where the opener
+       * is on screen - which matters once the same device is watched from
+       * more than one window, since this frame reaches all of them.
+       */
+      openerTabId: z.string().nullable(),
     })
     .strict(),
   z

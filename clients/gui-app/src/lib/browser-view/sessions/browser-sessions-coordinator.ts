@@ -919,6 +919,7 @@ function surfaceTabOpenedFrame(
       hostId,
       sessionId: frame.sessionId,
       tabId: frame.tabId,
+      openerTabId: frame.openerTabId,
     });
     return;
   }

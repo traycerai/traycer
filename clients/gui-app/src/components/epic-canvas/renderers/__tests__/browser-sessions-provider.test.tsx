@@ -618,6 +618,7 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
           sessionId: "session-popup",
           tabId: "tab-popup",
           source: "page",
+          openerTabId: null,
         },
         null,
       );
@@ -671,6 +672,7 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
           sessionId: "session-popup",
           tabId: "tab-popup",
           source: "page",
+          openerTabId: null,
         },
         null,
       );

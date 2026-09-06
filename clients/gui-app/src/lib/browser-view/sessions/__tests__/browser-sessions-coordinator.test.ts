@@ -198,17 +198,20 @@ describe("browser sessions coordinator registry", () => {
         sessionId: "device-session",
         tabId: "popup-tab",
         source: "page",
+        openerTabId: "opener-tab",
       },
       null,
     );
 
+    // With the opener the device named: the reconciler decides from where
+    // that tab is on screen whether this window's reader raised the popup.
     expect(
       consumeIndependentPageOpenedTab({
         hostId: "host-1",
         sessionId: "device-session",
         tabId: "popup-tab",
       }),
-    ).toBe(true);
+    ).toEqual({ openerTabId: "opener-tab" });
     // Consumed exactly once: a second window adopting the same row later must
     // not have its selection yanked as well.
     expect(
@@ -217,7 +220,7 @@ describe("browser sessions coordinator registry", () => {
         sessionId: "device-session",
         tabId: "popup-tab",
       }),
-    ).toBe(false);
+    ).toBeNull();
   });
 
   // Agents are epic-scoped on the host, so an agent-sourced frame on an
@@ -238,6 +241,7 @@ describe("browser sessions coordinator registry", () => {
         sessionId: "device-session",
         tabId: "agent-tab",
         source: "agent",
+        openerTabId: null,
       },
       null,
     );
@@ -248,7 +252,7 @@ describe("browser sessions coordinator registry", () => {
         sessionId: "device-session",
         tabId: "agent-tab",
       }),
-    ).toBe(false);
+    ).toBeNull();
   });
 
   it("keys two scopes on the same host and identity into two coordinators, independent of scope field order", () => {
