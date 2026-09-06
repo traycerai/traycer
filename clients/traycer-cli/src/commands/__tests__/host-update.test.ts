@@ -48,6 +48,17 @@ const mocks = vi.hoisted(() => ({
   assertHostNotBusyMock: vi.fn(),
   stopHostForRestartWithAttemptMock: vi.fn(),
   relaunchHostAfterRestartWithAttemptMock: vi.fn(),
+  // The fixture's model of the on-disk marker file. `armActivationDefaults`
+  // wires the four marker primitives above to read/write/CAS against this
+  // single holder, so `reassertMarkerUnderLock`'s "is the disk still ours"
+  // decisions see a coherent file instead of the four mocks disagreeing with
+  // each other. A plain field (not a `vi.fn()`), reset per test by
+  // `armActivationDefaults` itself.
+  disk: { current: null } as {
+    current:
+      | import("../../host/update-progress-marker").HostUpdateProgress
+      | null;
+  },
 }));
 
 vi.mock("../../host/update-progress-marker", () => ({
@@ -188,6 +199,13 @@ import type {
 } from "../../installer/download-stage";
 import type { ApplyHostOutcome } from "../../installer/apply";
 import type { HostUpdateProgress } from "../../host/update-progress-marker";
+// Value import (not type-only): the module is mocked above, and that mock
+// factory defines `sameProgress` as the REAL comparator (not a `vi.fn()`), so
+// this import gets production comparison logic - the same test double the
+// mocked `../../host/update-progress-marker` module hands the CLI code under
+// test. Used by `armActivationDefaults`'s disk fixture below to decide CAS
+// outcomes the way the real marker module would.
+import { sameProgress } from "../../host/update-progress-marker";
 
 // Mirrors host-management-ipc.ts's `projectInstallResult` field-by-field,
 // including its tolerant fallbacks - the contract this suite pins.
@@ -331,11 +349,53 @@ function fakeCtx(): CommandContext {
 // every existing short-circuit test keeps its no-op contract. Tests that
 // exercise activation opt in with an explicit pid record. Re-armed per test
 // because `resetAllMocks` wipes return values.
+//
+// The four marker primitives are wired to `mocks.disk` - a single fixture
+// modeling the on-disk marker file - rather than given independent canned
+// return values. `reassertMarkerUnderLock` (host-update.ts) reads the disk,
+// compares it against the marker THIS run wrote, and CAS-replaces or CAS-
+// deletes it; a `readUpdateProgressMarker` that always answers `null`
+// (the old default) makes every under-lock reassertion see an "empty disk"
+// and republish over its own still-live marker - a write this run did not
+// intend and tests must not double-count. A test that needs to simulate a
+// FOREIGN writer or a lost CAS race still overrides the individual mock
+// (`.mockResolvedValue(...)` on top of this wiring) exactly as before; that
+// override wins for that call and simply does not touch `mocks.disk`.
 function armActivationDefaults(): void {
-  mocks.readUpdateProgressMarkerMock.mockResolvedValue(null);
-  mocks.deleteUpdateProgressMarkerIfUnchangedMock.mockResolvedValue("cleared");
-  mocks.replaceUpdateProgressMarkerIfUnchangedMock.mockResolvedValue(
-    "replaced",
+  mocks.disk.current = null;
+  mocks.readUpdateProgressMarkerMock.mockImplementation(
+    async () => mocks.disk.current,
+  );
+  mocks.writeUpdateProgressMarkerMock.mockImplementation(
+    async (_environment: string, record: HostUpdateProgress) => {
+      mocks.disk.current = record;
+    },
+  );
+  mocks.replaceUpdateProgressMarkerIfUnchangedMock.mockImplementation(
+    async (
+      _environment: string,
+      expected: HostUpdateProgress,
+      next: HostUpdateProgress,
+    ) => {
+      if (
+        mocks.disk.current !== null &&
+        sameProgress(mocks.disk.current, expected)
+      ) {
+        mocks.disk.current = next;
+        return "replaced";
+      }
+      return "changed";
+    },
+  );
+  mocks.deleteUpdateProgressMarkerIfUnchangedMock.mockImplementation(
+    async (_environment: string, expected: HostUpdateProgress) => {
+      if (mocks.disk.current === null) return "absent";
+      if (sameProgress(mocks.disk.current, expected)) {
+        mocks.disk.current = null;
+        return "cleared";
+      }
+      return "changed";
+    },
   );
   mocks.readHostPidMetadataMock.mockResolvedValue(null);
   mocks.identityVerdictMock.mockResolvedValue("current");
@@ -499,6 +559,7 @@ describe("buildHostUpdateCommand composite", () => {
       version: "1.2.0",
       force: false,
       onProgress: expect.any(Function),
+      onBeforeCommit: expect.any(Function),
     });
     expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenCalledWith(
       "production",
@@ -1905,9 +1966,12 @@ describe("buildHostUpdateCommand busy park + early marker", () => {
         } satisfies HostDownloadOutcome;
       },
     );
-    mocks.writeUpdateProgressMarkerMock.mockImplementation(async () => {
-      mocks.callOrder.push("marker-written");
-    });
+    mocks.writeUpdateProgressMarkerMock.mockImplementation(
+      async (_environment: string, record: HostUpdateProgress) => {
+        mocks.callOrder.push("marker-written");
+        mocks.disk.current = record;
+      },
+    );
     mocks.applyHostMock.mockResolvedValue(
       appliedOutcome("1.0.0", "2.0.0", null),
     );
@@ -2128,5 +2192,179 @@ describe("buildHostUpdateCommand busy park + early marker", () => {
       expect.objectContaining({ force: true }),
     );
     expect(result.exitCode).toBe(0);
+  });
+});
+
+// `reassertMarkerUnderLock` (host-update.ts): under the contender lock, right
+// before the disruptive half of every arm, re-establish what the pre-lock
+// marker only claimed. These pin the three cases named in its own doc
+// comment against the DISK FIXTURE (`mocks.disk`, wired by
+// `armActivationDefaults`) rather than canned per-call return values, so a
+// test can simulate the disk changing out from under this run mid-flight.
+describe("buildHostUpdateCommand — reassertMarkerUnderLock under the lock", () => {
+  beforeEach(() => {
+    mocks.probeHostHealthMock.mockResolvedValue({
+      healthy: true,
+      detail: "ok",
+    });
+    armActivationDefaults();
+  });
+
+  afterEach(() => {
+    vi.resetAllMocks();
+    mocks.callOrder = [];
+  });
+
+  function requireHook(
+    opts: DownloadAndStageHostOptions,
+  ): (targetVersion: string) => Promise<void> {
+    if (opts.onWillDownload === null) {
+      throw new Error("expected onWillDownload to be provided");
+    }
+    return opts.onWillDownload;
+  }
+
+  it("marker withdrawn while waiting: republished under the lock before the apply", async () => {
+    // Falsification: stub `reassertMarkerUnderLock` to return early instead
+    // of republishing on an empty disk, and `writeUpdateProgressMarker`
+    // below is called once instead of twice.
+    mocks.downloadAndStageHostMock.mockImplementation(
+      async (opts: DownloadAndStageHostOptions) => {
+        await requireHook(opts)("2.0.0");
+        // Another updater's run cleared our marker while this run waited
+        // for admission - a wait this run controls none of.
+        mocks.disk.current = null;
+        return {
+          outcome: "promoted",
+          stagedVersion: "2.0.0",
+          installedVersion: "1.0.0",
+        } satisfies HostDownloadOutcome;
+      },
+    );
+    mocks.applyHostMock.mockResolvedValue(
+      appliedOutcome("1.0.0", "2.0.0", null),
+    );
+
+    const result = await buildHostUpdateCommand({
+      force: false,
+      allowDowngrade: false,
+      ackNonce: null,
+    })(fakeCtx());
+
+    expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenCalledTimes(2);
+    const firstWrite = mocks.writeUpdateProgressMarkerMock.mock
+      .calls[0][1] as HostUpdateProgress;
+    const secondWrite = mocks.writeUpdateProgressMarkerMock.mock
+      .calls[1][1] as HostUpdateProgress;
+    expect(firstWrite.targetVersion).toBe("2.0.0");
+    expect(secondWrite.targetVersion).toBe("2.0.0");
+    // The republish happens under the lock, strictly before the apply half
+    // - `invocationCallOrder` gives a global ordering across every mock.
+    const secondWriteOrder =
+      mocks.writeUpdateProgressMarkerMock.mock.invocationCallOrder[1];
+    const applyOrder = mocks.applyHostMock.mock.invocationCallOrder[0];
+    expect(secondWriteOrder).toBeLessThan(applyOrder);
+    // The final clear follows the republished record, not the withdrawn one.
+    expect(
+      mocks.deleteUpdateProgressMarkerIfUnchangedMock,
+    ).toHaveBeenCalledWith("production", secondWrite);
+    expect(result.exitCode).toBe(0);
+  });
+
+  it("another updater's marker on disk under the lock: left alone", async () => {
+    // Falsification: collapse `reassertMarkerUnderLock` to an
+    // unconditional `publishUpdating(targetVersion)` (drop the disk read
+    // and the ownership check entirely) and `writeUpdateProgressMarker`
+    // below is called twice, with the second write stamping over the
+    // foreign record instead of leaving it alone.
+    const foreignRecord: HostUpdateProgress = {
+      state: "updating",
+      error: null,
+      targetVersion: "2.0.0",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      writerId: "foreign-writer",
+    };
+    mocks.downloadAndStageHostMock.mockImplementation(
+      async (opts: DownloadAndStageHostOptions) => {
+        await requireHook(opts)("2.0.0");
+        // Another updater's `updating` has landed at the same path by the
+        // time this run reaches the lock - a live progress signal that is
+        // not this run's to touch.
+        mocks.disk.current = foreignRecord;
+        return {
+          outcome: "promoted",
+          stagedVersion: "2.0.0",
+          installedVersion: "1.0.0",
+        } satisfies HostDownloadOutcome;
+      },
+    );
+    // The apply half then genuinely fails busy - the park path, which only
+    // ever WITHDRAWS (conditionally) and never stamps `failed`, is what
+    // lets this test observe the foreign record surviving untouched.
+    mocks.applyHostMock.mockRejectedValue(
+      cliError({
+        code: CLI_ERROR_CODES.HOST_BUSY,
+        message: "The running host has work in progress",
+        details: null,
+        exitCode: 1,
+      }),
+    );
+    mocks.readHostStagedRecordMock.mockResolvedValue(null);
+
+    await expect(
+      buildHostUpdateCommand({
+        force: false,
+        allowDowngrade: false,
+        ackNonce: null,
+      })(fakeCtx()),
+    ).rejects.toMatchObject({ code: CLI_ERROR_CODES.HOST_BUSY });
+
+    expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenCalledTimes(1);
+    const written = mocks.writeUpdateProgressMarkerMock.mock
+      .calls[0][1] as HostUpdateProgress;
+    expect(
+      mocks.replaceUpdateProgressMarkerIfUnchangedMock,
+    ).not.toHaveBeenCalled();
+    // The withdrawal on park is ASKED for (against our own pre-lock
+    // record), but the CAS refuses it because the disk holds someone
+    // else's marker now.
+    expect(
+      mocks.deleteUpdateProgressMarkerIfUnchangedMock,
+    ).toHaveBeenCalledWith("production", written);
+    expect(mocks.disk.current).toEqual(foreignRecord);
+  });
+
+  it("downgrade arm passes onBeforeCommit and it re-asserts", async () => {
+    // Falsification: pass a no-op callback as `onBeforeCommit` from the
+    // downgrade arm in `host-update.ts` instead of
+    // `() => reassertMarkerUnderLock(downgradeTarget)`, and the second
+    // write below never happens.
+    mocks.readHostInstallRecordMock.mockResolvedValue(
+      sampleRecord("1.3.0-rc.1"),
+    );
+    mocks.installHostDowngradeMock.mockImplementation(
+      async (opts: { readonly onBeforeCommit: () => Promise<void> }) => {
+        // Simulate another updater withdrawing our marker before this run
+        // reaches the mutation lock's commit point.
+        mocks.disk.current = null;
+        await opts.onBeforeCommit();
+        return appliedOutcome("1.3.0-rc.1", "1.2.0", null);
+      },
+    );
+
+    await buildHostUpdateCommand({
+      force: false,
+      allowDowngrade: true,
+      versionRequest: "1.2.0",
+      ackNonce: null,
+    })(fakeCtx());
+
+    expect(mocks.installHostDowngradeMock).toHaveBeenCalledWith(
+      expect.objectContaining({ onBeforeCommit: expect.any(Function) }),
+    );
+    expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenCalledTimes(2);
+    expect(mocks.writeUpdateProgressMarkerMock.mock.calls[1][1]).toEqual(
+      expect.objectContaining({ state: "updating", targetVersion: "1.2.0" }),
+    );
   });
 });

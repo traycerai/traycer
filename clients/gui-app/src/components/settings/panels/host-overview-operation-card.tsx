@@ -74,7 +74,10 @@ export function HostOverviewOperationCard(props: {
    * The RECORDS say the install is ahead of the running host (activation
    * debt, `legacy-update-facts.ts`), and this is the page's cooperative
    * restart: the same confirm → transition id → busy verdict → force/defer
-   * flow the header's Restart runs. `null` when there is no debt.
+   * flow the header's Restart runs. `null` when there is no debt, and
+   * `null` when the scope cannot reach the host: the fact is a cached read
+   * that outlives reachability, and the sentence (rendered qualified) is
+   * evidence worth keeping while a dispatch through a dead route is not.
    *
    * Keyed on the FACT rather than on `view.kind`, deliberately. The kind is
    * `waiting-to-activate` when nothing outranks the fact, but a retained
@@ -88,7 +91,8 @@ export function HostOverviewOperationCard(props: {
    * (staged wait): dispatch `host.update.install {version: staged, force}`
    * through the page's existing install mutation. `null` when there is no
    * stage waiting, or when the host reported no positive session count to
-   * name — `offersForceRestart` gates the button on exactly that count.
+   * name — `offersForceRestart` gates the button on exactly that count —
+   * and `null` when the scope cannot reach the host, as for `onRestart`.
    */
   readonly onForceUpdate: (() => void) | null;
 }): ReactNode {

@@ -228,6 +228,7 @@ describe("installHostDowngrade", () => {
       version: "1.2.0",
       force: true,
       onProgress: noopProgress,
+      onBeforeCommit: async () => undefined,
     });
 
     expect(outcome.outcome).toBe("applied");
@@ -253,6 +254,7 @@ describe("installHostDowngrade", () => {
         version: "1.2.0",
         force: false,
         onProgress: noopProgress,
+        onBeforeCommit: async () => undefined,
       }),
     ).rejects.toThrow("host is busy");
 
@@ -276,6 +278,7 @@ describe("installHostDowngrade", () => {
         version: "1.2.0",
         force: false,
         onProgress: noopProgress,
+        onBeforeCommit: async () => undefined,
       }),
     ).rejects.toThrow("precommit failed");
 
@@ -284,5 +287,42 @@ describe("installHostDowngrade", () => {
     );
     expect(existsSync(join(stagingRoot(), "install-"))).toBe(false);
     expect(readdirSync(stagingRoot())).toEqual([]);
+  });
+
+  it("invokes onBeforeCommit exactly once, before the commit lands - even on the busy path, since the busy gate runs AFTER it", async () => {
+    // `onBeforeCommit` is `host update`'s re-assertion hook, run under the
+    // mutation lock before anything else touches the install - the source's
+    // own comment on the field says it runs "before the busy gate and the
+    // commit". Observing the install record from INSIDE the callback (rather
+    // than just counting calls) pins that ordering: a call that ran after
+    // the swap would see the NEW version already committed.
+    await writeInstalled("1.3.0-rc.1", "old");
+    configureRegistry("1.2.0", "new");
+    mocks.busy = true;
+    let beforeCommitCalls = 0;
+    let installedVersionAtCallTime: string | undefined;
+
+    await expect(
+      installHostDowngrade({
+        environment: ENV,
+        version: "1.2.0",
+        force: false,
+        onProgress: noopProgress,
+        onBeforeCommit: async () => {
+          beforeCommitCalls += 1;
+          const installed = await readHostInstallRecord(ENV);
+          installedVersionAtCallTime = installed?.version;
+        },
+      }),
+    ).rejects.toThrow("host is busy");
+
+    // Falsification: move the `onBeforeCommit()` call in
+    // `installHostDowngrade` to after `assertHostNotBusy` and this goes red
+    // - a busy host would reject before the hook ever ran.
+    expect(beforeCommitCalls).toBe(1);
+    expect(installedVersionAtCallTime).toBe("1.3.0-rc.1");
+    expect(readFileSync(join(installDir(), "traycer-host"), "utf8")).toBe(
+      "old",
+    );
   });
 });
