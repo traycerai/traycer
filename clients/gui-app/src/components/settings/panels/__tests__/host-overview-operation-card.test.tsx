@@ -38,7 +38,13 @@ vi.mock("sonner", () => ({
   },
 }));
 
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
@@ -49,6 +55,11 @@ import {
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import type { HostStatusUpdateOperation } from "@traycer/protocol/host/status/index";
 import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
+import type { HostGetInstallationInfoResponseV11 } from "@traycer/protocol/host/maintenance/index";
+import type {
+  HostInstallRecord,
+  HostStagedRecord,
+} from "@traycer/protocol/config/installation-records";
 import type { HostRpcRegistry } from "@/lib/host";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import { resetHostServiceWriteLatchesForTest } from "@/components/settings/panels/host-service-write-latch-store";
@@ -172,6 +183,107 @@ function statusWithCoarseProgress(
   >["updateProgress"],
 ): ResponseOfMethod<HostRpcRegistry, "host.status"> {
   return { ...statusWith(operation), updateProgress };
+}
+
+// Same shape as `statusWith`, but with `hostVersion`/`busy`/`busySessionCount`
+// all explicit - `statusWith` hardcodes `hostVersion: "1.5.0"`, which the
+// staged-wait fixture below must NOT inherit: the facts read `busy` and
+// `busySessionCount` off this SAME `host.status` reply, and reusing
+// `statusWith`'s fixed version would mismatch the fixture's own installed
+// record and manufacture a spurious activation debt.
+function statusWithBusy(
+  hostVersion: string,
+  operation: HostStatusUpdateOperation,
+  busy: boolean,
+  busySessionCount: number,
+): ResponseOfMethod<HostRpcRegistry, "host.status"> {
+  return {
+    ready: true,
+    hostVersion,
+    protocolVersion: { major: 1, minor: 3 },
+    busy,
+    busySessionCount,
+    updateProgress: null,
+    busyBreakdown: null,
+    updateOperation: operation,
+    updateTransaction: { recordSchemaVersion: 2, authority: "attempt" },
+  };
+}
+
+// A pre-@1.3 peer: `updateOperation: null`, exactly what such a host sends -
+// it cannot report an attempt record at all, only the coarse marker (unused
+// here) and, since this feature, the install/staged records beside it.
+function statusOperationNull(
+  hostVersion: string,
+): ResponseOfMethod<HostRpcRegistry, "host.status"> {
+  return {
+    ready: true,
+    hostVersion,
+    protocolVersion: { major: 1, minor: 0 },
+    busy: false,
+    busySessionCount: 0,
+    updateProgress: null,
+    busyBreakdown: null,
+    updateOperation: null,
+    updateTransaction: null,
+  };
+}
+
+/**
+ * The minimum-viable `HostInstallRecord`/`HostStagedRecord` pair for the
+ * record-derived park suite below - every field the wire schema requires
+ * (`protocol/src/config/installation-records.ts`), populated with benign
+ * placeholders except `version`/`runtimeVersion`, which each test varies.
+ */
+function installRecord(
+  version: string,
+  runtimeVersion: string | null,
+): HostInstallRecord {
+  return {
+    installId: "install-1",
+    version,
+    runtimeVersion,
+    platform: "darwin",
+    arch: "arm64",
+    installedAt: "2026-08-10T00:00:00Z",
+    source: { kind: "registry", value: version },
+    archiveSha256: "a".repeat(64),
+    signatureVerifiedAt: "2026-08-10T00:00:00Z",
+    signatureKeyId: "key-1",
+    sizeBytes: 1024,
+    executablePath: `/tmp/traycer/${version}/host`,
+    executableSha256: "b".repeat(64),
+  };
+}
+
+function stagedRecord(version: string): HostStagedRecord {
+  return {
+    schemaVersion: 1,
+    stageId: null,
+    version,
+    runtimeVersion: null,
+    archiveSha256: "a".repeat(64),
+    sizeBytes: 1024,
+    source: { kind: "registry", value: version },
+    signatureKeyId: "key-1",
+    signatureVerifiedAt: "2026-08-10T00:00:00Z",
+    executablePath: `/tmp/traycer/${version}/host`,
+    platform: "darwin",
+    arch: "arm64",
+    executableSha256: "b".repeat(64),
+  };
+}
+
+function managedInstallation(
+  install: HostInstallRecord,
+  staged: HostStagedRecord | null,
+): HostGetInstallationInfoResponseV11 {
+  return {
+    status: "managed",
+    installRecord: install,
+    stagedRecord: staged,
+    cliManifest: null,
+  };
 }
 
 afterEach(() => {
@@ -373,5 +485,182 @@ describe("HostOverviewOperationCard - the coarse updateProgress marker beside {k
 
     const card = await screen.findByTestId("host-overview-operation-card");
     expect(card.textContent).toContain("Update failed: health probe failed");
+  });
+});
+
+// The two record-derived parks (`legacy-update-facts.ts`), mounted end to
+// end through `HostSettingsPanel`: the Overview derives `legacyFacts` from
+// `host.getInstallationInfo` beside `host.status`, and the card renders
+// exactly one control per park - Restart for activation debt, Force update…
+// for a staged wait blocked on live work.
+describe("HostOverviewOperationCard — record-derived parks", () => {
+  it("activation debt (kind:'none' peer) renders the restart sentence and ONLY the Restart control", async () => {
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.3.0-rc.2",
+      installation: managedInstallation(
+        installRecord("1.3.0-rc.3", null),
+        null,
+      ),
+      overrideHandlers: {
+        "host.status": () =>
+          statusWithBusy("1.3.0-rc.2", { kind: "none" }, false, 0),
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    const card = await screen.findByTestId("host-overview-operation-card");
+    expect(card.textContent).toContain(
+      "Update installed — restart host to finish",
+    );
+    await screen.findByTestId("host-overview-operation-restart");
+    // Falsification: gating `onForceUpdate` on the view kind instead of the
+    // `stagedWait` fact, or gating `onForceRestart`'s button on the wrong
+    // predicate, would put one of these on screen beside Restart.
+    expect(
+      screen.queryByTestId("host-overview-operation-force-update"),
+    ).toBeNull();
+    expect(
+      screen.queryByTestId("host-overview-operation-force-restart"),
+    ).toBeNull();
+
+    fireEvent.click(screen.getByTestId("host-overview-operation-restart"));
+    const dialog = await screen.findByTestId("confirm-destructive-dialog");
+    expect(dialog.textContent).toContain("Restart host?");
+  });
+
+  it("SAME activation debt under a pre-1.3 peer (updateOperation: null) - Restart still renders", async () => {
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.3.0-rc.2",
+      installation: managedInstallation(
+        installRecord("1.3.0-rc.3", null),
+        null,
+      ),
+      overrideHandlers: {
+        "host.status": () => statusOperationNull("1.3.0-rc.2"),
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    const card = await screen.findByTestId("host-overview-operation-card");
+    expect(card.textContent).toContain(
+      "Update installed — restart host to finish",
+    );
+    await screen.findByTestId("host-overview-operation-restart");
+
+    fireEvent.click(screen.getByTestId("host-overview-operation-restart"));
+    const dialog = await screen.findByTestId("confirm-destructive-dialog");
+    expect(dialog.textContent).toContain("Restart host?");
+  });
+
+  it("a coarse 'failed' marker beside debt keeps the failure text AND still offers Restart - real evidence is not papered over", async () => {
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.3.0-rc.2",
+      installation: managedInstallation(
+        installRecord("1.3.0-rc.3", null),
+        null,
+      ),
+      overrideHandlers: {
+        "host.status": () => ({
+          ...statusWithBusy("1.3.0-rc.2", { kind: "none" }, false, 0),
+          updateProgress: { state: "failed", error: "health probe failed" },
+        }),
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    const card = await screen.findByTestId("host-overview-operation-card");
+    expect(card.textContent).toContain("Update failed: health probe failed");
+    // Falsification: keying `onRestart` off `view.kind === "waiting-to-activate"`
+    // instead of the `activationDebt` fact would make this null once the
+    // coarse marker outranked the park's own kind.
+    await screen.findByTestId("host-overview-operation-restart");
+  });
+
+  it("staged wait renders the blocked-sessions sentence and Force update…, dispatching host.update.install with force:true on confirm", async () => {
+    const installCalls: Array<{ version: string; force: boolean }> = [];
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.3.0-rc.2",
+      installation: managedInstallation(
+        installRecord("1.3.0-rc.2", "1.3.0-rc.2"),
+        stagedRecord("1.3.0-rc.3"),
+      ),
+      overrideHandlers: {
+        "host.status": () =>
+          statusWithBusy("1.3.0-rc.2", { kind: "none" }, true, 2),
+        "host.update.install": (req) => {
+          installCalls.push({ version: req.version, force: req.force });
+          return { outcome: "accepted" as const, attemptId: null };
+        },
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    const card = await screen.findByTestId("host-overview-operation-card");
+    expect(card.textContent).toContain(
+      "Update will continue when 2 sessions finish",
+    );
+    expect(screen.queryByTestId("host-overview-operation-restart")).toBeNull();
+    expect(
+      screen.queryByTestId("host-overview-operation-force-restart"),
+    ).toBeNull();
+
+    fireEvent.click(
+      await screen.findByTestId("host-overview-operation-force-update"),
+    );
+    const busyDialog = await screen.findByTestId(
+      "host-busy-force-defer-dialog",
+    );
+    expect(busyDialog).toBeTruthy();
+    fireEvent.click(screen.getByTestId("host-busy-force"));
+
+    await waitFor(() => {
+      expect(installCalls).toEqual([{ version: "1.3.0-rc.3", force: true }]);
+    });
+  });
+
+  it("no park (install matches running, host idle, nothing staged) - no card at all", async () => {
+    // Regression pin. Falsification: `legacyFactsView` (or the panel's own
+    // `legacyFacts` derivation) returning a non-null park here would put the
+    // card back on screen for a host with nothing to report.
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.5.0",
+      installation: managedInstallation(installRecord("1.5.0", "1.5.0"), null),
+      overrideHandlers: {
+        "host.status": () => statusWith({ kind: "none" }),
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    // Wait for a render derived from the status/installation reply before
+    // asserting absence, exactly as the sibling "no coarse marker" test above
+    // does - otherwise the assertion would pass vacuously during the loading
+    // frame.
+    await screen.findByText(/1\.5\.0/);
+    expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
   });
 });

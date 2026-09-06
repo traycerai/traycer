@@ -5,6 +5,7 @@ import type {
   HostUpdateTransactionCapability,
 } from "@traycer/protocol/host/status/index";
 import type { HostUpdateAttemptPhase } from "@traycer/protocol/config/host-update-attempt";
+import type { LegacyUpdateFacts } from "@/lib/host/fleet-update/legacy-update-facts";
 
 /**
  * The pure projection every update surface reads — landing banner, Settings
@@ -72,6 +73,23 @@ export interface FleetUpdateWireObservation {
    * `null` when the peer reported nothing in that field.
    */
   readonly coarseProgress: HostStatusUpdateProgress | null;
+  /**
+   * What the install and staged RECORDS say about a parked legacy update
+   * (`legacy-update-facts.ts`), derived by the caller from
+   * `host.getInstallationInfo` beside this same `host.status` read.
+   *
+   * The legacy updater WITHDRAWS its marker when a busy host makes it stop, so
+   * for the two parks it can leave behind — bytes installed but not running,
+   * bytes staged and waiting — the coarse field says nothing and these facts
+   * are the only signal. Consulted after the coarse marker and before `idle`.
+   *
+   * `null` when the caller had no installation read to derive from: the
+   * borrowed fleet leg, the landing banner (which keeps its own desktop-status
+   * debt arm), and a surface whose installation query has not answered. Like
+   * every other `null` on this record it means "not observed", never "no
+   * park".
+   */
+  readonly legacyFacts: LegacyUpdateFacts | null;
 }
 
 /**
@@ -294,13 +312,15 @@ export interface FleetUpdateViewInput {
  *    phase, so a surface can say "last seen downloading" rather than going
  *    blank. A missed poll is not a state change on the host.
  * 3. **`operation === null`** → the coarse `updateProgress` view when the peer
- *    reported one, else `unknown`. This is the one that is easy to get
+ *    reported one, else the record-derived park ({@link legacyFactsView}),
+ *    else `unknown`. This is the one that is easy to get
  *    wrong and expensive when wrong: for a REMOTE host on a per-host `manual`
  *    update policy this is potentially the indefinite steady state, not an
  *    upgrade transient. Reading it as "no update in progress" would show those
  *    users nothing during a real update, for as long as their host stayed on
  *    `@1.2`.
- * 4. **`kind: "none"`** → `idle`. The host looked and there is nothing.
+ * 4. **`kind: "none"`** → the coarse marker, else the record-derived park,
+ *    else `idle`. The host looked and there is nothing.
  * 5. **`kind: "unavailable"`** → `unavailable`. Fail-closed evidence stays
  *    distinct from both "no attempt" and "failed".
  * 6. **`kind: "attempt"`** → liveness first, then phase.
@@ -379,6 +399,11 @@ export function projectFleetUpdateView(
     // never `idle`, for the reasons above.
     const coarseView = coarseProgressView(observation, stale);
     if (coarseView !== null) return coarseView;
+    // Same order as the `none` arm below: a park the RECORDS describe is
+    // rendered for this cohort too, because a pre-@1.3 host's legacy updater
+    // parks in exactly the same way as a current one's.
+    const parkedView = legacyFactsView(observation, stale);
+    if (parkedView !== null) return parkedView;
     return UNKNOWN_FLEET_UPDATE_VIEW;
   }
 
@@ -394,6 +419,15 @@ export function projectFleetUpdateView(
     // marker is consulted FIRST, and only its absence means quiet.
     const coarseView = coarseProgressView(observation, stale);
     if (coarseView !== null) return coarseView;
+    // Then the parks the marker CANNOT carry. The legacy updater withdraws
+    // its marker when a busy host makes it stop, leaving either bytes
+    // installed under a host still running the old version, or a stage
+    // waiting for the host to go idle. Both are visible in the install and
+    // staged records and nowhere else, and reading the marker alone rendered
+    // them as "Host is up to date" - on an Overview whose header said rc.2
+    // and whose Installation card said rc.3.
+    const parkedView = legacyFactsView(observation, stale);
+    if (parkedView !== null) return parkedView;
     // A stale read of a quiet host is still unknown rather than idle: the
     // absence of an attempt was true when we looked, and we have since stopped
     // looking. Claiming "up to date" from a reading we cannot refresh is the
@@ -533,6 +567,76 @@ function coarseProgressView(
         ? { kind: "indeterminate", bytes: null, totalBytes: null }
         : { kind: "none" },
     errorMessage: coarse.errorMessage,
+  };
+}
+
+/**
+ * The view a parked legacy update projects from the RECORDS, or `null` when
+ * the caller derived no park (or had nothing to derive from).
+ *
+ * The two kinds already exist for the schema-v2 attempt's own parks and carry
+ * exactly the right copy, gates and cadence: `waiting-to-activate` ("Update
+ * installed — restart host to finish") and `waiting-for-work` ("Update will
+ * continue when N sessions finish", with **Force** when the count is
+ * positive). Neither holds the lifecycle gate nor earns the fast poll — a park
+ * can sit for days, and the restart it waits for must stay pressable.
+ *
+ * Debt outranks the staged wait when both hold (rc.3 installed, rc.4 staged,
+ * rc.2 running and busy): the restart is the smaller, always-available step,
+ * and the stage is applied by the next run once the host is idle anyway.
+ *
+ * Consulted AFTER the coarse marker on purpose. A live `updating` means an
+ * updater is working right now and its park, if any, is still ahead of it; a
+ * retained `failed` is real evidence about the last run that a derived park
+ * must not paper over — the Overview keeps the failure text and offers
+ * Restart from the debt fact directly, off the view kind.
+ */
+function legacyPark(facts: LegacyUpdateFacts): {
+  readonly kind: "waiting-to-activate" | "waiting-for-work";
+  readonly targetVersion: string;
+  readonly blockingSessionCount: number | null;
+} | null {
+  // Debt outranks a staged wait: the installed bytes are the nearer fact,
+  // and a restart resolves the debt before any stage can matter.
+  if (facts.activationDebt !== null) {
+    return {
+      kind: "waiting-to-activate",
+      targetVersion: facts.activationDebt.installedVersion,
+      blockingSessionCount: null,
+    };
+  }
+  if (facts.stagedWait !== null) {
+    return {
+      kind: "waiting-for-work",
+      targetVersion: facts.stagedWait.stagedVersion,
+      blockingSessionCount: facts.stagedWait.blockingSessionCount,
+    };
+  }
+  return null;
+}
+
+function legacyFactsView(
+  observation: FleetUpdateWireObservation,
+  stale: boolean,
+): FleetUpdateView | null {
+  const facts = observation.legacyFacts;
+  if (facts === null) return null;
+  const park = legacyPark(facts);
+  if (park === null) return null;
+  if (stale) {
+    return {
+      ...UNKNOWN_FLEET_UPDATE_VIEW,
+      targetVersion: park.targetVersion,
+      lastKnownKind: park.kind,
+      lastObservedAtMs: observation.observedAtMs,
+    };
+  }
+  return {
+    ...UNKNOWN_FLEET_UPDATE_VIEW,
+    kind: park.kind,
+    targetVersion: park.targetVersion,
+    blockingSessionCount: park.blockingSessionCount,
+    qualified: false,
   };
 }
 

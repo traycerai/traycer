@@ -24,7 +24,6 @@ import {
   HostOverviewHeaderActions,
   HostOverviewNameAction,
   HostOverviewNotice,
-  HostOverviewUpdateProgress,
 } from "@/components/settings/panels/host-overview-status-card";
 import { HostOverviewOperationCard } from "@/components/settings/panels/host-overview-operation-card";
 import { HostOverviewUpdatesRegion } from "@/components/settings/panels/host-overview-updates";
@@ -81,6 +80,7 @@ import {
   UNKNOWN_FLEET_UPDATE_VIEW,
 } from "@/lib/host/fleet-update/fleet-update-view";
 import { observationFromCanonicalRead } from "@/lib/host/fleet-update/canonical-status-observation";
+import { deriveLegacyUpdateFacts } from "@/lib/host/fleet-update/legacy-update-facts";
 import { useActiveUpdatePollAccelerator } from "@/hooks/host/use-active-update-poll-accelerator";
 import {
   toastHostRestartDeclined,
@@ -529,8 +529,34 @@ export function HostOverviewPanel(props: {
   // `observationFromCanonicalRead` now carries those conditions with the fact,
   // and it is the same function the landing banner and the fleet's coalesced
   // reads use, so a fourth staleness rule cannot appear here by accident.
+  //
+  // The parks the legacy updater leaves behind WITHOUT a marker - bytes
+  // installed under a host still running the old version, a stage waiting
+  // for a busy host to go idle - are derived from the install and staged
+  // records beside the same status read. This is the one leg that derives
+  // them: the banner keeps its desktop-status debt arm and the fleet legs
+  // read no installation info. `null` until both reads have answered, which
+  // the projector treats as "not observed", never as "no park".
+  const legacyFacts =
+    statusQuery.data === undefined || installationQuery.data === undefined
+      ? null
+      : deriveLegacyUpdateFacts({
+          installation: installationQuery.data,
+          runningVersion: statusQuery.data.hostVersion,
+          // The RAW read, not the live-source-demoted snapshot: the facts must
+          // describe one instant of one response, and staleness is already
+          // the observation deadline's job below.
+          busy: statusQuery.data.busy,
+          busySessionCount: statusQuery.data.busySessionCount,
+        });
+  // Built whenever there IS a status read - including for a pre-@1.3 peer
+  // whose `updateOperation` is `null`. This used to bail to `null` for that
+  // peer and render the coarse marker through a separate notice; the
+  // projector already has an arm for exactly that observation (coarse first,
+  // then the record-derived parks, then `unknown`), and routing the old peer
+  // through it is what lets its parks reach the card too.
   const operationObservation =
-    view.updateOperation === null || statusQuery.data === undefined
+    statusQuery.data === undefined
       ? null
       : observationFromCanonicalRead({
           hostId: scope.hostId ?? "",
@@ -543,6 +569,7 @@ export function HostOverviewPanel(props: {
             hasLiveSource: usable,
           },
           source: "selected",
+          legacyFacts,
         });
   const operationView =
     operationObservation === null
@@ -586,11 +613,15 @@ export function HostOverviewPanel(props: {
   //
   // `holdsLifecycleGate` answers the narrower question (`execution === "active"`)
   // that this gate actually wants. For a pre-@1.3 peer `updateOperation` is
-  // `null`, the projection is `unknown`, and we fall back to the coarse field —
-  // which is exactly the behaviour those hosts ship with today, so no host
-  // regresses and only the ones that CAN tell us more get the fix.
+  // `null` and we fall back to the coarse field — which is exactly the
+  // behaviour those hosts ship with today, so no host regresses and only the
+  // ones that CAN tell us more get the fix. Keyed on the PEER's field rather
+  // than on whether a projection exists: the projection is now built for that
+  // peer too (so its parks reach the card), and its `updating` kind is
+  // deliberately fail-open in `holdsLifecycleGate`, which would have quietly
+  // dropped the gate those hosts ship with.
   const updateInFlight =
-    operationView === null
+    view.updateOperation === null || operationView === null
       ? view.updateProgress?.state === "updating"
       : holdsLifecycleGate(operationView);
   const corePending =
@@ -693,7 +724,8 @@ export function HostOverviewPanel(props: {
     // swap the scoped host under a mounted subtree, and an override carried
     // across that swap would apply one machine's decision to another.
     hostId: scope.hostId,
-    installedVersion: view.hostVersion,
+    runningVersion: view.hostVersion,
+    activationDebt: legacyFacts?.activationDebt ?? null,
     platformKey: host?.platform ?? null,
     // The check reads on its own now, so this gate is load-bearing rather than
     // cosmetic: without it the page would spawn a CLI process on the host from
@@ -704,6 +736,37 @@ export function HostOverviewPanel(props: {
     busy: updateGatePending,
   });
   const anyPending = updateGatePending || updates.summary.installing;
+
+  // The staged-wait force, as the OFFER it is: a newer host is staged, the
+  // running host is busy, and "Force update…" on the card opens this before
+  // anything is dispatched — the ellipsis is a promise, and the count the
+  // dialog states is the count captured when the offer was made, not
+  // whatever the page shows when the button is pressed. Confirming dispatches
+  // `host.update.install {version: staged, force: true}` through the page's
+  // one install mutation, so the accepted latch, the invalidations and the
+  // outcome toasts are the ones every other install here gets.
+  const [forceUpdateOffer, setForceUpdateOffer] = useState<{
+    readonly stagedVersion: string;
+    readonly blockingSessionCount: number | null;
+  } | null>(null);
+  // Same stale-open rule as the restart confirm: close for every arming of
+  // the page-wide gate EXCEPT this offer's own dispatch, which keeps the
+  // dialog up to show its spinner. Adjust-during-render so the close lands in
+  // the arming commit.
+  if (forceUpdateOffer !== null && anyPending && !updates.summary.installing) {
+    setForceUpdateOffer(null);
+  }
+  // And when the fact it describes is gone - the stage was applied by another
+  // actor, or the host went idle and the next run is about to take it. A
+  // force over a stage that no longer waits would install something the
+  // dialog never described.
+  if (
+    forceUpdateOffer !== null &&
+    (legacyFacts?.stagedWait ?? null)?.stagedVersion !==
+      forceUpdateOffer.stagedVersion
+  ) {
+    setForceUpdateOffer(null);
+  }
 
   // Which write IS this dialog's own dispatch: the cooperative `host.restart`
   // ordinarily, the bridge respawn when the fallback routes Restart to the
@@ -949,12 +1012,28 @@ export function HostOverviewPanel(props: {
               // the first click and never consumes update-force authorization.
               setRestartConfirmOpen(true);
             }}
-          />
-        )}
-        {operationView !== null || view.updateProgress === null ? null : (
-          <HostOverviewUpdateProgress
-            state={view.updateProgress.state}
-            error={view.updateProgress.error}
+            // Keyed on the FACT, not the view kind: a retained `failed`
+            // marker beside real debt keeps its failure text and still gets
+            // the way forward. Same confirm the header's Restart opens, so
+            // the transition id, the busy verdict and the force/defer dialog
+            // are all the existing ones.
+            onRestart={
+              (legacyFacts?.activationDebt ?? null) === null
+                ? null
+                : () => setRestartConfirmOpen(true)
+            }
+            onForceUpdate={
+              legacyFacts === null || legacyFacts.stagedWait === null
+                ? null
+                : () => {
+                    if (legacyFacts.stagedWait === null) return;
+                    setForceUpdateOffer({
+                      stagedVersion: legacyFacts.stagedWait.stagedVersion,
+                      blockingSessionCount:
+                        legacyFacts.stagedWait.blockingSessionCount,
+                    });
+                  }
+            }
           />
         )}
         {/* The update ANSWER, on the card that describes the host — not under a
@@ -1171,6 +1250,37 @@ export function HostOverviewPanel(props: {
         }}
         onDefer={() => setForceRestartOffer(null)}
       />
+      {/* The staged-wait force's confirmation - the same busy/force/defer
+          dialog, because the decision is the same shape: live work stands
+          between the person and the update, and they choose whether to end
+          it. What "force" DOES differs and is named on the button: this one
+          re-runs the updater with `--force` against the kept stage; the one
+          above respawns the host process. */}
+      <HostBusyForceDeferDialog
+        open={forceUpdateOffer !== null}
+        message={
+          forceUpdateOffer === null
+            ? ""
+            : forceUpdateMessage(
+                displayName,
+                forceUpdateOffer.stagedVersion,
+                forceUpdateOffer.blockingSessionCount,
+              )
+        }
+        isForcing={updates.summary.installing}
+        forceLabel="Force update"
+        onForce={() => {
+          if (forceUpdateOffer === null) return;
+          // Closed on the ANSWER, whatever it is: an accepted force is now
+          // reported by the card and the toasts, and a refused one by the
+          // inline failure notice - leaving the dialog up over either would
+          // re-offer a decision already made.
+          updates.installForce(forceUpdateOffer.stagedVersion, () =>
+            setForceUpdateOffer(null),
+          );
+        }}
+        onDefer={() => setForceUpdateOffer(null)}
+      />
       <DoctorSheet
         open={doctorOpen}
         onOpenChange={setDoctorOpen}
@@ -1240,6 +1350,25 @@ export function HostOverviewPanel(props: {
       />
     </div>
   );
+}
+
+/**
+ * What the staged-wait force dialog says. The count is the one the card's
+ * sentence named when the offer was made; `null` (a busy host that counts no
+ * session) keeps the sentence unquantified rather than inventing a number.
+ */
+function forceUpdateMessage(
+  hostName: string,
+  stagedVersion: string,
+  blockingSessionCount: number | null,
+): string {
+  let work = "the work in progress";
+  if (blockingSessionCount === 1) {
+    work = "1 session";
+  } else if (blockingSessionCount !== null) {
+    work = `${String(blockingSessionCount)} sessions`;
+  }
+  return `v${stagedVersion} is downloaded and waiting. Installing it now ends ${work} on ${hostName} and restarts the host. Defer to let the update continue on its own once the host is idle.`;
 }
 
 /**

@@ -947,6 +947,7 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
         hostId: LOCAL_HOST_ID,
         status: attemptStatus(failedAttempt),
         nowMs: Date.now(),
+        legacyFacts: null,
       });
       const view = projectFleetUpdateView({
         observation,
@@ -958,6 +959,8 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
           view={view}
           hostName="This computer"
           onForceRestart={() => undefined}
+          onRestart={null}
+          onForceUpdate={null}
         />,
       );
       const card = screen.getByTestId("host-overview-operation-card");

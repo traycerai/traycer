@@ -2,12 +2,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CommandContext } from "../../runner/runner";
 import type { HostInstallRecord } from "../../manifest/host-install";
 import type { HostUpdateProgress } from "../../host/update-progress-marker";
+import { CLI_ERROR_CODES, cliError } from "../../runner/errors";
 
 const mocks = vi.hoisted(() => ({
   installHostDowngradeMock: vi.fn(),
   readHostInstallRecordMock: vi.fn(),
   writeUpdateProgressMarkerMock: vi.fn(),
   deleteUpdateProgressMarkerMock: vi.fn(),
+  deleteUpdateProgressMarkerIfUnchangedMock: vi.fn(),
   replaceUpdateProgressMarkerMock: vi.fn(),
   probeHostHealthMock: vi.fn(),
   installDispatchAckStamperMock: vi.fn(),
@@ -25,7 +27,8 @@ vi.mock("../../host/update-progress-marker", () => ({
   writeUpdateProgressMarker: mocks.writeUpdateProgressMarkerMock,
   deleteUpdateProgressMarker: mocks.deleteUpdateProgressMarkerMock,
   readUpdateProgressMarker: async () => null,
-  deleteUpdateProgressMarkerIfUnchanged: async () => "absent",
+  deleteUpdateProgressMarkerIfUnchanged:
+    mocks.deleteUpdateProgressMarkerIfUnchangedMock,
   replaceUpdateProgressMarkerIfUnchanged: mocks.replaceUpdateProgressMarkerMock,
   progressRecord: (fields: {
     state: "updating" | "failed";
@@ -149,6 +152,48 @@ describe("host update explicit downgrade failure", () => {
         error: "downgrade commit failed",
       }),
     );
+    expect(mocks.probeHostHealthMock).not.toHaveBeenCalled();
+    expect(mocks.deleteUpdateProgressMarkerMock).not.toHaveBeenCalled();
+  });
+
+  it("HOST_BUSY from installHostDowngrade parks: deletes the written updating marker and never stamps failed", async () => {
+    mocks.installDispatchAckStamperMock.mockReturnValue(null);
+    mocks.readHostInstallRecordMock.mockResolvedValue(installedRecord);
+    mocks.installHostDowngradeMock.mockRejectedValue(
+      cliError({
+        code: CLI_ERROR_CODES.HOST_BUSY,
+        message: "The running host has work in progress",
+        details: null,
+        exitCode: 1,
+      }),
+    );
+    mocks.deleteUpdateProgressMarkerIfUnchangedMock.mockResolvedValue(
+      "cleared",
+    );
+
+    await expect(
+      buildHostUpdateCommand({
+        allowDowngrade: true,
+        force: false,
+        versionRequest: "1.2.0",
+        ackNonce: null,
+      })(fakeCtx()),
+    ).rejects.toMatchObject({ code: CLI_ERROR_CODES.HOST_BUSY });
+
+    // Only the initial `updating` write happens - the park withdraws it
+    // rather than stamping a second, `failed` one.
+    expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenCalledTimes(1);
+    const written = mocks.writeUpdateProgressMarkerMock.mock
+      .calls[0][1] as HostUpdateProgress;
+    expect(written.state).toBe("updating");
+    expect(written.targetVersion).toBe("1.2.0");
+    expect(
+      mocks.deleteUpdateProgressMarkerIfUnchangedMock,
+    ).toHaveBeenCalledWith("production", written);
+    // Falsification: drop the HOST_BUSY arm in the catch (fall through to
+    // the generic failure branch) and this goes red - `replace…` would be
+    // called with a `failed` record instead.
+    expect(mocks.replaceUpdateProgressMarkerMock).not.toHaveBeenCalled();
     expect(mocks.probeHostHealthMock).not.toHaveBeenCalled();
     expect(mocks.deleteUpdateProgressMarkerMock).not.toHaveBeenCalled();
   });

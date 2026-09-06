@@ -1,6 +1,7 @@
 import {
   keepPreviousData,
   useQueryClient,
+  type QueryClient,
   type UseMutationResult,
 } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -180,6 +181,15 @@ function scopedSessionMembershipSignature(hostId: string): string {
  * the difference matters on this page: "no install record" is a legitimate,
  * describable state (someone is running the host from a checkout), not an
  * error, and rendering it as one would put a red box on every dev machine.
+ *
+ * Polled (table-owned cadence, 10s), not merely stale-timed, because the
+ * Overview now DERIVES from it: the install record against the running
+ * version is what says "installed, restart to finish", and the staged record
+ * beside a busy host is what says "staged, waiting for work". Both change
+ * under a mounted page through actors this client never sees - a detached CLI
+ * run, the desktop's launch converge - and a 60s staleTime with no interval
+ * observed neither until the page was remounted. `staleTime` still exceeds
+ * the interval so a healthy poll never reads as stale.
  */
 export function useHostInstallationInfoQuery(input: {
   readonly client: HostClient<HostRpcRegistry> | null;
@@ -190,7 +200,7 @@ export function useHostInstallationInfoQuery(input: {
     client: input.client,
     method: "host.getInstallationInfo",
     params: EMPTY_PARAMS,
-    options: { enabled: input.enabled, staleTime: 60_000 },
+    options: { enabled: input.enabled, staleTime: 60_000, poll: true },
   });
 }
 
@@ -654,9 +664,7 @@ export function useHostUpdateInstall(
           useHostServiceWriteLatchStore
             .getState()
             .releaseUpdateInstallAccepted(context.hostId);
-          void queryClient.invalidateQueries({
-            queryKey: hostQueryKeys.methodScope(context.hostId, "host.status"),
-          });
+          invalidateUpdateReads(queryClient, context.hostId);
           return;
         }
         if (
@@ -677,9 +685,7 @@ export function useHostUpdateInstall(
         // against that active swap. The refresh below is how the progress
         // row appears once the CLI reports it, and the panel's release
         // effect (or the bounded timer) unwinds the latch from there.
-        void queryClient.invalidateQueries({
-          queryKey: hostQueryKeys.methodScope(context.hostId, "host.status"),
-        });
+        invalidateUpdateReads(queryClient, context.hostId);
       },
       onError: (_error, _variables, context) => {
         if (context === undefined || context.hostId === null) return;
@@ -689,6 +695,22 @@ export function useHostUpdateInstall(
       },
     },
   });
+}
+
+/**
+ * The two reads an accepted install changes: `host.status` for the coarse
+ * marker the detached updater publishes, and `host.getInstallationInfo` for
+ * the records it leaves behind when it PARKS instead - a stage kept because
+ * the host was busy, or an install committed under a host that refused to
+ * restart. The second used to wait for its own poll; a Settings click that
+ * parks within a second then showed nothing for up to ten.
+ */
+function invalidateUpdateReads(queryClient: QueryClient, hostId: string): void {
+  for (const method of ["host.status", "host.getInstallationInfo"] as const) {
+    void queryClient.invalidateQueries({
+      queryKey: hostQueryKeys.methodScope(hostId, method),
+    });
+  }
 }
 
 /** Narrowing helper so callers read the managed arm without re-checking. */

@@ -56,7 +56,17 @@ import { createServiceController, serviceLabelFor } from "../service";
 // Busy (D6): the stage is kept - `applyHost`'s busy check runs before it
 // touches the stage - and this command re-throws `E_HOST_BUSY` with the
 // staged version attached to `details`, rather than the generic
-// `details: null` `assertHostNotBusy` throws on its own.
+// `details: null` `assertHostNotBusy` throws on its own. A busy exit is a
+// PARK, not a failure: the run withdraws its own `updating` marker and stamps
+// no `failed` (see the catch below), because the refusal was the policy
+// working and the surfaces derive "staged, waiting" / "installed, restart to
+// finish" from the install and staged records instead.
+//
+// The `updating` marker is published from `onWillDownload` - after the
+// short-circuit decision, before the first byte - so the whole transfer is
+// visible as an update in progress and a transfer failure has a marker to
+// stamp `failed` onto. The no-transfer arms (already staged, activation debt,
+// explicit downgrade) publish it just before the apply half instead.
 //
 // SUCCESS CONTRACT: when an update is actually applied, exit 0 here means a
 // host came back healthy after the swap. Two limits are deliberate and worth
@@ -175,85 +185,26 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
     // a real dependency of the run rather than a value the compiler can drop.
     void dispatchAckAcknowledgement;
 
-    const preparation = await prepareHostUpdate({
-      environment,
-      version: args.versionRequest ?? null,
-      allowDowngrade: args.allowDowngrade,
-      onProgress: (info) => ctx.progress(info),
-    });
-    const installedUpToDate =
-      preparation.kind === "staged" &&
-      preparation.download.outcome === "short-circuit" &&
-      preparation.download.reason === "installed-up-to-date";
-    const needsApply = !installedUpToDate;
-    // "Installed" is a fact about `install.json`; "running" is a fact about
-    // the process. The two disagree whenever the bytes were swapped by a
-    // caller that could not (or did not) restart the host - Desktop's launch
-    // reconcile runs `host apply --no-service` and then activates through
-    // SMAppService, and when that cycle parks the OLD host keeps serving on
-    // top of the NEW install record indefinitely. This command then answered
-    // "installed-up-to-date" to a Settings click made precisely BECAUSE the
-    // live version was behind, exited 0 having changed nothing, and the GUI
-    // toasted "Updating…" over a host that never moved. Activation debt is
-    // therefore an update this command owes, not a no-op it may report.
-    const activationReading = installedUpToDate
-      ? await readActivationState(environment)
-      : null;
-    const activationDebt =
-      activationReading !== null && activationReading.kind === "debt"
-        ? activationReading
-        : null;
-    if (activationDebt !== null) {
-      ctx.runtime.logger.info(
-        "Host update found the install record ahead of the running host; activating",
-        {
-          environment,
-          installedVersion: activationDebt.installedVersion,
-          runningVersion: activationDebt.runningVersion,
-        },
-      );
-    }
-    const needsActivate = activationDebt !== null;
-    const needsWork = needsApply || needsActivate;
-
-    // A `failed` marker outlives the failure it reported: the post-swap
-    // health probe can time out on a host that finishes starting a moment
-    // later, and nothing on the legacy path ever revisits the file. Every
-    // @1.3 host then renders that stale failure indefinitely, and a retry
-    // cannot clear it because a retry with nothing to do returns before the
-    // marker is touched. So the no-work path reconciles it here - and ONLY
-    // when the running host has been OBSERVED at the installed version. A
-    // host that is down, or a dev build, leaves the marker alone: for those
-    // the failure may still be exactly true.
-    if (
-      !needsWork &&
-      activationReading !== null &&
-      activationReading.kind === "activated"
-    ) {
-      await clearStaleFailedMarker(ctx.runtime.logger, environment);
-    }
-
     // Remote Host Support T16: the daemon polls `update-progress.json` and
     // folds it into `host.status@1.1` / the drain gate, so an update that is
     // in flight (or that failed) is visible to a remote client that cannot
-    // watch this process. Written BEFORE the apply half touches the install
-    // and terminated on every exit path below. Marker I/O is deliberately
-    // never allowed to fail the update itself - a missing marker degrades
-    // the remote progress readout, it must not break the local update.
-    const targetVersion =
-      activationDebt !== null
-        ? activationDebt.installedVersion
-        : preparation.kind === "downgrade"
-          ? preparation.version
-          : downloadTargetVersion(preparation.download);
-    // The marker THIS invocation wrote, kept so the clear at the end can be
+    // watch this process. Written the moment the work becomes certain and
+    // terminated on every exit path below. Marker I/O is deliberately never
+    // allowed to fail the update itself - a missing marker degrades the
+    // remote progress readout, it must not break the local update.
+    //
+    // The marker THIS invocation wrote, kept so every later write is
     // conditional on it: marker writes happen before their writer takes the
-    // contender lock, so by the time this command reaches its clear another
-    // updater may have landed its own `updating` at the same path, and an
-    // unconditional delete would erase that updater's only progress signal.
-    let writtenMarker: HostUpdateProgress | null = null;
-    if (needsWork) {
-      writtenMarker = progressRecord({
+    // contender lock, so by the time this command reaches its stamp or clear
+    // another updater may have landed its own `updating` at the same path,
+    // and an unconditional write would erase that updater's only progress
+    // signal. Non-null from the first write attempt on, whether or not the
+    // write landed (a failed write is warned about, not retried). The version
+    // it names is the one a `failed` stamp has to name too, which is why the
+    // re-point under the lock replaces the whole record rather than one field.
+    const ownMarker: { current: HostUpdateProgress | null } = { current: null };
+    const publishUpdating = async (targetVersion: string): Promise<void> => {
+      ownMarker.current = progressRecord({
         state: "updating",
         error: null,
         targetVersion,
@@ -261,10 +212,13 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
       await writeUpdateProgressMarkerSafely(
         ctx.runtime.logger,
         environment,
-        writtenMarker,
+        ownMarker.current,
       );
-    }
+    };
 
+    let preparation: HostUpdatePreparation;
+    let needsApply = false;
+    let needsActivate = false;
     let legacy: LegacyHostUpdateResult;
     // What was decided BEFORE the lock is whether to enter the activation
     // path; what happened UNDER it is a separate fact, because the debt can
@@ -275,19 +229,106 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
     // stamping the no-op `failed` when that probe misses, would report a
     // failure for an update that did not happen.
     let activationPerformed = false;
-    // The version the progress marker names. Written pre-lock from the
-    // record as it stood; re-pointed when the activation path finds the
-    // record moved under the lock, so a `failed` stamp names the version
-    // that was actually being activated.
-    let markerTargetVersion = targetVersion;
+    // The preparation runs INSIDE the try whose catch owns the marker. The
+    // marker is published from within it - `onWillDownload`, before the first
+    // byte - so a transfer that rejects has a marker to stamp `failed` onto;
+    // with the download outside the try, a network failure twenty seconds in
+    // rendered as nothing at all, on every surface, while the exit code said
+    // otherwise. A failure BEFORE the hook (manifest unreachable, invalid
+    // target) never wrote a marker and stamps none: `ownMarker.current` is still
+    // `null` and the error carries the report on its own.
     try {
+      preparation = await prepareHostUpdate({
+        environment,
+        version: args.versionRequest ?? null,
+        allowDowngrade: args.allowDowngrade,
+        onProgress: (info) => ctx.progress(info),
+        onWillDownload: publishUpdating,
+      });
+      const installedUpToDate =
+        preparation.kind === "staged" &&
+        preparation.download.outcome === "short-circuit" &&
+        preparation.download.reason === "installed-up-to-date";
+      needsApply = !installedUpToDate;
+      // "Installed" is a fact about `install.json`; "running" is a fact about
+      // the process. The two disagree whenever the bytes were swapped by a
+      // caller that could not (or did not) restart the host - Desktop's launch
+      // reconcile runs `host apply --no-service` and then activates through
+      // SMAppService, and when that cycle parks the OLD host keeps serving on
+      // top of the NEW install record indefinitely. This command then answered
+      // "installed-up-to-date" to a Settings click made precisely BECAUSE the
+      // live version was behind, exited 0 having changed nothing, and the GUI
+      // toasted "Updating…" over a host that never moved. Activation debt is
+      // therefore an update this command owes, not a no-op it may report.
+      const activationReading = installedUpToDate
+        ? await readActivationState(environment)
+        : null;
+      const activationDebt =
+        activationReading !== null && activationReading.kind === "debt"
+          ? activationReading
+          : null;
+      if (activationDebt !== null) {
+        ctx.runtime.logger.info(
+          "Host update found the install record ahead of the running host; activating",
+          {
+            environment,
+            installedVersion: activationDebt.installedVersion,
+            runningVersion: activationDebt.runningVersion,
+          },
+        );
+      }
+      needsActivate = activationDebt !== null;
+      const needsWork = needsApply || needsActivate;
+
+      // A `failed` marker outlives the failure it reported: the post-swap
+      // health probe can time out on a host that finishes starting a moment
+      // later, and nothing on the legacy path ever revisits the file. Every
+      // @1.3 host then renders that stale failure indefinitely, and a retry
+      // cannot clear it because a retry with nothing to do returns before the
+      // marker is touched. So the no-work path reconciles it here - and ONLY
+      // when the running host has been OBSERVED at the installed version. A
+      // host that is down, or a dev build, leaves the marker alone: for those
+      // the failure may still be exactly true.
+      if (
+        !needsWork &&
+        activationReading !== null &&
+        activationReading.kind === "activated"
+      ) {
+        await clearStaleFailedMarker(ctx.runtime.logger, environment);
+      }
+
+      // The arms that reached here WITHOUT a transfer - an already-staged
+      // target, an activation debt, an explicit downgrade - publish now,
+      // before the apply half touches the install. A transfer already
+      // published from `onWillDownload`, and the version it named is the one
+      // that was staged; a second write here would replace this run's own
+      // record with an identical-looking one and cost nothing but the
+      // certainty of what `ownMarker.current` refers to.
+      if (needsWork && ownMarker.current === null) {
+        await publishUpdating(
+          activationDebt !== null
+            ? activationDebt.installedVersion
+            : preparation.kind === "downgrade"
+              ? preparation.version
+              : downloadTargetVersion(preparation.download),
+        );
+      }
+
       if (activationDebt !== null) {
         const activation = await activateInstalledAndProjectLegacy(
           environment,
           args.force,
           activationDebt.runningVersion,
           async (installedVersion) => {
-            if (installedVersion === markerTargetVersion) return;
+            // Re-point the marker when the activation path finds the record
+            // moved under the lock, so a `failed` stamp names the version
+            // that was actually being activated.
+            if (
+              ownMarker.current !== null &&
+              installedVersion === ownMarker.current.targetVersion
+            ) {
+              return;
+            }
             const repointed = progressRecord({
               state: "updating",
               error: null,
@@ -298,14 +339,13 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
             // an unconditional re-point would replace it with a record THIS
             // run then clears at the end - leaving that updater's whole
             // apply/restart without its progress signal. The re-point lands
-            // only over this run's own marker, and `writtenMarker` follows
+            // only over this run's own marker, and `ownMarker.current` follows
             // what is actually on disk: if the swap reports the marker is no
             // longer ours, it stays pointed at the old record, so the later
             // stamp and clear (both conditional on it) leave the newer
             // updater's marker alone.
-            if (writtenMarker === null) {
-              writtenMarker = repointed;
-              markerTargetVersion = installedVersion;
+            if (ownMarker.current === null) {
+              ownMarker.current = repointed;
               await writeUpdateProgressMarkerSafely(
                 ctx.runtime.logger,
                 environment,
@@ -315,12 +355,11 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
             }
             const outcome = await replaceUpdateProgressMarkerIfUnchanged(
               environment,
-              writtenMarker,
+              ownMarker.current,
               repointed,
             );
             if (outcome === "replaced") {
-              writtenMarker = repointed;
-              markerTargetVersion = installedVersion;
+              ownMarker.current = repointed;
             } else {
               ctx.runtime.logger.info(
                 "Host update did not re-point the progress marker - another updater owns it now",
@@ -350,13 +389,37 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
               );
       }
     } catch (err) {
-      if (needsWork) {
+      if (err instanceof CliError && err.code === CLI_ERROR_CODES.HOST_BUSY) {
+        // A PARK, not a failure. The host has work in progress and this run
+        // declined to interrupt it - a policy decision that every busy gate
+        // on this path makes BEFORE it touches the install (`applyHost`,
+        // `installHostDowngrade`, the activation arm's `assertHostNotBusy`),
+        // so nothing has changed except that a stage may now be waiting. A
+        // `failed` stamp here rendered "Update failed: work in progress" in
+        // red on every surface for a host that was doing exactly what it was
+        // asked to; the GUI derives the truth - installed-but-not-running, or
+        // staged-and-waiting - from the records, and the marker's job is only
+        // to get out of the way. Withdrawn CONDITIONALLY, like the clear
+        // below: a newer updater's marker is not this run's to remove.
+        if (ownMarker.current !== null) {
+          const withdrawn = await deleteUpdateProgressMarkerIfUnchanged(
+            environment,
+            ownMarker.current,
+          );
+          ctx.runtime.logger.info(
+            "Host update parked - the host has work in progress; the progress marker was withdrawn",
+            { environment, withdrawn },
+          );
+        }
+        throw err;
+      }
+      if (ownMarker.current !== null) {
         await markUpdateFailed(
           ctx.runtime.logger,
           environment,
-          markerTargetVersion,
+          ownMarker.current.targetVersion,
           err instanceof Error ? err.message : String(err),
-          writtenMarker,
+          ownMarker.current,
         );
       }
       throw err;
@@ -385,7 +448,7 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
           environment,
           legacy.version,
           probe.detail,
-          writtenMarker,
+          ownMarker.current,
         );
         throw cliError({
           code: CLI_ERROR_CODES.HOST_UPDATE_HEALTH_CHECK_FAILED,
@@ -395,7 +458,7 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
         });
       }
     }
-    if (writtenMarker !== null) {
+    if (ownMarker.current !== null) {
       // Written above whenever work was OWED, so it is cleared whenever it
       // was - including the activation debt that another actor paid while
       // this command waited, which leaves nothing to probe but a marker
@@ -405,7 +468,7 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
       // above belongs to someone whose update is still to come.
       const cleared = await deleteUpdateProgressMarkerIfUnchanged(
         environment,
-        writtenMarker,
+        ownMarker.current,
       );
       if (cleared === "changed") {
         ctx.runtime.logger.info(
@@ -723,6 +786,8 @@ async function prepareHostUpdate(input: {
   readonly version: string | null;
   readonly allowDowngrade: boolean;
   readonly onProgress: (info: ProgressInfo) => void;
+  /** See `DownloadAndStageHostOptions.onWillDownload`; the downgrade arm never fires it. */
+  readonly onWillDownload: (targetVersion: string) => Promise<void>;
 }): Promise<HostUpdatePreparation> {
   if (input.allowDowngrade && input.version !== null) {
     const installed = await requireInstalled(input.environment);
@@ -741,6 +806,7 @@ async function prepareHostUpdate(input: {
       automatic: false,
       onProgress: input.onProgress,
       registryClient: null,
+      onWillDownload: input.onWillDownload,
     }),
   };
 }
@@ -783,7 +849,8 @@ async function writeUpdateProgressMarkerSafely(
  * for why an empty live path is not proof of an idle peer); the failure is
  * still reported by exit code and log. `ours` is `null` only when this run
  * never wrote a marker, in which case there is nothing to compare against and
- * the stamp lands unconditionally.
+ * the stamp lands unconditionally - every caller today passes the marker it
+ * wrote, so that arm is a contract for the signature rather than a live path.
  */
 async function markUpdateFailed(
   logger: ILogger,
@@ -853,7 +920,14 @@ async function applyAndProjectLegacy(
         const staged = await readHostStagedRecord(environment);
         throw cliError({
           code: CLI_ERROR_CODES.HOST_BUSY,
-          message: err.message,
+          // The park, in words: the bytes are kept, and the two ways forward
+          // are named. This message is what a person reads at the terminal
+          // and in the host's log after a Settings click; the GUI derives the
+          // same fact from the staged record rather than from this text.
+          message:
+            staged === null
+              ? err.message
+              : `${err.message} Host ${staged.version} stays staged; it installs on the next update once the host is idle, or now with --force.`,
           details: { stagedVersion: staged?.version ?? null },
           exitCode: err.exitCode,
         });

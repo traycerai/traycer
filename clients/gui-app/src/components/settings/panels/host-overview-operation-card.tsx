@@ -50,6 +50,16 @@ import { cn } from "@/lib/utils";
  * Doctor card is Diagnostics. The landing banner needs its own copies because
  * it is nowhere near either. Adding a second pair here would be the layered
  * narration this codebase keeps deleting.
+ *
+ * The two record-derived parks (`legacy-update-facts.ts`) are the exception
+ * that proves the rule, and each gets exactly one control. **Restart** on
+ * activation debt is not a second Restart: it opens the SAME confirmation the
+ * overflow Restart opens, and it exists because the card's own sentence
+ * ("Update installed — restart host to finish") names that action and a
+ * sentence that names an action three clicks away is a dead end. **Force
+ * update…** on a staged wait has no counterpart anywhere else on the page -
+ * the version rows install without force, and force is precisely what a
+ * parked stage needs.
  */
 export function HostOverviewOperationCard(props: {
   readonly view: FleetUpdateView;
@@ -60,6 +70,27 @@ export function HostOverviewOperationCard(props: {
    * re-reads live work before anything happens.
    */
   readonly onForceRestart: () => void;
+  /**
+   * The RECORDS say the install is ahead of the running host (activation
+   * debt, `legacy-update-facts.ts`), and this is the page's cooperative
+   * restart: the same confirm → transition id → busy verdict → force/defer
+   * flow the header's Restart runs. `null` when there is no debt.
+   *
+   * Keyed on the FACT rather than on `view.kind`, deliberately. The kind is
+   * `waiting-to-activate` when nothing outranks the fact, but a retained
+   * `failed` marker from an earlier run outranks it and keeps its failure
+   * text — real evidence, not to be papered over — and the person still needs
+   * the way forward. So Restart renders beside either sentence.
+   */
+  readonly onRestart: (() => void) | null;
+  /**
+   * The RECORDS say a newer host is staged and the running host is busy
+   * (staged wait): dispatch `host.update.install {version: staged, force}`
+   * through the page's existing install mutation. `null` when there is no
+   * stage waiting, or when the host reported no positive session count to
+   * name — `offersForceRestart` gates the button on exactly that count.
+   */
+  readonly onForceUpdate: (() => void) | null;
 }): ReactNode {
   const { view } = props;
   const copy = describeUpdateOperation({ view, hostName: props.hostName });
@@ -119,17 +150,25 @@ export function HostOverviewOperationCard(props: {
             {percent}%
           </span>
         )}
-        {offersForceRestart(view) ? (
+        {props.onRestart === null ? null : (
           <Button
             type="button"
             size="sm"
             variant="default"
             className="shrink-0"
-            onClick={props.onForceRestart}
-            data-testid="host-overview-operation-force-restart"
+            onClick={props.onRestart}
+            data-testid="host-overview-operation-restart"
           >
-            Force restart…
+            Restart
           </Button>
+        )}
+        {/* `offersForceRestart` gates both forces on a positive, host-reported
+            count; `ForceControl` picks which one. */}
+        {offersForceRestart(view) ? (
+          <ForceControl
+            onForceUpdate={props.onForceUpdate}
+            onForceRestart={props.onForceRestart}
+          />
         ) : null}
       </div>
       {showProgress ? (
@@ -140,5 +179,43 @@ export function HostOverviewOperationCard(props: {
         />
       ) : null}
     </div>
+  );
+}
+
+/**
+ * The one force control the card offers when `offersForceRestart` holds.
+ * Which force it is depends on WHO parked: a record-derived staged wait has
+ * no attempt to force-restart into, so its way forward is the updater itself
+ * re-run with `--force`; an attempt-record park keeps the force-restart route.
+ */
+function ForceControl(props: {
+  readonly onForceUpdate: (() => void) | null;
+  readonly onForceRestart: () => void;
+}): ReactNode {
+  if (props.onForceUpdate !== null) {
+    return (
+      <Button
+        type="button"
+        size="sm"
+        variant="default"
+        className="shrink-0"
+        onClick={props.onForceUpdate}
+        data-testid="host-overview-operation-force-update"
+      >
+        Force update…
+      </Button>
+    );
+  }
+  return (
+    <Button
+      type="button"
+      size="sm"
+      variant="default"
+      className="shrink-0"
+      onClick={props.onForceRestart}
+      data-testid="host-overview-operation-force-restart"
+    >
+      Force restart…
+    </Button>
   );
 }

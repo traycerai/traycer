@@ -2351,6 +2351,35 @@ aria-live="polite"` carrying the equivalent text for
       attempt record, and it sat directly above the updates region saying
       "v1.3.0-rc.2 is available." about the same host. The landing banner hides
       on the same predicate, so the two cannot drift on where quiet begins.
+    - **The two parks the marker cannot carry come from the RECORDS.** A busy
+      host makes the legacy updater stop, and it stops by WITHDRAWING its
+      marker (a refusal on policy is not a failure), leaving either bytes
+      installed under a host still running the old version, or a newer host
+      staged and waiting. `legacy-update-facts.ts` derives both from
+      `host.getInstallationInfo` beside the same `host.status` read - debt by
+      the CLI's own `readActivationState` rule (runtime-stamp equality when
+      the record has a stamp, else comparable-and-unequal SemVer), staged wait
+      as a stage at a different version than the install while `busy` - and
+      the Overview hands them to the projector as
+      `FleetUpdateWireObservation.legacyFacts`. They project the existing
+      `waiting-to-activate` ("Update installed — restart host to finish") and
+      `waiting-for-work` ("Update will continue when N sessions finish")
+      kinds, AFTER the coarse marker and before `idle`, and like every park
+      they hold no lifecycle gate and earn no fast poll. The card offers
+      **Restart** on the debt FACT rather than on the view kind, so a retained
+      `failed` marker beside real debt keeps its failure text and still shows
+      the way forward, and **Force update…** on a staged wait with a positive
+      count, which confirms through `HostBusyForceDeferDialog` and dispatches
+      `host.update.install {version: staged, force: true}` through the page's
+      one install mutation. Under debt the updates sentence reads "v{installed}
+      is installed — restart host to finish." and the catalog is compared
+      against the INSTALLED version, so Update now stays only for something
+      newer than what is already on disk. Because the facts live in records
+      that change under a mounted page, `host.getInstallationInfo` polls at the
+      `host.status` cadence (10s) and an accepted install invalidates it beside
+      `host.status`. The Overview is the only leg that derives: the landing
+      banner keeps its desktop-status debt arm, and the fleet legs pass
+      `legacyFacts: null`, which the projector reads as "not observed".
   - **Installation** reads `host.getInstallationInfo`. `unmanaged` is a real
     state, not an error - a host run from a checkout has no install record - and
     it says so rather than claiming nothing is installed.

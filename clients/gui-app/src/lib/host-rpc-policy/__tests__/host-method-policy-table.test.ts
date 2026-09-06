@@ -201,6 +201,19 @@ describe("host method poll policy table", () => {
     expect(intervalMs).toBeLessThan(30_000);
   });
 
+  // `host.getInstallationInfo` used to have no cadence at all. It is now
+  // opted in for one caller: the Overview derives the two record-derived
+  // parks (`legacy-update-facts.ts`) from the install/staged records beside
+  // the live `host.status` read, and those records change UNDER a mounted
+  // page — a detached `traycer host update` commits or parks, Desktop's
+  // launch converge swaps bytes — so a read that only goes stale on its own
+  // never observes them.
+  it("polls host.getInstallationInfo on a fixed 10s cadence, matching host.status", () => {
+    const policy = HOST_METHOD_POLL_TABLE["host.getInstallationInfo"].poll;
+    const intervalMs: number = policy.intervalMs;
+    expect(intervalMs).toBe(10_000);
+  });
+
   it("consumes condition cache data as unknown", () => {
     const data: unknown = {
       providers: [

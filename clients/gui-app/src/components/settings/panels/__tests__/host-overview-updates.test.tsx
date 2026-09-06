@@ -52,7 +52,14 @@ import {
 import { toast } from "sonner";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { HostAvailableManifest } from "@traycer/protocol/host/maintenance/index";
+import type {
+  HostAvailableManifest,
+  HostGetInstallationInfoResponseV11,
+} from "@traycer/protocol/host/maintenance/index";
+import type {
+  HostInstallRecord,
+  HostStagedRecord,
+} from "@traycer/protocol/config/installation-records";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import {
   recordNegotiatedHostManifest,
@@ -278,6 +285,45 @@ function rowFor(rows: readonly HTMLElement[], version: string): HTMLElement {
     throw new Error(`no version row rendered for v${version}`);
   }
   return row;
+}
+
+/**
+ * The minimum-viable HostInstallRecord for the
+ * activation-debt suite below - every field the wire schema requires
+ * (protocol/src/config/installation-records.ts), populated with benign
+ * placeholders except version/runtimeVersion, which each test varies.
+ */
+function installRecord(
+  version: string,
+  runtimeVersion: string | null,
+): HostInstallRecord {
+  return {
+    installId: "install-1",
+    version,
+    runtimeVersion,
+    platform: "darwin",
+    arch: "arm64",
+    installedAt: "2026-08-10T00:00:00Z",
+    source: { kind: "registry", value: version },
+    archiveSha256: "a".repeat(64),
+    signatureVerifiedAt: "2026-08-10T00:00:00Z",
+    signatureKeyId: "key-1",
+    sizeBytes: 1024,
+    executablePath: `/tmp/traycer/${version}/host`,
+    executableSha256: "b".repeat(64),
+  };
+}
+
+function managedInstallation(
+  install: HostInstallRecord,
+  staged: HostStagedRecord | null,
+): HostGetInstallationInfoResponseV11 {
+  return {
+    status: "managed",
+    installRecord: install,
+    stagedRecord: staged,
+    cliManifest: null,
+  };
 }
 
 describe("<HostSettingsPanel /> Overview updates — version picker", () => {
@@ -1412,5 +1458,121 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
         .getByRole("button", { name: "Install 2.0.0-rc.1" })
         .hasAttribute("disabled"),
     ).toBe(false);
+  });
+});
+
+// The Overview's `legacyFacts` derivation (`legacy-update-facts.ts`): the
+// install RECORD is ahead of the running host. `describeCheckState` names
+// this "activation debt" and it outranks every catalog sentence except a
+// transient install failure - the summary should say so whether or not the
+// catalog ALSO has something newer than the installed version, and "Update
+// now" should track the INSTALLED version, not the running one.
+describe("Overview updates — activation debt", () => {
+  it("the debt sentence renders exactly, and Update now is absent when nothing beats the installed version", async () => {
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.3.0-rc.2",
+      installation: managedInstallation(
+        installRecord("1.3.0-rc.3", null),
+        null,
+      ),
+      overrideHandlers: {
+        "host.update.check": () =>
+          Promise.resolve({
+            outcome: "ok" as const,
+            effectiveIncludePreReleases: false,
+            includePreReleasesSource: "stable-default" as const,
+            manifest: multiVersionManifest(["1.3.0-rc.3"]),
+          }),
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    await screen.findByText(
+      "v1.3.0-rc.3 is installed — restart host to finish.",
+    );
+    // Falsification: comparing the catalog against the RUNNING version
+    // (1.3.0-rc.2) instead of the installed one would offer "Update now" for
+    // the very version already sitting on disk.
+    expect(screen.queryByRole("button", { name: "Update now" })).toBeNull();
+  });
+
+  it("the debt sentence stays, and Update now DOES appear when the catalog has something newer than the installed version", async () => {
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.3.0-rc.2",
+      installation: managedInstallation(
+        installRecord("1.3.0-rc.3", null),
+        null,
+      ),
+      overrideHandlers: {
+        "host.update.check": () =>
+          Promise.resolve({
+            outcome: "ok" as const,
+            effectiveIncludePreReleases: true,
+            includePreReleasesSource: "explicit-include" as const,
+            manifest: multiVersionManifest(["1.3.0-rc.4", "1.3.0-rc.3"]),
+          }),
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    // Debt outranks the catalog sentence even though there IS something to
+    // offer - see `describeCheckState`'s ordering comment.
+    await screen.findByText(
+      "v1.3.0-rc.3 is installed — restart host to finish.",
+    );
+    await screen.findByRole("button", { name: "Update now" });
+  });
+
+  it("host.getInstallationInfo's poll refreshes the debt card live, with no remount", async () => {
+    // Companion to the direct policy-table pin
+    // (host-method-policy-table.test.ts: "polls host.getInstallationInfo on a
+    // fixed 10s cadence, matching host.status") — that test proves the TABLE
+    // entry; this one proves the CONSEQUENCE reaches a mounted page. Driven
+    // through an explicit `invalidateQueries()` rather than fake timers,
+    // which fight this suite's real-timer TanStack Query scheduling; the
+    // 10s-cadence claim itself is covered by the policy-table pin, not here.
+    let installationCalls = 0;
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.3.0-rc.2",
+      overrideHandlers: {
+        "host.getInstallationInfo": () => {
+          installationCalls += 1;
+          return managedInstallation(
+            installRecord(
+              installationCalls === 1 ? "1.3.0-rc.2" : "1.3.0-rc.3",
+              null,
+            ),
+            null,
+          );
+        },
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    const { queryClient } = renderPanel();
+
+    // First read: the install record matches the running host - no debt, no
+    // card.
+    await waitFor(() => expect(installationCalls).toBeGreaterThan(0));
+    expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
+
+    await act(async () => {
+      await queryClient.invalidateQueries();
+    });
+
+    await screen.findByTestId("host-overview-operation-restart");
   });
 });

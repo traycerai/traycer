@@ -399,7 +399,19 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
-  "host.getInstallationInfo": { ...LATEST_SCHEDULING, poll: null },
+  // Polled, at the `host.status` cadence, for one consumer: the Overview
+  // derives "installed, restart to finish" and "staged, waiting for work"
+  // from the install and staged records beside the live status. Those
+  // records change UNDER a mounted page - a detached `traycer host update`
+  // commits or parks, the desktop's launch converge swaps bytes - and a read
+  // that only goes stale never observes them, so the card that should offer
+  // the restart never appeared until the page was remounted. One host RPC
+  // over an open connection, only while the Overview is mounted (it is the
+  // only surface that opts into `poll: true` on this method).
+  "host.getInstallationInfo": {
+    ...LATEST_SCHEDULING,
+    poll: { kind: "fixed", intervalMs: 10_000 },
+  },
   "host.service.status": { ...LATEST_SCHEDULING, poll: null },
   // FIFO, like `host.update.install` and for the same reason: these mutate the
   // host's own lifecycle, so two in flight must never collapse to "the latest".

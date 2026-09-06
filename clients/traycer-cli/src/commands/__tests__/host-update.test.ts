@@ -182,7 +182,10 @@ import { buildHostUpdateCommand } from "../host-update";
 import { CLI_ERROR_CODES, cliError } from "../../runner/errors";
 import type { CommandContext } from "../../runner/runner";
 import type { HostInstallRecord } from "../../manifest/host-install";
-import type { HostDownloadOutcome } from "../../installer/download-stage";
+import type {
+  DownloadAndStageHostOptions,
+  HostDownloadOutcome,
+} from "../../installer/download-stage";
 import type { ApplyHostOutcome } from "../../installer/apply";
 import type { HostUpdateProgress } from "../../host/update-progress-marker";
 
@@ -445,6 +448,7 @@ describe("buildHostUpdateCommand composite", () => {
       automatic: false,
       onProgress: expect.any(Function),
       registryClient: null,
+      onWillDownload: expect.any(Function),
     });
   });
 
@@ -1209,13 +1213,11 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
     mocks.downloadAndStageHostMock.mockResolvedValue(upToDate("2.0.0"));
     mocks.readHostInstallRecordMock.mockResolvedValue(sampleRecord("2.0.0"));
     mocks.readHostPidMetadataMock.mockResolvedValue(pidRecord("1.0.0", 4242));
-    mocks.assertHostNotBusyMock.mockRejectedValue(
-      cliError({
-        code: CLI_ERROR_CODES.HOST_BUSY,
-        message: "host is busy",
-        details: {},
-        exitCode: 1,
-      }),
+    // A REAL failure under the lock - the stop half throws. Not a busy
+    // refusal: that one is a park now (see "the host is busy" below) and
+    // never reaches the failure stamp this test is about.
+    mocks.stopHostForRestartWithAttemptMock.mockRejectedValue(
+      new Error("stop failed"),
     );
     // By the time the failure is stamped, a third updater has already
     // landed its own `updating` at the live path - the compare-and-swap
@@ -1230,7 +1232,7 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
         allowDowngrade: false,
         ackNonce: null,
       })(fakeCtx()),
-    ).rejects.toMatchObject({ code: CLI_ERROR_CODES.HOST_BUSY });
+    ).rejects.toThrow("stop failed");
 
     // Our own `updating` was written once; no unconditional `failed` write
     // ever happens - the failure goes through the compare-and-swap instead,
@@ -1776,7 +1778,17 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
     expect(projected.previousVersion).toBe("staging.1783540000000.0a1b2c3d4");
   });
 
-  it("the host is busy: assertHostNotBusy rejects, the marker is left failed, and restart never runs", async () => {
+  it("the host is busy: assertHostNotBusy rejects, the run PARKS - its own updating marker is withdrawn, nothing is stamped failed, and restart never runs", async () => {
+    // A busy refusal is the policy working, not a failure: the install is
+    // committed and the running host is behind it, and the GUI derives
+    // "installed, restart to finish" from those two records. Stamping
+    // `failed` here painted "Update failed: work in progress" in red on
+    // every surface for a host doing exactly what it was asked to.
+    //
+    // Falsification: replace the `E_HOST_BUSY` catch arm in `host-update.ts`
+    // with a fall-through to `markUpdateFailed` and the `replace…` negative
+    // below goes red; drop the conditional delete and the `delete…` positive
+    // does.
     mocks.downloadAndStageHostMock.mockResolvedValue(upToDate("2.0.0"));
     mocks.readHostInstallRecordMock.mockResolvedValue(sampleRecord("2.0.0"));
     mocks.readHostPidMetadataMock.mockResolvedValue(pidRecord("1.0.0", 4242));
@@ -1802,13 +1814,18 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
     expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenCalledTimes(1);
     const written = mocks.writeUpdateProgressMarkerMock.mock
       .calls[0][1] as HostUpdateProgress;
+    expect(written).toEqual(
+      expect.objectContaining({ state: "updating", targetVersion: "2.0.0" }),
+    );
+    // Withdrawn CONDITIONALLY, against the record this run wrote - a newer
+    // updater's marker is not this run's to remove.
+    expect(
+      mocks.deleteUpdateProgressMarkerIfUnchangedMock,
+    ).toHaveBeenCalledWith("production", written);
+    expect(mocks.deleteUpdateProgressMarkerMock).not.toHaveBeenCalled();
     expect(
       mocks.replaceUpdateProgressMarkerIfUnchangedMock,
-    ).toHaveBeenCalledWith(
-      "production",
-      written,
-      expect.objectContaining({ state: "failed", targetVersion: "2.0.0" }),
-    );
+    ).not.toHaveBeenCalled();
   });
 
   it("the health probe fails after activation: rejects the health-check error, marks the marker failed, and never clears it", async () => {
@@ -1846,5 +1863,270 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
       }),
     );
     expect(mocks.deleteUpdateProgressMarkerMock).not.toHaveBeenCalled();
+  });
+});
+
+// Busy park + early marker (Host Update Layer Redesign): `onWillDownload`
+// publishes the `updating` marker BEFORE the transfer starts, and a
+// HOST_BUSY rethrow from the apply arm withdraws that same marker instead of
+// stamping `failed` - the park is the policy working, not a failure.
+describe("buildHostUpdateCommand busy park + early marker", () => {
+  beforeEach(() => {
+    mocks.probeHostHealthMock.mockResolvedValue({
+      healthy: true,
+      detail: "ok",
+    });
+    armActivationDefaults();
+  });
+
+  afterEach(() => {
+    vi.resetAllMocks();
+    mocks.callOrder = [];
+  });
+
+  function requireHook(
+    opts: DownloadAndStageHostOptions,
+  ): (targetVersion: string) => Promise<void> {
+    if (opts.onWillDownload === null) {
+      throw new Error("expected onWillDownload to be provided");
+    }
+    return opts.onWillDownload;
+  }
+
+  it("writes the updating marker from onWillDownload strictly before the download resolves, and clears it with the same written record", async () => {
+    mocks.downloadAndStageHostMock.mockImplementation(
+      async (opts: DownloadAndStageHostOptions) => {
+        await requireHook(opts)("2.0.0");
+        mocks.callOrder.push("download-resolved");
+        return {
+          outcome: "promoted",
+          stagedVersion: "2.0.0",
+          installedVersion: "1.0.0",
+        } satisfies HostDownloadOutcome;
+      },
+    );
+    mocks.writeUpdateProgressMarkerMock.mockImplementation(async () => {
+      mocks.callOrder.push("marker-written");
+    });
+    mocks.applyHostMock.mockResolvedValue(
+      appliedOutcome("1.0.0", "2.0.0", null),
+    );
+
+    const result = await buildHostUpdateCommand({
+      force: false,
+      allowDowngrade: false,
+      ackNonce: null,
+    })(fakeCtx());
+
+    expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenCalledTimes(1);
+    expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenCalledWith(
+      "production",
+      expect.objectContaining({ state: "updating", targetVersion: "2.0.0" }),
+    );
+    const markerIndex = mocks.callOrder.indexOf("marker-written");
+    const resolvedIndex = mocks.callOrder.indexOf("download-resolved");
+    expect(markerIndex).toBeGreaterThanOrEqual(0);
+    expect(resolvedIndex).toBeGreaterThanOrEqual(0);
+    // The load-bearing ordering: the marker is on disk before the download
+    // promise this command awaits ever resolves, not merely before `apply`.
+    expect(markerIndex).toBeLessThan(resolvedIndex);
+    const written = mocks.writeUpdateProgressMarkerMock.mock
+      .calls[0][1] as HostUpdateProgress;
+    expect(
+      mocks.deleteUpdateProgressMarkerIfUnchangedMock,
+    ).toHaveBeenCalledWith("production", written);
+    expect(result.exitCode).toBe(0);
+  });
+
+  it("a transport failure that happens AFTER the hook fired stamps failed and does not delete", async () => {
+    mocks.downloadAndStageHostMock.mockImplementation(
+      async (opts: DownloadAndStageHostOptions) => {
+        await requireHook(opts)("2.0.0");
+        throw new Error("download failed: ECONNRESET");
+      },
+    );
+
+    await expect(
+      buildHostUpdateCommand({
+        force: false,
+        allowDowngrade: false,
+        ackNonce: null,
+      })(fakeCtx()),
+    ).rejects.toThrow("download failed: ECONNRESET");
+
+    expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenCalledTimes(1);
+    const written = mocks.writeUpdateProgressMarkerMock.mock
+      .calls[0][1] as HostUpdateProgress;
+    expect(written.state).toBe("updating");
+    expect(written.targetVersion).toBe("2.0.0");
+    expect(
+      mocks.replaceUpdateProgressMarkerIfUnchangedMock,
+    ).toHaveBeenCalledWith(
+      "production",
+      written,
+      expect.objectContaining({
+        state: "failed",
+        error: "download failed: ECONNRESET",
+        targetVersion: "2.0.0",
+      }),
+    );
+    // Falsification: fold the HOST_BUSY delete-on-park branch into every
+    // catch arm (instead of gating it on the HOST_BUSY code check) and this
+    // goes red.
+    expect(
+      mocks.deleteUpdateProgressMarkerIfUnchangedMock,
+    ).not.toHaveBeenCalled();
+  });
+
+  it("a failure BEFORE the hook fires writes no marker of any kind", async () => {
+    mocks.downloadAndStageHostMock.mockRejectedValue(
+      new Error("manifest unreachable"),
+    );
+
+    await expect(
+      buildHostUpdateCommand({
+        force: false,
+        allowDowngrade: false,
+        ackNonce: null,
+      })(fakeCtx()),
+    ).rejects.toThrow("manifest unreachable");
+
+    // Falsification: move `publishUpdating`'s first write to before
+    // `prepareHostUpdate` runs (outside the try that owns `onWillDownload`)
+    // and this goes red - a marker would appear for a run that never
+    // reached the hook.
+    expect(mocks.writeUpdateProgressMarkerMock).not.toHaveBeenCalled();
+    expect(
+      mocks.replaceUpdateProgressMarkerIfUnchangedMock,
+    ).not.toHaveBeenCalled();
+    expect(
+      mocks.deleteUpdateProgressMarkerIfUnchangedMock,
+    ).not.toHaveBeenCalled();
+  });
+
+  it("apply-arm busy park: withdraws its own updating marker, never stamps failed, names the staged version in the message, and skips the health probe", async () => {
+    mocks.downloadAndStageHostMock.mockImplementation(
+      async (opts: DownloadAndStageHostOptions) => {
+        await requireHook(opts)("2.0.0");
+        return {
+          outcome: "promoted",
+          stagedVersion: "2.0.0",
+          installedVersion: "1.0.0",
+        } satisfies HostDownloadOutcome;
+      },
+    );
+    mocks.applyHostMock.mockRejectedValue(
+      cliError({
+        code: CLI_ERROR_CODES.HOST_BUSY,
+        message: "The running host has work in progress",
+        details: null,
+        exitCode: 1,
+      }),
+    );
+    mocks.readHostStagedRecordMock.mockResolvedValue({
+      schemaVersion: 1,
+      version: "2.0.0",
+      runtimeVersion: null,
+      archiveSha256: null,
+      sizeBytes: 1,
+      source: { kind: "registry", value: "2.0.0" },
+      signatureKeyId: "test-key",
+      signatureVerifiedAt: "2026-01-01T00:00:00.000Z",
+      executablePath: "traycer-host",
+      platform: "darwin",
+      arch: "arm64",
+    });
+
+    let caught: unknown;
+    try {
+      await buildHostUpdateCommand({
+        force: false,
+        allowDowngrade: false,
+        ackNonce: null,
+      })(fakeCtx());
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(caught).toMatchObject({
+      code: CLI_ERROR_CODES.HOST_BUSY,
+      details: { stagedVersion: "2.0.0" },
+    });
+    expect(caught).toBeInstanceOf(Error);
+    const message = (caught as Error).message;
+    expect(message).toContain("stays staged");
+    expect(message).toContain("--force");
+
+    expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenCalledTimes(1);
+    const written = mocks.writeUpdateProgressMarkerMock.mock
+      .calls[0][1] as HostUpdateProgress;
+    expect(written.state).toBe("updating");
+    expect(
+      mocks.deleteUpdateProgressMarkerIfUnchangedMock,
+    ).toHaveBeenCalledTimes(1);
+    expect(
+      mocks.deleteUpdateProgressMarkerIfUnchangedMock,
+    ).toHaveBeenCalledWith("production", written);
+    // Falsification: drop the HOST_BUSY arm in the catch (let it fall
+    // through to the generic failure branch) and this goes red.
+    expect(
+      mocks.replaceUpdateProgressMarkerIfUnchangedMock,
+    ).not.toHaveBeenCalled();
+    // Falsification: probe health unconditionally instead of gating it on
+    // `workPerformed` and this goes red.
+    expect(mocks.probeHostHealthMock).not.toHaveBeenCalled();
+  });
+
+  it("already-staged short-circuit then apply: the marker is still written exactly once (the post-prepare write) and cleared conditionally", async () => {
+    mocks.downloadAndStageHostMock.mockResolvedValue({
+      outcome: "short-circuit",
+      reason: "already-staged",
+      targetVersion: "2.0.0",
+      installedVersion: "1.0.0",
+      stagedVersion: "2.0.0",
+    } satisfies HostDownloadOutcome);
+    mocks.applyHostMock.mockResolvedValue(
+      appliedOutcome("1.0.0", "2.0.0", null),
+    );
+
+    const result = await buildHostUpdateCommand({
+      force: false,
+      allowDowngrade: false,
+      ackNonce: null,
+    })(fakeCtx());
+
+    expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenCalledTimes(1);
+    expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenCalledWith(
+      "production",
+      expect.objectContaining({ state: "updating", targetVersion: "2.0.0" }),
+    );
+    const written = mocks.writeUpdateProgressMarkerMock.mock
+      .calls[0][1] as HostUpdateProgress;
+    expect(
+      mocks.deleteUpdateProgressMarkerIfUnchangedMock,
+    ).toHaveBeenCalledWith("production", written);
+    expect(result.exitCode).toBe(0);
+  });
+
+  it("--force on the apply arm is unchanged (positive control)", async () => {
+    mocks.downloadAndStageHostMock.mockResolvedValue({
+      outcome: "promoted",
+      stagedVersion: "2.0.0",
+      installedVersion: "1.0.0",
+    } satisfies HostDownloadOutcome);
+    mocks.applyHostMock.mockResolvedValue(
+      appliedOutcome("1.0.0", "2.0.0", null),
+    );
+
+    const result = await buildHostUpdateCommand({
+      force: true,
+      allowDowngrade: false,
+      ackNonce: null,
+    })(fakeCtx());
+
+    expect(mocks.applyHostMock).toHaveBeenCalledWith(
+      expect.objectContaining({ force: true }),
+    );
+    expect(result.exitCode).toBe(0);
   });
 });

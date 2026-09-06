@@ -34,6 +34,19 @@ import { toastFromHostError } from "@/lib/host-error-toast";
 import type { HostRpcRegistry } from "@/lib/host";
 
 /**
+ * The version the catalog is compared against: the install record's under
+ * activation debt, the process's otherwise. Kept out of the hook body so the
+ * hook stays under the complexity ceiling.
+ */
+function comparisonBaseline(
+  activationDebt: { readonly installedVersion: string } | null,
+  runningVersion: string | null,
+): string | null {
+  if (activationDebt !== null) return activationDebt.installedVersion;
+  return runningVersion;
+}
+
+/**
  * A host's update story: what it can install, and installing it.
  *
  * Check now shells `host available --json` on the SCOPED host and the answer is
@@ -76,7 +89,17 @@ export function useHostOverviewUpdates(input: {
   readonly hostName: string;
   /** The scoped host this panel is showing — see the override reset below. */
   readonly hostId: string | null;
-  readonly installedVersion: string | null;
+  /** What the PROCESS reports about itself (`host.status.hostVersion`). */
+  readonly runningVersion: string | null;
+  /**
+   * The install record is ahead of the running host (`legacy-update-facts.ts`).
+   * When set, every catalog comparison below is against the INSTALLED version,
+   * not the running one: the bytes on disk are what the next restart serves,
+   * so "is there something newer" is a question about them. Comparing
+   * against the running version would re-offer the version that is already
+   * installed as "Update now", and pressing it would find nothing to do.
+   */
+  readonly activationDebt: { readonly installedVersion: string } | null;
   readonly platformKey: string | null;
   /** Whether this host is worth asking at all — the page owns that gate. */
   readonly enabled: boolean;
@@ -84,7 +107,13 @@ export function useHostOverviewUpdates(input: {
   readonly installDegrade: OverviewDegradeReason | null;
   readonly busy: boolean;
 }): HostOverviewUpdatesState {
-  const { client, hostName, installedVersion } = input;
+  const { client, hostName } = input;
+  // The version the catalog is compared against. Under activation debt that
+  // is the install record's, not the process's - see `activationDebt`.
+  const installedVersion = comparisonBaseline(
+    input.activationDebt,
+    input.runningVersion,
+  );
   const installVersion = useHostNegotiatedMethodVersion(
     client,
     "host.update.install",
@@ -186,10 +215,18 @@ export function useHostOverviewUpdates(input: {
     void checkQuery.refetch();
   };
 
-  const install = (version: string): void => {
+  const install = (
+    version: string,
+    force: boolean,
+    // The caller's own settle hook, for UI that opened a confirmation over
+    // this dispatch and has to close it whatever the answer was. MOUNTED
+    // state only, like the callbacks beside it.
+    onSettled: (() => void) | null,
+  ): void => {
     installMutation.mutate(
-      { version, force: false },
+      { version, force },
       {
+        onSettled: () => onSettled?.(),
         // MOUNTED UI state only. The `host.status` invalidation this
         // used to do moved to `useHostUpdateInstall`'s hook-level
         // `onSuccess`: an install outlives a Settings scope switch,
@@ -283,6 +320,12 @@ export function useHostOverviewUpdates(input: {
 
   return {
     degrade,
+    // The staged-wait force: the SAME dispatch as a row's Install, with
+    // `force: true`, so the accepted latch, the invalidations and the
+    // outcome toasts are the ones every other install on this page gets.
+    // The confirmation that precedes it is the panel's (the ellipsis on
+    // "Force update…" is a promise); this is only the dispatch.
+    installForce: (version, onSettled) => install(version, true, onSettled),
     summary: {
       hostName,
       description: describeCheckState({
@@ -292,6 +335,7 @@ export function useHostOverviewUpdates(input: {
         unreachable: checkQuery.isError,
         hostName,
         upToDate,
+        activationDebt: input.activationDebt,
         offerable: updatableVersion !== null,
         // What the BUTTON will install, when it can install anything. The two
         // differ whenever the best candidate is unusable: with a yanked
@@ -313,7 +357,7 @@ export function useHostOverviewUpdates(input: {
       busy: input.busy,
       onCheck: runCheck,
       onUpdateLatest: () => {
-        if (updatableVersion !== null) install(updatableVersion);
+        if (updatableVersion !== null) install(updatableVersion, false, null);
       },
     },
     picker: {
@@ -351,7 +395,7 @@ export function useHostOverviewUpdates(input: {
       ),
       installingVersion,
       disabled: input.busy,
-      onInstall: install,
+      onInstall: (version) => install(version, false, null),
       awaitingFirstCheck: actionableManifest === null,
       checking,
     },
@@ -374,6 +418,12 @@ export interface HostOverviewUpdatesState {
   readonly degrade: OverviewDegradeReason | null;
   readonly summary: HostOverviewUpdatesSummary;
   readonly picker: VersionPickerProps;
+  /**
+   * `host.update.install {version, force: true}` — the staged-wait force.
+   * `onSettled` runs once the request answers or fails, so the confirmation
+   * that dispatched it can close on the answer rather than on a guess.
+   */
+  readonly installForce: (version: string, onSettled: () => void) => void;
 }
 
 /**
@@ -872,6 +922,8 @@ function describeCheckState(input: {
   readonly unreachable: boolean;
   readonly hostName: string;
   readonly upToDate: boolean;
+  /** The install record is ahead of the running host; see the hook's input. */
+  readonly activationDebt: { readonly installedVersion: string } | null;
   /** `updatableVersion` resolved — the summary can actually OFFER the latest. */
   readonly offerable: boolean;
   /** The strictly-newer version this sentence is about, if there is one. */
@@ -886,10 +938,20 @@ function describeCheckState(input: {
   // Ordered so a stale answer never outranks what is happening NOW: a refetch
   // keeps the previous manifest on screen, so "vX is available." would otherwise
   // sit there unchanged while a re-check ran, or failed.
-  if (input.checking) return "Checking for updates…";
   if (input.failure !== null) {
     return describeCliShellFailure(input.failure, input.hostName);
   }
+  // Debt outranks everything the CATALOG can say, including "checking": it is
+  // a fact about this host's own disk, true whether or not the registry
+  // answers, and the sentence names the one action that resolves it. Only a
+  // failed install attempt sits above it - that is the answer to something
+  // the person just pressed. When the catalog additionally offers something
+  // newer than the INSTALLED version, Update now stays beside this sentence
+  // (see the hook's `installedVersion`); the button speaks for itself.
+  if (input.activationDebt !== null) {
+    return `v${input.activationDebt.installedVersion} is installed — restart host to finish.`;
+  }
+  if (input.checking) return "Checking for updates…";
   if (input.unreachable) {
     // Deliberately NOT a toast, which is what the imperative check's `onError`
     // raised. This read now fires on its own, and an automatic request that
