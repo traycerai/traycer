@@ -377,15 +377,26 @@ export function withCliInvocationRecord(
         waitMs: CLI_INVOCATION_TXN_WAIT_MS,
         pollIntervalMs: CLI_INVOCATION_TXN_POLL_MS,
       }),
-    uninstall: (options) =>
-      runServiceUninstallWithInvocationRecord({
+    uninstall: async (options) => {
+      // The Linux self-protection guard runs BEFORE the record transaction,
+      // not only inside `withStopIntent` beneath it. Inside the transaction a
+      // refusal is indistinguishable from an OS uninstall that threw, and
+      // `runServiceRemovalWithInvocationRecord` rightly treats that as "the
+      // service may be half-gone" and marks the live record stale - for a
+      // preflight that touched nothing, that would send every later host read
+      // through OS recovery for an intact registration. The inner guard stays:
+      // it is `withStopIntent`'s own contract for any composition that lacks
+      // this decorator, and a second cgroup read costs nothing.
+      await assertNotInsideHostUnit();
+      return runServiceUninstallWithInvocationRecord({
         environment: options.label.environment,
         hostHomeDir: hostHomeDir(options.label.environment),
         serviceLabel: options.label.id,
         uninstall: () => controller.uninstall(options),
         waitMs: CLI_INVOCATION_TXN_WAIT_MS,
         pollIntervalMs: CLI_INVOCATION_TXN_POLL_MS,
-      }),
+      });
+    },
     // The competing-registration repair removes THIS label's registration -
     // the one a live record describes - on macOS when Desktop owns host
     // registration, so it runs inside the same transaction as an uninstall.
@@ -506,6 +517,10 @@ export function withStopIntent(
  * supervisor would sit silenced for the intent's lifetime with no uninstall
  * having occurred. Inside the transaction, the intent is announced only once
  * the backend uninstall is actually about to run.
+ *
+ * The one thing that runs before BOTH is the Linux cgroup guard: the outer
+ * decorator's uninstall re-runs it ahead of acquiring the transaction, so a
+ * refusal neither publishes an intent nor invalidates the record.
  */
 export function createServiceController(): ServiceController {
   const platform = osPlatform();

@@ -81,7 +81,33 @@ vi.mock("node:fs/promises", async (importOriginal) => {
   };
 });
 
-const { withStopIntent } = await import("../index");
+// The record transaction is the thing the outer decorator must NOT open when
+// the guard refuses; a spy stands in for it so the ordering is observable.
+// The stand-in still runs the wrapped uninstall, as the real transaction does,
+// so the pass-through control below proves the controller is reached THROUGH
+// it and not around it.
+const recordMocks = vi.hoisted(() => ({
+  uninstallTransactions: 0,
+}));
+
+vi.mock("../cli-invocation-record", () => ({
+  CLI_INVOCATION_TXN_POLL_MS: 10,
+  CLI_INVOCATION_TXN_WAIT_MS: 100,
+  runServiceRegistrationWithInvocationRecord: async () => {
+    throw new Error("not used in this test");
+  },
+  runServiceRemovalWithInvocationRecord: async () => {
+    throw new Error("not used in this test");
+  },
+  runServiceUninstallWithInvocationRecord: async (options: {
+    readonly uninstall: () => Promise<void>;
+  }) => {
+    recordMocks.uninstallTransactions += 1;
+    await options.uninstall();
+  },
+}));
+
+const { withCliInvocationRecord, withStopIntent } = await import("../index");
 
 const label: ServiceLabel = {
   id: "ai.traycer.host",
@@ -117,6 +143,61 @@ beforeEach(() => {
   mocks.clears.length = 0;
   mocks.persisted = true;
   mocks.cgroup = HOST_UNIT_CGROUP;
+  recordMocks.uninstallTransactions = 0;
+});
+
+describe("withCliInvocationRecord(withStopIntent(...)) - the guard runs before the record transaction", () => {
+  // The production composition puts the record decorator OUTSIDE the
+  // stop-intent one, so its transaction would be acquired before the inner
+  // guard ever ran - and a refusal thrown inside the transaction is treated
+  // as an OS uninstall that threw, which marks an intact record stale. The
+  // outer decorator therefore runs the guard itself, ahead of the
+  // transaction; this pins that a refusal opens no transaction at all.
+  it("uninstall: a guard refusal opens no record transaction and announces nothing", async () => {
+    let ran = false;
+    const controller = withCliInvocationRecord(
+      withStopIntent(
+        baseController({
+          uninstall: async () => {
+            ran = true;
+          },
+        }),
+      ),
+    );
+
+    await expect(controller.uninstall({ label })).rejects.toMatchObject({
+      code: "E_SERVICE_CONTROL_FAILED",
+    });
+
+    expect(recordMocks.uninstallTransactions).toBe(0);
+    expect(mocks.writes).toEqual([]);
+    expect(ran).toBe(false);
+
+    // Ablation: remove the `await assertNotInsideHostUnit();` from
+    // `withCliInvocationRecord`'s uninstall → this test reddens on
+    // `uninstallTransactions` (1, not 0): the inner guard still refuses, but
+    // only after the transaction stand-in has been entered.
+  });
+
+  it("uninstall: outside a host unit the transaction is entered exactly once and the controller runs through it", async () => {
+    mocks.cgroup = SCOPE_CGROUP;
+    let ran = false;
+    const controller = withCliInvocationRecord(
+      withStopIntent(
+        baseController({
+          uninstall: async () => {
+            ran = true;
+          },
+        }),
+      ),
+    );
+
+    await controller.uninstall({ label });
+
+    expect(recordMocks.uninstallTransactions).toBe(1);
+    expect(mocks.writes).toEqual(["uninstall"]);
+    expect(ran).toBe(true);
+  });
 });
 
 describe("withStopIntent - Linux cgroup self-protection guard", () => {
