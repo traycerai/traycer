@@ -613,16 +613,25 @@ export function HostOverviewPanel(props: {
   //
   // `holdsLifecycleGate` answers the narrower question (`execution === "active"`)
   // that this gate actually wants. For a pre-@1.3 peer `updateOperation` is
-  // `null` and we fall back to the coarse field — which is exactly the
-  // behaviour those hosts ship with today, so no host regresses and only the
-  // ones that CAN tell us more get the fix. Keyed on the PEER's field rather
-  // than on whether a projection exists: the projection is now built for that
-  // peer too (so its parks reach the card), and its `updating` kind is
-  // deliberately fail-open in `holdsLifecycleGate`, which would have quietly
-  // dropped the gate those hosts ship with.
+  // `null` and we fall back to the coarse marker — the behaviour those hosts
+  // ship with, so no host regresses and only the ones that CAN tell us more
+  // get the fix. Keyed on the PEER's field rather than on whether a projection
+  // exists: the projection is now built for that peer too (so its parks reach
+  // the card), and its `updating` kind is deliberately fail-open in
+  // `holdsLifecycleGate`, which would have quietly dropped the gate those
+  // hosts ship with.
+  //
+  // The coarse fallback reads the PROJECTED kind, not the raw wire field. The
+  // two agree while the read is healthy; they part when it is not, and that
+  // is the case that matters: `projectFleetUpdateView` demotes a retained,
+  // failed, paused or aged read to `unknown`, while the raw `updateProgress`
+  // on the retained response still says `updating`. A pre-@1.3 host whose
+  // updater crashed mid-swap leaves that marker behind with nothing to clear
+  // it, and holding the gate on it would lock Restart — the one action that
+  // recovers the host — for as long as the response was retained.
   const updateInFlight =
     view.updateOperation === null || operationView === null
-      ? view.updateProgress?.state === "updating"
+      ? operationView?.kind === "updating"
       : holdsLifecycleGate(operationView);
   const corePending =
     restart.isPending ||

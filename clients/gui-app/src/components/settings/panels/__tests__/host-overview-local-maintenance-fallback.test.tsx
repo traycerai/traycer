@@ -113,6 +113,18 @@ const RELEASED_FLOOR_METHODS = ["host.status"] as const;
 const RPC_INSTALL_VERSION = "rpc-1.0.0";
 const BRIDGE_INSTALL_VERSION = "bridge-9.9.9";
 const BRIDGE_CHECK_VERSION = "1.2.0";
+/**
+ * What the running host reports. The two install-version sentinels above are
+ * deliberately not versions at all - they exist to prove which LANE a read
+ * came from - so the records built from them carry `runtimeVersion: null`:
+ * a sentinel declared as the runtime would read as activation debt against
+ * this version (`installRecord.runtimeVersion !== hostVersion`, see
+ * `legacy-update-facts.ts`) and the Overview would render "vbridge-9.9.9 is
+ * installed — restart host to finish." in place of the catalog sentence these
+ * tests wait for. With `null` the comparison falls to the version comparator,
+ * which finds the sentinel incomparable and reports no debt.
+ */
+const RUNNING_HOST_VERSION = "1.1.11";
 const RPC_CHECK_VERSION = "1.3.0";
 
 const SERVICE_STOPPED: HostDoctorIssue = {
@@ -226,7 +238,7 @@ function managedInstallationInfo(
     installRecord: {
       installId: `id-${version}`,
       version,
-      runtimeVersion: version,
+      runtimeVersion: null,
       platform: "darwin",
       arch: "arm64",
       installedAt: "2026-08-10T00:00:00Z",
@@ -337,7 +349,7 @@ function mountFallbackOverview(options: {
   const fixture = buildOverviewHostFixture({
     hostId: HOST_ID,
     isLocalMachine: true,
-    hostVersion: "1.1.11",
+    hostVersion: RUNNING_HOST_VERSION,
     effectiveName: HOST_NAME,
     invalidator: createHostQueryInvalidator(queryClient),
     overrideHandlers: {

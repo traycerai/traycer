@@ -325,6 +325,53 @@ describe("HostOverviewPanel — lifecycle gate matrix (G1)", () => {
     });
   });
 
+  it("(d2) a pre-@1.3 peer's COARSE 'updating' marker releases the gate once the read goes unhealthy — the retained wire field must not outlive the projection's demotion", async () => {
+    // (c) for the coarse leg. The pre-@1.3 fallback used to read the RAW
+    // `view.updateProgress.state` off the retained response, which TanStack
+    // keeps verbatim across a failed background refetch - so an old host whose
+    // updater crashed mid-swap (marker left at `updating`, nothing alive to
+    // clear it) locked Restart for as long as the response was retained. The
+    // fallback now reads the PROJECTED kind, which `projectFleetUpdateView`
+    // demotes to `unknown` on an unhealthy read.
+    //
+    // Falsification: put `view.updateProgress?.state === "updating"` back in
+    // `host-overview-panel.tsx`'s `updateInFlight` fallback and the second
+    // assertion goes red while (d) above stays green.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let statusCalls = 0;
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      overrideHandlers: {
+        "host.status": () => {
+          statusCalls += 1;
+          if (statusCalls === 1) {
+            return statusWith(null, {
+              updateProgress: { state: "updating", error: null },
+            });
+          }
+          throw new Error("host unreachable");
+        },
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    // Healthy read: the released behaviour, gate HOLDS (same as (d)).
+    await waitFor(async () => {
+      expect(await editNameDisabled()).toBe(true);
+    });
+
+    // Past the 10s baseline poll: the refetch fails and the `updating`
+    // response is retained. The projection demotes it; the gate must follow.
+    await vi.advanceTimersByTimeAsync(11_000);
+    await waitFor(async () => {
+      expect(await editNameDisabled()).toBe(false);
+    });
+  });
+
   it("(c) THE DEFECT ITSELF — a retained active status whose READ THEN GOES UNHEALTHY must release the gate, and an already-open restart confirmation must STAY open", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     let statusCalls = 0;
