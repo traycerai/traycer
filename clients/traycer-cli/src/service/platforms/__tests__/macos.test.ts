@@ -1425,6 +1425,67 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
     expect(classifyLaunchdPrintOutput(printOutput)).toEqual({
       kind: "cli-or-other",
       path: "/Users/me/Library/LaunchAgents/ai.traycer.host.plist",
+      pid: null,
+    });
+  });
+
+  it("classifies a raw CLI-bootstrapped LaunchAgent with a live pid as cli-or-other with that pid", () => {
+    const printOutput = [
+      "gui/501/ai.traycer.host = {",
+      "\tactive count = 1",
+      "\tpath = /Users/me/Library/LaunchAgents/ai.traycer.host.plist",
+      "\ttype = LaunchAgent",
+      "\tstate = running",
+      "\tpid = 4242",
+      "",
+      "\tprogram = /Users/me/.traycer/cli/bin/traycer",
+      "\targuments = {",
+      "\t\t/Users/me/.traycer/cli/bin/traycer",
+      "\t\thost",
+      "\t\tstart",
+      "\t}",
+      "}",
+      "",
+    ].join("\n");
+
+    expect(classifyLaunchdPrintOutput(printOutput)).toEqual({
+      kind: "cli-or-other",
+      path: "/Users/me/Library/LaunchAgents/ai.traycer.host.plist",
+      pid: 4242,
+    });
+  });
+
+  it("treats a zero or non-numeric pid field as no live process", () => {
+    const printOutputZero = [
+      "gui/501/ai.traycer.host = {",
+      "\tpath = /Users/me/Library/LaunchAgents/ai.traycer.host.plist",
+      "\ttype = LaunchAgent",
+      "\tpid = 0",
+      "\tprogram = /Users/me/.traycer/cli/bin/traycer",
+      "}",
+      "",
+    ].join("\n");
+
+    expect(classifyLaunchdPrintOutput(printOutputZero)).toEqual({
+      kind: "cli-or-other",
+      path: "/Users/me/Library/LaunchAgents/ai.traycer.host.plist",
+      pid: null,
+    });
+
+    const printOutputNonNumeric = [
+      "gui/501/ai.traycer.host = {",
+      "\tpath = /Users/me/Library/LaunchAgents/ai.traycer.host.plist",
+      "\ttype = LaunchAgent",
+      "\tpid = (null)",
+      "\tprogram = /Users/me/.traycer/cli/bin/traycer",
+      "}",
+      "",
+    ].join("\n");
+
+    expect(classifyLaunchdPrintOutput(printOutputNonNumeric)).toEqual({
+      kind: "cli-or-other",
+      path: "/Users/me/Library/LaunchAgents/ai.traycer.host.plist",
+      pid: null,
     });
   });
 
@@ -2320,6 +2381,146 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         expect(bootout?.args).toEqual(["bootout", "--wait", agentTarget]);
       },
     );
+  });
+
+  describe("takeoverDesktopRegistration - standing down a live CLI-label host", () => {
+    // No Desktop SMAppService agent is loaded (the `.agent` probe reads
+    // not-loaded, exit 113), but the CLI label itself is loaded from a
+    // raw `~/Library/LaunchAgents/<label>.plist` path (NOT an in-bundle
+    // SMAppService path, so this stays `cli-or-other` rather than
+    // tripping the pre-split refusal) with an optional live `pid` -
+    // the KeepAlive-respawn race `standDownLiveCliLabelHost` exists to
+    // close.
+    function stageStandDownRunner(input: { pid: number | null }): {
+      calls: RecordedCall[];
+      controller: ServiceController;
+    } {
+      const calls: RecordedCall[] = [];
+      const runner: ProcessRunner = async (command, args) => {
+        calls.push({ command, args });
+        if (args[0] === "print") {
+          if (args[1]?.endsWith(".agent") === true) {
+            return {
+              stdout: "",
+              stderr: "Could not find specified service\n",
+              exitCode: 113,
+            };
+          }
+          const pidLine = input.pid === null ? "" : `\tpid = ${input.pid}\n`;
+          return {
+            stdout: `\tpath = /Users/me/Library/LaunchAgents/${label.id}.plist\n\ttype = LaunchAgent\n${pidLine}`,
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+        return buildSuccessResult();
+      };
+      return { calls, controller: createMacosController(runner) };
+    }
+
+    it("rejects with HOST_BUSY and never boots out when the live CLI-label host denies the shutdown claim", async () => {
+      const { calls, controller } = stageStandDownRunner({ pid: 4242 });
+      MOCKS.requestCooperativeShutdown.mockResolvedValue({ kind: "busy" });
+
+      await expect(
+        controller.takeoverDesktopRegistration(label),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.HOST_BUSY,
+        message: expect.stringContaining("denied the shutdown claim"),
+      });
+      expect(calls.some((c) => c.args[0] === "bootout")).toBe(false);
+    });
+
+    it("rejects with SERVICE_INSTALL_FAILED and never boots out when the live CLI-label host has not published a live endpoint yet (no-metadata)", async () => {
+      const { calls, controller } = stageStandDownRunner({ pid: 4242 });
+      MOCKS.requestCooperativeShutdown.mockResolvedValue({
+        kind: "no-metadata",
+      });
+
+      await expect(
+        controller.takeoverDesktopRegistration(label),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+        message: expect.stringContaining(
+          "has not published a live endpoint yet",
+        ),
+      });
+      expect(calls.some((c) => c.args[0] === "bootout")).toBe(false);
+    });
+
+    it("rejects with SERVICE_INSTALL_FAILED the same way, and never boots out, when launchd's pid names a host that already exited (no-host)", async () => {
+      const { calls, controller } = stageStandDownRunner({ pid: 4242 });
+      MOCKS.requestCooperativeShutdown.mockResolvedValue({
+        kind: "no-host",
+      });
+
+      await expect(
+        controller.takeoverDesktopRegistration(label),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+        message: expect.stringContaining(
+          "has not published a live endpoint yet",
+        ),
+      });
+      expect(calls.some((c) => c.args[0] === "bootout")).toBe(false);
+    });
+
+    it("resolves cli-host-stopped/stopped and logs the stand-down when the live CLI-label host stops cooperatively", async () => {
+      const { controller } = stageStandDownRunner({ pid: 4242 });
+      MOCKS.requestCooperativeShutdown.mockResolvedValue({ kind: "stopped" });
+
+      await expect(
+        controller.takeoverDesktopRegistration(label),
+      ).resolves.toEqual({
+        kind: "cli-host-stopped",
+        cooperativeStop: "stopped",
+      });
+      expect(MOCKS.requestCooperativeShutdown).toHaveBeenCalledWith(
+        label.environment,
+        "takeover",
+        "shutdown",
+      );
+      expect(MOCKS.cliLoggerInfo).toHaveBeenCalledWith(
+        expect.stringContaining("stood down before the reload"),
+        expect.objectContaining({ label: label.id, pid: 4242 }),
+      );
+    });
+
+    it("resolves cli-host-stopped/skipped-unreachable and warns when the live CLI-label host cannot be stopped cooperatively", async () => {
+      const { controller } = stageStandDownRunner({ pid: 4242 });
+      MOCKS.requestCooperativeShutdown.mockResolvedValue({
+        kind: "unreachable",
+        cause: "boom",
+      });
+
+      await expect(
+        controller.takeoverDesktopRegistration(label),
+      ).resolves.toEqual({
+        kind: "cli-host-stopped",
+        cooperativeStop: "skipped-unreachable",
+      });
+      expect(MOCKS.cliLoggerWarn).toHaveBeenCalledWith(
+        expect.stringContaining("could not be stopped cooperatively"),
+        expect.objectContaining({ cause: "boom" }),
+      );
+    });
+
+    it("reports not-applicable and never calls requestCooperativeShutdown when the CLI label is loaded but has no live pid", async () => {
+      const { controller } = stageStandDownRunner({ pid: null });
+
+      await expect(
+        controller.takeoverDesktopRegistration(label),
+      ).resolves.toEqual({ kind: "not-applicable" });
+      expect(MOCKS.requestCooperativeShutdown).not.toHaveBeenCalled();
+    });
+
+    // The CLI label not loaded at all (exit 113 on both probes) is already
+    // covered above by "reports not-applicable when Desktop owns nothing"
+    // in the `takeoverDesktopRegistration` describe block - that runner
+    // makes every `print` call return exit 113, which puts `cliOwnership`
+    // at `not-loaded` (not `cli-or-other`), so `standDownLiveCliLabelHost`
+    // short-circuits to `not-applicable` without calling
+    // `requestCooperativeShutdown`. No separate test added here.
   });
 
   it("stop/start/restart proceed normally when the agent probe reads not-loaded (CLI-managed machine)", async () => {

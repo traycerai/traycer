@@ -167,7 +167,9 @@ async function takeoverDesktopRegistration(
     });
   }
   const desktopAgent = await probeDesktopAgentOwnership(label, run);
-  if (desktopAgent === null) return { kind: "not-applicable" };
+  if (desktopAgent === null) {
+    return await standDownLiveCliLabelHost(label, cliOwnership);
+  }
   // The CLI is taking this label over; Desktop's registration is retired, not
   // relaunched. Nothing is coming back under this identity.
   const outcome = await requestCooperativeShutdown(
@@ -275,6 +277,85 @@ async function takeoverDesktopRegistration(
         : outcome.kind === "no-host"
           ? "no-host"
           : "skipped-unreachable",
+  };
+}
+
+// The takeover with NO Desktop agent to retire. Its caller (`installService`)
+// boots out a loaded CLI label with a plain `launchctl bootout` and no
+// cooperative claim - fine for a job with no process, and exactly wrong for
+// a host that started between the caller's own probe and this lock: the
+// Desktop's parked-registration fallback admits the takeover only after it
+// has seen no live process under the label, but a throttled `KeepAlive`
+// respawn can start in that gap (Codex, traycer#1761). Under this lock, a
+// live process is asked to stand down on the same terms as a Desktop-managed
+// host: a busy denial ABORTS, a stopped or dead host proceeds, and an
+// unreachable one is booted out underneath because it is the broken part.
+//
+// `no-metadata` and `no-host` with a live launchd pid both REFUSE instead of
+// proceeding. launchd's pid is the supervisor; `pid.json` names its host
+// child. A supervisor that is alive while the metadata is absent, or names a
+// child that is gone, is a host in its first seconds (fresh start, or a
+// respawn after the old child exited and before the new one published) -
+// there is no endpoint to ask yet, and booting it out now is the very
+// interruption this guard exists to prevent. The window closes on its own;
+// the caller retries. Only a host that answered - stood down, or is
+// provably unreachable behind a published endpoint - lets the reload run.
+async function standDownLiveCliLabelHost(
+  label: ServiceLabel,
+  cliOwnership: LaunchdOwnership,
+): Promise<DesktopRegistrationTakeover> {
+  if (cliOwnership.kind !== "cli-or-other" || cliOwnership.pid === null) {
+    return { kind: "not-applicable" };
+  }
+  const outcome = await requestCooperativeShutdown(
+    label.environment,
+    "takeover",
+    "shutdown",
+  );
+  if (outcome.kind === "busy") {
+    throw cliError({
+      code: CLI_ERROR_CODES.HOST_BUSY,
+      message:
+        "service install --takeover: the host running under the CLI label has work in progress and denied the shutdown claim; retry once the work completes.",
+      details: { label: label.id, pid: cliOwnership.pid },
+      exitCode: 1,
+    });
+  }
+  if (outcome.kind === "no-metadata" || outcome.kind === "no-host") {
+    throw cliError({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+      message: `service install --takeover: launchd reports a process (pid ${cliOwnership.pid}) under '${label.id}' that has not published a live endpoint yet, so it could not be asked to stand down; it is most likely still starting. Retry in a moment, or run 'traycer host service uninstall' first if it never comes up.`,
+      details: {
+        label: label.id,
+        pid: cliOwnership.pid,
+        metadata: outcome.kind,
+      },
+      exitCode: 1,
+    });
+  }
+  const logger = createCliLogger(label.environment);
+  if (outcome.kind === "unreachable" || outcome.kind === "hung") {
+    logger.warn(
+      "Takeover: the host running under the CLI label could not be stopped cooperatively; the reload will boot the job out underneath it.",
+      {
+        label: label.id,
+        pid: cliOwnership.pid,
+        cause:
+          outcome.kind === "unreachable"
+            ? outcome.cause
+            : `pid ${outcome.pid} outlived the shutdown grace`,
+      },
+    );
+  } else {
+    logger.info(
+      "Takeover: the host running under the CLI label stood down before the reload.",
+      { label: label.id, pid: cliOwnership.pid, outcome: outcome.kind },
+    );
+  }
+  return {
+    kind: "cli-host-stopped",
+    cooperativeStop:
+      outcome.kind === "stopped" ? "stopped" : "skipped-unreachable",
   };
 }
 
@@ -617,7 +698,14 @@ async function reloadRegisteredService(
 type LaunchdOwnership =
   | { readonly kind: "not-loaded" }
   | { readonly kind: "smappservice"; readonly path: string }
-  | { readonly kind: "cli-or-other"; readonly path: string | null };
+  | {
+      readonly kind: "cli-or-other";
+      readonly path: string | null;
+      // launchd's `pid` for the job, or null when the job is loaded but has
+      // no running process (a clean exit under `KeepAlive{SuccessfulExit:
+      // false}`, or the throttle window between crashes).
+      readonly pid: number | null;
+    };
 
 // Probe launchd for who currently owns this label. `launchctl print`
 // exits 0 when loaded; non-zero means not loaded. Tolerate non-zero so a
@@ -686,7 +774,14 @@ function classifyLaunchdPrintOutput(printOutput: string): LaunchdOwnership {
   if (isServiceManagement) {
     return { kind: "smappservice", path: path ?? SMAPPSERVICE_PATH_UNKNOWN };
   }
-  return { kind: "cli-or-other", path };
+  const pidField = fields.get("pid");
+  const pid =
+    pidField === undefined ? Number.NaN : Number.parseInt(pidField, 10);
+  return {
+    kind: "cli-or-other",
+    path,
+    pid: Number.isInteger(pid) && pid > 0 ? pid : null,
+  };
 }
 
 // launchctl returns "Service is already loaded" / "Bootstrap failed:

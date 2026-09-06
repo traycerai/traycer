@@ -173,7 +173,9 @@ export function buildServiceInstallCommand(
     let human =
       takeover !== null && takeover.kind === "took-over"
         ? `service '${label.id}' registered (environment=${label.environment}); host management taken over from Traycer Desktop (agent '${takeover.agentLabelId}' deregistered, host ${takeover.cooperativeStop === "stopped" ? "stopped cooperatively" : takeover.cooperativeStop === "no-host" ? "was not running" : "was unreachable and booted out"})`
-        : `service '${label.id}' registered (environment=${label.environment})`;
+        : takeover !== null && takeover.kind === "cli-host-stopped"
+          ? `service '${label.id}' registered (environment=${label.environment}); the host already running under this label ${takeover.cooperativeStop === "stopped" ? "stood down cooperatively before the reload" : "was unreachable and booted out"}`
+          : `service '${label.id}' registered (environment=${label.environment})`;
     // Restate the unauthenticated warning on the terminal line - the
     // pre-flight's copy printed before the registration output and may
     // have scrolled away.

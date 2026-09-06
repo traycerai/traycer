@@ -236,7 +236,11 @@ export function readHostLoginItemStatus(): HostLoginItemStatus {
  *     own takeover treats missing metadata as a reason to boot the job out
  *     underneath a host it could not ask. A job that is loaded but has no
  *     process is fine: the install re-registers and kickstarts it, which is
- *     the start this exists to perform.
+ *     the start this exists to perform. This read is a snapshot, not a
+ *     lock: a job that starts between it and the CLI taking its contender
+ *     lock is caught THERE - `takeoverDesktopRegistration` asks a live
+ *     CLI-label process to stand down before its reload and refuses one
+ *     that has no endpoint to ask yet.
  */
 export type ParkedRegistrationTakeover =
   | {
