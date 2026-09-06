@@ -1267,8 +1267,14 @@ function parseProcessTableJson(
  * from `kill` (killing on a claim we cannot verify is the mistake this scan
  * exists to prevent), and the loop must not read their absence from `kill` as
  * convergence, because a host child spawned just before its parent died looks
- * exactly like this. `unattributed` is the same list minus the CLI's own
- * protected branch - what the loop reports, as opposed to what it remembers.
+ * exactly like this.
+ *
+ * Precisely: `undecided` is that closure minus everything the loop is about to
+ * remember with a window (`kill` and `protectedAncestors`) and minus the CLI's
+ * own descendant branch, which is positively identified and never the host's
+ * even when its slot-matched scan lands in the closure under an undecided CLI.
+ * `unattributed` is `undecided` minus the CLI's uncertain ancestors as well -
+ * what the loop reports, as opposed to what it remembers.
  */
 export function computeWindowsHostKillSet(
   table: readonly WindowsProcessTableRow[],
@@ -1399,15 +1405,17 @@ export function computeWindowsHostKillSet(
  * `undecided` is the rows that claim a remembered process as their parent but
  * cannot be tied to it - born after the victim was last seen alive, or carrying
  * an unreadable creation time - plus everything that hangs off those rows,
- * minus what is being remembered with a window. They are neither killed (they
- * may be strangers) nor ignored (they may be the host's children).
+ * minus what is being remembered with a window (`kill` and
+ * `protectedAncestors`) and minus the CLI's own descendant branch, which is
+ * never the host's. They are neither killed (they may be strangers) nor ignored
+ * (they may be the host's children).
  *
  * `unattributed` is the subset of `undecided` the loop REPORTS - it refuses to
- * claim a stop rather than pick silently - and it leaves out the CLI's own
- * protected branch, which is never killed and never a reason to refuse. The
- * loop's suspect memory is fed from `undecided`, not from the report: a
- * protected root's uncertainty is inherited by its children whether or not the
- * root itself is ever named, and it has to outlive the root.
+ * claim a stop rather than pick silently - and it additionally leaves out the
+ * CLI's uncertain ancestors, which are never killed and never a reason to
+ * refuse. The loop's suspect memory is fed from `undecided`, not from the
+ * report: a protected root's uncertainty is inherited by its children whether
+ * or not the root itself is ever named, and it has to outlive the root.
  */
 export interface WindowsHostKillSet {
   readonly kill: readonly number[];
