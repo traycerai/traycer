@@ -526,6 +526,7 @@ async function killHostProcessTree(
     const killSet = computeWindowsHostKillSet(table, process.pid, memory);
     const pids = uniqueProcessIds(killSet.kill);
     const unattributed = uniqueProcessIds(killSet.unattributed);
+    const undecided = uniqueProcessIds(killSet.undecided);
     if (pids.length === 0) {
       // Nothing left to kill - but that is only convergence if nothing is
       // UNDECIDED. A row claiming a killed host process as its parent, born
@@ -613,12 +614,21 @@ async function killHostProcessTree(
         seenAliveAt,
       });
     }
-    // Recorded from the same snapshot, and only ever added to: a pid this round
-    // could not place stays undecided for the rest of the loop even if the next
-    // scan does not list it at all, which is precisely the case the memory
-    // exists for. A later round that reaches the same pid again adds the
-    // incarnation that round saw beside the earlier one.
-    for (const pid of unattributed) {
+    // Recorded from the same snapshot, and only ever added to. What is kept is
+    // evidence about CLAIMS: a later row that names this pid as its parent, born
+    // after the incarnation seen here, is undecided - even if the next scan does
+    // not list the pid at all, which is precisely the case the memory exists
+    // for. It is not a verdict on the pid's own row: a row this round could not
+    // place is re-classified from scratch next round, and a live parent whose
+    // edge validates then clears it (`classifyCarryOverClaim`). A later round
+    // that reaches the same pid again adds the incarnation it saw beside the
+    // earlier one.
+    //
+    // From the FULL undecided closure, not from the reported subset. The CLI's
+    // own branch is withheld from the report and the kill, but the shell above
+    // the CLI is under no obligation to still be there next round, and its
+    // other children then claim a pid that only this entry remembers.
+    for (const pid of undecided) {
       rememberIncarnation(priorSuspects, pid, created.get(pid) ?? 0);
     }
   }
@@ -1215,7 +1225,7 @@ function parseProcessTableJson(
  * would mean deciding its parent, which is the thing this loop already said it
  * could not do.
  *
- * `unattributed` carries those undecidable rows out to the caller, TOGETHER WITH
+ * `undecided` carries those undecidable rows out to the caller, TOGETHER WITH
  * EVERYTHING BELOW THEM, walked over the same validated edges as the kill set.
  * An undecided root makes its whole subtree undecided - those children are
  * verified children of a process we cannot place, so they are exactly as
@@ -1224,7 +1234,8 @@ function parseProcessTableJson(
  * from `kill` (killing on a claim we cannot verify is the mistake this scan
  * exists to prevent), and the loop must not read their absence from `kill` as
  * convergence, because a host child spawned just before its parent died looks
- * exactly like this.
+ * exactly like this. `unattributed` is the same list minus the CLI's own
+ * protected branch - what the loop reports, as opposed to what it remembers.
  */
 export function computeWindowsHostKillSet(
   table: readonly WindowsProcessTableRow[],
@@ -1261,22 +1272,29 @@ export function computeWindowsHostKillSet(
   for (const ancestor of ancestorsOf(cliPid, parents)) {
     if (!slot.has(ancestor)) spared.add(ancestor);
   }
+  // Rows already in `kill` drop out of both undecided lists: a subtree can hang
+  // off an undecided root and still be slot-matched in its own right, and a pid
+  // this scan has decided to kill is not an open question - it is remembered as
+  // a victim, with a window, which is the stronger fact. Reporting it in both
+  // lists would put the same pid in front of the user twice, in two
+  // contradictory roles.
+  const undecidedClosure = [...suspects]
+    .filter((pid) => !victims.has(pid))
+    .sort((left, right) => left - right);
   return {
     kill: [...victims]
       .filter((pid) => !spared.has(pid))
       .sort((left, right) => left - right),
-    // The CLI's own branch is spared from this too. A protected row that
+    undecided: undecidedClosure,
+    // The CLI's own branch is spared from the REPORT. A protected row that
     // happens to claim a victim pid is not an open question about the host - it
     // is a process we have already decided never to kill - and reporting it
-    // would fail every stop issued from a Traycer-hosted terminal. Rows already
-    // in `kill` drop out for the mirror-image reason: a subtree can hang off an
-    // undecided root and still be slot-matched in its own right, and a pid this
-    // scan has decided to kill is not an open question either. Reporting it in
-    // both lists would put the same pid in front of the user twice, in two
-    // contradictory roles.
-    unattributed: [...suspects]
-      .filter((pid) => !spared.has(pid) && !victims.has(pid))
-      .sort((left, right) => left - right),
+    // would fail every stop issued from a Traycer-hosted terminal. It stays in
+    // `undecided`, because sparing it answers nothing about its children: the
+    // shell above the CLI can exit between rounds, and its other children then
+    // arrive as orphans claiming a pid that has to be remembered as undecided,
+    // or they read as convergence.
+    unattributed: undecidedClosure.filter((pid) => !spared.has(pid)),
   };
 }
 
@@ -1322,15 +1340,23 @@ export interface WindowsKillMemory {
 /**
  * What a round's scan says to do, split by what it can PROVE.
  *
- * `kill` is the ordinary answer. `unattributed` is the rows that claim a killed
- * or already-undecided process as their parent but cannot be tied to it - born
+ * `kill` is the ordinary answer. `undecided` is the rows that claim a killed or
+ * already-undecided process as their parent but cannot be tied to it - born
  * after the victim was last seen alive, or carrying an unreadable creation time
- * - plus everything that hangs off those rows. They are neither killed (they may
- * be strangers) nor ignored (they may be the host's children), and the loop
- * refuses to report a stop rather than pick one silently.
+ * - plus everything that hangs off those rows, minus what is being killed. They
+ * are neither killed (they may be strangers) nor ignored (they may be the
+ * host's children).
+ *
+ * `unattributed` is the subset of `undecided` the loop REPORTS - it refuses to
+ * claim a stop rather than pick silently - and it leaves out the CLI's own
+ * protected branch, which is never killed and never a reason to refuse. The
+ * loop's suspect memory is fed from `undecided`, not from the report: a
+ * protected root's uncertainty is inherited by its children whether or not the
+ * root itself is ever named, and it has to outlive the root.
  */
 export interface WindowsHostKillSet {
   readonly kill: readonly number[];
+  readonly undecided: readonly number[];
   readonly unattributed: readonly number[];
 }
 
@@ -1356,7 +1382,10 @@ type CarryOverClaim = "seed" | "unattributed" | "none";
 // evidence and outranks the earlier suspicion, which is why nothing here keeps a
 // row undecided by its own identity once its edge validates. Uncertainty about
 // a child whose LIVE parent is itself undecided is preserved by the descendant
-// closure in `computeWindowsHostKillSet`, not here.
+// closure in `computeWindowsHostKillSet`, not here; and once that parent has
+// exited, by the suspect entry the loop recorded for it - for every member of
+// the closure, the CLI's protected branch included, so a child that outlives a
+// spared shell still finds its parent's pid remembered.
 //
 // The gate is NOT redundant with the rules below. The case it decides is a
 // live, validated parent wearing a pid this loop killed earlier: an unrelated

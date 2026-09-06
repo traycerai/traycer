@@ -1833,6 +1833,134 @@ describe("killHostProcessTree convergence loop", () => {
     ]);
   });
 
+  it("round-6 P2: a spared shell's uncertainty outlives the shell - its children still refuse the stop after it exits", async () => {
+    // The CLI (this process, pid 9999 here) runs in a terminal shell 700 the
+    // host spawned - the "terminal-run" topology - and the host's own age is
+    // unreadable, so 700 can be placed neither way for the whole loop.
+    // Chronology (samples 5000, 7000, 9000):
+    //   R0 (sample 5000): host 100 (slot, `created` 0 - unreadable), shell
+    //       700 (born 2000) claiming it with a zeroed edge, the CLI (born
+    //       2500) as 700's validated child. kill=[100]; victim 100 =
+    //       [0, 5000]. 700 is spared by ancestry; nothing is undecided yet
+    //       because nothing was remembered yet.
+    //   R1 (sample 7000): 700 and the CLI again, a side worker 888 (born
+    //       6000, 700's validated child) and a re-launched slot 200 (born
+    //       6200). Against the unreadable victim 700 is undecided; the
+    //       closure is {700, CLI, 888}; 700 and the CLI are spared from the
+    //       REPORT, so unattributed=[888]. kill=[200]. The memory must take
+    //       the whole closure: 700 and 888 become suspects.
+    //   R2 (sample 9000): 700 has exited. The CLI and 888 now claim absent
+    //       700, and a NEW child 889 (born 8000) does too. Nothing was
+    //       killed, so the verdict rests on memory: suspect 700 (born 2000)
+    //       makes every claim born after it undecided. The CLI is spared;
+    //       888 and 889 are named, and the stop refuses. Before this fix
+    //       only 888 was remembered - by its own pid, not its parent's - and
+    //       the loop reported a converged stop with both alive.
+    const samples = [5000, 7000, 9000];
+    let sample = 0;
+    const shell700 = (parent: number): TableRowInput => ({
+      processId: 700,
+      parentProcessId: parent,
+      claimedParentProcessId: 100,
+      created: 2000,
+      slot: false,
+    });
+    const cli9999 = (parent: number): TableRowInput => ({
+      processId: 9999,
+      parentProcessId: parent,
+      claimedParentProcessId: 700,
+      created: 2500,
+      slot: false,
+    });
+    const { runner, calls } = roundedRunner([
+      {
+        kind: "table",
+        rows: [
+          { processId: 100, parentProcessId: 1, created: 0, slot: true },
+          shell700(0),
+          cli9999(700),
+        ],
+      },
+      {
+        kind: "table",
+        rows: [
+          shell700(0),
+          cli9999(700),
+          {
+            processId: 888,
+            parentProcessId: 700,
+            claimedParentProcessId: 700,
+            created: 6000,
+            slot: false,
+          },
+          { processId: 200, parentProcessId: 1, created: 6200, slot: true },
+        ],
+      },
+      {
+        kind: "table",
+        rows: [
+          cli9999(0),
+          {
+            processId: 888,
+            parentProcessId: 0,
+            claimedParentProcessId: 700,
+            created: 6000,
+            slot: false,
+          },
+          {
+            processId: 889,
+            parentProcessId: 0,
+            claimedParentProcessId: 700,
+            created: 8000,
+            slot: false,
+          },
+        ],
+      },
+    ]);
+    const controller = createWindowsController(runner, {
+      now: () => {
+        const value = samples[sample] ?? 9000;
+        sample += 1;
+        return value;
+      },
+    });
+
+    const originalPid = Object.getOwnPropertyDescriptor(process, "pid");
+    Object.defineProperty(process, "pid", { value: 9999, configurable: true });
+    try {
+      await expect(
+        controller.stop(serviceLabelFor("staging"), { force: false }),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        details: { unattributedPids: [888, 889] },
+      });
+    } finally {
+      if (originalPid !== undefined) {
+        Object.defineProperty(process, "pid", originalPid);
+      }
+    }
+
+    expect(
+      calls.filter((call) => call.command === "powershell.exe"),
+    ).toHaveLength(3);
+    expect(
+      calls
+        .filter((call) => call.command === "taskkill")
+        .map((call) => call.args),
+    ).toEqual([
+      ["/F", "/PID", "100"],
+      ["/F", "/PID", "200"],
+    ]);
+
+    // Ablation: in `killHostProcessTree`, record suspects from `unattributed`
+    // instead of `undecided` → this test reddens: round 2 remembers 888 but
+    // not 700, no row's claim on 700 matches anything, and the stop RESOLVES
+    // with 888 and 889 alive (same kills, same three scans). 889 is why a
+    // self-identity rule would not have been enough: it was never seen
+    // before, so nothing about its own pid could be remembered - only its
+    // parent's.
+  });
+
   // The unattributed refusal exercised through all four callers that run
   // `killHostProcessTree`: none of them may treat it as anything softer than
   // the scan-unavailable refusal already covered above. The fourth is the
@@ -2217,6 +2345,7 @@ describe("computeWindowsHostKillSet and the taskkill self-protection it drives",
       const table = rowsOf([victimRow(777, 0, 100, 3000, false), cliRow]);
       expect(computeWindowsHostKillSet(table, cliPid, remembered)).toEqual({
         kill: [777],
+        undecided: [],
         unattributed: [],
       });
     });
@@ -2231,6 +2360,7 @@ describe("computeWindowsHostKillSet and the taskkill self-protection it drives",
       const table = rowsOf([victimRow(777, 0, 100, 6000, false), cliRow]);
       expect(computeWindowsHostKillSet(table, cliPid, remembered)).toEqual({
         kill: [],
+        undecided: [777],
         unattributed: [777],
       });
     });
@@ -2248,6 +2378,7 @@ describe("computeWindowsHostKillSet and the taskkill self-protection it drives",
       const table = rowsOf([victimRow(777, 0, 100, 900, false), cliRow]);
       expect(computeWindowsHostKillSet(table, cliPid, remembered)).toEqual({
         kill: [],
+        undecided: [],
         unattributed: [],
       });
     });
@@ -2256,7 +2387,7 @@ describe("computeWindowsHostKillSet and the taskkill self-protection it drives",
       const sameAsBirth = rowsOf([victimRow(777, 0, 100, 1000, false), cliRow]);
       expect(
         computeWindowsHostKillSet(sameAsBirth, cliPid, remembered),
-      ).toEqual({ kill: [777], unattributed: [] });
+      ).toEqual({ kill: [777], undecided: [], unattributed: [] });
 
       const sameAsSeenAliveAt = rowsOf([
         victimRow(777, 0, 100, 5000, false),
@@ -2264,11 +2395,11 @@ describe("computeWindowsHostKillSet and the taskkill self-protection it drives",
       ]);
       expect(
         computeWindowsHostKillSet(sameAsSeenAliveAt, cliPid, remembered),
-      ).toEqual({ kill: [777], unattributed: [] });
+      ).toEqual({ kill: [777], undecided: [], unattributed: [] });
 
       // Ablation (§ablation table): change `created < victim.created` to
       // `return "unattributed"` → the P2-2 test above reddens, becoming
-      // `{ kill: [], unattributed: [777] }` instead of deciding the row is
+      // `{ kill: [], undecided: [777], unattributed: [777] }` instead of deciding the row is
       // simply not the victim's child.
       // Ablation (§ablation table): drop `row.created <= victim.seenAliveAt`
       // → the P1-a test above reddens the same way - exactly the bug this
@@ -2279,7 +2410,7 @@ describe("computeWindowsHostKillSet and the taskkill self-protection it drives",
       const unknownRowAge = rowsOf([victimRow(777, 0, 100, 0, false), cliRow]);
       expect(
         computeWindowsHostKillSet(unknownRowAge, cliPid, remembered),
-      ).toEqual({ kill: [], unattributed: [777] });
+      ).toEqual({ kill: [], undecided: [777], unattributed: [777] });
 
       const unknownVictimAge = victimMemory(
         new Map<number, readonly WindowsKillVictim[]>([
@@ -2289,16 +2420,16 @@ describe("computeWindowsHostKillSet and the taskkill self-protection it drives",
       const ordinaryRow = rowsOf([victimRow(777, 0, 100, 3000, false), cliRow]);
       expect(
         computeWindowsHostKillSet(ordinaryRow, cliPid, unknownVictimAge),
-      ).toEqual({ kill: [], unattributed: [777] });
+      ).toEqual({ kill: [], undecided: [777], unattributed: [777] });
 
       // Ablation (§ablation table): drop the zero-age branch entirely
       // (`victim.created === 0 || row.created === 0`) → BOTH assertions
       // above redden, in opposite directions. The row of age 0 falls into
       // the lower bound (`0 < 1000`) and is DECIDED as older than the victim
-      // (`{ kill: [], unattributed: [] }`), which is "we could not read an
+      // (`{ kill: [], undecided: [], unattributed: [] }`), which is "we could not read an
       // age" masquerading as proof. The victim of age 0 admits everything
       // (`3000 < 0` is false, `3000 <= 5000` is true) and 777 is killed
-      // (`{ kill: [777], unattributed: [] }`). Neither reading of an
+      // (`{ kill: [777], undecided: [], unattributed: [] }`). Neither reading of an
       // unreadable age is acceptable, which is why the guard runs first.
     });
 
@@ -2313,6 +2444,7 @@ describe("computeWindowsHostKillSet and the taskkill self-protection it drives",
       ]);
       expect(computeWindowsHostKillSet(table, cliPid, remembered)).toEqual({
         kill: [],
+        undecided: [],
         unattributed: [],
       });
     });
@@ -2321,6 +2453,7 @@ describe("computeWindowsHostKillSet and the taskkill self-protection it drives",
       const table = rowsOf([victimRow(777, 0, 424242, 3000, false), cliRow]);
       expect(computeWindowsHostKillSet(table, cliPid, remembered)).toEqual({
         kill: [],
+        undecided: [],
         unattributed: [],
       });
     });
@@ -2333,14 +2466,51 @@ describe("computeWindowsHostKillSet and the taskkill self-protection it drives",
       // classification - reporting it would fail every stop issued from a
       // Traycer-hosted terminal whose shell happens to sit on a pid the host
       // once held.
+      //
+      // Excluded from the REPORT, not from the memory feed: 700 and the CLI
+      // under it are still the round's undecided closure, and the loop
+      // remembers them as suspects so that a child of 700 that shows up after
+      // 700 has exited still finds its parent's pid remembered.
       const table = rowsOf([
         victimRow(700, 0, 100, 6000, false),
         victimRow(cliPid, 700, 700, 6500, false),
       ]);
       expect(computeWindowsHostKillSet(table, cliPid, remembered)).toEqual({
         kill: [],
+        undecided: [700, cliPid],
         unattributed: [],
       });
+    });
+
+    it("a spared undecided shell's unspared child is reported, and the shell itself is kept in the memory feed", () => {
+      // The cold review's round-6 P2, as one round: the host was killed with
+      // an UNREADABLE age, so shell 700 (claiming it, born 2000) can be
+      // placed neither way; the CLI (9999) is 700's validated child, and so
+      // is a side worker 888 (born 6000). 700 is spared by ancestry and 888
+      // is reported. Without 700 in `undecided` the loop would remember only
+      // 888, and once 700 exits nothing would remember the pid its children
+      // claim.
+      const unreadableHost = victimMemory(
+        new Map<number, readonly WindowsKillVictim[]>([
+          [100, [{ created: 0, seenAliveAt: 5000 }]],
+        ]),
+      );
+      const table = rowsOf([
+        victimRow(700, 0, 100, 2000, false),
+        victimRow(cliPid, 700, 700, 2500, false),
+        victimRow(888, 700, 700, 6000, false),
+        victimRow(200, 0, 0, 6200, true),
+      ]);
+      expect(computeWindowsHostKillSet(table, cliPid, unreadableHost)).toEqual({
+        kill: [200],
+        undecided: [700, 888, cliPid],
+        unattributed: [888],
+      });
+
+      // Ablation: in `computeWindowsHostKillSet`, build `undecided` with the
+      // `!spared.has(pid)` filter too (make it equal to `unattributed`) →
+      // this assertion and the one above redden on `undecided`, and the
+      // loop-level "round-6 P2" test reddens into a resolved stop.
     });
 
     it("both non-empty: a killable seed and an unattributed row coexist in the same verdict", () => {
@@ -2351,6 +2521,7 @@ describe("computeWindowsHostKillSet and the taskkill self-protection it drives",
       ]);
       expect(computeWindowsHostKillSet(table, cliPid, remembered)).toEqual({
         kill: [777],
+        undecided: [888],
         unattributed: [888],
       });
     });
@@ -2359,6 +2530,7 @@ describe("computeWindowsHostKillSet and the taskkill self-protection it drives",
       const table = rowsOf([victimRow(200, 0, 0, 2000, true), cliRow]);
       expect(computeWindowsHostKillSet(table, cliPid, remembered)).toEqual({
         kill: [200],
+        undecided: [],
         unattributed: [],
       });
     });
@@ -2380,6 +2552,7 @@ describe("computeWindowsHostKillSet and the taskkill self-protection it drives",
       ]);
       expect(computeWindowsHostKillSet(table, cliPid, remembered)).toEqual({
         kill: [800],
+        undecided: [],
         unattributed: [],
       });
     });
@@ -2404,6 +2577,7 @@ describe("computeWindowsHostKillSet and the taskkill self-protection it drives",
         ]);
         expect(computeWindowsHostKillSet(table, cliPid, remembered)).toEqual({
           kill: [100, 777],
+          undecided: [],
           unattributed: [],
         });
       });
@@ -2420,6 +2594,7 @@ describe("computeWindowsHostKillSet and the taskkill self-protection it drives",
         ]);
         expect(computeWindowsHostKillSet(table, cliPid, remembered)).toEqual({
           kill: [100, 777],
+          undecided: [],
           unattributed: [],
         });
       });
@@ -2438,6 +2613,7 @@ describe("computeWindowsHostKillSet and the taskkill self-protection it drives",
         ]);
         expect(computeWindowsHostKillSet(table, cliPid, remembered)).toEqual({
           kill: [200, 300, 400],
+          undecided: [],
           unattributed: [],
         });
       });
@@ -2458,11 +2634,12 @@ describe("computeWindowsHostKillSet and the taskkill self-protection it drives",
       ]);
       expect(computeWindowsHostKillSet(table, cliPid, remembered)).toEqual({
         kill: [],
+        undecided: [],
         unattributed: [],
       });
 
       // Ablation (§ablation table): drop `row.parentProcessId !== 0` → this
-      // test reddens, becoming `{ kill: [], unattributed: [777] }` - the
+      // test reddens, becoming `{ kill: [], undecided: [777], unattributed: [777] }` - the
       // window alone cannot place a row born after 5000, and a stop would be
       // refused over a process the scan had already tied to a living,
       // unrelated parent.
@@ -2486,6 +2663,7 @@ describe("computeWindowsHostKillSet and the taskkill self-protection it drives",
       ]);
       expect(computeWindowsHostKillSet(table, cliPid, widerWindow)).toEqual({
         kill: [],
+        undecided: [],
         unattributed: [],
       });
     });
@@ -2515,12 +2693,13 @@ describe("computeWindowsHostKillSet and the taskkill self-protection it drives",
         const table = rowsOf([victimRow(555, 0, 100, 1500, false), cliRow]);
         expect(computeWindowsHostKillSet(table, cliPid, twoWindows)).toEqual({
           kill: [555],
+          undecided: [],
           unattributed: [],
         });
 
         // Ablation: in `classifyCarryOverClaim`, consult only the LAST
         // incarnation of the claimed pid → this test reddens
-        // (`{ kill: [], unattributed: [] }`): 555 is decided as somebody
+        // (`{ kill: [], undecided: [], unattributed: [] }`): 555 is decided as somebody
         // else's child and silently spared.
       });
 
@@ -2539,6 +2718,7 @@ describe("computeWindowsHostKillSet and the taskkill self-protection it drives",
         const table = rowsOf([victimRow(888, 0, 777, 6500, false), cliRow]);
         expect(computeWindowsHostKillSet(table, cliPid, mixed)).toEqual({
           kill: [],
+          undecided: [888],
           unattributed: [888],
         });
       });
@@ -2550,6 +2730,7 @@ describe("computeWindowsHostKillSet and the taskkill self-protection it drives",
         const table = rowsOf([victimRow(888, 0, 777, 6500, false), cliRow]);
         expect(computeWindowsHostKillSet(table, cliPid, twoSuspects)).toEqual({
           kill: [],
+          undecided: [888],
           unattributed: [888],
         });
       });
@@ -2579,6 +2760,7 @@ describe("computeWindowsHostKillSet and the taskkill self-protection it drives",
         ]);
         expect(computeWindowsHostKillSet(table, cliPid, suspected)).toEqual({
           kill: [],
+          undecided: [],
           unattributed: [],
         });
 
@@ -2593,7 +2775,11 @@ describe("computeWindowsHostKillSet and the taskkill self-protection it drives",
         ]);
         expect(
           computeWindowsHostKillSet(underSuspectParent, cliPid, suspected),
-        ).toEqual({ kill: [], unattributed: [777, 888] });
+        ).toEqual({
+          kill: [],
+          undecided: [777, 888],
+          unattributed: [777, 888],
+        });
 
         // Ablation: in `classifyCarryOverClaim`, before the gate, return
         // "unattributed" when `memory.suspects.get(row.processId)` contains
@@ -2622,6 +2808,7 @@ describe("computeWindowsHostKillSet and the taskkill self-protection it drives",
         ]);
         expect(computeWindowsHostKillSet(table, cliPid, suspected)).toEqual({
           kill: [],
+          undecided: [888, 889],
           unattributed: [888, 889],
         });
 
@@ -2636,6 +2823,7 @@ describe("computeWindowsHostKillSet and the taskkill self-protection it drives",
         const table = rowsOf([victimRow(888, 0, 777, 5000, false), cliRow]);
         expect(computeWindowsHostKillSet(table, cliPid, suspected)).toEqual({
           kill: [],
+          undecided: [],
           unattributed: [],
         });
       });
@@ -2644,6 +2832,7 @@ describe("computeWindowsHostKillSet and the taskkill self-protection it drives",
         const zeroRow = rowsOf([victimRow(888, 0, 777, 0, false), cliRow]);
         expect(computeWindowsHostKillSet(zeroRow, cliPid, suspected)).toEqual({
           kill: [],
+          undecided: [888],
           unattributed: [888],
         });
         const zeroSuspect = suspectMemory(
@@ -2652,6 +2841,7 @@ describe("computeWindowsHostKillSet and the taskkill self-protection it drives",
         const table = rowsOf([victimRow(888, 0, 777, 5000, false), cliRow]);
         expect(computeWindowsHostKillSet(table, cliPid, zeroSuspect)).toEqual({
           kill: [],
+          undecided: [888],
           unattributed: [888],
         });
       });
@@ -2668,6 +2858,7 @@ describe("computeWindowsHostKillSet and the taskkill self-protection it drives",
         ]);
         expect(computeWindowsHostKillSet(table, cliPid, remembered)).toEqual({
           kill: [],
+          undecided: [777, 888],
           unattributed: [777, 888],
         });
       });
@@ -2683,6 +2874,7 @@ describe("computeWindowsHostKillSet and the taskkill self-protection it drives",
         ]);
         expect(computeWindowsHostKillSet(table, cliPid, remembered)).toEqual({
           kill: [888],
+          undecided: [777],
           unattributed: [777],
         });
       });
