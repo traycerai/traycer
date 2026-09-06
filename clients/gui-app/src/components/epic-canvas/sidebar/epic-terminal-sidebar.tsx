@@ -498,7 +498,7 @@ function TerminalRow(props: TerminalRowProps) {
                         <MoreHorizontal className="size-3" />
                       </Button>
                     </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end">
+                    <DropdownMenuContent align="end" className="w-max">
                       <SidebarDropdownMenuItems entries={rowMenuEntries} />
                     </DropdownMenuContent>
                   </DropdownMenu>

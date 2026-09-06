@@ -2156,7 +2156,7 @@ function ArtifactMoreMenu(props: {
           <MoreHorizontal className="size-3" />
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end">
+      <DropdownMenuContent align="end" className="w-max">
         <SidebarDropdownMenuItems entries={entries} />
       </DropdownMenuContent>
     </DropdownMenu>
