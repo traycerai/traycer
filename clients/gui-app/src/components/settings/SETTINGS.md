@@ -2415,6 +2415,92 @@ aria-live="polite"` carrying the equivalent text for
       waits (Restart cannot activate a stage). The Overview is the only leg that derives: the landing
       banner keeps its desktop-status debt arm, and the fleet legs pass
       `legacyFacts: null`, which the projector reads as "not observed".
+    - **An ATTEMPT's park is resumed through a BOUND METHOD, not a version.**
+      `host.update.activate {attemptId, force}` and
+      `host.update.continue {attemptId, force}` name the attempt the record
+      already describes; the operation comes from its continuation, so no
+      version crosses the wire and nothing here consults the release catalog
+      (`describeForceUpdateRefusal` is deliberately not applied: `activate`
+      places no bytes, and `continue` resumes bytes the attempt was authorized
+      to fetch when it was created — a downgrade park re-downloads the same
+      version it was created for, which is the case a staged-version force
+      cannot even express). They are METHODS rather than an intent field
+      precisely so an older host, which has neither, is refused at dispatch by
+      the transport: `useHostSupportsMethod` withholds the control per method
+      and the page keeps today's `host.restart` / `installForce` routes. Each
+      control is gated on its OWN method — two authorizations, and a host may
+      advertise one without the other. All three update dispatches share
+      `hostMaintenanceMutationKeys.updateInstall()` and one pending flag, so a
+      second dispatch is never offered beside one already in flight.
+      Outcomes (D18): `dispatch-indeterminate` maps `nothing-to-do` →
+      "already up to date", `recovered-complete` / `recovered-failed` → what
+      the last run did, every `refused-attempt-gone` /
+      `refused-unverifiable` / `refused-install-changed` → "the host changed
+      while the update was being prepared", anything else → today's
+      "couldn't confirm" WITH the reason; `cli-failed {cli-too-old}` → "this
+      computer's Traycer CLI is too old to resume the update". All of them
+      release the accepted latch; only the indeterminate arm re-reads.
+    - **The card's controls come from the ATTEMPT when there is one.**
+      `waiting-to-activate` renders **Restart**, which opens the activation
+      dialog and dispatches `activate {force: true}` — locally AND remotely,
+      where the legacy busy verdict could only ever be answered on a
+      Desktop-local host and toasted "declined" elsewhere. `waiting-for-work`
+      renders **Force update…**, which dispatches `continue {force: true}`;
+      `force` is the user's consent to end the live work the dialog counted,
+      and it is what gets the CLI past its own busy gate. Both still require
+      the host to have REPORTED a positive session count (`offersForceRestart`
+      is unchanged), and both fall back to the record-derived controls above on
+      a host without the methods. `holdsLifecycleGate` and the `!usable`
+      withdrawal are untouched.
+    - **The activation dialog opens ITSELF, once, for a dispatch this page
+      made.** A per-host slot in the write-latch store records
+      `{attemptId, dispatchedAt, incarnation, seen}` on an `accepted` answer
+      with an attempt id, from any of the three dispatches. `incarnation` is a
+      token minted per `HostOverviewPanel` mount: an install's settle
+      deliberately outlives the mount (that is how the latch settles and the
+      reads are invalidated for a swap the user navigated away from), and the
+      ownership write is the one part of it that must not, because its only
+      consumer is a modal a mount opens. `seen` flips on the first
+      `host.status` frame naming that attempt, which is what stops the cache
+      still serving the PREVIOUS attempt from being read as this dispatch's
+      answer. The dialog then opens on the first `waiting-to-activate` view for
+      that attempt — never for another window's dispatch, never for a park that
+      was already there, never for `waiting-for-work`, never on an unusable
+      scope, never without `host.update.activate` — and exactly once
+      (`autoOpenedFor`): Defer, Escape and a scope change all close it and none
+      re-opens it, because a modal that returned on the next poll would be one
+      a person cannot dismiss for as long as the park lasts. The slot clears on
+      a terminal frame for its id, on a frame naming a different id once `seen`
+      is true, 60 s after a dispatch no frame ever named, and on
+      deregistration. A scope flip is deliberately NOT one of them: that flip
+      releases the latches, which guard a window of time, while ownership is a
+      fact about who asked.
+    - **A local record can show `restarting`, and the proof EXPIRES.** For the
+      Desktop-local host the Overview reads the same durable-record leg the
+      landing banner does (`useLocalAttemptRecordObservation` →
+      `projectLocalUpdate`, one shared precedence-plus-projection; a remote
+      host keeps the status-only observation). A record observation carries
+      Desktop's own probed `liveness` and the clock at that probe, and phase
+      `restarting` with `liveness: "live"` projects the LIVE `restarting` kind
+      — bar, lifecycle gate — only while
+      `0 - one tick ≤ nowMs - livenessObservedAtMs ≤ 5 s`
+      (`LOCAL_LIVENESS_PROOF_MS`; the slack absorbs the tick's own
+      quantisation, and a real backward clock step is still refused). Every
+      other record read keeps `unknown` + last-known, outside the gate. `nowMs`
+      is a one-second renderer tick and NOT any query's `dataUpdatedAt`: the
+      host being down is exactly when `host.status` stops advancing, and
+      Desktop's broadcaster keeps its idle loop running through a failing
+      `publish()` — so nothing new lands in a controller query with
+      `staleTime: Infinity` and a deadline measured against either timestamp
+      would never arrive. Expiry therefore lands on the first tick after the
+      deadline rather than at an exact five-second wall, and releases the gate
+      while keeping the last-seen sentence. Precedence between the two legs
+      (`preferLiveOverRecord`): a healthy wire read always wins; once it is
+      stale, the same attempt is ordered by `(generation, sequence)` — so a
+      repeated read of one unchanged record can never outrank a live frame —
+      and a different attempt falls back to the record's own `updatedAt` as a
+      sanity bound, with an unparseable or future stamp losing. No query's read
+      time is an input.
     - **A CLI requirement has a remedy in the card.** The best target's
       projected unavailable asset is the executing CLI's verdict, recognized
       by `HOST_CLIENT_FLOOR_REASON_PREFIX` from the shared release-line helpers.

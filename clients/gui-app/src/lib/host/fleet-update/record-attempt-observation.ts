@@ -18,10 +18,14 @@ import type { FleetUpdateRecordObservation } from "@/lib/host/fleet-update/fleet
  *
  * ## FACTS ONLY
  *
- * Everything here comes off the record. Nothing invents `execution`,
- * `trigger`, `liveness`, busy counts, or an error — those are things only a
+ * Everything here comes off the record, or — for `liveness` and its stamp —
+ * off the PROBE the publisher ran beside the read (D13). Nothing invents
+ * `execution`, `trigger`, busy counts, or an error: those are things only a
  * RUNNING host can report, and the whole reason this arm exists is that there
- * is no running host to report them.
+ * is no running host to report them. Liveness is the one thing a reader on
+ * this machine CAN establish without the host, by joining the record with its
+ * sibling lock's holder, and it is carried rather than derived here — this
+ * function has no lock to probe and must not infer one from a phase.
  *
  * ## `null` is the fail-closed answer, and it has three causes
  *
@@ -80,6 +84,19 @@ export function recordObservationFromLocalAttempt(input: {
     attemptId: facts.attemptId,
     targetVersion: facts.targetVersion,
     phase,
+    // Forwarded verbatim, including `livenessObservedAtMs: null`. The stamp is
+    // the publisher's clock at ITS probe, not this reader's clock at this
+    // call: re-stamping here would restart the proof's life on every render
+    // and make the deadline the projector applies unenforceable.
+    liveness: facts.liveness,
+    livenessObservedAtMs: facts.livenessObservedAtMs,
+    // The three ordering facts `preferLiveOverRecord` needs. They travel with
+    // the observation rather than being read at the comparison site so the
+    // projector stays pure and the adapter stays the only thing that knows
+    // what an IPC payload looks like.
+    updatedAt: facts.updatedAt,
+    generation: facts.generation,
+    sequence: facts.sequence,
   };
 }
 

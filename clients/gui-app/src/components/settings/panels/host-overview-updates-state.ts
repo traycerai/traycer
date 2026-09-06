@@ -31,13 +31,17 @@ import {
   type OverviewDegradeReason,
 } from "@/components/settings/panels/host-overview-model";
 import {
+  useHostUpdateActivate,
   useHostUpdateCheckQuery,
+  useHostUpdateContinue,
   useHostUpdateInstall,
+  type BoundDispatchResponse,
 } from "@/components/settings/panels/host-overview-rpc";
 import {
   useHostNegotiatedMethodVersion,
   type NegotiatedMethodVersion,
 } from "@/hooks/host/use-host-negotiated-method-version";
+import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import type { HostRpcRegistry } from "@/lib/host";
 
@@ -118,6 +122,12 @@ export function useHostOverviewUpdates(input: {
   readonly checkDegrade: OverviewDegradeReason | null;
   readonly installDegrade: OverviewDegradeReason | null;
   readonly busy: boolean;
+  /**
+   * The dispatching panel mount's token (D8), threaded to all three update
+   * dispatches so an `accepted` answer can be attributed to the mount that
+   * asked for it. See `host-overview-rpc.ts`'s `settleUpdateDispatch`.
+   */
+  readonly incarnation: string;
 }): HostOverviewUpdatesState {
   const { client, hostName } = input;
   // The version the catalog is compared against. Under activation debt that
@@ -188,7 +198,15 @@ export function useHostOverviewUpdates(input: {
     enabled: input.enabled && input.checkDegrade === null,
     includePreReleases: includePreReleasesOverride,
   });
-  const installMutation = useHostUpdateInstall(client);
+  const installMutation = useHostUpdateInstall(client, input.incarnation);
+  const bound = useBoundUpdateDispatches({
+    client,
+    hostId: input.hostId,
+    hostName,
+    incarnation: input.incarnation,
+    beforeDispatch: () => setForceRefusal(null),
+    onAccepted: () => setInstallFailure(null),
+  });
 
   // Derived from the latest answer rather than accumulated across attempts.
   //
@@ -367,11 +385,20 @@ export function useHostOverviewUpdates(input: {
   const installingVersion = installMutation.isPending
     ? installMutation.variables.version
     : null;
+  // ONE in-flight update dispatch per page, whatever its intent. The three
+  // mutations share a mutation key so any `useIsMutating` reader sees them
+  // alike, and this is the same fact read from the page's own observers: the
+  // controls a dispatch greys out must be greyed by an activation and a
+  // continuation too, or the page would offer a second dispatch beside one it
+  // is already waiting on.
+  const dispatching = installingVersion !== null || bound.pending;
 
   return {
     degrade,
     cliFloor,
     stagedEntryOfferable,
+    activate: bound.activate,
+    continueAttempt: bound.continueAttempt,
     // The staged-wait force: the SAME dispatch as a row's Install, with
     // `force: true`, so the accepted latch, the invalidations and the
     // outcome toasts are the ones every other install on this page gets.
@@ -428,7 +455,7 @@ export function useHostOverviewUpdates(input: {
       // and never while the row is still reporting a failed attempt. "Update
       // now" is a promise that pressing it changes something.
       updatableVersion,
-      installing: installingVersion !== null,
+      installing: dispatching,
       busy: input.busy,
       onCheck: runCheck,
       onUpdateLatest: () => {
@@ -477,6 +504,98 @@ export function useHostOverviewUpdates(input: {
   };
 }
 
+/**
+ * The two BOUND dispatches, and whether either is in flight.
+ *
+ * Split out of {@link useHostOverviewUpdates} because it is a self-contained
+ * question — does this host advertise the methods, and what happens when one
+ * answers — and the hook it came from is already at its complexity ceiling.
+ *
+ * Both go through the SAME machinery an install goes through: the accepted
+ * latch, the read invalidations and the settle classification live in
+ * `useHostUpdateActivate` / `useHostUpdateContinue`, which share them with
+ * `useHostUpdateInstall` and share its mutation key.
+ *
+ * What they deliberately do NOT go through is `describeForceUpdateRefusal`.
+ * That gate exists to stop this page offering to place bytes it has just been
+ * told cannot be placed here — a withdrawn release, an unresolvable asset, a
+ * CLI floor — and neither of these places bytes on that basis: `activate`
+ * places none at all, and `continue` resumes bytes the attempt was authorized
+ * to fetch when it was created (a downgrade park re-downloads the same version
+ * it was created for). Running the catalog gate over them would refuse a
+ * parked update because the catalog has since moved, which is exactly the
+ * state a park needs to be resumable out of.
+ *
+ * `null` means the host does not advertise that method.
+ * `useHostSupportsMethod` fails closed on a manifest it has not seen, so the
+ * page keeps its legacy routes until a handshake positively proves the method
+ * present — never dispatching something the transport would refuse.
+ */
+function useBoundUpdateDispatches(input: {
+  readonly client: HostClient<HostRpcRegistry> | null;
+  readonly hostId: string | null;
+  readonly hostName: string;
+  readonly incarnation: string;
+  /** Clears the page's stale Force refusal, as an install's dispatch does. */
+  readonly beforeDispatch: () => void;
+  /** Clears the transient CLI-failure notice on any answer that ran. */
+  readonly onAccepted: () => void;
+}): {
+  readonly activate: ((variables: BoundDispatchInput) => void) | null;
+  readonly continueAttempt: ((variables: BoundDispatchInput) => void) | null;
+  readonly pending: boolean;
+} {
+  // Each gated on ITS OWN method: they are two authorizations, and a host can
+  // advertise one without the other.
+  const supportsActivate = useHostSupportsMethod(
+    input.hostId,
+    "host.update.activate",
+  );
+  const supportsContinue = useHostSupportsMethod(
+    input.hostId,
+    "host.update.continue",
+  );
+  const activateMutation = useHostUpdateActivate(
+    input.client,
+    input.incarnation,
+  );
+  const continueMutation = useHostUpdateContinue(
+    input.client,
+    input.incarnation,
+  );
+  const dispatch = (
+    mutation: typeof activateMutation,
+    variables: BoundDispatchInput,
+  ): void => {
+    input.beforeDispatch();
+    mutation.mutate(
+      { attemptId: variables.attemptId, force: variables.force },
+      {
+        onSettled: () => variables.onSettled(),
+        onSuccess: (response) => {
+          handleBoundDispatchOutcome({
+            response,
+            hostName: input.hostName,
+            targetVersion: variables.targetVersion,
+            onAccepted: input.onAccepted,
+          });
+        },
+        onError: (error) =>
+          toastFromHostError(error, "Couldn't start the update."),
+      },
+    );
+  };
+  return {
+    activate: supportsActivate
+      ? (variables) => dispatch(activateMutation, variables)
+      : null,
+    continueAttempt: supportsContinue
+      ? (variables) => dispatch(continueMutation, variables)
+      : null,
+    pending: activateMutation.isPending || continueMutation.isPending,
+  };
+}
+
 export interface HostOverviewUpdatesSummary {
   readonly hostName: string;
   readonly description: string;
@@ -488,6 +607,23 @@ export interface HostOverviewUpdatesSummary {
   readonly busy: boolean;
   readonly onCheck: () => void;
   readonly onUpdateLatest: () => void;
+}
+
+/**
+ * What a bound dispatch needs from its caller: which attempt, whether the user
+ * consented to push past live work, what to say it is updating to, and how to
+ * close the confirmation that asked.
+ *
+ * `targetVersion` is for COPY only and is deliberately not sent: the operation
+ * comes from the record's own continuation, and a version on the wire would be
+ * a second copy of a fact the record owns — one a stale UI could get wrong.
+ */
+export interface BoundDispatchInput {
+  readonly attemptId: string;
+  readonly force: boolean;
+  /** The attempt's target, when the view named one. Toast copy only. */
+  readonly targetVersion: string | null;
+  readonly onSettled: () => void;
 }
 
 export interface HostOverviewUpdatesState {
@@ -502,6 +638,18 @@ export interface HostOverviewUpdatesState {
    * that dispatched it can close on the answer rather than on a guess.
    */
   readonly installForce: (version: string, onSettled: () => void) => void;
+  /**
+   * `host.update.activate {attemptId, force}` — restart into an attempt's
+   * already-placed bytes. `null` when this host does not advertise the method,
+   * which is how the page keeps the legacy `host.restart` route for a host that
+   * predates the cutover rather than dispatching something it cannot serve.
+   */
+  readonly activate: ((input: BoundDispatchInput) => void) | null;
+  /**
+   * `host.update.continue {attemptId, force}` — resume a parked attempt.
+   * `null` on a host without the method, exactly as `activate`.
+   */
+  readonly continueAttempt: ((input: BoundDispatchInput) => void) | null;
 }
 
 /**
@@ -1192,9 +1340,7 @@ function handleInstallOutcome(input: {
     // negotiated route for progress and is unaffected by this arm.
     input.onAccepted();
     toast.info(
-      input.indeterminateReason === null
-        ? `Couldn't confirm the update started on ${input.hostName}. Watching for progress.`
-        : `Couldn't confirm the update started on ${input.hostName}: ${input.indeterminateReason}. Watching for progress.`,
+      describeIndeterminateDispatch(input.indeterminateReason, input.hostName),
     );
     return;
   }
@@ -1209,6 +1355,106 @@ function handleInstallOutcome(input: {
     return;
   }
   input.onTransient(input.outcome);
+}
+
+/**
+ * The copy this page owns for the CLI floor a bound dispatch can hit.
+ *
+ * The host maps a spawned CLI that rejected `--intent` (an old parser exits
+ * before any command body runs) — and its own diagnostic version preflight — to
+ * `cli-failed {reason: "cli-too-old"}`. That is the one refusal with a concrete
+ * remedy, and it is worth its own sentence rather than the generic
+ * "couldn't complete the request": nothing on the HOST is wrong, and no amount
+ * of retrying this button changes anything until the CLI is updated.
+ */
+const CLI_TOO_OLD_MESSAGE =
+  "This computer's Traycer CLI is too old to resume the update. Update the CLI, then try again.";
+
+/**
+ * What a `dispatch-indeterminate` reason means to a person (D18).
+ *
+ * The host names a reason from a closed grammar, and three of those reasons are
+ * not really "we could not confirm" at all — they are definite answers about
+ * work that did not need doing, which read as a shrug if they go through the
+ * generic sentence. The rest keep today's wording WITH the reason attached:
+ * several distinct causes reach this one outcome, and flattening them into one
+ * opaque message is the diagnostic substitution this epic has already paid for
+ * more than once.
+ */
+function describeIndeterminateDispatch(
+  reason: string | null,
+  hostName: string,
+): string {
+  if (reason === "nothing-to-do") return `${hostName} is already up to date.`;
+  if (reason === "recovered-complete")
+    return "The last update already finished.";
+  // The record's own failure arrives on the next `host.status` frame and the
+  // operation card states it; this only says which run it is about.
+  if (reason === "recovered-failed") return "The last update failed.";
+  if (
+    reason === "refused-attempt-gone" ||
+    reason === "refused-unverifiable" ||
+    // No producer after this plan — a moved install record on a park is written
+    // `failed {install-changed}` and arrives as the record's own failure — but
+    // the reason stays in the grammar, so the arm stays here rather than
+    // falling through to a sentence that would misdescribe it.
+    reason === "refused-install-changed"
+  ) {
+    return "The host changed while the update was being prepared. Try again.";
+  }
+  return reason === null
+    ? `Couldn't confirm the update started on ${hostName}. Watching for progress.`
+    : `Couldn't confirm the update started on ${hostName}: ${reason}. Watching for progress.`;
+}
+
+/**
+ * The bound methods' four outcomes, which are the install's minus the two
+ * structural refusals and plus a REASONED `cli-failed`.
+ *
+ * Neither `externally-managed` nor `cli-unavailable` can arrive here — the
+ * bound response schema has no arm for either — which is why this does not
+ * touch the sticky region-degrade state at all. A bound dispatch cannot retire
+ * the updates region, and pretending it could would take the version list away
+ * on an answer that never said the mechanism was gone.
+ */
+function handleBoundDispatchOutcome(input: {
+  readonly response: BoundDispatchResponse;
+  readonly hostName: string;
+  readonly targetVersion: string | null;
+  readonly onAccepted: () => void;
+}): void {
+  const { hostName } = input;
+  if (input.response.outcome === "accepted") {
+    input.onAccepted();
+    // The same sentence an install's acceptance produces, deliberately: from
+    // the user's side this IS the update continuing, and a second vocabulary
+    // for "the host took the job" would read as a different thing happening.
+    toast.success(
+      input.targetVersion === null
+        ? `Updating ${hostName}`
+        : `Updating ${hostName} to v${input.targetVersion}`,
+    );
+    return;
+  }
+  if (input.response.outcome === "already-updating") {
+    input.onAccepted();
+    toast.info(`${hostName} is already installing an update.`);
+    return;
+  }
+  if (input.response.outcome === "dispatch-indeterminate") {
+    input.onAccepted();
+    toast.info(describeIndeterminateDispatch(input.response.reason, hostName));
+    return;
+  }
+  // `cli-failed`, whose `reason` is non-nullable on this schema — the whole
+  // point of not reusing the install's response, whose `cli-failed` arm has
+  // nowhere to put one.
+  const reason = input.response.reason;
+  if (reason === "cli-too-old") {
+    toast.error(CLI_TOO_OLD_MESSAGE);
+    return;
+  }
+  toast.error(`${describeCliShellFailure("cli-failed", hostName)} (${reason})`);
 }
 
 function describeCheckState(input: {

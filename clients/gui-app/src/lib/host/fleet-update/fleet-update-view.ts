@@ -5,6 +5,7 @@ import type {
   HostUpdateTransactionCapability,
 } from "@traycer/protocol/host/status/index";
 import type { HostUpdateAttemptPhase } from "@traycer/protocol/config/host-update-attempt";
+import type { LocalAttemptLiveness } from "@traycer-clients/shared/platform/runner-host";
 import type { LegacyUpdateFacts } from "@/lib/host/fleet-update/legacy-update-facts";
 
 /**
@@ -121,7 +122,79 @@ export interface FleetUpdateRecordObservation {
   readonly targetVersion: string;
   /** The phase the record names, already narrowed at the read boundary. */
   readonly phase: HostUpdateAttemptPhase;
+  /**
+   * What the READER's own holder probe established (D13), never something
+   * derived from the record's contents.
+   *
+   * This is the one fact the record cannot supply about itself: a file saying
+   * `restarting` proves an executor once wrote that, never that one is still
+   * carrying it. `live` is minted only from a `holder-live` probe whose record
+   * identity was unchanged across a bracketing re-read; `interrupted` and
+   * `unknown` are conclusions this projector keeps OUTSIDE the lifecycle gate.
+   */
+  readonly liveness: LocalAttemptLiveness;
+  /**
+   * The PROBER's clock at the probe that produced {@link liveness}, or `null`
+   * when no probe ran (parked and terminal records are never probed).
+   *
+   * A positive proof has to be allowed to expire, which is why this travels
+   * beside the verdict rather than being folded into it. The controller query
+   * that carries these facts keeps its last value indefinitely
+   * (`staleTime: Infinity`) and the publisher stops publishing when its read
+   * fails, so `live` with no deadline would hold a lifecycle gate open forever
+   * on a payload nothing is refreshing.
+   */
+  readonly livenessObservedAtMs: number | null;
+  /**
+   * The record's OWN last-write timestamp (ISO 8601), as the record states it.
+   *
+   * Ordering-only, and only across DIFFERENT attempts — see
+   * {@link preferLiveOverRecord}. Not a freshness signal: how old the record is
+   * says nothing about whether anything is still working on it.
+   */
+  readonly updatedAt: string;
+  /**
+   * The record's position, which is what orders two observations of the SAME
+   * attempt. Monotone per attempt by the writer's construction, and — unlike
+   * any timestamp — comparable across the two readers (the host's observer and
+   * this machine's own read) without trusting either one's clock.
+   */
+  readonly generation: number;
+  readonly sequence: number;
 }
+
+/**
+ * How long a POSITIVE holder probe may still be presented as proof (D13).
+ *
+ * Five seconds: comfortably above the 750 ms cadence a live record is
+ * published at, so an ordinary publication always renews the proof before it
+ * lapses, and short enough that a publisher which has stopped publishing
+ * cannot hold the lifecycle gate for more than one blink.
+ *
+ * Measured against a clock that TICKS on its own — never against the last
+ * `host.status` success, which stops advancing exactly when the host goes
+ * down, which is precisely when this proof is load-bearing.
+ */
+export const LOCAL_LIVENESS_PROOF_MS = 5_000;
+
+/**
+ * How far a probe stamp may sit in this reader's FUTURE before it stops
+ * counting as proof.
+ *
+ * The rule D13 states is `0 ≤ nowMs - livenessObservedAtMs`, and a strict `0`
+ * would be wrong here for a reason that has nothing to do with clocks
+ * disagreeing: `nowMs` comes from a one-second renderer tick, so it lags real
+ * time by up to that interval, while the stamp is written at the instant of
+ * the probe. A record published 200 ms after the last tick therefore carries a
+ * stamp "ahead" of `nowMs` every single time — refusing it would reject
+ * exactly the freshest proofs.
+ *
+ * So the lower bound is one tick's worth of slack, which is what the
+ * quantisation can produce and nothing more. A real backward wall-clock step —
+ * the `lock.ts` TTL pitfall this bound exists for — moves the clock by seconds
+ * or minutes and is still refused.
+ */
+export const LOCAL_LIVENESS_CLOCK_SLACK_MS = 1_000;
 
 /**
  * Everything the projector accepts.
@@ -359,14 +432,13 @@ export function projectFleetUpdateView(
   // vantage is `restarting`, and reading a record because the host is down IS
   // the disconnected vantage. Passing `true` here would render `restarting`
   // for a host that is not answering.
+  //
+  // THE ONE EXCEPTION is the probed live `restarting` below, and it is an
+  // exception to the paragraph above rather than to the module header: a
+  // holder probe is evidence, not an inference from the file's contents, so
+  // that arm is not "we do not know" dressed up as a phase.
   if (isRecordObservation(observation)) {
-    return {
-      ...UNKNOWN_FLEET_UPDATE_VIEW,
-      attemptId: observation.attemptId,
-      targetVersion: observation.targetVersion,
-      lastKnownKind: phaseKind(observation.phase, false),
-      lastObservedAtMs: observation.observedAtMs,
-    };
+    return recordObservationView(observation, nowMs);
   }
 
   const stale = nowMs > observation.freshUntilMs;
@@ -520,6 +592,92 @@ export function projectFleetUpdateView(
   // saying. `lastKnownKind` is populated only where `kind` decayed to
   // `unknown` — that is the invariant the field's doc states.
   return { ...view, qualified: operation.liveness === "indeterminate" };
+}
+
+/**
+ * What the DURABLE RECORD projects on its own (D13).
+ *
+ * Two arms, and the split is exactly the difference between evidence and
+ * inference:
+ *
+ *  - **`restarting` with a FRESH positive holder probe** projects the live
+ *    `restarting` kind — indeterminate bar, lifecycle gate held, exactly as a
+ *    live wire `restarting` does. Nothing is invented: the probe read the
+ *    sibling lock's holder and found it alive, which is the same join the
+ *    host's own observer performs, and this is the one window in which no host
+ *    exists to perform it. `connected` is not consulted (the wire arm's
+ *    restarting/reconnecting split is about whether OUR connection survived
+ *    the restart; here the executor's liveness is the observed fact, and it is
+ *    observed locally).
+ *
+ *  - **everything else** keeps the qualified-stale shape it has always had:
+ *    `kind: "unknown"` with the phase retained as `lastKnownKind`, so a
+ *    surface says "last seen preparing v2.0.0" and every gate and cadence
+ *    decision — all of which read `kind` — treats this host as one we know
+ *    nothing current about. `interrupted` and `unknown` liveness land here, and
+ *    so does a `live` verdict whose proof has aged out, stepped backward, or
+ *    arrived without a usable stamp.
+ *
+ * On expiry the observation does NOT disappear: it returns to the second arm,
+ * keeping its last-seen history while the gate releases.
+ */
+function recordObservationView(
+  observation: FleetUpdateRecordObservation,
+  nowMs: number,
+): FleetUpdateView {
+  const identity = {
+    attemptId: observation.attemptId,
+    targetVersion: observation.targetVersion,
+  };
+  if (
+    observation.phase === "restarting" &&
+    localLivenessProofHolds(observation, nowMs)
+  ) {
+    return {
+      ...UNKNOWN_FLEET_UPDATE_VIEW,
+      ...identity,
+      kind: "restarting",
+      // Indeterminate, never `none`: a restart is motion with nothing to
+      // measure, and the wire's own `restarting` frame draws the same bar.
+      progress: { kind: "indeterminate", bytes: null, totalBytes: null },
+      qualified: false,
+    };
+  }
+  return {
+    ...UNKNOWN_FLEET_UPDATE_VIEW,
+    ...identity,
+    lastKnownKind: phaseKind(observation.phase, false),
+    lastObservedAtMs: observation.observedAtMs,
+  };
+}
+
+/**
+ * Whether a positive holder probe may still be presented as proof.
+ *
+ * Three ways to fail, all of them projecting `unknown` rather than a phase:
+ * the verdict was never `live`; the stamp is absent or not a finite instant
+ * (nothing to age it against — refusing beats guessing); or the age is outside
+ * `[-LOCAL_LIVENESS_CLOCK_SLACK_MS, LOCAL_LIVENESS_PROOF_MS]`.
+ *
+ * The lower bound is the half worth stating. A cached positive that never
+ * expires is the defect this whole mechanism exists for, and a wall-clock step
+ * BACKWARD is how a bounded proof silently becomes an unbounded one — the same
+ * pitfall the attempt lock's TTL already guards. Ageing a stamp against a clock
+ * that has moved backward produces a negative age, which reads as "even fresher
+ * than new" to any check that only looks at the upper bound.
+ */
+function localLivenessProofHolds(
+  observation: FleetUpdateRecordObservation,
+  nowMs: number,
+): boolean {
+  if (observation.liveness !== "live") return false;
+  const observedAtMs = observation.livenessObservedAtMs;
+  if (observedAtMs === null) return false;
+  if (!Number.isFinite(observedAtMs) || !Number.isFinite(nowMs)) return false;
+  const ageMs = nowMs - observedAtMs;
+  return (
+    ageMs >= -LOCAL_LIVENESS_CLOCK_SLACK_MS && ageMs <= LOCAL_LIVENESS_PROOF_MS
+  );
 }
 
 /**
@@ -880,29 +1038,112 @@ export function warrantsFastPoll(view: FleetUpdateView): boolean {
 }
 
 /**
- * Precedence between a live read and the durable record (Ticket 07 §5.2.7).
+ * Precedence between a live read and the durable record (Ticket 07 §5.2.7,
+ * ordering per D13).
  *
  * A FRESH wire observation always wins: a running host reporting on itself is
  * strictly better evidence than a file describing what it last wrote, and the
- * record arm exists for the host-down window only.
- *
- * Once the wire read has gone stale the record is better — it was read from
- * this machine's disk just now, so it is a current reading of a durable fact,
- * where the stale wire observation is an old reading of a live one.
+ * record arm exists for the host-down window. Once the wire read has gone stale
+ * the record is better — it was read from this machine's disk just now, so it is
+ * a current reading of a durable fact, where the stale wire observation is an
+ * old reading of a live one.
  *
  * Deliberately NOT expressed as "whichever was observed most recently". That
  * rule looks equivalent and is not: the record is re-read on every tick, so its
  * `observedAtMs` is always newer, and a recency comparison would let it
  * outrank a perfectly good live read and permanently suppress real progress.
+ * **No read time is an input here** — neither observation's `observedAtMs`
+ * reaches this decision, and `nowMs` is consulted only to ask whether the wire
+ * read is still presentable and whether the record's own timestamp is sane.
+ *
+ * What ORDERS the two once the wire is stale depends on whether they are even
+ * talking about the same attempt:
+ *
+ *  - **Same attempt** → `(generation, sequence)`, the writer's own monotone
+ *    position. A record BEHIND the last wire frame is a lagging copy of a story
+ *    the wire already told better, so the wire keeps it; at or ahead, the record
+ *    wins and brings its liveness with it. Equality is the common case in the
+ *    host-down window (both readers read the same last write) and it must go to
+ *    the record, which is the only side that can still say anything about a
+ *    holder.
+ *  - **Different attempts**, or a wire frame naming no attempt at all → the
+ *    record's own `updatedAt`, as a BOUND rather than as a comparison: there is
+ *    nothing on the wire to compare it against (no timestamp crosses it, by
+ *    design), so all it can do is establish that the record is not obvious
+ *    nonsense. An unparseable or future-dated stamp is treated as unknown and
+ *    the wire keeps the slot.
+ *
+ * The tie rule is what preserves the invariant a repeated read must not break:
+ * re-reading ONE unchanged record produces the same `(generation, sequence)`
+ * every time, so it can never climb over a healthy live frame of that attempt.
  */
 export function preferLiveOverRecord(
   wire: FleetUpdateWireObservation | null,
   record: FleetUpdateRecordObservation | null,
   nowMs: number,
 ): FleetUpdateObservation | null {
-  if (wire !== null && nowMs <= wire.freshUntilMs) return wire;
-  // Stale or absent wire. The record fills the window when there is one; when
-  // there is not, the stale wire is retained rather than dropped, because its
-  // own stale arm still carries `lastKnownKind`.
-  return record ?? wire;
+  if (record === null) return wire;
+  if (wire === null) return record;
+  // A HEALTHY live read wins outright, whatever the record says. Handing the
+  // slot to a record that happens to sit one `sequence` ahead — which it
+  // routinely does, being re-read several times per `host.status` poll — would
+  // replace a live phase and its percentage with "last seen …" for most of
+  // every download, and then remove the fast poll that was keeping the wire
+  // caught up. Progress the host is actively reporting is never improved by a
+  // file that cannot report liveness.
+  if (nowMs <= wire.freshUntilMs) return wire;
+  const wireAttempt = wireAttemptPosition(wire);
+  if (wireAttempt !== null && wireAttempt.attemptId === record.attemptId) {
+    return recordIsBehind(record, wireAttempt) ? wire : record;
+  }
+  return recordTimestampIsSane(record, nowMs) ? record : wire;
+}
+
+/** The wire frame's attempt position, or `null` when it names no attempt. */
+function wireAttemptPosition(wire: FleetUpdateWireObservation): {
+  readonly attemptId: string;
+  readonly generation: number;
+  readonly sequence: number;
+} | null {
+  const operation = wire.operation;
+  if (operation === null || operation.kind !== "attempt") return null;
+  return {
+    attemptId: operation.attemptId,
+    generation: operation.generation,
+    sequence: operation.sequence,
+  };
+}
+
+/** Lexicographic on `(generation, sequence)`; equality is NOT behind. */
+function recordIsBehind(
+  record: FleetUpdateRecordObservation,
+  wire: { readonly generation: number; readonly sequence: number },
+): boolean {
+  if (record.generation !== wire.generation) {
+    return record.generation < wire.generation;
+  }
+  return record.sequence < wire.sequence;
+}
+
+/**
+ * Whether the record's `updatedAt` is usable as the different-attempt bound.
+ *
+ * `Date.parse` on a non-timestamp yields `NaN`, which every comparison answers
+ * `false` to — so the finiteness check is written out rather than relied upon
+ * implicitly, because "invalid loses" and "invalid silently wins" differ by one
+ * negated operator.
+ *
+ * The future allowance is {@link LOCAL_LIVENESS_CLOCK_SLACK_MS} for the same
+ * reason the proof's lower bound has one: `nowMs` is a one-second tick and lags
+ * real time, so a record written moments ago is routinely stamped after it.
+ * Anything beyond that is a timestamp we cannot account for, and an
+ * unaccountable timestamp orders nothing.
+ */
+function recordTimestampIsSane(
+  record: FleetUpdateRecordObservation,
+  nowMs: number,
+): boolean {
+  const updatedAtMs = Date.parse(record.updatedAt);
+  if (!Number.isFinite(updatedAtMs) || !Number.isFinite(nowMs)) return false;
+  return updatedAtMs - nowMs <= LOCAL_LIVENESS_CLOCK_SLACK_MS;
 }

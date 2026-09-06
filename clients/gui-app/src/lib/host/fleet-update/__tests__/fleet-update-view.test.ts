@@ -846,6 +846,14 @@ function recordObservation(
     attemptId: "attempt-1",
     targetVersion: "2.0.0",
     phase: "preparing",
+    // Un-probed by default, which is what a parked or terminal record carries
+    // and what every case here that is not ABOUT liveness should assert
+    // against — `live` is the exceptional verdict, so it has to be asked for.
+    liveness: "unknown",
+    livenessObservedAtMs: null,
+    updatedAt: "2026-08-27T00:00:00.000Z",
+    generation: 1,
+    sequence: 1,
     ...overrides,
   };
 }
