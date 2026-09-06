@@ -1,4 +1,5 @@
 import {
+  isRecordObservation,
   preferLiveOverRecord,
   projectFleetUpdateView,
   UNKNOWN_FLEET_UPDATE_VIEW,
@@ -6,6 +7,7 @@ import {
   type FleetUpdateRecordObservation,
   type FleetUpdateView,
   type FleetUpdateWireObservation,
+  type LocalUpdateClock,
 } from "@/lib/host/fleet-update/fleet-update-view";
 
 /**
@@ -22,28 +24,37 @@ import {
  * evaluated against have to be one decision, or the banner and the Overview can
  * hold different opinions about which observation won.
  *
- * ## `nowMs` is a TICKING clock, and that is the point
+ * ## The RECORD leg gets a ticking clock; the WIRE leg keeps its own instant
  *
- * Both call sites used to pass `statusQuery.dataUpdatedAt` — the instant the
- * last `host.status` succeeded — which made every staleness comparison in the
- * projection vacuous (a deadline derived from an instant can never be outrun by
- * that same instant) and, more importantly, froze exactly when it needed to
- * move. A holder probe's proof has a five-second life
- * (`LOCAL_LIVENESS_PROOF_MS`); the thing that must age it out is a clock that
- * keeps running while the host is down, because "the host is down" is the whole
- * situation the proof is used in.
+ * A holder probe's proof has a five-second life (`LOCAL_LIVENESS_PROOF_MS`),
+ * and the thing that must age it out is a clock that keeps running while the
+ * host is down, because "the host is down" is the whole situation the proof is
+ * used in. Neither timestamp within reach can do that job:
+ * `statusQuery.dataUpdatedAt` stops advancing because the host is down, and the
+ * controller query's own `dataUpdatedAt` stops too — Desktop's status
+ * broadcaster keeps its idle loop running through a failing `publish()`, so
+ * nothing new lands in a cache with `staleTime: Infinity` and the payload
+ * saying `liveness: "live"` sits there indefinitely. A deadline measured
+ * against either would never arrive, and the lifecycle gate would be held by a
+ * proof nobody is refreshing. So the record leg is evaluated against a renderer
+ * tick, and expiry lands on the first tick AFTER the deadline rather than at an
+ * exact five-second wall — a coarser clock that cannot stop.
  *
- * The publisher does not save us either: Desktop's status broadcaster keeps its
- * idle loop running through a failing `publish()`, so nothing new lands in the
- * controller query, `dataUpdatedAt` stops advancing, and the payload carrying
- * `liveness: "live"` sits in a cache with `staleTime: Infinity` indefinitely. A
- * deadline measured against that timestamp would therefore never arrive — the
- * proof would hold the lifecycle gate for as long as the surface stayed
- * mounted.
+ * The WIRE leg must NOT be evaluated against that tick, and this helper briefly
+ * made that mistake by taking one instant for both. The wire read's
+ * `freshUntilMs` was derived from the query's own `dataUpdatedAt` with the
+ * query's health already folded in, so measuring it against that same instant
+ * is not a vacuous comparison — it is the statement that a HEALTHY read is
+ * fresh and only health demotes it. Measured against a ticking clock it becomes
+ * a race against the round trip: one `host.status` slower than the fresh window
+ * (2.5 × the poll delay, so ~3 s while an update is active) demotes a live
+ * attempt to "last seen", DROPS the page-wide lifecycle gate, and disengages
+ * the accelerator that was keeping the poll fast — repeating every cycle, on a
+ * host that is merely far away. A gate that blinks open mid-apply is the exact
+ * failure the gate exists to prevent.
  *
- * So callers pass a renderer tick. The visible consequence is that expiry lands
- * on the first tick AFTER the deadline rather than at an exact five-second
- * wall, which is the intended trade: a coarser clock that cannot stop.
+ * Hence {@link LocalUpdateClock}: two named instants, and the projection routes
+ * each observation to the one that can answer for it.
  */
 export interface LocalUpdateProjection {
   /**
@@ -64,14 +75,14 @@ export interface LocalUpdateProjection {
 export function projectLocalUpdate(input: {
   readonly wire: FleetUpdateWireObservation | null;
   readonly record: FleetUpdateRecordObservation | null;
-  /** A ticking clock. See the note above; never a query's `dataUpdatedAt`. */
-  readonly nowMs: number;
+  /** See the note above: the record leg ticks, the wire leg does not. */
+  readonly clock: LocalUpdateClock;
   readonly connected: boolean;
 }): LocalUpdateProjection {
   const observation = preferLiveOverRecord(
     input.wire,
     input.record,
-    input.nowMs,
+    input.clock,
   );
   if (observation === null) {
     return { observation: null, view: UNKNOWN_FLEET_UPDATE_VIEW };
@@ -80,7 +91,14 @@ export function projectLocalUpdate(input: {
     observation,
     view: projectFleetUpdateView({
       observation,
-      nowMs: input.nowMs,
+      // The whole split, in one expression: `projectFleetUpdateView` asks the
+      // clock exactly one question per arm — "has this record's proof expired"
+      // or "has this wire read gone stale" — so the winner names which instant
+      // is entitled to answer. Handing it a single clock is what let the wire
+      // arm inherit the record arm's tick.
+      nowMs: isRecordObservation(observation)
+        ? input.clock.recordNowMs
+        : input.clock.wireNowMs,
       connected: input.connected,
     }),
   };

@@ -2447,10 +2447,14 @@ aria-live="polite"` carrying the equivalent text for
       Desktop-local host and toasted "declined" elsewhere. `waiting-for-work`
       renders **Force update…**, which dispatches `continue {force: true}`;
       `force` is the user's consent to end the live work the dialog counted,
-      and it is what gets the CLI past its own busy gate. Both still require
-      the host to have REPORTED a positive session count (`offersForceRestart`
-      is unchanged), and both fall back to the record-derived controls above on
-      a host without the methods. `holdsLifecycleGate` and the `!usable`
+      and it is what gets the CLI past its own busy gate. **Force update… —
+      and only it — still requires the host to have REPORTED a positive session
+      count** (`offersForceRestart` is unchanged by this cutover): a
+      `waiting-for-work` park with a null or zero count renders no control.
+      Restart has no such condition; it renders whenever the card has an
+      `onRestart`, which is what lets an idle host that has finished installing
+      be restarted. Both fall back to the record-derived controls above on a
+      host without the methods. `holdsLifecycleGate` and the `!usable`
       withdrawal are untouched.
     - **The activation dialog opens ITSELF, once, for a dispatch this page
       made.** A per-host slot in the write-latch store records
@@ -2471,10 +2475,16 @@ aria-live="polite"` carrying the equivalent text for
       re-opens it, because a modal that returned on the next poll would be one
       a person cannot dismiss for as long as the park lasts. The slot clears on
       a terminal frame for its id, on a frame naming a different id once `seen`
-      is true, 60 s after a dispatch no frame ever named, and on
-      deregistration. A scope flip is deliberately NOT one of them: that flip
-      releases the latches, which guard a window of time, while ownership is a
-      fact about who asked.
+      is true, 60 s after a dispatch no frame ever named, and on an ACCEPTED
+      `host.service.deregister` for that host — the service the dispatch was
+      made about is being removed, and keeping the slot would let a
+      re-register under the same `hostId` inherit its activation offer. That
+      last one fires on the accepted ANSWER, not beside the pessimistic
+      dispatch-time arm of `deregisterAcceptedAt`: over-locking controls for a
+      bounded moment is safe, discarding ownership is not, and a refused
+      deregister leaves a dispatch that is still good. A scope flip is
+      deliberately NOT one of them: that flip releases the latches, which guard
+      a window of time, while ownership is a fact about who asked.
     - **A local record can show `restarting`, and the proof EXPIRES.** For the
       Desktop-local host the Overview reads the same durable-record leg the
       landing banner does (`useLocalAttemptRecordObservation` →
@@ -2486,15 +2496,24 @@ aria-live="polite"` carrying the equivalent text for
       `0 - one tick ≤ nowMs - livenessObservedAtMs ≤ 5 s`
       (`LOCAL_LIVENESS_PROOF_MS`; the slack absorbs the tick's own
       quantisation, and a real backward clock step is still refused). Every
-      other record read keeps `unknown` + last-known, outside the gate. `nowMs`
-      is a one-second renderer tick and NOT any query's `dataUpdatedAt`: the
-      host being down is exactly when `host.status` stops advancing, and
-      Desktop's broadcaster keeps its idle loop running through a failing
-      `publish()` — so nothing new lands in a controller query with
-      `staleTime: Infinity` and a deadline measured against either timestamp
-      would never arrive. Expiry therefore lands on the first tick after the
-      deadline rather than at an exact five-second wall, and releases the gate
-      while keeping the last-seen sentence. Precedence between the two legs
+      other record read keeps `unknown` + last-known, outside the gate. That
+      deadline is measured against a one-second renderer tick and NOT any
+      query's `dataUpdatedAt`: the host being down is exactly when
+      `host.status` stops advancing, and Desktop's broadcaster keeps its idle
+      loop running through a failing `publish()` — so nothing new lands in a
+      controller query with `staleTime: Infinity` and a deadline measured
+      against either timestamp would never arrive. Expiry therefore lands on
+      the first tick after the deadline rather than at an exact five-second
+      wall, and releases the gate while keeping the last-seen sentence.
+      **The tick is the RECORD leg's clock alone** (`LocalUpdateClock`, two
+      named instants). The WIRE leg keeps the instant its own read was taken
+      at, because `observationFromCanonicalRead` already folded the query's
+      health into `freshUntilMs` — so a healthy read is fresh until health says
+      otherwise, never until the round trip runs long. Feeding the tick to both
+      made one `host.status` slower than the fresh window (2.5 × the poll
+      delay, ~3 s while an update is active, ordinary over the relay) demote a
+      live attempt to "Last seen", drop the page-wide gate and disengage the
+      poll accelerator, once per cycle. Precedence between the two legs
       (`preferLiveOverRecord`): a healthy wire read always wins; once it is
       stale, the same attempt is ordered by `(generation, sequence)` — so a
       repeated read of one unchanged record can never outrank a live frame —

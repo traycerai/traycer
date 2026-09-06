@@ -570,7 +570,21 @@ export function useHostServiceDeregister(
         // it - that is the state the latch exists for.
         if (response.outcome !== "accepted") {
           latchStore.releaseDeregisterAccepted(context.hostId);
+          return;
         }
+        // THE DISPATCH SLOT'S FOURTH CLEAR (D8): the host service is going
+        // away, and an update dispatch is a claim about a host that will be
+        // there to park. Keeping the slot would mean a re-register of the same
+        // `hostId` — the same string, a freshly installed service — inherits an
+        // activation offer made about the service that was removed, and opens
+        // a dialog for it on the first matching frame.
+        //
+        // Cleared on the ACCEPTED answer rather than beside the arm above,
+        // even though the latch itself is armed pessimistically at dispatch:
+        // over-locking controls for a bounded moment is a safe default, but
+        // discarding ownership is not reversible, and a refused deregister
+        // leaves a host whose dispatch is still perfectly good.
+        latchStore.clearUpdateDispatch(context.hostId);
       },
       onError: (error, _variables, context) => {
         if (context === undefined || context.hostId === null) return;

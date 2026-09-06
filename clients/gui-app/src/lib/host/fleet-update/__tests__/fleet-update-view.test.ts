@@ -16,6 +16,7 @@ import {
   LOCAL_LIVENESS_CLOCK_SLACK_MS,
   type FleetUpdateRecordObservation,
   type FleetUpdateWireObservation,
+  type LocalUpdateClock,
   type FleetUpdateView,
   UNKNOWN_FLEET_UPDATE_VIEW,
 } from "@/lib/host/fleet-update/fleet-update-view";
@@ -838,6 +839,19 @@ describe("holdsLifecycleGate — direct unit coverage", () => {
 
 // ---- Ticket 07 §5.2.7 — the record-derived arm ----------------------------
 
+/**
+ * One instant for both legs, for the cases that are not ABOUT the split.
+ *
+ * `preferLiveOverRecord` takes a wire instant and a record instant because
+ * production has two different clocks to offer it (see `LocalUpdateClock`).
+ * A test whose subject is ordering, not clock choice, has no reason to
+ * separate them — and collapsing them here keeps the divergent-clock pin below
+ * visibly special rather than lost among identical-looking literals.
+ */
+function sameClock(nowMs: number): LocalUpdateClock {
+  return { wireNowMs: nowMs, recordNowMs: nowMs };
+}
+
 function recordObservation(
   overrides: Partial<FleetUpdateRecordObservation>,
 ): FleetUpdateRecordObservation {
@@ -996,14 +1010,14 @@ describe("preferLiveOverRecord — the record arm fills the host-down window onl
 
   it("a FRESH wire read outranks the record", () => {
     const wire = observation({ freshUntilMs: NOW_MS + 1000 });
-    expect(preferLiveOverRecord(wire, record, NOW_MS)).toBe(wire);
+    expect(preferLiveOverRecord(wire, record, sameClock(NOW_MS))).toBe(wire);
   });
 
   it("a STALE wire read loses to the record", () => {
     // The load-bearing case. A recency comparison would get this backwards in
     // the other direction too - see the next test.
     const wire = observation({ freshUntilMs: NOW_MS - 1 });
-    expect(preferLiveOverRecord(wire, record, NOW_MS)).toBe(record);
+    expect(preferLiveOverRecord(wire, record, sameClock(NOW_MS))).toBe(record);
   });
 
   it("a fresh wire read wins even when the record was observed MORE recently", () => {
@@ -1015,19 +1029,21 @@ describe("preferLiveOverRecord — the record arm fills the host-down window onl
       observedAtMs: NOW_MS - 5000,
     });
     const newerRecord = recordObservation({ observedAtMs: NOW_MS });
-    expect(preferLiveOverRecord(wire, newerRecord, NOW_MS)).toBe(wire);
+    expect(preferLiveOverRecord(wire, newerRecord, sameClock(NOW_MS))).toBe(
+      wire,
+    );
   });
 
   it("keeps a stale wire read when there is no record, rather than dropping it", () => {
     // Its own stale arm still carries `lastKnownKind`; returning null here
     // would throw away the last thing we knew.
     const wire = observation({ freshUntilMs: NOW_MS - 1 });
-    expect(preferLiveOverRecord(wire, null, NOW_MS)).toBe(wire);
+    expect(preferLiveOverRecord(wire, null, sameClock(NOW_MS))).toBe(wire);
   });
 
   it("returns the record when there is no wire read at all, and null when there is neither", () => {
-    expect(preferLiveOverRecord(null, record, NOW_MS)).toBe(record);
-    expect(preferLiveOverRecord(null, null, NOW_MS)).toBeNull();
+    expect(preferLiveOverRecord(null, record, sameClock(NOW_MS))).toBe(record);
+    expect(preferLiveOverRecord(null, null, sameClock(NOW_MS))).toBeNull();
   });
 });
 
@@ -1174,7 +1190,9 @@ describe("preferLiveOverRecord — same-attempt ordering and the different-attem
       sequence: 1,
     });
     for (let read = 0; read < 3; read += 1) {
-      expect(preferLiveOverRecord(wire, unchangedRecord, NOW_MS)).toBe(wire);
+      expect(
+        preferLiveOverRecord(wire, unchangedRecord, sameClock(NOW_MS)),
+      ).toBe(wire);
     }
   });
 
@@ -1195,9 +1213,9 @@ describe("preferLiveOverRecord — same-attempt ordering and the different-attem
       generation: 1,
       sequence: 2,
     });
-    expect(preferLiveOverRecord(staleWire, aheadRecord, NOW_MS)).toBe(
-      aheadRecord,
-    );
+    expect(
+      preferLiveOverRecord(staleWire, aheadRecord, sameClock(NOW_MS)),
+    ).toBe(aheadRecord);
   });
 
   it("a FUTURE-dated updatedAt on a DIFFERENT attempt loses to a stale wire — the wire must be stale for this to prove anything", () => {
@@ -1216,9 +1234,9 @@ describe("preferLiveOverRecord — same-attempt ordering and the different-attem
       attemptId: "attempt-2",
       updatedAt: new Date(NOW_MS + 24 * 60 * 60 * 1000).toISOString(),
     });
-    expect(preferLiveOverRecord(staleWire, futureRecord, NOW_MS)).toBe(
-      staleWire,
-    );
+    expect(
+      preferLiveOverRecord(staleWire, futureRecord, sameClock(NOW_MS)),
+    ).toBe(staleWire);
   });
 
   it("mirror: a different-attempt record with a SANE updatedAt beats a stale wire", () => {
@@ -1233,7 +1251,7 @@ describe("preferLiveOverRecord — same-attempt ordering and the different-attem
       attemptId: "attempt-2",
       updatedAt: new Date(NOW_MS - 60_000).toISOString(),
     });
-    expect(preferLiveOverRecord(staleWire, saneRecord, NOW_MS)).toBe(
+    expect(preferLiveOverRecord(staleWire, saneRecord, sameClock(NOW_MS))).toBe(
       saneRecord,
     );
   });
@@ -1250,9 +1268,9 @@ describe("preferLiveOverRecord — same-attempt ordering and the different-attem
       attemptId: "attempt-2",
       updatedAt: "not-a-date",
     });
-    expect(preferLiveOverRecord(staleWire, unparseableRecord, NOW_MS)).toBe(
-      staleWire,
-    );
+    expect(
+      preferLiveOverRecord(staleWire, unparseableRecord, sameClock(NOW_MS)),
+    ).toBe(staleWire);
   });
 });
 

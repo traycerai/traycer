@@ -197,6 +197,34 @@ export const LOCAL_LIVENESS_PROOF_MS = 5_000;
 export const LOCAL_LIVENESS_CLOCK_SLACK_MS = 1_000;
 
 /**
+ * The two instants the local (wire + record) projection is evaluated against.
+ *
+ * They are separate because the two legs measure different things and one
+ * clock cannot answer both. Passing the same value for both is a legitimate
+ * thing for a test to do, but a production call site that does it has a bug in
+ * one leg or the other — see {@link preferLiveOverRecord} for which.
+ */
+export interface LocalUpdateClock {
+  /**
+   * The instant the WIRE read was taken at (the query's `dataUpdatedAt`).
+   *
+   * A healthy read must be fresh by construction, because its deadline was
+   * derived from this same instant plus the query's health. Anything that
+   * advances independently turns "the round trip was slow" into "the host
+   * stopped reporting", which is a different and much louder claim.
+   */
+  readonly wireNowMs: number;
+  /**
+   * A clock that TICKS, for the RECORD leg alone.
+   *
+   * The record's proof expires on its own, and every timestamp attached to the
+   * record stops advancing in exactly the situation the record is read in — so
+   * only a clock nobody has to refresh can retire it.
+   */
+  readonly recordNowMs: number;
+}
+
+/**
  * Everything the projector accepts.
  *
  * Discriminated on `source`, and the record arm's literal is deliberately
@@ -1053,8 +1081,33 @@ export function warrantsFastPoll(view: FleetUpdateView): boolean {
  * `observedAtMs` is always newer, and a recency comparison would let it
  * outrank a perfectly good live read and permanently suppress real progress.
  * **No read time is an input here** — neither observation's `observedAtMs`
- * reaches this decision, and `nowMs` is consulted only to ask whether the wire
- * read is still presentable and whether the record's own timestamp is sane.
+ * reaches this decision, and the clock is consulted only to ask whether the
+ * wire read is still presentable and whether the record's own timestamp is
+ * sane.
+ *
+ * ## Two instants, because those two questions are asked of different clocks
+ *
+ * `wireNowMs` is the instant the wire read was taken at — the query's
+ * `dataUpdatedAt`. Measuring a wire read's own deadline against it is what
+ * makes a HEALTHY read fresh by construction, which is the pre-existing
+ * semantics and the only correct one: `observationFromCanonicalRead` already
+ * folds the query's health into `freshUntilMs` and stamps an unhealthy read as
+ * expired, so freshness is a health verdict and never a race against how long
+ * the round trip took. Handing this a ticking clock instead — which is what
+ * this function briefly did — means a single `host.status` round trip longer
+ * than the fresh window demotes a live attempt to "last seen", drops the
+ * page-wide lifecycle gate, and disengages the poll accelerator that was
+ * keeping the wire caught up, on a host that is answering perfectly well and
+ * is merely far away.
+ *
+ * `recordNowMs` is a renderer tick, and only the record's questions may use
+ * it. The record's evidence expires on its own — a holder probe's proof lives
+ * five seconds — while both timestamps that could age it stop advancing
+ * exactly when it matters, so nothing but a clock that keeps running can
+ * retire it. `recordTimestampIsSane` takes the tick for the same reason from
+ * the other side: its tolerance is one second, so judging a current record
+ * against a `dataUpdatedAt` frozen minutes ago would reject it as
+ * "future-dated" for being what it is, current.
  *
  * What ORDERS the two once the wire is stale depends on whether they are even
  * talking about the same attempt:
@@ -1080,7 +1133,7 @@ export function warrantsFastPoll(view: FleetUpdateView): boolean {
 export function preferLiveOverRecord(
   wire: FleetUpdateWireObservation | null,
   record: FleetUpdateRecordObservation | null,
-  nowMs: number,
+  clock: LocalUpdateClock,
 ): FleetUpdateObservation | null {
   if (record === null) return wire;
   if (wire === null) return record;
@@ -1091,12 +1144,12 @@ export function preferLiveOverRecord(
   // every download, and then remove the fast poll that was keeping the wire
   // caught up. Progress the host is actively reporting is never improved by a
   // file that cannot report liveness.
-  if (nowMs <= wire.freshUntilMs) return wire;
+  if (clock.wireNowMs <= wire.freshUntilMs) return wire;
   const wireAttempt = wireAttemptPosition(wire);
   if (wireAttempt !== null && wireAttempt.attemptId === record.attemptId) {
     return recordIsBehind(record, wireAttempt) ? wire : record;
   }
-  return recordTimestampIsSane(record, nowMs) ? record : wire;
+  return recordTimestampIsSane(record, clock.recordNowMs) ? record : wire;
 }
 
 /** The wire frame's attempt position, or `null` when it names no attempt. */
