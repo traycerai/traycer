@@ -131,7 +131,7 @@ const nothingRemembered: WindowsKillMemory = {
 // pins below reason about, where an earlier round killed a parent and this
 // round has to decide what may be attributed to it.
 function victimMemory(
-  victims: ReadonlyMap<number, WindowsKillVictim>,
+  victims: ReadonlyMap<number, readonly WindowsKillVictim[]>,
 ): WindowsKillMemory {
   return { victims, suspects: new Map() };
 }
@@ -140,7 +140,7 @@ function victimMemory(
 // suspect-inheritance pins reason about, where an earlier round could place a
 // pid neither in the slot nor out of it.
 function suspectMemory(
-  suspects: ReadonlyMap<number, number>,
+  suspects: ReadonlyMap<number, readonly number[]>,
 ): WindowsKillMemory {
   return { victims: new Map(), suspects };
 }
@@ -945,19 +945,32 @@ describe("killHostProcessTree convergence loop", () => {
   });
 
   it("carries the victim set BETWEEN rounds: round 1's orphan is only killable because round 0's victim is remembered", async () => {
-    // Round 0 kills host 100 (a genuine slot match). Round 1's snapshot shows
-    // orphan 555, spawned after round 0's kill destroyed the edge proving it
-    // belongs to the slot: its `parentProcessId` arrives as 0 (unverifiable,
-    // host is dead), and its own path/command line matches nothing (a shell
-    // or provider binary). Without `priorVictims` carrying host 100's
-    // creation time forward, 555 looks like an ordinary unrelated process and
-    // the loop would report convergence while it lives - the finding this
-    // whole carry-over mechanism exists to close.
+    // Chronology (sample 5000 before every scan; every row is born before
+    // it, so each is present in every scan taken while it lives):
+    //   R0: host 100 (born 1000, slot) and its validated child 555 (born
+    //       1500, a shell or provider binary whose own path matches nothing).
+    //       Both are killed, 555 first.
+    //   R1: 100 is gone. 555 is STILL listed - `taskkill /F` is
+    //       `TerminateProcess`, asynchronous, and the loop's own comment names
+    //       this case - and its edge now arrives as `parentProcessId` 0: the
+    //       parent that would have vouched for it is dead. Its own path
+    //       matches nothing. Without `priorVictims` carrying 100's window
+    //       forward, 555 is an ordinary unrelated process and the loop reports
+    //       convergence while it lives. With it, 555 (born 1500, inside
+    //       [1000, 5000]) is seeded and killed again.
+    //   R2: empty. Converged.
     const { runner, calls } = roundedRunner([
       {
         kind: "table",
         rows: [
           { processId: 100, parentProcessId: 1, created: 1000, slot: true },
+          {
+            processId: 555,
+            parentProcessId: 100,
+            claimedParentProcessId: 100,
+            created: 1500,
+            slot: false,
+          },
         ],
       },
       {
@@ -974,8 +987,6 @@ describe("killHostProcessTree convergence loop", () => {
       },
       { kind: "table", rows: [] },
     ]);
-    // A real clock, not 0: 555's window is [1000, seenAliveAt], and only a
-    // seenAliveAt at or above its own `created` (1500) can ever admit it.
     const controller = createWindowsController(runner, { now: () => 5000 });
 
     await controller.stop(serviceLabelFor("staging"), { force: false });
@@ -988,71 +999,122 @@ describe("killHostProcessTree convergence loop", () => {
         .filter((call) => call.command === "taskkill")
         .map((call) => call.args),
     ).toEqual([
+      ["/F", "/PID", "555"],
       ["/F", "/PID", "100"],
       ["/F", "/PID", "555"],
     ]);
 
     // Ablation (§ablation table): in `classifyCarryOverClaim`, replace the
     // body with `return "none";` → this test reddens alongside the direct
-    // "the finding" algebra pin below - 555 is never seeded, round 1's kill
-    // set comes back empty, and the stop resolves with 555 still alive.
+    // "the finding" algebra pin below - 555 is never seeded in round 1, that
+    // kill set comes back empty, and the stop resolves with 555 still alive.
   });
 
-  it("the victim map ACCUMULATES across rounds rather than being replaced - round 2 needs BOTH round 0's and round 1's victims remembered at once", async () => {
-    // Round 0 kills host 100. Round 1's orphan 555 is only killable because
-    // 100 is remembered. Round 2 contains TWO orphans at once: 777 claims
-    // 555 (round 1's victim) and 888 claims 100 (round 0's victim, still
-    // directly). 888 is born at 2200 - AFTER round 1's snapshot (1500) ran,
-    // so its absence from that snapshot is coherent history, not a process
-    // that should have already been visible and wasn't. A per-round RESET
-    // (keeping only the latest round's victims) would seed 777 but not 888,
-    // since 100 would have fallen out of the map the moment round 1 replaced
-    // it with 555 - so this only passes if the map is grown, never reset,
-    // across the whole loop.
+  it("the victim map ACCUMULATES across rounds rather than being replaced - round 2 still needs round 0's victim remembered", async () => {
+    // The CLI (this process, pid 9999 here) was launched from shell 700,
+    // which the host 100 spawned - the "terminal-run" topology. 700 is the
+    // CLI's ancestor and is SPARED every round, and that is what makes this
+    // history coherent: a long-lived row that keeps claiming a dead victim.
+    // Chronology (the clock is sampled before each scan: 5000, 7000, 9000,
+    // 11000):
+    //   R0 (sample 5000): 100 (born 1000, slot), 700 (born 2000, child of
+    //       100), CLI 9999 (born 2500, child of 700). Kill set: 100 only -
+    //       700 and the CLI are the spared branch.
+    //   R1 (sample 7000): 100 gone; 700 now claims a dead parent
+    //       (`parentProcessId` 0) and is a carry-over seed through remembered
+    //       100 (born 2000, inside [1000, 5000]); a NEW sibling of the CLI,
+    //       555 (born 6000, validated child of 700), is 700's descendant and
+    //       dies. 555 born after R0's sample is why it is absent from R0.
+    //   R2 (sample 9000): 700 and the CLI again, plus another new sibling
+    //       888 (born 8000). 888 dies for the same reason - and ONLY because
+    //       100 is still remembered: a per-round reset would leave just 555
+    //       in the map, 700 would no longer be a seed, and 888 would survive
+    //       into a "converged" stop.
+    //   R3 (sample 11000): 700 and the CLI. 700 is a seed with nothing
+    //       unspared beneath it. Converged.
+    const rows700 = (extra: readonly TableRowInput[]): TableRowInput[] => [
+      {
+        processId: 700,
+        parentProcessId: 0,
+        claimedParentProcessId: 100,
+        created: 2000,
+        slot: false,
+      },
+      {
+        processId: 9999,
+        parentProcessId: 700,
+        claimedParentProcessId: 700,
+        created: 2500,
+        slot: false,
+      },
+      ...extra,
+    ];
     const { runner, calls } = roundedRunner([
       {
         kind: "table",
         rows: [
           { processId: 100, parentProcessId: 1, created: 1000, slot: true },
-        ],
-      },
-      {
-        kind: "table",
-        rows: [
           {
-            processId: 555,
-            parentProcessId: 0,
+            processId: 700,
+            parentProcessId: 100,
             claimedParentProcessId: 100,
-            created: 1500,
-            slot: false,
-          },
-        ],
-      },
-      {
-        kind: "table",
-        rows: [
-          {
-            processId: 777,
-            parentProcessId: 0,
-            claimedParentProcessId: 555,
             created: 2000,
             slot: false,
           },
           {
-            processId: 888,
-            parentProcessId: 0,
-            claimedParentProcessId: 100,
-            created: 2200,
+            processId: 9999,
+            parentProcessId: 700,
+            claimedParentProcessId: 700,
+            created: 2500,
             slot: false,
           },
         ],
       },
-      { kind: "table", rows: [] },
+      {
+        kind: "table",
+        rows: rows700([
+          {
+            processId: 555,
+            parentProcessId: 700,
+            claimedParentProcessId: 700,
+            created: 6000,
+            slot: false,
+          },
+        ]),
+      },
+      {
+        kind: "table",
+        rows: rows700([
+          {
+            processId: 888,
+            parentProcessId: 700,
+            claimedParentProcessId: 700,
+            created: 8000,
+            slot: false,
+          },
+        ]),
+      },
+      { kind: "table", rows: rows700([]) },
     ]);
-    // A real clock covering every fixture's `created` value above (max 2200).
-    const controller = createWindowsController(runner, { now: () => 5000 });
+    const samples = [5000, 7000, 9000, 11000];
+    let sample = 0;
+    const controller = createWindowsController(runner, {
+      now: () => {
+        const value = samples[sample] ?? 11000;
+        sample += 1;
+        return value;
+      },
+    });
 
-    await controller.stop(serviceLabelFor("staging"), { force: false });
+    const originalPid = Object.getOwnPropertyDescriptor(process, "pid");
+    Object.defineProperty(process, "pid", { value: 9999, configurable: true });
+    try {
+      await controller.stop(serviceLabelFor("staging"), { force: false });
+    } finally {
+      if (originalPid !== undefined) {
+        Object.defineProperty(process, "pid", originalPid);
+      }
+    }
 
     expect(
       calls.filter((call) => call.command === "powershell.exe"),
@@ -1064,9 +1126,13 @@ describe("killHostProcessTree convergence loop", () => {
     ).toEqual([
       ["/F", "/PID", "100"],
       ["/F", "/PID", "555"],
-      ["/F", "/PID", "777"],
       ["/F", "/PID", "888"],
     ]);
+
+    // Ablation: in `killHostProcessTree`, clear `priorVictims` at the top of
+    // every round → this test reddens: round 2 remembers only 555, 700 is no
+    // longer a seed, and the stop resolves without ever issuing a kill for
+    // 888.
   });
 
   it("kills within a round deepest-first: a 3-node chain is issued grandchild, child, host", async () => {
@@ -1227,17 +1293,24 @@ describe("killHostProcessTree convergence loop", () => {
     // prove belonged to the host.
   });
 
-  // A pid killed again in a later round overwrites its `priorVictims` entry
+  // A pid killed again in a later round gets a SECOND `priorVictims` entry
   // with THAT round's `seenAliveAt` - never frozen at the round it was first
   // killed - so a later orphan's window is bounded by how long the victim was
   // actually still provably alive, not by the first round that happened to
   // notice it.
   it("a repeated victim's seenAliveAt advances across rounds, widening what a later orphan can be attributed to", async () => {
-    // 100 is killed in round 0, then found STILL present in round 1
-    // (`taskkill /F` is asynchronous - the loop's own comment names this
-    // exact case) and killed again there. Orphan 555 is born at 3000 - after
-    // round 0's seenAliveAt (2000) but before round 1's (4000) - so it is
-    // only killable if the map's bound for 100 actually moved forward.
+    // Chronology (samples 2000, 4000, 6000, 8000):
+    //   R0 (sample 2000): 100 (born 1000, slot). Killed.
+    //   R1 (sample 4000): 100 is STILL listed (`taskkill /F` is
+    //       asynchronous - the loop's own comment names this exact case) and
+    //       has meanwhile spawned 555 (born 3000, validated child). Both are
+    //       killed, 555 first. 100's window now extends to 4000.
+    //   R2 (sample 6000): 100 is gone; 555 lingers the same way, its edge
+    //       now `parentProcessId` 0. Born 3000, it is AFTER round 0's bound
+    //       (2000) but inside round 1's (4000): only the widened window can
+    //       attribute it, and it is killed again rather than reported as
+    //       undecided.
+    //   R3 (sample 8000): empty. Converged.
     const { runner, calls } = roundedRunner([
       {
         kind: "table",
@@ -1249,6 +1322,13 @@ describe("killHostProcessTree convergence loop", () => {
         kind: "table",
         rows: [
           { processId: 100, parentProcessId: 1, created: 1000, slot: true },
+          {
+            processId: 555,
+            parentProcessId: 100,
+            claimedParentProcessId: 100,
+            created: 3000,
+            slot: false,
+          },
         ],
       },
       {
@@ -1265,12 +1345,15 @@ describe("killHostProcessTree convergence loop", () => {
       },
       { kind: "table", rows: [] },
     ]);
-    let round = 0;
-    const now = (): number => {
-      round += 1;
-      return round === 1 ? 2000 : 4000;
-    };
-    const controller = createWindowsController(runner, { now });
+    const samples = [2000, 4000, 6000, 8000];
+    let sample = 0;
+    const controller = createWindowsController(runner, {
+      now: () => {
+        const value = samples[sample] ?? 8000;
+        sample += 1;
+        return value;
+      },
+    });
 
     await controller.stop(serviceLabelFor("staging"), { force: false });
 
@@ -1280,15 +1363,15 @@ describe("killHostProcessTree convergence loop", () => {
         .map((call) => call.args),
     ).toEqual([
       ["/F", "/PID", "100"],
+      ["/F", "/PID", "555"],
       ["/F", "/PID", "100"],
       ["/F", "/PID", "555"],
     ]);
 
-    // Ablation: in `killHostProcessTree`, only record a victim's
-    // `priorVictims` entry the FIRST time it is killed (skip the `.set` when
-    // an entry already exists) → this test reddens: 100's `seenAliveAt`
-    // freezes at round 0's 2000, 555 (born 3000) falls outside that stale
-    // window, and round 2 reports it unattributed instead of killing it.
+    // Ablation: in `rememberIncarnation`, skip the push when an entry already
+    // exists (first incarnation only) → this test reddens: 100's only window
+    // ends at round 0's 2000, 555 (born 3000) falls outside it, and round 2
+    // reports it unattributed instead of killing it.
   });
 
   // P2 (round 5c): a kill set of `[]` used to mean convergence unconditionally.
@@ -1301,6 +1384,14 @@ describe("killHostProcessTree convergence loop", () => {
   // and only refuses once a later round's kill set is empty with the
   // undecidable row still unexplained.
   it("kills happen first even when an unattributed row sits in the same round's scan; the throw only comes once nothing is left to kill", async () => {
+    // Chronology (samples 5000, 7000, 9000):
+    //   R0 (sample 5000): host 100 (born 1000, slot). Killed.
+    //   R1 (sample 7000): a NEW slot process 200 (born 6200 - a relaunch,
+    //       hence absent from R0) and 777 (born 6000, claims 100, after 100's
+    //       window closed at 5000, so undecided). kill=[200],
+    //       unattributed=[777]: 200 dies, the refusal waits.
+    //   R2 (sample 9000): only 777. Nothing to kill, 777 still undecided:
+    //       refused, naming it.
     const { runner, calls } = roundedRunner([
       {
         kind: "table",
@@ -1311,13 +1402,7 @@ describe("killHostProcessTree convergence loop", () => {
       {
         kind: "table",
         rows: [
-          {
-            processId: 555,
-            parentProcessId: 0,
-            claimedParentProcessId: 100,
-            created: 1500,
-            slot: false,
-          },
+          { processId: 200, parentProcessId: 1, created: 6200, slot: true },
           {
             processId: 777,
             parentProcessId: 0,
@@ -1340,7 +1425,15 @@ describe("killHostProcessTree convergence loop", () => {
         ],
       },
     ]);
-    const controller = createWindowsController(runner, { now: () => 5000 });
+    const samples = [5000, 7000, 9000];
+    let sample = 0;
+    const controller = createWindowsController(runner, {
+      now: () => {
+        const value = samples[sample] ?? 9000;
+        sample += 1;
+        return value;
+      },
+    });
 
     await expect(
       controller.stop(serviceLabelFor("staging"), { force: false }),
@@ -1349,15 +1442,15 @@ describe("killHostProcessTree convergence loop", () => {
       details: { unattributedPids: [777] },
     });
 
-    // 555 (born 1500, inside [1000, 5000]) was killed even though 777 (born
-    // 6000, outside it) sat alongside it in the very same round's scan.
+    // 200 (an ordinary slot match) was killed even though 777 (undecided)
+    // sat alongside it in the very same round's scan.
     expect(
       calls
         .filter((call) => call.command === "taskkill")
         .map((call) => call.args),
     ).toEqual([
       ["/F", "/PID", "100"],
-      ["/F", "/PID", "555"],
+      ["/F", "/PID", "200"],
     ]);
 
     // Ablation (§ablation table): in `killHostProcessTree`, return `kill`
@@ -1451,10 +1544,113 @@ describe("killHostProcessTree convergence loop", () => {
     ]);
 
     // Ablation (§ablation table): in `killHostProcessTree`, drop the
-    // `priorSuspects.set(...)` loop (record victims only) → this test
+    // `priorSuspects` recording loop (record victims only) → this test
     // reddens: round 2 finds nothing to kill and nothing it remembers, and
     // the stop RESOLVES with 888 alive. Alternatively make
     // `classifyAgainstSuspect` return "none" → same outcome.
+  });
+
+  it("P2 (round 5e): a newer incarnation of a suspect's pid does not erase the suspicion about the older one's child", async () => {
+    // Chronology (samples 5000, 7000, 9000, 11000):
+    //   R0 (sample 5000): host 100 (born 1000, slot). Killed.
+    //   R1 (sample 7000): slot 200 (born 6200), 777 (born 6000, claims dead
+    //       100 - undecided) and 777's validated child 888 (born 6500).
+    //       kill=[200], unattributed=[777, 888].
+    //   R2 (sample 9000): old 777 has exited; a NEW slot-matched process
+    //       wears pid 777 (born 8000). 888 is still there; the scan zeroes
+    //       its edge because the holder of 777 is younger than it. 888 is
+    //       undecided (suspect 777 at 6000); the newcomer is killed as a slot
+    //       match and becomes victim 777 = [8000, 9000].
+    //   R3 (sample 11000): only 888. Against victim 777 (born 8000) it is
+    //       "older than the victim" - decided, and wrongly, if that were the
+    //       only memory consulted. The suspect incarnation (6000) and 888's
+    //       own remembered identity both keep it undecided: refused, naming
+    //       888.
+    const samples = [5000, 7000, 9000, 11000];
+    let sample = 0;
+    const { runner, calls } = roundedRunner([
+      {
+        kind: "table",
+        rows: [
+          { processId: 100, parentProcessId: 1, created: 1000, slot: true },
+        ],
+      },
+      {
+        kind: "table",
+        rows: [
+          { processId: 200, parentProcessId: 1, created: 6200, slot: true },
+          {
+            processId: 777,
+            parentProcessId: 0,
+            claimedParentProcessId: 100,
+            created: 6000,
+            slot: false,
+          },
+          {
+            processId: 888,
+            parentProcessId: 777,
+            claimedParentProcessId: 777,
+            created: 6500,
+            slot: false,
+          },
+        ],
+      },
+      {
+        kind: "table",
+        rows: [
+          { processId: 777, parentProcessId: 1, created: 8000, slot: true },
+          {
+            processId: 888,
+            parentProcessId: 0,
+            claimedParentProcessId: 777,
+            created: 6500,
+            slot: false,
+          },
+        ],
+      },
+      {
+        kind: "table",
+        rows: [
+          {
+            processId: 888,
+            parentProcessId: 0,
+            claimedParentProcessId: 777,
+            created: 6500,
+            slot: false,
+          },
+        ],
+      },
+    ]);
+    const controller = createWindowsController(runner, {
+      now: () => {
+        const value = samples[sample] ?? 11000;
+        sample += 1;
+        return value;
+      },
+    });
+
+    await expect(
+      controller.stop(serviceLabelFor("staging"), { force: false }),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+      details: { unattributedPids: [888] },
+    });
+
+    expect(
+      calls
+        .filter((call) => call.command === "taskkill")
+        .map((call) => call.args),
+    ).toEqual([
+      ["/F", "/PID", "100"],
+      ["/F", "/PID", "200"],
+      ["/F", "/PID", "777"],
+    ]);
+
+    // Ablation: replace `rememberIncarnation`'s push with an overwrite
+    // (`memory.set(pid, [incarnation])`) AND make `classifyCarryOverClaim`
+    // return the first incarnation's verdict → this test reddens: round 3
+    // decides 888 is older than victim 777 and the stop RESOLVES with it
+    // alive. Either half alone is caught by the pure incarnation pins.
   });
 
   // The unattributed refusal exercised through all four callers that run
@@ -1830,8 +2026,8 @@ describe("computeWindowsHostKillSet and the taskkill self-protection it drives",
     }
 
     const remembered = victimMemory(
-      new Map<number, WindowsKillVictim>([
-        [100, { created: 1000, seenAliveAt: 5000 }],
+      new Map<number, readonly WindowsKillVictim[]>([
+        [100, [{ created: 1000, seenAliveAt: 5000 }]],
       ]),
     );
     const cliPid = 9999;
@@ -1906,8 +2102,8 @@ describe("computeWindowsHostKillSet and the taskkill self-protection it drives",
       ).toEqual({ kill: [], unattributed: [777] });
 
       const unknownVictimAge = victimMemory(
-        new Map<number, WindowsKillVictim>([
-          [100, { created: 0, seenAliveAt: 5000 }],
+        new Map<number, readonly WindowsKillVictim[]>([
+          [100, [{ created: 0, seenAliveAt: 5000 }]],
         ]),
       );
       const ordinaryRow = rowsOf([victimRow(777, 0, 100, 3000, false), cliRow]);
@@ -1916,14 +2112,14 @@ describe("computeWindowsHostKillSet and the taskkill self-protection it drives",
       ).toEqual({ kill: [], unattributed: [777] });
 
       // Ablation (§ablation table): drop the zero-age branch entirely
-      // (`victim.created === 0 || row.created === 0`) → only the SECOND
-      // assertion above reddens (`unknownVictimAge`, becoming `{ kill:
-      // [777], unattributed: [] }`). The first does not: with the branch
-      // gone, the range check runs directly, and `1000 <= 0` is already
-      // false on its own - a row's own zero age is caught by the ordinary
-      // lower bound without needing the special case. Only a VICTIM's zero
-      // age needs the guard, because `0 <= anything-non-negative` would
-      // otherwise be vacuously true.
+      // (`victim.created === 0 || row.created === 0`) → BOTH assertions
+      // above redden, in opposite directions. The row of age 0 falls into
+      // the lower bound (`0 < 1000`) and is DECIDED as older than the victim
+      // (`{ kill: [], unattributed: [] }`), which is "we could not read an
+      // age" masquerading as proof. The victim of age 0 admits everything
+      // (`3000 < 0` is false, `3000 <= 5000` is true) and 777 is killed
+      // (`{ kill: [777], unattributed: [] }`). Neither reading of an
+      // unreadable age is acceptable, which is why the guard runs first.
     });
 
     it("a validated live edge is neither killed nor unattributed - the carry-over is not even consulted", () => {
@@ -2067,21 +2263,40 @@ describe("computeWindowsHostKillSet and the taskkill self-protection it drives",
       });
     });
 
-    it("the gate is checked before the window: defensive, synthetic input pins that a validated live edge is never a carry-over question", () => {
-      // Deliberately SYNTHETIC, defensive input - this exact shape cannot
-      // arise from a real scan. `classifyCarryOverClaim`'s own comment says
-      // so: a row with a validated live edge has a parent the scan found in
-      // this very table, and a live parent is never simultaneously a killed
-      // victim, so the gate is redundant on legitimate input. This fixture
-      // exists only to pin the ORDER of the checks - the gate is evaluated
-      // before the window is ever consulted - so a future change cannot
-      // quietly drop the gate and rely on the window alone without a test
-      // noticing. Widen `seenAliveAt` to 6000 here specifically so the
-      // window ALONE would have accepted 777 (1000 <= 4000 <= 6000) - the
-      // gate is what still refuses it.
+    it("the gate is not redundant: a validated live edge to a process wearing a victim's pid is decided by the edge, not by the window", () => {
+      // LEGITIMATE scan output: after victim 100 died, an unrelated process
+      // took pid 100 (born 6000, after the window closed at 5000) and forked
+      // 777 (born 7000). The scan validates 777's edge - its parent is live
+      // and older - so `parentProcessId` is 100. On the window alone 777 is
+      // born after `seenAliveAt` and would be reported as undecided, failing
+      // the stop over a stranger's child; the edge is the better fact, and
+      // the gate is what applies it.
+      const table = rowsOf([
+        victimRow(100, 0, 0, 6000, false),
+        victimRow(777, 100, 100, 7000, false),
+        cliRow,
+      ]);
+      expect(computeWindowsHostKillSet(table, cliPid, remembered)).toEqual({
+        kill: [],
+        unattributed: [],
+      });
+
+      // Ablation (§ablation table): drop `row.parentProcessId !== 0` → this
+      // test reddens, becoming `{ kill: [], unattributed: [777] }` - the
+      // window alone cannot place a row born after 5000, and a stop would be
+      // refused over a process the scan had already tied to a living,
+      // unrelated parent.
+    });
+
+    it("the gate is checked before the window: defensive, synthetic input pins the order of the checks", () => {
+      // Deliberately SYNTHETIC: a victim window wide enough (to 6000) to
+      // contain a row whose validated live parent (born 3000) is itself
+      // inside that window cannot be produced by the pre-scan loop. It pins
+      // the ORDER only - the gate is evaluated before the window is ever
+      // consulted - so a future change cannot quietly reorder them.
       const widerWindow = victimMemory(
-        new Map<number, WindowsKillVictim>([
-          [100, { created: 1000, seenAliveAt: 6000 }],
+        new Map<number, readonly WindowsKillVictim[]>([
+          [100, [{ created: 1000, seenAliveAt: 6000 }]],
         ]),
       );
       const table = rowsOf([
@@ -2093,11 +2308,108 @@ describe("computeWindowsHostKillSet and the taskkill self-protection it drives",
         kill: [],
         unattributed: [],
       });
+    });
 
-      // Ablation (§ablation table): drop `row.parentProcessId !== 0` → this
-      // test reddens, becoming `{ kill: [777], unattributed: [] }` - the
-      // window alone accepts the row (1000 <= 4000 <= 6000) and wrongly
-      // seeds a stranger with a perfectly good live parent of its own.
+    // Round 5e: memory is per INCARNATION. A pid can be killed twice as two
+    // processes, or be a suspect in one round and a victim in the next, and
+    // each incarnation is evidence about the rows born during it. The
+    // strongest verdict across incarnations wins; a newer holder of a pid
+    // never erases what the loop learned about the older holder's children.
+    describe("incarnations - a later holder of a pid does not erase the earlier one", () => {
+      it("two victim windows for one pid: a row inside the OLDER window is still seeded", () => {
+        // 100 was killed at [1000, 2000], reused, and the newcomer (born
+        // 6000, slot-matched) killed at [6000, 9000]. 555 (born 1500) claims
+        // 100: against the newer incarnation it is "older than the victim",
+        // against the older one it is inside the window. Seed.
+        const twoWindows = victimMemory(
+          new Map<number, readonly WindowsKillVictim[]>([
+            [
+              100,
+              [
+                { created: 1000, seenAliveAt: 2000 },
+                { created: 6000, seenAliveAt: 9000 },
+              ],
+            ],
+          ]),
+        );
+        const table = rowsOf([victimRow(555, 0, 100, 1500, false), cliRow]);
+        expect(computeWindowsHostKillSet(table, cliPid, twoWindows)).toEqual({
+          kill: [555],
+          unattributed: [],
+        });
+
+        // Ablation: in `classifyCarryOverClaim`, consult only the LAST
+        // incarnation of the claimed pid → this test reddens
+        // (`{ kill: [], unattributed: [] }`): 555 is decided as somebody
+        // else's child and silently spared.
+      });
+
+      it("a suspect incarnation and a later victim incarnation of one pid: a row between them stays undecided", () => {
+        // 777 was undecided (born 6000), exited, and its pid was taken by a
+        // slot-matched process (born 8000) that was then killed. 888 (born
+        // 6500) claims 777: "older than the victim" against the newer
+        // incarnation, but born after the suspect's birth against the older
+        // one. The open question outranks the decided one.
+        const mixed: WindowsKillMemory = {
+          victims: new Map<number, readonly WindowsKillVictim[]>([
+            [777, [{ created: 8000, seenAliveAt: 9000 }]],
+          ]),
+          suspects: new Map<number, readonly number[]>([[777, [6000]]]),
+        };
+        const table = rowsOf([victimRow(888, 0, 777, 6500, false), cliRow]);
+        expect(computeWindowsHostKillSet(table, cliPid, mixed)).toEqual({
+          kill: [],
+          unattributed: [888],
+        });
+      });
+
+      it("two suspect incarnations of one pid: the older one still covers a row born before the newer", () => {
+        const twoSuspects = suspectMemory(
+          new Map<number, readonly number[]>([[777, [6000, 8000]]]),
+        );
+        const table = rowsOf([victimRow(888, 0, 777, 6500, false), cliRow]);
+        expect(computeWindowsHostKillSet(table, cliPid, twoSuspects)).toEqual({
+          kill: [],
+          unattributed: [888],
+        });
+      });
+
+      it("a remembered suspect stays undecided by its own identity, even once its edge validates against a newer holder of its parent's pid", () => {
+        // 888 (born 6500) was reported undecided in an earlier round. Now its
+        // dead parent's pid 777 is worn by a process born 5000 - OLDER than
+        // 888, so the scan validates the edge. The edge is a coincidence of
+        // pid reuse, not lineage; 888 is the same process it was, and the
+        // question about it has not been answered.
+        const suspected = suspectMemory(
+          new Map<number, readonly number[]>([[888, [6500]]]),
+        );
+        const table = rowsOf([
+          victimRow(777, 0, 0, 5000, false),
+          victimRow(888, 777, 777, 6500, false),
+          cliRow,
+        ]);
+        expect(computeWindowsHostKillSet(table, cliPid, suspected)).toEqual({
+          kill: [],
+          unattributed: [888],
+        });
+
+        // A DIFFERENT process wearing 888's pid (born 9000) is not the
+        // remembered suspect and is decided on its own terms.
+        const newcomer = rowsOf([
+          victimRow(777, 0, 0, 5000, false),
+          victimRow(888, 777, 777, 9000, false),
+          cliRow,
+        ]);
+        expect(computeWindowsHostKillSet(newcomer, cliPid, suspected)).toEqual({
+          kill: [],
+          unattributed: [],
+        });
+
+        // Ablation: remove the `isRememberedSuspect` check from
+        // `classifyCarryOverClaim` → the first assertion reddens
+        // (`unattributed: []`): the validated edge clears a question a pid
+        // reuse had no business answering.
+      });
     });
 
     // Round 5d: a pid an earlier round could place neither in the slot nor
@@ -2108,7 +2420,9 @@ describe("computeWindowsHostKillSet and the taskkill self-protection it drives",
     // it the row may be the suspect's or a stranger's, and both are
     // undecided (see `classifyAgainstSuspect`).
     describe("suspect inheritance - claims on a pid an earlier round could not place", () => {
-      const suspected = suspectMemory(new Map<number, number>([[777, 6000]]));
+      const suspected = suspectMemory(
+        new Map<number, readonly number[]>([[777, [6000]]]),
+      );
 
       it("a row claiming a suspect and born after it is unattributed, with no upper bound to clear it", () => {
         const table = rowsOf([
@@ -2142,7 +2456,9 @@ describe("computeWindowsHostKillSet and the taskkill self-protection it drives",
           kill: [],
           unattributed: [888],
         });
-        const zeroSuspect = suspectMemory(new Map<number, number>([[777, 0]]));
+        const zeroSuspect = suspectMemory(
+          new Map<number, readonly number[]>([[777, [0]]]),
+        );
         const table = rowsOf([victimRow(888, 0, 777, 5000, false), cliRow]);
         expect(computeWindowsHostKillSet(table, cliPid, zeroSuspect)).toEqual({
           kill: [],

@@ -456,7 +456,16 @@ async function killHostProcessTree(
   // What earlier rounds killed, with the age each had when it was killed. The
   // loop's memory: once a parent is dead the table can no longer prove its
   // children belong to the slot, and this is the only thing that still can.
-  const priorVictims = new Map<number, WindowsKillVictim>();
+  //
+  // Per INCARNATION, appended and never replaced. A pid can be killed twice as
+  // two different processes (the first lingers in an asynchronous
+  // `TerminateProcess`, or is reused and the newcomer is slot-matched too), and
+  // each kill is evidence about the rows born during THAT holder's lifetime. A
+  // map that kept only the latest would let a newer holder of a pid erase what
+  // the loop learned about the previous holder's children, and a row born inside
+  // the older window would read as "older than the victim" - decided, and
+  // wrongly, as somebody else's.
+  const priorVictims = new Map<number, WindowsKillVictim[]>();
   // The other half of that memory: pids an earlier round could place neither in
   // the slot nor out of it, against the age the row wearing each one had then.
   // Uncertainty has to cross a round boundary for the same reason a kill does.
@@ -464,8 +473,11 @@ async function killHostProcessTree(
   // next round - it can exit, or spawn a child and then exit - and without this
   // the child arrives as an ordinary orphan claiming a pid nothing remembers,
   // which reads as convergence. Only the age is kept: `classifyAgainstSuspect`
-  // shows a suspect's upper bound cannot change any verdict.
-  const priorSuspects = new Map<number, number>();
+  // shows a suspect's upper bound cannot change any verdict. Per incarnation,
+  // for the same reason as the victims: a later, unrelated holder of the pid
+  // that also cannot be placed must not narrow what an earlier holder's child
+  // can be suspected of.
+  const priorSuspects = new Map<number, number[]>();
   // The pair, by reference: the maps below are mutated in place at the end of
   // every round, so this is built once and always reflects the latest round.
   const memory: WindowsKillMemory = {
@@ -518,11 +530,16 @@ async function killHostProcessTree(
       // off an undecided process is exactly as undecided as its root.
       if (unattributed.length > 0) {
         // "Run the command again" was the wrong advice and is deliberately
-        // gone: a rerun repeats this scan against the same processes and
-        // reaches the same verdict, so it sends the user around the loop
-        // rather than out of it. Ending the named processes is what changes
-        // the answer, and it is the one instruction that also works when they
-        // turn out to be strangers wearing recycled pids.
+        // gone, for the opposite of the obvious reason: a rerun would very
+        // likely SUCCEED, and that success would prove nothing. This memory
+        // is invocation-local; a fresh stop starts with no victims and no
+        // suspects, so the same orphan arrives as an ordinary process with a
+        // parent nobody remembers, and with no slot match left the loop
+        // converges around it. The rerun cannot certify the orphan as
+        // unrelated, it can only forget the question. Ending the named
+        // processes is what actually changes the answer, and it is the one
+        // instruction that also works when they turn out to be strangers
+        // wearing recycled pids.
         throw cliError({
           code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
           message:
@@ -576,22 +593,39 @@ async function killHostProcessTree(
     // unreachable; 0 is the value the next round refuses to link anything to,
     // which is the right way for it to be wrong.
     //
-    // A pid killed again in a later round overwrites its entry, and that
-    // round's `seenAliveAt` is the honest bound: its scan saw the pid alive
-    // too, so the interval in which the pid was demonstrably still the
-    // victim's genuinely extends to there.
+    // A pid killed again in a later round gets a second entry with that
+    // round's `seenAliveAt`, and the wider window is the honest bound: its
+    // scan saw the pid alive too, so the interval in which the pid was
+    // demonstrably still the victim's genuinely extends to there. The earlier
+    // entry stays; nothing it proved has become false.
     const created = new Map(table.map((row) => [row.processId, row.created]));
     for (const pid of pids) {
-      priorVictims.set(pid, { created: created.get(pid) ?? 0, seenAliveAt });
+      rememberIncarnation(priorVictims, pid, {
+        created: created.get(pid) ?? 0,
+        seenAliveAt,
+      });
     }
     // Recorded from the same snapshot, and only ever added to: a pid this round
     // could not place stays undecided for the rest of the loop even if the next
     // scan does not list it at all, which is precisely the case the memory
-    // exists for. A later round that reaches the same pid again overwrites the
-    // age with the incarnation that round saw.
+    // exists for. A later round that reaches the same pid again adds the
+    // incarnation that round saw beside the earlier one.
     for (const pid of unattributed) {
-      priorSuspects.set(pid, created.get(pid) ?? 0);
+      rememberIncarnation(priorSuspects, pid, created.get(pid) ?? 0);
     }
+  }
+}
+
+function rememberIncarnation<T>(
+  memory: Map<number, T[]>,
+  pid: number,
+  incarnation: T,
+): void {
+  const incarnations = memory.get(pid);
+  if (incarnations === undefined) {
+    memory.set(pid, [incarnation]);
+  } else {
+    incarnations.push(incarnation);
   }
 }
 
@@ -1261,18 +1295,20 @@ export interface WindowsKillVictim {
  * What earlier rounds of the kill loop remember, and the only thing carrying
  * either kind of knowledge across a scan boundary.
  *
- * `victims` is what the loop killed, by pid. `suspects` is what it could place
- * neither in the slot nor out of it, by pid, against the creation time of the
- * incarnation that round saw - the age is all a suspect needs, because
- * `classifyAgainstSuspect` has no upper bound to compare against.
+ * `victims` is what the loop killed, by pid, one entry per incarnation it
+ * killed. `suspects` is what it could place neither in the slot nor out of it,
+ * by pid, one creation time per incarnation it saw - the age is all a suspect
+ * needs, because `classifyAgainstSuspect` has no upper bound to compare
+ * against. Neither list is ever shortened: a newer holder of a pid is new
+ * evidence beside the old, never a replacement for it.
  *
  * One value rather than two parameters because the two halves are never
  * meaningful apart: every round records into both from the same snapshot, and
- * every classification consults both in a fixed order.
+ * every classification consults both.
  */
 export interface WindowsKillMemory {
-  readonly victims: ReadonlyMap<number, WindowsKillVictim>;
-  readonly suspects: ReadonlyMap<number, number>;
+  readonly victims: ReadonlyMap<number, readonly WindowsKillVictim[]>;
+  readonly suspects: ReadonlyMap<number, readonly number[]>;
 }
 
 /**
@@ -1298,31 +1334,78 @@ export interface WindowsHostKillSet {
 type CarryOverClaim = "seed" | "unattributed" | "none";
 
 // Whether this row was created BY a process an earlier round killed, or by one
-// it could not place.
+// it could not place - or IS one it could not place.
 //
-// The gate is the row's own validated edge, and it is kept honestly: under the
-// pre-scan bound it is redundant on legitimate input. A row with a validated
-// live edge has a parent the scan found in this very table, and a live parent is
-// neither a killed victim nor a vanished suspect, so the rules below would
-// refuse it anyway. It stays as the scan's own verdict, checked first because it
-// is the cheaper and more direct fact, and its test is framed as defensive
-// rather than as a behaviour only it produces.
+// A process this loop already failed to place stays undecided for as long as
+// that same incarnation (pid AND creation time) is alive, whatever its edge says
+// now. That check comes before the gate on purpose: the row's edge can change
+// under it between rounds - its parent exits and the claimed pid is reused by
+// something the scan validates - and a verdict that could be cleared by a
+// stranger taking a pid is not a verdict.
 //
-// Victims are checked before suspects because a pid can be both - a row this
-// loop could not place in one round can be killed in a later one, once
-// something in the table proves it belongs to the slot - and a kill is the
-// stronger fact: it says what the pid WAS, where a suspicion only says that
-// nobody could tell.
+// The gate is the row's own validated edge, and it is NOT redundant with the
+// rules below. The case it decides is a live, validated parent wearing a pid
+// this loop killed earlier: an unrelated process that took the pid after the
+// victim died and then forked. Its child is born after the victim's window and
+// would read as undecided on the window alone; the scan has already tied it to
+// a living parent, which is the better fact, so it is not a carry-over question.
+//
+// Every remembered incarnation of the claimed pid is consulted, and the
+// STRONGEST verdict wins. A pid can have been a suspect in one round and a
+// victim in a later one, or killed twice as two different processes, and each
+// incarnation is evidence about the rows born during it: a row older than the
+// newest incarnation is "none" against that one but may be inside an older
+// window (seed) or after an older suspect's birth (unattributed). Taking the
+// first answer would let the newest holder of a pid erase what the loop learned
+// about the previous holder's children.
 function classifyCarryOverClaim(
   row: WindowsProcessTableRow,
   memory: WindowsKillMemory,
 ): CarryOverClaim {
+  if (isRememberedSuspect(row, memory)) return "unattributed";
   if (row.parentProcessId !== 0) return "none";
-  const victim = memory.victims.get(row.claimedParentProcessId);
-  if (victim !== undefined) return classifyAgainstVictim(row.created, victim);
-  const suspectCreated = memory.suspects.get(row.claimedParentProcessId);
-  if (suspectCreated === undefined) return "none";
-  return classifyAgainstSuspect(row.created, suspectCreated);
+  let claim: CarryOverClaim = "none";
+  for (const victim of memory.victims.get(row.claimedParentProcessId) ?? []) {
+    claim = strongerClaim(claim, classifyAgainstVictim(row.created, victim));
+  }
+  for (const suspectCreated of memory.suspects.get(
+    row.claimedParentProcessId,
+  ) ?? []) {
+    claim = strongerClaim(
+      claim,
+      classifyAgainstSuspect(row.created, suspectCreated),
+    );
+  }
+  return claim;
+}
+
+// The same process (pid and creation time) an earlier round reported as
+// undecided. Identity by creation time, not pid alone: a different process
+// wearing a suspect's pid is a different question, decided by its own edge and
+// claim. An unreadable age (0) on a remembered suspect matches a row of
+// unreadable age, which is the undecided answer either way.
+function isRememberedSuspect(
+  row: WindowsProcessTableRow,
+  memory: WindowsKillMemory,
+): boolean {
+  const incarnations = memory.suspects.get(row.processId);
+  if (incarnations === undefined) return false;
+  return incarnations.includes(row.created);
+}
+
+const CLAIM_STRENGTH: Readonly<Record<CarryOverClaim, number>> = {
+  none: 0,
+  unattributed: 1,
+  seed: 2,
+};
+
+// "seed" outranks "unattributed" outranks "none": a proof beats an open
+// question beats the absence of one.
+function strongerClaim(
+  left: CarryOverClaim,
+  right: CarryOverClaim,
+): CarryOverClaim {
+  return CLAIM_STRENGTH[right] > CLAIM_STRENGTH[left] ? right : left;
 }
 
 // A claim on a pid this loop killed, decided by a LIFETIME WINDOW.
