@@ -404,9 +404,10 @@ function hostUnitSegment(path: string): string | null {
  * The parent WAITS. A person in a Traycer-hosted terminal keeps seeing output
  * through the inherited stdio until the stop kills their terminal; a
  * host-spawned parent dies with the cgroup, which is the expected end for it
- * and is why nothing here tries to shepherd the child beyond relaying
- * termination signals (`relayTerminationSignals`, which the detach makes
- * necessary). Exiting immediately instead would lose that output and hand the
+ * and is why nothing here tries to shepherd the child beyond relaying a Ctrl-C
+ * (`relayInterruptSignal`, which the detach makes necessary - and which
+ * relays NOTHING else, least of all the SIGTERM this unit's own stop
+ * delivers). Exiting immediately instead would lose that output and hand the
  * host's `exited` promise a false early settle.
  *
  * THE ACK IS WHAT SEPARATES the two failures that both arrive as an exit code.
@@ -442,8 +443,9 @@ async function runInTransientScope(
       // SIGHUPs the terminal's foreground group and takes the relocated updater
       // with it - the cgroup escape wasted. `detached` is setsid AT SPAWN, so
       // there is no window in which a handler has to be installed first, and
-      // `systemd-run` stays waiting on the command inside the new session.
-      // The inherited fds come along, which is deliberate: progress stays
+      // and `--scope` execs the CLI in place, so the process that lands in the
+      // new session IS the relocated CLI - no supervisor is left behind in the
+      // old one. The inherited fds come along, which is deliberate: progress stays
       // visible while the terminal lives, and the child tolerates it going away
       // (`acknowledgeRelocationEntry`).
       detached: true,
@@ -456,7 +458,7 @@ async function runInTransientScope(
     command: commandPath,
     unit: inside.unit,
   });
-  const stopRelay = relayTerminationSignals(child);
+  const stopRelay = relayInterruptSignal(child);
   try {
     return await waitForRelocatedExit(child, logger, commandPath, inside);
   } finally {
@@ -465,7 +467,7 @@ async function runInTransientScope(
 }
 
 /**
- * Forward this process's SIGINT/SIGTERM to the relocated child's process group.
+ * Forward a Ctrl-C - and ONLY a Ctrl-C - to the relocated child's process group.
  *
  * Only needed BECAUSE of the detach. While the child shared our process group,
  * a terminal's Ctrl-C went to both of us at once and no forwarding was called
@@ -473,32 +475,67 @@ async function runInTransientScope(
  * group, so without this relay Ctrl-C would kill the waiting parent and leave
  * the update running unattended: the opposite of the semantics it had.
  *
- * The group (`-pid`), not the pid: `systemd-run --scope` runs the command as
- * its own child, so signalling only `systemd-run` can leave the command itself
- * untouched. The child is a group leader by virtue of the detach, so its pgid
- * is its pid.
+ * SIGTERM IS DELIBERATELY NOT RELAYED, and this is the whole reason the
+ * function is named for one signal. This parent runs inside the host unit -
+ * that is the only situation relocation exists for - and the stop the child was
+ * sent away to perform is `systemctl --user stop`, whose default
+ * `KillMode=control-group` SIGTERMs every process in that cgroup. Relaying it
+ * would hand the child its own stop signal and kill the update at exactly the
+ * moment the relocation exists to survive.
+ *
+ * The overwhelmingly likely SIGTERM here is therefore this unit dying - though
+ * not provably so, since a person can always `kill -TERM` this pid directly.
+ * The policy does not depend on telling those apart: in both cases the parent
+ * takes the default action and dies, and in both cases the child outliving it
+ * is the point. Only the provenance is uncertain, never the response.
+ *
+ * SIGHUP is not relayed either, and the policy is unconditional rather than
+ * inferred from where the signal came from. A hangup here most often means the
+ * PTY closed, which is a teardown the child was deliberately moved out of the
+ * way of - it left that session at spawn and tolerates the lost fds
+ * (`acknowledgeRelocationEntry`) - but it can also be sent by hand. Either way
+ * it is not forwarded: nothing about a hangup delivered to THIS process is
+ * evidence that the work in the other session should stop.
+ *
+ * The group (`-pid`), not the pid. `--scope` EXECS in place, so `child.pid` is
+ * the relocated CLI itself and signalling the bare pid would in fact reach it -
+ * but the CLI is not necessarily alone. `setsid` made it the leader of a new
+ * group, and anything it spawns without detaching itself lands in that group
+ * too, so `-pid` delivers to the whole thing a Ctrl-C would have hit had the
+ * process never left the terminal's foreground group. That equivalence is the
+ * point: the relay exists to preserve the semantics the detach took away, not
+ * to invent narrower ones.
  *
  * Deliberately no `process.exit` here: the parent keeps waiting so the child
  * stays the only writer of a terminal envelope, and reports its code as always.
+ * A consequence worth naming: while this listener is installed, Ctrl-C no
+ * longer terminates THIS process the way an unhandled SIGINT would. It ends the
+ * command all the same - the child takes the signal, dies, and its code is
+ * reported here - but the parent outlives the keypress by however long the
+ * child takes to go. That is the same trade the whole function makes: the child
+ * is the thing running the work, so the child decides when there is an answer.
+ *
+ * There is one gap this cannot close, and it is deliberate: a SIGINT arriving
+ * between `spawn` returning and this listener being installed still takes the
+ * default action and kills the parent, leaving the child running unattended.
+ * Closing it would mean installing a handler before there is a pid to forward
+ * to. The outcome is the same as the SIGTERM case above - parent gone, work
+ * continues - which is the behaviour this design already treats as correct.
  */
-function relayTerminationSignals(child: ChildProcess): () => void {
+function relayInterruptSignal(child: ChildProcess): () => void {
   const pid = child.pid;
   if (pid === undefined) return () => undefined;
-  const forward = (signal: NodeJS.Signals): void => {
+  const onInterrupt = (): void => {
     try {
-      process.kill(-pid, signal);
+      process.kill(-pid, "SIGINT");
     } catch {
       // Already gone, or never became a group leader. Neither is actionable:
       // the exit we are waiting on is what reports the outcome.
     }
   };
-  const onInt = (): void => forward("SIGINT");
-  const onTerm = (): void => forward("SIGTERM");
-  process.on("SIGINT", onInt);
-  process.on("SIGTERM", onTerm);
+  process.on("SIGINT", onInterrupt);
   return () => {
-    process.removeListener("SIGINT", onInt);
-    process.removeListener("SIGTERM", onTerm);
+    process.removeListener("SIGINT", onInterrupt);
   };
 }
 
@@ -616,6 +653,12 @@ export function acknowledgeRelocationEntry(): void {
   // the moment the relocation exists to survive. There is nowhere left to
   // report a write failure to - the place we would report it to is what
   // vanished - so the only thing to do with it is nothing.
+  //
+  // fd 0 is deliberately left alone. Nothing on a host-stopping path reads
+  // stdin, and merely TOUCHING `process.stdin` is not free: the getter
+  // constructs the stream on first access, and on a TTY that is a ref'd handle
+  // that can hold the event loop open past the work being done. A guard against
+  // an error nobody can provoke is not worth a process that will not exit.
   const ignore = (): void => undefined;
   process.stdout.on("error", ignore);
   process.stderr.on("error", ignore);

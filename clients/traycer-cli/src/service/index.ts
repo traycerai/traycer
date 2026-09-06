@@ -6,7 +6,7 @@ import type { CliInvocation } from "./cli-binary";
 import type { ServiceLabel } from "./label";
 import { createLinuxController } from "./platforms/linux";
 import { createMacosController } from "./platforms/macos";
-import { createWindowsController } from "./platforms/windows";
+import { createWindowsController, epochMicrosNow } from "./platforms/windows";
 import { assertNotInsideHostUnit } from "../host/cgroup-relocation";
 import { clearStopIntent, writeStopIntent } from "../host/stop-intent";
 import { findLiveIncumbentHost } from "../host/incumbent-check";
@@ -531,7 +531,7 @@ export function createServiceController(): ServiceController {
       environment: config.environment,
     });
     return withCliInvocationRecord(
-      withStopIntent(createWindowsController(null)),
+      withStopIntent(createWindowsController(null, { now: epochMicrosNow })),
     );
   }
   logger.error(

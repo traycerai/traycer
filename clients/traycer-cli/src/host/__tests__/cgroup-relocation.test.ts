@@ -498,7 +498,7 @@ describe("relocateOutOfHostCgroupIfNeeded", () => {
     // that never started.
   });
 
-  it("forwards SIGINT/SIGTERM to the relocated child's PROCESS GROUP (-pid), and disposes both listeners once settled", async () => {
+  it("forwards SIGINT to the relocated child's PROCESS GROUP (-pid), and disposes the listener once settled", async () => {
     // Only needed because of `detached`: while the child shared this
     // process's group, a terminal's Ctrl-C reached both at once. Detached,
     // it does not - so without this relay Ctrl-C would kill the waiting
@@ -510,17 +510,16 @@ describe("relocateOutOfHostCgroupIfNeeded", () => {
     process.execArgv = [];
     spawnMocks.childPid = 4242;
     // No `respond` queued: this test drives the fake child by hand so it can
-    // emit the signals BEFORE the child ever exits.
+    // emit the signal BEFORE the child ever exits.
     spawnMocks.respond = null;
-    // Captured BEFORE the relay installs its own pair, so the "disposed"
+    // Captured BEFORE the relay installs its own listener, so the "disposed"
     // assertion below proves the count returns to what it actually was
     // rather than to a baseline that already included the relay itself.
     const sigintBefore = process.listenerCount("SIGINT");
-    const sigtermBefore = process.listenerCount("SIGTERM");
 
     const promise = relocateOutOfHostCgroupIfNeeded("host update", {});
     // Let the async chain (cgroup read, isPackagedRun, spawn) run far enough
-    // to reach `relayTerminationSignals` before this test drives any signal.
+    // to reach `relayInterruptSignal` before this test drives any signal.
     await Promise.resolve();
     await Promise.resolve();
     await Promise.resolve();
@@ -528,41 +527,112 @@ describe("relocateOutOfHostCgroupIfNeeded", () => {
     // Spied BEFORE emitting: an unspied call would signal this test runner's
     // own process group.
     const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
-    try {
-      process.emit("SIGINT");
-      process.emit("SIGTERM");
-      expect(killSpy).toHaveBeenNthCalledWith(1, -4242, "SIGINT");
-      expect(killSpy).toHaveBeenNthCalledWith(2, -4242, "SIGTERM");
-
+    // Settling the fake child lives in its own `finally`-reached step: if an
+    // assertion above throws, the relay's listener must still be disposed of
+    // before this test ends, or it leaks into every test that runs after -
+    // exactly what happened while running this round's ablation.
+    let settled = false;
+    const settle = async (): Promise<void> => {
+      if (settled) return;
+      settled = true;
       const fake = spawnMocks.lastFake;
-      if (fake === null) throw new Error("spawn was never called");
+      if (fake === null) return;
       fake.child.emit("spawn");
       fake.ack.end("\n");
       await new Promise((resolve) => setImmediate(resolve));
       fake.child.emit("exit", 0, null);
+    };
+    try {
+      process.emit("SIGINT");
+      expect(killSpy).toHaveBeenCalledTimes(1);
+      expect(killSpy).toHaveBeenCalledWith(-4242, "SIGINT");
 
+      await settle();
       await expect(promise).resolves.toEqual({
         kind: "completed",
         exitCode: 0,
       });
-      // The disposer removed both listeners once the promise settled - a
-      // leaked pair would still fire (and still try to signal a dead pid) on
-      // every SIGINT/SIGTERM this test worker receives afterwards.
+      // The disposer removed the listener once the promise settled - a
+      // leaked one would still fire (and still try to signal a dead pid) on
+      // every SIGINT this test worker receives afterwards.
       expect(process.listenerCount("SIGINT")).toBe(sigintBefore);
-      expect(process.listenerCount("SIGTERM")).toBe(sigtermBefore);
     } finally {
+      await settle();
       killSpy.mockRestore();
     }
 
-    // Ablation: in `relayTerminationSignals`, change `process.kill(-pid,
-    // signal)` to `process.kill(pid, signal)` → this test fails: `killSpy` is
-    // called with the positive pid instead of `-pid`.
+    // Ablation: in `relayInterruptSignal`, change `process.kill(-pid,
+    // "SIGINT")` to `process.kill(pid, "SIGINT")` → this test fails:
+    // `killSpy` is called with the positive pid instead of `-pid`.
+  });
+
+  it("does NOT forward SIGTERM - unconditionally, because the likeliest sender is the host unit's own stop and relaying that would kill the update the child was sent away to finish", async () => {
+    // The P1 this test pins: `systemctl --user stop`'s default
+    // `KillMode=control-group` SIGTERMs every process in the host unit's
+    // cgroup, this waiting parent included. Forwarding that SIGTERM to the
+    // child's process group would hand the relocated update its own stop
+    // signal at exactly the moment relocation exists to survive it.
+    mocks.cgroup = V2_HOST_UNIT_CGROUP;
+    mocks.packaged = true;
+    process.argv = packagedArgv() as string[];
+    process.execPath = "/slot/traycer";
+    process.execArgv = [];
+    spawnMocks.childPid = 4242;
+    spawnMocks.respond = null;
+    // Captured BEFORE the relay runs, so this proves no SIGTERM listener was
+    // installed AT ALL - the stronger pin, since a listener that merely
+    // chooses not to fire today is a bug waiting to come back.
+    const sigtermBefore = process.listenerCount("SIGTERM");
+
+    const promise = relocateOutOfHostCgroupIfNeeded("host update", {});
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    // Settling the fake child lives in its own `finally`-reached step, same
+    // as the SIGINT test above: if an assertion throws (as the ablation for
+    // THIS test is designed to make happen), the promise must still be
+    // driven to completion, or this test's own relay listeners leak into
+    // every test that runs after it.
+    let settled = false;
+    const settle = async (): Promise<void> => {
+      if (settled) return;
+      settled = true;
+      const fake = spawnMocks.lastFake;
+      if (fake === null) return;
+      fake.child.emit("spawn");
+      fake.ack.end("\n");
+      await new Promise((resolve) => setImmediate(resolve));
+      fake.child.emit("exit", 0, null);
+    };
+    try {
+      expect(process.listenerCount("SIGTERM")).toBe(sigtermBefore);
+      process.emit("SIGTERM");
+      expect(killSpy).not.toHaveBeenCalled();
+
+      await settle();
+      await expect(promise).resolves.toEqual({
+        kind: "completed",
+        exitCode: 0,
+      });
+    } finally {
+      await settle();
+      killSpy.mockRestore();
+    }
+
+    // Ablation (§ablation table): reinstate a SIGTERM listener/forwarding in
+    // `relayInterruptSignal` → this test reddens on the FIRST assertion
+    // (`listenerCount("SIGTERM")` grows by one the moment the relay
+    // installs), before the emitted-signal assertion even runs. Once the
+    // isolation fix above is in place, THIS is the only test that reddens -
+    // the "no pid" test below must not be collateral damage any more.
   });
 
   it("a child with no pid installs no relay - process.kill is never called", async () => {
     // The spawn-failure shape: Node can hand back a `ChildProcess` with no
-    // pid at all. `relayTerminationSignals` refuses to install anything for
-    // it rather than signalling a pid that does not exist.
+    // pid at all. `relayInterruptSignal` refuses to install anything for it
+    // rather than signalling a pid that does not exist.
     mocks.cgroup = V2_HOST_UNIT_CGROUP;
     mocks.packaged = true;
     process.argv = packagedArgv() as string[];

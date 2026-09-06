@@ -55,8 +55,29 @@ import type {
 // controller without touching schtasks/taskkill.
 export type ProcessRunner = typeof runCommand;
 
+/**
+ * The clock the kill loop bounds its carry-over with, in epoch MICROSECONDS -
+ * the same unit and epoch the scan projects `CreationDate` into, which is the
+ * only reason the two can be compared at all.
+ *
+ * `Date.now()` is milliseconds, so this is coarser than its unit suggests: it
+ * names an instant up to 999us EARLIER than the true one. That direction is the
+ * safe one. The value is only ever used as an upper bound on "the victim still
+ * held this pid", so being early can only refuse a row that might have been
+ * attributable - never admit one that is not.
+ */
+export function epochMicrosNow(): number {
+  return Date.now() * 1000;
+}
+
+/** Seams the kill loop needs from the outside world. */
+export interface WindowsControllerDeps {
+  readonly now: () => number;
+}
+
 export function createWindowsController(
   runner: ProcessRunner | null,
+  deps: WindowsControllerDeps,
 ): ServiceController {
   const unverifiedRun: ProcessRunner = runner ?? runCommand;
   const run: ProcessRunner = async (command, args, options) => {
@@ -65,11 +86,11 @@ export function createWindowsController(
   };
   return {
     install: (options) => installService(options, run),
-    uninstall: (options) => uninstallService(options, run),
+    uninstall: (options) => uninstallService(options, run, deps),
     status: (label) => statusService(label),
-    stop: (label) => stopService(label, run),
+    stop: (label) => stopService(label, run, deps),
     start: (label) => startService(label, run),
-    restart: (label) => restartService(label, run),
+    restart: (label) => restartService(label, run, deps),
     hostStartAdoptionLabel: (label) => Promise.resolve(label.id),
     // No Desktop/SMAppService split on Windows, so the restart halves are the
     // stop and start `host restart` already performed - the named seam exists
@@ -77,7 +98,7 @@ export function createWindowsController(
     // never set: `stopService` taskkills and waits, so nothing survives to
     // need a recycle.
     stopForRestart: async (label) => {
-      await stopService(label, run);
+      await stopService(label, run, deps);
       return { forcedRecycle: false };
     },
     relaunchAfterRestart: (label) => startService(label, run),
@@ -270,6 +291,7 @@ async function removeStagedTaskDefinition(
 async function uninstallService(
   options: UninstallServiceOptions,
   run: ProcessRunner,
+  deps: WindowsControllerDeps,
 ): Promise<void> {
   const taskName = windowsTaskName(options.label);
   await run("schtasks", ["/End", "/TN", taskName], {
@@ -280,7 +302,7 @@ async function uninstallService(
   });
   // Reap the orphaned host tree so the host doesn't keep running (and serving
   // its port) after the task is deleted.
-  await killHostProcessTree(options.label, run);
+  await killHostProcessTree(options.label, run, deps);
   await run("schtasks", ["/Delete", "/TN", taskName, "/F"], {
     env: undefined,
     cwd: undefined,
@@ -358,6 +380,7 @@ async function statusService(label: ServiceLabel): Promise<ServiceStatus> {
 async function stopService(
   label: ServiceLabel,
   run: ProcessRunner,
+  deps: WindowsControllerDeps,
 ): Promise<void> {
   await run("schtasks", ["/End", "/TN", windowsTaskName(label)], {
     env: undefined,
@@ -365,7 +388,7 @@ async function stopService(
     timeoutMs: WINDOWS_SCHTASKS_END_TIMEOUT_MS,
     tolerateNonZeroExit: true,
   });
-  await killHostProcessTree(label, run);
+  await killHostProcessTree(label, run, deps);
   // The force-kill above never lets the host honor its "remove pid.json on
   // graceful shutdown" contract, and metadata left behind makes this
   // deliberate stop indistinguishable from a crash - the desktop's health
@@ -428,12 +451,40 @@ async function stopService(
 async function killHostProcessTree(
   label: ServiceLabel,
   run: ProcessRunner,
+  deps: WindowsControllerDeps,
 ): Promise<void> {
   // What earlier rounds killed, with the age each had when it was killed. The
   // loop's memory: once a parent is dead the table can no longer prove its
   // children belong to the slot, and this is the only thing that still can.
-  const priorVictims = new Map<number, number>();
+  const priorVictims = new Map<number, WindowsKillVictim>();
+  // The other half of that memory: pids an earlier round could place neither in
+  // the slot nor out of it, against the age the row wearing each one had then.
+  // Uncertainty has to cross a round boundary for the same reason a kill does.
+  // The row that made a pid undecided is under no obligation to still be there
+  // next round - it can exit, or spawn a child and then exit - and without this
+  // the child arrives as an ordinary orphan claiming a pid nothing remembers,
+  // which reads as convergence. Only the age is kept: `classifyAgainstSuspect`
+  // shows a suspect's upper bound cannot change any verdict.
+  const priorSuspects = new Map<number, number>();
+  // The pair, by reference: the maps below are mutated in place at the end of
+  // every round, so this is built once and always reflects the latest round.
+  const memory: WindowsKillMemory = {
+    victims: priorVictims,
+    suspects: priorSuspects,
+  };
   for (let round = 0; round <= WINDOWS_KILL_CONVERGENCE_ROUNDS; round += 1) {
+    // BEFORE the scan, and that ordering is the soundness argument for the
+    // whole carry-over: every victim this round selects is one the scan below
+    // observed alive, so each was still holding its pid at this instant. Read
+    // after the scan - or worse, just before the kills - the bound would cover
+    // time in which the victim may already have exited and its pid been reused.
+    //
+    // Strictly, "existed at this instant" holds for every victim the scan could
+    // have observed: one BORN during the enumeration did not exist here, and
+    // gets `created > seenAliveAt` - an empty window that attributes nothing to
+    // it. That is the safe direction: an empty window refuses every claim on
+    // that pid rather than admitting one it cannot support.
+    const seenAliveAt = deps.now();
     const table = await scanSlotProcessTable(label, run);
     if (table === null) {
       // Before the first kill this refuses to start; after one it refuses to
@@ -452,27 +503,67 @@ async function killHostProcessTree(
     // The kill boundary, and the only place a pid has to be POSITIVE: the scan
     // and its algebra work over an unfiltered table that includes pid 0, and
     // `isKillableProcessId` is what keeps 0 - and our own pid - out of an argv.
-    const pids = uniqueProcessIds(
-      computeWindowsHostKillSet(table, process.pid, priorVictims),
-    );
-    // Converged, and the only success: a scan taken AFTER the previous round's
-    // kills found nothing left in this slot. Round 0 reaches here whenever
-    // there was never anything to kill, which is the ordinary stop of a host
-    // that already exited - one scan, no kills.
-    if (pids.length === 0) return;
+    const killSet = computeWindowsHostKillSet(table, process.pid, memory);
+    const pids = uniqueProcessIds(killSet.kill);
+    const unattributed = uniqueProcessIds(killSet.unattributed);
+    if (pids.length === 0) {
+      // Nothing left to kill - but that is only convergence if nothing is
+      // UNDECIDED. A row claiming a killed host process as its parent, born
+      // after that parent was last seen alive, may be a stranger wearing a
+      // recycled pid or may be a host child spawned in its parent's last
+      // moments. Killing it risks a stranger; ignoring it reports a stop while
+      // a host process runs on and the caller goes off to delete the pid
+      // metadata. Neither is ours to choose silently, so the stop fails and
+      // names them - them and everything under them, since a subtree hanging
+      // off an undecided process is exactly as undecided as its root.
+      if (unattributed.length > 0) {
+        // "Run the command again" was the wrong advice and is deliberately
+        // gone: a rerun repeats this scan against the same processes and
+        // reaches the same verdict, so it sends the user around the loop
+        // rather than out of it. Ending the named processes is what changes
+        // the answer, and it is the one instruction that also works when they
+        // turn out to be strangers wearing recycled pids.
+        throw cliError({
+          code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+          message:
+            `refusing to report the ${label.id} host stopped: ${unattributed.length} process(es) could be neither tied to this slot nor ruled out of it ` +
+            "(each claims a process this stop killed - or one it could not place - as its parent, or descends from one, " +
+            "and was created after that parent was last seen alive or carries an unreadable creation time): " +
+            `pids ${unattributed.join(", ")}. End them from Task Manager, then retry.`,
+          details: { label: label.id, unattributedPids: unattributed },
+          exitCode: 1,
+        });
+      }
+      // Converged, and the only success: a scan taken AFTER the previous
+      // round's kills found nothing left in this slot and nothing undecided.
+      // Round 0 reaches here whenever there was never anything to kill, which
+      // is the ordinary stop of a host that already exited - one scan, no
+      // kills.
+      return;
+    }
     // Out of kill passes with the slot still occupied. Falling through here
     // would report exactly what a converged scan reports, which is the one
     // thing this function must never do: name the survivors instead, so the
     // caller's error says which processes to deal with.
     if (round === WINDOWS_KILL_CONVERGENCE_ROUNDS) {
+      // The undecided rows travel with the survivors. This exit is the one the
+      // user acts on, and a list that names only what we could prove sends
+      // them to Task Manager with half the slot: the pids we could not place
+      // are as likely to be what is holding the install dir open, and they are
+      // the ones nobody else is going to point at.
+      const undecided =
+        unattributed.length > 0
+          ? ` ${unattributed.length} further process(es) could not be placed either way: pids ${unattributed.join(", ")}.`
+          : "";
       throw cliError({
         code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
         message:
-          `${label.id} host processes are still running after ${WINDOWS_KILL_CONVERGENCE_ROUNDS} kill rounds (pids ${pids.join(", ")}). ` +
-          "Retry, or end them from Task Manager.",
+          `${label.id} host processes are still running after ${WINDOWS_KILL_CONVERGENCE_ROUNDS} kill rounds (pids ${pids.join(", ")}).${undecided} ` +
+          "End them from Task Manager, then retry.",
         details: {
           label: label.id,
           survivingPids: pids,
+          unattributedPids: unattributed,
           killRounds: WINDOWS_KILL_CONVERGENCE_ROUNDS,
         },
         exitCode: 1,
@@ -484,8 +575,23 @@ async function killHostProcessTree(
     // always in the table it was selected from, so the fallback age is
     // unreachable; 0 is the value the next round refuses to link anything to,
     // which is the right way for it to be wrong.
+    //
+    // A pid killed again in a later round overwrites its entry, and that
+    // round's `seenAliveAt` is the honest bound: its scan saw the pid alive
+    // too, so the interval in which the pid was demonstrably still the
+    // victim's genuinely extends to there.
     const created = new Map(table.map((row) => [row.processId, row.created]));
-    for (const pid of pids) priorVictims.set(pid, created.get(pid) ?? 0);
+    for (const pid of pids) {
+      priorVictims.set(pid, { created: created.get(pid) ?? 0, seenAliveAt });
+    }
+    // Recorded from the same snapshot, and only ever added to: a pid this round
+    // could not place stays undecided for the rest of the loop even if the next
+    // scan does not list it at all, which is precisely the case the memory
+    // exists for. A later round that reaches the same pid again overwrites the
+    // age with the incarnation that round saw.
+    for (const pid of unattributed) {
+      priorSuspects.set(pid, created.get(pid) ?? 0);
+    }
   }
 }
 
@@ -676,6 +782,7 @@ function parseSchtasksCsvRow(stdout: string): readonly string[] | null {
 async function restartService(
   label: ServiceLabel,
   run: ProcessRunner,
+  deps: WindowsControllerDeps,
 ): Promise<void> {
   const taskName = windowsTaskName(label);
   await run("schtasks", ["/End", "/TN", taskName], {
@@ -686,7 +793,7 @@ async function restartService(
   });
   // Reap the orphaned host tree before re-running, otherwise the old node keeps
   // its port + install dir and the fresh task races a stale host.
-  await killHostProcessTree(label, run);
+  await killHostProcessTree(label, run, deps);
   // Restart reuses the verified start path (baseline + post-/Run evidence)
   // so a stop-then-start that the scheduler accepts but never spawns fails
   // with Last Run Result instead of a silent no-op.
@@ -791,7 +898,10 @@ function buildSlotProcessTableScanScript(hostHome: string): string {
     // from the same snapshot, or the ages being compared are from two reads.
     "$table = @(Get-CimInstance Win32_Process)",
     "$created = @{}",
-    "foreach ($row in $table) { $created[[int]$row.ProcessId] = $row.CreationDate }",
+    "foreach ($row in $table) {",
+    "  if ($null -eq $row.CreationDate) { $created[[int]$row.ProcessId] = $null }",
+    "  else { $created[[int]$row.ProcessId] = $row.CreationDate.ToUniversalTime() }",
+    "}",
     "$rows = $table | ForEach-Object {",
     ...SLOT_MATCH_SCRIPT_LINES,
     ...PARENT_EDGE_VALIDATION_SCRIPT_LINES,
@@ -804,7 +914,7 @@ function buildSlotProcessTableScanScript(hostHome: string): string {
     // parent that is in no live table, so the validation above zeroes it - and
     // that is precisely the row the victim carry-over has to recognise.
     "      ClaimedParentProcessId = [int]$_.ParentProcessId",
-    "      Created = $createdMs",
+    "      Created = $createdMicros",
     "      Slot = $hostMatch",
     "    }",
     "}",
@@ -812,17 +922,31 @@ function buildSlotProcessTableScanScript(hostHome: string): string {
   ].join("\n");
 }
 
-// Sets `$createdMs` for the pipeline row in `$_`: how old the process is, as
-// milliseconds since the Unix epoch, and 0 when Windows reports no creation
-// time at all (pid 0 and System have none). Milliseconds rather than the native
-// FILETIME because a FILETIME is ~1.3e17 - past the point where JSON numbers
-// stay exact - while epoch milliseconds is ~1.7e12 and survives the round trip
-// intact. The unit only ever gets COMPARED, never displayed, so its precision
-// just has to beat the gap between a parent and the child it forks.
+// Sets `$createdMicros` for the pipeline row in `$_`: when the process started,
+// as MICROSECONDS since the Unix epoch, and 0 when Windows reports no creation
+// time at all (pid 0 and System have none).
+//
+// Microseconds, not milliseconds, because the carry-over compares a child's
+// birth against a victim's and milliseconds are too coarse to separate them: a
+// previous holder of a pid can fork a child and exit, and the replacement be
+// created, well inside one millisecond - both then project to the same value
+// and a `<=` comparison attributes the stranger to the victim. CIM datetimes
+// carry microseconds, so the precision is really there to be used.
+//
+// Not the native FILETIME (~1.3e17, past exact JSON integers) and not ticks
+// (100ns, ~1.7e16 - also past). Epoch microseconds is ~1.7e15, which is under
+// 2^53 and survives the round trip intact. `Ticks / 10` converts a TimeSpan's
+// 100ns units to microseconds; the floor keeps it an integer rather than
+// letting PowerShell hand back a rounded double.
+//
+// `.ToUniversalTime()` for the same reason the edge validation needs it: a
+// local DateTime is ambiguous across a DST fall-back, and an hour in which
+// every timestamp can mean two instants is an hour in which "older" is not a
+// fact. The epoch these are measured from is UTC, so the operand must be too.
 const ROW_CREATION_SCRIPT_LINES: readonly string[] = [
-  "    $createdMs = 0",
+  "    $createdMicros = 0",
   "    if ($null -ne $_.CreationDate) {",
-  "      $createdMs = [long]($_.CreationDate.ToUniversalTime() - [datetime]'1970-01-01').TotalMilliseconds",
+  "      $createdMicros = [long][math]::Floor(($_.CreationDate.ToUniversalTime() - [datetime]'1970-01-01').Ticks / 10)",
   "    }",
 ];
 
@@ -830,9 +954,17 @@ const ROW_CREATION_SCRIPT_LINES: readonly string[] = [
 // snapshot can still vouch for it, and 0 when it cannot. A missing
 // `CreationDate` on either end (pid 0 and System have none) is uncertainty, so
 // it fails closed to 0 like every other unverifiable edge.
+//
+// BOTH operands are normalised to UTC before they are compared. `CreationDate`
+// arrives as a local DateTime, and local time is not monotonic: across a DST
+// fall-back the same wall-clock hour happens twice, so a process started in the
+// second pass can compare as OLDER than one started in the first. That is not a
+// cosmetic ordering error here - it is an edge this scan would then VALIDATE,
+// attaching a stranger to a slot process and putting it in the kill set.
 const PARENT_EDGE_VALIDATION_SCRIPT_LINES: readonly string[] = [
   "    $parentId = [int]$_.ParentProcessId",
-  "    $childCreated = $_.CreationDate",
+  "    $childCreated = $null",
+  "    if ($null -ne $_.CreationDate) { $childCreated = $_.CreationDate.ToUniversalTime() }",
   "    if ($parentId -le 0 -or -not $created.ContainsKey($parentId)) {",
   "      $parentId = 0",
   "    } else {",
@@ -912,16 +1044,19 @@ export interface WindowsProcessTableRow {
   // field refuses to carry.
   readonly parentProcessId: number;
   // The parent id the row CLAIMS, with no validation applied. Its only use is
-  // the cross-round victim carry-over: a process whose parent this loop killed
-  // has a claimed parent that no longer appears in any table, so
-  // `parentProcessId` above is 0 and the claim is the only thing left linking
-  // the two. Never treat it as an edge on its own - `created` is what makes it
-  // safe (see `computeWindowsHostKillSet`).
+  // the cross-round carry-over: a process whose parent this loop killed - or
+  // could not place, and which has since gone - has a claimed parent that no
+  // longer appears in any table, so `parentProcessId` above is 0 and the claim
+  // is the only thing left linking the two. Never treat it as an edge on its
+  // own - `created` is what makes it safe (see `computeWindowsHostKillSet`).
   readonly claimedParentProcessId: number;
-  // Milliseconds since the Unix epoch, or 0 when Windows reports no creation
-  // time. What turns a claimed parent id into evidence: a process cannot
-  // predate its own parent, so an id whose claimed parent is YOUNGER than it is
-  // a recycled id rather than an ancestry.
+  // MICROSECONDS since the Unix epoch, or 0 when Windows reports no creation
+  // time. Microseconds because the scan floors `CreationDate` to them and the
+  // carry-over compares row ages against a `Date.now()`-derived bound in the
+  // same unit - a truncation to milliseconds on one side of that comparison
+  // would round a child's birth back below its parent's. What turns a claimed
+  // parent id into evidence: a process cannot predate its own parent, so an id
+  // whose claimed parent is YOUNGER than it is a recycled id, not an ancestry.
   readonly created: number;
   // Whether the row's executable path or command line matches this slot.
   readonly slot: boolean;
@@ -954,6 +1089,7 @@ function parseProcessTableJson(
   // on Windows PowerShell 5.1 - accept both shapes, like the detail parser.
   const values = Array.isArray(parsed) ? parsed : [parsed];
   const rows: WindowsProcessTableRow[] = [];
+  const seenProcessIds = new Set<number>();
   for (const value of values) {
     if (value === null || typeof value !== "object") return null;
     const record = value as Record<string, unknown>;
@@ -980,6 +1116,14 @@ function parseProcessTableJson(
     ) {
       return null;
     }
+    // A pid twice in one snapshot is not a table this code can reason over: the
+    // parent map, the child map and the age lookup would each silently keep a
+    // different one of the duplicates depending on iteration order, and the kill
+    // set would depend on which. `Get-CimInstance` cannot produce it, so a
+    // response that does is malformed - and malformed is refused whole, exactly
+    // like every other shape violation above.
+    if (seenProcessIds.has(processId)) return null;
+    seenProcessIds.add(processId);
     rows.push({
       processId,
       parentProcessId,
@@ -1011,27 +1155,40 @@ function parseProcessTableJson(
  * seeding from it spares the branch above the CLI while leaving the CLI's own
  * siblings - the detached upgrade finalizer among them - to be killed.
  *
- * `priorVictims` (pid -> creation time) is what the kill loop remembers from
- * its earlier rounds, and it exists because killing a parent DESTROYS the
- * evidence linking its children to the slot. A process the host spawned after
- * round 0's snapshot shows up in round 1 with its parent already dead: the
- * table cannot vouch for that edge, so the row arrives with `parentProcessId`
- * 0, and if the child is a shell or a provider binary its own path matches
- * nothing. It would be an orphan the loop calls convergence on. A row whose
- * CLAIMED parent is a remembered victim is therefore treated as a descendant of
- * a verified slot process - seeded, not merely walked to.
+ * `memory` is what the kill loop remembers from its earlier rounds. Its victims
+ * exist because killing a parent DESTROYS the evidence linking its children to
+ * the slot. A process the host spawned after round 0's snapshot shows up in
+ * round 1 with its parent already dead: the table cannot vouch for that edge, so
+ * the row arrives with `parentProcessId` 0, and if the child is a shell or a
+ * provider binary its own path matches nothing. It would be an orphan the loop
+ * calls convergence on. A row whose CLAIMED parent is a remembered victim, and
+ * whose birth falls inside that victim's known lifetime, is therefore treated as
+ * a descendant of a verified slot process - seeded, not merely walked to. See
+ * `classifyAgainstVictim` for why a lifetime, and why a claim that falls outside
+ * it is reported rather than decided.
  *
- * Creation time is what keeps that safe against pid reuse: a child cannot
- * predate its own parent, so a row claiming a recycled victim id is rejected
- * the moment it turns out to be OLDER than the victim was. An unknown creation
- * time on either end (0) is refused rather than assumed, which is the same way
- * the scan script treats an age it cannot read.
+ * Its suspects are the same memory for rows an earlier round could not place.
+ * They carry no verdict, only the fact that the pid is in question: a row
+ * claiming one is undecided too (`classifyAgainstSuspect`), because deciding it
+ * would mean deciding its parent, which is the thing this loop already said it
+ * could not do.
+ *
+ * `unattributed` carries those undecidable rows out to the caller, TOGETHER WITH
+ * EVERYTHING BELOW THEM, walked over the same validated edges as the kill set.
+ * An undecided root makes its whole subtree undecided - those children are
+ * verified children of a process we cannot place, so they are exactly as
+ * unplaceable - and naming only the root would send the caller after one pid
+ * while the rest of the branch keeps the install dir open. They are all spared
+ * from `kill` (killing on a claim we cannot verify is the mistake this scan
+ * exists to prevent), and the loop must not read their absence from `kill` as
+ * convergence, because a host child spawned just before its parent died looks
+ * exactly like this.
  */
 export function computeWindowsHostKillSet(
   table: readonly WindowsProcessTableRow[],
   cliPid: number,
-  priorVictims: ReadonlyMap<number, number>,
-): readonly number[] {
+  memory: WindowsKillMemory,
+): WindowsHostKillSet {
   const children = new Map<number, number[]>();
   const parents = new Map<number, number>();
   const slot = new Set<number>();
@@ -1046,35 +1203,196 @@ export function computeWindowsHostKillSet(
     if (row.slot) slot.add(row.processId);
   }
   const seeds = new Set<number>(slot);
+  const undecided = new Set<number>();
   for (const row of table) {
-    if (isChildOfVictim(row, priorVictims)) seeds.add(row.processId);
+    const claim = classifyCarryOverClaim(row, memory);
+    if (claim === "seed") seeds.add(row.processId);
+    else if (claim === "unattributed") undecided.add(row.processId);
   }
   // Seeded from LIVE rows only. A victim's own pid is deliberately never seeded:
   // it is dead, so a row bearing it again is a different process wearing a
   // recycled id, and killing it is the exact mistake this whole scan exists to
   // avoid.
   const victims = withDescendants(seeds, children);
+  const suspects = withDescendants(undecided, children);
   const spared = withDescendants(new Set([cliPid]), children);
   for (const ancestor of ancestorsOf(cliPid, parents)) {
     if (!slot.has(ancestor)) spared.add(ancestor);
   }
-  return [...victims]
-    .filter((pid) => !spared.has(pid))
-    .sort((left, right) => left - right);
+  return {
+    kill: [...victims]
+      .filter((pid) => !spared.has(pid))
+      .sort((left, right) => left - right),
+    // The CLI's own branch is spared from this too. A protected row that
+    // happens to claim a victim pid is not an open question about the host - it
+    // is a process we have already decided never to kill - and reporting it
+    // would fail every stop issued from a Traycer-hosted terminal. Rows already
+    // in `kill` drop out for the mirror-image reason: a subtree can hang off an
+    // undecided root and still be slot-matched in its own right, and a pid this
+    // scan has decided to kill is not an open question either. Reporting it in
+    // both lists would put the same pid in front of the user twice, in two
+    // contradictory roles.
+    unattributed: [...suspects]
+      .filter((pid) => !spared.has(pid) && !victims.has(pid))
+      .sort((left, right) => left - right),
+  };
 }
 
-// Whether this row is a child of a process an earlier kill round destroyed.
-// Both ages have to be known and the parent's must not be later than the
-// child's: an id whose claimed parent is YOUNGER than it cannot be its parent,
-// which is what a reused pid looks like from here.
-function isChildOfVictim(
+/**
+ * A pid this loop has killed, and the interval in which that pid demonstrably
+ * belonged to the victim.
+ *
+ * `seenAliveAt` is the clock sampled once per round, in epoch microseconds,
+ * BEFORE the scan that selects the round's victims runs. Before the scan, not
+ * before the kill, and the difference is the whole soundness argument: the scan
+ * observes the victim alive at some instant AFTER the sample, so the pid was
+ * still the victim's at the sampled instant. Sampling before the kill proves
+ * nothing of the sort - the victim can exit on its own between the scan and the
+ * kill, its pid be reused, and the replacement fork a child, all before the
+ * clock is read, and that child's birth then falls inside a window it has no
+ * business being in.
+ */
+export interface WindowsKillVictim {
+  readonly created: number;
+  readonly seenAliveAt: number;
+}
+
+/**
+ * What earlier rounds of the kill loop remember, and the only thing carrying
+ * either kind of knowledge across a scan boundary.
+ *
+ * `victims` is what the loop killed, by pid. `suspects` is what it could place
+ * neither in the slot nor out of it, by pid, against the creation time of the
+ * incarnation that round saw - the age is all a suspect needs, because
+ * `classifyAgainstSuspect` has no upper bound to compare against.
+ *
+ * One value rather than two parameters because the two halves are never
+ * meaningful apart: every round records into both from the same snapshot, and
+ * every classification consults both in a fixed order.
+ */
+export interface WindowsKillMemory {
+  readonly victims: ReadonlyMap<number, WindowsKillVictim>;
+  readonly suspects: ReadonlyMap<number, number>;
+}
+
+/**
+ * What a round's scan says to do, split by what it can PROVE.
+ *
+ * `kill` is the ordinary answer. `unattributed` is the rows that claim a killed
+ * or already-undecided process as their parent but cannot be tied to it - born
+ * after the victim was last seen alive, or carrying an unreadable creation time
+ * - plus everything that hangs off those rows. They are neither killed (they may
+ * be strangers) nor ignored (they may be the host's children), and the loop
+ * refuses to report a stop rather than pick one silently.
+ */
+export interface WindowsHostKillSet {
+  readonly kill: readonly number[];
+  readonly unattributed: readonly number[];
+}
+
+// How a row that claims a remembered pid as its parent is classified.
+//
+//   "seed"         - born inside the victim's proven lifetime; kill it.
+//   "unattributed" - claims the pid but cannot be tied to it or ruled out of it.
+//   "none"         - not a carry-over question at all.
+type CarryOverClaim = "seed" | "unattributed" | "none";
+
+// Whether this row was created BY a process an earlier round killed, or by one
+// it could not place.
+//
+// The gate is the row's own validated edge, and it is kept honestly: under the
+// pre-scan bound it is redundant on legitimate input. A row with a validated
+// live edge has a parent the scan found in this very table, and a live parent is
+// neither a killed victim nor a vanished suspect, so the rules below would
+// refuse it anyway. It stays as the scan's own verdict, checked first because it
+// is the cheaper and more direct fact, and its test is framed as defensive
+// rather than as a behaviour only it produces.
+//
+// Victims are checked before suspects because a pid can be both - a row this
+// loop could not place in one round can be killed in a later one, once
+// something in the table proves it belongs to the slot - and a kill is the
+// stronger fact: it says what the pid WAS, where a suspicion only says that
+// nobody could tell.
+function classifyCarryOverClaim(
   row: WindowsProcessTableRow,
-  priorVictims: ReadonlyMap<number, number>,
-): boolean {
-  const victimCreated = priorVictims.get(row.claimedParentProcessId);
-  if (victimCreated === undefined) return false;
-  if (victimCreated === 0 || row.created === 0) return false;
-  return victimCreated <= row.created;
+  memory: WindowsKillMemory,
+): CarryOverClaim {
+  if (row.parentProcessId !== 0) return "none";
+  const victim = memory.victims.get(row.claimedParentProcessId);
+  if (victim !== undefined) return classifyAgainstVictim(row.created, victim);
+  const suspectCreated = memory.suspects.get(row.claimedParentProcessId);
+  if (suspectCreated === undefined) return "none";
+  return classifyAgainstSuspect(row.created, suspectCreated);
+}
+
+// A claim on a pid this loop killed, decided by a LIFETIME WINDOW.
+//
+// The question is lineage, and lineage is a claim about the past: which
+// incarnation of this pid created this row. An earlier version of this code
+// tried to answer it by inspecting the pid's CURRENT holder, which cannot work
+// - a pid reused and vacated between two scans leaves no trace in the table, so
+// a stranger forked by that intermediate holder arrives looking exactly like the
+// victim's own child.
+//
+// The window does answer it, provided the upper bound is honest. Pid reuse is
+// sequential: from `victim.created` until the victim died, that pid was the
+// victim's and nobody else's. `seenAliveAt` is sampled before the scan that
+// found the victim alive, so the pid was still the victim's at that instant, and
+// a row claiming it that was born at or before then was created BY it.
+//
+// The order of the three answers is the order of what they can PROVE, and the
+// lower bound comes first because it proves the most. A row OLDER than the
+// victim cannot be the victim's child - a process cannot predate its own parent
+// - so the claimed id is somebody else's, an id this row has worn since before
+// the victim existed. That is a decided question, not an open one: reporting it
+// would fail the stop over a long-lived stranger that any retry finds sitting in
+// exactly the same place, which is a refusal nothing can clear.
+//
+// A row born after `seenAliveAt` is the genuinely open case. It may be the
+// host's child, spawned in the moments before its parent died; it may belong to
+// whoever holds that pid next. Nothing in the table distinguishes them, so it is
+// reported as `unattributed` and the caller fails the stop rather than silently
+// killing a stranger or silently sparing a host process.
+//
+// Both ends are `<=`. A child born in the same microsecond as its parent is
+// ordinary; a child born in the same microsecond as the sample was observed
+// alive by the scan that followed it.
+function classifyAgainstVictim(
+  created: number,
+  victim: WindowsKillVictim,
+): CarryOverClaim {
+  // An unreadable age on either side leaves nothing to compare. This is checked
+  // before the lower bound because 0 would pass it - a row of age 0 is older
+  // than every real victim - and "we could not read an age" must not be allowed
+  // to masquerade as the proof that clears a claim.
+  if (victim.created === 0 || created === 0) return "unattributed";
+  if (created < victim.created) return "none";
+  if (created <= victim.seenAliveAt) return "seed";
+  return "unattributed";
+}
+
+// A claim on a pid this loop could not place. Uncertainty is inherited: a
+// process whose parent we cannot tie to the slot cannot itself be tied to the
+// slot, and cannot be ruled out of it either.
+//
+// The one thing that CAN be ruled out is the same lower bound as above, for the
+// same reason - a row older than the pid's remembered incarnation was created by
+// an earlier holder, so this suspicion is not about it - and without it any
+// long-lived process that happened to claim a recycled pid would poison every
+// stop on the machine for as long as it ran.
+//
+// There is deliberately no upper bound here, and it is not a choice: a suspect's
+// `seenAliveAt` cannot change any verdict. Inside it the row is provably the
+// suspect's child, and a suspect's child inherits its suspicion; outside it the
+// row may be the suspect's or a stranger's, which is undecided too. Both arms
+// are `unattributed`, so the comparison is not worth the field it would need.
+function classifyAgainstSuspect(
+  created: number,
+  suspectCreated: number,
+): CarryOverClaim {
+  if (suspectCreated === 0 || created === 0) return "unattributed";
+  if (created < suspectCreated) return "none";
+  return "unattributed";
 }
 
 /**
@@ -1220,8 +1538,9 @@ function readNonEmptyString(value: unknown): string | null {
 export async function killLingeringSlotProcesses(
   label: ServiceLabel,
   runner: ProcessRunner | null,
+  deps: WindowsControllerDeps,
 ): Promise<void> {
-  await killHostProcessTree(label, runner ?? runCommand);
+  await killHostProcessTree(label, runner ?? runCommand, deps);
 }
 
 // The install swap's post-mortem (`SwapLockRecovery.describeLockHolders`):
