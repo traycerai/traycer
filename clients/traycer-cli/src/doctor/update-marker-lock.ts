@@ -201,12 +201,18 @@ function unbreakableIssue(
     arbitration.breaker === null
       ? "a breaker record that could not be parsed"
       : `pid ${String(arbitration.breaker.pid)} (since ${arbitration.breaker.startedAt})`;
+  // The future-dated cause is decided by the file's mtime, so it is reached
+  // with an unparseable payload too - where naming a "breaker" would print
+  // the placeholder above as if it were one. Only the two holder causes have
+  // a breaker by construction.
   const why =
     arbitration.cause === "breaker-live"
       ? `is held by ${breaker}, which is still running`
       : arbitration.cause === "breaker-unverifiable"
         ? `is held by ${breaker}, whose identity cannot be verified, so no contender will recover it`
-        : `is dated in the future (${breaker}) and will not be recovered until that time has passed`;
+        : arbitration.breaker === null
+          ? "is dated in the future and will not be recovered until that time has passed"
+          : `is dated in the future (written by ${breaker}) and will not be recovered until that time has passed`;
   return {
     code: DOCTOR_ISSUE_CODES.HOST_UPDATE_MARKER_LOCK_UNBREAKABLE,
     severity: "warning",

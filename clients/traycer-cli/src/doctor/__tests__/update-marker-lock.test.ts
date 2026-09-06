@@ -351,6 +351,29 @@ describe("probeUpdateMarkerLock", () => {
         DOCTOR_ISSUE_CODES.HOST_UPDATE_MARKER_LOCK_UNBREAKABLE,
       );
       expect(issue?.details).toMatchObject({ cause: "dated-in-the-future" });
+      expect(issue?.message).toContain("written by pid ");
+    });
+
+    it("names no breaker for a future-dated break file whose payload does not parse", async () => {
+      // The future-dated cause is decided by the file's MTIME, so it is
+      // reached with an empty or corrupt payload too - where a message that
+      // always names a breaker prints the "could not be parsed" placeholder
+      // as if it were one.
+      writeLock({ pid: findDeadPid(), processStartIdentity: null });
+      writeFileSync(breakPath, "{not json");
+      ageFile(breakPath, -120);
+      const issue = await probeUpdateMarkerLock({ lockPath, delay: NO_DELAY });
+      expect(issue?.code).toBe(
+        DOCTOR_ISSUE_CODES.HOST_UPDATE_MARKER_LOCK_UNBREAKABLE,
+      );
+      expect(issue?.details).toMatchObject({
+        cause: "dated-in-the-future",
+        breaker: null,
+      });
+      expect(issue?.message).toContain(
+        "is dated in the future and will not be recovered",
+      );
+      expect(issue?.message).not.toContain("could not be parsed");
     });
 
     it("reports a break file that cannot be read", async () => {

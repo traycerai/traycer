@@ -284,11 +284,12 @@ async function requestAtEndpoint<Method extends keyof HostRpcRegistry & string>(
 export async function resolveEndpoint(): Promise<HostTransportEndpoint> {
   const logger = createCliLogger(config.environment);
   const metadata = await readHostPidMetadata(config.environment);
-  // Liveness check, not just presence: a stopped/crashed host can leave a
-  // stale pid.json behind (the same reason `host status` checks
-  // `isProcessAlive`). Catching a dead pid here is what lets `mapHostRpcError`
-  // treat a transport `RPC_ERROR` as a genuine host error rather than
-  // overloading it to mean "not running".
+  // Identity check, not just presence: a stopped/crashed host can leave a
+  // stale pid.json behind, and the pid it names can since have been handed to
+  // an unrelated process (the same reason `host status` reads
+  // `publishedHostProcessGone`). Catching that record here is what lets
+  // `mapHostRpcError` treat a transport `RPC_ERROR` as a genuine host error
+  // rather than overloading it to mean "not running".
   if (metadata === null) {
     logger.warn("Host RPC endpoint resolution failed; metadata missing", {
       environment: config.environment,
@@ -296,21 +297,24 @@ export async function resolveEndpoint(): Promise<HostTransportEndpoint> {
     throw cliError({
       code: CLI_ERROR_CODES.HOST_NOT_RUNNING,
       message:
-        "traycer: host not running - pid metadata is absent, malformed, advertises an invalid local WebSocket endpoint, or names a process that is no longer alive.",
+        "traycer: host not running - pid metadata is absent, malformed, advertises an invalid local WebSocket endpoint, or names a process that is gone (exited, or a recycled pid that now belongs to an unrelated process).",
       details: null,
       exitCode: 1,
     });
   }
   if (publishedHostProcessGone(metadata)) {
-    logger.warn("Host RPC endpoint resolution failed; process is not alive", {
-      environment: config.environment,
-      hostId: metadata.hostId,
-      pid: metadata.pid,
-    });
+    logger.warn(
+      "Host RPC endpoint resolution failed; the published process is gone (exited, or a recycled pid)",
+      {
+        environment: config.environment,
+        hostId: metadata.hostId,
+        pid: metadata.pid,
+      },
+    );
     throw cliError({
       code: CLI_ERROR_CODES.HOST_NOT_RUNNING,
       message:
-        "traycer: host not running - pid metadata is absent, malformed, advertises an invalid local WebSocket endpoint, or names a process that is no longer alive.",
+        "traycer: host not running - pid metadata is absent, malformed, advertises an invalid local WebSocket endpoint, or names a process that is gone (exited, or a recycled pid that now belongs to an unrelated process).",
       details: null,
       exitCode: 1,
     });
@@ -323,7 +327,7 @@ export async function resolveEndpoint(): Promise<HostTransportEndpoint> {
     throw cliError({
       code: CLI_ERROR_CODES.HOST_NOT_RUNNING,
       message:
-        "traycer: host not running - pid metadata is absent, malformed, advertises an invalid local WebSocket endpoint, or names a process that is no longer alive.",
+        "traycer: host not running - pid metadata is absent, malformed, advertises an invalid local WebSocket endpoint, or names a process that is gone (exited, or a recycled pid that now belongs to an unrelated process).",
       details: null,
       exitCode: 1,
     });

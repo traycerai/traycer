@@ -121,12 +121,16 @@ function renderHumanStatus(
     const rows: [string, string][] = [
       ["Log", tildePath(output.bootstrapLogPath)],
     ];
-    // A non-null pidMetadata with a dead pid means the host exited
-    // (e.g. after `host stop` or a crash) but its pid.json was left
-    // behind. Surface it as stale rather than silently reporting
-    // "running" off a dead record.
+    // A non-null pidMetadata in this branch means the host exited (e.g.
+    // after `host stop` or a crash) and left its pid.json behind, or the pid
+    // that record names is live and belongs to an unrelated process the OS
+    // handed the recycled number to. Surface it as stale rather than
+    // silently reporting "running" off a record that identifies no host.
     if (output.pidMetadata !== null) {
-      rows.push(["Stale pid", `${output.pidMetadata.pid} (not alive)`]);
+      rows.push([
+        "Stale pid",
+        `${output.pidMetadata.pid} (gone, or now another process)`,
+      ]);
     }
     if (last !== undefined) {
       rows.push(["Last phase", phaseLabel(last, c)]);
