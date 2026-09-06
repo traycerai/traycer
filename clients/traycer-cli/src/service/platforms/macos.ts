@@ -226,7 +226,7 @@ async function takeoverDesktopRegistration(
   if (
     (outcome.kind === "no-metadata" || outcome.kind === "no-host") &&
     cliProbe.kind === "loaded" &&
-    cliProbe.pid !== null
+    cliProbe.running
   ) {
     throw unaskableCliLabelHost(label, cliProbe.pid, outcome.kind, null);
   }
@@ -319,17 +319,20 @@ async function takeoverDesktopRegistration(
   // already have been recycled (see `unloadCliLabelJob`).
   if (
     agentBootout.exitCode !== 0 &&
-    agentProbe.pid !== null &&
-    isProcessAlive(agentProbe.pid)
+    processMayLiveOn({
+      pid: agentProbe.pid,
+      running: agentProbe.running && outcome.kind !== "stopped",
+    })
   ) {
     throw cliError({
       code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
-      message: `service install --takeover: launchctl bootout unloaded '${desktopAgent.agentLabelId}', but its process (pid ${agentProbe.pid}) is still running after the wait, so the takeover was stopped rather than start a replacement beside it. Re-run the command once it has exited, or use the Traycer app to remove the host, or run 'traycer host service uninstall'.`,
+      message: `service install --takeover: launchctl bootout unloaded '${desktopAgent.agentLabelId}', but ${agentProbe.pid !== null ? `its process (pid ${agentProbe.pid}) is still running after the wait` : "launchd had reported it running with no pid to check and the wait did not end with its exit"}, so the takeover was stopped rather than start a replacement beside it. Re-run the command once it has exited, or use the Traycer app to remove the host, or run 'traycer host service uninstall'.`,
       details: {
         label: label.id,
         agentLabel: desktopAgent.agentLabelId,
         pid: agentProbe.pid,
-        verification: "process-alive",
+        verification:
+          agentProbe.pid !== null ? "process-alive" : "process-unverified",
       },
       exitCode: 1,
     });
@@ -406,6 +409,15 @@ type TakeoverLabelProbe =
       // carries one only for `cli-or-other`), so a bootout of either label is
       // checked against the PROCESS afterwards, not only the label.
       readonly pid: number | null;
+      // Whether launchd reports a process under the job: a positive pid, or
+      // `state = running` with no pid field printed - the same reading the
+      // desktop's parked-registration probe makes (Codex, traycer#1761); an
+      // exact match, like that probe, because no live bytes show a
+      // decorated form (`wedge.ts` documents the same rule for its tokens). A
+      // running job with no pid is still asked to stand down; only the
+      // liveness check after the bootout has nothing to key on, and it fails
+      // closed on the wait's timeout instead.
+      readonly running: boolean;
     };
 
 // Three-state `launchctl print` for the takeover's two labels: `absent` only
@@ -451,12 +463,34 @@ async function probeLabelForTakeover(
   }
   const ownership = classifyLaunchdPrintOutput(probe.raw);
   if (ownership.kind === "not-loaded") return { kind: "absent" };
-  const { pid } = probe.runState;
+  const { pid, jobState } = probe.runState;
+  const livePid = pid.kind === "observed" && pid.value > 0 ? pid.value : null;
   return {
     kind: "loaded",
     ownership,
-    pid: pid.kind === "observed" && pid.value > 0 ? pid.value : null,
+    pid: livePid,
+    running:
+      livePid !== null ||
+      (jobState.kind === "observed" &&
+        jobState.value.toLowerCase() === "running"),
   };
+}
+
+// The process evidence a takeover bootout is checked against afterwards.
+type TakeoverJobProcess = Pick<
+  Extract<TakeoverLabelProbe, { kind: "loaded" }>,
+  "pid" | "running"
+>;
+
+// After a `bootout --wait` that did NOT end with launchd's exit 0: may the
+// job's process live on? Only if launchd had reported one - and the caller
+// clears `running` once the host ANSWERED the claim with `stopped`, since
+// then it has exited and neither a recycled pid nor a stale flag is evidence.
+// With a pid, ask the kernel; without one, a running job cannot be checked
+// and the answer is yes.
+function processMayLiveOn(job: TakeoverJobProcess): boolean {
+  if (!job.running) return false;
+  return job.pid !== null ? isProcessAlive(job.pid) : true;
 }
 
 function preSplitCliLabelRefusal(
@@ -513,7 +547,8 @@ function takeoverProbeIndeterminate(
 // host proceeds, an unreachable one is booted out underneath because it is
 // the broken part - and, unlike that arm, a host nobody can ask is refused:
 //
-// `no-metadata` and `no-host` with a live launchd pid both REFUSE instead of
+// `no-metadata` and `no-host` while launchd reports a process (a positive
+// pid, or `state = running` with none printed) both REFUSE instead of
 // proceeding. launchd's pid is the supervisor; `pid.json` names its host
 // child. A supervisor that is alive while the metadata is absent, or names a
 // child that is gone, is a host in its first seconds (fresh start, or a
@@ -561,12 +596,12 @@ async function standDownLiveCliLabelHost(
   }
   const { pid } = cliProbe;
   const logger = createCliLogger(label.environment);
-  if (pid === null) {
+  if (!cliProbe.running) {
     logger.info(
       "Takeover: the CLI label is loaded with no running process; unloading it before the reload so launchd cannot start it underneath the install.",
       { label: label.id, path: cliProbe.ownership.path },
     );
-    await unloadCliLabelJob(label, null, run, retiredAgentLabelId);
+    await unloadCliLabelJob(label, cliProbe, run, retiredAgentLabelId);
     return { kind: "cli-host-stopped", cooperativeStop: "no-host" };
   }
   const outcome = await requestCooperativeShutdown(
@@ -603,7 +638,12 @@ async function standDownLiveCliLabelHost(
       { label: label.id, pid, outcome: outcome.kind },
     );
   }
-  await unloadCliLabelJob(label, pid, run, retiredAgentLabelId);
+  await unloadCliLabelJob(
+    label,
+    { pid, running: outcome.kind !== "stopped" },
+    run,
+    retiredAgentLabelId,
+  );
   return {
     kind: "cli-host-stopped",
     cooperativeStop:
@@ -620,14 +660,15 @@ async function standDownLiveCliLabelHost(
 // Desktop's agent the message says so and names the re-run.
 function unaskableCliLabelHost(
   label: ServiceLabel,
-  pid: number,
+  pid: number | null,
   metadata: "no-metadata" | "no-host",
   retiredAgentLabelId: string | null,
 ): Error {
+  const subject = pid === null ? "a running job" : `a process (pid ${pid})`;
   const state =
     metadata === "no-metadata"
-      ? `launchd reports a process (pid ${pid}) under '${label.id}' that has not published a live endpoint yet, so it could not be asked to stand down; it is most likely still starting.`
-      : `launchd reports a process (pid ${pid}) under '${label.id}', but the endpoint it published names a host that has already exited, so nothing could be asked to stand down; it is most likely between hosts (starting the next one, or exiting after the last).`;
+      ? `launchd reports ${subject} under '${label.id}' that has not published a live endpoint yet, so it could not be asked to stand down; it is most likely still starting.`
+      : `launchd reports ${subject} under '${label.id}', but the endpoint it published names a host that has already exited, so nothing could be asked to stand down; it is most likely between hosts (starting the next one, or exiting after the last).`;
   const routing =
     retiredAgentLabelId === null
       ? "Retry in a moment, or run 'traycer host service uninstall' first if it never comes up."
@@ -662,13 +703,16 @@ function unaskableCliLabelHost(
 // own success - only then: after a clean exit 0 the process is reaped, and a
 // pid read before the claim can have been recycled by the time a
 // `stopped` host's teardown is over, which `isProcessAlive` would report as
-// alive - the `pid` the caller knew is checked too.
+// alive - the process launchd reported is checked too: by pid when there
+// was one, and taken as still possible when launchd said `running` without
+// printing one. The caller clears `running` after a `stopped` answer.
 async function unloadCliLabelJob(
   label: ServiceLabel,
-  pid: number | null,
+  job: TakeoverJobProcess,
   run: ProcessRunner,
   retiredAgentLabelId: string | null,
 ): Promise<void> {
+  const { pid } = job;
   const serviceTarget = `${guiDomain()}/${label.id}`;
   const bootout = await run("launchctl", ["bootout", "--wait", serviceTarget], {
     env: undefined,
@@ -678,11 +722,10 @@ async function unloadCliLabelJob(
   });
   const postBootout = await verifyAgentBootedOut(serviceTarget, run);
   const verification =
-    postBootout === "absent" &&
-    bootout.exitCode !== 0 &&
-    pid !== null &&
-    isProcessAlive(pid)
-      ? "process-alive"
+    postBootout === "absent" && bootout.exitCode !== 0 && processMayLiveOn(job)
+      ? pid !== null
+        ? "process-alive"
+        : "process-unverified"
       : postBootout;
   if (verification === "absent") return;
   const routing = takeoverRerunRouting(retiredAgentLabelId);
@@ -691,7 +734,9 @@ async function unloadCliLabelJob(
       ? `launchctl bootout of '${label.id}' did not take effect (the job is still loaded), so the reload was stopped rather than start a replacement beside the old host.`
       : verification === "process-alive"
         ? `launchctl bootout unloaded '${label.id}', but its process (pid ${pid}) is still running after the wait, so the reload was stopped rather than start a replacement beside it.`
-        : `could not confirm that '${label.id}' was booted out (launchctl did not answer), so the reload was stopped rather than risk running two hosts.`;
+        : verification === "process-unverified"
+          ? `launchctl bootout unloaded '${label.id}', but launchd had reported the job running with no pid to check and the wait did not end with its exit, so the reload was stopped rather than start a replacement beside a process that may still be running.`
+          : `could not confirm that '${label.id}' was booted out (launchctl did not answer), so the reload was stopped rather than risk running two hosts.`;
   throw cliError({
     code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
     message: `service install --takeover: ${what} ${routing}`,

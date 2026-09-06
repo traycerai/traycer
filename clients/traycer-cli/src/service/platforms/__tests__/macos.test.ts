@@ -2606,6 +2606,58 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       ).resolves.toMatchObject({ kind: "took-over" });
     });
 
+    it("rejects with SERVICE_INSTALL_FAILED ('the wait did not end with its exit') when the agent's state is running but has no pid to verify after the bootout wait", async () => {
+      let agentPrints = 0;
+      const runner: ProcessRunner = async (command, args) => {
+        if (args[0] === "print") {
+          if (args[1]?.endsWith(".agent") === true) {
+            agentPrints += 1;
+            // launchd reports the job running (no pid printed) - the same
+            // reading the desktop's parked-registration probe makes. The
+            // verification print after bootout reads absent; only the
+            // process itself (which cannot be checked without a pid) may
+            // still be alive.
+            return agentPrints === 1
+              ? {
+                  stdout: `path = ${smAgentPath}\n\tstate = running\n`,
+                  stderr: "",
+                  exitCode: 0,
+                }
+              : {
+                  stdout: "",
+                  stderr: "Could not find specified service\n",
+                  exitCode: 113,
+                };
+          }
+          return {
+            stdout: "",
+            stderr: "Could not find specified service\n",
+            exitCode: 113,
+          };
+        }
+        if (args[0] === "bootout") {
+          return { stdout: "", stderr: "", exitCode: -1 };
+        }
+        return buildSuccessResult();
+      };
+      MOCKS.requestCooperativeShutdown.mockResolvedValue({
+        kind: "unreachable",
+        cause: "x",
+      });
+
+      await expect(
+        createMacosController(runner).takeoverDesktopRegistration(label),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+        message: expect.stringContaining("the wait did not end with its exit"),
+        details: expect.objectContaining({
+          agentLabel: `${label.id}.agent`,
+          pid: null,
+          verification: "process-unverified",
+        }),
+      });
+    });
+
     // Staging for the two pins below: the CLI label is absent on the FIRST
     // print (so the initial `standDownLiveCliLabelHost(..., null)` call from
     // the no-agent branch never fires here - the agent IS loaded), but
@@ -2719,6 +2771,12 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       pid: number | null;
       postBootout?: "absent" | "still-loaded" | "spawn-failure";
       bootoutExitCode?: number;
+      // A `state = <value>` line on the FIRST cli-label print - "running"
+      // (case-insensitive per `probeLabelForTakeover`) makes the job
+      // `running` with no pid to check; anything else (e.g. "waiting")
+      // exercises the idle path with an explicit non-running state instead
+      // of no state line at all.
+      stateLine?: "running" | "waiting";
     }): {
       calls: RecordedCall[];
       controller: ServiceController;
@@ -2738,8 +2796,12 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
           cliLabelPrints += 1;
           if (cliLabelPrints === 1) {
             const pidLine = input.pid === null ? "" : `\tpid = ${input.pid}\n`;
+            const stateLine =
+              input.stateLine === undefined
+                ? ""
+                : `\tstate = ${input.stateLine}\n`;
             return {
-              stdout: `\tpath = /Users/me/Library/LaunchAgents/${label.id}.plist\n\ttype = LaunchAgent\n${pidLine}`,
+              stdout: `\tpath = /Users/me/Library/LaunchAgents/${label.id}.plist\n\ttype = LaunchAgent\n${stateLine}${pidLine}`,
               stderr: "",
               exitCode: 0,
             };
@@ -3023,6 +3085,123 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         ),
       });
       expect(MOCKS.requestCooperativeShutdown).not.toHaveBeenCalled();
+    });
+
+    // `state = running` with NO pid still counts as `running` per
+    // `probeLabelForTakeover` - the job is asked to stand down just like a
+    // pid-bearing one, and only the post-bootout liveness check has nothing
+    // to key on (see the `process-unverified` pin below).
+    it("resolves cli-host-stopped/stopped and asks a running, pidless CLI-label job to stand down (state = running, no pid)", async () => {
+      const { calls, controller } = stageStandDownRunner({
+        pid: null,
+        stateLine: "running",
+      });
+      MOCKS.requestCooperativeShutdown.mockResolvedValue({ kind: "stopped" });
+
+      await expect(
+        controller.takeoverDesktopRegistration(label),
+      ).resolves.toEqual({
+        kind: "cli-host-stopped",
+        cooperativeStop: "stopped",
+      });
+      expect(MOCKS.requestCooperativeShutdown).toHaveBeenCalledWith(
+        label.environment,
+        "takeover",
+        "shutdown",
+      );
+      expect(MOCKS.cliLoggerInfo).toHaveBeenCalledWith(
+        expect.stringContaining("stood down before the reload"),
+        expect.objectContaining({ label: label.id, pid: null }),
+      );
+      const bootout = calls.find((c) => c.args[0] === "bootout");
+      expect(bootout?.args).toEqual([
+        "bootout",
+        "--wait",
+        `gui/${process.getuid?.() ?? 0}/${label.id}`,
+      ]);
+    });
+
+    it("rejects with SERVICE_INSTALL_FAILED naming 'a running job' when a running, pidless CLI-label job has not published a live endpoint yet (no-metadata)", async () => {
+      const { calls, controller } = stageStandDownRunner({
+        pid: null,
+        stateLine: "running",
+      });
+      MOCKS.requestCooperativeShutdown.mockResolvedValue({
+        kind: "no-metadata",
+      });
+
+      const takeover = controller.takeoverDesktopRegistration(label);
+      await expect(takeover).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+        message: expect.stringContaining("a running job under"),
+      });
+      await expect(takeover).rejects.toMatchObject({
+        message: expect.stringContaining(
+          "has not published a live endpoint yet",
+        ),
+      });
+      expect(calls.some((c) => c.args[0] === "bootout")).toBe(false);
+    });
+
+    it("rejects with SERVICE_INSTALL_FAILED ('the wait did not end with its exit') when a running, pidless CLI-label job's bootout does not confirm exit", async () => {
+      const { controller } = stageStandDownRunner({
+        pid: null,
+        stateLine: "running",
+        bootoutExitCode: -1,
+      });
+      MOCKS.requestCooperativeShutdown.mockResolvedValue({
+        kind: "unreachable",
+        cause: "x",
+      });
+
+      await expect(
+        controller.takeoverDesktopRegistration(label),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+        message: expect.stringContaining("the wait did not end with its exit"),
+        details: expect.objectContaining({
+          verification: "process-unverified",
+          pid: null,
+        }),
+      });
+    });
+
+    it("does not refuse a running, pidless CLI-label job whose host ANSWERED the claim with stopped, even when the bootout wait exits non-zero (the stale running flag is not evidence after an answer)", async () => {
+      const { calls, controller } = stageStandDownRunner({
+        pid: null,
+        stateLine: "running",
+        bootoutExitCode: -1,
+      });
+      MOCKS.requestCooperativeShutdown.mockResolvedValue({ kind: "stopped" });
+
+      await expect(
+        controller.takeoverDesktopRegistration(label),
+      ).resolves.toEqual({
+        kind: "cli-host-stopped",
+        cooperativeStop: "stopped",
+      });
+      expect(calls.some((c) => c.args[0] === "bootout")).toBe(true);
+    });
+
+    it("resolves cli-host-stopped/no-host via the idle unload path (no claim) when the CLI-label job's state is explicitly not running (state = waiting, no pid)", async () => {
+      const { calls, controller } = stageStandDownRunner({
+        pid: null,
+        stateLine: "waiting",
+      });
+
+      await expect(
+        controller.takeoverDesktopRegistration(label),
+      ).resolves.toEqual({
+        kind: "cli-host-stopped",
+        cooperativeStop: "no-host",
+      });
+      expect(MOCKS.requestCooperativeShutdown).not.toHaveBeenCalled();
+      const bootout = calls.find((c) => c.args[0] === "bootout");
+      expect(bootout?.args).toEqual([
+        "bootout",
+        "--wait",
+        `gui/${process.getuid?.() ?? 0}/${label.id}`,
+      ]);
     });
 
     // The CLI label not loaded at all (exit 113 on both probes) is already
