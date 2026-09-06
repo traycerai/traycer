@@ -664,6 +664,64 @@ describe("HostOverviewOperationCard — record-derived parks", () => {
     await screen.findByTestId("host-overview-operation-restart");
   });
 
+  it("a TERMINAL superseded attempt beside real debt still renders the debt sentence AND Restart (D-49)", async () => {
+    // The mounted end of `fleet-update-view.test.ts`'s D-49 pins, and the
+    // state D-47 produces: another actor delivered rc.3, this host is still
+    // running rc.2, and the executor ended ITS attempt `superseded` - no
+    // error, nothing owed on the attempt. The records are the only thing that
+    // knows a restart is owed.
+    //
+    // Falsification: drop the terminal fall-through in `fleet-update-view.ts`
+    // and the attempt arm takes the frame, `superseded` projects `idle`,
+    // `isQuietUpdateView` hides the card, and BOTH assertions below go red -
+    // which is the "nothing on screen after an Updating… toast" outcome the
+    // rule exists to prevent.
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.3.0-rc.2",
+      installation: managedInstallation(
+        installRecord("1.3.0-rc.3", null),
+        null,
+      ),
+      overrideHandlers: {
+        "host.status": () => ({
+          ...statusWithBusy("1.3.0-rc.2", { kind: "none" }, false, 0),
+          updateOperation: {
+            kind: "attempt" as const,
+            attemptId: "a-superseded",
+            generation: 1,
+            sequence: 4,
+            targetVersion: "1.3.0-rc.3",
+            trigger: "manual" as const,
+            phase: "superseded" as const,
+            execution: "terminal" as const,
+            continuation: null,
+            progress: null,
+            liveness: "terminal" as const,
+            livenessCause: null,
+            busySessionCount: null,
+            busyBreakdown: null,
+            error: null,
+          },
+        }),
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    // The card exists at all, which `superseded` -> `idle` would not produce:
+    // `idle` is quiet and the Overview renders nothing for it.
+    await screen.findByTestId("host-overview-operation-card");
+    // And it is the DEBT park's sentence, not the attempt's.
+    expect(
+      screen.getByTestId("host-overview-operation-phase").textContent,
+    ).toBe("Update installed — restart host to finish");
+    await screen.findByTestId("host-overview-operation-restart");
+  });
+
   it("staged wait renders the blocked-sessions sentence and Force update…, dispatching host.update.install with force:true on confirm", async () => {
     const installCalls: Array<{ version: string; force: boolean }> = [];
     const fixture = buildOverviewHostFixture({

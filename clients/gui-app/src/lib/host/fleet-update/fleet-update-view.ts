@@ -4,7 +4,10 @@ import type {
   HostStatusUpdateProgress,
   HostUpdateTransactionCapability,
 } from "@traycer/protocol/host/status/index";
-import type { HostUpdateAttemptPhase } from "@traycer/protocol/config/host-update-attempt";
+import {
+  isTerminalPhase,
+  type HostUpdateAttemptPhase,
+} from "@traycer/protocol/config/host-update-attempt";
 import type { LocalAttemptLiveness } from "@traycer-clients/shared/platform/runner-host";
 import type { LegacyUpdateFacts } from "@/lib/host/fleet-update/legacy-update-facts";
 
@@ -559,67 +562,18 @@ export function projectFleetUpdateView(
     };
   }
 
-  const base = {
-    attemptId: operation.attemptId,
-    targetVersion: operation.targetVersion,
-    progress: projectProgress(operation),
-    blockingSessionCount: operation.busySessionCount,
-    blockingBreakdown: operation.busyBreakdown,
-    errorMessage: operation.error?.message ?? null,
-  } satisfies Omit<
-    FleetUpdateView,
-    "kind" | "qualified" | "lastKnownKind" | "lastObservedAtMs"
-  >;
-  const noRetainedPhase = {
-    lastKnownKind: null,
-    lastObservedAtMs: null,
-  } satisfies Pick<FleetUpdateView, "lastKnownKind" | "lastObservedAtMs">;
-
-  if (stale) {
-    // The last phase, explicitly qualified, and now actually CARRIED rather
-    // than described in a comment. `kind` decays to `unknown` — every gate and
-    // every cadence decision reads it, and both must treat this host as one we
-    // know nothing current about — while `lastKnownKind` keeps the phase so a
-    // surface can say "last seen preparing v1.2.3" instead of dropping to a
-    // bare "offline" that loses everything we knew.
-    return {
-      ...base,
-      kind: "unknown",
-      qualified: true,
-      lastKnownKind: phaseKind(operation.phase, input.connected),
-      lastObservedAtMs: observation.observedAtMs,
-    };
-  }
-
-  // Liveness is the host's read-side conclusion joining the attempt lock's
-  // holder, and a client cannot re-derive it — so it outranks the phase.
-  if (operation.liveness === "interrupted") {
-    // The ONLY route to `failed` that the phase alone does not carry: a
-    // non-terminal, non-parked attempt with positive proof its executor is
-    // gone. `indeterminate` deliberately does not reach here.
-    return {
-      ...base,
-      ...noRetainedPhase,
-      kind: "failed",
-      qualified: false,
-      errorMessage: base.errorMessage ?? "The update was interrupted.",
-    };
-  }
-
-  const view = {
-    ...base,
-    ...noRetainedPhase,
-    kind: phaseKind(operation.phase, input.connected),
-  };
-  // `indeterminate` means the host could not establish whether the executor is
-  // alive. The phase is still the best thing we have, so it is shown — and
-  // qualified, so no surface presents it as confirmed-live.
-  //
-  // No retained phase here even though this view IS qualified: `kind` is the
-  // live phase, so there is nothing in the past that `kind` is not already
-  // saying. `lastKnownKind` is populated only where `kind` decayed to
-  // `unknown` — that is the invariant the field's doc states.
-  return { ...view, qualified: operation.liveness === "indeterminate" };
+  // THE ATTEMPT ARM, in its own function beside the other three
+  // (`coarseProgressView`, `legacyFactsView`, `recordObservationView`). It is
+  // the last arm that was still inline, and D-49's terminal fall-back is what
+  // made that worth changing: the rule is a statement about which LEG answers,
+  // so it belongs where the legs are chosen from rather than buried in the
+  // middle of the longest branch.
+  return attemptOperationView({
+    operation,
+    observation,
+    stale,
+    connected: input.connected,
+  });
 }
 
 /**
@@ -826,6 +780,123 @@ function legacyFactsView(
   };
 }
 
+/**
+ * What a REPORTED attempt projects to: the phase, qualified by staleness and
+ * by the host's own liveness conclusion — plus D-49's one exception, where a
+ * terminal attempt steps aside for the record-derived parks.
+ *
+ * Extracted from {@link projectFleetUpdateView} so every arm is a named
+ * function and the leg-selection rules read together. Behaviour is unchanged
+ * by the extraction itself.
+ */
+function attemptOperationView(input: {
+  readonly operation: Extract<HostStatusUpdateOperation, { kind: "attempt" }>;
+  readonly observation: FleetUpdateWireObservation;
+  readonly stale: boolean;
+  readonly connected: boolean;
+}): FleetUpdateView {
+  const { operation, observation, stale } = input;
+  // D-49: A TERMINAL attempt that is NOT `failed` does not occupy the
+  // operation slot for the purpose of the record-derived parks.
+  //
+  // The case is D-47's: another actor delivered the requested version and the
+  // host is not running it, so the executor ends the attempt `superseded` - no
+  // error, nothing owed on the attempt itself - while `install.json` names X
+  // and the runtime names Y. That IS an activation debt, and it is visible in
+  // the records and nowhere else. Without this the attempt arm takes the
+  // frame, `superseded` projects `idle`, `idle` is quiet, and the page says
+  // nothing at all after an "Updating…" toast: the user's last word on their
+  // own update is a sentence that turned out to be wrong.
+  //
+  // GUI-SIDE ON PURPOSE. The alternative was a host guarantee that terminal
+  // records stop appearing on `host.status`, and whether the host's
+  // `projectUpdateOperation` withholds them is a projection detail that can
+  // change under us. The debt sentence is derived from the RECORDS, so it has
+  // to be reachable whenever the records say debt - deciding it from the wire
+  // leg's phase instead is the class of error findings 1/4/6 were.
+  //
+  // FALL-BACK, NOT REPLACEMENT: the substitution applies to THIS CHOICE only.
+  // With no park the attempt arm below still runs and still answers, so
+  // `superseded` keeps projecting `idle` and - the case that makes the
+  // distinction load-bearing - `complete` keeps projecting `complete`. The
+  // landing banner renders a completion acknowledgement off that kind and
+  // auto-collapses it (`useLandingCompletionCollapse`), and ITS leg passes
+  // `legacyFacts: null`, so a blanket substitution would have deleted that
+  // surface outright rather than merely reordering it.
+  //
+  // `failed` is excluded because its cause must render: it is the one terminal
+  // state with something to say that the records cannot say for it. And a park
+  // OUTRANKING a `complete` is deliberate rather than incidental - a completed
+  // attempt whose install record disagrees with the running version is exactly
+  // "delivered, not running it", which is the debt.
+  if (isTerminalPhase(operation.phase) && operation.phase !== "failed") {
+    const parkedView = legacyFactsView(observation, stale);
+    if (parkedView !== null) return parkedView;
+  }
+
+  const base = {
+    attemptId: operation.attemptId,
+    targetVersion: operation.targetVersion,
+    progress: projectProgress(operation),
+    blockingSessionCount: operation.busySessionCount,
+    blockingBreakdown: operation.busyBreakdown,
+    errorMessage: operation.error?.message ?? null,
+  } satisfies Omit<
+    FleetUpdateView,
+    "kind" | "qualified" | "lastKnownKind" | "lastObservedAtMs"
+  >;
+  const noRetainedPhase = {
+    lastKnownKind: null,
+    lastObservedAtMs: null,
+  } satisfies Pick<FleetUpdateView, "lastKnownKind" | "lastObservedAtMs">;
+
+  if (stale) {
+    // The last phase, explicitly qualified, and now actually CARRIED rather
+    // than described in a comment. `kind` decays to `unknown` — every gate and
+    // every cadence decision reads it, and both must treat this host as one we
+    // know nothing current about — while `lastKnownKind` keeps the phase so a
+    // surface can say "last seen preparing v1.2.3" instead of dropping to a
+    // bare "offline" that loses everything we knew.
+    return {
+      ...base,
+      kind: "unknown",
+      qualified: true,
+      lastKnownKind: phaseKind(operation.phase, input.connected),
+      lastObservedAtMs: observation.observedAtMs,
+    };
+  }
+
+  // Liveness is the host's read-side conclusion joining the attempt lock's
+  // holder, and a client cannot re-derive it — so it outranks the phase.
+  if (operation.liveness === "interrupted") {
+    // The ONLY route to `failed` that the phase alone does not carry: a
+    // non-terminal, non-parked attempt with positive proof its executor is
+    // gone. `indeterminate` deliberately does not reach here.
+    return {
+      ...base,
+      ...noRetainedPhase,
+      kind: "failed",
+      qualified: false,
+      errorMessage: base.errorMessage ?? "The update was interrupted.",
+    };
+  }
+
+  const view = {
+    ...base,
+    ...noRetainedPhase,
+    kind: phaseKind(operation.phase, input.connected),
+  };
+  // `indeterminate` means the host could not establish whether the executor is
+  // alive. The phase is still the best thing we have, so it is shown — and
+  // qualified, so no surface presents it as confirmed-live.
+  //
+  // No retained phase here even though this view IS qualified: `kind` is the
+  // live phase, so there is nothing in the past that `kind` is not already
+  // saying. `lastKnownKind` is populated only where `kind` decayed to
+  // `unknown` — that is the invariant the field's doc states.
+  return { ...view, qualified: operation.liveness === "indeterminate" };
+}
+
 function coarseKind(coarse: HostStatusUpdateProgress | null): {
   readonly kind: "updating" | "failed";
   readonly errorMessage: string | null;
@@ -922,12 +993,14 @@ function phaseKind(
       // answer is deliberately NOT here: `install.json` names the delivered
       // version and the runtime does not, which is the activation-debt park,
       // and `legacyFactsView` renders it with its Restart from the RECORDS
-      // alone. That arm is reached only once the peer stops reporting the
-      // terminal attempt (`updateOperation: {kind:"none"}`) - see the `none`
-      // arm above; while the terminal attempt is still on the wire this
-      // `idle` wins and the card is quiet. Telling the three apart in COPY
-      // would need the record to carry a cause, which is a CLI-side change
-      // and an accepted residual of the cutover, not something to infer here.
+      // alone. Reaching that arm is not left to the host: D-49's terminal
+      // fall-through above consults the parks BEFORE this mapping is ever
+      // used, so the debt speaks whether or not the peer is still reporting
+      // the terminal attempt. This `idle` is what remains when the records
+      // have nothing to say - which for cause 1 and cause 2 is the whole
+      // truth. Telling the three apart in COPY would need the record to carry
+      // a cause, which is a CLI-side change and an accepted residual of the
+      // cutover, not something to infer here.
       return "idle";
   }
 }

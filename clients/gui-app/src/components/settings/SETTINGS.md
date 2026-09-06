@@ -2365,7 +2365,25 @@ aria-live="polite"` carrying the equivalent text for
       `waiting-to-activate` ("Update installed — restart host to finish") and
       `waiting-for-work` ("Update waits for N sessions to finish")
       kinds, AFTER the coarse marker and before `idle`, and like every park
-      they hold no lifecycle gate and earn no fast poll. The card offers
+      they hold no lifecycle gate and earn no fast poll.
+      **A TERMINAL attempt that is not `failed` yields the operation slot to
+      these parks** (D-49): `complete` and `superseded` let the records answer
+      first, so "another actor delivered the version and this host is not
+      running it" - which the executor ends as `superseded` with no error -
+      still renders the debt sentence and its Restart. Reaching that is NOT
+      left to the host: whether `projectUpdateOperation` withholds terminal
+      records from `host.status` is a projection detail that can change under
+      us, and a sentence derived from the RECORDS must be reachable whenever
+      the records say debt. `failed` is excluded, because its cause is the one
+      thing a terminal attempt can say that the records cannot say for it. It
+      is a fall-BACK rather than a substitution: with no park the attempt arm
+      still answers, so `superseded` keeps projecting `idle` and `complete`
+      keeps projecting `complete` - the landing banner's completion
+      acknowledgement is rendered off that kind, and its leg passes
+      `legacyFacts: null`, so a blanket substitution would have deleted that
+      surface rather than reordering it. A park outranking a `complete` whose
+      records disagree with the running version is deliberate: that IS
+      "delivered, not running it". The card offers
       **Restart** on the debt FACT rather than on the view kind, so a retained
       `failed` marker beside real debt keeps its failure text and still shows
       the way forward, and **Force update…** on a staged wait with a positive

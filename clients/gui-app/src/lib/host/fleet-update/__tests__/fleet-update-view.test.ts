@@ -1660,3 +1660,115 @@ describe("projectFleetUpdateView — record-derived parks (legacyFacts)", () => 
     expect(view.kind).toBe("idle");
   });
 });
+
+/**
+ * D-49: a TERMINAL, non-`failed` attempt yields the operation slot to the
+ * record-derived parks — and yields it for the CHOICE only, falling back to
+ * its own arm when the records say nothing.
+ *
+ * The rule exists for D-47's settlement: another actor delivered the version,
+ * the host is not running it, the executor writes `superseded` with no error.
+ * The attempt has nothing to say; `install.json` and the runtime do.
+ */
+describe("projectFleetUpdateView — terminal attempts yield to the record parks (D-49)", () => {
+  const DEBT_FACTS = {
+    activationDebt: { installedVersion: "2.1.0" },
+    stagedWait: null,
+  };
+
+  it("(1) superseded + installed != running projects the DEBT park, not idle", () => {
+    // The pin the rule exists for. Falsification: drop the terminal
+    // fall-through in `fleet-update-view.ts` and `superseded` reaches
+    // `phaseKind`, projects `idle`, and `isQuietUpdateView` hides the card —
+    // which is the "nothing on screen after an Updating… toast" outcome.
+    const view = projectFleetUpdateView({
+      observation: observation({
+        operation: attemptOperation({
+          phase: "superseded",
+          execution: "terminal",
+          liveness: "terminal",
+        }),
+        legacyFacts: DEBT_FACTS,
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(view.kind).toBe("waiting-to-activate");
+    expect(view.targetVersion).toBe("2.1.0");
+    expect(view.qualified).toBe(false);
+    // And it is NOT quiet, which is what puts the card on screen at all.
+    expect(isQuietUpdateView(view)).toBe(false);
+  });
+
+  it("(2) failed keeps its OWN arm even with the same debt facts - a failure's cause must render", () => {
+    // `failed` is excluded from the fall-through on purpose: it is the one
+    // terminal state carrying something the records cannot say for it.
+    // Falsification: widen the guard to every terminal phase and this becomes
+    // `waiting-to-activate`, silently swallowing the error message.
+    const view = projectFleetUpdateView({
+      observation: observation({
+        operation: attemptOperation({
+          phase: "failed",
+          execution: "terminal",
+          liveness: "terminal",
+          error: {
+            code: "E_TEST",
+            message: "the updater fell over",
+            phase: "applying",
+          },
+        }),
+        legacyFacts: DEBT_FACTS,
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(view.kind).toBe("failed");
+    expect(view.errorMessage).toBe("the updater fell over");
+  });
+
+  it("(3) complete with installed == running keeps its COMPLETE kind - the acknowledgement is not spent to reach the rule", () => {
+    // The FALL-BACK half, and the reason the rule is not a replacement. With
+    // no park the attempt arm still answers, so the landing banner's
+    // completion acknowledgement (`useLandingCompletionCollapse`, keyed on
+    // `kind === "complete"` and the attempt id) survives. Its own leg passes
+    // `legacyFacts: null` — the fixture default here — so a substitution that
+    // returned `{kind:"none"}`'s answer outright would project `idle` and
+    // delete that surface. Falsification: make the fall-through return the
+    // `none` arm's result instead of falling back, and this reddens along
+    // with `host-update-banner-bound.test.tsx:437` and `:1001`.
+    const view = projectFleetUpdateView({
+      observation: observation({
+        operation: attemptOperation({
+          phase: "complete",
+          execution: "terminal",
+          liveness: "terminal",
+        }),
+        legacyFacts: null,
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(view.kind).toBe("complete");
+    expect(view.attemptId).toBe("attempt-1");
+  });
+
+  it("a complete attempt whose records DISAGREE with the running version is debt, not a completion", () => {
+    // Deliberate, not incidental: "delivered, but not running it" is the
+    // debt whatever the attempt calls itself, and this is the ordering that
+    // makes (3) a statement about the absence of a park rather than about
+    // `complete` being exempt.
+    const view = projectFleetUpdateView({
+      observation: observation({
+        operation: attemptOperation({
+          phase: "complete",
+          execution: "terminal",
+          liveness: "terminal",
+        }),
+        legacyFacts: DEBT_FACTS,
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(view.kind).toBe("waiting-to-activate");
+  });
+});
