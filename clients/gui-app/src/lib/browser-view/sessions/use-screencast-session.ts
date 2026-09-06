@@ -55,7 +55,10 @@ import {
 } from "@/lib/browser-view/sessions/video-plane-session";
 import { deriveSpecDeadlineMs } from "@traycer/protocol/host-transport/rtt-deadlines";
 import { VIEWER_CONTROL_PLANE_DEADLINES } from "@/lib/browser-view/sessions/control-plane-deadlines";
-import { handoffTokenFor } from "@/lib/browser-view/sessions/screencast-handoff-tokens";
+import {
+  handoffTokenFor,
+  onHandoffTokenRecorded,
+} from "@/lib/browser-view/sessions/screencast-handoff-tokens";
 import type { WebrtcVideoStatsSample } from "@/lib/browser-view/tiles/webrtc-media-registry";
 import {
   acquireBrowserMediaEntry,
@@ -395,6 +398,21 @@ export function useScreencastSession(
     frameSize: null,
     navState: EMPTY_SCREENCAST_NAV_STATE,
   }));
+  // Bumped when a handoff token is recorded for this tab AFTER a stream is
+  // already open on it, which is the one order the token registry cannot
+  // absorb on its own: the device's inventory can list a tab this client just
+  // opened before the open's own answer arrives, so the tile mounted from that
+  // inventory subscribed presenting `null`. The subscribe effect below holds
+  // this in its deps and re-subscribes with the token; in the common order the
+  // token is recorded before the tile exists and nothing fires here.
+  const [handoffTokenGeneration, setHandoffTokenGeneration] = useState(0);
+  useEffect(
+    () =>
+      onHandoffTokenRecorded({ hostId, sessionId, tabId }, () => {
+        setHandoffTokenGeneration((current) => current + 1);
+      }),
+    [hostId, sessionId, tabId],
+  );
 
   const refs = useMemo<ScreencastSessionRefs>(
     () => ({
@@ -703,9 +721,12 @@ export function useScreencastSession(
       quality: profile.quality,
       format: "jpeg",
       role,
-      // Read at subscribe time, not held in a dep: the open that minted it
-      // resolved before this tile could mount, and a re-subscribe presenting
-      // a spent token is inert on the host.
+      // Read at subscribe time rather than held as a value: in the common
+      // order the open that minted it resolved before this tile could mount.
+      // `handoffTokenGeneration` in the deps covers the other order - a token
+      // recorded after this stream opened re-runs the effect, so the opener
+      // presents it instead of leaving the host's claim held until some
+      // unrelated re-subscribe. A spent token presented again is inert there.
       handoffToken: handoffTokenFor({ hostId, sessionId, tabId }),
       callbacks: { onServerFrame, onConnectionStatus },
     });
@@ -733,6 +754,7 @@ export function useScreencastSession(
     client,
     controller,
     scope,
+    handoffTokenGeneration,
     hostId,
     patchStreamState,
     profile,

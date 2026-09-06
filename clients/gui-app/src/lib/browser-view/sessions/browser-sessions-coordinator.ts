@@ -920,6 +920,10 @@ function surfaceTabOpenedFrame(
       sessionId: frame.sessionId,
       tabId: frame.tabId,
       openerTabId: frame.openerTabId,
+      // Read as the frame lands, not when the reconciler gets to it: the
+      // gesture was a moment ago, and the reader may have moved on by the
+      // next inventory pass.
+      raisedWhileFocused: document.hasFocus(),
     });
     return;
   }

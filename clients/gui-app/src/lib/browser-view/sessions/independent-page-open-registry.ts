@@ -33,6 +33,14 @@ export interface IndependentPageOpen {
    * screen to decide whether the popup was this window's reader's doing.
    */
   readonly openerTabId: string | null;
+  /**
+   * Whether THIS window's document held focus as the frame arrived. The
+   * frame follows the reader's gesture by a round trip, and the OS gives
+   * focus to one window, so for a popup whose pixels reach every window
+   * (headless) it is what separates the window the gesture was made in from
+   * another window showing the same row of the same session.
+   */
+  readonly raisedWhileFocused: boolean;
 }
 
 function pageOpenKey(tab: IndependentPageOpenedTab): string {
@@ -54,7 +62,10 @@ export function recordIndependentPageOpenedTab(
   // which is the right eviction order anyway - delete first only to keep the
   // map's iteration honest about recency.
   pendingPageOpens.delete(key);
-  pendingPageOpens.set(key, { openerTabId: tab.openerTabId });
+  pendingPageOpens.set(key, {
+    openerTabId: tab.openerTabId,
+    raisedWhileFocused: tab.raisedWhileFocused,
+  });
   while (pendingPageOpens.size > MAX_PENDING_PAGE_OPENS) {
     const oldest = pendingPageOpens.keys().next();
     if (oldest.done === true) return;

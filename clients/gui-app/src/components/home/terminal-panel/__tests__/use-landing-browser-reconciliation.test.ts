@@ -432,6 +432,7 @@ describe("useLandingBrowserReconciliation", () => {
       sessionId: "session-1",
       tabId: "popup-tab",
       openerTabId: "tab-1",
+      raisedWhileFocused: true,
     });
     const session = sessionInfo({
       sessionId: "session-1",
@@ -476,6 +477,8 @@ describe("useLandingBrowserReconciliation", () => {
       readonly openerBoundWindowId: string | null;
       /** `false`: the device could not name the opener (`noopener`, gone). */
       readonly openerNamed: boolean;
+      /** Whether this window held focus as the frame arrived. */
+      readonly focused: boolean;
     }
     const pass = (input: Pass): boolean => {
       useLandingPanelStore.getState().resetForTests();
@@ -504,6 +507,7 @@ describe("useLandingBrowserReconciliation", () => {
         sessionId: "session-1",
         tabId: "popup-tab",
         openerTabId: input.openerNamed ? "opener-tab" : null,
+        raisedWhileFocused: input.focused,
       });
       const sessions = [
         sessionInfo({
@@ -556,6 +560,7 @@ describe("useLandingBrowserReconciliation", () => {
     const native = (
       thisWindowId: string | null,
       activeRow: Pass["activeRow"],
+      focused: boolean,
     ): boolean =>
       pass({
         thisWindowId,
@@ -563,31 +568,64 @@ describe("useLandingBrowserReconciliation", () => {
         popupBoundWindowId: "window-a",
         openerBoundWindowId: "window-a",
         openerNamed: true,
+        focused,
       });
-    const headless = (
-      thisWindowId: string | null,
-      activeRow: Pass["activeRow"],
-      openerNamed: boolean,
-    ): boolean =>
+    const headless = (input: {
+      readonly thisWindowId: string | null;
+      readonly activeRow: Pass["activeRow"];
+      readonly openerNamed: boolean;
+      readonly focused: boolean;
+    }): boolean =>
       pass({
-        thisWindowId,
-        activeRow,
+        ...input,
         popupBoundWindowId: null,
         openerBoundWindowId: null,
-        openerNamed,
       });
 
     // A native popup is born in its opener's window; that window follows it
-    // whatever row its panel was on, and no other window does.
-    expect(native("window-a", "other-tab")).toBe(true);
-    expect(native("window-b", "opener")).toBe(false);
+    // whatever row its panel was on, and no other window does. The device
+    // has already named the window, so focus adds nothing - the reader's
+    // click was in a native guest view, not in this document.
+    expect(native("window-a", "other-tab", false)).toBe(true);
+    expect(native("window-b", "opener", true)).toBe(false);
 
     // A headless popup reaches every window. The one whose reader was on the
     // opener raised it; a window on another tab of the same device did not.
-    expect(headless("window-a", "opener", true)).toBe(true);
-    expect(headless("window-b", "other-tab", true)).toBe(false);
+    expect(
+      headless({
+        thisWindowId: "window-a",
+        activeRow: "opener",
+        openerNamed: true,
+        focused: true,
+      }),
+    ).toBe(true);
+    expect(
+      headless({
+        thisWindowId: "window-b",
+        activeRow: "other-tab",
+        openerNamed: true,
+        focused: true,
+      }),
+    ).toBe(false);
+    // The strip is shared, so a second window can be on the opener too. It
+    // did not hold focus when the frame arrived, so it did not raise it.
+    expect(
+      headless({
+        thisWindowId: "window-b",
+        activeRow: "opener",
+        openerNamed: true,
+        focused: false,
+      }),
+    ).toBe(false);
     // A shell with no window id (the browser build) is still a reader.
-    expect(headless(null, "opener", true)).toBe(true);
+    expect(
+      headless({
+        thisWindowId: null,
+        activeRow: "opener",
+        openerNamed: true,
+        focused: true,
+      }),
+    ).toBe(true);
 
     // A headless popup from a NATIVE opener: the opener's window raised it,
     // even if that window's panel had moved on to another row.
@@ -598,6 +636,7 @@ describe("useLandingBrowserReconciliation", () => {
         popupBoundWindowId: null,
         openerBoundWindowId: "window-a",
         openerNamed: true,
+        focused: true,
       }),
     ).toBe(true);
     expect(
@@ -607,13 +646,38 @@ describe("useLandingBrowserReconciliation", () => {
         popupBoundWindowId: null,
         openerBoundWindowId: "window-a",
         openerNamed: true,
+        focused: true,
       }),
     ).toBe(false);
 
-    // Opener unknown: the window looking at that session is the best answer
-    // left; one on another session did not raise it.
-    expect(headless("window-a", "other-tab", false)).toBe(true);
-    expect(headless("window-a", "other-session", false)).toBe(false);
+    // Opener unknown (`noopener`): the focused window looking at that session
+    // is the best answer left. One on another session did not raise it, and
+    // neither did a second window on the same session that was not focused -
+    // the case where "some active tab of that session" alone picked both.
+    expect(
+      headless({
+        thisWindowId: "window-a",
+        activeRow: "other-tab",
+        openerNamed: false,
+        focused: true,
+      }),
+    ).toBe(true);
+    expect(
+      headless({
+        thisWindowId: "window-a",
+        activeRow: "other-session",
+        openerNamed: false,
+        focused: true,
+      }),
+    ).toBe(false);
+    expect(
+      headless({
+        thisWindowId: "window-b",
+        activeRow: "other-tab",
+        openerNamed: false,
+        focused: false,
+      }),
+    ).toBe(false);
   });
 
   it("leaves the selection alone for tabs nobody at this keyboard opened", () => {

@@ -252,9 +252,9 @@ function useFailedStreamRetry(args: {
   readonly browserSessions: LandingBrowserSessionEntries;
 }): void {
   const { pendingKills, browserSessions } = args;
-  const timersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(
-    new Map(),
-  );
+  // `window.setTimeout` handles: this is renderer code, and the DOM timer is a
+  // plain number.
+  const timersRef = useRef<Map<string, number>>(new Map());
   const sessionsRef = useRef(browserSessions);
   useEffect(() => {
     sessionsRef.current = browserSessions;
@@ -270,14 +270,14 @@ function useFailedStreamRetry(args: {
     }
     for (const [hostId, timer] of timers) {
       if (failed.has(hostId)) continue;
-      clearTimeout(timer);
+      window.clearTimeout(timer);
       timers.delete(hostId);
     }
     for (const hostId of failed) {
       if (timers.has(hostId)) continue;
       timers.set(
         hostId,
-        setTimeout(() => {
+        window.setTimeout(() => {
           timers.delete(hostId);
           // Re-read at fire time: the stream may have come back on its own,
           // and a retry then would drop a live one.
@@ -291,7 +291,7 @@ function useFailedStreamRetry(args: {
   useEffect(() => {
     const timers = timersRef.current;
     return () => {
-      for (const timer of timers.values()) clearTimeout(timer);
+      for (const timer of timers.values()) window.clearTimeout(timer);
       timers.clear();
     };
   }, []);

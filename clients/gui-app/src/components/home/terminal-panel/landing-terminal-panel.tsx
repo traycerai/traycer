@@ -1406,8 +1406,7 @@ export function LandingTerminalPanel(): ReactNode {
   const browserOpenTab = useLandingBrowserOpenTab({
     canDriveTabs: canDriveBrowserTabs,
     hostId: target.hostId,
-    sessions:
-      target.hostId === null ? null : (browserSessions[target.hostId] ?? null),
+    browserSessions,
     // Same rule as the terminal arm: replace the placeholder it was picked from
     // in that row's own strip position, and append when that row is gone.
     // The row is read off the REQUEST, so an answer can only ever act on the

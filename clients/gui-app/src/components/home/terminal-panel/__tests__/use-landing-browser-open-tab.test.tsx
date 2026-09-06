@@ -16,6 +16,7 @@ import {
   tabInfo,
 } from "@/lib/browser-view/sessions/__tests__/browser-session-test-kit";
 import type { LandingBrowserTabRef } from "@/stores/home/landing-panel-store";
+import type { LandingBrowserSessionEntries } from "../landing-terminal-authority-fleet";
 
 const mocks = vi.hoisted(() => ({
   toastError: vi.fn(),
@@ -94,7 +95,8 @@ function renderOpener(args: {
         // that is not renders its own opener.
         canDriveTabs: true,
         hostId: HOST_ID,
-        sessions: args.sessions,
+        browserSessions:
+          args.sessions === null ? {} : { [HOST_ID]: args.sessions },
         onOpened: args.onOpened,
       }),
     { wrapper: QueryWrapper },
@@ -130,7 +132,10 @@ describe("landingBrowserTabCount", () => {
         useLandingBrowserOpenTab({
           canDriveTabs: true,
           hostId: hostRef.current,
-          sessions: sessionsState({ openTab }),
+          browserSessions: {
+            "host-a": sessionsState({ openTab }),
+            "host-b": sessionsState({ openTab }),
+          },
           onOpened: (tab, request) => {
             answered.push({
               tabId: tab.tabId,
@@ -206,7 +211,7 @@ describe("landingBrowserTabCount", () => {
         useLandingBrowserOpenTab({
           canDriveTabs: false,
           hostId: HOST_ID,
-          sessions: sessionsState({ openTab }),
+          browserSessions: { [HOST_ID]: sessionsState({ openTab }) },
           onOpened,
         }),
       { wrapper: QueryWrapper },
@@ -369,7 +374,7 @@ describe("useLandingBrowserOpenTab", () => {
         opener: useLandingBrowserOpenTab({
           canDriveTabs: true,
           hostId: HOST_ID,
-          sessions: props.sessions,
+          browserSessions: { [HOST_ID]: props.sessions },
           onOpened: () => undefined,
         }),
         // Stands in for the popup opener's mutation on the same device.
@@ -403,6 +408,82 @@ describe("useLandingBrowserOpenTab", () => {
       expect(mocks.toastError).toHaveBeenCalledWith(landingBrowserCapMessage());
     });
     expect(openTab).not.toHaveBeenCalled();
+  });
+
+  // The same wait, with the panel's target MOVED to another device by the time
+  // the queued open runs. The open is for the device it was dispatched on, and
+  // what it counts is that device's latest inventory - not the new target's,
+  // which has room, and not a snapshot from the dispatch, which still had room.
+  it("counts the dispatched device's latest inventory after the panel moved to another device", async () => {
+    const openTab = vi.fn(() =>
+      Promise.resolve({ sessionId: "s", tabId: "t", handoffToken: null }),
+    );
+    const otherOpenTab = vi.fn(() =>
+      Promise.resolve({ sessionId: "s", tabId: "t", handoffToken: null }),
+    );
+    const oneBelowCap = sessionsState({
+      items: [independentSessionWith(LANDING_BROWSER_TAB_CAP - 1)],
+      openTab,
+    });
+    const atCap = sessionsState({
+      items: [independentSessionWith(LANDING_BROWSER_TAB_CAP)],
+      openTab,
+    });
+    const otherDevice = sessionsState({
+      hostId: "host-b",
+      openTab: otherOpenTab,
+    });
+    let releaseBlocker: () => void = () => undefined;
+    const initialProps: {
+      readonly hostId: string;
+      readonly browserSessions: LandingBrowserSessionEntries;
+    } = { hostId: HOST_ID, browserSessions: { [HOST_ID]: oneBelowCap } };
+    const { result, rerender } = renderHook(
+      (props: {
+        readonly hostId: string;
+        readonly browserSessions: LandingBrowserSessionEntries;
+      }) => ({
+        opener: useLandingBrowserOpenTab({
+          canDriveTabs: true,
+          hostId: props.hostId,
+          browserSessions: props.browserSessions,
+          onOpened: () => undefined,
+        }),
+        blocker: useMutation({
+          scope: { id: browserMutationKeys.openTabScope(HOST_ID) },
+          mutationFn: () =>
+            new Promise<void>((resolve) => {
+              releaseBlocker = resolve;
+            }),
+        }),
+      }),
+      { wrapper: QueryWrapper, initialProps },
+    );
+
+    act(() => {
+      result.current.blocker.mutate();
+    });
+    await waitFor(() => {
+      expect(result.current.blocker.isPending).toBe(true);
+    });
+    act(() => {
+      result.current.opener.open({ placeholderInstanceId: null });
+    });
+    // While this open waits: the popup fills the first device, and the panel
+    // moves on to a second one with room.
+    rerender({
+      hostId: "host-b",
+      browserSessions: { [HOST_ID]: atCap, "host-b": otherDevice },
+    });
+    act(() => {
+      releaseBlocker();
+    });
+
+    await waitFor(() => {
+      expect(mocks.toastError).toHaveBeenCalledWith(landingBrowserCapMessage());
+    });
+    expect(openTab).not.toHaveBeenCalled();
+    expect(otherOpenTab).not.toHaveBeenCalled();
   });
 
   it("refuses at the cap with the message the chooser's card carries", async () => {
@@ -480,7 +561,10 @@ describe("useLandingBrowserOpenTab", () => {
         useLandingBrowserOpenTab({
           canDriveTabs: true,
           hostId: hostRef.current,
-          sessions: sessionsState({ openTab }),
+          browserSessions: {
+            "host-a": sessionsState({ openTab }),
+            "host-b": sessionsState({ openTab }),
+          },
           onOpened: vi.fn(),
         }),
       { wrapper: QueryWrapper },

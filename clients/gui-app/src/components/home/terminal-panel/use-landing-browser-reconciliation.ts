@@ -105,6 +105,7 @@ export function useLandingBrowserReconciliation(args: {
       return raisedInThisWindow({
         popup: tab,
         openerTabId: opened.openerTabId,
+        raisedWhileFocused: opened.raisedWhileFocused,
         sessions: items,
         activeTab: activeLandingBrowserTab(store),
         desktopWindowId,
@@ -122,37 +123,54 @@ export function useLandingBrowserReconciliation(args: {
  * device says which through `boundWindowId`: only that window's reader could
  * have clicked in it. A HEADLESS popup - a remote device's tab, or a device
  * with no desktop - is bound nowhere and its pixels reach every window that
- * watches, so the question moves to the opener: the gesture was made where the
- * opener was on screen, which is the window whose active row it was (or, for a
- * native opener, the window it is bound in). When the device could not name
- * the opener, the reader looking at that session here is the best answer left;
- * a window on a terminal, or on another session, did not raise it.
+ * watches, so the question moves to the opener: for a native opener, the window
+ * it is bound in; otherwise the window whose reader had the opener on screen
+ * AND held focus when the frame arrived. Both terms are needed: the panel strip
+ * is shared across windows, so two windows can be on the same row of the same
+ * session, and only one of them was the one the reader clicked in. When the
+ * device could not name the opener (`noopener`, or an opener already gone) the
+ * row term relaxes to the session: the focused window looking at that session
+ * is the best answer left, and a window on a terminal, on another session, or
+ * behind the one the reader was in did not raise it.
  */
 function raisedInThisWindow(args: {
   readonly popup: LandingBrowserTabRef;
   readonly openerTabId: string | null;
+  readonly raisedWhileFocused: boolean;
   readonly sessions: readonly BrowserSessionInfo[];
   readonly activeTab: LandingBrowserTabRef | null;
   readonly desktopWindowId: string | null;
 }): boolean {
-  const { popup, openerTabId, sessions, activeTab, desktopWindowId } = args;
+  const {
+    popup,
+    openerTabId,
+    raisedWhileFocused,
+    sessions,
+    activeTab,
+    desktopWindowId,
+  } = args;
   const popupBoundWindowId = boundWindowIdOf(sessions, popup);
   if (popupBoundWindowId !== null) {
     return popupBoundWindowId === desktopWindowId;
   }
-  const onThisSessionHere =
-    activeTab !== null &&
-    activeTab.hostId === popup.hostId &&
-    activeTab.sessionId === popup.sessionId;
-  if (openerTabId === null) return onThisSessionHere;
-  const openerBoundWindowId = boundWindowIdOf(sessions, {
-    sessionId: popup.sessionId,
-    tabId: openerTabId,
-  });
-  if (openerBoundWindowId !== null) {
-    return openerBoundWindowId === desktopWindowId;
+  if (openerTabId !== null) {
+    const openerBoundWindowId = boundWindowIdOf(sessions, {
+      sessionId: popup.sessionId,
+      tabId: openerTabId,
+    });
+    if (openerBoundWindowId !== null) {
+      return openerBoundWindowId === desktopWindowId;
+    }
   }
-  return onThisSessionHere && activeTab.tabId === openerTabId;
+  if (!raisedWhileFocused) return false;
+  if (
+    activeTab === null ||
+    activeTab.hostId !== popup.hostId ||
+    activeTab.sessionId !== popup.sessionId
+  ) {
+    return false;
+  }
+  return openerTabId === null || activeTab.tabId === openerTabId;
 }
 
 /** The window a tab's native guest is bound in, per the device; `null` if none. */

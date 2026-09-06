@@ -546,7 +546,7 @@ describe("useLandingBrowserOpenLink", () => {
       const direct = useLandingBrowserOpenTab({
         canDriveTabs: true,
         hostId: HOST_ID,
-        sessions: chooserSessions,
+        browserSessions: { [HOST_ID]: chooserSessions },
         onOpened: () => undefined,
       });
       useEffect(() => {

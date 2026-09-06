@@ -190,6 +190,10 @@ describe("browser sessions coordinator registry", () => {
     });
     const session = soleSession(soleClient(harness.clients));
     session.emitStatus("open");
+    // jsdom answers `false` for the whole run; the record is what this window
+    // saw AS THE FRAME LANDED, so it is pinned here rather than left to the
+    // environment.
+    const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(true);
 
     session.emit(
       {
@@ -202,16 +206,18 @@ describe("browser sessions coordinator registry", () => {
       },
       null,
     );
+    hasFocus.mockRestore();
 
-    // With the opener the device named: the reconciler decides from where
-    // that tab is on screen whether this window's reader raised the popup.
+    // With the opener the device named and this window's focus at the time:
+    // the reconciler decides from where that tab is on screen, and from which
+    // window held focus, whether this window's reader raised the popup.
     expect(
       consumeIndependentPageOpenedTab({
         hostId: "host-1",
         sessionId: "device-session",
         tabId: "popup-tab",
       }),
-    ).toEqual({ openerTabId: "opener-tab" });
+    ).toEqual({ openerTabId: "opener-tab", raisedWhileFocused: true });
     // Consumed exactly once: a second window adopting the same row later must
     // not have its selection yanked as well.
     expect(
