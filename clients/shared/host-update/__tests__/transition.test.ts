@@ -1942,13 +1942,13 @@ describe("decideAttemptRecovery - the C/R collision's terminal encoding still re
     if (decision.kind !== "terminalize-failed") return;
     expect(decision.record.error?.code).toBe("recovery-evidence-insufficient");
     const runningLeg = decision.record.recovery?.evidence.running;
-    expect(runningLeg).toEqual({
-      kind: "unbound",
-      version: "C",
-      ownerBound: false,
-      runtimeIdentity: "C",
-    });
 
+    // The OLD reader's verdict is asserted FIRST, deliberately. It is the
+    // property this pin exists for - a record this build writes must still
+    // read as a valid leg to a reader that predates `runtimeIdentity` - and
+    // asserting the exact new shape ahead of it would make any change to the
+    // encoding fail on the shape line, hiding whether the old reader would
+    // still have accepted it.
     const frozenResult = frozenParseRecoveryRunningLeg(runningLeg);
     expect(frozenResult).not.toBe("invalid");
     expect(frozenResult).toEqual({
@@ -1962,6 +1962,13 @@ describe("decideAttemptRecovery - the C/R collision's terminal encoding still re
     expect(
       frozenParseRecoveryRunningLeg({ ...runningLeg, version: null }),
     ).toBe("invalid");
+
+    expect(runningLeg).toEqual({
+      kind: "unbound",
+      version: "C",
+      ownerBound: false,
+      runtimeIdentity: "C",
+    });
   });
 });
 
