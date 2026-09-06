@@ -2410,7 +2410,9 @@ aria-live="polite"` carrying the equivalent text for
       an indefinitely retained payload. And a record leg that is not live is
       not "gone": the facts as read keep the catalog's comparison baseline
       (an activation debt read from the record still names the installed
-      version, and the region's sentence says "(last known)" rather than
+      version, and the region's sentence says "(last known)" - whenever
+      EITHER leg is not live, since the debt is the record's installed
+      version read against the status read's running version - rather than
       re-offering that version as available), while every offer and the
       projector's park take the live facts only. An open Force confirm
       closes only when a live leg no longer carries its stage (the running version moving re-keys the

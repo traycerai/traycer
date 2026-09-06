@@ -19,7 +19,10 @@ const mocks = vi.hoisted(() => ({
   createDefaultRegistryClientMock: vi.fn(),
   busy: false,
   beforeSwapError: false,
-  lifecycleCalls: [] as Array<{ readonly force: boolean }>,
+  lifecycleCalls: [] as Array<{
+    readonly force: boolean;
+    readonly onWillStopHost: (() => void) | null;
+  }>,
 }));
 
 // Keep the real staging and commit primitives, but route their host paths to a
@@ -101,8 +104,14 @@ vi.mock("../../host/busy-check", () => ({
 }));
 
 vi.mock("../../service/install-lifecycle", () => ({
-  createServiceInstallLifecycle: (options: { readonly force: boolean }) => {
-    mocks.lifecycleCalls.push({ force: options.force });
+  createServiceInstallLifecycle: (options: {
+    readonly force: boolean;
+    readonly onWillStopHost: (() => void) | null;
+  }) => {
+    mocks.lifecycleCalls.push({
+      force: options.force,
+      onWillStopHost: options.onWillStopHost,
+    });
     const state = {
       priorState: "running" as ServiceInstallLifecycleState["priorState"],
       stoppedBeforeSwap: false,
@@ -238,10 +247,49 @@ describe("installHostDowngrade", () => {
     expect(readFileSync(join(installDir(), "traycer-host"), "utf8")).toBe(
       "new",
     );
-    expect(mocks.lifecycleCalls).toEqual([{ force: true }]);
+    expect(mocks.lifecycleCalls).toMatchObject([{ force: true }]);
     expect(await readHostInstallRecord(ENV)).toMatchObject({
       version: "1.2.0",
     });
+  });
+
+  it("hands ONE disruption boundary to both actuators - the lifecycle's onWillStopHost and the commit's onWillSwap - and it fires before the install record changes", async () => {
+    // The downgrade forwards `onWillDisruptHost` to the lifecycle
+    // (`onWillStopHost`, fired before the stop under its authority check -
+    // mocked here, so the identity is what this half pins) and to the
+    // commit (`onWillSwap`, fired after the pre-swap verify - real here,
+    // so the ORDER is what that half pins: the record read inside the
+    // callback is still the old install). Falsification: drop either
+    // forward in `installHostDowngrade` - the identity assertion or the
+    // call count below goes red.
+    await writeInstalled("1.3.0-rc.1", "old");
+    configureRegistry("1.2.0", "new");
+    // The hook is synchronous, so what it can observe is read synchronously:
+    // the installed bytes at the instant it fires.
+    const bytesAtCall: string[] = [];
+    const onWillDisruptHost = (): void => {
+      bytesAtCall.push(
+        readFileSync(join(installDir(), "traycer-host"), "utf8"),
+      );
+    };
+    await installHostDowngrade({
+      environment: ENV,
+      version: "1.2.0",
+      force: false,
+      onProgress: noopProgress,
+      onBeforeCommit: async () => undefined,
+      onWillDisruptHost,
+    });
+
+    expect(mocks.lifecycleCalls).toHaveLength(1);
+    expect(mocks.lifecycleCalls[0].onWillStopHost).toBe(onWillDisruptHost);
+    // The real commit fired the same function exactly once (`onWillSwap`),
+    // while the old bytes were still installed; the mocked lifecycle never
+    // calls its copy, so the count isolates the commit's forward.
+    expect(bytesAtCall).toEqual(["old"]);
+    expect(readFileSync(join(installDir(), "traycer-host"), "utf8")).toBe(
+      "new",
+    );
   });
 
   it("checks busy before commit and discards the owned staged tree without replacing the install", async () => {

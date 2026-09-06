@@ -824,11 +824,14 @@ export function HostOverviewPanel(props: {
         ? null
         : {
             installedVersion: legacyFactsRead.activationDebt.installedVersion,
-            // The record leg's liveness alone: the sentence this qualifies
-            // renders only inside the updates region, which is withheld
-            // outright on an unusable scope (`!usable ? null : …` below), so
-            // the scope needs no second mention here.
-            live: installationLive,
+            // BOTH legs: the debt is the record's installed version read
+            // against the status read's running version, so a status read
+            // that failed or aged (the host may already have restarted
+            // onto the installed version) makes the sentence "last known"
+            // exactly as a failed record read does. `statusLive` carries
+            // `usable` too. The region renders only under `usable`, so an
+            // unusable scope never reaches this sentence at all.
+            live: installationLive && statusLive,
           },
     platformKey: host?.platform ?? null,
     // Deliberately NOT held to `installationLive`: the manifest describes

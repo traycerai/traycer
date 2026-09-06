@@ -3074,6 +3074,73 @@ describe("Overview updates — record-leg liveness and entry-level floor gates",
     await screen.findByTestId("host-overview-operation-restart");
   });
 
+  it("a failed STATUS read qualifies the debt sentence as (last known) too - the running version it compares against is retained data", async () => {
+    // The debt is the record's installed version read against the status
+    // read's running version. A status poll that fails while the record
+    // poll keeps succeeding leaves `legacyFactsRead` built on a retained
+    // `hostVersion`, and the host may already have restarted onto the
+    // installed version - so the sentence must say "last known" exactly
+    // as it does for a failed record read (the pin above). Falsification:
+    // key `activationDebt.live` on `installationLive` alone and the
+    // qualified sentence below never appears.
+    let statusCalls = 0;
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.3.0-rc.2",
+      installation: managedInstallation(
+        installRecord("1.3.0-rc.3", null),
+        null,
+      ),
+      overrideHandlers: {
+        "host.status": () => {
+          statusCalls += 1;
+          if (statusCalls === 2) {
+            throw new Error("host unreachable");
+          }
+          return {
+            ready: true,
+            hostVersion: "1.3.0-rc.2",
+            protocolVersion: { major: 1, minor: 1 },
+            busy: false,
+            busySessionCount: 0,
+            updateProgress: null,
+            busyBreakdown: null,
+            updateOperation: null,
+            updateTransaction: null,
+          };
+        },
+        "host.update.check": () => ({
+          outcome: "ok" as const,
+          effectiveIncludePreReleases: true,
+          includePreReleasesSource: "installed-rc" as const,
+          manifest: multiVersionManifest(["1.3.0-rc.3"]),
+        }),
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    const { queryClient } = renderPanel();
+
+    await waitFor(() => {
+      expect(screen.getByRole("status").textContent).toBe(
+        "v1.3.0-rc.3 is installed — restart host to finish.",
+      );
+    });
+
+    await act(async () => {
+      await queryClient.invalidateQueries();
+    });
+    await waitFor(() => expect(statusCalls).toBe(2));
+    await waitFor(() => {
+      expect(screen.getByRole("status").textContent).toBe(
+        "v1.3.0-rc.3 is installed (last known) — restart host to finish.",
+      );
+    });
+    expect(screen.queryByRole("button", { name: "Update now" })).toBeNull();
+  });
+
   it("a floor that is not a version renders help and does NOT arm the recheck; a readable floor beside it does", async () => {
     // `CliFloor.repairable` is what the recheck is keyed on: the mounted
     // 30 s recheck exists to notice a CLI upgrade clearing the floor, and no
