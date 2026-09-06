@@ -35,7 +35,13 @@ function CliFloorRemedyControl(props: {
   const { action, desktopBridge } = props;
   switch (action.kind) {
     case "desktop-check":
-      return <DesktopRemedyCheck bridge={desktopBridge} />;
+      return (
+        <DesktopRemedyCheck
+          bridge={desktopBridge}
+          label={action.label}
+          checkOnMount={action.checkOnMount}
+        />
+      );
     case "restart-desktop-hint":
       return null;
     case "desktop-progress":
@@ -109,16 +115,32 @@ function CliFloorRemedyControl(props: {
 
 function DesktopRemedyCheck(props: {
   readonly bridge: DesktopAppUpdatesBridge | null;
+  readonly label: string | null;
+  readonly checkOnMount: boolean;
 }): ReactNode {
-  const { bridge } = props;
-  // One bridge check per mounted unknown-state episode. Checking/error remain
-  // this same action, so a failed check cannot create an effect retry loop.
-  // Host recovery polling belongs to the RPC table, never this component.
+  const { bridge, label, checkOnMount } = props;
+  // Only an idle updater needs an initial check. A failed check stays visible
+  // until the user retries; entering checking must not issue a second request.
+  // Keeping one component across these states avoids a mount-driven retry loop.
   useEffect(() => {
-    if (bridge === null) return;
-    void bridge.checkForUpdates("manual").catch((error: unknown) => {
-      appLogger.error("[app-update] floor remedy check failed", {}, error);
-    });
-  }, [bridge]);
-  return null;
+    if (checkOnMount) checkDesktopRemedy(bridge);
+  }, [bridge, checkOnMount]);
+  if (label === null) return null;
+  return (
+    <Button
+      type="button"
+      size="sm"
+      disabled={bridge === null}
+      onClick={() => checkDesktopRemedy(bridge)}
+    >
+      {label}
+    </Button>
+  );
+}
+
+function checkDesktopRemedy(bridge: DesktopAppUpdatesBridge | null): void {
+  if (bridge === null) return;
+  void bridge.checkForUpdates("manual").catch((error: unknown) => {
+    appLogger.error("[app-update] floor remedy check failed", {}, error);
+  });
 }

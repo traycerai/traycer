@@ -65,7 +65,7 @@ function snapshot(
   return {
     sequence: 1,
     status,
-    currentVersion: "1.2.0",
+    currentVersion: "1.3.0",
     allowPrerelease: false,
     latestVersion: "1.3.0",
     latestCompatibilityEpoch: 1,
@@ -154,7 +154,11 @@ describe("describeCliFloorRemedy", () => {
         testCase.isLocalMachine &&
         testCase.bridge
       ) {
-        expect(kinds).toEqual([expectedDesktopKind(testCase.status)]);
+        if (testCase.status === "error" || testCase.status === "unavailable") {
+          expect(kinds).toEqual(["desktop-check", "help"]);
+        } else {
+          expect(kinds).toEqual([expectedDesktopKind(testCase.status)]);
+        }
         continue;
       }
       expect(kinds).toEqual(["copy-command"]);
@@ -447,13 +451,231 @@ describe("describeCliFloorRemedy", () => {
     });
   });
 
+  it("falls back when Desktop candidates are below a known CLI floor", () => {
+    const candidates = [
+      { version: "1.2.0", belowFloor: true },
+      { version: "1.3.0-rc.3", belowFloor: true },
+      { version: "1.3.0-rc.4", belowFloor: false },
+      { version: "1.3.0-rc.5", belowFloor: false },
+      { version: "1.3.0", belowFloor: false },
+    ] as const;
+    for (const status of ["available", "downloading", "ready"] as const) {
+      for (const candidate of candidates) {
+        const result = describeCliFloorRemedy(
+          input({
+            source: "desktop",
+            platform: "darwin-arm64",
+            isLocalMachine: true,
+            desktopUpdate: snapshot(status, {
+              latestVersion: candidate.version,
+            }),
+            overrides: { requiredCliVersion: "1.3.0-rc.4" },
+          }),
+        );
+        if (candidate.belowFloor) {
+          // Bypassing describeDesktopFloorFallback would expose a normal
+          // Desktop action for this refusal; these fallback pins must turn RED
+          // under the concrete D01 ablation.
+          expect(result.sentence).toBe(
+            `Traycer v${candidate.version} is the latest on this update channel and its command-line tools are below 1.3.0-rc.4. Open a terminal on build-host and run the copied command, then select Check now.`,
+          );
+          expect(result.actions).toEqual([
+            {
+              kind: "copy-command",
+              label: "Copy command",
+              command: "'/home/u/.local/bin/traycer' cli upgrade",
+            },
+            { kind: "help", label: "Show installation help" },
+          ]);
+          continue;
+        }
+        // Removing the comparable equal/greater floor check would make these
+        // clear candidates show repair guidance; this negative candidate pin
+        // must turn RED under that concrete semver-ablation.
+        expect(result.actions[0]?.kind).toBe(expectedDesktopKind(status));
+      }
+    }
+  });
+
+  it("uses help instead of guessing a Desktop CLI command when the floor fallback lacks a safe path", () => {
+    const pathCases = [
+      {
+        platform: "darwin-arm64",
+        cliBinaryPath: "/home/u/bin/traycer",
+        copy: true,
+      },
+      { platform: "linux-x64", cliBinaryPath: null, copy: false },
+      { platform: "linux-x64", cliBinaryPath: "traycer", copy: false },
+      {
+        platform: "win32-x64",
+        cliBinaryPath: "/home/u/bin/traycer",
+        copy: false,
+      },
+      { platform: null, cliBinaryPath: "/home/u/bin/traycer", copy: false },
+    ] as const;
+    for (const pathCase of pathCases) {
+      const result = describeCliFloorRemedy(
+        input({
+          source: "desktop",
+          platform: pathCase.platform,
+          isLocalMachine: true,
+          desktopUpdate: snapshot("available", { latestVersion: "1.2.0" }),
+          overrides: {
+            cliBinaryPath: pathCase.cliBinaryPath,
+            requiredCliVersion: "1.3.0",
+          },
+        }),
+      );
+      // Removing the absolute-POSIX/non-Windows path guard would guess a
+      // command for an unsafe case; these negative fallback pins must RED.
+      expect(
+        result.actions.some((action) => action.kind === "copy-command"),
+      ).toBe(pathCase.copy);
+      expect(result.actions.at(-1)).toEqual({
+        kind: "help",
+        label: "Show installation help",
+      });
+    }
+
+    const upToDate = describeCliFloorRemedy(
+      input({
+        source: "desktop",
+        platform: "darwin-arm64",
+        isLocalMachine: true,
+        desktopUpdate: snapshot("up-to-date", {
+          currentVersion: "1.2.0",
+          latestVersion: null,
+        }),
+        overrides: {
+          requiredCliVersion: "1.3.0",
+        },
+      }),
+    );
+    // Removing the up-to-date currentVersion fallback would lose a known
+    // below-floor candidate; this negative fallback pin must turn RED.
+    expect(upToDate.sentence).toContain("Traycer Desktop v1.2.0 is installed");
+
+    const installedVersionAheadOfFeed = describeCliFloorRemedy(
+      input({
+        source: "desktop",
+        platform: "darwin-arm64",
+        isLocalMachine: true,
+        desktopUpdate: snapshot("up-to-date", {
+          currentVersion: "1.3.0-rc.4",
+          latestVersion: "1.2.0",
+        }),
+        overrides: { requiredCliVersion: "1.3.0-rc.4" },
+      }),
+    );
+    // Restoring the prior candidate expression
+    // `snapshot.latestVersion ?? (snapshot.status === "up-to-date" ?
+    // snapshot.currentVersion : null)` would select the older feed version
+    // and expose floor fallback; this feed-behind pin must turn RED while the
+    // below-floor/null-latest case above remains green.
+    expect(installedVersionAheadOfFeed.actions).toEqual([
+      { kind: "restart-desktop-hint" },
+    ]);
+
+    for (const latestVersion of [null, "not-a-version"] as const) {
+      const unknown = describeCliFloorRemedy(
+        input({
+          source: "desktop",
+          platform: "darwin-arm64",
+          isLocalMachine: true,
+          desktopUpdate: snapshot("available", { latestVersion }),
+          overrides: { requiredCliVersion: "1.3.0" },
+        }),
+      );
+      // Removing the unknown-candidate fallback would fabricate a normal
+      // Desktop action; these negative missing/unparseable pins must RED.
+      expect(unknown.sentence).toContain(
+        "couldn't verify that this Desktop update includes Traycer CLI 1.3.0 or newer",
+      );
+      expect(unknown.actions.at(-1)).toEqual({
+        kind: "help",
+        label: "Show installation help",
+      });
+    }
+  });
+
+  it("shows retryable Desktop failures and only auto-checks an idle updater", () => {
+    const failures = [
+      {
+        status: "error" as const,
+        errorMessage: "  Desktop updater failed.  ",
+        sentence: "Desktop updater failed.",
+      },
+      {
+        status: "unavailable" as const,
+        errorMessage: null,
+        sentence: "Traycer Desktop couldn't check for updates.",
+      },
+    ] as const;
+    for (const failure of failures) {
+      const result = describeCliFloorRemedy(
+        input({
+          source: "desktop",
+          platform: "darwin-arm64",
+          isLocalMachine: true,
+          desktopUpdate: snapshot(failure.status, {
+            errorMessage: failure.errorMessage,
+          }),
+          overrides: {},
+        }),
+      );
+      expect(result.sentence).toBe(failure.sentence);
+      // Mapping failures back to Checking/null-label/checkOnMount true would
+      // hide recovery; this negative retry/help pin must RED under that D02
+      // ablation.
+      expect(result.actions).toEqual([
+        {
+          kind: "desktop-check",
+          label: "Check again",
+          checkOnMount: false,
+        },
+        { kind: "help", label: "Show installation help" },
+      ]);
+    }
+
+    const checking = describeCliFloorRemedy(
+      input({
+        source: "desktop",
+        platform: "darwin-arm64",
+        isLocalMachine: true,
+        desktopUpdate: snapshot("checking", {}),
+        overrides: {},
+      }),
+    );
+    expect(checking.sentence).toBe("Checking for a Traycer Desktop update…");
+    expect(checking.actions).toEqual([
+      { kind: "desktop-check", label: null, checkOnMount: false },
+    ]);
+    const idle = describeCliFloorRemedy(
+      input({
+        source: "desktop",
+        platform: "darwin-arm64",
+        isLocalMachine: true,
+        desktopUpdate: snapshot("idle", {}),
+        overrides: {},
+      }),
+    );
+    // Changing idle's sentence back to Checking would claim work is in
+    // flight before the initial check starts; this copy pin must turn RED.
+    expect(idle.sentence).toBe("Check for a Traycer Desktop update.");
+    expect(idle.actions).toEqual([
+      { kind: "desktop-check", label: null, checkOnMount: true },
+    ]);
+  });
+
   it("uses a restart hint only when Desktop is up to date and checks unknown states", () => {
     const current = describeCliFloorRemedy(
       input({
         source: "desktop",
         platform: "darwin-arm64",
         isLocalMachine: true,
-        desktopUpdate: snapshot("up-to-date", {}),
+        desktopUpdate: snapshot("up-to-date", {
+          currentVersion: "1.3.0",
+        }),
         overrides: {},
       }),
     );
@@ -468,7 +690,20 @@ describe("describeCliFloorRemedy", () => {
           overrides: {},
         }),
       );
-      expect(result.actions).toEqual([{ kind: "desktop-check" }]);
+      if (status === "checking") {
+        expect(result.actions).toEqual([
+          { kind: "desktop-check", label: null, checkOnMount: false },
+        ]);
+      } else {
+        expect(result.actions).toEqual([
+          {
+            kind: "desktop-check",
+            label: "Check again",
+            checkOnMount: false,
+          },
+          { kind: "help", label: "Show installation help" },
+        ]);
+      }
     }
     // Removing the explicit up-to-date arm would turn a healthy Desktop state
     // into a retrying check and this negative pin would turn RED.

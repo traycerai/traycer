@@ -35,7 +35,10 @@ interface CliFloorRemedyActionPayloads {
     readonly showGuidance: boolean;
     readonly installInFlight: boolean;
   };
-  readonly "desktop-check": unknown;
+  readonly "desktop-check": {
+    readonly label: string | null;
+    readonly checkOnMount: boolean;
+  };
   readonly "restart-desktop-hint": unknown;
   readonly "copy-command": {
     readonly label: string;
@@ -81,7 +84,7 @@ export function describeCliFloorRemedy(
     input.cliSource === "desktop" &&
     input.desktopUpdate !== null
   ) {
-    return describeDesktopRemedy(input.desktopUpdate, input.requiredCliVersion);
+    return describeDesktopRemedy(input.desktopUpdate, input);
   }
   if (input.cliSource !== "desktop" && input.cliSource !== "manual") {
     const command = PACKAGE_MANAGER_UPGRADE_COMMAND[input.cliSource];
@@ -113,10 +116,11 @@ export function describeCliFloorRemedy(
 
 function describeDesktopRemedy(
   snapshot: DesktopAppUpdateSnapshot,
-  requiredCliVersion: string | null,
+  input: CliFloorRemedyInput,
 ): CliFloorRemedy {
-  const version = snapshot.latestVersion ?? requiredCliVersion;
-  const versionSuffix = version === null ? "" : ` ${version}`;
+  const fallback = describeDesktopFloorFallbackFor(snapshot, input);
+  if (fallback !== null) return fallback;
+  const version = snapshot.latestVersion ?? input.requiredCliVersion;
   switch (snapshot.status) {
     case "available":
       return {
@@ -143,40 +147,137 @@ function describeDesktopRemedy(
           },
         ],
       };
-    case "ready": {
-      // Same precedence as the header: a blocked location wins over manual
-      // install guidance, and main's in-flight snapshot disarms every surface.
-      const showGuidance =
-        snapshot.installBlockedReason === null &&
-        snapshot.installGuidance !== null;
-      return {
-        sentence: `Traycer Desktop${versionSuffix} is ready. Restart Traycer to finish, then this host update can install.`,
-        actions: [
-          {
-            kind: "desktop-install",
-            label: showGuidance ? "Finish update" : "Restart to update",
-            disabled:
-              snapshot.installBlockedReason !== null ||
-              snapshot.installInFlight,
-            tooltip: snapshot.installBlockedReason,
-            showGuidance,
-            installInFlight: snapshot.installInFlight,
-          },
-        ],
-      };
-    }
+    case "ready":
+      return describeDesktopReady(snapshot, version);
     case "up-to-date":
       return {
         sentence:
           "Traycer Desktop is up to date, but this computer still needs to finish updating its host tools. Restart Traycer Desktop to finish.",
         actions: [{ kind: "restart-desktop-hint" }],
       };
-    default:
+    case "error":
+    case "unavailable":
+      return describeDesktopCheckFailed(snapshot);
+    case "idle":
+      return {
+        sentence: "Check for a Traycer Desktop update.",
+        actions: [{ kind: "desktop-check", label: null, checkOnMount: true }],
+      };
+    case "checking":
       return {
         sentence: "Checking for a Traycer Desktop update…",
-        actions: [{ kind: "desktop-check" }],
+        actions: [{ kind: "desktop-check", label: null, checkOnMount: false }],
       };
   }
+}
+
+function describeDesktopReady(
+  snapshot: DesktopAppUpdateSnapshot,
+  version: string | null,
+): CliFloorRemedy {
+  // Same precedence as the header: a blocked location wins over manual
+  // install guidance, and main's in-flight snapshot disarms every surface.
+  const showGuidance =
+    snapshot.installBlockedReason === null && snapshot.installGuidance !== null;
+  return {
+    sentence: `Traycer Desktop${version === null ? "" : ` ${version}`} is ready. Restart Traycer to finish, then this host update can install.`,
+    actions: [
+      {
+        kind: "desktop-install",
+        label: showGuidance ? "Finish update" : "Restart to update",
+        disabled:
+          snapshot.installBlockedReason !== null || snapshot.installInFlight,
+        tooltip: snapshot.installBlockedReason,
+        showGuidance,
+        installInFlight: snapshot.installInFlight,
+      },
+    ],
+  };
+}
+
+function describeDesktopCheckFailed(
+  snapshot: DesktopAppUpdateSnapshot,
+): CliFloorRemedy {
+  return {
+    sentence:
+      snapshot.errorMessage?.trim() ||
+      "Traycer Desktop couldn't check for updates.",
+    actions: [
+      { kind: "desktop-check", label: "Check again", checkOnMount: false },
+      { kind: "help", label: "Show installation help" },
+    ],
+  };
+}
+
+// Desktop and its bundled CLI share a version. Downloading or restarting a
+// stable build below an RC host's floor would leave the same refusal. When no
+// update is offered, a restart runs the installed Desktop, and the feed's
+// latest version may be older than it (for example after leaving RCs).
+function describeDesktopFloorFallbackFor(
+  snapshot: DesktopAppUpdateSnapshot,
+  input: CliFloorRemedyInput,
+): CliFloorRemedy | null {
+  switch (snapshot.status) {
+    case "available":
+    case "downloading":
+    case "ready":
+      return describeDesktopFloorFallback(input, snapshot.latestVersion);
+    case "up-to-date":
+      return describeDesktopFloorFallback(input, snapshot.currentVersion);
+    default:
+      return null;
+  }
+}
+
+function describeDesktopFloorFallback(
+  input: CliFloorRemedyInput,
+  candidate: string | null,
+): CliFloorRemedy | null {
+  const { requiredCliVersion } = input;
+  if (requiredCliVersion === null) return null;
+  const comparison =
+    candidate === null
+      ? null
+      : compareHostVersions(candidate, requiredCliVersion);
+  if (
+    comparison !== null &&
+    comparison.comparable &&
+    comparison.ordering !== "less"
+  ) {
+    return null;
+  }
+  const versionDescription =
+    input.desktopUpdate?.status === "up-to-date"
+      ? `Traycer Desktop v${candidate} is installed`
+      : `Traycer v${candidate} is the latest on this update channel`;
+  const sentence =
+    comparison !== null && comparison.comparable
+      ? `${versionDescription} and its command-line tools are below ${requiredCliVersion}.`
+      : `Traycer couldn't verify that this Desktop update includes Traycer CLI ${requiredCliVersion} or newer.`;
+  // A Desktop-owned CLI may have a separate recorded binary. Only reuse the
+  // model's existing absolute POSIX path route; guessing PATH could upgrade
+  // another copy and leave this host refused by the same bundled CLI.
+  const command =
+    input.platform !== null &&
+    !input.platform.startsWith("win32") &&
+    input.cliBinaryPath !== null &&
+    input.cliBinaryPath.startsWith("/")
+      ? posixCliUpgradeCommand(input.cliBinaryPath)
+      : null;
+  const help: CliFloorRemedyAction = {
+    kind: "help",
+    label: "Show installation help",
+  };
+  return {
+    sentence:
+      command === null
+        ? sentence
+        : `${sentence} Open a terminal on ${input.hostName} and run the copied command, then select Check now.`,
+    actions:
+      command === null
+        ? [help]
+        : [{ kind: "copy-command", label: "Copy command", command }, help],
+  };
 }
 
 function describeCopyRemedy(

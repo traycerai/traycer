@@ -278,6 +278,80 @@ describe("HostOverviewUpdatesRegion CLI floor remedy", () => {
     expect(bridge.installUpdate).not.toHaveBeenCalled();
   });
 
+  it("shows manual retry and help for Desktop failures without automatic checks", async () => {
+    const failures = [
+      {
+        status: "error" as const,
+        errorMessage: "Updater failed",
+        sentence: "Updater failed",
+      },
+      {
+        status: "unavailable" as const,
+        errorMessage: null,
+        sentence: "Traycer Desktop couldn't check for updates.",
+      },
+    ] as const;
+    for (const failure of failures) {
+      const bridge = new FakeDesktopBridge();
+      const remedy = describeCliFloorRemedy({
+        isLocalMachine: true,
+        platform: "darwin-arm64",
+        cliSource: "desktop",
+        cliBinaryPath: null,
+        cliVersion: "1.2.0",
+        requiredCliVersion: "1.3.0",
+        desktopUpdate: {
+          ...SNAPSHOT,
+          status: failure.status,
+          errorMessage: failure.errorMessage,
+        },
+        hostName: "build-host",
+      });
+      const rendered = renderRegion(remedy, bridge);
+
+      expect(screen.getByRole("status").textContent).toBe(failure.sentence);
+      expect(screen.getByRole("button", { name: "Check again" })).toBeTruthy();
+      expect(
+        screen.getByRole("button", { name: "Show installation help" }),
+      ).toBeTruthy();
+      await waitFor(() =>
+        expect(bridge.checkForUpdates).not.toHaveBeenCalled(),
+      );
+      // D02's automatic retry mapping or D04's removal of only
+      // `if (checkOnMount)` would dispatch on this failure mount. Retaining
+      // `[bridge, checkOnMount]` isolates the mount guard; this count must
+      // remain zero through rerenders until the user clicks.
+      rendered.rerender(
+        regionElement(
+          describeCliFloorRemedy({
+            isLocalMachine: true,
+            platform: "darwin-arm64",
+            cliSource: "desktop",
+            cliBinaryPath: null,
+            cliVersion: "1.2.0",
+            requiredCliVersion: "1.3.0",
+            desktopUpdate: { ...SNAPSHOT, status: "checking" },
+            hostName: "build-host",
+          }),
+          bridge,
+        ),
+      );
+      rendered.rerender(regionElement(remedy, bridge));
+      await waitFor(() =>
+        expect(bridge.checkForUpdates).not.toHaveBeenCalled(),
+      );
+
+      // Removing the retry button's manual dispatch would keep this genuine
+      // spy at zero; these exact per-click counts must turn RED under D03.
+      fireEvent.click(screen.getByRole("button", { name: "Check again" }));
+      expect(bridge.checkForUpdates).toHaveBeenCalledTimes(1);
+      expect(bridge.checkForUpdates).toHaveBeenCalledWith("manual");
+      fireEvent.click(screen.getByRole("button", { name: "Check again" }));
+      expect(bridge.checkForUpdates).toHaveBeenCalledTimes(2);
+      cleanup();
+    }
+  });
+
   it("checks an unknown Desktop state once and does not create an effect retry loop", async () => {
     const bridge = new FakeDesktopBridge();
     const remedy = describeCliFloorRemedy({
@@ -287,7 +361,7 @@ describe("HostOverviewUpdatesRegion CLI floor remedy", () => {
       cliBinaryPath: null,
       cliVersion: "1.2.0",
       requiredCliVersion: "1.3.0",
-      desktopUpdate: { ...SNAPSHOT, status: "error" },
+      desktopUpdate: { ...SNAPSHOT, status: "idle" },
       hostName: "build-host",
     });
     const rendered = renderRegion(remedy, bridge);
@@ -313,9 +387,9 @@ describe("HostOverviewUpdatesRegion CLI floor remedy", () => {
     await waitFor(() =>
       expect(bridge.checkForUpdates).toHaveBeenCalledTimes(1),
     );
-    // Removing the bridge dependency guard / stable unknown-state effect would
-    // call manual checks again on every render; this negative call-count pin
-    // must turn RED under that concrete retry-loop ablation.
+    // Removing ONLY `if (checkOnMount)` while retaining `[bridge, checkOnMount]`
+    // would call once on idle mount and again on the idle-to-checking
+    // transition; this negative call-count pin must turn RED under D04.
     expect(bridge.checkForUpdates).toHaveBeenCalledWith("manual");
   });
 });
