@@ -411,6 +411,72 @@ export type HostUpdateInstallResponseV11 = z.infer<
   typeof hostUpdateInstallResponseV11Schema
 >;
 
+/**
+ * The request shared by the two BOUND update dispatches,
+ * `host.update.activate` and `host.update.continue`.
+ *
+ * It names an ATTEMPT, not a version. That is the whole difference from
+ * `host.update.install`: these methods resume work a durable record already
+ * describes, so the operation comes from the record's continuation and the
+ * caller supplies only which attempt it means and whether the user asked to
+ * push past a busy host. A version here would be a second, unsynchronised copy
+ * of a fact the record already owns — and one a stale UI could get wrong.
+ */
+export const hostUpdateBoundDispatchRequestSchema = z.object({
+  attemptId: z.string().min(1),
+  force: z.boolean(),
+});
+export type HostUpdateBoundDispatchRequest = z.infer<
+  typeof hostUpdateBoundDispatchRequestSchema
+>;
+
+/**
+ * The response shared by both bound dispatches — deliberately NOT
+ * `host.update.install`'s, at any minor.
+ *
+ * Two properties of the install response make reuse actively wrong here:
+ *
+ *  - its `cli-failed` arm carries NO reason (`{ outcome: "cli-failed" }`), and
+ *    a bound dispatch's most important failure is a CLI too old to honour the
+ *    bound options at all. That is a specific, actionable thing to tell a user
+ *    ("update the CLI, then try again"), and an arm with nowhere to put it
+ *    would erase it at the wire;
+ *  - the host projects every `host.update.install@1.0` peer's decision as
+ *    `accepted {null}`, a legacy accommodation for callers that predate
+ *    attempt ids. These methods are new AT 1.0, so there is no such peer, and
+ *    inheriting a projection that turns a refusal into an acceptance would be
+ *    the "never reports a false success" rule broken on day one.
+ *
+ * Every arm carries a non-null payload, unlike the install response's
+ * required-key/nullable-value fields: those exist because an OLD peer might
+ * not have said, and there are no old peers here. A caller may therefore act
+ * on `attemptId` and render `reason` without a "did not say" branch.
+ */
+export const hostUpdateBoundDispatchResponseSchema = z.discriminatedUnion(
+  "outcome",
+  [
+    z.object({
+      outcome: z.literal("accepted"),
+      attemptId: z.string().min(1),
+    }),
+    z.object({
+      outcome: z.literal("already-updating"),
+      attemptId: z.string().min(1),
+    }),
+    z.object({
+      outcome: z.literal("dispatch-indeterminate"),
+      reason: z.string().min(1),
+    }),
+    z.object({
+      outcome: z.literal("cli-failed"),
+      reason: z.string().min(1),
+    }),
+  ],
+);
+export type HostUpdateBoundDispatchResponse = z.infer<
+  typeof hostUpdateBoundDispatchResponseSchema
+>;
+
 export const hostGetInstallationInfoRequestSchema = emptyRequestSchema;
 export type HostGetInstallationInfoRequest = z.infer<
   typeof hostGetInstallationInfoRequestSchema

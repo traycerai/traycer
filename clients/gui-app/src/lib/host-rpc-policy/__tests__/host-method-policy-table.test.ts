@@ -166,6 +166,23 @@ describe("host method poll policy table", () => {
     expect(HOST_METHOD_POLL_TABLE["agent.roles.relinquish"].mode).toBe("fifo");
   });
 
+  it("declares both bound update dispatches as FIFO, unpolled one-shot commands", () => {
+    // Same reason as `host.update.install`: they mutate the host's own
+    // lifecycle, so two in flight must never collapse to "the latest".
+    // Unpolled - progress is read from `host.status.updateOperation`, never
+    // by re-asking the method what happened.
+    expect(HOST_METHOD_POLL_TABLE["host.update.activate"]).toEqual({
+      mode: "fifo",
+      joinResponseTimeoutMs: null,
+      poll: null,
+    });
+    expect(HOST_METHOD_POLL_TABLE["host.update.continue"]).toEqual({
+      mode: "fifo",
+      joinResponseTimeoutMs: null,
+      poll: null,
+    });
+  });
+
   it("declares the two chat-sharing writes as independent fifo queues", () => {
     // fifo is per (method, params). These two methods never share a
     // coordinator queue; cross-surface ordering is the client-side

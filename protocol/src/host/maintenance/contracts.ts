@@ -19,6 +19,8 @@ import {
   hostUpdateCheckRequestSchemaV11,
   hostUpdateCheckResponseSchema,
   hostUpdateCheckResponseSchemaV11,
+  hostUpdateBoundDispatchRequestSchema,
+  hostUpdateBoundDispatchResponseSchema,
   hostUpdateInstallRequestSchema,
   hostUpdateInstallResponseSchema,
   hostUpdateInstallResponseV11Schema,
@@ -172,6 +174,43 @@ export const hostUpdateInstallUpgradeV10ToV11 = defineUpgradePath<
     response.outcome === "accepted" || response.outcome === "already-updating"
       ? { ...response, attemptId: null }
       : response,
+});
+
+/**
+ * Resumes a parked attempt's ACTIVATION — the bytes are already placed and
+ * only the restart is owed.
+ *
+ * A METHOD rather than a field on `host.update.install`, and that is the
+ * authorization design, not a naming preference. An intent carried as a
+ * request field is silently DROPPED when the client projects its request onto
+ * a lower negotiated minor, so an old host would run a plain install for a
+ * request that asked for an activation. A method a host does not have is
+ * refused at dispatch instead, and the client falls back to the legacy route
+ * with nothing lost in translation.
+ */
+export const hostUpdateActivateV10 = defineRpcContract({
+  method: "host.update.activate",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: hostUpdateBoundDispatchRequestSchema,
+  responseSchema: hostUpdateBoundDispatchResponseSchema,
+});
+
+/**
+ * Resumes a parked attempt's OWN continuation, whichever it is — the apply a
+ * busy host deferred, or the activation.
+ *
+ * The distinction from {@link hostUpdateActivateV10} is the authority the
+ * caller is exercising, not the work performed: `activate` says "restart into
+ * bytes that are already placed", while `continue` says "carry on with
+ * whatever this attempt was authorized to do". They share a request and a
+ * response shape and stay separate methods so a host can offer, refuse and log
+ * them independently.
+ */
+export const hostUpdateContinueV10 = defineRpcContract({
+  method: "host.update.continue",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: hostUpdateBoundDispatchRequestSchema,
+  responseSchema: hostUpdateBoundDispatchResponseSchema,
 });
 
 /** Returns this slot's shared on-disk installation records, or tree-run state. */

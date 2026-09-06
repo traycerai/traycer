@@ -972,7 +972,10 @@ describe("runAttemptExecutorSegment - the dispatch ACK is stamped AFTER the clai
     );
     expect(decoded.kind).toBe("valid");
     if (decoded.kind !== "valid") return;
-    expect(decoded.ack.attemptId).toBe(stampedIdentity);
+    expect(decoded.ack.result).toMatchObject({
+      kind: "claimed",
+      attemptId: stampedIdentity,
+    });
     expect(decoded.ack.nonce).toBe("nonce-abcdefgh");
   });
 });
@@ -1006,6 +1009,8 @@ describe("runAttemptExecutorSegment - the cohort gate is scoped to ADMISSION (Ti
           expected: null,
           newAttemptId: "adopted-attempt-1",
           initialPhase: "applying",
+          initialContinuation: null,
+          claim: null,
           nowIso: "2026-01-01T00:00:00.000Z",
         },
       },
@@ -1023,6 +1028,7 @@ describe("runAttemptExecutorSegment - the cohort gate is scoped to ADMISSION (Ti
           continuation: "activate",
           progress: null,
           error: null,
+          claimRefresh: null,
           nowIso: "2026-01-01T00:01:00.000Z",
         },
       },
@@ -1115,6 +1121,8 @@ describe("runAttemptExecutorSegment - recovery path runs the injected reader und
           expected: null,
           newAttemptId: "attempt-1",
           initialPhase: "applying",
+          initialContinuation: null,
+          claim: null,
           nowIso: "2026-01-01T00:00:00.000Z",
         },
       },
@@ -1606,6 +1614,7 @@ describe("execute()'s complete() closure - fault points around the terminal writ
             continuation: null,
             progress: null,
             error: null,
+            claimRefresh: null,
             nowIso: "2026-01-01T00:05:00.000Z",
           },
         },

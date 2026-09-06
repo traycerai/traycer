@@ -54,12 +54,15 @@ describe("stampUpdateDispatchAck", () => {
     expect(decoded).toEqual({
       kind: "valid",
       ack: {
-        v: 1,
+        v: 2,
         nonce: "nonce-abcdefgh",
-        attemptId: "attempt-1",
-        generation: 2,
-        sequence: 5,
-        claimedAt: "2026-01-01T00:00:00.000Z",
+        result: {
+          kind: "claimed",
+          attemptId: "attempt-1",
+          generation: 2,
+          sequence: 5,
+          claimedAt: "2026-01-01T00:00:00.000Z",
+        },
       },
     });
   });
@@ -103,7 +106,10 @@ describe("stampUpdateDispatchAck", () => {
     // The publish is a rename, so a reader sees the old ACK or the new one and
     // never a mix of the two.
     expect(decoded.ack.nonce).toBe("nonce-abcdefgh");
-    expect(decoded.ack.attemptId).toBe("attempt-1");
+    expect(decoded.ack.result).toMatchObject({
+      kind: "claimed",
+      attemptId: "attempt-1",
+    });
   });
 
   it("cleans up its scratch file when the publish itself fails", async () => {

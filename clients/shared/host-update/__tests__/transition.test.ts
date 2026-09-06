@@ -4,6 +4,7 @@ import {
   attemptIdentityOf,
   compareAttemptOrder,
   nextAttemptCounter,
+  type HostUpdateAttemptClaimBaseline,
   type HostUpdateAttemptIdentity,
   type HostUpdateAttemptRecord,
 } from "../record";
@@ -52,6 +53,8 @@ function baseRequest(
     expected: null,
     newAttemptId: "new-attempt",
     initialPhase: "downloading",
+    initialContinuation: null,
+    claim: null,
     nowIso: "2026-01-01T00:10:00.000Z",
     ...overrides,
   };
@@ -87,6 +90,67 @@ describe("decideAttemptClaim - create", () => {
       completedAt: null,
       error: null,
     });
+  });
+
+  it("creates preparing/activate for initialContinuation 'activate' (the activation-debt arm), and the record can then legally park at waiting-to-activate", () => {
+    const decision = decideAttemptClaim({
+      current: { kind: "absent" },
+      request: baseRequest({
+        initialPhase: "preparing",
+        initialContinuation: "activate",
+      }),
+      holder: HELD,
+    });
+    expect(decision.kind).toBe("create");
+    if (decision.kind !== "create") return;
+    expect(decision.record.phase).toBe("preparing");
+    expect(decision.record.execution).toBe("active");
+    expect(decision.record.continuation).toBe("activate");
+
+    const parked = advanceAttempt(
+      decision.record,
+      attemptIdentityOf(decision.record),
+      {
+        phase: "waiting-to-activate",
+        continuation: "activate",
+        progress: null,
+        error: null,
+        claimRefresh: null,
+        nowIso: "2026-01-01T00:11:00.000Z",
+      },
+    );
+    expect(parked.kind).toBe("advanced");
+    if (parked.kind !== "advanced") return;
+    expect(parked.record.phase).toBe("waiting-to-activate");
+    expect(parked.record.execution).toBe("parked");
+    expect(parked.record.continuation).toBe("activate");
+  });
+
+  it("writes the claim baseline verbatim when the request carries one, and omits the key entirely for null (byte-identical to today)", () => {
+    const claim: HostUpdateAttemptClaimBaseline = {
+      installedVersion: "1.0.0",
+      installGeneration: "gen-a",
+      stageFingerprint: "fp-a",
+      allowDowngrade: true,
+    };
+    const withClaim = decideAttemptClaim({
+      current: { kind: "absent" },
+      request: baseRequest({ claim }),
+      holder: HELD,
+    });
+    expect(withClaim.kind).toBe("create");
+    if (withClaim.kind === "create")
+      expect(withClaim.record.claim).toEqual(claim);
+
+    const withoutClaim = decideAttemptClaim({
+      current: { kind: "absent" },
+      request: baseRequest({ claim: null }),
+      holder: HELD,
+    });
+    expect(withoutClaim.kind).toBe("create");
+    if (withoutClaim.kind === "create") {
+      expect("claim" in withoutClaim.record).toBe(false);
+    }
   });
 
   it.each([
@@ -316,6 +380,57 @@ describe("decideAttemptClaim - resume: each action against each parked continuat
       });
     },
   );
+
+  // `continue` is identity-bound (§ D19): it does not name an operation, it
+  // names an ATTEMPT and adopts whichever continuation that attempt's park
+  // says. So, unlike every other action above, it resumes BOTH parks.
+  it("resumes a resume-apply park for action continue", () => {
+    const decision = decideAttemptClaim({
+      current: { kind: "valid", version: 2, value: resumeApplyParked },
+      request: baseRequest({
+        action: "continue",
+        expected: attemptIdentityOf(resumeApplyParked),
+      }),
+      holder: HELD,
+    });
+    expect(decision.kind).toBe("resume");
+    if (decision.kind !== "resume") return;
+    expect(decision.continuation).toBe("resume-apply");
+    expect(decision.record.continuation).toBe("resume-apply");
+  });
+
+  it("resumes an activate park for action continue", () => {
+    const decision = decideAttemptClaim({
+      current: { kind: "valid", version: 2, value: activateParked },
+      request: baseRequest({
+        action: "continue",
+        expected: attemptIdentityOf(activateParked),
+      }),
+      holder: HELD,
+    });
+    expect(decision.kind).toBe("resume");
+    if (decision.kind !== "resume") return;
+    expect(decision.continuation).toBe("activate");
+    expect(decision.record.continuation).toBe("activate");
+  });
+});
+
+describe("decideAttemptClaim - continue with expected: null is refused, never a create", () => {
+  it("refuses stale-expectation for continue with expected: null, before any record is even consulted", () => {
+    // Invariant: `continue with expected: null` -> `stale-expectation`. This
+    // is the generic non-`start` rule (§1.1) - `continue` is never the sole
+    // unbound operation `start` is, so it cannot mint a fresh attempt either.
+    const decision = decideAttemptClaim({
+      current: { kind: "absent" },
+      request: baseRequest({ action: "continue", expected: null }),
+      holder: HELD,
+    });
+    expect(decision).toEqual({
+      kind: "refuse",
+      reason: "stale-expectation",
+      observed: null,
+    });
+  });
 });
 
 describe("decideAttemptClaim - recovery outranks supersession", () => {
@@ -783,6 +898,7 @@ describe("advanceAttempt - continuation provenance matrix", () => {
         continuation,
         progress: null,
         error: null,
+        claimRefresh: null,
         nowIso: "2026-01-01T00:05:00.000Z",
       });
       expect(outcome).toEqual({ kind: "rejected", reason });
@@ -801,6 +917,7 @@ describe("advanceAttempt - continuation provenance matrix", () => {
         continuation: "activate",
         progress: null,
         error: null,
+        claimRefresh: null,
         nowIso: "2026-01-01T00:05:00.000Z",
       });
       expect(outcome.kind).toBe("advanced");
@@ -821,6 +938,7 @@ describe("advanceAttempt - continuation provenance matrix", () => {
       continuation: "activate",
       progress: null,
       error: null,
+      claimRefresh: null,
       nowIso: "2026-01-01T00:05:00.000Z",
     });
     expect(reparking.kind).toBe("advanced");
@@ -831,6 +949,7 @@ describe("advanceAttempt - continuation provenance matrix", () => {
       continuation: "activate",
       progress: null,
       error: null,
+      claimRefresh: null,
       nowIso: "2026-01-01T00:06:00.000Z",
     });
     expect(restarting.kind).toBe("advanced");
@@ -844,6 +963,7 @@ describe("advanceAttempt - continuation provenance matrix", () => {
         continuation: "activate",
         progress: null,
         error: null,
+        claimRefresh: null,
         nowIso: "2026-01-01T00:07:00.000Z",
       },
     );
@@ -863,6 +983,7 @@ describe("advanceAttempt", () => {
       continuation: null,
       progress: null,
       error: null,
+      claimRefresh: null,
       nowIso: "2026-01-01T00:05:00.000Z",
     });
     expect(outcome.kind).toBe("advanced");
@@ -883,6 +1004,7 @@ describe("advanceAttempt", () => {
         continuation: null,
         progress: null,
         error: null,
+        claimRefresh: null,
         nowIso: "2026-01-01T00:05:00.000Z",
       },
     );
@@ -899,6 +1021,7 @@ describe("advanceAttempt", () => {
         continuation: null,
         progress: null,
         error: null,
+        claimRefresh: null,
         nowIso: "2026-01-01T00:05:00.000Z",
       },
     );
@@ -918,6 +1041,7 @@ describe("advanceAttempt", () => {
         continuation: null,
         progress: null,
         error: null,
+        claimRefresh: null,
         nowIso: "2026-01-01T00:05:00.000Z",
       },
     );
@@ -931,6 +1055,7 @@ describe("advanceAttempt", () => {
       continuation: null,
       progress: null,
       error: null,
+      claimRefresh: null,
       nowIso: "2026-01-01T00:05:00.000Z",
     });
     expect(outcome).toEqual({ kind: "rejected", reason: "terminal" });
@@ -953,6 +1078,7 @@ describe("advanceAttempt", () => {
         continuation,
         progress: null,
         error: null,
+        claimRefresh: null,
         nowIso: "2026-01-01T00:05:00.000Z",
       });
       expect(outcome).toEqual({ kind: "rejected", reason: "not-active" });
@@ -970,6 +1096,7 @@ describe("advanceAttempt", () => {
       continuation: "activate",
       progress: null,
       error: null,
+      claimRefresh: null,
       nowIso: "2026-01-01T00:05:00.000Z",
     });
     expect(outcome).toEqual({
@@ -989,6 +1116,7 @@ describe("advanceAttempt", () => {
       continuation: "activate",
       progress: null,
       error: null,
+      claimRefresh: null,
       nowIso: "2026-01-01T00:05:00.000Z",
     });
     expect(outcome).toEqual({
@@ -1008,6 +1136,7 @@ describe("advanceAttempt", () => {
       continuation: null,
       progress: null,
       error: null,
+      claimRefresh: null,
       nowIso: "2026-01-01T00:05:00.000Z",
     });
     expect(outcome).toEqual({
@@ -1027,6 +1156,7 @@ describe("advanceAttempt", () => {
       continuation: "resume-apply",
       progress: null,
       error: null,
+      claimRefresh: null,
       nowIso: "2026-01-01T00:05:00.000Z",
     });
     expect(outcome).toEqual({
@@ -1046,6 +1176,7 @@ describe("advanceAttempt", () => {
       continuation: "resume-apply",
       progress: null,
       error: null,
+      claimRefresh: null,
       nowIso: "2026-01-01T00:05:00.000Z",
     });
     expect(outcome).toEqual({
@@ -1065,6 +1196,7 @@ describe("advanceAttempt", () => {
       continuation: "activate",
       progress: null,
       error: null,
+      claimRefresh: null,
       nowIso: "2026-01-01T00:05:00.000Z",
     });
     expect(outcome.kind).toBe("advanced");
@@ -1085,6 +1217,7 @@ describe("advanceAttempt", () => {
       continuation: null,
       progress: null,
       error: { code: "restart-failed", message: "boom", phase: "restarting" },
+      claimRefresh: null,
       nowIso: "2026-01-01T00:05:00.000Z",
     });
     expect(outcome.kind).toBe("advanced");
@@ -1101,6 +1234,7 @@ describe("advanceAttempt", () => {
       continuation: null,
       progress: null,
       error: null,
+      claimRefresh: null,
       nowIso: "2026-01-01T00:05:00.000Z",
     });
     expect(outcome).toEqual({ kind: "rejected", reason: "counter-exhausted" });
@@ -1113,6 +1247,7 @@ describe("advanceAttempt", () => {
       continuation: null,
       progress: null,
       error: null,
+      claimRefresh: null,
       nowIso: "2026-01-01T00:05:00.000Z",
     });
     expect(outcome).toEqual({ kind: "rejected", reason: "illegal-phase" });
@@ -1127,6 +1262,7 @@ describe("advanceAttempt", () => {
       continuation: null,
       progress: null,
       error: null,
+      claimRefresh: null,
       nowIso: "2026-01-01T00:05:00.000Z",
     });
     expect(outcome).toEqual({
@@ -1143,6 +1279,7 @@ describe("advanceAttempt", () => {
       continuation: null,
       progress: null,
       error: null,
+      claimRefresh: null,
       nowIso: "2026-01-01T00:06:00.000Z",
     });
     expect(nonTerminal.kind).toBe("advanced");
@@ -1155,6 +1292,7 @@ describe("advanceAttempt", () => {
       continuation: null,
       progress: null,
       error: null,
+      claimRefresh: null,
       nowIso: "2026-01-01T00:07:00.000Z",
     });
     expect(terminal.kind).toBe("advanced");
@@ -1162,6 +1300,86 @@ describe("advanceAttempt", () => {
       expect(terminal.record.execution).toBe("terminal");
       expect(terminal.record.completedAt).toBe("2026-01-01T00:07:00.000Z");
     }
+  });
+});
+
+describe("advanceAttempt - claimRefresh (D19): the three park arms", () => {
+  const priorClaim: HostUpdateAttemptClaimBaseline = {
+    installedVersion: "1.2.3",
+    installGeneration: "gen-prior",
+    stageFingerprint: "fp-prior",
+    // Deliberately `true` with a refresh naming an installedVersion BELOW the
+    // record's own target - a recomputation from version order would say
+    // `false`, so a passing test here is proof the value was COPIED, not
+    // rederived from the refresh or from the target.
+    allowDowngrade: true,
+  };
+
+  it("replaces the three identity fields on a refresh and copies allowDowngrade from the prior record, never recomputing it", () => {
+    const current = makeRecord({
+      phase: "applying",
+      continuation: null,
+      claim: priorClaim,
+    });
+    const outcome = advanceAttempt(current, attemptIdentityOf(current), {
+      phase: "waiting-to-activate",
+      continuation: "activate",
+      progress: null,
+      error: null,
+      claimRefresh: {
+        installedVersion: "0.9.0",
+        installGeneration: "gen-refreshed",
+        stageFingerprint: "fp-refreshed",
+      },
+      nowIso: "2026-01-01T00:05:00.000Z",
+    });
+    expect(outcome.kind).toBe("advanced");
+    if (outcome.kind !== "advanced") return;
+    expect(outcome.record.claim).toEqual({
+      installedVersion: "0.9.0",
+      installGeneration: "gen-refreshed",
+      stageFingerprint: "fp-refreshed",
+      allowDowngrade: true,
+    });
+  });
+
+  it("carries the claim byte-identically when claimRefresh is null on a claimed record - a park may refresh or carry, never drop", () => {
+    const current = makeRecord({
+      phase: "applying",
+      continuation: null,
+      claim: priorClaim,
+    });
+    const outcome = advanceAttempt(current, attemptIdentityOf(current), {
+      phase: "waiting-to-activate",
+      continuation: "activate",
+      progress: null,
+      error: null,
+      claimRefresh: null,
+      nowIso: "2026-01-01T00:05:00.000Z",
+    });
+    expect(outcome.kind).toBe("advanced");
+    if (outcome.kind !== "advanced") return;
+    expect(outcome.record.claim).toEqual(priorClaim);
+  });
+
+  it("ignores a refresh on a claim-less record - a legacy continuation cannot gain a consent nobody granted it", () => {
+    const current = makeRecord({ phase: "applying", continuation: null });
+    expect("claim" in current).toBe(false);
+    const outcome = advanceAttempt(current, attemptIdentityOf(current), {
+      phase: "waiting-to-activate",
+      continuation: "activate",
+      progress: null,
+      error: null,
+      claimRefresh: {
+        installedVersion: "1.0.0",
+        installGeneration: "gen-a",
+        stageFingerprint: null,
+      },
+      nowIso: "2026-01-01T00:05:00.000Z",
+    });
+    expect(outcome.kind).toBe("advanced");
+    if (outcome.kind !== "advanced") return;
+    expect("claim" in outcome.record).toBe(false);
   });
 });
 
@@ -1623,6 +1841,134 @@ describe("decideAttemptRecovery - resume-new-generation: continuation choice and
     expect(decision.kind).toBe("terminalize-failed");
     if (decision.kind !== "terminalize-failed") return;
     expect(decision.record.error?.code).toBe("recovery-evidence-insufficient");
+  });
+
+  it("recovers the C/R collision (installed verified at the SAME target a live process reports as `foreign`) as resume-new-generation/activate, not as an evidence contradiction", () => {
+    // §D9/D16: a `foreign` running leg is debt, never a contradiction - no
+    // equality in this module accepts it, so `runningTarget` below is false
+    // and only `installedTarget` decides the outcome, exactly like the plain
+    // "installed verifies, running absent" case above.
+    const active = makeRecord({ targetVersion: "1.2.3" });
+    const decision = decideAttemptRecovery(
+      recoveryContext({
+        current: active,
+        request: {
+          action: "activate",
+          requestedTargetVersion: "1.2.3",
+          evidence: {
+            installed: { kind: "verified", version: "1.2.3" },
+            staged: { kind: "absent" },
+            running: { kind: "foreign", runtimeIdentity: "1.2.3" },
+          },
+        },
+      }),
+    );
+    expect(decision.kind).toBe("resume-new-generation");
+    if (decision.kind !== "resume-new-generation") return;
+    expect(decision.continuation).toBe("activate");
+    expect(decision.record.phase).toBe("preparing");
+    expect(decision.record.execution).toBe("active");
+  });
+});
+
+describe("decideAttemptRecovery - the C/R collision's terminal encoding still reads as a valid leg to the decoder as of dfc9e1521", () => {
+  // A frozen copy of `parseRecoveryRunningLeg` EXACTLY as it read before this
+  // ticket (`git show 69a4a4d78~1:protocol/src/config/host-update-attempt.ts`,
+  // lines 673-696). It must never be "fixed" to know about `runtimeIdentity` -
+  // the entire point of lowering `foreign` to `unbound` + the raw identity in
+  // `version` is that a reader built before this ticket still accepts the
+  // record as a normal `unbound` leg instead of failing closed as corrupt.
+  type FrozenLeg =
+    | {
+        readonly kind: "absent" | "verified" | "unbound" | "unreadable";
+        readonly version: string | null;
+        readonly ownerBound: boolean;
+      }
+    | "invalid";
+
+  function frozenNullableNonEmptyString(
+    value: unknown,
+  ): string | null | "invalid" {
+    if (value === undefined) return "invalid";
+    if (value === null) return null;
+    return typeof value === "string" && value.length > 0 ? value : "invalid";
+  }
+
+  function frozenParseRecoveryRunningLeg(value: unknown): FrozenLeg {
+    if (value === null || typeof value !== "object" || Array.isArray(value)) {
+      return "invalid";
+    }
+    const raw = value as Record<string, unknown>;
+    const version = frozenNullableNonEmptyString(raw.version);
+    if (
+      version === "invalid" ||
+      (raw.kind !== "absent" &&
+        raw.kind !== "verified" &&
+        raw.kind !== "unbound" &&
+        raw.kind !== "unreadable") ||
+      ((raw.kind === "verified" || raw.kind === "unbound") &&
+        version === null) ||
+      ((raw.kind === "absent" || raw.kind === "unreadable") &&
+        version !== null) ||
+      typeof raw.ownerBound !== "boolean"
+    ) {
+      return "invalid";
+    }
+    if (raw.kind !== "verified" && raw.ownerBound) return "invalid";
+    return { kind: raw.kind, version, ownerBound: raw.ownerBound };
+  }
+
+  it("yields a terminalize-failed/recovery-evidence-insufficient record whose running leg the frozen decoder still reads as a valid unbound leg", () => {
+    // Record targets D; installed evidence verifies an UNRELATED old target C
+    // (so `recoveryContinuation` offers neither activate nor resume-apply);
+    // the request also names D, so this is the `recovery-evidence-insufficient`
+    // arm, not the target-change `supersede` arm (that is what a request
+    // naming D against a record targeting C would hit instead).
+    const active = makeRecord({ targetVersion: "D" });
+    const decision = decideAttemptRecovery(
+      recoveryContext({
+        current: active,
+        request: {
+          requestedTargetVersion: "D",
+          evidence: {
+            installed: { kind: "verified", version: "C" },
+            staged: { kind: "absent" },
+            running: { kind: "foreign", runtimeIdentity: "C" },
+          },
+        },
+      }),
+    );
+    expect(decision.kind).toBe("terminalize-failed");
+    if (decision.kind !== "terminalize-failed") return;
+    expect(decision.record.error?.code).toBe("recovery-evidence-insufficient");
+    const runningLeg = decision.record.recovery?.evidence.running;
+
+    // The OLD reader's verdict is asserted FIRST, deliberately. It is the
+    // property this pin exists for - a record this build writes must still
+    // read as a valid leg to a reader that predates `runtimeIdentity` - and
+    // asserting the exact new shape ahead of it would make any change to the
+    // encoding fail on the shape line, hiding whether the old reader would
+    // still have accepted it.
+    const frozenResult = frozenParseRecoveryRunningLeg(runningLeg);
+    expect(frozenResult).not.toBe("invalid");
+    expect(frozenResult).toEqual({
+      kind: "unbound",
+      version: "C",
+      ownerBound: false,
+    });
+
+    // The raw identity in `version` is what makes this load-bearing rather
+    // than decorative: strip it and the frozen decoder fails closed.
+    expect(
+      frozenParseRecoveryRunningLeg({ ...runningLeg, version: null }),
+    ).toBe("invalid");
+
+    expect(runningLeg).toEqual({
+      kind: "unbound",
+      version: "C",
+      ownerBound: false,
+      runtimeIdentity: "C",
+    });
   });
 });
 

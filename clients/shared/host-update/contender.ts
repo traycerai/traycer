@@ -525,6 +525,9 @@ async function commitVerifiedExecutorCompletion(
         continuation: null,
         progress: canonical.value.progress,
         error: null,
+        // The attempt is over: there is no later resume for a baseline to
+        // authorize, so this write carries whatever the record already had.
+        claimRefresh: null,
         nowIso: evidence.nowIso,
       },
     },

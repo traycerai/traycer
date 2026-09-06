@@ -443,4 +443,170 @@ describe("decodeHostUpdateAttempt", () => {
     );
     expect(result).toEqual({ kind: "corrupt" });
   });
+
+  // ---- runtimeIdentity on the recovery running leg (D9/D16) ---------------
+
+  function failedTerminalJson(overrides: Record<string, unknown>): string {
+    return JSON.stringify({
+      ...VALID_ACTIVE,
+      phase: "failed",
+      execution: "terminal",
+      completedAt: "2026-01-01T00:05:00.000Z",
+      error: {
+        code: "recovery-evidence-insufficient",
+        message: "x",
+        phase: "downloading",
+      },
+      recovery: {
+        recoveredBy: "attempt-executor",
+        outcome: "failed",
+        evidence: {
+          installed: { kind: "absent", version: null },
+          staged: { kind: "absent", version: null },
+          running: {
+            kind: "unbound",
+            version: "C",
+            ownerBound: false,
+            runtimeIdentity: "C",
+          },
+        },
+      },
+      ...overrides,
+    });
+  }
+
+  it("decodes runtimeIdentity on a persisted unbound running leg - the one kind the encoder lowers a `foreign` process identity onto", () => {
+    const result = decodeHostUpdateAttempt(bytes(failedTerminalJson({})));
+    expect(result.kind).toBe("valid");
+    if (result.kind !== "valid") return;
+    expect(result.value.recovery?.evidence.running).toEqual({
+      kind: "unbound",
+      version: "C",
+      ownerBound: false,
+      runtimeIdentity: "C",
+    });
+  });
+
+  it("ignores (drops) a runtimeIdentity present on a verified leg rather than rejecting the record", () => {
+    const runningWithIdentity = {
+      ...VALID_COMPLETE_RECOVERY.evidence.running,
+      runtimeIdentity: "should-be-dropped",
+    };
+    const result = decodeHostUpdateAttempt(
+      bytes(
+        completeTerminalJson({
+          recovery: {
+            ...VALID_COMPLETE_RECOVERY,
+            evidence: {
+              ...VALID_COMPLETE_RECOVERY.evidence,
+              running: runningWithIdentity,
+            },
+          },
+        }),
+      ),
+    );
+    expect(result.kind).toBe("valid");
+    if (result.kind !== "valid") return;
+    expect(result.value.recovery?.evidence.running).toEqual(
+      VALID_COMPLETE_RECOVERY.evidence.running,
+    );
+    expect(
+      "runtimeIdentity" in (result.value.recovery?.evidence.running ?? {}),
+    ).toBe(false);
+  });
+
+  it("reports corrupt when runtimeIdentity is present but an empty string", () => {
+    const result = decodeHostUpdateAttempt(
+      bytes(
+        failedTerminalJson({
+          recovery: {
+            recoveredBy: "attempt-executor",
+            outcome: "failed",
+            evidence: {
+              installed: { kind: "absent", version: null },
+              staged: { kind: "absent", version: null },
+              running: {
+                kind: "unbound",
+                version: "C",
+                ownerBound: false,
+                runtimeIdentity: "",
+              },
+            },
+          },
+        }),
+      ),
+    );
+    expect(result).toEqual({ kind: "corrupt" });
+  });
+
+  // ---- the claim baseline (D19) -------------------------------------------
+
+  const VALID_CLAIM = {
+    installedVersion: "1.0.0",
+    installGeneration: "gen-a",
+    stageFingerprint: "fp-a",
+    allowDowngrade: true,
+  };
+
+  it("decodes as valid, with no claim key, when claim is explicitly undefined (i.e. omitted from the wire)", () => {
+    const result = decodeHostUpdateAttempt(bytes(json({ claim: undefined })));
+    expect(result.kind).toBe("valid");
+    if (result.kind === "valid") expect("claim" in result.value).toBe(false);
+  });
+
+  it("decodes the released-build fixture (no claim, no runtimeIdentity) with no claim key at all - not `claim: undefined`", () => {
+    const result = decodeHostUpdateAttempt(bytes(json({})));
+    expect(result).toEqual({ kind: "valid", version: 2, value: VALID_ACTIVE });
+    if (result.kind === "valid") {
+      expect("claim" in result.value).toBe(false);
+    }
+  });
+
+  it("reports corrupt when claim is explicitly null", () => {
+    expect(decodeHostUpdateAttempt(bytes(json({ claim: null })))).toEqual({
+      kind: "corrupt",
+    });
+  });
+
+  it("decodes a valid claim baseline attached to an ACTIVE record - unlike `recovery`, `claim` is legal on any phase, not only a terminal one", () => {
+    const result = decodeHostUpdateAttempt(bytes(json({ claim: VALID_CLAIM })));
+    expect(result.kind).toBe("valid");
+    if (result.kind === "valid")
+      expect(result.value.claim).toEqual(VALID_CLAIM);
+  });
+
+  it("decodes a valid claim baseline with a null stageFingerprint", () => {
+    const claim = { ...VALID_CLAIM, stageFingerprint: null };
+    const result = decodeHostUpdateAttempt(bytes(json({ claim })));
+    expect(result.kind).toBe("valid");
+    if (result.kind === "valid") expect(result.value.claim).toEqual(claim);
+  });
+
+  it.each([
+    ["installedVersion empty", { ...VALID_CLAIM, installedVersion: "" }],
+    ["installedVersion wrong type", { ...VALID_CLAIM, installedVersion: 1 }],
+    [
+      "installGeneration missing",
+      (() => {
+        const { installGeneration: _drop, ...rest } = VALID_CLAIM;
+        return rest;
+      })(),
+    ],
+    ["stageFingerprint wrong type", { ...VALID_CLAIM, stageFingerprint: 1 }],
+    ["stageFingerprint empty string", { ...VALID_CLAIM, stageFingerprint: "" }],
+    ["allowDowngrade wrong type", { ...VALID_CLAIM, allowDowngrade: "yes" }],
+    [
+      "allowDowngrade missing",
+      (() => {
+        const { allowDowngrade: _drop, ...rest } = VALID_CLAIM;
+        return rest;
+      })(),
+    ],
+    ["not an object", "nope"],
+    ["an array", []],
+  ])("reports corrupt for a malformed claim: %s", (_label, claim) => {
+    expect(decodeHostUpdateAttempt(bytes(json({ claim })))).toEqual({
+      kind: "corrupt",
+    });
+  });
 });

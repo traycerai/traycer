@@ -21,7 +21,10 @@ import {
   type UpdateAttemptLockHandle,
 } from "../lock";
 import { updateAttemptLockPath, updateAttemptRecordPath } from "../paths";
-import type { HostUpdateAttemptIdentity } from "../record";
+import type {
+  HostUpdateAttemptClaimBaseline,
+  HostUpdateAttemptIdentity,
+} from "../record";
 import { TERMINAL_ATTEMPT_RETENTION_MS } from "../record";
 import {
   __sameRecordFileIdentityForTest,
@@ -53,6 +56,8 @@ function baseCreateRequest(
     expected: null,
     newAttemptId: "attempt-1",
     initialPhase: "downloading",
+    initialContinuation: null,
+    claim: null,
     nowIso: "2026-01-01T00:00:00.000Z",
     ...overrides,
   };
@@ -394,6 +399,7 @@ describe("commitAttemptMutation - illegal transitions are structurally unreprese
           continuation: "resume-apply",
           progress: null,
           error: null,
+          claimRefresh: null,
           nowIso: "2026-01-01T00:01:00.000Z",
         },
       },
@@ -459,6 +465,7 @@ describe("commitAttemptMutation - illegal transitions are structurally unreprese
           continuation: null,
           progress: null,
           error: null,
+          claimRefresh: null,
           nowIso: "2026-01-01T00:02:00.000Z",
         },
       },
@@ -487,6 +494,7 @@ describe("commitAttemptMutation - illegal transitions are structurally unreprese
           continuation: null,
           progress: null,
           error: null,
+          claimRefresh: null,
           nowIso: "2026-01-01T00:02:00.000Z",
         },
       },
@@ -504,6 +512,7 @@ describe("commitAttemptMutation - illegal transitions are structurally unreprese
           continuation: null,
           progress: null,
           error: null,
+          claimRefresh: null,
           nowIso: "2026-01-01T00:03:00.000Z",
         },
       },
@@ -613,6 +622,7 @@ describe("commitAttemptMutation - byte authority and round trips", () => {
                 continuation: null,
                 progress: { percent: 10, bytes: 20, totalBytes: 200 },
                 error: null,
+                claimRefresh: null,
                 nowIso: "2026-01-01T00:02:00.000Z",
               },
             },
@@ -631,6 +641,7 @@ describe("commitAttemptMutation - byte authority and round trips", () => {
             continuation: "resume-apply",
             progress: null,
             error: null,
+            claimRefresh: null,
             nowIso: "2026-01-01T00:01:00.000Z",
           },
         },
@@ -738,6 +749,7 @@ describe("commitAttemptMutation - byte authority and round trips", () => {
           continuation: null,
           progress,
           error,
+          claimRefresh: null,
           nowIso: "2026-01-01T00:02:00.000Z",
         },
       },
@@ -779,6 +791,7 @@ describe("commitAttemptMutation - byte authority and round trips", () => {
           continuation: null,
           progress,
           error: null,
+          claimRefresh: null,
           nowIso: "2026-01-01T00:02:00.000Z",
         },
       },
@@ -823,6 +836,7 @@ describe("commitAttemptMutation - byte authority and round trips", () => {
           continuation: null,
           progress,
           error: null,
+          claimRefresh: null,
           nowIso: "2026-01-01T00:02:00.000Z",
         },
       },
@@ -845,6 +859,7 @@ describe("commitAttemptMutation - continuation provenance", () => {
   const advanceDefaults = {
     progress: null,
     error: null,
+    claimRefresh: null,
     nowIso: "2026-01-01T00:05:00.000Z",
   } as const;
 
@@ -1186,6 +1201,206 @@ describe("commitAttemptMutation - continuation provenance", () => {
       expect(verifying.record.phase).toBe("verifying");
       expect(verifying.record.continuation).toBe("activate");
     }
+  });
+});
+
+describe("commitAttemptMutation - claim baseline (D19) reconstruction and round trip", () => {
+  const claim: HostUpdateAttemptClaimBaseline = {
+    installedVersion: "1.0.0",
+    installGeneration: "gen-a",
+    stageFingerprint: "fp-a",
+    allowDowngrade: false,
+  };
+
+  it("preserves the claim baseline across create -> park -> resume", async () => {
+    const dir = await freshDir();
+    const handle = await acquireHandle(dir, "claim-round-trip");
+    const created = await commitAttemptMutation({
+      handle,
+      intent: { kind: "create", request: baseCreateRequest({ claim }) },
+    });
+    expect(created.kind).toBe("committed");
+    if (created.kind !== "committed") return;
+    expect(created.record.claim).toEqual(claim);
+
+    const parked = await commitAttemptMutation({
+      handle,
+      intent: {
+        kind: "advance",
+        held: created.identity,
+        advance: {
+          phase: "waiting-for-work",
+          continuation: "resume-apply",
+          progress: null,
+          error: null,
+          claimRefresh: null,
+          nowIso: "2026-01-01T00:01:00.000Z",
+        },
+      },
+    });
+    expect(parked.kind).toBe("committed");
+    if (parked.kind !== "committed") return;
+    expect(parked.record.claim).toEqual(claim);
+
+    const resumed = await commitAttemptMutation({
+      handle,
+      intent: {
+        kind: "resume",
+        request: baseCreateRequest({
+          action: "resume-apply",
+          expected: parked.identity,
+          initialPhase: "preparing",
+          nowIso: "2026-01-01T00:02:00.000Z",
+        }),
+      },
+    });
+    expect(resumed.kind).toBe("committed");
+    if (resumed.kind !== "committed") return;
+    expect(resumed.record.claim).toEqual(claim);
+
+    const onDisk = await readUpdateAttemptRecord(dir);
+    expect(onDisk.kind).toBe("valid");
+    if (onDisk.kind === "valid") expect(onDisk.value.claim).toEqual(claim);
+  });
+
+  it("keeps a claim-less record claim-less across a park with no refresh", async () => {
+    const dir = await freshDir();
+    const handle = await acquireHandle(dir, "claim-less-park");
+    const created = await commitAttemptMutation({
+      handle,
+      intent: { kind: "create", request: baseCreateRequest({}) },
+    });
+    expect(created.kind).toBe("committed");
+    if (created.kind !== "committed") return;
+    expect("claim" in created.record).toBe(false);
+
+    const parked = await commitAttemptMutation({
+      handle,
+      intent: {
+        kind: "advance",
+        held: created.identity,
+        advance: {
+          phase: "waiting-for-work",
+          continuation: "resume-apply",
+          progress: null,
+          error: null,
+          claimRefresh: null,
+          nowIso: "2026-01-01T00:01:00.000Z",
+        },
+      },
+    });
+    expect(parked.kind).toBe("committed");
+    if (parked.kind !== "committed") return;
+    expect("claim" in parked.record).toBe(false);
+
+    const onDisk = await readUpdateAttemptRecord(dir);
+    expect(onDisk.kind).toBe("valid");
+    if (onDisk.kind === "valid") expect("claim" in onDisk.value).toBe(false);
+  });
+
+  it("commits a resume via action 'continue', which the pre-ticket action allowlist rejected as intent-invalid", async () => {
+    const dir = await freshDir();
+    const handle = await acquireHandle(dir, "continue-action-allowlist");
+    const created = await commitAttemptMutation({
+      handle,
+      intent: { kind: "create", request: baseCreateRequest({}) },
+    });
+    expect(created.kind).toBe("committed");
+    if (created.kind !== "committed") return;
+
+    const parked = await commitAttemptMutation({
+      handle,
+      intent: {
+        kind: "advance",
+        held: created.identity,
+        advance: {
+          phase: "waiting-for-work",
+          continuation: "resume-apply",
+          progress: null,
+          error: null,
+          claimRefresh: null,
+          nowIso: "2026-01-01T00:01:00.000Z",
+        },
+      },
+    });
+    expect(parked.kind).toBe("committed");
+    if (parked.kind !== "committed") return;
+
+    const resumed = await commitAttemptMutation({
+      handle,
+      intent: {
+        kind: "resume",
+        request: baseCreateRequest({
+          action: "continue",
+          expected: parked.identity,
+          initialPhase: "preparing",
+          nowIso: "2026-01-01T00:02:00.000Z",
+        }),
+      },
+    });
+    expect(resumed.kind).toBe("committed");
+    if (resumed.kind !== "committed") return;
+    expect(resumed.record.continuation).toBe("resume-apply");
+  });
+
+  it("sameRecord's reconstruction sees a claim change: a park-refresh's new baseline is what the committed bytes decode back to, not the record's prior one", async () => {
+    // `sameRecord` and `sameRecovery` are module-private (they validate the
+    // encoder's own output inside `encodeValidatedRecord`), so this is pinned
+    // through a decoded read rather than a direct call: if `claim` were
+    // dropped from that comparison, a decode/encode bug losing the refreshed
+    // baseline could still commit successfully.
+    const dir = await freshDir();
+    const handle = await acquireHandle(dir, "same-record-claim-change");
+    const priorClaim: HostUpdateAttemptClaimBaseline = {
+      installedVersion: "1.0.0",
+      installGeneration: "gen-a",
+      stageFingerprint: null,
+      allowDowngrade: false,
+    };
+    const created = await commitAttemptMutation({
+      handle,
+      intent: {
+        kind: "create",
+        request: baseCreateRequest({ claim: priorClaim }),
+      },
+    });
+    expect(created.kind).toBe("committed");
+    if (created.kind !== "committed") return;
+
+    const parked = await commitAttemptMutation({
+      handle,
+      intent: {
+        kind: "advance",
+        held: created.identity,
+        advance: {
+          phase: "waiting-for-work",
+          continuation: "resume-apply",
+          progress: null,
+          error: null,
+          claimRefresh: {
+            installedVersion: "2.0.0",
+            installGeneration: "gen-b",
+            stageFingerprint: "fp-b",
+          },
+          nowIso: "2026-01-01T00:01:00.000Z",
+        },
+      },
+    });
+    expect(parked.kind).toBe("committed");
+    if (parked.kind !== "committed") return;
+    const refreshedClaim = {
+      installedVersion: "2.0.0",
+      installGeneration: "gen-b",
+      stageFingerprint: "fp-b",
+      allowDowngrade: false,
+    };
+    expect(parked.record.claim).toEqual(refreshedClaim);
+
+    const onDisk = await readUpdateAttemptRecord(dir);
+    expect(onDisk.kind).toBe("valid");
+    if (onDisk.kind !== "valid") return;
+    expect(onDisk.value.claim).toEqual(refreshedClaim);
+    expect(onDisk.value.claim).not.toEqual(priorClaim);
   });
 });
 
@@ -1605,6 +1820,7 @@ describe("commitExecutorOnlyAttemptMutation - recover intent", () => {
           continuation: "resume-apply",
           progress: null,
           error: null,
+          claimRefresh: null,
           nowIso: "2026-01-01T00:01:00.000Z",
         },
       },
@@ -1748,6 +1964,49 @@ describe("commitExecutorOnlyAttemptMutation - recover intent", () => {
     });
     expect(outcome.kind).toBe("committed");
   });
+
+  it("commits the C/R collision through the store's live-input normalizer and recomputed decideAttemptRecovery as resume-new-generation/activate - the SAME decision the pure function gives directly", async () => {
+    // The ablation this pin must redden: if `normalizeRecoveryRunningEvidence`
+    // lowered `foreign` to `unbound` instead of preserving it, this would
+    // commit a `failed` record (`recovery-evidence-contradiction`) instead of
+    // resuming - the executor's chosen continuation and the stored record
+    // would then disagree about the same evidence.
+    const dir = await freshDir();
+    const handle = await acquireHandle(dir, "recover-cr-collision");
+    const created = await commitAttemptMutation({
+      handle,
+      intent: {
+        kind: "create",
+        request: baseCreateRequest({ targetVersion: "1.2.3" }),
+      },
+    });
+    expect(created.kind).toBe("committed");
+    if (created.kind !== "committed") return;
+
+    const outcome = await commitExecutorOnlyAttemptMutation({
+      handle,
+      intent: {
+        kind: "recover",
+        recovery: {
+          expected: created.identity,
+          action: "activate",
+          requestedTargetVersion: "1.2.3",
+          evidence: {
+            installed: { kind: "verified", version: "1.2.3" },
+            staged: { kind: "absent" },
+            running: { kind: "foreign", runtimeIdentity: "1.2.3" },
+          },
+          nowIso: "2026-01-01T00:04:00.000Z",
+        },
+      },
+    });
+    expect(outcome.kind).toBe("committed");
+    if (outcome.kind !== "committed") return;
+    expect(outcome.record.phase).toBe("preparing");
+    expect(outcome.record.execution).toBe("active");
+    expect(outcome.record.continuation).toBe("activate");
+    expect(outcome.record.error).toBeNull();
+  });
 });
 
 // Ticket 03 final-authority cold review, P0 (class swept to its full shape):
@@ -1849,6 +2108,7 @@ describe("commitAttemptMutation - executor-only intents (recover / advance-to-co
             continuation: null,
             progress: null,
             error: null,
+            claimRefresh: null,
             nowIso: "2026-01-01T00:00:00.000Z",
           },
         },
@@ -1948,6 +2208,7 @@ describe("commitAttemptMutation - executor-only intents (recover / advance-to-co
           continuation: null,
           progress: null,
           error: null,
+          claimRefresh: null,
           nowIso: "2026-01-01T00:04:00.000Z",
         },
       }),
@@ -2035,6 +2296,7 @@ describe("commitAttemptMutation - handle authority", () => {
           continuation: null,
           progress: null,
           error: null,
+          claimRefresh: null,
           nowIso: "2026-01-01T00:05:00.000Z",
         },
       },
@@ -2054,6 +2316,7 @@ describe("commitAttemptMutation - handle authority", () => {
           continuation: null,
           progress: null,
           error: null,
+          claimRefresh: null,
           nowIso: "2026-01-01T00:06:00.000Z",
         },
       },
@@ -2121,6 +2384,7 @@ describe("commitAttemptMutation - handle authority", () => {
           continuation: null,
           progress: null,
           error: null,
+          claimRefresh: null,
           nowIso: "2026-01-01T00:05:00.000Z",
         },
       },
@@ -2237,6 +2501,7 @@ describe("pruneTerminalAttemptRecord - release cannot overtake an in-flight prun
           continuation: null,
           progress: null,
           error: { code: "x", message: "y", phase: "downloading" },
+          claimRefresh: null,
           nowIso: "2020-01-01T00:00:00.000Z",
         },
       },
@@ -2701,6 +2966,7 @@ describe("pruneTerminalAttemptRecord", () => {
           continuation: null,
           progress: null,
           error: { code: "x", message: "y", phase: "downloading" },
+          claimRefresh: null,
           nowIso: completedAtIso,
         },
       },

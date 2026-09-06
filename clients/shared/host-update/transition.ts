@@ -8,6 +8,7 @@ import {
   isTerminalPhase,
   nextAttemptCounter,
   sameAttemptIdentity,
+  type HostUpdateAttemptClaimBaseline,
   type HostUpdateAttemptContinuation,
   type HostUpdateAttemptError,
   type HostUpdateAttemptIdentity,
@@ -49,6 +50,14 @@ export type AttemptClaimAction =
   | "resume-apply"
   | "activate"
   | "force"
+  /**
+   * An identity-bound resume of whatever the park is waiting to do. Legal only
+   * with `expected !== null` (the generic rule below), and it adopts EITHER
+   * continuation - which is exactly why it is a separate action rather than a
+   * widening of `resume-apply` or `activate`: the dispatcher named an attempt,
+   * not an operation, and the record is what says which operation that is.
+   */
+  | "continue"
   | "defer";
 
 export interface AttemptClaimRequest {
@@ -74,6 +83,26 @@ export interface AttemptClaimRequest {
   readonly newAttemptId: string;
   /** The phase a newly created attempt commits before its first side effect. */
   readonly initialPhase: ActiveHostUpdateAttemptPhase;
+  /**
+   * The continuation a newly created attempt is already executing, or `null`
+   * for the ordinary case that has none yet.
+   *
+   * `"activate"` exists for one situation: an attempt CREATED to activate
+   * bytes that are already placed (the activation-debt arm). Without it such an
+   * attempt is born with no continuation, and a busy host at the activation
+   * gate has no legal park to write - `waiting-to-activate` may be born only
+   * from `applying`, or re-parked from an `activate` segment.
+   */
+  readonly initialContinuation: "activate" | null;
+  /**
+   * The claim baseline (D19), written verbatim by `createdRecord`, or `null`
+   * for a claimant with nothing to record.
+   *
+   * `null` is not a degraded baseline: it writes NO `claim` key at all, which
+   * is byte-identical to what every pre-D19 build produced, and a record with
+   * no baseline is deliberately resumable only as an upgrade park.
+   */
+  readonly claim: HostUpdateAttemptClaimBaseline | null;
   readonly nowIso: string;
 }
 
@@ -197,6 +226,21 @@ export type AttemptRecoveryRunningEvidence =
       readonly owner: "host-home-bound";
     }
   | { readonly kind: "unbound"; readonly version: string }
+  /**
+   * A host process is running and answering, but its reported identity is not
+   * a catalog version this install record vouches for - a staging identity
+   * that matches no record, or the record's own catalog version while the
+   * record names a DIFFERENT `runtimeVersion` (the "C/R collision").
+   *
+   * It is deliberately a kind of its own rather than an `unbound` at the raw
+   * identity, and no equality below accepts it. That is what makes the
+   * collision read as activation DEBT - `recoveryContinuation` keys `activate`
+   * on the INSTALLED leg, which is exactly how `readActivationState` already
+   * reads it - instead of the evidence CONTRADICTION an `unbound` at the
+   * target version means. It is lowered to a persistable leg in exactly one
+   * place, `recoverySummary`.
+   */
+  | { readonly kind: "foreign"; readonly runtimeIdentity: string }
   | { readonly kind: "unreadable" };
 
 export interface AttemptRecoveryEvidence {
@@ -477,17 +521,45 @@ function recoverySummary(
           ? evidence.staged.version
           : null,
     },
-    running: {
-      kind: evidence.running.kind,
-      version:
-        evidence.running.kind === "verified" ||
-        evidence.running.kind === "unbound"
-          ? evidence.running.version
-          : null,
-      ownerBound:
-        evidence.running.kind === "verified" &&
-        evidence.running.owner === "host-home-bound",
-    },
+    running: runningSummaryLeg(evidence.running),
+  };
+}
+
+/**
+ * THE ONE PLACE a `foreign` running leg is lowered onto the persisted shape.
+ *
+ * `foreign` has no encoding of its own: the durable leg's `kind` is frozen at
+ * four values, and both alternatives to `unbound` + the raw identity are worse
+ * than they look. A fifth kind, or `unbound` with a null `version`, is read as
+ * CORRUPT by every observer built before this change (`parseRecoveryRunningLeg`
+ * requires a non-null version on `unbound`) - a fail-closed verdict on an
+ * otherwise perfectly good terminal record. The raw identity carried in
+ * `version`, plus the additive `runtimeIdentity` key an old reader ignores,
+ * keeps the record readable everywhere and loses nothing.
+ *
+ * Lowering it ANYWHERE else - the store's live-input normalizer above all -
+ * changes a recovery DECISION rather than a record's encoding: `unbound` at the
+ * target version is an evidence contradiction, while `foreign` is debt.
+ */
+function runningSummaryLeg(
+  running: AttemptRecoveryRunningEvidence,
+): HostUpdateAttemptRecovery["evidence"]["running"] {
+  if (running.kind === "foreign") {
+    return {
+      kind: "unbound",
+      version: running.runtimeIdentity,
+      ownerBound: false,
+      runtimeIdentity: running.runtimeIdentity,
+    };
+  }
+  return {
+    kind: running.kind,
+    version:
+      running.kind === "verified" || running.kind === "unbound"
+        ? running.version
+        : null,
+    ownerBound:
+      running.kind === "verified" && running.owner === "host-home-bound",
   };
 }
 
@@ -687,8 +759,11 @@ export function decideAttemptClaim(
  *
  * `force` is a request to proceed through the pre-apply busy gate, so it
  * may resume only `resume-apply`. Activation has its own action because
- * `waiting-to-activate` says promotion is already complete. `defer` is a
- * future in-segment parking action, not a claim action, and therefore cannot
+ * `waiting-to-activate` says promotion is already complete. `continue` is the
+ * identity-bound "resume whatever this attempt is waiting for" authorization
+ * and therefore adopts either continuation - it is bound to an attempt, and
+ * the record it names is what decides the operation. `defer` is a future
+ * in-segment parking action, not a claim action, and therefore cannot
  * accidentally turn into a resume while the durable-core API has no request
  * journal to consume it from.
  */
@@ -696,6 +771,7 @@ function actionMayResume(
   action: AttemptClaimAction,
   continuation: Exclude<HostUpdateAttemptContinuation, null>,
 ): boolean {
+  if (action === "continue") return true;
   if (continuation === "resume-apply") {
     return action === "resume-apply" || action === "force";
   }
@@ -712,12 +788,15 @@ function createdRecord(request: AttemptClaimRequest): HostUpdateAttemptRecord {
     targetVersion: request.targetVersion,
     phase: request.initialPhase,
     execution: executionForPhase(request.initialPhase),
-    continuation: null,
+    continuation: request.initialContinuation,
     progress: null,
     startedAt: request.nowIso,
     updatedAt: request.nowIso,
     completedAt: null,
     error: null,
+    // The key is OMITTED for `null`, never written as null: a `start` with no
+    // baseline must produce the exact bytes every pre-D19 build produced.
+    ...(request.claim === null ? {} : { claim: request.claim }),
   };
 }
 
@@ -911,7 +990,42 @@ export interface AttemptAdvance {
   readonly continuation: HostUpdateAttemptContinuation;
   readonly progress: HostUpdateAttemptProgress;
   readonly error: HostUpdateAttemptError;
+  /**
+   * The install identity read under the lock at THIS write, or `null` to carry
+   * the record's existing claim baseline unchanged.
+   *
+   * Required and nullable rather than an optional key, deliberately: a park is
+   * the one write whose baseline MUST be current (it is the fact the next
+   * resume is authorized against), and omitting a key is not a decision anyone
+   * makes on purpose. Every advance therefore says which it is. Phase advances
+   * pass `null`.
+   *
+   * All three arms, in one sentence each:
+   *
+   *  - a refresh on a record WITH a claim replaces those three fields and
+   *    COPIES `allowDowngrade` from the prior record - consent travels with the
+   *    attempt and is never recomputed from arguments or version order;
+   *  - a refresh on a record WITHOUT a claim is IGNORED - a legacy
+   *    continuation cannot gain an authorization nobody ever granted it;
+   *  - `null` carries the prior claim unchanged.
+   *
+   * A park may refresh or carry. It may never drop.
+   */
+  readonly claimRefresh: AttemptClaimRefresh | null;
   readonly nowIso: string;
+}
+
+/**
+ * The install identity a park write re-read under the lock.
+ *
+ * Deliberately NOT `HostUpdateAttemptClaimBaseline`: `allowDowngrade` is
+ * absent because a refresh may not restate consent, and a shape that cannot
+ * carry it cannot accidentally recompute it.
+ */
+export interface AttemptClaimRefresh {
+  readonly installedVersion: string;
+  readonly installGeneration: string;
+  readonly stageFingerprint: string | null;
 }
 
 export type AttemptAdvanceRejection =
@@ -999,10 +1113,15 @@ export function advanceAttempt(
   }
 
   const execution = executionForPhase(advance.phase);
+  const refreshed = refreshedClaimBaseline(current, advance.claimRefresh);
   return {
     kind: "advanced",
     record: {
       ...current,
+      // Spread AFTER `...current` so a refresh replaces the prior baseline,
+      // and omitted entirely when there is nothing to refresh - which is what
+      // makes `...current` the carry-unchanged path.
+      ...(refreshed === null ? {} : { claim: refreshed }),
       sequence,
       phase: advance.phase,
       execution,
@@ -1015,6 +1134,30 @@ export function advanceAttempt(
       // one place a terminal record's age comes from.
       completedAt: execution === "terminal" ? advance.nowIso : null,
     },
+  };
+}
+
+/**
+ * The claim baseline this advance writes, or `null` for "leave it exactly as
+ * the record has it".
+ *
+ * Note which way the two `null`s point: a `null` REFRESH carries the prior
+ * baseline, and a record with NO baseline stays without one however specific
+ * the refresh is. Neither can drop a baseline the record already carries,
+ * which is the property the resume authorization rests on.
+ */
+function refreshedClaimBaseline(
+  current: HostUpdateAttemptRecord,
+  refresh: AttemptClaimRefresh | null,
+): HostUpdateAttemptClaimBaseline | null {
+  const prior = current.claim;
+  if (refresh === null || prior === undefined) return null;
+  return {
+    installedVersion: refresh.installedVersion,
+    installGeneration: refresh.installGeneration,
+    stageFingerprint: refresh.stageFingerprint,
+    // COPIED, never recomputed. The refresh shape cannot even express it.
+    allowDowngrade: prior.allowDowngrade,
   };
 }
 

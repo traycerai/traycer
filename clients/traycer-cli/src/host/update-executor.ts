@@ -634,6 +634,10 @@ async function parkResumedActivation(
         continuation: "activate",
         progress: null,
         error: null,
+        // Carry the recovered record's baseline unchanged. This park is
+        // written from the recovery decision alone; the facts a refresh
+        // requires are read by the caller that observed them under the lock.
+        claimRefresh: null,
         nowIso: options.nowIso(),
       },
     },
@@ -769,7 +773,16 @@ function claimRequestAtExecutor(
   request: ExecutorClaimRequest,
   nowIso: string,
 ): AttemptClaimRequest {
-  return { ...request, nowIso };
+  return {
+    ...request,
+    // Today's behaviour, stated explicitly. `ExecutorClaimRequest` is fixed
+    // before the lock and therefore cannot carry either fact: the continuation
+    // an activation-debt start needs, and the claim baseline, are both read
+    // UNDER the lock by the caller that will supply them here.
+    initialContinuation: null,
+    claim: null,
+    nowIso,
+  };
 }
 
 /** Parent-side private-ack protocol; it never carries a lock handle or token. */

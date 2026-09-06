@@ -105,6 +105,8 @@ function baseCreateRequest(
     expected: null,
     newAttemptId: "attempt-1",
     initialPhase: "downloading",
+    initialContinuation: null,
+    claim: null,
     nowIso: "2026-01-01T00:00:00.000Z",
     ...overrides,
   };
@@ -1149,6 +1151,7 @@ describe("commitExecutorAttemptMutation - executor-only capability", () => {
               continuation: null,
               progress: null,
               error: null,
+              claimRefresh: null,
               nowIso: "2026-01-01T00:05:00.000Z",
             },
           });
@@ -1191,6 +1194,7 @@ describe("commitExecutorAttemptMutation - executor-only capability", () => {
             continuation: null,
             progress: null,
             error: null,
+            claimRefresh: null,
             nowIso: "2026-01-01T00:05:00.000Z",
           },
         });
@@ -1395,6 +1399,7 @@ describe("withUpdateExecutorCompletionSegment / ExecutorCompletionSession.comple
             continuation: null,
             progress: null,
             error: null,
+            claimRefresh: null,
             nowIso: "2026-01-01T00:05:00.000Z",
           },
         },

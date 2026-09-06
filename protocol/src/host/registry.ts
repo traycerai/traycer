@@ -267,9 +267,11 @@ import {
   hostServiceDeregisterV10,
   hostServiceRegisterV10,
   hostServiceStatusV10,
+  hostUpdateActivateV10,
   hostUpdateCheckUpgradeV10ToV11,
   hostUpdateCheckV10,
   hostUpdateCheckV11,
+  hostUpdateContinueV10,
   hostUpdateInstallV10,
   hostUpdateInstallV11,
   hostUpdateInstallV12,
@@ -4453,6 +4455,45 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         2: {
           contract: hostUpdateInstallV12,
           upgradeFromPreviousVersion: hostUpdateInstallUpgradeV11ToV12,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  // The two BOUND update dispatches: brand-new v1.0, outside
+  // `RELEASED_FLOOR_METHOD_NAMES`, `unsupported` degrade — the same shape as
+  // the OS-service methods below, and here the degrade arm is the whole
+  // authorization story. A host that predates these simply lacks them, the
+  // client feature-detects at handshake and keeps the legacy Restart / Force
+  // update routes, and no request is ever projected onto an older shape that
+  // would drop the intent and run a plain install instead.
+  //
+  // Registered as two methods rather than one taking an intent verb for the
+  // reason the OS-service trio is: they are two different authorizations
+  // ("restart into bytes already placed" vs "carry on with whatever this
+  // attempt was authorized to do"), and one capability answer over both would
+  // make a host's support for either indistinguishable from support for both.
+  "host.update.activate": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostUpdateActivateV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.update.continue": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostUpdateContinueV10,
+          upgradeFromPreviousVersion: null,
         },
       },
       downgradePathsFromLatest: {},

@@ -527,6 +527,12 @@ async function claim(
     // the drain runs before `restarting`, and a fresh attempt starts there
     // because this executor never downloads.
     initialPhase: "preparing",
+    // Desktop records neither creation fact. It has no under-lock reading of
+    // the install tree to build a baseline from - that evidence belongs to the
+    // CLI claimant - and a baseline it could not attest would be worse than
+    // none: a later resume would be authorized against a fact nobody checked.
+    initialContinuation: null,
+    claim: null,
     nowIso: deps.nowIso(),
   };
   const decision = decideAttemptClaim({
@@ -604,6 +610,10 @@ async function terminalize(
       continuation: null,
       progress: null,
       error: { code: reason, message: cause, phase: "restarting" },
+      // Carried unchanged. Desktop never re-reads the install tree under this
+      // lock, so it has nothing to refresh a baseline with - and a terminal
+      // write is not the place to restate one anyway.
+      claimRefresh: null,
       nowIso: deps.nowIso(),
     },
   });
@@ -637,6 +647,10 @@ async function advance(
       continuation: to.continuation,
       progress: null,
       error: null,
+      // Carried unchanged, park included: refreshing a baseline means proving
+      // the install tree is still the one the claim was made against, and this
+      // executor reads no install record at all.
+      claimRefresh: null,
       nowIso: deps.nowIso(),
     },
   });

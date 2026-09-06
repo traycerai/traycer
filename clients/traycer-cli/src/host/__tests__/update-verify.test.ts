@@ -143,6 +143,8 @@ async function seedRestartingActiveRecord(
         expected: null,
         newAttemptId: "attempt-1",
         initialPhase: "restarting",
+        initialContinuation: null,
+        claim: null,
         nowIso: "2026-01-01T00:00:00.000Z",
       },
     },

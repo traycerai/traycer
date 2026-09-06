@@ -59,25 +59,53 @@ export function updateDispatchAckPath(hostHomeDir: string): string {
   return join(hostHomeDir, UPDATE_DISPATCH_ACK_FILENAME);
 }
 
-export const UPDATE_DISPATCH_ACK_VERSION = 1;
+/** The version this build WRITES. Both are decoded; see below. */
+export const UPDATE_DISPATCH_ACK_VERSION = 2;
+
+export type UpdateDispatchAckVersion = 1 | 2;
 
 /**
- * What the child attests.
+ * What the child attests — v2.
  *
- * Only facts the durable claim established. There is deliberately no phase, no
+ * v1 could say only "I claimed, and here is the identity". That left the far
+ * more common outcomes — a no-op, a recovery that finished the previous
+ * attempt, a refusal — indistinguishable from a child that died before
+ * writing anything, so the resolver waited out its whole deadline and reported
+ * `dispatch-indeterminate` for a run that had already finished deciding. v2
+ * makes the decision itself the payload: exactly one of "here is the attempt I
+ * claimed" and "there is no attempt, and here is why".
+ *
+ * Still only facts the decision established. There is deliberately no phase, no
  * progress and no outcome: this record answers "did the child I spawned claim,
  * and which attempt is it", and nothing else. Anything further would be a
  * second, unsynchronised copy of state the attempt record already owns.
  */
+export type UpdateDispatchAckResult =
+  | {
+      readonly kind: "claimed";
+      readonly attemptId: string;
+      readonly generation: number;
+      readonly sequence: number;
+      /** ISO instant of the claim, for diagnostics only — never for ordering. */
+      readonly claimedAt: string;
+    }
+  /**
+   * The child ran to a decision and there is no attempt to name — a no-op, a
+   * recovery that owed nothing further, or a refusal. Distinct from a missing
+   * ACK, which says only that nothing was heard.
+   */
+  | { readonly kind: "no-attempt"; readonly reason: string };
+
 export interface UpdateDispatchAck {
-  readonly v: typeof UPDATE_DISPATCH_ACK_VERSION;
+  /**
+   * The version the bytes carried, NOT the version this build writes: a v1 ACK
+   * decodes into this same shape (as `claimed`), and a caller that wants to
+   * know which producer wrote it must be able to tell.
+   */
+  readonly v: UpdateDispatchAckVersion;
   /** Correlates this ACK with ONE dispatch. See the staleness note above. */
   readonly nonce: string;
-  readonly attemptId: string;
-  readonly generation: number;
-  readonly sequence: number;
-  /** ISO instant of the claim, for diagnostics only — never for ordering. */
-  readonly claimedAt: string;
+  readonly result: UpdateDispatchAckResult;
 }
 
 export type DecodedUpdateDispatchAck =
@@ -112,6 +140,28 @@ export function isValidUpdateDispatchAckNonce(value: string): boolean {
 }
 
 /**
+ * Reasons a `no-attempt` result may carry.
+ *
+ * A closed grammar rather than free text, and — unlike the nonce pattern above
+ * — an EXPORTED one. The reason crosses a repository boundary: the CLI writes
+ * it and the host re-checks it before it reaches a log line or an RPC
+ * response, and that re-check has to be against this exact grammar rather than
+ * some wider "safe characters" predicate on the host's side. A superset would
+ * accept values this contract can never produce, which makes it a check that
+ * can never refuse anything — and the one thing worth refusing here is a
+ * reason no producer in this contract could have written.
+ *
+ * Lowercase kebab, 1–64 characters. Long enough for `refused-e-host-not-installed`,
+ * closed enough that a reason can be pasted into a log, a URL or a JSX label
+ * without escaping.
+ */
+export const UPDATE_DISPATCH_ACK_REASON_PATTERN = /^[a-z0-9-]{1,64}$/;
+
+export function isValidUpdateDispatchAckReason(value: string): boolean {
+  return UPDATE_DISPATCH_ACK_REASON_PATTERN.test(value);
+}
+
+/**
  * Decode ACK bytes. Total: every malformed input maps to a named defect rather
  * than throwing, because the caller is a bounded wait that must keep its own
  * deadline rather than unwind.
@@ -132,13 +182,50 @@ export function decodeUpdateDispatchAck(
   // Version first: a future version is not malformed, it is a shape this build
   // has no business interpreting, and saying so is more useful than reporting
   // whichever field happens to differ.
-  if (raw.v !== UPDATE_DISPATCH_ACK_VERSION) {
+  //
+  // v1 is still ACCEPTED, and must be: the ACK is written by whichever CLI
+  // image the slot holds and read by a host that may have been updated first,
+  // so the reader is the half that has to know both shapes. A v1 file is
+  // exactly a v2 `claimed` with its fields at the top level, which is why it
+  // upgrades losslessly rather than needing a compatibility arm downstream.
+  const version: UpdateDispatchAckVersion | null =
+    raw.v === 1 ? 1 : raw.v === UPDATE_DISPATCH_ACK_VERSION ? 2 : null;
+  if (version === null) {
     return { kind: "invalid", reason: "unsupported-version" };
   }
-  const { nonce, attemptId, generation, sequence, claimedAt } = raw;
+  const { nonce } = raw;
+  if (typeof nonce !== "string" || !isValidUpdateDispatchAckNonce(nonce)) {
+    return { kind: "invalid", reason: "malformed-fields" };
+  }
+  // A v1 file carries the claimed fields at the TOP level; a v2 file carries a
+  // discriminated `result`.
+  const result =
+    version === 1 ? claimedResult(raw) : decodeV2Result(raw.result);
+  if (result === null) return { kind: "invalid", reason: "malformed-fields" };
+  return { kind: "valid", ack: { v: version, nonce, result } };
+}
+
+function decodeV2Result(value: unknown): UpdateDispatchAckResult | null {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const raw = value as Record<string, unknown>;
+  if (raw.kind === "claimed") return claimedResult(raw);
+  if (raw.kind !== "no-attempt") return null;
+  const { reason } = raw;
+  // Checked at the reader, not only at the writer. The grammar is what lets
+  // this value be handled as data everywhere downstream, and a reader that
+  // trusts the producer to have checked has no way to keep that promise.
+  return typeof reason === "string" && isValidUpdateDispatchAckReason(reason)
+    ? { kind: "no-attempt", reason }
+    : null;
+}
+
+function claimedResult(
+  raw: Readonly<Record<string, unknown>>,
+): UpdateDispatchAckResult | null {
+  const { attemptId, generation, sequence, claimedAt } = raw;
   if (
-    typeof nonce !== "string" ||
-    !isValidUpdateDispatchAckNonce(nonce) ||
     typeof attemptId !== "string" ||
     attemptId.length === 0 ||
     typeof generation !== "number" ||
@@ -148,17 +235,7 @@ export function decodeUpdateDispatchAck(
     typeof claimedAt !== "string" ||
     claimedAt.length === 0
   ) {
-    return { kind: "invalid", reason: "malformed-fields" };
+    return null;
   }
-  return {
-    kind: "valid",
-    ack: {
-      v: UPDATE_DISPATCH_ACK_VERSION,
-      nonce,
-      attemptId,
-      generation,
-      sequence,
-      claimedAt,
-    },
-  };
+  return { kind: "claimed", attemptId, generation, sequence, claimedAt };
 }
