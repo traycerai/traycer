@@ -1186,8 +1186,9 @@ type ActivationReading =
  * equal, or restart a correctly activated host on every run when they do
  * not; equality of runtime stamps is the test Desktop uses, and it is the
  * one used here. Only a record with no runtime stamp yet falls back to the
- * catalog version, compared with the same comparator the update decision
- * itself uses (comparable and unequal).
+ * catalog version - string identity there too; the comparator is consulted
+ * only to exempt a record it cannot order (`local-*`), which stays activated
+ * by policy.
  *
  * The comparison is on VERSION rather than on install generation because
  * `pid.json` publishes the version and nothing finer; a swap to the same
@@ -1247,17 +1248,20 @@ async function readActivationState(
   }
   // A release host publishes exactly its catalog version (the build stamps
   // `src/config.ts`'s version into the binary and into the archive's
-  // `version.json` alike), so the record's string IS what an activated host
-  // of that record publishes: identity is the string here as in the
-  // runtime-stamp domain, and another build of the same release
+  // `version.json` alike), so a registry record's string IS what an
+  // activated host of that record publishes (an own-build record from
+  // `host ensure` names the CLI's version and relies on its runtime stamp,
+  // which its archive always carries): identity is the string here as in
+  // the runtime-stamp domain, and another build of the same release
   // (`2.0.0+bar` running under a `2.0.0+foo` record) is debt - the committed
   // artifact is not the one serving. The comparator's build-metadata-blind
   // "equal" would read it as activated, and every consumer keyed on
   // `activated` - the debt gate, `targetObservedRunning`'s withdrawal, the
   // stale-failed clear - would then treat an artifact that never ran as
-  // delivered. The comparator is kept for what it is for: a pair it
-  // cannot ORDER (a `local-*` record, a runtime the catalog does not name)
-  // is not this command's debt to collect and stays activated by policy.
+  // delivered. The comparator is kept for what it is for: a record it
+  // cannot ORDER (`local-*`; the running version passed the SemVer guard
+  // above) is not this command's debt to collect and stays activated by
+  // policy.
   if (running.version === installed.version) {
     return { kind: "activated", installedVersion: installed.version };
   }
