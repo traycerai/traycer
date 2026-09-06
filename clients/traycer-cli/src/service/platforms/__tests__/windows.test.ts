@@ -1129,10 +1129,100 @@ describe("killHostProcessTree convergence loop", () => {
       ["/F", "/PID", "888"],
     ]);
 
-    // Ablation: in `killHostProcessTree`, clear `priorVictims` at the top of
-    // every round → this test reddens: round 2 remembers only 555, 700 is no
-    // longer a seed, and the stop resolves without ever issuing a kill for
-    // 888.
+    // Ablation: in `killHostProcessTree`, keep only the latest round's
+    // victims - `priorVictims.clear()` just before the recording loop at the
+    // END of each round → this test reddens: round 2 remembers only 555, 700
+    // is no longer a seed, and the stop resolves without ever issuing a kill
+    // for 888. (Clearing at the TOP of every round is the cruder mutation and
+    // reddens earlier: round 1 already remembers nothing, so 555 is never
+    // issued either and the stop resolves after the single kill of 100.)
+  });
+
+  it("the victim recorder APPENDS: a lingering victim is re-killed through the OLDER window after its parent's pid was killed again as a newcomer", async () => {
+    // The loop-level twin of the "two victim windows for one pid" algebra
+    // pin: that one builds its memory by hand, so only a fixture that runs
+    // `rememberIncarnation` twice for one pid in the SAME map can tell an
+    // append from an overwrite. Chronology (samples 5000, 7000, 9000,
+    // 11000):
+    //   R0 (sample 5000): host 100 (born 1000, slot) and its validated child
+    //       555 (born 2000). Both killed; victims 100 = [1000, 5000],
+    //       555 = [2000, 5000].
+    //   R1 (sample 7000): a re-launched slot process wears pid 100 again
+    //       (born 6000, slot-matched); 555 lingers in its asynchronous
+    //       `TerminateProcess`, and the scan zeroes its edge because the
+    //       holder of 100 is now younger than it. 555 claims remembered 100
+    //       and sits inside the OLD window: seed. Both killed again; 100 gains
+    //       a second window [6000, 7000].
+    //   R2 (sample 9000): 555 still lingers, still claiming 100. Against the
+    //       newer window it is "older than the victim" - none; against the
+    //       older one it is inside - seed. The older entry is what still
+    //       issues the kill.
+    //   R3 (sample 11000): empty. Converged.
+    const samples = [5000, 7000, 9000, 11000];
+    let sample = 0;
+    const lingering555: TableRowInput = {
+      processId: 555,
+      parentProcessId: 0,
+      claimedParentProcessId: 100,
+      created: 2000,
+      slot: false,
+    };
+    const { runner, calls } = roundedRunner([
+      {
+        kind: "table",
+        rows: [
+          { processId: 100, parentProcessId: 1, created: 1000, slot: true },
+          {
+            processId: 555,
+            parentProcessId: 100,
+            claimedParentProcessId: 100,
+            created: 2000,
+            slot: false,
+          },
+        ],
+      },
+      {
+        kind: "table",
+        rows: [
+          { processId: 100, parentProcessId: 1, created: 6000, slot: true },
+          lingering555,
+        ],
+      },
+      { kind: "table", rows: [lingering555] },
+      { kind: "table", rows: [] },
+    ]);
+    const controller = createWindowsController(runner, {
+      now: () => {
+        const value = samples[sample] ?? 11000;
+        sample += 1;
+        return value;
+      },
+    });
+
+    await controller.stop(serviceLabelFor("staging"), { force: false });
+
+    expect(
+      calls.filter((call) => call.command === "powershell.exe"),
+    ).toHaveLength(4);
+    expect(
+      calls
+        .filter((call) => call.command === "taskkill")
+        .map((call) => call.args),
+    ).toEqual([
+      ["/F", "/PID", "555"],
+      ["/F", "/PID", "100"],
+      ["/F", "/PID", "100"],
+      ["/F", "/PID", "555"],
+      ["/F", "/PID", "555"],
+    ]);
+
+    // Ablation: in `rememberIncarnation`, replace the push with an overwrite
+    // (`memory.set(pid, [incarnation])` on both arms) → this test reddens:
+    // round 2 remembers only the newcomer's window for 100, 555 (born 2000)
+    // reads as older than that victim, and the stop resolves after three
+    // scans and four kills with 555 still alive. Nothing else in the loop
+    // masks it - 555 is a victim, never a suspect, so no suspect entry keeps
+    // it in play.
   });
 
   it("kills within a round deepest-first: a 3-node chain is issued grandchild, child, host", async () => {
@@ -1547,7 +1637,9 @@ describe("killHostProcessTree convergence loop", () => {
     // `priorSuspects` recording loop (record victims only) → this test
     // reddens: round 2 finds nothing to kill and nothing it remembers, and
     // the stop RESOLVES with 888 alive. Alternatively make
-    // `classifyAgainstSuspect` return "none" → same outcome.
+    // `classifyAgainstSuspect` return "none" → same outcome. Neither is
+    // masked by 888's own suspect entry: a row's classification consults
+    // only its CLAIMED PARENT's incarnations, never its own.
   });
 
   it("P2 (round 5e): a newer incarnation of a suspect's pid does not erase the suspicion about the older one's child", async () => {
@@ -1645,11 +1737,15 @@ describe("killHostProcessTree convergence loop", () => {
       ["/F", "/PID", "777"],
     ]);
 
-    // Ablation: replace `rememberIncarnation`'s push with an overwrite
-    // (`memory.set(pid, [incarnation])`) AND make `classifyCarryOverClaim`
-    // return the first incarnation's verdict → this test reddens: round 3
-    // decides 888 is older than victim 777 and the stop RESOLVES with it
-    // alive. Either half alone is caught by the pure incarnation pins.
+    // Ablation: in `classifyCarryOverClaim`, return the FIRST verdict instead
+    // of the strongest (`return classifyAgainstVictim(...)` inside the
+    // victims loop) → this test reddens: round 3 consults victim 777 (born
+    // 8000) first, decides 888 is older than it, never reaches the remembered
+    // suspect, and the stop RESOLVES with 888 alive. The recorder's
+    // append-vs-overwrite is NOT what this fixture exercises - 777's suspect
+    // and victim incarnations live in different maps, and 888's two suspect
+    // entries are identical - so overwriting `rememberIncarnation` leaves it
+    // green; the lingering-victim loop test above is the one that reddens.
   });
 
   it("a suspicion earned while a live parent's age was unreadable is cleared once the age reads and the edge validates", async () => {

@@ -4593,9 +4593,11 @@ export class HostController {
         let raw: unknown;
         try {
           // Streamed for the same reason as `deregisterService`: `host
-          // uninstall` deregisters and then stops the host, and on Windows
-          // both steps run the bounded scan-then-kill loop, whose worst case
-          // is well past the run path's flat 45 s budget.
+          // uninstall --all` deregisters the service and then stops the host,
+          // and on Windows both steps run the bounded scan-then-kill loop,
+          // whose worst case is well past the run path's flat 45 s budget.
+          // The bare form leaves the service and a running host alone (the
+          // CLI gates both on `--all`) and merely shares the wrapper.
           raw = await this.streamBundled<unknown>(
             all ? ["host", "uninstall", "--all"] : ["host", "uninstall"],
           );
