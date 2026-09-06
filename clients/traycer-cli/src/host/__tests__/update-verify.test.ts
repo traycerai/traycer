@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   acquireUpdateAttemptLock,
   commitAttemptMutation,
+  readUpdateAttemptRecord,
 } from "@traycer-clients/shared/host-update";
 
 // This file drives `verifyHostUpdateAttempt`/`reportFor` (host/update-verify.ts)
@@ -366,6 +367,21 @@ describe("verifyHostUpdateAttempt / reportFor - the four HostUpdateVerifyReport 
     expect(report).not.toMatchObject({
       generation: argsFor("1.2.3").generation,
     });
+
+    // B2: the ON-DISK half. `verifyHostUpdateAttempt` uses
+    // `recoveredActivation: "park"`, so a resumed activate is re-parked
+    // before the segment releases - it must never be left ACTIVE-and-unheld.
+    // This is what the `recoveredActivation: "execute"` ablation reddens on
+    // the verifier's own route: an execute disposition would leave the
+    // record `preparing`/active instead.
+    const onDisk = await readUpdateAttemptRecord(hostHomeDir);
+    expect(onDisk.kind).toBe("valid");
+    if (onDisk.kind === "valid") {
+      expect(onDisk.value.phase).toBe("waiting-to-activate");
+      expect(onDisk.value.continuation).toBe("activate");
+      expect(onDisk.value.execution).not.toBe("active");
+      expect(onDisk.value.generation).toBe(2);
+    }
   });
 
   it("reports complete when installed AND running evidence both genuinely verify the exact target version", async () => {
@@ -380,6 +396,19 @@ describe("verifyHostUpdateAttempt / reportFor - the four HostUpdateVerifyReport 
       argsFor("1.2.3"),
     );
     expect(report).toEqual({ outcome: "complete" });
+
+    // B1: the ON-DISK half, through the REAL verifier caller. `afterRecovery:
+    // "report"` must leave the terminal record recovery wrote exactly as it
+    // stands, and never create a second attempt over it - the `reselect`
+    // ablation would turn this outcome `indeterminate` (see the SEAM-style
+    // comment above) while still leaving SOME terminal-looking record behind.
+    const onDisk = await readUpdateAttemptRecord(hostHomeDir);
+    expect(onDisk.kind).toBe("valid");
+    if (onDisk.kind === "valid") {
+      expect(onDisk.value.attemptId).toBe("attempt-1");
+      expect(onDisk.value.phase).toBe("complete");
+      expect(onDisk.value.execution).toBe("terminal");
+    }
   });
 
   it("reports failed with the recovery-evidence-contradiction error code when a positively bound running host disagrees with the installed artifact", async () => {
@@ -402,6 +431,16 @@ describe("verifyHostUpdateAttempt / reportFor - the four HostUpdateVerifyReport 
       outcome: "failed",
       reason: "recovery-evidence-contradiction",
     });
+
+    // B1: the ON-DISK half - the terminal `failed` record for attempt-1,
+    // with no new attempt created over it.
+    const onDisk = await readUpdateAttemptRecord(hostHomeDir);
+    expect(onDisk.kind).toBe("valid");
+    if (onDisk.kind === "valid") {
+      expect(onDisk.value.attemptId).toBe("attempt-1");
+      expect(onDisk.value.phase).toBe("failed");
+      expect(onDisk.value.execution).toBe("terminal");
+    }
   });
 
   it("never reports a terminal outcome (complete/failed) for any refusal - indeterminate is the only arm a failed dispatch may produce", async () => {
