@@ -178,6 +178,11 @@ function renderAssistantMessage(props: ChatMessageProps): ReactElement {
         completedAt={message.completedAt}
         stopped={message.stopped}
         meta={message.assistantMeta}
+        // The host turn this row is, for the error segment's manual-rung
+        // affordances: they attach to the ONE attempt the host names and to no
+        // other row. Absent on a legacy record with no turn identity, which
+        // then correctly matches nothing.
+        turnId={message.turnId ?? null}
         nextStepActions={nextStepActions}
         forkAction={assistantActions?.fork ?? null}
         interviewDeliveryRetry={

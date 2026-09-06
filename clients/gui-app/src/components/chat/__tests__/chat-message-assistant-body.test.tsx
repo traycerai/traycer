@@ -90,6 +90,9 @@ const ERROR_SEGMENT: MessageSegment = {
   message: "The provider stream ended unexpectedly.",
   recoverable: true,
   code: "PROVIDER_STREAM_ERROR",
+  // No typed failure: this fixture is a plain provider-stream error, and the
+  // fallback affordances on the row are gated on one being present.
+  failure: null,
 };
 
 const STOPPED: ChatMessageStoppedInfo = {
@@ -162,6 +165,7 @@ describe("AssistantMessageBody autonomous resume rendering", () => {
   it("does not render an elapsed footer for an autonomous-resume notification without completion", () => {
     render(
       <AssistantMessageBody
+        turnId={null}
         {...bodyProps({
           segments: [AUTONOMOUS_RESUME_SEGMENT],
           turnHasOnlyAutonomousResumeSegments: true,
@@ -177,6 +181,7 @@ describe("AssistantMessageBody autonomous resume rendering", () => {
   it('renders "Resumed · no response · {elapsed}" for a completed silent autonomous resume', () => {
     render(
       <AssistantMessageBody
+        turnId={null}
         {...bodyProps({
           segments: [AUTONOMOUS_RESUME_SEGMENT],
           elapsedStartedAt: 3_000,
@@ -194,6 +199,7 @@ describe("AssistantMessageBody autonomous resume rendering", () => {
   it("does not infer a silent resume from one autonomous-resume-only slice", () => {
     render(
       <AssistantMessageBody
+        turnId={null}
         {...bodyProps({
           segments: [AUTONOMOUS_RESUME_SEGMENT],
           elapsedStartedAt: 3_000,
@@ -213,6 +219,7 @@ describe("AssistantMessageBody stopped turn rendering", () => {
   it('renders "Stopped · {elapsed}" with the stop glyph, not the natural-completion verb', () => {
     render(
       <AssistantMessageBody
+        turnId={null}
         {...bodyProps({
           segments: [TEXT_SEGMENT],
           elapsedStartedAt: 0,
@@ -236,6 +243,7 @@ describe("AssistantMessageBody stopped turn rendering", () => {
   it('renders the natural "worked for" copy with no stop glyph when the turn was not stopped', () => {
     render(
       <AssistantMessageBody
+        turnId={null}
         {...bodyProps({
           segments: [TEXT_SEGMENT],
           elapsedStartedAt: 0,
@@ -257,6 +265,7 @@ describe("AssistantMessageBody stopped turn rendering", () => {
   it("keeps the reply copy control alongside the stopped footer", () => {
     render(
       <AssistantMessageBody
+        turnId={null}
         {...bodyProps({
           segments: [TEXT_SEGMENT],
           elapsedStartedAt: 0,
@@ -273,6 +282,7 @@ describe("AssistantMessageBody stopped turn rendering", () => {
   it('renders "Stopped before responding" instead of nothing for a turn that never produced output', () => {
     render(
       <AssistantMessageBody
+        turnId={null}
         {...bodyProps({
           segments: [],
           runState: null,
@@ -292,6 +302,7 @@ describe("AssistantMessageBody stopped turn rendering", () => {
   it("retains the resume notification alongside an unstarted stop boundary", () => {
     render(
       <AssistantMessageBody
+        turnId={null}
         {...bodyProps({
           segments: [AUTONOMOUS_RESUME_SEGMENT],
           turnHasOnlyAutonomousResumeSegments: true,
@@ -312,6 +323,7 @@ describe("AssistantMessageBody stopped turn rendering", () => {
   it('renders the full "Stopped · {elapsed}" footer, not "Stopped before responding", on a content-less boundary row whose turn DID produce output elsewhere', () => {
     render(
       <AssistantMessageBody
+        turnId={null}
         {...bodyProps({
           segments: [],
           runState: null,
@@ -333,6 +345,7 @@ describe("AssistantMessageBody stopped turn rendering", () => {
     const clipboard = installClipboardMock();
     render(
       <AssistantMessageBody
+        turnId={null}
         {...bodyProps({
           segments: [],
           runState: null,
@@ -351,6 +364,7 @@ describe("AssistantMessageBody stopped turn rendering", () => {
   it("renders nothing for an empty, non-stopped, ended turn (unchanged baseline)", () => {
     const { container } = render(
       <AssistantMessageBody
+        turnId={null}
         {...bodyProps({
           segments: [],
           runState: null,
@@ -365,6 +379,7 @@ describe("AssistantMessageBody stopped turn rendering", () => {
   it("shows the elapsed footer even when the turn's last segment is an error, once the turn is marked stopped", () => {
     render(
       <AssistantMessageBody
+        turnId={null}
         {...bodyProps({
           segments: [TEXT_SEGMENT, ERROR_SEGMENT],
           elapsedStartedAt: 0,
@@ -381,6 +396,7 @@ describe("AssistantMessageBody stopped turn rendering", () => {
   it("keeps the error-ending footer suppressed when the same turn was not stopped (override does not leak)", () => {
     render(
       <AssistantMessageBody
+        turnId={null}
         {...bodyProps({
           segments: [TEXT_SEGMENT, ERROR_SEGMENT],
           elapsedStartedAt: 0,
@@ -397,6 +413,7 @@ describe("AssistantMessageBody stopped turn rendering", () => {
     const user = userEvent.setup();
     render(
       <AssistantMessageBody
+        turnId={null}
         {...bodyProps({
           segments: [TEXT_SEGMENT],
           elapsedStartedAt: 0,
@@ -425,6 +442,7 @@ describe("AssistantMessageBody stopped turn rendering", () => {
     const user = userEvent.setup();
     render(
       <AssistantMessageBody
+        turnId={null}
         {...bodyProps({
           segments: [TEXT_SEGMENT],
           elapsedStartedAt: 0,
@@ -451,6 +469,7 @@ describe("AssistantMessageBody stopped turn rendering", () => {
     const user = userEvent.setup();
     render(
       <AssistantMessageBody
+        turnId={null}
         {...bodyProps({
           segments: [TEXT_SEGMENT],
           elapsedStartedAt: 0,
@@ -488,6 +507,7 @@ describe("AssistantMessageBody stopped turn rendering", () => {
     const user = userEvent.setup();
     render(
       <AssistantMessageBody
+        turnId={null}
         {...bodyProps({
           segments: [TEXT_SEGMENT],
           elapsedStartedAt: 0,
@@ -516,6 +536,7 @@ describe("AssistantMessageBody stopped turn rendering", () => {
     const user = userEvent.setup();
     render(
       <AssistantMessageBody
+        turnId={null}
         {...bodyProps({
           segments: [TEXT_SEGMENT],
           elapsedStartedAt: 0,

@@ -24,11 +24,13 @@ describe("<ErrorSegment />", () => {
   it("renders the error chrome with the code badge and message", () => {
     render(
       <ErrorSegment
+        turnId={null}
         message="Boom went the host"
         code="RUNTIME_THROWN"
         recoverable={false}
         findUnitId={null}
         harnessId={null}
+        failure={null}
       />,
     );
 
@@ -40,11 +42,13 @@ describe("<ErrorSegment />", () => {
   it("omits the code badge when there is no code", () => {
     render(
       <ErrorSegment
+        turnId={null}
         message="Something failed"
         code={null}
         recoverable={false}
         findUnitId={null}
         harnessId={null}
+        failure={null}
       />,
     );
 
@@ -59,11 +63,13 @@ describe("<ErrorSegment />", () => {
     render(
       <TooltipProvider>
         <ErrorSegment
+          turnId={null}
           message="Something failed"
           code={hostileCode}
           recoverable={false}
           findUnitId={null}
           harnessId={null}
+          failure={null}
         />
       </TooltipProvider>,
     );
@@ -88,11 +94,13 @@ describe("<ErrorSegment />", () => {
     render(
       <TooltipProvider>
         <ErrorSegment
+          turnId={null}
           message="Boom went the host"
           code="RUNTIME_THROWN"
           recoverable={false}
           findUnitId={null}
           harnessId={null}
+          failure={null}
         />
       </TooltipProvider>,
     );
@@ -131,22 +139,26 @@ describe("<ErrorSegment />", () => {
     const { rerender } = render(
       <TooltipProvider>
         <ErrorSegment
+          turnId={null}
           message="First failure"
           code="RUNTIME_THROWN"
           recoverable={false}
           findUnitId={null}
           harnessId={null}
+          failure={null}
         />
       </TooltipProvider>,
     );
     rerender(
       <TooltipProvider>
         <ErrorSegment
+          turnId={null}
           message="Please re-authenticate"
           code="auth"
           recoverable
           findUnitId={null}
           harnessId={null}
+          failure={null}
         />
       </TooltipProvider>,
     );
@@ -182,11 +194,13 @@ describe("<ErrorSegment />", () => {
     render(
       <TooltipProvider>
         <ErrorSegment
+          turnId={null}
           message="Boom went the host"
           code="RUNTIME_THROWN"
           recoverable={false}
           findUnitId={null}
           harnessId={null}
+          failure={null}
         />
       </TooltipProvider>,
     );
@@ -216,11 +230,13 @@ describe("<ErrorSegment />", () => {
       render(
         <TooltipProvider>
           <ErrorSegment
+            turnId={null}
             message="Boom went the host"
             code="RUNTIME_THROWN"
             recoverable={false}
             findUnitId={null}
             harnessId={null}
+            failure={null}
           />
         </TooltipProvider>,
       );
@@ -237,11 +253,13 @@ describe("<ErrorSegment />", () => {
     render(
       <TooltipProvider>
         <ErrorSegment
+          turnId={null}
           message="Please re-authenticate"
           code="auth"
           recoverable
           findUnitId={null}
           harnessId={null}
+          failure={null}
         />
       </TooltipProvider>,
     );
@@ -280,11 +298,13 @@ describe("<ErrorSegment />", () => {
     it("deep-links to the turn's own provider Env tab", () => {
       render(
         <ErrorSegment
+          turnId={null}
           message={ENV_CREDENTIAL_MESSAGE}
           code="auth_env_credential"
           recoverable={false}
           findUnitId={null}
           harnessId="claude"
+          failure={null}
         />,
       );
 
@@ -306,11 +326,13 @@ describe("<ErrorSegment />", () => {
       // not name an arbitrary provider either.
       render(
         <ErrorSegment
+          turnId={null}
           message={ENV_CREDENTIAL_MESSAGE}
           code="auth_env_credential"
           recoverable={false}
           findUnitId={null}
           harnessId={null}
+          failure={null}
         />,
       );
 
@@ -325,11 +347,13 @@ describe("<ErrorSegment />", () => {
     it("does not offer it on an ordinary error", () => {
       render(
         <ErrorSegment
+          turnId={null}
           message="Boom went the host"
           code="RUNTIME_THROWN"
           recoverable={false}
           findUnitId={null}
           harnessId="claude"
+          failure={null}
         />,
       );
 
@@ -344,11 +368,13 @@ describe("<ErrorSegment />", () => {
       // the user to a page with nothing to change.
       render(
         <ErrorSegment
+          turnId={null}
           message="Please re-authenticate"
           code="auth"
           recoverable
           findUnitId={null}
           harnessId="claude"
+          failure={null}
         />,
       );
 

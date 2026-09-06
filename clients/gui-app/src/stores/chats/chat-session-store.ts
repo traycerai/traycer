@@ -166,6 +166,9 @@ import type {
   ChatRunSettings,
   ChatRunStatus,
   ChatSubscribeClientFrame,
+  LastFailedAttempt,
+  PendingFallback,
+  PendingReturn,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type {
   WorktreeBinding,
@@ -219,6 +222,19 @@ type ChatOwnerActionFrame = Exclude<
   { readonly kind: "ping" }
 >;
 type ChatActionAckFrame = Parameters<ChatStreamCallbacks["onActionAck"]>[0];
+
+/**
+ * A grace-hold lease, from the frame that asked for it to the ack that minted
+ * it. See `ChatSessionState.fallbackChoiceLease`.
+ */
+export interface FallbackChoiceLease {
+  readonly traversalId: string;
+  /** The `fallback.holdForChoice` frame this lease is the answer to. */
+  readonly clientActionId: string;
+  /** The host's token, once the ack carries one. `null` while `pending`. */
+  readonly token: string | null;
+  readonly status: "pending" | "held" | "refused";
+}
 type ChatSnapshotFrame = Parameters<ChatStreamCallbacks["onSnapshot"]>[0];
 type ChatWindowedSnapshotFrame = Parameters<
   ChatStreamCallbacks["onWindowedSnapshot"]
@@ -250,6 +266,15 @@ type DeferredWindowedSnapshotAux = Pick<
   | "missingWorktreePaths"
   | "managedCommands"
   | "heldUpdates"
+  // Both fallback DTOs qualify under this type's own rule: they are on the
+  // windowed snapshot AND `turnStateChanged` supersedes them. Omitting them
+  // here would not merely replay a stale value - it would replay it
+  // PERMANENTLY, because nothing re-sends a card that has already cleared, so
+  // a deferred snapshot landing after a settle would put a dead grace
+  // countdown back on screen for the rest of the session.
+  | "pendingFallback"
+  | "pendingReturn"
+  | "lastFailedAttempt"
 >;
 
 function deferredWindowedSnapshotAuxOf(
@@ -268,6 +293,9 @@ function deferredWindowedSnapshotAuxOf(
     missingWorktreePaths: snapshot.missingWorktreePaths,
     managedCommands: snapshot.managedCommands,
     heldUpdates: snapshot.heldUpdates,
+    pendingFallback: snapshot.pendingFallback,
+    pendingReturn: snapshot.pendingReturn,
+    lastFailedAttempt: snapshot.lastFailedAttempt,
   };
 }
 type ChatSessionSetState = StoreApi<ChatSessionState>["setState"];
@@ -844,6 +872,60 @@ export interface ChatSessionState {
   readonly accumulatedSummaryAssemblyStarted: boolean;
   readonly backgroundItems: ReadonlyArray<BackgroundItem> | undefined;
   /**
+   * The live fallback traversal on this chat (`chat.subscribe@1.9`), or
+   * `undefined` when there is none.
+   *
+   * DERIVED per frame by the host and NEVER accumulated here: the durable
+   * record outlives the session that produced it, so every frame carrying this
+   * key is the whole truth as of that frame. That is why the appliers below
+   * assign it straight across instead of taking the `??` fallback
+   * {@link backgroundItems} takes - for that field an omitted key means
+   * "unchanged", but here `undefined` means "there is no traversal", which is
+   * exactly the value that clears the card. A `??` would pin a grace countdown
+   * on screen for the rest of the session, and it is the same value an older
+   * host's silence produces, so one code path serves both.
+   *
+   * `undefined` also covers every pre-`1.9` host: the key is stripped from
+   * those lines by the host's own projection, so a client on an old host simply
+   * never offers the affordances.
+   */
+  readonly pendingFallback: PendingFallback | undefined;
+  /**
+   * The switch-back offer (`chat.subscribe@1.9`), or `undefined` when none is
+   * up.
+   *
+   * Same derived-per-frame contract as {@link pendingFallback}, and the same
+   * assign-straight-across rule. Read this by VALUE and never by key presence:
+   * on a live `1.9` frame the KEY is always set - the host's builders write it
+   * unconditionally, with `undefined` meaning "clear the banner" - so a
+   * presence test (`"pendingReturn" in frame`) reads as "offer up" forever.
+   * The host's own projection tests the key, because ITS question is the mirror
+   * one (may this peer see the key at all); a renderer's question is whether
+   * there is an offer.
+   */
+  readonly pendingReturn: PendingReturn | undefined;
+  /**
+   * The chat's latest terminal failure, when the host would admit a manual
+   * rung on it (`chat.subscribe@1.9`, D152/D156) - the error card's Retry /
+   * Switch… / Wait-until affordances and nothing else.
+   *
+   * Same derived-per-frame contract and the same assign-straight-across rule
+   * as the two above, and the same BY-VALUE read. Two things about this one
+   * specifically:
+   *
+   * **Never accumulate it.** `undefined` is what HIDES the affordances, and a
+   * store that kept its last value would offer Retry on a turn that has since
+   * succeeded - the defect D122 closed on the host, arriving through the
+   * renderer instead.
+   *
+   * **`eligibleRungs: []` is a different fact from an absent value.** Absent
+   * means no affordances at all; empty means the host walked its guard chain
+   * and admitted nothing for this failure (`auth` is exactly that shape). A
+   * reader that falls back to offering all three on an empty array rebuilds
+   * the dead-button case the field exists to remove.
+   */
+  readonly lastFailedAttempt: LastFailedAttempt | undefined;
+  /**
    * The shells this chat created, whatever state they are in - not a subset
    * of {@link backgroundItems}, since a shell outlives the turn that started
    * it. Carried whole by every snapshot and every `managedCommandsChanged`
@@ -910,6 +992,28 @@ export interface ChatSessionState {
     readonly awaitingTurnEnd: boolean;
     readonly turnId: string | null;
   } | null;
+  /**
+   * The grace-hold lease taken by the destination menu, or `null`.
+   *
+   * A STREAM lease, which is why it lives here and not in the menu's own React
+   * state. `fallback.holdForChoice` freezes the remaining grace window and the
+   * host mints a token that binds to this subscription's `connectionId`; the
+   * token arrives on the action ack rather than on a frame of its own, so the
+   * only place that can see it is the code that reconciles acks.
+   *
+   * `status` is what the menu renders against. `pending` means the frame is out
+   * and the window may still be running - the menu must not claim a pause the
+   * engine has not granted, and the card says "countdown paused" only once the
+   * DTO itself reports `choosing`. `held` carries the token every later
+   * `chat.fallback.chooseTarget` presents. `refused` is a hold the host
+   * declined (a traversal that advanced under the click), and the menu closes
+   * on it rather than picking against a window it does not hold.
+   *
+   * Cleared by an authoritative snapshot: a snapshot means this subscriber
+   * re-attached, and subscriber detach resumes the frozen remainder host-side,
+   * so a token carried across one names a hold that no longer exists.
+   */
+  readonly fallbackChoiceLease: FallbackChoiceLease | null;
   readonly restore: ChatRestoreSlot | null;
   readonly pendingActions: Readonly<Record<string, PendingChatAction>>;
   readonly acceptedActions: Readonly<Record<string, AcceptedChatAction>>;
@@ -1058,6 +1162,19 @@ export interface ChatSessionState {
     revertArtifacts: boolean,
   ) => string | null;
   stopTurn: () => string | null;
+  /**
+   * Open the destination menu on a live grace window: freeze the remainder and
+   * ask for a lease. Returns the `clientActionId`, or `null` when there is
+   * nothing to hold - no traversal, a traversal in a state the hold does not
+   * apply to, or a hold already in flight for it.
+   */
+  fallbackHoldForChoice: (traversalId: string) => string | null;
+  /**
+   * Close the menu and resume the frozen remainder. A no-op unless a lease is
+   * actually `held`: a `pending` hold has no token to prove ownership with, and
+   * the host resumes on detach anyway, so there is nothing to release.
+   */
+  fallbackReleaseChoice: () => string | null;
   stopBackgroundItem: (taskId: string) => string | null;
   stopAllBackgroundItems: () => string | null;
   stopBackgroundSession: () => string | null;
@@ -2511,6 +2628,19 @@ export function createChatSessionStoreWithNotificationDependencies(
           pendingInterviews: frame.snapshot.pendingInterviews,
           accumulatedFileChanges: frame.snapshot.accumulatedFileChanges,
           backgroundItems: frame.snapshot.backgroundItems,
+          // Straight across, deliberately WITHOUT the `??` fallback the
+          // neighbours take: for these two `undefined` is a value ("no
+          // traversal", "no offer") rather than an omission, and it is the one
+          // that clears the card. See `ChatSessionState.pendingFallback`.
+          pendingFallback: frame.snapshot.pendingFallback,
+          pendingReturn: frame.snapshot.pendingReturn,
+          lastFailedAttempt: frame.snapshot.lastFailedAttempt,
+          // A snapshot means this subscriber (re)attached, and subscriber
+          // detach resumes a frozen grace window host-side. Any lease we were
+          // holding across it names a hold that no longer exists, so it is
+          // dropped here rather than presented to `chooseTarget` as proof of
+          // something the host has already given back.
+          fallbackChoiceLease: null,
           managedCommands: frame.snapshot.managedCommands,
           heldUpdates: frame.snapshot.heldUpdates,
           // Drop per-item stops whose task has left the running-only list
@@ -3699,6 +3829,9 @@ export function createChatSessionStoreWithNotificationDependencies(
           managedCommands: current.managedCommands,
           heldUpdates: current.heldUpdates,
           turnInProgress: current.turnInProgress,
+          pendingFallback: current.pendingFallback,
+          pendingReturn: current.pendingReturn,
+          lastFailedAttempt: current.lastFailedAttempt,
         },
       };
     };
@@ -4572,6 +4705,10 @@ export function createChatSessionStoreWithNotificationDependencies(
                   (message) => message.clientActionId !== frame.clientActionId,
                 );
           const backgroundStopAck = reconcileBackgroundStopAck(state, frame);
+          const choiceLease = reconcileFallbackChoiceAck(
+            state.fallbackChoiceLease,
+            frame,
+          );
           const nextSessionStop = reconcileSessionStopAck(
             state.pendingBackgroundSessionStop,
             frame,
@@ -4585,6 +4722,7 @@ export function createChatSessionStoreWithNotificationDependencies(
                 pendingBackgroundStops: backgroundStopAck.pendingStops,
                 pendingBackgroundStopAll: backgroundStopAck.pendingStopAll,
                 pendingBackgroundSessionStop: nextSessionStop,
+                fallbackChoiceLease: choiceLease,
               };
             }
             return {
@@ -4625,6 +4763,7 @@ export function createChatSessionStoreWithNotificationDependencies(
               pendingBackgroundStops: backgroundStopAck.pendingStops,
               pendingBackgroundStopAll: backgroundStopAck.pendingStopAll,
               pendingBackgroundSessionStop: nextSessionStop,
+              fallbackChoiceLease: choiceLease,
             };
           }
           return {
@@ -4633,6 +4772,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             pendingBackgroundStops: backgroundStopAck.pendingStops,
             pendingBackgroundStopAll: backgroundStopAck.pendingStopAll,
             pendingBackgroundSessionStop: nextSessionStop,
+            fallbackChoiceLease: choiceLease,
             queue: removeOptimisticQueuedItemByClientActionId(
               state.queue,
               frame.clientActionId,
@@ -4908,6 +5048,16 @@ export function createChatSessionStoreWithNotificationDependencies(
             activeTurn: frame.activeTurn,
             turnInProgress: frame.turnInProgress ?? state.turnInProgress,
             backgroundItems: nextBackgroundItems,
+            // No `??` here, unlike the two lines above, and the difference is
+            // the point: those fields are omitted by an older host and
+            // "omitted" means "unchanged", whereas a live `1.9` peer sets
+            // these keys on EVERY frame with `undefined` meaning "the
+            // traversal is over". Taking the fallback would make a settled
+            // grace card immortal - the host never re-sends a card it has
+            // cleared, so nothing would ever take it back down.
+            pendingFallback: frame.pendingFallback,
+            pendingReturn: frame.pendingReturn,
+            lastFailedAttempt: frame.lastFailedAttempt,
             // Keep background-stop pending state in lockstep with the
             // running-only list: a task that has left the list settled, so its
             // Stop is no longer in flight.
@@ -4964,6 +5114,13 @@ export function createChatSessionStoreWithNotificationDependencies(
           activeTurn: frame.activeTurn,
           turnInProgress: frame.turnInProgress ?? held.turnInProgress,
           backgroundItems: frame.backgroundItems ?? held.backgroundItems,
+          // Same rule as the store write above - "one rule per site, never two
+          // copies of the rule". Without these two the held snapshot would
+          // replay its own (older) card state when its tail arrives, and
+          // because nothing re-sends a cleared card that replay is permanent.
+          pendingFallback: frame.pendingFallback,
+          pendingReturn: frame.pendingReturn,
+          lastFailedAttempt: frame.lastFailedAttempt,
         }));
       },
       onBlockDelta: (frame) => {
@@ -5570,8 +5727,12 @@ export function createChatSessionStoreWithNotificationDependencies(
       accumulatedSummaryGenerationSeated: false,
       accumulatedSummaryAssemblyStarted: false,
       backgroundItems: undefined,
+      pendingFallback: undefined,
+      pendingReturn: undefined,
+      lastFailedAttempt: undefined,
       managedCommands: [],
       heldUpdates: [],
+      fallbackChoiceLease: null,
       pendingBackgroundStops: {},
       pendingBackgroundStopAll: null,
       pendingBackgroundSessionStop: null,
@@ -6036,6 +6197,86 @@ export function createChatSessionStoreWithNotificationDependencies(
             deliveryPolicy: null,
             createdAt: Date.now(),
           },
+          pendingUserMessage: null,
+        });
+      },
+      fallbackHoldForChoice: (traversalId) => {
+        const state = get();
+        // The DTO is the capability gate. `pendingFallback` exists only on a
+        // live `chat.subscribe@1.9` frame, so a host that has no handler for
+        // this action is also a host that never gave us a traversal to hold -
+        // no separate version check, and none that could drift from this one.
+        const pending = state.pendingFallback;
+        if (pending === undefined) return null;
+        if (pending.traversalId !== traversalId) return null;
+        // Only a live window can be frozen. `switching` has committed and
+        // `waiting` never had a countdown; both open their menu with no hold at
+        // all, so asking for one here would be asking the host to freeze
+        // something that is not running.
+        if (pending.state !== "hold") return null;
+        // A hold already in flight or already granted for this traversal: a
+        // second frame would mint a second lease and orphan the first.
+        const lease = state.fallbackChoiceLease;
+        if (
+          lease !== null &&
+          lease.traversalId === traversalId &&
+          lease.status !== "refused"
+        ) {
+          return null;
+        }
+        const clientActionId = uuidv4();
+        const frame: ChatOwnerActionFrame = {
+          kind: "fallback.holdForChoice",
+          hasBinaryPayload: false,
+          epicId: options.epicId,
+          chatId: options.chatId,
+          clientActionId,
+          traversalId,
+        };
+        const sent = sendAction({
+          set,
+          get,
+          frame,
+          pending: basicPending(clientActionId, "fallback.holdForChoice"),
+          pendingUserMessage: null,
+        });
+        if (sent === null) return null;
+        set(() => ({
+          fallbackChoiceLease: {
+            traversalId,
+            clientActionId: sent,
+            token: null,
+            status: "pending",
+          },
+        }));
+        return sent;
+      },
+      fallbackReleaseChoice: () => {
+        const lease = get().fallbackChoiceLease;
+        // Clear the slot in every case. A `pending` hold whose ack never landed
+        // and a `refused` one both leave nothing to release - the host resumes
+        // the remainder on detach, close and restart regardless, which is
+        // exactly why it can never treat this frame as the only way a hold
+        // ends - but the menu is closing either way and a stale slot would
+        // block the next open.
+        if (lease === null) return null;
+        set(() => ({ fallbackChoiceLease: null }));
+        if (lease.status !== "held" || lease.token === null) return null;
+        const clientActionId = uuidv4();
+        const frame: ChatOwnerActionFrame = {
+          kind: "fallback.releaseChoice",
+          hasBinaryPayload: false,
+          epicId: options.epicId,
+          chatId: options.chatId,
+          clientActionId,
+          traversalId: lease.traversalId,
+          token: lease.token,
+        };
+        return sendAction({
+          set,
+          get,
+          frame,
+          pending: basicPending(clientActionId, "fallback.releaseChoice"),
           pendingUserMessage: null,
         });
       },
@@ -7082,6 +7323,39 @@ function reconcileBackgroundStopAck(
     pendingStops,
     pendingStopAll: stopAllAcked ? null : state.pendingBackgroundStopAll,
   };
+}
+
+/**
+ * The ack that mints, refuses, or does not concern a grace-hold lease.
+ *
+ * The token rides the ACK rather than a frame of its own so the lease and the
+ * acceptance are one message - a token delivered separately could arrive after
+ * the client had given up on the hold - which makes this the only place in the
+ * renderer that can see it.
+ *
+ * `status: "rejected"` becomes `refused` rather than `null`, deliberately. The
+ * menu has to tell "the host declined this hold" from "no hold was ever asked
+ * for": the first closes the menu and says the chat has moved on, the second is
+ * the ordinary closed state, and collapsing them would make a refusal look like
+ * a menu that simply never opened.
+ */
+function reconcileFallbackChoiceAck(
+  lease: ChatSessionState["fallbackChoiceLease"],
+  frame: ChatActionAckFrame,
+): ChatSessionState["fallbackChoiceLease"] {
+  if (lease === null) return null;
+  if (lease.clientActionId !== frame.clientActionId) return lease;
+  if (frame.status !== "accepted") {
+    return { ...lease, token: null, status: "refused" };
+  }
+  // An accepted hold with no token is a host that took the freeze and minted
+  // nothing - treated as a refusal, because a pick with no token to present is
+  // `choice_lease_stale` at the verb and the menu is better off closing here
+  // than offering rows that cannot be chosen.
+  if (frame.token === null) {
+    return { ...lease, token: null, status: "refused" };
+  }
+  return { ...lease, token: frame.token, status: "held" };
 }
 
 function reconcileSessionStopAck(

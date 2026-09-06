@@ -1591,6 +1591,11 @@ function buildNotificationAnchorMessages(
             message: anchor.message,
             recoverable: false,
             code: anchor.code,
+            // A session-anchor row is synthesized here from an EVENT, not
+            // projected from an error block, so there is no typed failure to
+            // carry - and inventing one would put fallback affordances on a
+            // row no turn produced.
+            failure: null,
           },
         ],
         structuredContent: null,
@@ -1659,6 +1664,22 @@ function pendingTurnMeta(
 
 interface AssistantTurnAccumulator {
   messageId: string;
+  /**
+   * The record's OWN `turnId`, not this turn's accumulator key.
+   *
+   * The two differ, and the difference is load-bearing: `assistantTurnKey`
+   * falls back to `ts:<timestamp>` for a record persisted before `turnId`
+   * existed, so the key is always a string while the turn identity may be
+   * absent. Anything matching against a host-supplied turn id - the error
+   * card's manual-rung affordances, whose whole correctness rests on naming
+   * the right attempt - has to compare against this, and a legacy row must
+   * fail that comparison rather than match a synthetic key.
+   *
+   * Records of one turn agree by construction (the key is derived from this
+   * field), so there is no first-wins/last-wins question the way there is for
+   * the run metadata above.
+   */
+  turnId: string | null;
   sender: AgentSender;
   /**
    * Earliest wall-clock the host attributed to this turn. Sourced from
@@ -2300,6 +2321,7 @@ function addAssistantMessageToAccumulator(
   }
   const created: AssistantTurnAccumulator = {
     messageId: message.messageId,
+    turnId: message.turnId,
     sender: message.sender,
     startedAt: message.startedAt,
     timestamp: message.timestamp,
@@ -2788,6 +2810,10 @@ function renderAssistantTurnSlice(
     pausedDurationMs: input.pause.pausedDurationMs,
     pausedSinceMs: input.pause.pausedSinceMs,
     persistentMessageId: input.acc.messageId,
+    // Spread rather than set: `turnId` is absent when the record carries none,
+    // and an explicit `undefined` would be a present key whose value is the
+    // one thing a reader must not treat as an identity.
+    ...(input.acc.turnId === null ? {} : { turnId: input.acc.turnId }),
     // Assistant rows render no provider/model label above the bubble (it moved
     // to the elapsed-footer hover, which reads `assistantMeta`), so there's no
     // sender label to carry here.
@@ -3094,6 +3120,9 @@ function renderLiveAssistant(
   }
   const acc: AssistantTurnAccumulator = {
     messageId: transientLiveAssistantMessageId(liveAssistant.turnId),
+    // The live row always has a real turn id - it is what the host is
+    // streaming against - so no `ts:` synthetic can reach here.
+    turnId: liveAssistant.turnId,
     sender: liveAssistant.sender,
     startedAt: liveAssistant.startedAt,
     timestamp: liveAssistant.timestamp,
@@ -3908,6 +3937,10 @@ const BLOCK_HANDLERS: {
       return {
         kind: "provider_notice",
         status: block.status,
+        // Straight across. A block's notice kind is fixed at creation and
+        // never upserted, which is why `textBlockContentVersion` does not hash
+        // it: a kind change would be a different block.
+        noticeKind: notice.noticeKind,
         tone: notice.tone,
         title: notice.title,
         message: notice.message,
@@ -4055,6 +4088,11 @@ const BLOCK_HANDLERS: {
     message: block.message,
     recoverable: block.recoverable,
     code: block.code,
+    // Straight across, no re-derivation. `failure.reason` is the same
+    // classification the fallback engine acted on, and the error row's
+    // affordances turn on it - so reading it here and inferring it from
+    // `message`/`code` anywhere else would be two answers to one question.
+    failure: block.failure,
   }),
   compaction: (block) => ({
     kind: "compaction",

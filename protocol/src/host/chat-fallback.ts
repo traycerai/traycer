@@ -265,3 +265,197 @@ export const chatFallbackReturnToPreferredV10 = defineRpcContract({
   requestSchema: chatFallbackReturnToPreferredRequestSchema,
   responseSchema: chatFallbackReturnToPreferredResponseSchema,
 });
+
+/**
+ * Why a target is not offered, or a note attached to one that is.
+ *
+ * An OPEN string beside a rendered label, not an enum, and the reason is the
+ * one written at the top of this file: a strict enum is strict on the CLIENT,
+ * so a reason a released build has never heard of would fail the whole
+ * response - blanking an entire menu over one unrecognised row. `label` is
+ * always safe to render verbatim; parse `reason` with
+ * `tierRungSkipReasonSchema` from `./fallback-policy` to branch on it, and fall
+ * back to the label when it does not match. Consumers keep compile-time
+ * exhaustiveness by mapping copy over that type with no `default` arm.
+ *
+ * On a NON-selectable row this says why. On a selectable row it is advisory -
+ * `already-tried` and `rate-limited` are both rows the verb would accept, and
+ * whether to offer the click is the surface's decision, not this field's.
+ */
+export const fallbackTargetSkipSchema = z.object({
+  reason: z.string(),
+  label: z.string(),
+});
+export type FallbackTargetSkip = z.infer<typeof fallbackTargetSkipSchema>;
+
+/**
+ * A sibling ACCOUNT on the failed tuple's own provider - the profile rung.
+ *
+ * **Deliberately carries no `target`, unlike {@link fallbackModelTargetSchema},
+ * and this asymmetry is the design rather than an omission.** A caller assembles
+ * the tuple itself as `{ ...failedTuple, profileId: row.profileId }`.
+ *
+ * That is safe here because it is a field SUBSTITUTION, not a reconstruction.
+ * Only the account moves: same provider, same model, same reasoning effort, fast
+ * mode, permission mode and agent mode. There is nothing for the engine to
+ * re-derive, so there is no engine answer for a client to drift from.
+ *
+ * The model row is the opposite case, which is why it carries a `target` and
+ * says "never reconstruct this client-side": it crosses to ANOTHER provider,
+ * whose catalog may not offer the failed tuple's effort or fast mode at all, so
+ * the engine re-derives both against the target's catalog and drops what does
+ * not survive (reported in `warnings`). A client copying those fields across
+ * would send a tuple the target cannot honour, and would go stale on the next
+ * catalog change - the drift this method exists to remove.
+ *
+ * So: the rule is not "clients never build tuples", it is "clients never build
+ * a tuple whose fields the engine DERIVED". If a future profile row ever gains a
+ * derived field, it needs a `target` too, and this doc stops being true.
+ */
+export const fallbackProfileTargetSchema = z.object({
+  /** `null` is the ambient login, never a sentinel string. */
+  profileId: z.string().nullable(),
+  label: z.string(),
+  /** `"ok" | "near_limit" | "hard_limit" | "unknown"`, open for the same reason. */
+  severity: z.string(),
+  /**
+   * Worst applicable window, or `null` for NOT COMPARABLE.
+   *
+   * `null` is never "zero" - the engine's ranking orders the two differently,
+   * and a bar drawn at 0% for an unread gauge tells the user the opposite of
+   * what is true.
+   */
+  usedPercent: z.number().nullable(),
+  /**
+   * The account the ladder would take next - true on at most one row, false on
+   * every row when nothing is rankable.
+   *
+   * A flag rather than "the array is in rank order" deliberately: rank order is
+   * an invariant a future reorder breaks with no compile error, and the
+   * error-card entry point has no live record to cross-check it against.
+   */
+  recommended: z.boolean(),
+  selectable: z.boolean(),
+  skip: fallbackTargetSkipSchema.nullable(),
+});
+export type FallbackProfileTarget = z.infer<typeof fallbackProfileTargetSchema>;
+
+/** An equivalent model on ANOTHER provider - the tier rung. */
+export const fallbackModelTargetSchema = z.object({
+  /**
+   * The group this candidate came from. Its `id` is all a group has - the
+   * persisted `tierGroupSchema` is `{ id, candidates }` with no display name -
+   * so a surface titles the section from the id or from its own copy.
+   */
+  groupId: z.string(),
+  /** Always present: with `modelFamily`, the row's title even when unresolved. */
+  harnessId: z.string(),
+  modelFamily: z.string(),
+  /** The resolved slug; `null` when resolution stopped before one existed. */
+  model: z.string().nullable(),
+  reasoningEffort: z.string().nullable(),
+  profileId: z.string().nullable(),
+  severity: z.string(),
+  usedPercent: z.number().nullable(),
+  /**
+   * The tuple to hand straight back to `chat.fallback.runManualRung`, or `null`
+   * when there is nothing to send.
+   *
+   * Never reconstruct this client-side. The engine re-derives effort and fast
+   * mode against the TARGET's catalog and carries permission mode and agent
+   * mode from the failed tuple untouched; a client-assembled tuple drifts from
+   * the engine on the next catalog change, which is the drift this whole method
+   * exists to remove.
+   */
+  target: chatRunSettingsSchema.nullable(),
+  /** Dropped effort / fast mode, in `agent.configure`'s wording. Unjoined. */
+  warnings: z.array(z.string()),
+  /**
+   * Whether the VERB would accept this pick - exactly `target !== null`.
+   *
+   * It does NOT answer "should the menu offer the click". The manual switch
+   * validates usability alone, so an `already-tried` or `rate-limited` row is
+   * one the host would accept; encoding the stricter answer here would make
+   * every menu a second policy nothing enforces.
+   */
+  selectable: z.boolean(),
+  skip: fallbackTargetSkipSchema.nullable(),
+});
+export type FallbackModelTarget = z.infer<typeof fallbackModelTargetSchema>;
+
+/**
+ * `chat.fallback.listTargets` - what the destination menu may offer, computed
+ * by the ENGINE's own resolution rather than re-derived by the client.
+ *
+ * Read-only with ONE bounded exception: no probe, no gauge write, no
+ * traversal-record write - but a user whose fallback policy row has never been
+ * seeded gets its one-time tier-group seed on their first call, because the
+ * host reads groups through the same seeding helper the ladder's tier rung
+ * uses. Skipping it would answer `no-group` for a user the engine would have
+ * found targets for. Idempotent thereafter, and it never touches the traversal
+ * record - so opening the menu still cannot move a traversal, and a surface may
+ * call it on every open and refresh freely.
+ *
+ * Two selectors because the two entry points genuinely differ. The cards hold a
+ * live record and can be stale, so they carry `{ traversalId, revision }`; the
+ * error card has no live record and names the work by the failed attempt, the
+ * same `{ userMessageId, turnId }` pair `runManualRung` already takes.
+ *
+ * Never throws: an unreadable or moved-on world is a normal response carrying
+ * an `outcome` and empty lists, exactly as the action verbs answer
+ * `traversal_advanced` rather than failing the call.
+ */
+export const chatFallbackListTargetsRequestSchema = z.object({
+  epicId: z.string().trim().min(1),
+  chatId: z.string().trim().min(1),
+  selector: z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("traversal"),
+      traversalId: z.string().trim().min(1),
+      revision: z.number().int().nonnegative(),
+    }),
+    z.object({
+      kind: z.literal("attempt"),
+      userMessageId: z.string().trim().min(1),
+      turnId: z.string().trim().min(1),
+    }),
+  ]),
+});
+export type ChatFallbackListTargetsRequest = z.infer<
+  typeof chatFallbackListTargetsRequestSchema
+>;
+
+export const chatFallbackListTargetsResponseSchema = z.object({
+  outcome: z.enum([
+    "listed",
+    "no_active_traversal",
+    "traversal_advanced",
+    "attempt_not_latest",
+    "state_unreadable",
+  ]),
+  /** The tuple that failed, so a surface can assert it is never offered. */
+  failedTuple: chatRunSettingsSchema.nullable(),
+  profileTargets: z.array(fallbackProfileTargetSchema),
+  modelTargets: z.array(fallbackModelTargetSchema),
+  /**
+   * Why `modelTargets` is EMPTY, when that is a rung-level fact rather than
+   * every candidate having been skipped - in practice `no-group`.
+   *
+   * Beside the array rather than inside it because it describes the absence of
+   * candidates, not a candidate. Load-bearing for the UI: `no-group` is the
+   * COMMONEST ineligibility, being what a user sees after deleting or narrowing
+   * their groups, so an empty list with no explanation would be the menu's
+   * worst cell.
+   */
+  modelTargetsSkip: fallbackTargetSkipSchema.nullable(),
+});
+export type ChatFallbackListTargetsResponse = z.infer<
+  typeof chatFallbackListTargetsResponseSchema
+>;
+
+export const chatFallbackListTargetsV10 = defineRpcContract({
+  method: "chat.fallback.listTargets",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: chatFallbackListTargetsRequestSchema,
+  responseSchema: chatFallbackListTargetsResponseSchema,
+});

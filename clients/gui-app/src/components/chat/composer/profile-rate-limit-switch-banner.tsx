@@ -62,7 +62,24 @@ interface ProfileRateLimitSwitchBannerProps {
    * automatic non-forced usage check on it per mounted warning episode. */
   readonly probeTarget: ProfileRateLimitDestination | null;
   readonly runTargetHostId: string | null;
-  /** User-confirmed only. Commits the picked profile for the next turn. */
+  /**
+   * User-confirmed only. Commits the picked profile for the next turn.
+   *
+   * "User-confirmed" is a statement about THIS banner, not a rule about the
+   * app. Provider fallback switches a chat's profile without a press, and that
+   * is legitimate: the user authorized it once, in advance, by configuring the
+   * policy — a standing authorization is consent, and the fallback surfaces
+   * spend it in the open (a named destination, a countdown, and a refusal that
+   * keeps the error).
+   *
+   * What stays true here is the DIVISION: this banner is the manual,
+   * PRE-failure path. It fires on a usage reading while the turn could still
+   * succeed, so there is nothing to rescue and no authorization to spend —
+   * only a suggestion, which a person accepts or dismisses. Fallback is the
+   * post-failure path and never routes through this callback: it would drop
+   * the failed message, which is the one thing this banner's switch does not
+   * carry.
+   */
   readonly onSwitchProfile: (profileId: string | null) => void;
   /** Includes the current chat. The current composer commit is handled by
    * `onSwitchProfile`; this callback switches only matching siblings. */

@@ -335,6 +335,18 @@ export function publishedChatSessionState(
     accumulatedSummaryGenerationSeated: true,
     accumulatedSummaryAssemblyStarted: false,
     backgroundItems: undefined,
+    // A published copy is frozen and has no stream: there is no traversal to
+    // hold its dispatch and no offer to answer, so both surfaces are absent
+    // for the life of the surface rather than merely not-yet-arrived. That is
+    // the same thing `undefined` means on a live frame, so the cards read one
+    // value here and there rather than a published-only sentinel.
+    pendingFallback: undefined,
+    pendingReturn: undefined,
+    // A published copy can never act, so there is no rung to admit even if the
+    // transcript it froze ends in a failure. Absent, not empty: empty would
+    // say "the host looked and admitted nothing", and nothing looked.
+    lastFailedAttempt: undefined,
+    fallbackChoiceLease: null,
     pendingBackgroundStops: {},
     pendingBackgroundStopAll: null,
     pendingBackgroundSessionStop: null,
@@ -376,6 +388,8 @@ export function publishedChatSessionState(
     editUserMessage: () => null,
     revertFileChanges: () => null,
     stopTurn: () => null,
+    fallbackHoldForChoice: () => null,
+    fallbackReleaseChoice: () => null,
     stopBackgroundItem: () => null,
     stopAllBackgroundItems: () => null,
     stopBackgroundSession: () => null,

@@ -575,6 +575,14 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // The destination menu's candidate list, and the ONE fallback method that is
+  // not `fifo`. The other four mutate and name the revision they expect, so two
+  // rapid answers must stay two ordered requests. This one is read-only - no
+  // probe, no gauge write, no record write - so a later read supersedes an
+  // earlier one and `LATEST_SCHEDULING` is the honest scheduling: a user who
+  // reopens or refreshes the menu wants the newest answer, not a queue of stale
+  // ones delivered in order.
+  "chat.fallback.listTargets": { ...LATEST_SCHEDULING, poll: null },
   "snapshots.getLocalStorageSize": { ...LATEST_SCHEDULING, poll: null },
   "snapshots.readSnapshotDiff": { ...LATEST_SCHEDULING, poll: null },
   // Clearing snapshots destructively removes locally retained data.
@@ -1507,6 +1515,33 @@ export const HOST_METHOD_POLL_TABLE = {
   "providers.fallbackPolicy.set": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Restoring the seeded model groups and resetting the whole policy are both
+  // persisted settings writes, so `fifo` for the same reason as `.set`: they
+  // race with it (all three write the same row) and must land in the order the
+  // user pressed them, never coalesced.
+  "providers.fallbackPolicy.restoreTierGroups": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "providers.fallbackPolicy.reset": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // A pure read re-issued on every edit, so `latest` - the same argument as
+  // `chat.fallback.listTargets`. Coalescing onto the NEWEST request is what
+  // makes the rendered verdicts match the draft on screen: under a burst of
+  // edits the superseded requests describe groups the user has already changed,
+  // and running them in order would render each stale answer on the way past
+  // while spending a catalog walk per candidate on every one of them. `fifo`
+  // belongs to the writes, which name a revision and must all land.
+  // `poll: null`: it is re-asked when the draft changes, and nothing else can
+  // change its answer.
+  "providers.fallbackPolicy.previewTierGroups": {
+    ...LATEST_SCHEDULING,
     poll: null,
   },
   // Native MCP/plugins/skills mutations write provider config files, so they

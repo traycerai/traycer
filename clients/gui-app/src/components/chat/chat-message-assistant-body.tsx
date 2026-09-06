@@ -38,6 +38,7 @@ import { InterviewSegment } from "./segments/interview-segment";
 import type { NextStepActionHandler } from "./segments/next-steps-action-group";
 import { PlanSegment } from "./segments/plan-segment";
 import { ProviderNoticeSegment } from "./segments/provider-notice-segment";
+import { FallbackWaitResumedMarker } from "@/components/chat/fallback/fallback-notice-attribution";
 import { ReasoningSegment } from "./segments/reasoning-segment";
 import { SubagentSegment } from "./segments/subagent-segment";
 import { TextSegment } from "./segments/text-segment";
@@ -100,6 +101,12 @@ interface AssistantBodyProps {
    * predate the persisted run-metadata fields.
    */
   meta: AssistantTurnMeta | null;
+  /**
+   * The host turn this row is. Null on user rows, synthesized event rows, and
+   * records persisted before `turnId` existed - all of which correctly match
+   * no host-named attempt and therefore offer no manual rungs.
+   */
+  turnId: string | null;
   nextStepActions: NextStepActionHandler | null;
   forkAction: ChatMessageForkAction | null;
   interviewDeliveryRetry: InterviewDeliveryRetryAction | null;
@@ -118,6 +125,7 @@ export function AssistantMessageBody({
   completedAt,
   stopped,
   meta,
+  turnId,
   nextStepActions,
   forkAction,
   interviewDeliveryRetry,
@@ -230,6 +238,7 @@ export function AssistantMessageBody({
             // the chat has since switched away from. `null` on legacy turns with
             // no metadata; the affordance then falls back to the section root.
             harnessId={meta?.provider ?? null}
+            turnId={turnId}
           />
         );
       })}
@@ -797,6 +806,8 @@ interface AssistantSegmentProps {
   interviewDeliveryRetry: InterviewDeliveryRetryAction | null;
   /** Harness that ran this turn, for provider-targeted error affordances. */
   harnessId: GuiHarnessId | null;
+  /** See `AssistantBodyProps.turnId`. */
+  turnId: string | null;
 }
 
 function ApprovalSegmentCard({
@@ -834,6 +845,7 @@ function AssistantSegment({
   forkAction,
   interviewDeliveryRetry,
   harnessId,
+  turnId,
 }: AssistantSegmentProps) {
   const findUnitId = chatFindSegmentUnitId(id);
   switch (segment.kind) {
@@ -974,6 +986,8 @@ function AssistantSegment({
           recoverable={segment.recoverable}
           findUnitId={findUnitId}
           harnessId={harnessId}
+          failure={segment.failure}
+          turnId={turnId}
         />
       );
     case "compaction":
@@ -990,9 +1004,22 @@ function AssistantSegment({
         />
       );
     case "provider_notice":
-      return (
+      // The resumed-turn marker is a different FRAME, not a different notice:
+      // the turn it heads had no user message, so the transcript's existing
+      // answer to "why is the agent talking" - the autonomous-resume marker -
+      // is the shape that reads correctly. A hairline rule between two
+      // assistant messages does not.
+      return segment.noticeKind === "fallback_wait_resumed" ? (
+        <FallbackWaitResumedMarker
+          title={segment.title}
+          message={segment.message}
+          details={segment.details}
+          findUnitId={findUnitId}
+        />
+      ) : (
         <ProviderNoticeSegment
           status={segment.status}
+          noticeKind={segment.noticeKind}
           tone={segment.tone}
           title={segment.title}
           message={segment.message}

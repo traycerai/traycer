@@ -19,6 +19,7 @@ import { AppNotificationsSettingsPanel } from "@/components/settings/panels/app-
 import { DiagnosticsSettingsPanel } from "@/components/settings/panels/diagnostics-settings-panel";
 import { ProvidersSettingsPanel } from "@/components/settings/panels/providers-settings-panel";
 import { AgentsSettingsPanel } from "@/components/settings/panels/agents-settings-panel";
+import { FallbackSettingsPanel } from "@/components/settings/panels/fallback-settings-panel";
 import { NotificationsSettingsPanel } from "@/components/settings/panels/notifications-settings-panel";
 import { UsageSettingsPanel } from "@/components/settings/panels/usage-settings-panel";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
@@ -77,6 +78,7 @@ const SETTINGS_PANELS = {
   providers: ProvidersSettingsPanel,
   notifications: NotificationsSettingsPanel,
   agents: AgentsSettingsPanel,
+  fallback: FallbackSettingsPanel,
   keybindings: KeybindingsSettingsPanel,
   shell: ShellSettingsPanel,
   worktrees: WorktreesSettingsPanel,

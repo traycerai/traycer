@@ -3155,7 +3155,8 @@ export const epicSchemaSurfaceBaseline = {
                                             "safety_buffering",
                                             "harness_message",
                                             "fallback_applied",
-                                            "fallback_wait_resumed"
+                                            "fallback_wait_resumed",
+                                            "fallback_settled"
                                           ]
                                         },
                                         "tone": {
@@ -11427,7 +11428,8 @@ export const epicSchemaSurfaceBaseline = {
                                             "safety_buffering",
                                             "harness_message",
                                             "fallback_applied",
-                                            "fallback_wait_resumed"
+                                            "fallback_wait_resumed",
+                                            "fallback_settled"
                                           ]
                                         },
                                         "tone": {

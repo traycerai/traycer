@@ -109,14 +109,22 @@ const artifactKindSchema = getRecordSchema(
 // prompt, and whatever else that channel grows). It is deliberately
 // metadata-less; the other three name a specific provider behaviour and each
 // has a `providerNoticeNormalizedMetadataSchema` variant.
-// `fallback_applied` / `fallback_wait_resumed` are the provider-fallback
-// attribution arms: the durable transcript record that the host moved this
-// chat onto another profile/tuple after a failed turn, and that a turn parked
-// on a rate-limit reset has resumed. Metadata-less like `harness_message` -
-// their facts (rung, from -> to tuple, reason, resetsAt) are ordinary
-// `details` label/value pairs, which need no
-// `providerNoticeNormalizedMetadataSchema` variant and therefore no growth of
-// that discriminated union.
+// `fallback_applied` / `fallback_wait_resumed` / `fallback_settled` are the
+// provider-fallback attribution arms: the durable transcript record that the
+// host moved this chat onto another profile/tuple after a failed turn, that a
+// turn parked on a rate-limit reset has resumed, and that a traversal ENDED -
+// what was tried, why it stopped, and where the chat was left. Metadata-less
+// like `harness_message` - their facts (rung, from -> to tuple, reason,
+// resetsAt, settlement code/cause/hops) are ordinary `details` label/value
+// pairs, which need no `providerNoticeNormalizedMetadataSchema` variant and
+// therefore no growth of that discriminated union.
+//
+// `fallback_settled` exists because the settlement receipt reached only the
+// NOTIFICATION: the transcript's only settlement row was the queue-paused
+// notice, which is appended solely when items were actually held and carries no
+// cause. A settle with an empty queue therefore left the chat with nothing but
+// an `info` terminal, and a client had no rendered account of a traversal that
+// had walked its whole ladder.
 export const providerNoticeKindSchema = z.enum([
   "model_rerouted",
   "model_verification",
@@ -124,6 +132,7 @@ export const providerNoticeKindSchema = z.enum([
   "harness_message",
   "fallback_applied",
   "fallback_wait_resumed",
+  "fallback_settled",
 ]);
 export type ProviderNoticeKind = z.infer<typeof providerNoticeKindSchema>;
 
@@ -132,10 +141,18 @@ export type ProviderNoticeKind = z.infer<typeof providerNoticeKindSchema>;
  * carries epic record `2.0` and `chat.subscribe@1.0`-`1.6`. It stays the
  * released freeze for the fallback kinds too: `1.6` is still the highest
  * released minor (`__fixtures__/released-baseline-surface.json`), so pinning it
- * here is what keeps `fallback_applied` / `fallback_wait_resumed` off every
- * line a peer in the field can negotiate. The host half of that guarantee is
- * `chat-frame-projection.ts`, which strips any kind OUTSIDE this list rather
- * than naming kinds one at a time - see the note there.
+ * here is what keeps every fallback kind off every line a peer in the field can
+ * negotiate. The host half of that guarantee is `chat-frame-projection.ts`, and
+ * it selects per NEGOTIATED MINOR rather than stripping against this one list:
+ * `providerNoticeKindsForSchemaVersion` answers `null` for a peer that already
+ * accepts fallback notices (`1.9`+, nothing to strip),
+ * `providerNoticeKindSchemaPreFallback`'s options for `1.7`/`1.8`, and THIS
+ * list at or below `1.6` - see the note there. What every branch has in common
+ * is the shape that matters: each reads a frozen enum's `.options` and strips
+ * whatever falls OUTSIDE it, rather than naming kinds one at a time. That is
+ * why `fallback_settled` needed no projection change to be safe - a value added
+ * to the LIVE enum is automatically outside every frozen list, and so outside
+ * every branch.
  *
  * An enum VALUE addition is the one growth a frozen `z.object` copy does not
  * absorb on its own: a released peer strips an unknown KEY, but strict-decodes
@@ -155,17 +172,22 @@ export const providerNoticeKindSchemaPreHarnessMessage = z.enum([
 
 /**
  * The notice kinds `chat.subscribe@1.7` and `@1.8` ship - everything before the
- * two provider-fallback attribution arms.
+ * provider-fallback attribution arms.
  *
  * Those two minors are cut for release (`release/v1.3.0` pins this exact
  * protocol commit), so they get a peer population the moment that tag lands,
  * and an enum VALUE addition is the growth their frozen `z.object` copies
  * cannot absorb on their own - same as `providerNoticeKindSchemaPreHarnessMessage`
- * above. `1.9` is the only line that admits `fallback_applied` /
- * `fallback_wait_resumed`.
+ * above. `1.9` is the only line that admits `fallback_applied`,
+ * `fallback_wait_resumed` or `fallback_settled`.
  *
- * Derived with `.extract()` off the live enum rather than re-spelled, so a
- * future kind added without deciding its freeze story is a compile error here.
+ * Derived with `.extract()` off the live enum rather than re-spelled, so this
+ * list can only ever name kinds the live enum still has. Note what that does
+ * NOT catch: adding a value to the live enum leaves this extract compiling
+ * unchanged, which is the CORRECT default (a new kind is born unreleased and
+ * must stay off these lines) but means the freeze story for a new kind is a
+ * decision to make, not a compile error to wait for. `fallback_settled` was
+ * added under exactly that rule and deliberately left out here.
  * Do NOT add new kinds.
  */
 export const providerNoticeKindSchemaPreFallback =

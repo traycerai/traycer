@@ -818,6 +818,74 @@ describe("<BackgroundItemsPanel />", () => {
       screen.getByTestId("confirm-destructive-dialog").textContent,
     ).toContain("Stopping the session ends all 2 background items.");
   });
+
+  it("titles a fallback-wait row with the provider display name and a 12-hour resume time", () => {
+    const at = new Date(2026, 5, 15, 15, 0, 0).getTime();
+    const wait = backgroundItem({
+      kind: "fallback-wait",
+      taskId: "wait-1",
+      title: "raw title should not win",
+      blockId: "wait-1",
+      parentTaskId: null,
+      scheduledFor: at,
+      providerId: "claude-code",
+      profileLabel: "work-account",
+    });
+    const ambient = backgroundItem({
+      kind: "fallback-wait",
+      taskId: "wait-ambient",
+      title: "ambient wait",
+      blockId: "wait-ambient",
+      parentTaskId: null,
+      scheduledFor: at,
+      providerId: "claude-code",
+      profileLabel: null,
+    });
+    const wakeup = backgroundItem({
+      kind: "wakeup",
+      taskId: "wake-1",
+      title: "Review status",
+      blockId: "wake-1",
+      parentTaskId: null,
+      scheduledFor: at,
+    });
+
+    renderPanel({
+      items: [wait, wakeup],
+      onItemClick: () => undefined,
+      onStopItem: () => null,
+      onStopAll: () => null,
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Background/ }));
+
+    const waitTitle = screen.getByText(
+      /Waiting for Claude Code · work-account's limit/,
+    ).textContent;
+    expect(waitTitle).toMatch(/resumes \d{1,2}:\d{2}\s?[AP]M/i);
+    // Falsification: use item.providerId directly instead of fallbackProviderLabelFor and THIS assertion must go red.
+    expect(waitTitle).toContain("Claude Code");
+    expect(waitTitle).not.toContain("claude-code");
+    // Falsification: swap formatClockTime for formatWakeupTime in that branch and THIS assertion must go red.
+    expect(waitTitle).toMatch(/[AP]M/i);
+    expect(waitTitle).not.toMatch(/\b\d{2}:\d{2}\b/);
+
+    const wakeupTitle = screen.getByText(/Waiting until/).textContent;
+    expect(wakeupTitle).toMatch(/^Waiting until \d{2}:\d{2} · Review status$/);
+
+    cleanup();
+    renderPanel({
+      items: [ambient],
+      onItemClick: () => undefined,
+      onStopItem: () => null,
+      onStopAll: () => null,
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Background/ }));
+    const ambientTitle = screen.getByText(
+      /Waiting for Claude Code's limit/,
+    ).textContent;
+    expect(ambientTitle).toMatch(/^Waiting for Claude Code's limit · resumes /);
+    expect(ambientTitle).not.toMatch(/Claude Code · /);
+  });
 });
 
 interface PanelInput {

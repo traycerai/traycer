@@ -8,50 +8,146 @@ const WEEK_MS = 7 * DAY_MS;
 // Where the compact ladder stops counting weeks and shows a date instead.
 const COMPACT_WEEKS_CUTOFF_MS = 4 * WEEK_MS;
 
-// Shared 60s clock. A single setInterval drives every component that renders
-// a relative timestamp, so a popover with 20 rows pays one timer - not 20.
-// `tick` increments on each fire; `useSyncExternalStore` wakes only the
-// components that subscribed to this clock, so sibling rows that don't read
-// it are not re-rendered.
-let tick = 0;
-let intervalHandle: number | null = null;
-// Sampled at module load so the first render of a consumer has a valid value
-// before `useSyncExternalStore`'s subscribe effect runs. Re-sampled on every
-// interval fire and whenever the shared clock is (re)started.
-let sampledNow = Date.now();
-const listeners = new Set<() => void>();
+/**
+ * A shared ticking clock: one `setInterval` for every component subscribed to
+ * it, so a popover with 20 rows pays one timer - not 20. `tick` increments on
+ * each fire; `useSyncExternalStore` wakes only the components that subscribed
+ * to THIS clock, so sibling rows reading a different cadence (or none) are not
+ * re-rendered.
+ *
+ * A factory rather than two copies of the same fifteen lines. There are two
+ * cadences in this module and there is exactly one place where starting,
+ * stopping and sampling are decided - which also means a fix to the lifecycle
+ * cannot land on one cadence and miss the other.
+ */
+interface SharedClock {
+  /** For `useSyncExternalStore`'s subscribe argument. Starts the interval on
+   *  the first listener and stops it when the last one leaves. */
+  readonly subscribe: (listener: () => void) => () => void;
+  /** Monotonic tick count - the store snapshot, not a time. */
+  readonly getSnapshot: () => number;
+  /** The instant sampled at the last fire (or at module load / clock start). */
+  readonly sampledNow: () => number;
+}
 
-function startIfNeeded(): void {
-  if (intervalHandle !== null) return;
-  sampledNow = Date.now();
-  intervalHandle = window.setInterval(() => {
-    tick += 1;
+/**
+ * Exported for the subscribe-cost pin in `__tests__/relative-time.test.ts`.
+ * Whether a mass mount costs a linear or a quadratic number of listener calls
+ * is a property of THIS function; counting through React would measure the
+ * scheduler's batching instead, and batching is exactly what would hide it.
+ * Production has the two instances constructed below and no others.
+ */
+export function createSharedClock(intervalMs: number): SharedClock {
+  let tick = 0;
+  let intervalHandle: number | null = null;
+  // Sampled at construction so the first render of a consumer has a valid
+  // value before `useSyncExternalStore`'s subscribe effect runs. Re-sampled on
+  // every interval fire and whenever the clock is (re)started.
+  let sampledNow = Date.now();
+  const listeners = new Set<() => void>();
+
+  const startIfNeeded = (): void => {
+    if (intervalHandle !== null) return;
     sampledNow = Date.now();
-    for (const listener of listeners) {
-      listener();
-    }
-  }, MINUTE_MS);
-}
+    intervalHandle = window.setInterval(() => {
+      tick += 1;
+      sampledNow = Date.now();
+      for (const listener of listeners) {
+        listener();
+      }
+    }, intervalMs);
+  };
 
-function stopIfIdle(): void {
-  if (listeners.size > 0) return;
-  if (intervalHandle === null) return;
-  window.clearInterval(intervalHandle);
-  intervalHandle = null;
-}
+  const stopIfIdle = (): void => {
+    if (listeners.size > 0) return;
+    if (intervalHandle === null) return;
+    window.clearInterval(intervalHandle);
+    intervalHandle = null;
+  };
 
-function subscribe(listener: () => void): () => void {
-  listeners.add(listener);
-  startIfNeeded();
-  return () => {
-    listeners.delete(listener);
-    stopIfIdle();
+  return {
+    subscribe: (listener) => {
+      listeners.add(listener);
+      // Captured BEFORE `startIfNeeded`, which re-samples whenever it starts
+      // the interval. THIS is the value the newcomer's render actually read,
+      // and it is the only correct thing to compare against: the first version
+      // of the guard below tested `now > sampledNow` after `startIfNeeded` had
+      // already advanced it, so the two were always equal, no tick was bumped,
+      // and D170's "a 5s window paints 6s" came straight back. Its own test
+      // caught it; the mass-mount count did not, because a freshly constructed
+      // clock is sampled at the instant its first subscriber arrives and never
+      // exercises the stale case at all.
+      const sampleTheRenderSaw = sampledNow;
+      startIfNeeded();
+      // A new subscriber's FIRST render already happened, and it read whatever
+      // sample the last fire (or module load) left behind - up to one whole
+      // interval old. That is a visible error at both cadences: a grace card
+      // mounting 900ms into the second clock's tick renders a countdown 900ms
+      // high (a 5s window paints "6s"), and a row mounting 50s into the minute
+      // clock's renders "Just now" for something a minute old.
+      //
+      // Re-sampling alone would not reach the screen: `getSnapshot` returns the
+      // TICK, so a fresher time behind an unchanged tick is a store React has
+      // no reason to re-read. Bumping the tick is what makes the correction a
+      // re-render - and `useSyncExternalStore` re-reads the snapshot right
+      // after subscribe for exactly this case, a store that moved between
+      // render and effect.
+      //
+      // Every listener is notified, not just this one. The tick is shared, so
+      // waking only the newcomer would leave its siblings rendering an older
+      // sample against a snapshot that has already moved past theirs - two rows
+      // in one popover disagreeing about what time it is until the next fire.
+      //
+      // Guarded on the clock having actually MOVED, which is what stops that
+      // notify-everyone from being quadratic. A mass mount - 300 worktree rows
+      // in one commit - subscribes 300 times inside the same millisecond, and
+      // unguarded the k-th subscriber wakes k listeners: ~45,000 calls to
+      // correct nothing. Here the FIRST of those rows bumps the tick and the
+      // other 299 find the sample already current, so the commit costs one
+      // notification. They are not left stale by that: `useSyncExternalStore`
+      // re-reads `getSnapshot` after subscribing and re-renders anyone whose
+      // tick moved between render and effect, which is precisely their case.
+      // The notify-everyone loop is therefore for listeners already mounted -
+      // the ones React has no reason to re-check.
+      //
+      // `>` rather than `!==` so a backwards system-clock jump does not thrash
+      // every listener; the sample simply stands until the next fire re-takes
+      // it.
+      const now = Date.now();
+      if (now > sampleTheRenderSaw) {
+        sampledNow = now;
+        tick += 1;
+        for (const subscribed of listeners) {
+          subscribed();
+        }
+      }
+      return () => {
+        listeners.delete(listener);
+        stopIfIdle();
+      };
+    },
+    getSnapshot: () => tick,
+    sampledNow: () => sampledNow,
   };
 }
 
-function getSnapshot(): number {
-  return tick;
-}
+// The long clock: every relative timestamp, reset countdown and "far reset"
+// decision in the app. Minute resolution is what those labels change at.
+const minuteClock = createSharedClock(MINUTE_MS);
+const { subscribe, getSnapshot } = minuteClock;
+const sampledNowOf = minuteClock.sampledNow;
+
+/**
+ * The SECOND clock, for the provider-fallback grace countdown alone.
+ *
+ * Its own cadence rather than a faster shared one: a 1s tick on the clock the
+ * transcript's timestamps use would repaint every relative label in the window
+ * sixty times a minute to move one number. Keeping them apart means the cost is
+ * paid only while a countdown card is mounted, and it stops the moment the card
+ * unmounts - `stopIfIdle` clears the interval when the last subscriber leaves,
+ * which for this clock is the common case rather than the rare one.
+ */
+const secondClock = createSharedClock(SECOND_MS);
 
 /**
  * Pure bucketed relative-time formatter.
@@ -117,7 +213,7 @@ export function formatCompactRelativeTime(
  */
 export function useCompactRelativeTime(timestamp: number): string {
   useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
-  return formatCompactRelativeTime(timestamp, sampledNow);
+  return formatCompactRelativeTime(timestamp, sampledNowOf());
 }
 
 /**
@@ -128,12 +224,12 @@ export function useCompactRelativeTime(timestamp: number): string {
  */
 export function useRelativeTimestamp(createdAt: number): string {
   useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
-  return formatRelativeTimestamp(createdAt, sampledNow);
+  return formatRelativeTimestamp(createdAt, sampledNowOf());
 }
 
 export function useSampledNow(): number {
   useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
-  return sampledNow;
+  return sampledNowOf();
 }
 
 /**
@@ -174,7 +270,7 @@ export function formatResetCountdown(resetsAt: number, now: number): string {
 export function useResetCountdown(resetsAt: number | null): string | null {
   useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
   if (resetsAt === null) return null;
-  return formatResetCountdown(resetsAt, sampledNow);
+  return formatResetCountdown(resetsAt, sampledNowOf());
 }
 
 /**
@@ -205,7 +301,7 @@ export function isFarReset(resetsAt: number, now: number): boolean {
 export function useIsFarReset(resetsAt: number | null): boolean {
   useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
   if (resetsAt === null) return false;
-  return isFarReset(resetsAt, sampledNow);
+  return isFarReset(resetsAt, sampledNowOf());
 }
 
 /**
@@ -268,4 +364,92 @@ export function formatResetFullDateTime(resetsAt: number): string {
     minute: "2-digit",
     hour12: true,
   });
+}
+
+/**
+ * Bare wall-clock time - "3:00 PM".
+ *
+ * The one format the provider-fallback surfaces state a resume time in: the
+ * waiting card ("Resuming at 3:00 PM"), its background-items row ("Waiting for
+ * Claude Code's limit · resumes 3:00 PM"), and the destination menu's wait row.
+ * Exported so those three cannot drift apart - the background panel's own
+ * `formatWakeupTime` is a zero-padded 24-hour string ("15:00") belonging to the
+ * Claude wake row, and ux-surfaces is explicit that a fallback wait must never
+ * be rendered in the wake row's form.
+ *
+ * No weekday and no date, unlike {@link formatResetDateTime}: a wait is capped
+ * at the policy's longest wait (six hours by default), so the day is never in
+ * question and the extra words cost width in a card that is mostly buttons.
+ * `hour12` is explicit rather than left to the locale so the AM/PM designator
+ * always renders - without it "3:00" is ambiguous in exactly the case the card
+ * exists for.
+ *
+ * Pure, not a hook: an absolute time does not go stale.
+ */
+export function formatClockTime(at: number): string {
+  return new Date(at).toLocaleTimeString(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  });
+}
+
+/**
+ * What the grace card renders once the countdown has run out.
+ *
+ * Deliberately not "0s". The deadline is the HOST's, and this countdown is
+ * presentational: the two clocks drift, the frame announcing the switch takes a
+ * moment to arrive, and a card reading "0s" for three seconds is asserting
+ * something the user can see is false. "Any moment now" is true across the
+ * whole of that window and needs no accuracy the client does not have.
+ */
+export const GRACE_COUNTDOWN_IMMINENT = "any moment now";
+
+/**
+ * Seconds-resolution countdown to a grace deadline, for the fallback card.
+ *
+ * `${n}s` below a minute, `${m}m ${s}s` above it (seconds dropped on the
+ * minute), and {@link GRACE_COUNTDOWN_IMMINENT} at or past the deadline. The
+ * two-part form exists because the grace window is a user setting bounded at
+ * five minutes, not a fixed twelve seconds.
+ *
+ * Remaining time rounds UP: a card showing "1s" for the last whole second and
+ * then "any moment now" reads correctly, whereas rounding down shows "0s" for a
+ * second before the deadline is actually reached - the small lie this whole
+ * formatter is shaped to avoid.
+ */
+export function formatGraceCountdown(deadline: number, now: number): string {
+  const remainingMs = deadline - now;
+  if (remainingMs <= 0) return GRACE_COUNTDOWN_IMMINENT;
+  const seconds = Math.ceil(remainingMs / SECOND_MS);
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  return remainingSeconds > 0
+    ? `${minutes}m ${remainingSeconds}s`
+    : `${minutes}m`;
+}
+
+/**
+ * {@link formatGraceCountdown} bound to the shared 1s clock, or `null` when
+ * there is no deadline to count down to.
+ *
+ * `null` is a real state rather than a missing one and the caller must render
+ * for it: the pending-fallback DTO's `deadline` is null for an effect phase
+ * that is due now, for a `choosing` window a menu has frozen, and for a state
+ * with no timer at all. In none of those is there a time to show.
+ *
+ * Call it from a small LEAF component, the same guidance the minute-clock hooks
+ * carry and more sharply: this one wakes its subscriber once a second, so a
+ * component holding the whole card would repaint every button and helper line
+ * with it.
+ */
+export function useGraceCountdown(deadline: number | null): string | null {
+  useSyncExternalStore(
+    secondClock.subscribe,
+    secondClock.getSnapshot,
+    secondClock.getSnapshot,
+  );
+  if (deadline === null) return null;
+  return formatGraceCountdown(deadline, secondClock.sampledNow());
 }

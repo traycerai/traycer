@@ -28,6 +28,7 @@ SettingsLayout
         ├── ProvidersSettingsPanel
         ├── NotificationsSettingsPanel
         ├── AgentsSettingsPanel
+        ├── FallbackSettingsPanel
         ├── KeybindingsSettingsPanel
         ├── ShellSettingsPanel
         ├── WorktreesSettingsPanel
@@ -52,7 +53,11 @@ built through `satisfies Record<AnalyticsSettingsSection, true>` - that
 navigation event. The two `SETTINGS_PATHS` sets (`stores/tabs/store.ts` and
 `stores/tabs/desktop-tabs-persistence.ts`) are hand-written string sets with no
 gate at all: a section absent from them stops being recognised as a settings
-route for persistence. `devices` was missing from both for its whole life.
+route for persistence. `devices` was missing from both for its whole life - and
+so, it turned out, were `app-notifications` and `link-phone`, found while
+adding `fallback` and fixed alongside it. Three misses on one ungated pair is
+the argument for checking these two by hand whenever a section is added, not a
+run of bad luck.
 
 ## Responsive Behavior (mobile)
 
@@ -989,6 +994,17 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
       the provider rail spends on "disabled". A future signal must split those
       meanings: a muted count on the list tabs, a warning tone reserved for
       real attention.
+  - **The Fallback cross-link sits at the foot of `usage`** (Profiles & Limits),
+    which is where someone lands when a provider has stopped working for them
+    and is therefore where "can it just carry on somewhere else?" gets asked.
+    It is a POINTER, not a control: it reads no policy and prints no state, so
+    the master toggle keeps exactly one readout and the two cannot disagree
+    mid-save. Ungated - fallback answers a signed-out account and a billing
+    failure as well as a limit, so it is relevant for every provider, not only
+    the ones that report usage - and rendered outside the profile-switch inert
+    block, since it is not profile-scoped. It navigates with
+    `navigateToSettingsSection`, never a router `Link`; the Fallback panel's
+    profile-step hint is the same crossing in the other direction.
   - **Provider environment variables.** Each provider detail pane (last, below
     the CLI picker and terminal-agent args) has an _Environment variables_ card
     holding the per-provider env applied when the host spawns that harness
@@ -1839,6 +1855,193 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
   hooks. This settings panel edits only the global guide. A workspace can add
   `.traycer/agent-selection-guide.md` manually; agents layer that file over the
   global guide when they work in that workspace.
+- `Fallback` (section id `fallback`, route `/settings/fallback`,
+  `panels/fallback-settings-panel.tsx` plus `panels/fallback/`) The whole
+  configuration surface for **automatic provider fallback**: what the host does
+  when a turn dies on a provider error it cannot retry (rate limit, outage,
+  billing, signed out). Backed by `providers.fallbackPolicy.get` / `.set`.
+  - **Host-scoped like Agent selection**, and for the same reason: the policy
+    lives in `provider-accounts.json`, which is machine-local, so it is one
+    policy per Traycer user **per host**. The panel mounts `HostScopeGate`,
+    re-provides `HostRuntimeContext` only at `status === "ready"`, and keys its
+    editor on `scope.hostId` so one machine's draft can never be saved to
+    another's row.
+  - **It is the one panel that names its host in the description** -
+    "Applies to your chat agents on `<host name>`" - which is a deliberate
+    exception to the no-readout rule above. The sentence is not a second copy
+    of the sidebar's label; it rules out the reading that this configures every
+    agent on the machine. The policy covers that user's **chat** agents and
+    never terminal agents, which cannot be reconfigured in place and get no
+    fallback at all. The chat surfaces link in here from another host's chat
+    (through `carryViewedHostIntoSettingsScope`), which is precisely when a
+    panel that said nothing would be editing the wrong machine.
+  - **Groups**: Fallback (the `Automatic fallback` master switch, off by
+    default, and the `Try these in order` step editor), Behavior, Equivalent
+    models, Advanced per-failure overrides, and a Danger Zone.
+  - **The step editor is the only drag surface in Settings**, so it carries ▲▼
+    buttons as well: a pointer drag is unreachable from a keyboard and awkward
+    on touch, and this list is the feature's whole configuration. Only
+    `PointerSensor` is registered - the buttons are the keyboard and touch
+    path, and two competing keyboard gestures over one list would be worse than
+    one that is announced. `Notify me` has neither handle nor arrows.
+  - **Enablement is PRESENCE in the stored `ladder`**, which cannot represent
+    where a turned-off step sat. The panel therefore holds the four-row display
+    order in its draft and persists only the enabled subset; a step turned off
+    and then reloaded comes back at the end, and the editor's own copy says so.
+    The alternative was widening the wire shape to `{ kind, enabled }[]`, which
+    would have reached the host's validation and the engine's ladder walk for a
+    presentational fact.
+  - **The Advanced per-failure matrix is collapsed by default and derived, not
+    written out.** Its rows are `HOST_NOTIFICATION_STOPPED_REASONS` minus
+    `EXCLUDED_FALLBACK_REASONS`, so a new failure reason gets a row the day it
+    is added rather than silently missing one. Each row has three chips
+    (`notify` has no column - it is eligible everywhere, so the column would
+    carry no information) in three states: **runs**, **off**, and
+    **impossible**, the last rendered as a non-interactive `<span>` carrying
+    its own reason inline. That third state is why the eligibility table
+    `REASON_ELIGIBLE_RUNGS` had to move into `@traycer/protocol` (it was
+    host-private): the matrix must distinguish "you turned this off" from
+    "this cannot help that failure", and a second copy GUI-side would have
+    drawn a policy the engine does not execute the first time a row moved.
+    A write from this matrix carries `notify` through explicitly and takes its
+    order from the editor's four-row display order, never from the chips on
+    screen; an override that ends up equal to the base ladder is **removed**
+    rather than stored, so a later change to the main order keeps applying to
+    that failure. The five excluded reasons collapse into one read-only line -
+    exclusion is not a preference - and `Reset overrides only` clears
+    `reasonOverrides` alone, leaving the ladder and Behavior untouched.
+  - **Equivalent models** is the user's statement about which models are
+    interchangeable, and the only thing that makes the "equivalent model" step
+    possible - the host will not move a chat between a standard and a frontier
+    model on its own guess. Each row is **provider + model family + optional
+    effort**. The provider select offers the GUI-capable harnesses only - the
+    rung skips anything else with `harness-not-gui`, so a terminal-only vendor
+    here would be a row the user can choose and the engine will never walk - and
+    a stored id outside that set still gets an option of its own, under the same
+    range-render rule the timings use.
+    Candidate ORDER inside a group is load-bearing (the rung walks it and takes
+    the first usable target) so rows carry ▲▼; GROUP order is not (D128 routes
+    by most-specific family match, not position), so there is deliberately no
+    group reordering - a control that changed nothing would be worse than none.
+    There is deliberately **no drag surface here**: the step editor stays the
+    only one, because a candidate list is unbounded and nested inside a
+    scrolling pane, which is where drag is worst, and ▲▼ is the keyboard and
+    touch path either way.
+    Empty is a state a user can REACH, and it is not the same as never having
+    had groups: the host seeds on first read and marks the user, so the empty
+    state offers **Restore the default groups**, which calls the RESTORE op
+    rather than saving a client-built list - only the host can build the seed a
+    first read would have produced. Deleting a group offers **Undo**, and undo
+    restores the previous POLICY rather than re-appending the group, because
+    position is the one thing a user cannot retype. A new row's family starts
+    EMPTY (invalid until typed, so an invented default is never saved as a
+    choice) while its provider is SEEDED - a closed union with a control right
+    there is a starting point, not a fabricated answer.
+    **Candidate rows carry a client-side identity** (`fallback-tier-group-keys.ts`),
+    minted once when a row enters the draft - at hydration from the stored
+    policy, or when the user adds one - held in the draft reducer beside
+    `displayOrder`, and stripped before anything is sent. The wire shape cannot
+    supply the key: `TierCandidate` is `{harnessId, modelFamily, reasoningEffort}`
+    with no id, so a content-derived key collides the moment two rows hold the
+    same values (two fresh rows are both empty, and nothing dedupes two identical
+    fully-specified ones), and an index key makes React reuse the node at a
+    POSITION rather than follow the row - which these rows reorder. A policy that
+    arrives from somewhere other than the editor (a host echo, a revert) keeps the
+    existing identities when it is structurally the list already on screen and
+    re-seeds otherwise; mapping an unfamiliar list positionally would be index
+    keying by another name. GROUPS need none of this - `fallbackPolicySchema`
+    refines group ids unique, so the id is already an identity.
+  - **When an edit is SAVED depends on the control kind.** Switches, selects,
+    ▲▼ and buttons produce a complete value per interaction and commit
+    immediately. **Text fields (group name, model family, effort) commit on
+    BLUR or Enter**, because their intermediate states are not values anyone
+    means: "opus" passes through "o", "op", "opu", and a save per character
+    persists three model families nobody chose and spends a catalog read per
+    candidate previewing each. Local validation still runs per keystroke, so the
+    inline message under a blank family appears as it goes blank rather than
+    when the field is left. Enter does not also blur - the field is not a form.
+  - **A save's echo cannot overwrite a newer draft.** Every edit bumps a
+    `revision` on the draft reducer; `save-started` records which revision the
+    request carries; `save-succeeded` applies the response only if the revision
+    is unchanged. Otherwise it records that the host stored what was sent and
+    leaves the draft, its identities, its display order and any local error
+    alone - they describe a newer value the user can see, and it reaches the
+    host through its own commit. `save-failed` is deliberately NOT symmetric: a
+    refusal carries no value, it says the persisted one is in force, and that is
+    true whatever the draft has since become.
+  - **The per-row "resolves to" preview is an RPC, not a computation.**
+    Resolving a family to a slug needs the live catalog, the provider's enabled
+    and runnable state, and which account would run it - none of which the
+    renderer has. `providers.fallbackPolicy.previewTierGroups` runs the engine's
+    own `enumerateTierCandidates` walk, so the editor cannot offer a target the
+    engine would skip. It renders the host's `skipLabel` rather than decoding
+    `skipReason`, so a reason a released client has never heard of still prints
+    a sentence instead of blanking the row, and `null` preview data renders no
+    verdict line at all - the honest absence on a host too old to answer.
+    The read is gated on two separate questions: the host must ADVERTISE the
+    method (it is optional rather than floor, and `useHostSupportsMethod` fails
+    closed), and the draft must be VALID - the request schema requires a
+    non-empty `modelFamily`, so the empty row "Add a model" creates on every
+    click cannot be encoded, and an ungated preview would turn ordinary editing
+    into a malformed-request error. Both gates render the same `null`. There is
+    no `placeholderData` carrying the previous answer across a key change:
+    verdicts pair to rows by `candidateIndex`, which is sound only while the
+    list they were computed for is the list on screen.
+    The "on &lt;account&gt;" clause names the **account, never its id**. The
+    wire `profileId` is a managed-profile uuid, so rendering it produced
+    "resolves to gpt-5.6-sol on 3f2a9c1e-…" - the defect D118 fixed host-side,
+    on the one surface whose job is to say what a row will do (D190). The label
+    comes from the `providers.list` read this panel already makes, and the RULE
+    is shared with the chat cards (`buildFallbackProfileLabels` /
+    `resolveFallbackProfileLabel`) rather than restated: two implementations
+    would be two ways to name one account, and two truncations of one id read
+    as two accounts. Duplicate labels get a bracketed id prefix; an id that
+    cannot be resolved degrades to its 8-character prefix rather than vanishing,
+    because a row describing an account still has to name it. `profileId: null`
+    omits the clause entirely - distinct from the chat cards, where `null` is a
+    terminal agent and is NAMED "Terminal account".
+  - **Danger Zone** holds one action, `Reset all fallback settings`, and its
+    confirm body names its scope because every part of that scope is guessable
+    wrong: what it touches (steps, both timings, model groups, overrides - not
+    just the master switch), whose and where (one Traycer user on one host, not
+    the machine), and what it does not touch. On that last point the copy stops
+    at the true half: an armed traversal froze its ladder, grace window, max
+    wait and return-to-preferred into a snapshot, so a policy write cannot move
+    them - but the tier rung re-reads the model groups LIVE, so a reset does
+    change where an armed traversal can hop to. It says "keep the steps and
+    timings they started with" and claims nothing more.
+  - **Reset INVALIDATES and remounts; restore writes in place.** The asymmetry
+    is the seed marker. `reset` clears it, so the default policy it returns is
+    stale the moment the next read re-seeds - writing that response into the
+    cache would show an empty model-group list while the engine resolves against
+    a full seeded set. So the reset awaits its own refetch and the editor
+    remounts (a `resetGeneration` in its key), which matters because the reducer
+    is seeded ONCE and deliberately ignores later reads: an invalidate alone
+    would refetch into a component still rendering the pre-reset draft.
+    `restoreTierGroups` does not clear the marker, so its response IS what a
+    later read would produce and `save-succeeded` takes it directly.
+  - **Two failure kinds, decided once** in `fallback/fallback-policy-draft.ts`
+    rather than per control. A **local validation failure** keeps the draft in
+    the control, shows the error and **sends nothing**; a **host rejection**
+    reverts the control to the last persisted value and prints the host's
+    reason. Both messages state which value is on screen and which is in force,
+    because "couldn't save" alone leaves the control ambiguous. Validity is
+    decided by `fallbackPolicySchema.safeParse` - the wire schema itself, so
+    the local check cannot drift from the host's - and this module only turns
+    the failing path into a sentence.
+  - **`storedPolicyUnreadable`** is surfaced, never swallowed. The host answers
+    a corrupt row with the default policy plus that flag instead of throwing,
+    so that this page still renders and a save can replace the bad row; the
+    notice says what is on screen is not what is stored.
+  - **`inFlightCount`** is rendered as a plain number in the master toggle's
+    helper with **no link**: every holding or waiting chat already shows its own
+    card with its own stop action. It is derived per read, which is why this
+    query keeps `refetchOnWindowFocus` on while the agent-guide editor beside it
+    turns it off - a refetch here cannot reach a control, because the editable
+    policy is seeded once into a reducer.
+  - **No per-chat and no per-task control exists anywhere in the app**, by
+    decision. The harness/model picker and the composer gain nothing from this
+    feature; per-chat intervention is the actions on the cards themselves.
 - `Keybindings` Keyboard shortcut customization.
 - `Shell` Shell binary + args used for every terminal PTY
   (`TerminalSessionManager` reads the effective config per spawn, file-watched,

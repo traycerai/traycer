@@ -66,6 +66,7 @@ import {
   restoreStartedManifestSchema,
 } from "@traycer/protocol/persistence/epic/checkpoint-manifests";
 import {
+  agentFailureSchema,
   diffSourceSchema,
   fileEditReasonSchema,
 } from "@traycer/protocol/persistence/epic/content-blocks";
@@ -949,6 +950,89 @@ export const pendingReturnSchema = z.object({
 });
 export type PendingReturn = z.infer<typeof pendingReturnSchema>;
 
+/**
+ * The failed attempt the error card's manual rungs act on
+ * (`chat.subscribe@1.9`, D152).
+ *
+ * `chat.fallback.runManualRung` is bound to the FAILED ATTEMPT rather than to a
+ * traversal, and it needs both halves of that identity - `userMessageId` alone
+ * cannot name an attempt, because the reuse path deliberately re-sends the same
+ * persisted user message across retries. After the turn ends nothing on the
+ * frame carried the pair: `activeTurn` has it only while the turn is running,
+ * the persisted assistant record has a `turnId` and no edge back to its user
+ * message, and the transcript row key `assistant:<turnId>` is a presentation
+ * key a client must not mine for wire identity. So the card either had this or
+ * had to guess, and a guess here re-runs the wrong turn.
+ *
+ * DEFINED IFF THE HOST WOULD ADMIT A RUNG. The value is present only when the
+ * chat's latest attempt is a terminal failure that passes the same eligibility
+ * chain `runManualFallbackRungLocked` walks - it is the latest attempt, nothing
+ * is running, no dispatch-holding traversal is live, and a terminal traversal
+ * record counts as a failure only when its settlement notifies failure
+ * (D122/D133). Three of those four are host facts a renderer cannot see without
+ * racing, and a client that re-derived them would be a second decider that
+ * disagrees on exactly the frames that matter.
+ *
+ * What it deliberately does NOT answer is whether any PARTICULAR rung is
+ * available for this failure's reason - that stays the verb's, which answers
+ * `rung_unavailable`. The card renders when this value is defined and sends the
+ * ids it was given; the verb remains the single authority on the rung itself.
+ *
+ * DERIVED per frame, never accumulated, and the key is always present on a live
+ * frame so an `undefined` VALUE clears a card that is no longer offered - the
+ * `pendingReturn` contract exactly (D102/D115).
+ */
+export const lastFailedAttemptSchema = z.object({
+  /** The persisted user message the attempt ran. */
+  userMessageId: z.string(),
+  /** What distinguishes this attempt from a retry of the same message. */
+  turnId: z.string(),
+  /**
+   * The typed failure, as the error block already carries it.
+   *
+   * Reused rather than flattened to a reason string: `resetsAt` +
+   * `resetsAtSource` are exactly what the `wait_once` rung's boundary copy
+   * needs, and they arrive here under the same guarantee the block gives - a
+   * provider-reported or probe-read boundary only, never a gauge estimate - so
+   * a card may render it as a time without qualifying it.
+   */
+  failure: agentFailureSchema,
+  /**
+   * Which manual rungs the host would admit for THIS failure, right now
+   * (D156).
+   *
+   * Without it the value could be defined with nothing offerable and the card
+   * would render three buttons that all answer `rung_unavailable` - `auth` is
+   * exactly that shape. A client cannot compute this itself without building a
+   * per-reason table that has to agree with the ladder's and disagrees on
+   * exactly the frames that matter, which is the second-decider problem this
+   * whole DTO exists to avoid.
+   *
+   * An UPPER BOUND, not a guarantee - the same contract as
+   * `pendingReturn.queuedItemsMoving`. It is computed at frame time and is
+   * therefore already stale when a click arrives, so
+   * `chat.fallback.runManualRung` stays the sole authority and still answers
+   * `rung_unavailable` on a race. What this buys is not correctness at the
+   * click, which the verb owns; it is not offering a button that was never
+   * going to work.
+   *
+   * MAY BE EMPTY, and a client must render no actions rather than falling back
+   * to offering all three: empty means the host walked the chain and admitted
+   * nothing, which is a different fact from an older host that never sent the
+   * key at all (absent value, no card).
+   *
+   * `wait_once` is present iff the failure carries a verified `resetsAt` within
+   * the policy's longest-wait cap. That is the verb's own rule rather than a
+   * second one - the host computes it from the same guard chain
+   * `runManualFallbackRungLocked` walks, so a rung offered here and a rung
+   * accepted there cannot diverge. It is also why the cap never reaches the
+   * client: a renderer that had to know the policy to decide whether to draw a
+   * button would be re-deciding eligibility by another name.
+   */
+  eligibleRungs: z.array(z.enum(["retry", "switch", "wait_once"])),
+});
+export type LastFailedAttempt = z.infer<typeof lastFailedAttemptSchema>;
+
 export const chatSnapshotSchema = z.object({
   chat: chatSchema,
   access: chatAccessSchema,
@@ -1034,6 +1118,10 @@ export const chatSnapshotSchema = z.object({
   // (`chat.subscribe@1.9`). Same optionality contract as `pendingFallback`, and
   // stripped by the same pre-1.9 projection.
   pendingReturn: pendingReturnSchema.optional(),
+  // The failed attempt the error card's rungs act on, or absent when the host
+  // would not admit a rung (`chat.subscribe@1.9`, D152). Same optionality
+  // contract and the same pre-1.9 strip as the two above.
+  lastFailedAttempt: lastFailedAttemptSchema.optional(),
 });
 export type ChatSnapshot = z.infer<typeof chatSnapshotSchema>;
 
@@ -1077,6 +1165,11 @@ const chatSubscribeTurnStateChangedServerFrameSchema = z.object({
   // Same rule, same reason: the banner must vanish when the offer is answered,
   // so an absent key CLEARS rather than preserving the last value.
   pendingReturn: pendingReturnSchema.optional(),
+  // Same rule again (D152). The card must vanish when a replacement lands or a
+  // traversal takes the chat back over, so an absent key CLEARS - a renderer
+  // that kept its last value would offer Retry on a turn that has since
+  // succeeded, which is the exact defect D122 closed on the host side.
+  lastFailedAttempt: lastFailedAttemptSchema.optional(),
 });
 
 /**
@@ -3071,6 +3164,12 @@ export const chatWindowedSnapshotSchema = z.object({
   pendingFallback: pendingFallbackSchema.optional(),
   /** The switch-back offer, on both snapshot shapes for the same reason. */
   pendingReturn: pendingReturnSchema.optional(),
+  /**
+   * The failed attempt the rungs act on, on both snapshot shapes for the same
+   * reason (D152) - the windowed payload is what every up-to-date peer
+   * actually receives, so a field added only to the full shape reaches nobody.
+   */
+  lastFailedAttempt: lastFailedAttemptSchema.optional(),
   /**
    * The epoch every ordinal in this session is relative to. The host advances
    * it only when an ordinal no longer names the row it named before; appends

@@ -1529,6 +1529,7 @@ function providerNoticeSegment(
     id,
     kind: "provider_notice",
     status: "completed",
+    noticeKind: "model_rerouted",
     tone: "info",
     title: "Model verification active",
     message: null,

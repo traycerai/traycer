@@ -258,11 +258,15 @@ import {
 } from "@traycer/protocol/host/restart/contracts";
 import {
   providersFallbackPolicyGetV10,
+  providersFallbackPolicyPreviewTierGroupsV10,
+  providersFallbackPolicyResetV10,
+  providersFallbackPolicyRestoreTierGroupsV10,
   providersFallbackPolicySetV10,
 } from "@traycer/protocol/host/fallback-policy";
 import {
   chatFallbackCancelV10,
   chatFallbackChooseTargetV10,
+  chatFallbackListTargetsV10,
   chatFallbackReturnToPreferredV10,
   chatFallbackRunManualRungV10,
 } from "@traycer/protocol/host/chat-fallback";
@@ -5109,6 +5113,23 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
+  // Read-only, and the only fallback method that is: it computes what a menu
+  // may offer and changes nothing. `unsupported` like its four siblings, so a
+  // client meeting an older host renders no destination menu rather than
+  // failing - the affordance is absent, not broken.
+  "chat.fallback.listTargets": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: chatFallbackListTargetsV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
   "agent.gui.listHarnesses": {
     1: {
       latestMinor: 0,
@@ -8365,6 +8386,45 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
       versions: {
         0: {
           contract: providersFallbackPolicySetV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "providers.fallbackPolicy.restoreTierGroups": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersFallbackPolicyRestoreTierGroupsV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "providers.fallbackPolicy.reset": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersFallbackPolicyResetV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "providers.fallbackPolicy.previewTierGroups": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersFallbackPolicyPreviewTierGroupsV10,
           upgradeFromPreviousVersion: null,
         },
       },

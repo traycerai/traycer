@@ -4,6 +4,7 @@ import {
   chatSnapshotSchema,
   chatSubscribeV19,
   chatWindowedSnapshotSchema,
+  lastFailedAttemptSchema,
   pendingFallbackSchema,
   pendingReturnSchema,
 } from "@traycer/protocol/host/agent/gui/subscribe";
@@ -410,6 +411,166 @@ describe("every released chat.subscribe line tolerates pendingReturn without gai
         expect(Object.hasOwn(parsed.snapshot as object, "pendingReturn")).toBe(
           false,
         );
+      });
+    });
+  }
+});
+
+/**
+ * Fully populated on purpose, `agentFailure`'s four optionals included: the
+ * fixture-vs-schema guard below only proves the TOP level covers the schema, so
+ * a nested optional left unset would ride every round-trip below without ever
+ * being carried. `resetsAt`/`resetsAtSource` in particular are the pair the
+ * wait affordance's copy reads.
+ */
+function lastFailedAttemptFixture() {
+  return {
+    userMessageId: "user-message-d152-1",
+    turnId: "turn-d152-1",
+    failure: {
+      reason: "rate_limit",
+      resetsAt: 1_700_000_600_000,
+      resetsAtSource: "provider",
+      scope: "five_hour",
+      providerDetail: "code=rate_limit_exceeded",
+    },
+    // All three, so the round-trip carries a populated array. The EMPTY case is
+    // a distinct fact (host admitted nothing) and is pinned separately.
+    eligibleRungs: ["retry", "switch", "wait_once"],
+  };
+}
+
+function assertLastFailedFixtureMatchesSchema() {
+  expect(Object.keys(lastFailedAttemptFixture()).sort()).toEqual(
+    Object.keys(lastFailedAttemptSchema.shape).sort(),
+  );
+}
+
+describe("chat.subscribe@1.9 carries a fully-populated lastFailedAttempt", () => {
+  it("the fixture covers every lastFailedAttemptSchema field", () => {
+    assertLastFailedFixtureMatchesSchema();
+  });
+
+  it("round-trips lastFailedAttempt intact on a snapshot frame", () => {
+    const lastFailedAttempt = lastFailedAttemptFixture();
+    const parsed = chatSubscribeV19.serverFrameSchema.parse(
+      frame("snapshot", {
+        snapshot: { ...baseWindowedSnapshot(), lastFailedAttempt },
+      }),
+    );
+    if (parsed.kind !== "snapshot") throw new Error("expected snapshot");
+    expect(parsed.snapshot.lastFailedAttempt).toEqual(lastFailedAttempt);
+  });
+
+  it("round-trips lastFailedAttempt intact on a turnStateChanged frame", () => {
+    const lastFailedAttempt = lastFailedAttemptFixture();
+    const parsed = chatSubscribeV19.serverFrameSchema.parse(
+      frame("turnStateChanged", {
+        runStatus: "running",
+        activeTurn: null,
+        lastFailedAttempt,
+      }),
+    );
+    if (parsed.kind !== "turnStateChanged") {
+      throw new Error("expected turnStateChanged");
+    }
+    expect(parsed.lastFailedAttempt).toEqual(lastFailedAttempt);
+  });
+
+  it("chatWindowedSnapshotSchema retains lastFailedAttempt intact", () => {
+    const lastFailedAttempt = lastFailedAttemptFixture();
+    const parsed = chatWindowedSnapshotSchema.parse({
+      ...baseWindowedSnapshot(),
+      lastFailedAttempt,
+    });
+    expect(parsed.lastFailedAttempt).toEqual(lastFailedAttempt);
+  });
+
+  it("chatSnapshotSchema retains lastFailedAttempt intact", () => {
+    const lastFailedAttempt = lastFailedAttemptFixture();
+    const parsed = chatSnapshotSchema.parse({
+      chat: baseChat(),
+      ...baseAux(),
+      accumulatedFileChanges: [],
+      lastFailedAttempt,
+    });
+    expect(parsed.lastFailedAttempt).toEqual(lastFailedAttempt);
+  });
+});
+
+describe("every released chat.subscribe line tolerates lastFailedAttempt without gaining it", () => {
+  for (const minor of RELEASED_MINORS) {
+    const version = `1.${minor}`;
+
+    describe(`chat.subscribe@${version}`, () => {
+      const { contract } = chatSubscribeLine.versions[minor];
+      const isWindowed = minor === 8;
+
+      it("parses a snapshot frame carrying lastFailedAttempt, and strips the key", () => {
+        const lastFailedAttempt = lastFailedAttemptFixture();
+        const snapshot = isWindowed
+          ? { ...baseWindowedSnapshot(), lastFailedAttempt }
+          : {
+              chat: baseChat(),
+              ...baseAux(),
+              accumulatedFileChanges: [],
+              lastFailedAttempt,
+            };
+        const result = contract.serverFrameSchema.safeParse(
+          frame("snapshot", { snapshot }),
+        );
+        expect(result.success).toBe(true);
+        if (!result.success) return;
+        const parsed = result.data as { kind: string; snapshot?: unknown };
+        if (parsed.kind !== "snapshot") throw new Error("expected snapshot");
+        expect(
+          Object.hasOwn(parsed.snapshot as object, "lastFailedAttempt"),
+        ).toBe(false);
+      });
+
+      it("parses a turnStateChanged frame carrying lastFailedAttempt, and strips the key", () => {
+        const lastFailedAttempt = lastFailedAttemptFixture();
+        const result = contract.serverFrameSchema.safeParse(
+          frame("turnStateChanged", {
+            runStatus: "running",
+            activeTurn: null,
+            lastFailedAttempt,
+          }),
+        );
+        expect(result.success).toBe(true);
+        if (!result.success) return;
+        const parsed = result.data as { kind: string };
+        if (parsed.kind !== "turnStateChanged") {
+          throw new Error("expected turnStateChanged");
+        }
+        expect(Object.hasOwn(parsed as object, "lastFailedAttempt")).toBe(
+          false,
+        );
+      });
+
+      // The card-CLEARING frame, and the one the sibling funnel once got wrong
+      // by testing value presence instead of key presence: an own key whose
+      // value is `undefined` must still be stripped, because that is exactly
+      // the frame that tells a client to take the card down.
+      it("parses a card-clearing snapshot (lastFailedAttempt own key undefined) and strips the key", () => {
+        const snapshot = isWindowed
+          ? { ...baseWindowedSnapshot(), lastFailedAttempt: undefined }
+          : {
+              chat: baseChat(),
+              ...baseAux(),
+              accumulatedFileChanges: [],
+              lastFailedAttempt: undefined,
+            };
+        const result = contract.serverFrameSchema.safeParse(
+          frame("snapshot", { snapshot }),
+        );
+        expect(result.success).toBe(true);
+        if (!result.success) return;
+        const parsed = result.data as { kind: string; snapshot?: unknown };
+        if (parsed.kind !== "snapshot") throw new Error("expected snapshot");
+        expect(
+          Object.hasOwn(parsed.snapshot as object, "lastFailedAttempt"),
+        ).toBe(false);
       });
     });
   }

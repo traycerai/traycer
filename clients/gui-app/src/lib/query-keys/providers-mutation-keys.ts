@@ -39,4 +39,11 @@ export const providersMutationKeys = {
     ["providers.consumeRateLimitResetCredit"] as const,
   refreshProfileStatus: (hostId: string | null) =>
     ["providers.refreshProfileStatus", hostId] as const,
+  // The three fallback-policy writes are separate keys, not one, because the
+  // settings panel disables a different control for each: an ordinary save
+  // must not make "Reset all" look busy, and vice versa.
+  setFallbackPolicy: () => ["providers.fallbackPolicy.set"] as const,
+  restoreFallbackTierGroups: () =>
+    ["providers.fallbackPolicy.restoreTierGroups"] as const,
+  resetFallbackPolicy: () => ["providers.fallbackPolicy.reset"] as const,
 };

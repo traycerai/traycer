@@ -44,6 +44,11 @@ import {
   type ChatComposerSubmitSource,
 } from "@/lib/chats/resolve-steer-submit";
 import { resolveComposerTopBannerKind } from "./chat-composer-top-banner";
+import { ChatComposerFallbackBanners } from "@/components/chat/fallback/chat-composer-fallback-banners";
+import {
+  fallbackComposerCardVisible,
+  type ChatProviderFallbackState,
+} from "@/components/chat/fallback/fallback-state";
 import { usePaneFocused } from "@/components/epic-tabs/pane-visibility-context";
 import { useTabBodySelected } from "@/components/epic-canvas/canvas/tab-body-selected-context";
 import { chatTileCatalogActivity } from "@/components/epic-canvas/renderers/chat-tile-surface-activity";
@@ -139,6 +144,13 @@ interface ChatComposerProps {
   readonly viewTabId: string | null;
   readonly settingsSeed: ChatRunSettings | null;
   readonly fallbackSettingsSeed: ChatRunSettings | null;
+  /**
+   * This chat's provider-fallback surfaces (the grace card and the switch-back
+   * offer). Unrelated to `fallbackSettingsSeed` above, which is "the settings to
+   * use when there is no seed" - see `ChatProviderFallbackState` for why the
+   * longer name is used everywhere this is threaded.
+   */
+  readonly providerFallback: ChatProviderFallbackState;
   readonly onSubmitMessage:
     | ((input: ChatComposerSubmitInput) => boolean)
     | null;
@@ -269,6 +281,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
     viewTabId,
     settingsSeed,
     fallbackSettingsSeed,
+    providerFallback,
     onSubmitMessage,
     onSideChat,
     onSettingsChange,
@@ -572,8 +585,16 @@ function ChatComposerImpl(props: ChatComposerProps) {
   });
   const reauthBanner = resolveReauthBannerProps(reauthGate);
   const topBannerKind = resolveComposerTopBannerKind({
+    // The UNION of the two card predicates, and only for the slot question -
+    // which banner wins. Which CARD renders is decided inside
+    // `ChatComposerFallbackBanners`, by each predicate on its own.
+    fallbackVisible: fallbackComposerCardVisible(providerFallback.pending),
     profileDisabled: profileEligibility.disabled,
     reauthVisible: reauthBanner !== null,
+    // BY VALUE. The key is present on every live `1.9` frame with `undefined`
+    // meaning "no offer", so a `"pendingReturn" in ...` test here would pin the
+    // banner open for the life of the chat.
+    fallbackReturnVisible: providerFallback.pendingReturn !== undefined,
     ambientDriftVisible: ambientDrift.pendingNotice !== null,
     rateLimitVisible:
       !reauthGate.signedOut && rateLimitPrompt.kind === "visible",
@@ -615,6 +636,15 @@ function ChatComposerImpl(props: ChatComposerProps) {
 
   return (
     <>
+      <ChatComposerFallbackBanners
+        topBannerKind={topBannerKind}
+        fallback={providerFallback}
+        client={hostClient}
+        chatId={taskId}
+        epicId={currentEpicId}
+        hostId={tabHostId}
+        canAct={onSubmitMessage !== null}
+      />
       {topBannerKind === "rate-limit" ? (
         <ChatComposerBannerPortal>
           <div className="pointer-events-none px-4">

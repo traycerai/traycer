@@ -23,6 +23,8 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import { LivePulse } from "@/components/ui/live-pulse";
 import { LiveElapsed } from "@/components/chat/segments/segment-elapsed";
+import { fallbackProviderLabelFor } from "@/components/chat/fallback/fallback-identity";
+import { formatClockTime } from "@/lib/relative-time";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { ManagedCommandMonitorIcon } from "@/components/managed-commands/managed-command-monitor-icon";
 import { ManagedCommandStopAction } from "@/components/managed-commands/managed-command-lifecycle-actions";
@@ -223,11 +225,21 @@ function backgroundItemDisplayTitle(item: BackgroundItem): string {
     // never joins against a providers list to title itself. `profileLabel` is
     // null for the ambient profile - a real state, not a missing one - and the
     // provider alone is the honest title then.
+    //
+    // The DISPLAY name, never the raw wire id: the copy table fixes "Claude
+    // Code", and `claude-code` is a value the user has no reason to recognise.
+    const providerLabel = fallbackProviderLabelFor(item.providerId);
     const account =
       item.profileLabel === null
-        ? item.providerId
-        : `${item.providerId} · ${item.profileLabel}`;
-    return `Waiting for ${account}'s limit`;
+        ? providerLabel
+        : `${providerLabel} · ${item.profileLabel}`;
+    // `scheduledFor` is REQUIRED on this variant (a wait exists because a
+    // verified reset boundary was read), so the time is never conditional the
+    // way the wakeup row's is - and it is the SHARED 12-hour format, never
+    // `formatWakeupTime`'s zero-padded 24-hour one. That distinction is the
+    // point: a fallback wait and a scheduled wake are different things, and a
+    // wait rendered in the wake row's shape reads as a wake the user set.
+    return `Waiting for ${account}'s limit · resumes ${formatClockTime(item.scheduledFor)}`;
   }
   return item.title;
 }

@@ -179,8 +179,12 @@ function ComposerBannerPrecedenceHarness() {
   });
   const rateLimitVisible = !reauthGate.signedOut && prompt.kind === "visible";
   const topBannerKind = resolveComposerTopBannerKind({
+    // This harness exercises the advisory rate-limit chain; no traversal and no
+    // return offer exist in any of its cases.
+    fallbackVisible: false,
     profileDisabled: false,
     reauthVisible: reauthGate.signedOut,
+    fallbackReturnVisible: false,
     ambientDriftVisible: pendingAmbientDrift && !acknowledgedAmbientDrift,
     rateLimitVisible,
   });
