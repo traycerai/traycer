@@ -9,6 +9,7 @@ import {
   ORDERED_PROVIDERS,
   orderProvidersByEnablement,
   providerCliIdForHarness,
+  providerIdToGuiHarnessId,
 } from "@/lib/provider-ordering";
 
 // Read from the protocol schema rather than hand-copying the harness id
@@ -37,6 +38,21 @@ describe("providerCliIdForHarness", () => {
         );
       },
     );
+  });
+});
+
+describe("ORDERED_PROVIDERS antigravity placement", () => {
+  it("places antigravity between qwen and amp", () => {
+    const ids = ORDERED_PROVIDERS.map((p) => p.providerId);
+    const antigravityIndex = ids.indexOf("antigravity");
+    expect(antigravityIndex).toBeGreaterThan(-1);
+    expect(ids[antigravityIndex - 1]).toBe("qwen");
+    expect(ids[antigravityIndex + 1]).toBe("amp");
+  });
+
+  it("round-trips antigravity through guiHarnessIdToProviderId and providerIdToGuiHarnessId", () => {
+    expect(guiHarnessIdToProviderId("antigravity")).toBe("antigravity");
+    expect(providerIdToGuiHarnessId("antigravity")).toBe("antigravity");
   });
 });
 

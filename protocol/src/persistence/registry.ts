@@ -79,8 +79,11 @@ const epicDowngradeV300ToV200 = defineRecordDowngradePath<
       ok: false as const,
       error: {
         code: "DOWNGRADE_UNSUPPORTED" as const,
+        // Names no harness, for the same reason as the `harness-id` bridge in
+        // `common/registry.ts`: 2.0 froze before Reasonix and every id added
+        // after it (Antigravity, and whatever follows) fails closed here too.
         message:
-          "Epic contains Reasonix harness state that the 2.0 record contract cannot represent",
+          "Epic contains harness state that the 2.0 record contract cannot represent",
       },
     };
   },

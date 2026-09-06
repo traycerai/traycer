@@ -61,6 +61,10 @@ const API_KEY_DASHBOARD_URL: Record<ProviderId, string | null> = {
   // page to send the user to, and the provider key page it would name depends
   // on which model provider they configured.
   reasonix: null,
+  // Antigravity is a subscription provider (Google sign-in), so it is absent
+  // from the host's `API_KEY_ENV_VAR`, `apiKey.supported` is false and this
+  // section never renders for it.
+  antigravity: null,
 };
 
 function apiKeyStatusLabel(apiKey: ProviderCliState["apiKey"]): string {

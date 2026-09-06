@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 import { downgradeRequestAcrossMajors } from "@traycer/protocol/framework/index";
 import { agentListHarnessModelsDowngradeV2ToV1 } from "@traycer/protocol/host/agent/contracts";
 import {
+  AGENT_FACING_HARNESS_IDS,
   guiHarnessIdSchema,
   tuiHarnessIdSchema,
 } from "@traycer/protocol/host/agent/shared";
+import { providerIdSchema } from "@traycer/protocol/host/provider-ids";
 import {
   agentSelectionGuideResponseSchema,
   createAgentRequestSchema,
@@ -425,6 +427,33 @@ describe("agent host schemas", () => {
       harnessId: "codex",
       models: [{ id: "opus-4.7" }, { id: "gpt-5.5", fastModeAvailable: true }],
     });
+  });
+
+  // Antigravity joins the live carriers next to Reasonix without opening a
+  // new protocol major, so it has to reach all three independent enums a GUI
+  // harness rides - the wire `guiHarnessIdSchema`, the A2A harness allowlist
+  // `AGENT_FACING_HARNESS_IDS` (which `agentFacingHarnessIdSchema`, and so
+  // `agent.create`'s `harnessId`, is extracted from), and the separate
+  // `providerIdSchema`, which does NOT derive from the harness enum. Each is
+  // a hand-written runtime list, so an id missing from one is dropped from
+  // that surface at parse time with nothing to type-check it.
+  it("admits antigravity into guiHarnessIdSchema, AGENT_FACING_HARNESS_IDS, and providerIdSchema", () => {
+    expect(guiHarnessIdSchema.options).toContain("antigravity");
+    expect(AGENT_FACING_HARNESS_IDS).toContain("antigravity");
+    expect(providerIdSchema.options).toContain("antigravity");
+    expect(
+      createAgentRequestSchema.safeParse({
+        senderAgentId: "agent-1",
+        epicId: "epic-1",
+        name: null,
+        surface: "gui",
+        harnessId: "antigravity",
+        model: "gemini-3-pro",
+        agentMode: null,
+        reasoningEffort: null,
+        fastMode: null,
+      }).success,
+    ).toBe(true);
   });
 
   it("registers agent A2A methods at version 1.0", () => {

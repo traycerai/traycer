@@ -2480,8 +2480,9 @@ const chatSubscribeServerFrameSchemaV16 = z.discriminatedUnion("kind", [
 // `clientFrameSchema` is DELIBERATELY the live union, unlike the frozen
 // serverFrame above. `1.6`'s action set is identical to the live one - diffing
 // its clientFrame against the released baseline shows only the deliberate
-// `reasonix` enum add - so nothing is unrepresentable today, and the enum grows
-// on a client→HOST slot, where a wider host is the safe direction.
+// post-freeze enum adds (`reasonix`, `antigravity`) - so nothing is
+// unrepresentable today, and the enum grows on a client→HOST slot, where a
+// wider host is the safe direction.
 //
 // It is not free, though, and the compat checker cannot catch the regression:
 // its oracle only guards host→client additions, so a new action appended to
@@ -2563,9 +2564,9 @@ export const chatSubscribeSnapshotServerFrameShallowSchemaV16 = z.object({
 // (`projectChatClientFrameForVersion`) — negotiation is the mechanism, not
 // permissive unknown-field parsing.
 //
-// The Reasonix half is the same story in the enum dimension: every
+// The harness half is the same story in the enum dimension: every
 // harness-bearing leaf on `1.6` is pinned to the nineteen-id set above, and
-// only this line admits `reasonix`.
+// only this line admits the ids added since (`reasonix`, `antigravity`).
 export const chatSubscribeV17 = defineStreamRpcContract({
   method: "chat.subscribe",
   schemaVersion: { major: 1, minor: 7 } as const,

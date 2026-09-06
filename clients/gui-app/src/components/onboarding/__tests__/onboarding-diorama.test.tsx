@@ -55,6 +55,7 @@ describe("OnboardingDiorama", () => {
       "Kilo Code",
       "Kimi",
       "Qwen Code",
+      "Antigravity",
       "Amp",
       "Devin",
       "Pi",

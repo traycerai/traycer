@@ -1,5 +1,6 @@
 import {
   AmpIcon,
+  AntigravityIcon,
   ClaudeAIIcon,
   CodexIcon,
   CopilotIcon,
@@ -49,4 +50,5 @@ export const PROVIDER_ICON_CONFIG: Record<ProviderId, HarnessIconConfig> = {
   hermes: { Icon: HermesIcon, className: "text-foreground" },
   omp: { Icon: OmpIcon, className: "text-foreground" },
   reasonix: { Icon: ReasonixIcon, className: "text-foreground" },
+  antigravity: { Icon: AntigravityIcon, className: "text-foreground" },
 };

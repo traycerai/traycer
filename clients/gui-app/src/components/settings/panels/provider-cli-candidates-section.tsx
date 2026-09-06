@@ -111,6 +111,9 @@ const SHARED_CLI_CANDIDATE_SOURCE: Record<ProviderId, ProviderId | null> = {
   // Reasonix ships its own self-contained binary (six prebuilt targets), so it
   // borrows nobody's.
   reasonix: null,
+  // Antigravity ships its own server binary (`agy_acp_server`) plus a
+  // companion, so it borrows nobody's either.
+  antigravity: null,
 };
 
 /**
@@ -157,6 +160,11 @@ const PROVIDER_INSTALL_GUIDE_URL: Record<ProviderId, string | null> = {
   // appears if the managed binary is missing on this machine. Left null rather
   // than shipping an unverified upstream install page for that edge.
   reasonix: null,
+  // Antigravity is bundled everywhere upstream publishes a build, which is
+  // every target except Intel macOS - upstream ships no `darwin-x64` archive.
+  // That platform is the normal path for this empty state, not an edge, so it
+  // gets the real page: installing the IDE is what puts the server on disk.
+  antigravity: "https://antigravity.google/docs/ide/extensions",
 };
 
 interface ProviderCandidateConfig {
