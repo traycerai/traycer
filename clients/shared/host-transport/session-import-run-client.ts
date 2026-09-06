@@ -6,6 +6,7 @@ import {
 } from "@traycer/protocol/host/session-import/run";
 import type { SessionImportSelection } from "@traycer/protocol/host/session-import/candidate";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
+import type { PermissionMode } from "@traycer/protocol/persistence/epic/schemas";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type {
   IStreamSession,
@@ -51,6 +52,8 @@ export interface SessionImportRunCallbacks {
 export interface SessionImportRunClientOptions {
   readonly wsStreamClient: IStreamClient<HostStreamRpcRegistry>;
   readonly selections: ReadonlyArray<SessionImportSelection>;
+  /** The mode every imported chat continues under - the client's new-chat default. */
+  readonly permissionMode: PermissionMode;
   readonly callbacks: SessionImportRunCallbacks;
 }
 
@@ -73,6 +76,7 @@ export class SessionImportRunClient {
 
     this.session = options.wsStreamClient.subscribe("sessionImport.run", {
       selections: [...options.selections],
+      permissionMode: options.permissionMode,
     });
     this.session.onServerFrame((envelope, binaryPayload) => {
       this.handleServerFrame(envelope, binaryPayload);

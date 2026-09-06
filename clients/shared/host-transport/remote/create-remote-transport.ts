@@ -16,7 +16,11 @@ import { RemoteHostMessenger } from "./remote-host-messenger";
 import { RemoteStreamClient } from "./remote-stream-client";
 import { createAttachGrantProvider } from "./grant-client";
 import { decodeHostPublicKey } from "./noise-channel";
-import { acquireRemoteSession } from "./active-remote-sessions";
+import {
+  acquireRemoteSession,
+  planRestrictedReprobeAt,
+  type RemoteSessionIdentity,
+} from "./active-remote-sessions";
 
 /**
  * Assembles the client remote transport for one host: one `RemoteSession`,
@@ -157,20 +161,21 @@ export function createRemoteHostTransport<
     return null;
   }
 
+  const identity: RemoteSessionIdentity = {
+    hostId: options.hostId,
+    userId: options.userId,
+    hostPublicKey: options.hostPublicKey,
+    relayAttachUrl: options.relayAttachUrl,
+    // Part of the identity, not a per-consumer option: on a cache hit the
+    // factory below never runs, so `auth` would otherwise be silently
+    // inherited from whichever consumer happened to build the session first.
+    authRecovery: options.auth === null ? "terminal" : "revalidate",
+    // Same reasoning applied to WHICH auth context wired those closures, not
+    // just which policy they implement. See `RemoteSessionIdentity.authEpoch`.
+    authEpoch: authEpochFor(bearerSource),
+  };
   const session = acquireRemoteSession(
-    {
-      hostId: options.hostId,
-      userId: options.userId,
-      hostPublicKey: options.hostPublicKey,
-      relayAttachUrl: options.relayAttachUrl,
-      // Part of the identity, not a per-consumer option: on a cache hit the
-      // factory below never runs, so `auth` would otherwise be silently
-      // inherited from whichever consumer happened to build the session first.
-      authRecovery: options.auth === null ? "terminal" : "revalidate",
-      // Same reasoning applied to WHICH auth context wired those closures, not
-      // just which policy they implement. See `RemoteSessionIdentity.authEpoch`.
-      authEpoch: authEpochFor(bearerSource),
-    },
+    identity,
     { proactiveWakeEligible: options.proactiveWakeEligible },
     () => {
       const grantProvider = createAttachGrantProvider({
@@ -199,7 +204,9 @@ export function createRemoteHostTransport<
   return {
     session,
     messenger: new RemoteHostMessenger(session),
-    streamClient: new RemoteStreamClient(session),
+    streamClient: new RemoteStreamClient(session, () =>
+      planRestrictedReprobeAt(identity),
+    ),
   };
 }
 

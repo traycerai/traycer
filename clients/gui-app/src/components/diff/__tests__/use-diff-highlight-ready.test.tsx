@@ -9,20 +9,27 @@ import {
 } from "vitest";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import type { FileContents, FileDiffMetadata } from "@pierre/diffs";
+import type { WorkerPoolManager } from "@pierre/diffs/worker";
 import {
+  useDiffsDiffEditHighlightReady,
   useDiffsDiffHighlightReady,
   useDiffsFileHighlightReady,
 } from "@/components/diff/use-diff-highlight-ready";
 import { DiffHighlightLoading } from "@/components/diff/diff-highlight-loading";
+import {
+  __resetDiffWorkerPoolForTests,
+  getDiffWorkerPool,
+  registerDiffWorkerPoolCreator,
+} from "@/lib/diff/diff-worker-pool-demand";
+
+interface FakeWorkerPoolManager {
+  setRenderOptions: Mock;
+  primeFileHighlightCache: Mock;
+  primeDiffHighlightCache: Mock;
+}
 
 const poolState = vi.hoisted(() => ({
-  pool: undefined as
-    | undefined
-    | {
-        setRenderOptions: Mock;
-        primeFileHighlightCache: Mock;
-        primeDiffHighlightCache: Mock;
-      },
+  pool: undefined as FakeWorkerPoolManager | undefined,
 }));
 
 vi.mock("@pierre/diffs/react", () => ({
@@ -30,16 +37,39 @@ vi.mock("@pierre/diffs/react", () => ({
   EditProvider: (props: { readonly children: unknown }) => props.children,
 }));
 
+/**
+ * A fake `WorkerPoolManager`. The real class has ~90 members, so a literal
+ * with three of them does not overlap enough for a direct `as`, and
+ * `as unknown as` is lint-forbidden here. The same seam the diagnostics test
+ * support uses instead: a prototype-less object asserted to the class type,
+ * then the three members the gates actually call assigned onto it. Only the
+ * demand store's `manager` field (typed against the real class) ever sees
+ * it; every assertion in this file reads the fake object directly.
+ */
+function fakeWorkerPoolManager(): FakeWorkerPoolManager {
+  return {
+    setRenderOptions: vi.fn(() => Promise.resolve()),
+    primeFileHighlightCache: vi.fn(() => Promise.resolve()),
+    primeDiffHighlightCache: vi.fn(() => Promise.resolve()),
+  };
+}
+
+function asWorkerPoolManager(fake: FakeWorkerPoolManager): WorkerPoolManager {
+  return Object.assign(Object.create(null) as WorkerPoolManager, fake);
+}
+
 describe("useDiffs highlight gates", () => {
   beforeEach(() => {
     poolState.pool = undefined;
+    __resetDiffWorkerPoolForTests();
   });
 
   afterEach(() => {
     cleanup();
+    __resetDiffWorkerPoolForTests();
   });
 
-  it("treats a missing worker pool as ready so main-thread render can proceed", () => {
+  it("releases a surface once it has requested the pool with no provider mounted (availability 'unavailable')", () => {
     render(<FileReadyProbe file={sampleFile()} theme="pierre-dark" enabled />);
     expect(screen.getByTestId("ready").textContent).toBe("ready");
   });
@@ -153,6 +183,191 @@ describe("useDiffs highlight gates", () => {
     render(<DiffHighlightLoading testId="workspace-file-highlighting" />);
     expect(screen.getByTestId("workspace-file-highlighting")).toBeTruthy();
   });
+
+  it("keeps both the file and diff gates closed once a creator is registered but the context has not caught up yet", async () => {
+    const manager = fakeWorkerPoolManager();
+    registerDiffWorkerPoolCreator(() => asWorkerPoolManager(manager));
+    // `poolState.pool` stays undefined on purpose: the store already built the
+    // manager, but the provider that would carry it into context has not
+    // re-rendered in this test, so `useWorkerPool()` still answers undefined.
+
+    render(<FileReadyProbe file={sampleFile()} theme="pierre-dark" enabled />);
+    expect(screen.getByTestId("ready").textContent).toBe("pending");
+    await act(async () => {});
+    expect(screen.getByTestId("ready").textContent).toBe("pending");
+    cleanup();
+
+    render(
+      <DiffReadyProbe
+        fileDiffs={[sampleDiff("a.ts")]}
+        theme="pierre-light"
+        enabled
+      />,
+    );
+    expect(screen.getByTestId("ready").textContent).toBe("pending");
+    await act(async () => {});
+    expect(screen.getByTestId("ready").textContent).toBe("pending");
+  });
+
+  it("requests the pool from the hook's own mount effect, so a registered creator builds it", () => {
+    const manager = asWorkerPoolManager(fakeWorkerPoolManager());
+    registerDiffWorkerPoolCreator(() => manager);
+    expect(getDiffWorkerPool()).toBeUndefined();
+
+    render(<FileReadyProbe file={sampleFile()} theme="pierre-dark" enabled />);
+
+    expect(getDiffWorkerPool()).toBe(manager);
+  });
+
+  it("releases the file gate once the context catches up with the pool the creator built", async () => {
+    const manager = fakeWorkerPoolManager();
+    registerDiffWorkerPoolCreator(() => asWorkerPoolManager(manager));
+
+    const rendered = render(
+      <FileReadyProbe file={sampleFile()} theme="pierre-dark" enabled />,
+    );
+    expect(screen.getByTestId("ready").textContent).toBe("pending");
+
+    poolState.pool = manager;
+    rendered.rerender(
+      <FileReadyProbe file={sampleFile()} theme="pierre-dark" enabled />,
+    );
+
+    await waitFor(() => {
+      expect(manager.primeFileHighlightCache).toHaveBeenCalledWith(
+        sampleFile(),
+      );
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId("ready").textContent).toBe("ready");
+    });
+  });
+
+  it("releases the diff gate once the context catches up with the pool the creator built", async () => {
+    const manager = fakeWorkerPoolManager();
+    registerDiffWorkerPoolCreator(() => asWorkerPoolManager(manager));
+    const fileDiffs = [sampleDiff("a.ts")];
+
+    const rendered = render(
+      <DiffReadyProbe fileDiffs={fileDiffs} theme="pierre-light" enabled />,
+    );
+    expect(screen.getByTestId("ready").textContent).toBe("pending");
+
+    poolState.pool = manager;
+    rendered.rerender(
+      <DiffReadyProbe fileDiffs={fileDiffs} theme="pierre-light" enabled />,
+    );
+
+    await waitFor(() => {
+      expect(manager.primeDiffHighlightCache).toHaveBeenCalledWith(
+        fileDiffs[0],
+      );
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId("ready").textContent).toBe("ready");
+    });
+  });
+
+  it("releases the edit gate when no creator is registered (availability 'unavailable')", () => {
+    render(
+      <EditReadyProbe
+        fileDiffs={[sampleDiff("a.ts")]}
+        theme="pierre-dark"
+        enabled
+      />,
+    );
+    expect(screen.getByTestId("ready").textContent).toBe("ready");
+  });
+
+  it("keeps the edit gate closed when a creator is registered but no pool is in context yet", async () => {
+    const manager = fakeWorkerPoolManager();
+    registerDiffWorkerPoolCreator(() => asWorkerPoolManager(manager));
+
+    render(
+      <EditReadyProbe
+        fileDiffs={[sampleDiff("a.ts")]}
+        theme="pierre-dark"
+        enabled
+      />,
+    );
+    expect(screen.getByTestId("ready").textContent).toBe("pending");
+    await act(async () => {});
+    expect(screen.getByTestId("ready").textContent).toBe("pending");
+  });
+
+  it("requests the pool from a disabled gate that has work, but holds release until the pool reaches context", () => {
+    // The file gate's demand signal is `useDiffWorkerPoolAvailability(true)` -
+    // always has work, independent of `enabled` - so a disabled gate still
+    // asks for the pool instead of skipping the request.
+    const manager = asWorkerPoolManager(fakeWorkerPoolManager());
+    registerDiffWorkerPoolCreator(() => manager);
+
+    render(
+      <FileReadyProbe
+        file={sampleFile()}
+        theme="pierre-dark"
+        enabled={false}
+      />,
+    );
+
+    expect(getDiffWorkerPool()).toBe(manager);
+    // Only the store built a manager; no pool has reached React context yet,
+    // so the gate holds rather than releasing instantly for being disabled.
+    expect(screen.getByTestId("ready").textContent).toBe("pending");
+  });
+
+  it("holds a disabled gate until the pool reaches context, releases once it does, and never re-closes when enabled later flips true", () => {
+    const manager = fakeWorkerPoolManager();
+    registerDiffWorkerPoolCreator(() => asWorkerPoolManager(manager));
+
+    const rendered = render(
+      <FileReadyProbe
+        file={sampleFile()}
+        theme="pierre-dark"
+        enabled={false}
+      />,
+    );
+    // The store already built the manager (the file gate always has work),
+    // but the provider has not carried it into context yet - the gate holds.
+    expect(screen.getByTestId("ready").textContent).toBe("pending");
+
+    // The provider re-renders and the pool reaches context. Still disabled.
+    poolState.pool = manager;
+    rendered.rerender(
+      <FileReadyProbe
+        file={sampleFile()}
+        theme="pierre-dark"
+        enabled={false}
+      />,
+    );
+
+    // Releases because `!enabled`, not because a cache prime resolved - a
+    // disabled gate never waits on one.
+    expect(screen.getByTestId("ready").textContent).toBe("ready");
+    expect(manager.primeFileHighlightCache).not.toHaveBeenCalled();
+
+    // The regression this pins: an editor that mounted disabled (an edit
+    // session in progress) and is later enabled (the session ends) must stay
+    // released - never close the gate again and replace the mounted editor
+    // with DiffHighlightLoading.
+    rendered.rerender(
+      <FileReadyProbe file={sampleFile()} theme="pierre-dark" enabled />,
+    );
+    expect(screen.getByTestId("ready").textContent).toBe("ready");
+  });
+
+  it("does not request the pool for an empty diff list", () => {
+    const manager = asWorkerPoolManager(fakeWorkerPoolManager());
+    registerDiffWorkerPoolCreator(() => manager);
+
+    render(<DiffReadyProbe fileDiffs={[]} theme="pierre-dark" enabled />);
+    render(<EditReadyProbe fileDiffs={[]} theme="pierre-dark" enabled />);
+
+    expect(getDiffWorkerPool()).toBeUndefined();
+    for (const probe of screen.getAllByTestId("ready")) {
+      expect(probe.textContent).toBe("ready");
+    }
+  });
 });
 
 function FileReadyProbe(props: {
@@ -170,6 +385,15 @@ function DiffReadyProbe(props: {
   readonly enabled: boolean;
 }) {
   const ready = useDiffsDiffHighlightReady(props);
+  return <div data-testid="ready">{ready ? "ready" : "pending"}</div>;
+}
+
+function EditReadyProbe(props: {
+  readonly fileDiffs: ReadonlyArray<FileDiffMetadata>;
+  readonly theme: "pierre-dark" | "pierre-light";
+  readonly enabled: boolean;
+}) {
+  const ready = useDiffsDiffEditHighlightReady(props);
   return <div data-testid="ready">{ready ? "ready" : "pending"}</div>;
 }
 

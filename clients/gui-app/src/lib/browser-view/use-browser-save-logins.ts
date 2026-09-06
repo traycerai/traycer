@@ -42,6 +42,14 @@ function saveLoginsQueryOptions(browserView: BrowserViewBridge | null) {
     enabled: browserView !== null,
     staleTime: 0,
     refetchOnMount: "always",
+    // And on focus, against the app-wide client's default: a mount is not
+    // enough for a surface that stays up - the tour's login-import act, the
+    // announcement toast - while another window flips the pref. The user
+    // who flipped it there and comes back here is the refetch, so the act
+    // and the toast follow the machine's setting rather than the value this
+    // window read when it opened. A window that never regains focus keeps
+    // its read, which is the residual the deleted fan-out leaves.
+    refetchOnWindowFocus: true,
     // One machine-local read: a retry would only delay the toggle's answer.
     retry: false,
   });
@@ -55,11 +63,26 @@ export interface BrowserSaveLoginsController {
   readonly setEnabled: (enabled: boolean) => void;
 }
 
+/**
+ * The read half on its own, for surfaces that only ask whether saving is on
+ * (the tour's login-import act, the announcement toast) and have no toggle
+ * to write it with. Same query entry as the controller, so a toggle flipped
+ * in Settings is what these read next.
+ */
+export function useBrowserSaveLoginsEnabled(
+  browserView: BrowserViewBridge | null,
+): boolean | null {
+  const saveLogins = useQuery(saveLoginsQueryOptions(browserView));
+  return saveLogins.isError || saveLogins.data === undefined
+    ? null
+    : saveLogins.data;
+}
+
 export function useBrowserSaveLogins(
   browserView: BrowserViewBridge | null,
 ): BrowserSaveLoginsController {
   const queryClient = useQueryClient();
-  const saveLogins = useQuery(saveLoginsQueryOptions(browserView));
+  const enabled = useBrowserSaveLoginsEnabled(browserView);
   const setSaveLogins = useMutation<boolean, Error, boolean>({
     mutationKey: browserMutationKeys.setSaveLogins(),
     mutationFn: async (next: boolean): Promise<boolean> => {
@@ -87,10 +110,7 @@ export function useBrowserSaveLogins(
   });
 
   return {
-    enabled:
-      saveLogins.isError || saveLogins.data === undefined
-        ? null
-        : saveLogins.data,
+    enabled,
     pending: setSaveLogins.isPending,
     setEnabled: (next: boolean) => {
       if (browserView === null || setSaveLogins.isPending) return;

@@ -17,7 +17,14 @@ import {
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { CopyTextButton } from "@/components/copy-text-button";
-import { getDesktopHeapSnapshotBridge } from "@/lib/resources/desktop-app-resource-usage";
+import {
+  describeDesktopJsHeapIsolate,
+  getDesktopHeapSnapshotBridge,
+  getDesktopJsHeapBridge,
+  type DesktopJsHeapBreakdown,
+  type DesktopJsHeapIsolate,
+} from "@/lib/resources/desktop-app-resource-usage";
+import { formatMemoryBytes } from "@/lib/resources/format-resource-usage";
 import { getLogLevelsBridge } from "@/lib/desktop-log-levels";
 import { runnerMutationKeys } from "@/lib/query-keys/runner-mutation-keys";
 import { toastFromRunnerError } from "@/lib/runner-error-toast";
@@ -126,6 +133,20 @@ function DesktopAppLogEntry(props: {
 }
 
 /**
+ * One serialization scope for BOTH memory diagnostics - see the `scope` note
+ * below for why `scope` and not `mutationKey`.
+ *
+ * They share it because they contend for the same renderer isolate, not merely
+ * for the same button. A heap capture freezes that isolate for as long as the
+ * walk takes (tens of seconds on the long-lived sessions worth capturing),
+ * which is longer than `JS_HEAP_MEASURE_TIMEOUT_MS`; a measurement started
+ * underneath one would have its protocol reads stall behind the freeze and
+ * report a measurement failure for a window that is perfectly measurable a
+ * moment later. Queuing the second action is the honest answer.
+ */
+const MEMORY_DIAGNOSTICS_MUTATION_SCOPE = "runner-memory-diagnostics";
+
+/**
  * On-demand heap capture for memory reports. The renderer freezes while V8
  * walks the heap and the file runs to gigabytes on exactly the long-lived
  * sessions worth capturing, so this is a deliberate button rather than
@@ -133,11 +154,12 @@ function DesktopAppLogEntry(props: {
  * The resulting path is shown for copying rather than revealed in the file
  * manager: no reveal capability is exposed for arbitrary paths.
  */
-/** Serialization scope for the heap capture - see the `scope` note below. */
-const HEAP_SNAPSHOT_MUTATION_SCOPE = "runner-heap-snapshot";
-
 function MemoryDiagnosticsGroup(): ReactNode {
   const bridge = useMemo(() => getDesktopHeapSnapshotBridge(), []);
+  // The two capabilities are gated independently, like every other pair of
+  // desktop bridges on this page: a shell that carries one and not the other
+  // still gets the one it has.
+  const jsHeapAvailable = useMemo(() => getDesktopJsHeapBridge() !== null, []);
   const [snapshotPath, setSnapshotPath] = useState<string | null>(null);
 
   const captureMutation = useMutation({
@@ -146,7 +168,7 @@ function MemoryDiagnosticsGroup(): ReactNode {
     // `mutationKey` alone does not. Without it the only thing standing
     // between a double-click and two concurrent multi-gigabyte heap walks
     // is the `disabled` prop, which cannot help a second mounted panel.
-    scope: { id: HEAP_SNAPSHOT_MUTATION_SCOPE },
+    scope: { id: MEMORY_DIAGNOSTICS_MUTATION_SCOPE },
     mutationFn: (): Promise<string | null> =>
       bridge === null ? Promise.resolve(null) : bridge.takeHeapSnapshot(),
     onSuccess: (path) => {
@@ -164,7 +186,7 @@ function MemoryDiagnosticsGroup(): ReactNode {
     },
   });
 
-  if (bridge === null) {
+  if (bridge === null && !jsHeapAvailable) {
     return (
       <SettingsGroup
         title="Memory"
@@ -186,47 +208,240 @@ function MemoryDiagnosticsGroup(): ReactNode {
       dataTestId={undefined}
       fill={false}
     >
-      <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-2.5">
+      {bridge === null ? null : (
+        <>
+          <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-2.5">
+            <span className="min-w-0 flex-1 text-ui-xs text-muted-foreground">
+              Captures a heap snapshot of this window for a memory report. The
+              app stops responding while the snapshot is written, and the file
+              can be several gigabytes.
+            </span>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="shrink-0"
+              disabled={captureMutation.isPending}
+              onClick={() => captureMutation.mutate()}
+              data-testid="diagnostics-capture-heap-snapshot"
+            >
+              {captureMutation.isPending ? (
+                <AgentSpinningDots
+                  className="text-current"
+                  testId={undefined}
+                  variant={undefined}
+                />
+              ) : null}
+              Capture heap snapshot
+            </Button>
+          </div>
+          {snapshotPath === null ? null : (
+            <div className="flex items-start gap-2 px-4 pb-3">
+              <pre
+                className="min-w-0 flex-1 overflow-auto rounded-md border border-border/60 bg-muted/30 px-3 py-2 font-mono text-code-xs text-muted-foreground"
+                data-testid="diagnostics-heap-snapshot-path"
+              >
+                {snapshotPath}
+              </pre>
+              <CopyTextButton
+                value={snapshotPath}
+                label="Copy"
+                ariaLabel="Copy heap snapshot path"
+                disabled={false}
+              />
+            </div>
+          )}
+        </>
+      )}
+      <JsHeapReadout />
+    </SettingsGroup>
+  );
+}
+
+interface JsHeapTotals {
+  readonly usedBytes: number;
+  readonly totalBytes: number;
+  readonly embedderBytes: number | null;
+  readonly backingStorageBytes: number | null;
+}
+
+/**
+ * Column totals. The two out-of-heap columns stay `null` until some isolate
+ * reports one, so a build whose protocol omits those experimental fields shows
+ * an empty column rather than a confident zero.
+ */
+function sumJsHeapIsolates(
+  isolates: ReadonlyArray<DesktopJsHeapIsolate>,
+): JsHeapTotals {
+  let usedBytes = 0;
+  let totalBytes = 0;
+  let embedderBytes: number | null = null;
+  let backingStorageBytes: number | null = null;
+  for (const isolate of isolates) {
+    usedBytes += isolate.usedBytes;
+    totalBytes += isolate.totalBytes;
+    if (isolate.embedderBytes !== null) {
+      embedderBytes = (embedderBytes ?? 0) + isolate.embedderBytes;
+    }
+    if (isolate.backingStorageBytes !== null) {
+      backingStorageBytes =
+        (backingStorageBytes ?? 0) + isolate.backingStorageBytes;
+    }
+  }
+  return { usedBytes, totalBytes, embedderBytes, backingStorageBytes };
+}
+
+function formatOptionalMemoryBytes(value: number | null): string {
+  return value === null ? "—" : formatMemoryBytes(value);
+}
+
+/**
+ * The per-isolate companion to the heap snapshot. A snapshot walks the page's
+ * own V8 isolate and nothing else; the renderer also runs one isolate per
+ * dedicated worker (an epic runtime per live epic session, the diff
+ * highlighter pool), and a window whose snapshot explains a fraction of its
+ * footprint is usually carrying the rest there. This readout is cheap - a few
+ * protocol round trips, no freeze - and lists every isolate with what it holds,
+ * so the snapshot can be read against the number it was missing.
+ */
+function JsHeapReadout(): ReactNode {
+  const bridge = useMemo(() => getDesktopJsHeapBridge(), []);
+  const [breakdown, setBreakdown] = useState<DesktopJsHeapBreakdown | null>(
+    null,
+  );
+
+  const measureMutation = useMutation({
+    mutationKey: runnerMutationKeys.measureJsHeaps(),
+    // Serialized for the same reason the heap capture is: the measurement
+    // attaches `webContents.debugger`, and a second call while the first holds
+    // the attachment is refused in main (`isAttached()`), which would read as
+    // a failure toast and clear a readout that was fine.
+    scope: { id: MEMORY_DIAGNOSTICS_MUTATION_SCOPE },
+    mutationFn: (): Promise<DesktopJsHeapBreakdown | null> =>
+      bridge === null ? Promise.resolve(null) : bridge.measureJsHeaps(),
+    onSuccess: (result) => {
+      setBreakdown(result);
+      if (result === null) {
+        toast.error("Couldn't measure this window's JS heaps");
+      }
+    },
+    onError: (error) => {
+      setBreakdown(null);
+      toastFromRunnerError(error, "Couldn't measure this window's JS heaps");
+    },
+  });
+
+  if (bridge === null) return null;
+
+  const totals = sumJsHeapIsolates(breakdown?.isolates ?? []);
+
+  return (
+    <>
+      <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border/60 px-4 py-2.5">
         <span className="min-w-0 flex-1 text-ui-xs text-muted-foreground">
-          Captures a heap snapshot of this window for a memory report. The app
-          stops responding while the snapshot is written, and the file can be
-          several gigabytes.
+          Lists every JS heap in this window: the page and each worker it runs.
+          A heap snapshot covers the page only, so this is what accounts for the
+          rest. Embedder and backing sit outside the JS heap — Blink&apos;s own
+          objects, and ArrayBuffer/WebAssembly stores such as a highlighter
+          worker&apos;s regex engine.
         </span>
         <Button
           type="button"
           variant="outline"
           size="sm"
           className="shrink-0"
-          disabled={captureMutation.isPending}
-          onClick={() => captureMutation.mutate()}
-          data-testid="diagnostics-capture-heap-snapshot"
+          disabled={measureMutation.isPending}
+          onClick={() => measureMutation.mutate()}
+          data-testid="diagnostics-measure-js-heaps"
         >
-          {captureMutation.isPending ? (
+          {measureMutation.isPending ? (
             <AgentSpinningDots
               className="text-current"
               testId={undefined}
               variant={undefined}
             />
           ) : null}
-          Capture heap snapshot
+          Measure JS heaps
         </Button>
       </div>
-      {snapshotPath === null ? null : (
-        <div className="flex items-start gap-2 px-4 pb-3">
-          <pre
-            className="min-w-0 flex-1 overflow-auto rounded-md border border-border/60 bg-muted/30 px-3 py-2 font-mono text-code-xs text-muted-foreground"
-            data-testid="diagnostics-heap-snapshot-path"
-          >
-            {snapshotPath}
-          </pre>
-          <CopyTextButton
-            value={snapshotPath}
-            label="Copy"
-            ariaLabel="Copy heap snapshot path"
-            disabled={false}
-          />
+      {breakdown === null ? null : (
+        <div className="px-4 pb-3" data-testid="diagnostics-js-heap-breakdown">
+          <table className="w-full border-collapse text-ui-xs">
+            <thead>
+              <tr className="text-left text-muted-foreground">
+                <th scope="col" className="py-1 pr-3 font-normal">
+                  Isolate
+                </th>
+                <th scope="col" className="py-1 pr-3 text-right font-normal">
+                  Live
+                </th>
+                <th scope="col" className="py-1 pr-3 text-right font-normal">
+                  Committed
+                </th>
+                <th scope="col" className="py-1 pr-3 text-right font-normal">
+                  Embedder
+                </th>
+                <th scope="col" className="py-1 text-right font-normal">
+                  Backing
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {breakdown.isolates.map((isolate, index) => (
+                <tr
+                  key={`${isolate.url}:${String(index)}`}
+                  className="border-t border-border/40"
+                >
+                  <td className="py-1 pr-3">
+                    {describeDesktopJsHeapIsolate(isolate)}
+                    {isolate.kind === "worker" ? (
+                      <span className="ml-2 font-mono text-code-xs text-muted-foreground">
+                        {isolate.url.slice(isolate.url.lastIndexOf("/") + 1)}
+                      </span>
+                    ) : null}
+                  </td>
+                  <td className="py-1 pr-3 text-right font-mono tabular-nums">
+                    {formatMemoryBytes(isolate.usedBytes)}
+                  </td>
+                  <td className="py-1 pr-3 text-right font-mono tabular-nums">
+                    {formatMemoryBytes(isolate.totalBytes)}
+                  </td>
+                  <td className="py-1 pr-3 text-right font-mono tabular-nums">
+                    {formatOptionalMemoryBytes(isolate.embedderBytes)}
+                  </td>
+                  <td className="py-1 text-right font-mono tabular-nums">
+                    {formatOptionalMemoryBytes(isolate.backingStorageBytes)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr className="border-t border-border/60 text-muted-foreground">
+                <td className="py-1 pr-3">
+                  {breakdown.isolates.length === 1
+                    ? "1 isolate"
+                    : `${String(breakdown.isolates.length)} isolates`}
+                  {breakdown.workingSetBytes === null
+                    ? null
+                    : ` · process working set ${formatMemoryBytes(breakdown.workingSetBytes)}`}
+                </td>
+                <td className="py-1 pr-3 text-right font-mono tabular-nums">
+                  {formatMemoryBytes(totals.usedBytes)}
+                </td>
+                <td className="py-1 pr-3 text-right font-mono tabular-nums">
+                  {formatMemoryBytes(totals.totalBytes)}
+                </td>
+                <td className="py-1 pr-3 text-right font-mono tabular-nums">
+                  {formatOptionalMemoryBytes(totals.embedderBytes)}
+                </td>
+                <td className="py-1 text-right font-mono tabular-nums">
+                  {formatOptionalMemoryBytes(totals.backingStorageBytes)}
+                </td>
+              </tr>
+            </tfoot>
+          </table>
         </div>
       )}
-    </SettingsGroup>
+    </>
   );
 }

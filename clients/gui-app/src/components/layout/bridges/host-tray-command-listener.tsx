@@ -226,6 +226,7 @@ export function HostTrayCommandListener() {
         onClose={() => setPendingRestart(false)}
       />
       <ConfirmDestructiveDialog
+        blockedReason={null}
         open={pendingInstallVersion !== null}
         onOpenChange={(open) => {
           if (!open) setPendingInstallVersion(null);
@@ -259,6 +260,9 @@ export function HostTrayCommandListener() {
         }}
       />
       <HostBusyForceDeferDialog
+        // The UPDATE commands' busy verdict (`runApply` / `runActivate`);
+        // the restart command's lives in `LocalHostRestartFlow` above.
+        purpose="update"
         open={busy !== null}
         message={busy?.message ?? ""}
         isForcing={

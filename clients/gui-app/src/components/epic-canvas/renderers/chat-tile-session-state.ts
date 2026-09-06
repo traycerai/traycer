@@ -740,9 +740,6 @@ export function findPendingInterview(
       if (!isHostPending(segment.id)) continue;
       return {
         blockId: segment.id,
-        toolName: segment.toolName,
-        title: segment.title,
-        description: segment.description,
         questions: segment.questions,
         assistantMessageId: forkableInterviewAssistantMessageId(message),
       };

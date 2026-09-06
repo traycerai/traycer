@@ -31,6 +31,7 @@ export function SignOutConfirmDialog(
 
   return (
     <ConfirmDestructiveDialog
+      blockedReason={null}
       open={props.open}
       onOpenChange={props.onOpenChange}
       title="Sign out?"

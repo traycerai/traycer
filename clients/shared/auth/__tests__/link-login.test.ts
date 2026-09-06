@@ -8,6 +8,9 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   buildLinkLoginQrPayload,
   claimantDeviceLabel,
+  claimantDeviceName,
+  claimLinkLoginCodeViaHttp,
+  linkLoginStatusViaHttp,
   linkLoginTokenViaHttp,
   normalizeLinkLoginCodeInput,
   parseLinkLoginInput,
@@ -161,6 +164,221 @@ describe("token poll: 429 back-off directive", () => {
 });
 
 /**
+ * The match code is OPT-IN on the wire: the server sends it only to a request
+ * that declared it understands the field, because these response schemas are
+ * strict and an older client would otherwise fail to parse today's flow. So
+ * this client must (a) always ask, (b) read the code when it comes, and (c)
+ * keep working against a server that predates it and sends nothing.
+ */
+describe("match code on the wire", () => {
+  const AUTHN_BASE_URL = "https://authn.example.test";
+  let originalFetch: typeof globalThis.fetch;
+  let lastBody: unknown = null;
+
+  function installFetch(body: object): void {
+    globalThis.fetch = (async (
+      _input: RequestInfo | URL,
+      init: RequestInit | undefined,
+    ): Promise<Response> => {
+      lastBody =
+        typeof init?.body === "string" ? JSON.parse(init.body) : init?.body;
+      return new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+  }
+
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+    lastBody = null;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it("claim asks for the code and reads it back", async () => {
+    installFetch({
+      status: "claimed",
+      secret: "S".repeat(43),
+      interval: 5,
+      matchCode: "47",
+    });
+    const result = await claimLinkLoginCodeViaHttp(
+      AUTHN_BASE_URL,
+      NORMALIZED,
+      "iPhone",
+    );
+    expect(lastBody).toEqual({
+      code: NORMALIZED,
+      device: "iPhone",
+      acceptMatchCode: true,
+    });
+    expect(result).toEqual({
+      kind: "claimed",
+      secret: "S".repeat(43),
+      pollIntervalSeconds: 5,
+      matchCode: "47",
+    });
+  });
+
+  it("claim still succeeds against a server that sends no code", async () => {
+    // The pre-match-code response shape, byte for byte: the phone must sign
+    // in exactly as before, with nothing to show.
+    installFetch({ status: "claimed", secret: "S".repeat(43), interval: 5 });
+    const result = await claimLinkLoginCodeViaHttp(
+      AUTHN_BASE_URL,
+      NORMALIZED,
+      null,
+    );
+    expect(lastBody).toEqual({ code: NORMALIZED, acceptMatchCode: true });
+    expect(result).toMatchObject({ kind: "claimed", matchCode: null });
+  });
+
+  it("claim refuses a code that is not two digits", async () => {
+    // A contract drift, not a display nit: the human is asked to COMPARE
+    // this against the desktop, so an unreadable value must not be shown.
+    installFetch({
+      status: "claimed",
+      secret: "S".repeat(43),
+      interval: 5,
+      matchCode: "4",
+    });
+    expect(
+      await claimLinkLoginCodeViaHttp(AUTHN_BASE_URL, NORMALIZED, null),
+    ).toEqual({ kind: "network-error" });
+  });
+
+  it("status asks for the code and reads it back, or its absence", async () => {
+    installFetch({
+      status: "claimed",
+      claimant: {
+        address: null,
+        userAgent: "iPhone",
+        location: null,
+        claimedAt: 1_760_000_000_000,
+        matchCode: "47",
+      },
+    });
+    const withCode = await linkLoginStatusViaHttp(
+      AUTHN_BASE_URL,
+      "bearer",
+      NORMALIZED,
+      null,
+    );
+    expect(lastBody).toEqual({
+      code: NORMALIZED,
+      acceptMatchCode: true,
+      acceptClaimExpiry: true,
+    });
+    expect(withCode).toMatchObject({
+      kind: "ok",
+      response: { claimant: { matchCode: "47" } },
+    });
+
+    // An older server: today's exact claimant shape parses unchanged.
+    installFetch({
+      status: "claimed",
+      claimant: {
+        address: null,
+        userAgent: "iPhone",
+        location: null,
+        claimedAt: 1_760_000_000_000,
+      },
+    });
+    const withoutCode = await linkLoginStatusViaHttp(
+      AUTHN_BASE_URL,
+      "bearer",
+      NORMALIZED,
+      null,
+    );
+    expect(withoutCode.kind).toBe("ok");
+    if (withoutCode.kind !== "ok") throw new Error("unreachable");
+    expect(withoutCode.response.claimant?.matchCode).toBeUndefined();
+  });
+
+  it("status asks for the claim's deadline and reads it back, or its absence", async () => {
+    installFetch({
+      status: "claimed",
+      claimant: {
+        address: null,
+        userAgent: "iPhone",
+        location: null,
+        claimedAt: 1_760_000_000_000,
+        claimExpiresAt: 1_760_000_120_000,
+      },
+    });
+    const withDeadline = await linkLoginStatusViaHttp(
+      AUTHN_BASE_URL,
+      "bearer",
+      NORMALIZED,
+      null,
+    );
+    expect(lastBody).toEqual({
+      code: NORMALIZED,
+      acceptMatchCode: true,
+      acceptClaimExpiry: true,
+    });
+    expect(withDeadline).toMatchObject({
+      kind: "ok",
+      response: { claimant: { claimExpiresAt: 1_760_000_120_000 } },
+    });
+
+    // An older server: today's exact claimant shape still parses.
+    installFetch({
+      status: "claimed",
+      claimant: {
+        address: null,
+        userAgent: "iPhone",
+        location: null,
+        claimedAt: 1_760_000_000_000,
+      },
+    });
+    const without = await linkLoginStatusViaHttp(
+      AUTHN_BASE_URL,
+      "bearer",
+      NORMALIZED,
+      null,
+    );
+    expect(without.kind).toBe("ok");
+    if (without.kind !== "ok") throw new Error("unreachable");
+    expect(without.response.claimant?.claimExpiresAt).toBeUndefined();
+  });
+
+  it("status keeps an explicit null as its own property — the phone presented no code", async () => {
+    // The strict parser must let the server's explicit null THROUGH, as an
+    // own property distinct from absence: null is what the approver renders
+    // as the loud "no code shown" warning, and a schema that only tolerated
+    // absence would turn it into a parse failure — the warning could never
+    // appear, and the downgrade it exists to expose would read as a network
+    // error instead.
+    installFetch({
+      status: "claimed",
+      claimant: {
+        address: null,
+        userAgent: "iPhone",
+        location: null,
+        claimedAt: 1_760_000_000_000,
+        matchCode: null,
+      },
+    });
+    const declined = await linkLoginStatusViaHttp(
+      AUTHN_BASE_URL,
+      "bearer",
+      NORMALIZED,
+      null,
+    );
+    expect(declined.kind).toBe("ok");
+    if (declined.kind !== "ok") throw new Error("unreachable");
+    const claimant = declined.response.claimant;
+    expect(claimant).not.toBeNull();
+    expect(Object.hasOwn(claimant ?? {}, "matchCode")).toBe(true);
+    expect(claimant?.matchCode).toBeNull();
+  });
+});
+
+/**
  * The approve prompt reads "Approve sign-in from ___?", so the label owns its
  * own article. Every surface that renders the prompt calls this, which is the
  * point of it living here.
@@ -202,5 +420,51 @@ describe("claimant device label", () => {
     expect(claimantDeviceLabel("")).toBe("a device");
     // Long enough to be UA-shaped, with no family to bucket into.
     expect(claimantDeviceLabel("x".repeat(41))).toBe("a device");
+  });
+
+  it("names the device bare for labels, the same bucket without the article", () => {
+    expect(claimantDeviceName("iPhone")).toBe("iPhone");
+    expect(
+      claimantDeviceName(
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)",
+      ),
+    ).toBe("iPhone");
+    expect(claimantDeviceName("Mozilla/5.0 (Linux; Android 15; Pixel 8)")).toBe(
+      "Android device",
+    );
+    expect(claimantDeviceName("Pixel 8")).toBe("Pixel 8");
+    expect(claimantDeviceName(null)).toBe("device");
+    // A self-reported name that happens to BE a generic kind is still that
+    // kind - "device" typed by a phone does not become a proper name.
+    expect(claimantDeviceLabel("device")).toBe("a device");
+  });
+
+  it("treats an inherited property name as a proper name, not a kind", () => {
+    // The claim is unauthenticated: a phone can call itself anything. A name
+    // that is also an Object.prototype key must not read the prototype's
+    // function as its article.
+    for (const name of [
+      "constructor",
+      "toString",
+      "__proto__",
+      "hasOwnProperty",
+    ]) {
+      expect(claimantDeviceName(name)).toBe(name);
+      expect(claimantDeviceLabel(name)).toBe(name);
+    }
+  });
+
+  it("refuses a self-reported name carrying terminal control characters", () => {
+    // Short, UA-free, and aimed at the CLI's prompt: an escape sequence is
+    // not a device name, and it buckets like any other unusable value.
+    expect(claimantDeviceName("\u001b[2Jevil")).toBe("device");
+    expect(claimantDeviceLabel("\u001b[31mPixel\u001b[0m")).toBe("a device");
+    expect(claimantDeviceName("Pixel\u0007")).toBe("device");
+    expect(claimantDeviceName("Pixel\u007f")).toBe("device");
+    expect(claimantDeviceName("Pixel\u009b")).toBe("device");
+    // A family survives its own control characters, on the bucket path.
+    expect(claimantDeviceName("\u001bc iPhone")).toBe("iPhone");
+    // Ordinary non-ASCII is a name.
+    expect(claimantDeviceName("Téléphone de Léa")).toBe("Téléphone de Léa");
   });
 });

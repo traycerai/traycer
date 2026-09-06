@@ -32,6 +32,9 @@ const mocks = vi.hoisted(() => ({
   platformOverride: null as "win32" | null,
   busyOverride: null as "busy" | null,
   lifecycleCalls: [] as Array<{ bootstrap: unknown; force: boolean }>,
+  // What `applyHost` handed the lifecycle as its pre-stop boundary, so a
+  // pin can assert the SAME function reaches both actuators.
+  lifecycleStopHooks: [] as Array<(() => void) | null>,
   lifecycleBeforeSwapShouldThrow: false,
   lifecyclePostSwapAction: "restart" as
     | "restart"
@@ -43,6 +46,13 @@ const mocks = vi.hoisted(() => ({
   // sandboxRoot` - a direct reference there hits a TDZ `ReferenceError`,
   // so the live sandbox value has to live in this hoisted object instead.
   sandboxHome: "",
+  // Cross-mock ordering timeline for the `onWillCommitStaged` placement
+  // pins below: `assertHostNotBusy` and `createServiceInstallLifecycle`
+  // (whose construction is `applyHost`'s first commit-path step after the
+  // hook) both push into this SHARED array, alongside the hook itself, so
+  // a single assertion can pin the hook strictly between the busy check
+  // and the commit machinery.
+  callOrder: [] as string[],
 }));
 
 // `store/paths` computes `TRAYCER_HOME` from `os.homedir()` once at module
@@ -62,6 +72,7 @@ vi.mock("node:os", async (importOriginal) => {
 
 vi.mock("../../host/busy-check", () => ({
   assertHostNotBusy: async () => {
+    mocks.callOrder.push("busy-check");
     if (mocks.busyOverride === "busy") {
       throw Object.assign(new Error("host is busy"), { code: "E_HOST_BUSY" });
     }
@@ -72,11 +83,14 @@ vi.mock("../../service/install-lifecycle", () => ({
   createServiceInstallLifecycle: (options: {
     bootstrap: unknown;
     force: boolean;
+    onWillStopHost: (() => void) | null;
   }) => {
+    mocks.callOrder.push("lifecycle-created");
     mocks.lifecycleCalls.push({
       bootstrap: options.bootstrap,
       force: options.force,
     });
+    mocks.lifecycleStopHooks.push(options.onWillStopHost);
     const state = {
       priorState: "running" as const,
       stoppedBeforeSwap: false,
@@ -140,14 +154,24 @@ import type { HostInstallRecord } from "../../manifest/host-install";
 
 const testMutationVerifier = async (): Promise<void> => undefined;
 type ApplyOptions = Parameters<typeof applyHostWithAuthority>[0];
+// The fields every call must state in production default to their "not
+// tracking / not pinning" values here: a test that pins one passes it.
+type ApplyDefaultedOptions =
+  | "verifyMutationCapability"
+  | "expectedStagedVersion"
+  | "onWillCommitStaged"
+  | "onWillDisruptHost";
 const applyHost = (
-  options: Omit<ApplyOptions, "verifyMutationCapability"> &
-    Partial<Pick<ApplyOptions, "verifyMutationCapability">>,
+  options: Omit<ApplyOptions, ApplyDefaultedOptions> &
+    Partial<Pick<ApplyOptions, ApplyDefaultedOptions>>,
 ) =>
   applyHostWithAuthority({
     ...options,
     verifyMutationCapability:
       options.verifyMutationCapability ?? testMutationVerifier,
+    expectedStagedVersion: options.expectedStagedVersion ?? null,
+    onWillCommitStaged: options.onWillCommitStaged ?? null,
+    onWillDisruptHost: options.onWillDisruptHost ?? null,
   });
 
 const ENV: Environment = "production";
@@ -221,6 +245,8 @@ describe("applyHost", () => {
     mocks.lifecycleBeforeSwapShouldThrow = false;
     mocks.lifecyclePostSwapAction = "restart";
     mocks.lifecyclePostSwapError = null;
+    mocks.callOrder = [];
+    mocks.lifecycleStopHooks = [];
     rmSync(sandboxRoot, { recursive: true, force: true });
   });
 
@@ -380,6 +406,96 @@ describe("applyHost", () => {
 
     expect(existsSync(stagedDirFor(ENV))).toBe(true);
     expect(existsSync(installDirFor(ENV))).toBe(true);
+  });
+
+  describe("onWillCommitStaged", () => {
+    it("is called exactly once with the staged version, after the busy check and before the commit", async () => {
+      // Falsification: move the `onWillCommitStaged` call above the busy
+      // gate in `apply.ts` and "busy-check" would land AFTER "hook" in the
+      // order below instead of before it.
+      await writeInstall("1.0.0", {});
+      await writeStaged("2.0.0", {});
+      const onWillCommitStaged = vi.fn(async (stagedVersion: string) => {
+        mocks.callOrder.push("hook");
+        expect(stagedVersion).toBe("2.0.0");
+      });
+
+      const result = await applyHost({
+        environment: ENV,
+        force: false,
+        noService: false,
+        expectedStageFingerprint: null,
+        onProgress: () => {},
+        onWillCommitStaged,
+      });
+
+      expect(result.outcome).toBe("applied");
+      expect(onWillCommitStaged).toHaveBeenCalledTimes(1);
+      expect(onWillCommitStaged).toHaveBeenCalledWith("2.0.0");
+      // Strictly between the busy check and the commit machinery
+      // (`createServiceInstallLifecycle` is `applyHost`'s first commit-path
+      // step once it decides to proceed).
+      expect(mocks.callOrder).toEqual([
+        "busy-check",
+        "hook",
+        "lifecycle-created",
+      ]);
+    });
+
+    it("is not called when nothing is staged (the no-op outcome)", async () => {
+      await writeInstall("1.0.0", {});
+      const onWillCommitStaged = vi.fn(async () => undefined);
+
+      const result = await applyHost({
+        environment: ENV,
+        force: false,
+        noService: false,
+        expectedStageFingerprint: null,
+        onProgress: () => {},
+        onWillCommitStaged,
+      });
+
+      expect(result).toEqual({ outcome: "no-op", installedVersion: "1.0.0" });
+      expect(onWillCommitStaged).not.toHaveBeenCalled();
+    });
+
+    it("is not called on a fingerprint mismatch", async () => {
+      await writeInstall("1.0.0", {});
+      await writeStaged("2.0.0", { stageId: "stage-a" });
+      const onWillCommitStaged = vi.fn(async () => undefined);
+
+      const result = await applyHost({
+        environment: ENV,
+        force: false,
+        noService: false,
+        expectedStageFingerprint: "stage-b",
+        onProgress: () => {},
+        onWillCommitStaged,
+      });
+
+      expect(result.outcome).toBe("stage-fingerprint-mismatch");
+      expect(onWillCommitStaged).not.toHaveBeenCalled();
+    });
+
+    it("is not called when the busy check throws", async () => {
+      await writeInstall("1.0.0", {});
+      await writeStaged("2.0.0", {});
+      mocks.busyOverride = "busy";
+      const onWillCommitStaged = vi.fn(async () => undefined);
+
+      await expect(
+        applyHost({
+          environment: ENV,
+          force: false,
+          noService: false,
+          expectedStageFingerprint: null,
+          onProgress: () => {},
+          onWillCommitStaged,
+        }),
+      ).rejects.toMatchObject({ code: "E_HOST_BUSY" });
+
+      expect(onWillCommitStaged).not.toHaveBeenCalled();
+    });
   });
 
   it("--force bypasses the busy check", async () => {
@@ -622,5 +738,121 @@ describe("applyHost", () => {
     // The busy refusal only swept trash litter - the live stage itself
     // is untouched (recovery table: busy -> stage kept).
     expect(existsSync(stagedDirFor(ENV))).toBe(true);
+  });
+
+  describe("expectedStagedVersion", () => {
+    it("refuses a stage naming another version before the busy gate and the hook, consuming nothing", async () => {
+      // Falsification: move the version check below the busy gate and
+      // "busy-check" appears in the order; drop it and the outcome is
+      // `applied` for a version the caller never confirmed.
+      await writeInstall("1.0.0", {});
+      await writeStaged("2.1.0", {});
+      const onWillCommitStaged = vi.fn(async () => undefined);
+
+      const result = await applyHost({
+        environment: ENV,
+        force: false,
+        noService: false,
+        expectedStageFingerprint: null,
+        expectedStagedVersion: "2.0.0",
+        onProgress: () => {},
+        onWillCommitStaged,
+      });
+
+      expect(result).toEqual({
+        outcome: "stage-version-mismatch",
+        installedVersion: "1.0.0",
+        expectedStagedVersion: "2.0.0",
+        actualStagedVersion: "2.1.0",
+      });
+      expect(mocks.callOrder).toEqual([]);
+      expect(onWillCommitStaged).not.toHaveBeenCalled();
+      expect(existsSync(stagedDirFor(ENV))).toBe(true);
+      expect((await readHostInstallRecord(ENV))?.version).toBe("1.0.0");
+    });
+
+    it("commits the stage that names the confirmed version", async () => {
+      await writeInstall("1.0.0", {});
+      await writeStaged("2.0.0", {});
+
+      const result = await applyHost({
+        environment: ENV,
+        force: false,
+        noService: false,
+        expectedStageFingerprint: null,
+        expectedStagedVersion: "2.0.0",
+        onProgress: () => {},
+      });
+
+      expect(result.outcome).toBe("applied");
+      expect((await readHostInstallRecord(ENV))?.version).toBe("2.0.0");
+    });
+  });
+
+  describe("onWillDisruptHost", () => {
+    it("reaches the lifecycle as its pre-stop boundary and, when the lifecycle does not stop, fires from the swap itself before the install directory changes", async () => {
+      // The mocked lifecycle's `beforeSwap` never calls the hook (it models
+      // "decided not to stop"), so the one call below is the swap's - and
+      // it sees the OLD install record. Falsification: fire the boundary
+      // from the `swap` progress line instead and it still fires once, but
+      // the lifecycle-side assertion reddens (no hook handed over); fire it
+      // after `atomicSwap` and the record read inside it is 2.0.0.
+      await writeInstall("1.0.0", {});
+      await writeStaged("2.0.0", {});
+      const versionsAtBoundary: string[] = [];
+      const onWillDisruptHost = (): void => {
+        mocks.callOrder.push("disrupt");
+        const record = JSON.parse(
+          readFileSync(join(installDirFor(ENV), "install.json"), "utf8"),
+        ) as { version: string };
+        versionsAtBoundary.push(record.version);
+      };
+
+      const result = await applyHost({
+        environment: ENV,
+        force: false,
+        noService: false,
+        expectedStageFingerprint: null,
+        onProgress: () => {},
+        onWillDisruptHost,
+      });
+
+      expect(result.outcome).toBe("applied");
+      expect(mocks.lifecycleStopHooks).toEqual([onWillDisruptHost]);
+      expect(versionsAtBoundary).toEqual(["1.0.0"]);
+      expect(mocks.callOrder).toEqual([
+        "busy-check",
+        "lifecycle-created",
+        "disrupt",
+      ]);
+    });
+
+    it("is NOT fired by the `service-stop` progress line: a lifecycle that fails before its actuator leaves the boundary unreported", async () => {
+      // Falsification: derive the boundary from progress stages (the shape
+      // `host update` used to have) and the hook fires here although the
+      // host was never touched.
+      await writeInstall("1.0.0", {});
+      await writeStaged("2.0.0", {});
+      mocks.lifecycleBeforeSwapShouldThrow = true;
+      const onWillDisruptHost = vi.fn();
+      const stages: string[] = [];
+
+      await expect(
+        applyHost({
+          environment: ENV,
+          force: false,
+          noService: false,
+          expectedStageFingerprint: null,
+          onProgress: (info) => {
+            stages.push(info.stage);
+          },
+          onWillDisruptHost,
+        }),
+      ).rejects.toThrow("simulated stop failure");
+
+      expect(stages).toContain("service-stop");
+      expect(onWillDisruptHost).not.toHaveBeenCalled();
+      expect((await readHostInstallRecord(ENV))?.version).toBe("1.0.0");
+    });
   });
 });

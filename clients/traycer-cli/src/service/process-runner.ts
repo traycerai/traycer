@@ -25,7 +25,15 @@ export function runCommand(
   options: RunOptions,
 ): Promise<RunResult> {
   return new Promise((resolve, reject) => {
-    execFile(
+    // Affirmative "the child started" evidence, recorded from the process
+    // handle itself rather than inferred from the shape of the error: a
+    // spawned child has a pid the moment `execFile` returns (and emits
+    // `spawn`), one that failed at fork/exec has neither. The error's `code`
+    // TYPE is not that evidence - execFile also reports a string code for a
+    // child that DID run and overflowed `maxBuffer`
+    // (`ERR_CHILD_PROCESS_STDIO_MAXBUFFER`), which must stay a run failure.
+    let spawned = false;
+    const child = execFile(
       command,
       [...args],
       {
@@ -59,22 +67,49 @@ export function runCommand(
         };
         const signal = errWithSignal.signal ?? null;
         const killed = errWithSignal.killed === true;
-        const summary =
-          killed && signal !== null
+        // Never started: no pid and no `spawn` event, and execFile reported
+        // the errno (`ENOENT`, `EACCES`, `EAGAIN`) instead of an exit status.
+        // A child that ran and failed carries a numeric exit code, one this
+        // runner killed carries a signal, and one that overflowed `maxBuffer`
+        // carries a string code but DID start - the pid keeps it a run error.
+        const spawnFailed = !spawned && typeof err.code === "string" && !killed;
+        const summary = spawnFailed
+          ? `could not be spawned (${err.code})`
+          : killed && signal !== null
             ? `timed out after ${options.timeoutMs}ms (killed via ${signal})`
             : `exited with code ${exitCode}`;
+        const message = `${command} ${args.join(" ")} ${summary}: ${stderrStr.trim() || stdoutStr.trim()}`;
         reject(
-          new ProcessRunError(
-            `${command} ${args.join(" ")} ${summary}: ${stderrStr.trim() || stdoutStr.trim()}`,
-            command,
-            args,
-            exitCode,
-            stdoutStr,
-            stderrStr,
-          ),
+          spawnFailed
+            ? new ProcessSpawnError(
+                message,
+                command,
+                args,
+                exitCode,
+                stdoutStr,
+                stderrStr,
+              )
+            : new ProcessRunError(
+                message,
+                command,
+                args,
+                exitCode,
+                stdoutStr,
+                stderrStr,
+              ),
         );
       },
     );
+    // Both signals, because they arrive at different times: the pid is set
+    // synchronously when the fork succeeded, `spawn` fires once the child is
+    // running. Either is proof the command reached the OS; the callback
+    // above runs after both (execFile's error path defers to the next tick).
+    if (typeof child.pid === "number") {
+      spawned = true;
+    }
+    child.once("spawn", () => {
+      spawned = true;
+    });
   });
 }
 
@@ -99,5 +134,27 @@ export class ProcessRunError extends Error {
     this.exitCode = exitCode;
     this.stdout = stdout;
     this.stderr = stderr;
+  }
+}
+
+/**
+ * The child never started - `execFile` reported a spawn errno (`ENOENT`,
+ * `EACCES`) rather than an exit status. Still a {@link ProcessRunError} for
+ * every caller that only asks "did it fail", and a distinct class for the
+ * callers whose answer depends on whether the command REACHED its target: a
+ * `launchctl bootout` that could not be spawned provably evicted nothing,
+ * where one that ran and failed may have.
+ */
+export class ProcessSpawnError extends ProcessRunError {
+  constructor(
+    message: string,
+    command: string,
+    args: readonly string[],
+    exitCode: number,
+    stdout: string,
+    stderr: string,
+  ) {
+    super(message, command, args, exitCode, stdout, stderr);
+    this.name = "ProcessSpawnError";
   }
 }

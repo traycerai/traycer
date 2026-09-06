@@ -38,6 +38,10 @@ export async function freshHostFsLayout(
     ),
     substrateFile: join(rootDir, "substrate.json"),
     transitionJournalFile: join(rootDir, "transition.json"),
+    browserTelemetryFile: join(rootDir, "browser-telemetry.jsonl"),
+    browserTelemetryRotatedFile: join(rootDir, "browser-telemetry.jsonl.1"),
+    browserTraceFile: join(rootDir, "browser-trace.jsonl"),
+    browserTraceRotatedFile: join(rootDir, "browser-trace.jsonl.1"),
     environment: "production",
   };
 }

@@ -128,6 +128,53 @@ If the service is registered but not responding, restart it:
 traycer host restart
 ```
 
+### Stopping the host from inside Traycer
+
+The commands that stop the host - `host update`, `host apply`, `host install`,
+`host ensure`, `host restart`, `host stop`, `host uninstall`,
+`host free-port-and-restart` and `host service uninstall` - are frequently run
+by the host itself, or by a person in a terminal the host opened. On those runs
+the command is a child of the host, so a naive stop kills the command that
+issued it, part-way through its own work.
+
+On Linux the CLI re-runs such a command in a transient systemd scope of its own
+(`systemd-run --user --scope`) before the command body starts. The relocated
+process is a sibling of `ai.traycer.host.service` rather than a child of it, and
+survives the stop. The relocated CLI reports back to the process that launched
+it as soon as it starts, and only then is the move recorded in the CLI log as
+`relocated host-stopping command into a transient scope`.
+
+Every way that can fail leaves the host running and reports
+`E_SERVICE_CONTROL_FAILED` rather than proceeding:
+
+- `systemd-run` is missing, or starts and then exits before the command does -
+  there is no systemd user manager, or the transient scope was refused;
+- the CLI cannot read its own `/proc/self/cgroup`. Any read failure, absence
+  included, means the CLI cannot establish which cgroup it is in, and it refuses
+  the stop rather than proceeding: a mount namespace can hide procfs from a
+  process that is still inside the host's unit and can still reach the user
+  manager. The message says `absent` when that is what was seen, so a sandbox is
+  recognisable as the cause;
+- an argument contains `$`. systemd 258 expands variables in scope arguments by
+  default, and the option to turn that off does not exist before systemd 254, so
+  a path such as `--from '/tmp/${BUILD}/host.tar.gz'` is refused instead of being
+  silently rewritten;
+- the stop is reached with the CLI still inside the host's own unit. This is
+  checked again immediately before the host is stopped, so a scope that did not
+  actually move the process is caught even if everything above appeared to work.
+
+In each case, run the command again from a shell outside Traycer.
+
+On Windows there is no re-exec. The host's processes are terminated
+individually, and the CLI running the command, its children, and the shell that
+launched it are excluded from that set - terminating the host's whole tree would
+take them down with it. Each process is terminated through a handle whose
+creation time is first checked against the scan that selected it, so a process
+id that Windows has since handed to something unrelated is skipped rather than
+killed.
+
+macOS needs neither: stopping the host's launchd job does not touch the CLI.
+
 ## Links
 
 - Documentation: [docs.traycer.ai](https://docs.traycer.ai)

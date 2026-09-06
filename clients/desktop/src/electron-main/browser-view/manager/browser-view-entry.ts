@@ -1,10 +1,8 @@
 import type {
-  BrowserViewBounds,
   BrowserViewCertificateErrorChange,
   BrowserViewNativeTabKey,
   BrowserViewStatus,
   BrowserViewTileKey,
-  BrowserViewViewportPresetId,
 } from "@traycer-clients/shared/platform/browser-view";
 import type { BrowserAnnotationSession } from "../annotation/browser-annotation-session";
 import type { BrowserSessionProfile } from "../browser-session";
@@ -12,7 +10,7 @@ import type { BrowserDebugSession } from "../debug/browser-debug-session";
 import type { BrowserViewEntryKey } from "./browser-view-entry-registry";
 import type {
   BrowserViewDevToolsWindow,
-  ManagedBrowserView,
+  BrowserViewWebContents,
 } from "../browser-view-port";
 import type { NativeBrowserViewLifecycle } from "./native-browser-view-lifecycle";
 import type { RunnerHostEvent } from "../../../ipc-contracts/ipc-channels";
@@ -47,18 +45,10 @@ export interface BrowserViewEntry {
    * by then the host frame that named the profile is long gone.
    */
   readonly profile: BrowserSessionProfile;
-  readonly view: ManagedBrowserView;
+  /** The guest itself. Capability code talks only to this. */
+  readonly webContents: BrowserViewWebContents;
   readonly listeners: BrowserViewListenerMap;
-  parentWindowId: string | null;
   desiredVisible: boolean;
-  bounds: BrowserViewBounds | null;
-  /**
-   * BT-101: last effective rect actually handed to `view.setBounds`. Identical
-   * follow-up updates coalesce to a no-op so a streamed drag burst does not
-   * relayout the guest per frame for unchanged geometry. Invalidated when
-   * anything else moves the view directly (PiP offscreen parking).
-   */
-  lastAppliedBounds: BrowserViewBounds | null;
   requestedUrl: string;
   currentUrl: string;
   currentTitle: string;
@@ -69,27 +59,10 @@ export interface BrowserViewEntry {
   debugSession: BrowserDebugSession | null;
   annotationSession: BrowserAnnotationSession | null;
   devToolsWindow: BrowserViewDevToolsWindow | null;
-  viewportPreset: BrowserViewViewportPresetId;
-  overlayOwnerIds: string[];
-  overlaySnapshotStale: boolean;
-  /**
-   * BT-202 two-phase park: true between serving the replacement frame and
-   * the renderer's paint acknowledgement. While pending, the view stays at
-   * its real onscreen geometry so the page never blanks.
-   */
-  overlayAwaitingPaintAck: boolean;
-  /** Set once the parked posture is actually applied (post-ack). */
-  overlayParked: boolean;
-  /** Visibility last computed by the geometry pass; null before the first. */
-  visible: boolean | null;
-  /** Last `visible` value logged, so forensics logging fires only on change. */
-  lastLoggedVisible: boolean | null;
   /**
    * Set when the host window's own renderer starts a fresh main-frame
    * navigation or crashes, before the new renderer has re-upserted this
-   * entry. Forces `applyEntryVisibility` to hide the tile so it cannot
-   * composite over the blank/reloading window; cleared when the surface is
-   * rebound.
+   * entry. Cleared when the surface is rebound.
    */
   rendererResetPending: boolean;
   internalNavigation: boolean;

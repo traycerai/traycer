@@ -664,6 +664,25 @@ export class ChunkReassembler {
     return this.accumulators.size;
   }
 
+  /**
+   * Plaintext bytes held across every in-flight reassembly on this peer.
+   *
+   * {@link MAX_MUX_MESSAGE_BYTES} bounds ONE message on ONE stream, which
+   * leaves the aggregate as large as the peer has streams. A receiver that
+   * charges a peer for its whole reassembly footprint reads it here
+   * (browser-security-hardening H11). Summed on demand over the accumulator
+   * map rather than tracked incrementally: the map is itself capped by the
+   * receiver, and a running total is a second copy of the truth that every
+   * deletion path has to remember to decrement.
+   */
+  get retainedBytes(): number {
+    let total = 0;
+    for (const accumulator of this.accumulators.values()) {
+      total += accumulator.totalLength;
+    }
+    return total;
+  }
+
   /** Drops every partial reassembly (called when the session resets). */
   reset(): void {
     this.accumulators.clear();
@@ -692,7 +711,15 @@ function concat(slices: Uint8Array[], totalLength: number): Uint8Array {
   return out;
 }
 
-function nextSeqValue(seq: number): number {
+/**
+ * The `seq` that must follow `seq` on the same stream, wrapping at 2^32.
+ *
+ * Exported because the RECEIVER needs the identical successor rule outside a
+ * chunk sequence too: the host sequences a stream's unchunked frames against
+ * it (browser-security-hardening H11), and two spellings of "the next seq"
+ * would disagree exactly at the wrap.
+ */
+export function nextSeqValue(seq: number): number {
   return (seq + 1) % 2 ** 32;
 }
 

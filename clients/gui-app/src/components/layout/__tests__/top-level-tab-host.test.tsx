@@ -1010,3 +1010,158 @@ describe("TopLevelTabHost hosted-plane wiring (design-review F3: real pointerdow
     expect(activatedTab.id).toBe(EPIC_B.id);
   });
 });
+
+/**
+ * "Reverse views" on a top-level split (`swapSplitSides`) exchanges the two
+ * sides' `left` offsets while each side keeps its own width - at ratio 0.5
+ * literally, and at any other ratio because `1 - leftRatio` on the other side
+ * is the width it already had. A hosted chat body is positioned by rects the
+ * geometry coordinator reads inside a ResizeObserver callback, and a
+ * ResizeObserver reports SIZE changes only, so nothing about the swap reached
+ * the coordinator: both hosted bodies stayed painted at their pre-swap rects
+ * while the tab strips and sidebars around them had already crossed over,
+ * overlapping the other side's sidebar. This pins the remeasure
+ * `TopLevelTabHost` now performs on every placement change. The
+ * `ControllableResizeObserver` installed above never fires unless triggered,
+ * and this test deliberately never triggers it - that IS the real-world
+ * condition for a position-only move.
+ */
+describe("TopLevelTabHost re-measures hosted geometry on a position-only placement change (Reverse views)", () => {
+  const CHAT_A = "reverse-views-chat-a";
+  const CHAT_B = "reverse-views-chat-b";
+  const PANE_ID = "p1";
+
+  beforeEach(() => {
+    window.localStorage.clear();
+    useTabsStore.setState(useTabsStore.getInitialState(), true);
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    useLandingDraftStore.setState(useLandingDraftStore.getInitialState(), true);
+    tabCommandCoordinator.resetReconciliationForTesting();
+    resetTileSurfaceMembershipForTesting();
+    resetTileSurfaceEnvironmentRegistryForTesting();
+    stableTileSurfaceHostTestState.enabled = true;
+  });
+
+  afterEach(() => {
+    cleanup();
+    stableTileSurfaceHostTestState.enabled = false;
+    useTabsStore.setState(useTabsStore.getInitialState(), true);
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    useLandingDraftStore.setState(useLandingDraftStore.getInitialState(), true);
+    tabCommandCoordinator.resetReconciliationForTesting();
+    resetTileSurfaceMembershipForTesting();
+    resetTileSurfaceEnvironmentRegistryForTesting();
+  });
+
+  function stubAnchorRect(
+    anchor: HTMLDivElement,
+    rect: { readonly left: number; readonly width: number },
+  ): void {
+    anchor.getBoundingClientRect = () => ({
+      left: rect.left,
+      top: 0,
+      width: rect.width,
+      height: 600,
+      right: rect.left + rect.width,
+      bottom: 600,
+      x: rect.left,
+      y: 0,
+      toJSON: () => ({}),
+    });
+  }
+
+  function seedChatCanvas(epic: TabRef, instanceId: string): void {
+    useEpicCanvasStore.setState((state) => ({
+      ...state,
+      canvasByTabId: {
+        ...state.canvasByTabId,
+        [epic.id]: {
+          root: pane(PANE_ID, [instanceId]),
+          activePaneId: PANE_ID,
+          tilesByInstanceId: {
+            [instanceId]: {
+              id: instanceId,
+              instanceId,
+              type: "chat" as const,
+              name: `Chat ${instanceId}`,
+              hostId: TEST_HOST_ID,
+            },
+          },
+          sizesByGroupId: {},
+        },
+      },
+    }));
+  }
+
+  async function hostedRecord(instanceId: string): Promise<HTMLElement> {
+    return waitFor(() => {
+      const element = document.querySelector(
+        `[${HOSTED_TILE_INSTANCE_ID_ATTRIBUTE}="${instanceId}"]`,
+      );
+      if (!(element instanceof HTMLElement)) {
+        throw new Error(`hosted record ${instanceId} not yet published`);
+      }
+      return element;
+    });
+  }
+
+  it("moves both hosted bodies to their swapped slots when the sides exchange offsets but keep their widths, with no ResizeObserver callback", async () => {
+    seedSources([EPIC_A, EPIC_B]);
+    seedChatCanvas(EPIC_A, CHAT_A);
+    seedChatCanvas(EPIC_B, CHAT_B);
+    setSplit(EPIC_A, EPIC_B, "left");
+
+    render(<TopLevelTabHost />);
+
+    // The two slots as the DOM lays them out before the swap: A fills the
+    // left half, B the right half, equal widths.
+    const anchorA = document.createElement("div");
+    const anchorB = document.createElement("div");
+    stubAnchorRect(anchorA, { left: 0, width: 500 });
+    stubAnchorRect(anchorB, { left: 500, width: 500 });
+
+    act(() => {
+      for (const [epic, instanceId, anchor] of [
+        [EPIC_A, CHAT_A, anchorA],
+        [EPIC_B, CHAT_B, anchorB],
+      ] as const) {
+        const base = buildSyntheticTileSurfaceEnvironment(instanceId, {
+          placement: {
+            epicId: epic.id,
+            viewTabId: epic.id,
+            paneId: PANE_ID,
+            hostId: TEST_HOST_ID,
+          },
+        });
+        publishTileSurfaceEnvironment({
+          ...base,
+          identity: { ...base.identity, epicId: epic.id },
+          services: { ...base.services, geometryAnchorElement: anchor },
+        });
+      }
+    });
+
+    const recordA = await hostedRecord(CHAT_A);
+    const recordB = await hostedRecord(CHAT_B);
+    expect(recordA.style.transform).toBe("translate(0px, 0px)");
+    expect(recordB.style.transform).toBe("translate(500px, 0px)");
+    expect(recordA.style.width).toBe("500px");
+    expect(recordB.style.width).toBe("500px");
+
+    // Reverse views: the DOM slots exchange `left` and keep their widths...
+    stubAnchorRect(anchorA, { left: 500, width: 500 });
+    stubAnchorRect(anchorB, { left: 0, width: 500 });
+    // ...and the strip commits the swapped split at the same 0.5 ratio -
+    // exactly what `swapSplitSides` produces for this item.
+    act(() => setSplit(EPIC_B, EPIC_A, "right"));
+
+    // Both records are the SAME elements (no remount), now at swapped rects.
+    expect(screen.getByTestId(`stable-tile-surface-record-${CHAT_A}`)).toBe(
+      recordA,
+    );
+    expect(recordA.style.transform).toBe("translate(500px, 0px)");
+    expect(recordB.style.transform).toBe("translate(0px, 0px)");
+    expect(recordA.style.width).toBe("500px");
+    expect(recordB.style.width).toBe("500px");
+  });
+});

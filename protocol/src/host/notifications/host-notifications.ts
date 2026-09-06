@@ -532,9 +532,9 @@ export type HostNotificationsEntityRef = z.infer<
 >;
 
 /**
- * The entity branch is an atomic view-consumption request. Hosts must only
- * mark unread `done`/`failure` rows in the named entity: `{ epicId }` means
- * epic-level (`chatId IS NULL`) rows only, never every chat in that epic.
+ * The entity branch is an atomic view-consumption request. `{ epicId }`
+ * consumes Task-level (`chatId IS NULL`) rows only. `{ epicId, chatId }`
+ * consumes those Task-level rows plus the named child, never sibling chats.
  */
 export const hostNotificationsMarkReadRequestSchema = z.discriminatedUnion(
   "kind",

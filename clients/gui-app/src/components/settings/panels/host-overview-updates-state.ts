@@ -1,10 +1,16 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import {
   compareHostVersions,
+  isValidHostVersion,
   isStrictlyNewerHostVersion,
 } from "@traycer-clients/shared/host-version/compare-host-versions";
+import {
+  HOST_CLIENT_FLOOR_REASON_PREFIX,
+  isHostClientFloorRefusedAsset,
+} from "@traycer-clients/shared/host-version/client-floor-reason";
 import {
   isMatchingStableRelease,
   isSameReleaseLine,
@@ -14,6 +20,12 @@ import type {
   HostIncludePreReleasesSource,
   HostUpdateCheckResponseV11,
 } from "@traycer/protocol/host/maintenance/index";
+import type { StoredCliInstallManifest } from "@traycer/protocol/config/installation-records";
+import type { DesktopAppUpdateSnapshot } from "@/lib/windows/types";
+import {
+  describeCliFloorRemedy,
+  type CliFloorRemedy,
+} from "@/components/settings/panels/host-overview-cli-floor-remedy";
 import type { VersionPickerProps } from "@/components/settings/panels/host-overview-advanced";
 import type { HostVersionRow } from "@/components/settings/panels/host-version-rows";
 import { VERSION_LIST_PREVIEW } from "@/components/settings/panels/host-settings-panel-model";
@@ -26,8 +38,33 @@ import {
   useHostUpdateCheckQuery,
   useHostUpdateInstall,
 } from "@/components/settings/panels/host-overview-rpc";
+import {
+  useHostNegotiatedMethodVersion,
+  type NegotiatedMethodVersion,
+} from "@/hooks/host/use-host-negotiated-method-version";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import type { HostRpcRegistry } from "@/lib/host";
+import { hostQueryKeys } from "@/lib/query-keys";
+
+/**
+ * How often the catalog is re-asked while a CLI-floor remedy is on screen. A
+ * fixed cadence, not a backoff: the thing being waited on is a person running
+ * the copied command, and the remedy's copy promises the page notices.
+ */
+export const CLI_FLOOR_RECHECK_MS = 30_000;
+
+/**
+ * The version the catalog is compared against: the install record's under
+ * activation debt, the process's otherwise. Kept out of the hook body so the
+ * hook stays under the complexity ceiling.
+ */
+function comparisonBaseline(
+  activationDebt: { readonly installedVersion: string } | null,
+  runningVersion: string | null,
+): string | null {
+  if (activationDebt !== null) return activationDebt.installedVersion;
+  return runningVersion;
+}
 
 /**
  * A host's update story: what it can install, and installing it.
@@ -72,15 +109,51 @@ export function useHostOverviewUpdates(input: {
   readonly hostName: string;
   /** The scoped host this panel is showing — see the override reset below. */
   readonly hostId: string | null;
-  readonly installedVersion: string | null;
+  /** What the PROCESS reports about itself (`host.status.hostVersion`). */
+  readonly runningVersion: string | null;
+  /**
+   * The install record is ahead of the running host (`legacy-update-facts.ts`).
+   * When set, every catalog comparison below is against the INSTALLED version,
+   * not the running one: the bytes on disk are what the next restart serves,
+   * so "is there something newer" is a question about them. Comparing
+   * against the running version would re-offer the version that is already
+   * installed as "Update now", and pressing it would find nothing to do.
+   */
+  readonly activationDebt: {
+    readonly installedVersion: string;
+    /**
+     * Whether the record read this debt came from is live
+     * (`canonicalReadIsLive` over the installation leg). A retained read
+     * still sets the comparison baseline - the bytes on disk do not change
+     * because a poll failed, and dropping the baseline would re-offer the
+     * installed version as "available" - but the sentence says so, and the
+     * page withholds the Restart until the read is live again.
+     */
+    readonly live: boolean;
+  } | null;
   readonly platformKey: string | null;
+  readonly cliManifest: StoredCliInstallManifest | null;
+  readonly isLocalMachine: boolean;
+  readonly desktopUpdate: DesktopAppUpdateSnapshot | null;
+  readonly stagedVersion: string | null;
   /** Whether this host is worth asking at all — the page owns that gate. */
   readonly enabled: boolean;
   readonly checkDegrade: OverviewDegradeReason | null;
   readonly installDegrade: OverviewDegradeReason | null;
   readonly busy: boolean;
 }): HostOverviewUpdatesState {
-  const { client, hostName, installedVersion } = input;
+  const { client, hostName } = input;
+  // The version the catalog is compared against. Under activation debt that
+  // is the install record's, not the process's - see `activationDebt`.
+  const installedVersion = comparisonBaseline(
+    input.activationDebt,
+    input.runningVersion,
+  );
+  const installVersion = useHostNegotiatedMethodVersion(
+    client,
+    "host.update.install",
+  );
+  const supportsDowngrade = versionSupportsDowngrade(installVersion);
   const [showAllVersions, setShowAllVersions] = useState(false);
   // `undefined` until the user touches the checkbox: the DEFAULT is the host's
   // own derivation, not a value this component picked. Only a deliberate
@@ -129,6 +202,9 @@ export function useHostOverviewUpdates(input: {
   const [installFailure, setInstallFailure] = useState<CliShellFailure | null>(
     null,
   );
+  const [forceRefusal, setForceRefusal] = useState<ForceUpdateRefusal | null>(
+    null,
+  );
 
   const checkQuery = useHostUpdateCheckQuery({
     client,
@@ -174,13 +250,23 @@ export function useHostOverviewUpdates(input: {
   const checking = checkQuery.isFetching;
 
   const runCheck = (): void => {
+    setForceRefusal(null);
     void checkQuery.refetch();
   };
 
-  const install = (version: string): void => {
+  const install = (
+    version: string,
+    force: boolean,
+    // The caller's own settle hook, for UI that opened a confirmation over
+    // this dispatch and has to close it whatever the answer was. MOUNTED
+    // state only, like the callbacks beside it.
+    onSettled: (() => void) | null,
+  ): void => {
+    setForceRefusal(null);
     installMutation.mutate(
-      { version, force: false },
+      { version, force },
       {
+        onSettled: () => onSettled?.(),
         // MOUNTED UI state only. The `host.status` invalidation this
         // used to do moved to `useHostUpdateInstall`'s hook-level
         // `onSuccess`: an install outlives a Settings scope switch,
@@ -225,14 +311,33 @@ export function useHostOverviewUpdates(input: {
   // versions the failed check could not confirm - under a summary that says
   // the host could not be checked.
   const actionableManifest = checkQuery.isError ? null : manifest;
+  // A repaired refusal must not return when a later check loses its catalog.
+  // Retire it on a newer successful answer, using the same guarded render
+  // adjustment as installDiscovered; hiding the text alone keeps stale state.
+  retireForceRefusalIfRefuted({
+    refusal: forceRefusal,
+    manifest: actionableManifest,
+    checkDataUpdatedAt: checkQuery.dataUpdatedAt,
+    checkSucceeded: checkQuery.isSuccess,
+    checkIsPlaceholderData: checkQuery.isPlaceholderData,
+    platformKey: input.platformKey,
+    hostName,
+    retire: () => setForceRefusal(null),
+  });
+  const failureDescription = describeUpdateFailure({
+    refusal: forceRefusal,
+    manifest: actionableManifest,
+    platformKey: input.platformKey,
+    failure: transientFailure,
+    hostName,
+  });
   // The best STRICTLY NEWER version this catalog offers, before the yanked and
   // platform-asset gates - what the sentence is about, where
   // `updatableVersion` below is what the button can act on.
   //
   // PRECEDENCE, not equality: a host running a hotfix or RC AHEAD of the
-  // stable channel is not outdated, and offering Update now there submits a
-  // target the CLI short-circuits as `installed-up-to-date` - an update that
-  // announces itself and performs no work. Equal precedence (build-metadata
+  // stable channel is not outdated. Only the picker may request a deliberate
+  // downgrade; the summary must never offer one as an update. Equal precedence (build-metadata
   // differences included) and incomparable pairs both count as up to date for
   // the SUMMARY - the picker stays the surface for deliberate cross-channel
   // moves.
@@ -241,6 +346,70 @@ export function useHostOverviewUpdates(input: {
     installedVersion,
     source: check.source,
   });
+  const summaryCandidate = selectSummaryCandidate({
+    manifest: actionableManifest,
+    installedVersion,
+    platformKey: input.platformKey,
+    source: check.source,
+  });
+  const { cliFloor, stagedEntryOfferable, remedy } = deriveCliFloorAndForceGate(
+    {
+      manifest: actionableManifest,
+      summaryCandidate,
+      stagedVersion: input.stagedVersion,
+      platformKey: input.platformKey,
+      cliManifest: input.cliManifest,
+      isLocalMachine: input.isLocalMachine,
+      desktopUpdate: input.desktopUpdate,
+      hostName,
+    },
+  );
+  // THE CLI-FLOOR RECHECK. While the remedy is on screen, re-ask the catalog
+  // every `CLI_FLOOR_RECHECK_MS` so a repaired CLI reveals Update now without
+  // a click - the remedy's own copy promises exactly that. Keyed on the
+  // REMEDY, not on the response: which floored catalog row the remedy names
+  // is the summary walk's answer (the matching stable and the later RCs on
+  // the installed line, strictly newer than what runs), and that walk needs
+  // the installed version, which the check's response does not carry. A
+  // classifier over the response alone - the table-owned condition lane this
+  // replaced - kept a 30 s cadence on ANY floored row of an `installed-rc`
+  // catalog, a release on another line included, with no remedy on screen to
+  // end it. Invalidating the shared key rather than holding a private query
+  // is the choice `useActiveUpdatePollAccelerator` makes, for the same
+  // reason: one key, one answer, every observer of it refreshed alike.
+  // Non-cancelling for the reason recorded there too - a round trip slower
+  // than the cadence is coalesced, never aborted by the next tick. The
+  // query's own scheduling stays table-owned; this only marks it stale.
+  //
+  // "On screen" is literal: a RETIRED region (`degrade` non-null - an
+  // externally-managed host discovered at install, an unsupported install
+  // method) renders a notice in place of the remedy, and two of those
+  // retirements leave the check query enabled, so a floor read before the
+  // retirement would otherwise keep re-asking a host with nothing on screen
+  // to end it - the defect this recheck exists to avoid, relocated.
+  //
+  // Two more things end it: a floor no upgrade can clear (`repairable`
+  // false - the remedy is help only, and re-asking cannot change the
+  // answer), and the page's own gate (`enabled`) - the region renders under
+  // it, and a timer ticking against a disabled query is a live timer for
+  // nothing.
+  const queryClient = useQueryClient();
+  const recheckFloor = floorRecheckArmed({
+    enabled: input.enabled,
+    degrade,
+    cliFloor,
+  });
+  const { hostId } = input;
+  useEffect(() => {
+    if (!recheckFloor || hostId === null) return;
+    const timer = setInterval(() => {
+      void queryClient.invalidateQueries(
+        { queryKey: hostQueryKeys.methodScope(hostId, "host.update.check") },
+        { cancelRefetch: false },
+      );
+    }, CLI_FLOOR_RECHECK_MS);
+    return () => clearInterval(timer);
+  }, [recheckFloor, hostId, queryClient]);
   // Read off the resolved target rather than `manifest.latest`, which for an
   // installed-RC catalog is the WRONG pointer: `latest` tracks the stable
   // channel, so a host on `2.0.0-rc.1` sees `1.9.0` there and would be told it
@@ -263,27 +432,53 @@ export function useHostOverviewUpdates(input: {
   // picker rows: a latest with no usable asset for this host is advertised
   // nowhere rather than installable in one surface and unavailable in the
   // other.
-  const updatableVersion = offerableLatestVersion({
-    manifest: actionableManifest,
-    installedVersion,
-    platformKey: input.platformKey,
-    source: check.source,
-  });
+  const updatableVersion = offerableLatestVersion(summaryCandidate);
   const installingVersion = installMutation.isPending
     ? installMutation.variables.version
     : null;
 
   return {
     degrade,
+    cliFloor,
+    stagedEntryOfferable,
+    // The staged-wait force: the SAME dispatch as a row's Install, with
+    // `force: true`, so the accepted latch, the invalidations and the
+    // outcome toasts are the ones every other install on this page gets.
+    // The confirmation that precedes it is the panel's (the ellipsis on
+    // "Force update…" is a promise); this is only the dispatch.
+    installForce: (version, onSettled) => {
+      // Re-read the exact version named by the confirmation. A catalog poll
+      // can withdraw it or project a refusal after the offer was opened.
+      const refusal = describeForceUpdateRefusal({
+        manifest: actionableManifest,
+        version,
+        platformKey: input.platformKey,
+        hostName,
+      });
+      if (refusal !== null) {
+        setForceRefusal({
+          version,
+          text: refusal,
+          checkDataUpdatedAt: checkQuery.dataUpdatedAt,
+        });
+        // No mutation means no mutation settle callback. Close synchronously
+        // here or the confirmation would be stranded over the inline notice.
+        onSettled();
+        return;
+      }
+      install(version, true, onSettled);
+    },
     summary: {
       hostName,
       description: describeCheckState({
         manifest,
         checking,
-        failure: transientFailure,
+        failure: failureDescription,
         unreachable: checkQuery.isError,
         hostName,
         upToDate,
+        activationDebt: input.activationDebt,
+        remedy,
         offerable: updatableVersion !== null,
         // What the BUTTON will install, when it can install anything. The two
         // differ whenever the best candidate is unusable: with a yanked
@@ -295,7 +490,8 @@ export function useHostOverviewUpdates(input: {
         strandedOnLine,
         installedVersion,
       }),
-      transientFailure,
+      failureDescription,
+      remedy,
       checking,
       // Offered only for a latest that is BOTH known and not already installed,
       // and never while the row is still reporting a failed attempt. "Update
@@ -305,7 +501,7 @@ export function useHostOverviewUpdates(input: {
       busy: input.busy,
       onCheck: runCheck,
       onUpdateLatest: () => {
-        if (updatableVersion !== null) install(updatableVersion);
+        if (updatableVersion !== null) install(updatableVersion, false, null);
       },
     },
     picker: {
@@ -314,6 +510,7 @@ export function useHostOverviewUpdates(input: {
         installedVersion,
         platformKey: input.platformKey,
         showAll: showAllVersions,
+        supportsDowngrade,
       }),
       totalCount: manifest?.versions.length ?? 0,
       showAll: showAllVersions,
@@ -342,7 +539,7 @@ export function useHostOverviewUpdates(input: {
       ),
       installingVersion,
       disabled: input.busy,
-      onInstall: install,
+      onInstall: (version) => install(version, false, null),
       awaitingFirstCheck: actionableManifest === null,
       checking,
     },
@@ -352,7 +549,8 @@ export function useHostOverviewUpdates(input: {
 export interface HostOverviewUpdatesSummary {
   readonly hostName: string;
   readonly description: string;
-  readonly transientFailure: CliShellFailure | null;
+  readonly failureDescription: string | null;
+  readonly remedy: CliFloorRemedy | null;
   readonly checking: boolean;
   readonly updatableVersion: string | null;
   readonly installing: boolean;
@@ -365,6 +563,14 @@ export interface HostOverviewUpdatesState {
   readonly degrade: OverviewDegradeReason | null;
   readonly summary: HostOverviewUpdatesSummary;
   readonly picker: VersionPickerProps;
+  readonly cliFloor: CliFloor | null;
+  readonly stagedEntryOfferable: boolean;
+  /**
+   * `host.update.install {version, force: true}` — the staged-wait force.
+   * `onSettled` runs once the request answers or fails, so the confirmation
+   * that dispatched it can close on the answer rather than on a guess.
+   */
+  readonly installForce: (version: string, onSettled: () => void) => void;
 }
 
 /**
@@ -381,6 +587,7 @@ function visibleVersionRows(input: {
   readonly installedVersion: string | null;
   readonly platformKey: string | null;
   readonly showAll: boolean;
+  readonly supportsDowngrade: boolean;
 }): readonly HostVersionRow[] {
   const { manifest } = input;
   if (manifest === null) return [];
@@ -398,9 +605,11 @@ function visibleVersionRows(input: {
       isInstalled,
       unavailableReason:
         assetUnavailableReason(asset) ??
-        (isInstalled
-          ? null
-          : supersededReason(input.installedVersion, entry.version)),
+        versionUnavailableReason(
+          input.installedVersion,
+          entry.version,
+          input.supportsDowngrade,
+        ),
     };
   });
 }
@@ -408,13 +617,11 @@ function visibleVersionRows(input: {
 /**
  * The version the summary's Update now may offer, or `null`.
  *
- * Four gates, all of which the picker enforces per row and the summary must
- * therefore enforce for its one target: the manifest must be from a check the
- * host CONFIRMED (not error-retained data), the target must be strictly newer
- * than what is installed, its entry must not be YANKED (the row disables it and
- * the CLI's `resolveAsset` refuses it before download, so an offer here would
- * dispatch an install the host is guaranteed to reject), and the entry must
- * resolve a usable asset for this host's platform.
+ * The summary additionally requires a strictly newer target; the picker also
+ * permits explicit downgrades. Both require a manifest from a check the
+ * host CONFIRMED (not error-retained data), a non-yanked entry, and a usable
+ * asset for this host's platform. The CLI also refuses yanked releases before
+ * downloading.
  *
  * WHICH version is the target depends on how the catalog was resolved, and
  * that is the whole reason provenance rides on the response. For an
@@ -426,12 +633,30 @@ function visibleVersionRows(input: {
  * explicit include: a user who asked for the broad catalog gets the broad
  * catalog's own pointer rather than a line restriction they did not request.
  */
-function offerableLatestVersion(input: {
+function offerableLatestVersion(
+  candidate: SummaryUpdateCandidate | null,
+): string | null {
+  if (candidate === null || candidate.cliFloor !== null) return null;
+  return candidate.version;
+}
+
+interface SummaryUpdateCandidate {
+  readonly version: string;
+  readonly cliFloor: CliFloor | null;
+}
+
+/**
+ * One ordered walk owns both the update and its CLI remedy. An unusable
+ * stable may leave an RC as the first repairable target; a floored stable
+ * must instead keep its priority over an already-installable lower RC.
+ * Yanked entries never become usable after a CLI repair, so skip them here.
+ */
+function selectSummaryCandidate(input: {
   readonly manifest: HostAvailableManifest | null;
   readonly installedVersion: string | null;
   readonly platformKey: string | null;
   readonly source: HostIncludePreReleasesSource | null;
-}): string | null {
+}): SummaryUpdateCandidate | null {
   const { manifest } = input;
   if (manifest === null) return null;
   for (const candidate of targetCandidates({
@@ -450,7 +675,11 @@ function offerableLatestVersion(input: {
     );
     if (entry === undefined || entry.yanked) continue;
     const asset = platformAssetFor(entry.platforms, input.platformKey);
-    if (assetUnavailableReason(asset) === null) return candidate;
+    if (assetUnavailableReason(asset) === null) {
+      return { version: candidate, cliFloor: null };
+    }
+    const cliFloor = readCliFloor(entry, input.platformKey);
+    if (cliFloor !== null) return { version: candidate, cliFloor };
   }
   return null;
 }
@@ -518,7 +747,7 @@ function targetCandidates(input: {
   );
   // EXCLUDING the matching stable, which also satisfies both predicates below
   // — it is on the line and strictly newer. Without this the stable is
-  // returned twice, and `offerableLatestVersion` pays for a second yanked and
+  // returned twice, and `selectSummaryCandidate` pays for a second yanked and
   // platform-asset probe on a candidate it already accepted or rejected.
   const laterOnLine = versions
     .filter(
@@ -619,30 +848,35 @@ function latestIsStrictlyNewer(
   return comparison.comparable && comparison.ordering === "less";
 }
 
-/**
- * Why a row below the installed version cannot be installed.
- *
- * This mirrors the CLI's own short-circuit rather than inventing a policy:
- * `download-stage.ts` computes `installedAtOrAboveTarget` and returns
- * `installed-up-to-date` for a target at OR BELOW what is installed, then skips
- * the apply and writes no progress marker. The RPC has already answered
- * `accepted` by then, so an enabled button here would toast "Updating…" for a
- * host that will do nothing and report nothing — the list would be lying about
- * an action it cannot perform.
- *
- * Incomparable pairs are deliberately left installable. `compareHostVersions`
- * refuses anything non-semver, a staging build id is not semver, and the CLI
- * applies the same refusal — an incomparable target does NOT short-circuit
- * there, so it must not be blocked here.
- */
-function supersededReason(
+function versionSupportsDowngrade(version: NegotiatedMethodVersion): boolean {
+  if (version === null || version === false) return false;
+  return version.major > 1 || (version.major === 1 && version.minor >= 2);
+}
+
+/** Only a host advertising downgrade support can honor an older target. */
+function versionUnavailableReason(
   installedVersion: string | null,
   rowVersion: string,
+  supportsDowngrade: boolean,
 ): string | null {
-  if (installedVersion === null) return null;
+  if (installedVersion === null || installedVersion === rowVersion) return null;
   const comparison = compareHostVersions(installedVersion, rowVersion);
-  if (!comparison.comparable || comparison.ordering === "less") return null;
-  return `Already on v${installedVersion}`;
+  if (!comparison.comparable) return null;
+  if (comparison.ordering === "equal") {
+    // Comparable-equal but a different string: another BUILD of the installed
+    // release (`1.2.0+build.2` beside an installed `1.2.0+build.1`). The
+    // comparator is build-metadata-blind and reserved for ordering; the
+    // artifact's identity is the string, and this host is NOT on the row's
+    // version. The CLI installs such a target only as an explicit sideways
+    // move (`--allow-downgrade`), which `host.update.install` passes only on a
+    // host that knows the sideways rule - and this page cannot tell which
+    // host it has - so the row stays disabled and says how to get the build.
+    return `Another build of v${installedVersion} is installed. To install v${rowVersion} over it, run: traycer host update --version ${rowVersion} --allow-downgrade`;
+  }
+  if (comparison.ordering === "greater" && !supportsDowngrade) {
+    return "Update this host to a release that supports downgrades from Settings.";
+  }
+  return null;
 }
 
 /**
@@ -711,6 +945,231 @@ function soleKeyBelongsToHost(
 type PlatformAsset =
   HostAvailableManifest["versions"][number]["platforms"][string];
 
+interface CliFloor {
+  readonly requiredCliVersion: string | null;
+  /**
+   * Whether upgrading the CLI can clear this floor: the version it names is
+   * one (`isValidHostVersion`), or none is named at all (an older payload
+   * whose authored reason still says the CLI is too old). A floor naming
+   * something that is not a version came from the pre-repair projector,
+   * which put the repairable prefix on an unreadable floor too; no upgrade
+   * clears it, so the remedy is help only and the recheck does not run.
+   */
+  readonly repairable: boolean;
+}
+
+interface ForceUpdateRefusal {
+  readonly version: string;
+  readonly text: string;
+  readonly checkDataUpdatedAt: number;
+}
+
+function deriveCliFloorAndForceGate(input: {
+  readonly manifest: HostAvailableManifest | null;
+  readonly summaryCandidate: SummaryUpdateCandidate | null;
+  readonly stagedVersion: string | null;
+  readonly platformKey: string | null;
+  readonly cliManifest: StoredCliInstallManifest | null;
+  readonly isLocalMachine: boolean;
+  readonly desktopUpdate: DesktopAppUpdateSnapshot | null;
+  readonly hostName: string;
+}): {
+  readonly cliFloor: CliFloor | null;
+  readonly stagedEntryOfferable: boolean;
+  readonly remedy: CliFloorRemedy | null;
+} {
+  // The staged release is not part of the summary walk (it was chosen
+  // earlier, by a catalog that may since have withdrawn it); its gates live
+  // in `describeForceUpdateRefusal`, which the Force offer and the Force
+  // dispatch both read. A withdrawn stage has no floor to remedy - no CLI
+  // version installs a yanked release - so the refusal names the withdrawal
+  // rather than a CLI requirement.
+  const cliFloor = input.summaryCandidate?.cliFloor ?? null;
+  return {
+    cliFloor,
+    // ONE predicate for "may Force be offered" and "may Force dispatch": the
+    // same refusal the dispatch revalidates at confirmation. A stage the
+    // catalog has dropped or withdrawn is not offered - the CLI would purge
+    // the stage (`discardIneligibleStagedVersion`) and then refuse the
+    // version, so the offer could only ever destroy the parked stage. See
+    // `describeForceUpdateRefusal` for why an unavailable asset is NOT in
+    // that set.
+    stagedEntryOfferable:
+      input.stagedVersion !== null &&
+      describeForceUpdateRefusal({
+        manifest: input.manifest,
+        version: input.stagedVersion,
+        platformKey: input.platformKey,
+        hostName: input.hostName,
+      }) === null,
+    remedy:
+      cliFloor === null
+        ? null
+        : describeCliFloorRemedy({
+            isLocalMachine: input.isLocalMachine,
+            platform: input.platformKey,
+            cliSource: input.cliManifest?.source ?? null,
+            cliBinaryPath: input.cliManifest?.binaryPath ?? null,
+            cliVersion: input.cliManifest?.version ?? null,
+            requiredCliVersion: cliFloor.requiredCliVersion,
+            desktopUpdate: input.desktopUpdate,
+            hostName: input.hostName,
+          }),
+  };
+}
+
+function readCliFloor(
+  entry: HostAvailableManifest["versions"][number] | undefined,
+  platformKey: string | null,
+): CliFloor | null {
+  if (entry === undefined) return null;
+  const asset = platformAssetFor(entry.platforms, platformKey);
+  if (!isHostClientFloorRefusedAsset(asset)) return null;
+  // The version decorates the verdict; it never decides it. Older payloads
+  // can omit the field while the authored refusal still names the requirement.
+  const reasonVersion = asset?.unavailableReason
+    ?.slice(HOST_CLIENT_FLOOR_REASON_PREFIX.length)
+    .match(/^(\S+) or newer\b/)?.[1];
+  const requiredCliVersion = entry.requiredCliVersion ?? reasonVersion ?? null;
+  return {
+    requiredCliVersion,
+    repairable:
+      requiredCliVersion === null || isValidHostVersion(requiredCliVersion),
+  };
+}
+
+function describeForceUpdateRefusal(input: {
+  readonly manifest: HostAvailableManifest | null;
+  readonly version: string;
+  readonly platformKey: string | null;
+  readonly hostName: string;
+}): string | null {
+  const entry = input.manifest?.versions.find(
+    (candidate) => candidate.version === input.version,
+  );
+  // The gates that matter for the one version Force names - a version whose
+  // bytes are ALREADY staged, downloaded and verified. That is narrower than
+  // the summary walk's: the CLI's stage reconcile purges a stage only when
+  // the catalog no longer lists the version or has yanked it
+  // (`discardIneligibleStagedVersion`), and an already-staged target
+  // short-circuits before any asset is resolved again, so a platform build
+  // the catalog has since marked unavailable still installs from the stage.
+  // Refusing that would strand a downloaded update behind a control that
+  // vanished. What does refuse: an entry the catalog dropped or withdrew
+  // (the confirmation could only destroy the stage); an asset this page
+  // cannot RESOLVE (nothing about the floor can be read - a deliberate
+  // narrowing for a host whose record carries no platform against a
+  // multi-platform entry; the CLI's own `host update --force` still works
+  // there); and a CLI floor. The floor is a PRODUCT gate, not a CLI one:
+  // the CLI would install the staged bytes, and the resulting host would
+  // then refuse the client that installed it, which is not a state this
+  // page offers to enter. The staged version is normally also the best
+  // target, whose floor renders the remedy card.
+  if (entry === undefined) {
+    // An absent entry, failed check, or incomplete refusal cannot name a
+    // floor.
+    return `Traycer couldn't verify that v${input.version} can be installed on ${input.hostName}. Select Check now and try again.`;
+  }
+  if (entry.yanked) {
+    return `v${input.version} has been withdrawn and can't be installed on ${input.hostName}. Select Check now for the current catalog.`;
+  }
+  if (platformAssetFor(entry.platforms, input.platformKey) === null) {
+    // No asset RESOLVED - an unknown platform key against a multi-platform
+    // entry, or a key the entry does not carry. Not proof the release is
+    // unavailable here, only that this page cannot read a floor for it.
+    return `Traycer couldn't verify that v${input.version} can be installed on ${input.hostName}. Select Check now and try again.`;
+  }
+  // The catalog ENTRY's own floor, read apart from the asset's authored
+  // reason: staged bytes install whatever the asset's availability says
+  // (the CLI's already-staged short-circuit resolves no asset and applies no
+  // floor), so a floor that is not a version - one this page cannot
+  // establish compatibility for, the same rule the projector applies when
+  // it reads the manifest - is refused here whether or not the asset
+  // carries the repairable prefix. A READABLE floor is left to the asset's
+  // verdict below: `available` is the executing CLI's own comparison
+  // against its own version, and the stored CLI manifest is no substitute
+  // for it in either direction (the stored copy can be newer than the
+  // executing one - see the remedy's older-copy sentence - or stale behind
+  // an upgrade the record has not re-read yet).
+  const declaredFloor = entry.requiredCliVersion;
+  if (declaredFloor !== null && !isValidHostVersion(declaredFloor)) {
+    return `Traycer couldn't verify the command-line tools version v${input.version} needs on ${input.hostName}: its catalog entry declares a requirement this page cannot read.`;
+  }
+  const floor = readCliFloor(entry, input.platformKey);
+  if (floor !== null) {
+    return floor.repairable && floor.requiredCliVersion !== null
+      ? `v${input.version} needs Traycer CLI ${floor.requiredCliVersion} or newer on ${input.hostName}. Update the command-line tools first.`
+      : `Traycer couldn't verify that v${input.version} can be installed on ${input.hostName}. Select Check now and try again.`;
+  }
+  return null;
+}
+
+interface ForceRefusalEvidence {
+  readonly refusal: ForceUpdateRefusal | null;
+  readonly manifest: HostAvailableManifest | null;
+  readonly checkDataUpdatedAt: number;
+  readonly checkSucceeded: boolean;
+  readonly checkIsPlaceholderData: boolean;
+  readonly platformKey: string | null;
+  readonly hostName: string;
+}
+
+/**
+ * The guarded render adjustment for a Force refusal: one decision, one
+ * action, stated beside its predicate rather than inline in the hook.
+ * `retire` is the state setter; calling it conditionally during render is
+ * the same pattern the `installDiscovered` adjustment uses.
+ */
+function retireForceRefusalIfRefuted(
+  input: ForceRefusalEvidence & { readonly retire: () => void },
+): void {
+  if (checkRefutesForceRefusal(input)) input.retire();
+}
+
+function checkRefutesForceRefusal(input: ForceRefusalEvidence): boolean {
+  // A retained or placeholder catalog cannot prove a subsequent repair.
+  // The exact refused version must be cleared by a newer successful answer.
+  return (
+    input.refusal !== null &&
+    input.checkSucceeded &&
+    !input.checkIsPlaceholderData &&
+    input.manifest !== null &&
+    input.checkDataUpdatedAt > input.refusal.checkDataUpdatedAt &&
+    describeForceUpdateRefusal({
+      manifest: input.manifest,
+      version: input.refusal.version,
+      platformKey: input.platformKey,
+      hostName: input.hostName,
+    }) === null
+  );
+}
+
+function describeUpdateFailure(input: {
+  readonly refusal: ForceUpdateRefusal | null;
+  readonly manifest: HostAvailableManifest | null;
+  readonly platformKey: string | null;
+  readonly failure: CliShellFailure | null;
+  readonly hostName: string;
+}): string | null {
+  // A successful poll can repair the exact version refused at confirmation.
+  // Derive visibility from the current catalog so both failure surfaces clear
+  // with that answer, without waiting for another click to reset local state.
+  if (
+    input.refusal !== null &&
+    describeForceUpdateRefusal({
+      manifest: input.manifest,
+      version: input.refusal.version,
+      platformKey: input.platformKey,
+      hostName: input.hostName,
+    }) !== null
+  ) {
+    return input.refusal.text;
+  }
+  return input.failure === null
+    ? null
+    : describeCliShellFailure(input.failure, input.hostName);
+}
+
 function assetUnavailableReason(asset: PlatformAsset | null): string | null {
   if (asset === null) return "No asset for this platform.";
   if (asset.available) return null;
@@ -761,6 +1220,25 @@ function checkRefutesDiscoveredRefusal(input: {
 }
 
 /** Precedence over the region's four retirement sources, first one wins. */
+/**
+ * Whether the mounted CLI-floor recheck runs: a REPAIRABLE floor is on
+ * screen (the remedy names a command an upgrade can satisfy), in a region
+ * that is neither retired nor disabled. See the comment at its caller for
+ * why each of the three ends it.
+ */
+function floorRecheckArmed(input: {
+  readonly enabled: boolean;
+  readonly degrade: OverviewDegradeReason | null;
+  readonly cliFloor: CliFloor | null;
+}): boolean {
+  return (
+    input.enabled &&
+    input.degrade === null &&
+    input.cliFloor !== null &&
+    input.cliFloor.repairable
+  );
+}
+
 function resolveRegionDegrade(input: {
   readonly installDiscovered: OverviewDegradeReason | null;
   readonly checkSticky: OverviewDegradeReason | null;
@@ -862,11 +1340,17 @@ function handleInstallOutcome(input: {
 function describeCheckState(input: {
   readonly manifest: HostAvailableManifest | null;
   readonly checking: boolean;
-  readonly failure: CliShellFailure | null;
+  readonly failure: string | null;
   /** The RPC itself failed — a transport fault, not an answer from the host. */
   readonly unreachable: boolean;
   readonly hostName: string;
   readonly upToDate: boolean;
+  /** The install record is ahead of the running host; see the hook's input. */
+  readonly activationDebt: {
+    readonly installedVersion: string;
+    readonly live: boolean;
+  } | null;
+  readonly remedy: CliFloorRemedy | null;
   /** `updatableVersion` resolved — the summary can actually OFFER the latest. */
   readonly offerable: boolean;
   /** The strictly-newer version this sentence is about, if there is one. */
@@ -881,10 +1365,28 @@ function describeCheckState(input: {
   // Ordered so a stale answer never outranks what is happening NOW: a refetch
   // keeps the previous manifest on screen, so "vX is available." would otherwise
   // sit there unchanged while a re-check ran, or failed.
-  if (input.checking) return "Checking for updates…";
   if (input.failure !== null) {
-    return describeCliShellFailure(input.failure, input.hostName);
+    return input.failure;
   }
+  // Debt outranks everything the CATALOG can say, including "checking": it is
+  // a fact about this host's own disk, true whether or not the registry
+  // answers, and the sentence names the one action that resolves it. Only a
+  // failed install attempt sits above it - that is the answer to something
+  // the person just pressed. When the catalog additionally offers something
+  // newer than the INSTALLED version, Update now stays beside this sentence
+  // (see the hook's `installedVersion`); the button speaks for itself.
+  if (input.activationDebt !== null) {
+    // Qualified when the record read behind it is not live: the debt was
+    // read, and still sets the baseline, but the page is not vouching for it
+    // right now (and withholds the Restart until it can).
+    return input.activationDebt.live
+      ? `v${input.activationDebt.installedVersion} is installed — restart host to finish.`
+      : `v${input.activationDebt.installedVersion} is installed (last known) — restart host to finish.`;
+  }
+  // Like debt, the remedy stays useful during the next check. The hook drops
+  // it when that check fails or returns a catalog that clears the refusal.
+  if (input.remedy !== null) return input.remedy.sentence;
+  if (input.checking) return "Checking for updates…";
   if (input.unreachable) {
     // Deliberately NOT a toast, which is what the imperative check's `onError`
     // raised. This read now fires on its own, and an automatic request that

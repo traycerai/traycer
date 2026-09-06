@@ -461,7 +461,7 @@ function SwitcherArtifactRow(props: {
   readonly onClose: () => void;
 }) {
   const { record, depth, active, records, epicId, tabId, onClose } = props;
-  const activate = useSwitcherActivate(epicId, tabId, onClose);
+  const activate = useSwitcherActivate(tabId, onClose);
 
   const onSelect = useCallback(() => {
     const type = record.type;

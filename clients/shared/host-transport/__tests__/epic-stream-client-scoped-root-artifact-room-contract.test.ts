@@ -109,6 +109,7 @@ function makeWsStreamClient(
     clientIdentity: TEST_CLIENT_IDENTITY,
     registry: hostStreamRpcRegistry,
     endpoint: () => mockLocalHostEntry,
+    hostId: mockLocalHostEntry.hostId,
     bearer: () => ctx?.credentials ?? null,
     auth: null,
     clock: null,

@@ -19,10 +19,6 @@ import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
 import { CURRENT_EPIC_VERSION } from "@traycer-clients/shared/epic/epic-version";
 
 import type { HostRpcRegistry } from "@/lib/host";
-// Draft-SEED keying only (see `ensureSubmissionDraft`): the effective host's
-// settings seed a brand-new draft; the create path re-keys on the placement
-// host. A pinned landing composer's seed defaults may come from the effective
-// host - a nuance, not a placement leak.
 import { hostQueryKeys } from "@/lib/query-keys";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { useEpicCreateForClient } from "@/hooks/epic/use-epic-create-mutation";
@@ -442,7 +438,7 @@ export function useLandingComposerActions(
         content: submittedContent,
         settings,
         worktreeIntent: workspaceContext.worktreeIntent,
-        placement: { kind: "active-tile" },
+        placement: null,
         messageId,
         clientActionId,
         createdAt: now,
@@ -839,7 +835,7 @@ export function useLandingComposerActions(
               tabId,
               parentId: null,
               title: "",
-              placement: { kind: "active-tile" },
+              placement: null,
               harnessId,
               model,
               reasoningEffort,

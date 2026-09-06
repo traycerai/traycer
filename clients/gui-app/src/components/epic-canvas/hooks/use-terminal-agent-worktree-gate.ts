@@ -64,7 +64,7 @@ export function useTerminalAgentWorktreeGate(
         tabId,
         parentId: null,
         title: "",
-        placement: { kind: "active-tile" },
+        placement: null,
         harnessId: input.harnessId,
         model: input.model,
         reasoningEffort: input.reasoningEffort,

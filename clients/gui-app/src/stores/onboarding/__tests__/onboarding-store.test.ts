@@ -111,6 +111,17 @@ describe("useOnboardingStore", () => {
     expect(useOnboardingStore.getState().step).toBe(0);
   });
 
+  it("reseat sets the position directly, clamped at 0, without touching completion", () => {
+    useOnboardingStore.setState({ completedAt: 123, step: 0 });
+
+    useOnboardingStore.getState().reseat(3);
+    expect(useOnboardingStore.getState().step).toBe(3);
+    expect(useOnboardingStore.getState().completedAt).toBe(123);
+
+    useOnboardingStore.getState().reseat(-1);
+    expect(useOnboardingStore.getState().step).toBe(0);
+  });
+
   it("persists completedAt to localStorage under its catalog persist key", async () => {
     useOnboardingStore.getState().complete();
 

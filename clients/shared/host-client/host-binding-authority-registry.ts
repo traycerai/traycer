@@ -1,5 +1,6 @@
 import type { HostRequestAuthority } from "../host-transport/host-messenger";
 import type { HostDirectoryEntry } from "./host-directory";
+import { StaleHostBindingAuthorityError } from "./host-binding-authority-error";
 import { isConfirmedTransportRefusal } from "./remote-fetcher";
 import { hasReadyRemoteSession } from "../host-transport/remote/active-remote-sessions";
 
@@ -41,14 +42,6 @@ interface HostTransportSnapshot {
    * torn down exactly when a re-dial would be refused and not one flip sooner.
    */
   readonly refused: boolean;
-}
-
-/** A routed entry no longer describes the directory's current transport. */
-export class StaleHostBindingAuthorityError extends Error {
-  constructor(hostId: string) {
-    super(`Host '${hostId}' changed before its request authority was captured`);
-    this.name = "StaleHostBindingAuthorityError";
-  }
 }
 
 /**

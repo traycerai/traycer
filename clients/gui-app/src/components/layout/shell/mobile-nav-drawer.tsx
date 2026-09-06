@@ -13,6 +13,7 @@ import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { isMobileApp } from "@/lib/mobile-app";
 import { computeInitials } from "@/lib/auth/compute-initials";
 import { resolvePlatformBaseUrl } from "@/lib/auth/platform-base-url";
+import { useOpenLink } from "@/lib/links/open-link";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { openNewEpicIntent } from "@/lib/commands/actions/new-epic";
 import { openEpicFromList } from "@/lib/commands/actions/open-epic-from-list";
@@ -56,6 +57,7 @@ export function MobileNavDrawer(): ReactNode {
   const profile = useAuthStore((state) => state.profile);
   const { openSettings } = useSystemTabModalActions();
   const runnerHost = useRunnerHost();
+  const openLink = useOpenLink();
   const [signOutOpen, setSignOutOpen] = useState(false);
   // Immutable after boot, so a plain read is stable for this component's
   // whole life - no resize can flip it the way the viewport hook flips.
@@ -81,14 +83,14 @@ export function MobileNavDrawer(): ReactNode {
   };
   const handleManageSubscription = () => {
     close();
-    void runnerHost
-      .openExternalLink(resolvePlatformBaseUrl(runnerHost.signInUrl))
-      .then(() => {
-        Analytics.getInstance().track(
-          AnalyticsEvent.SubscriptionManagementOpened,
-          { source: "direct_ui" },
-        );
-      });
+    void openLink(
+      resolvePlatformBaseUrl(runnerHost.signInUrl),
+      "account",
+      null,
+    );
+    Analytics.getInstance().track(AnalyticsEvent.SubscriptionManagementOpened, {
+      source: "direct_ui",
+    });
   };
 
   // The panel is identical on both primitives; only the frame around it

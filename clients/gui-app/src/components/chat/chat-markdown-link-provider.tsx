@@ -11,7 +11,6 @@ import {
 } from "@/markdown/links/markdown-link-context";
 import { useOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import { buildChatLinkPolicy } from "@/components/chat/build-chat-link-policy";
-import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 import { toast } from "sonner";
 
 interface ChatMarkdownLinkProviderProps {
@@ -36,13 +35,7 @@ export function ChatMarkdownLinkProvider({
   workspaceRoots,
   children,
 }: ChatMarkdownLinkProviderProps) {
-  const tileNavigation = useEpicTileNavigation();
-  const previewTileInTab = useCallback(
-    (targetTabId: string, node: EpicCanvasTileRef): void => {
-      tileNavigation.openTilePreviewInTab(targetTabId, node);
-    },
-    [tileNavigation],
-  );
+  const { openTile } = useEpicTileNavigation();
   const queryClient = useQueryClient();
   const tabHostId = useTabHostId();
   const tabHostClient = useTabHostClient();
@@ -91,13 +84,13 @@ export function ChatMarkdownLinkProvider({
       client: tabHostClient,
       workspaceClient: tabHostClient,
       navigate,
-      previewTileInTab,
+      openTile,
     });
   }, [
     epicHandle,
     navigate,
     openEpicId,
-    previewTileInTab,
+    openTile,
     queryClient,
     tabHostClient,
     tabHostId,

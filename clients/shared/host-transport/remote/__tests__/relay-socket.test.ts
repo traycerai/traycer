@@ -18,6 +18,7 @@ import {
   RELAY_PONG_TIMEOUT_MS,
   RELAY_WAKE_PROBE_TIMEOUT_MS,
 } from "../config";
+import { InsecureRelaySchemeError } from "@traycer/protocol/host-transport/relay-attach-url";
 import { RelaySocket, type RelaySocketHandlers } from "../relay-socket";
 // `RelaySocket.pokeKeepalive` runs the keepalive's staleness check off the
 // 25s interval schedule - the whole reason `RemoteSession.wake` can detect a
@@ -827,5 +828,52 @@ describe("RelaySocket adaptive half-open detection", () => {
       RELAY_AWAITING_PONG_TIMEOUT_MS + 2 * RELAY_PING_TICK_MS,
     );
     expect(handlers.onClose).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The sibling of the host leg's own gate (browser-security-hardening H11).
+ * Both legs build the same grant-in-query URL from the same configured base,
+ * so both refuse the same schemes - the shared assertion lives in
+ * `@traycer/protocol/host-transport/relay-attach-url`.
+ */
+describe("RelaySocket (client leg) attach-URL scheme gate", () => {
+  it("refuses a remote cleartext dial before any socket is created", () => {
+    const socket = new FakeSocket();
+    let created = 0;
+    const factory: IStreamWebSocketFactory = {
+      create: () => {
+        created += 1;
+        return socket;
+      },
+    };
+
+    expect(
+      () =>
+        new RelaySocket({
+          attachBaseUrl: "ws://relay.test/attach",
+          grantJws: "grant-jws",
+          webSocketFactory: factory,
+          handlers: buildHandlers(),
+        }),
+    ).toThrow(InsecureRelaySchemeError);
+    expect(created).toBe(0);
+  });
+
+  it("still dials wss: and cleartext loopback", () => {
+    for (const attachBaseUrl of [
+      "wss://relay.test/attach",
+      "ws://localhost:8787/attach",
+      "ws://127.0.0.1:8787/attach",
+    ]) {
+      const socket = new FakeSocket();
+      const relaySocket = new RelaySocket({
+        attachBaseUrl,
+        grantJws: "grant-jws",
+        webSocketFactory: { create: () => socket },
+        handlers: buildHandlers(),
+      });
+      relaySocket.close(1000, "test-teardown");
+    }
   });
 });

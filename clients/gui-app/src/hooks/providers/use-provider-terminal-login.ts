@@ -3,7 +3,10 @@ import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import { PROVIDER_DISPLAY_NAMES } from "@traycer/protocol/host/provider-schemas";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
-import { useProvidersStartTerminalLoginForClient } from "@/hooks/providers/use-providers-start-terminal-login-mutation";
+import {
+  useProvidersStartTerminalLoginForClient,
+  type StartTerminalLoginMutationResult,
+} from "@/hooks/providers/use-providers-start-terminal-login-mutation";
 import { useFocusEpicTerminalSession } from "@/components/epic-canvas/renderers/chat-tile-focus-terminal";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import {
@@ -20,15 +23,29 @@ import { recordProviderLoginTerminal } from "@/stores/providers/provider-login-t
  */
 const SIGN_IN_TERMINAL_CWD = "~";
 
-export interface ProviderTerminalLoginStarter {
-  readonly start: () => void;
-  readonly isPending: boolean;
-}
+/**
+ * The full mutation result plus the gesture that runs it, rather than a
+ * narrowed `{ start, isPending }`: a host-RPC hook returns its whole
+ * `UseMutationResult` (gui-app AGENTS.md), so a consumer can read `error`,
+ * `status` or `reset` without a second hook. `start` is what every consumer
+ * actually presses - it fills in the fixed request this gesture always sends.
+ */
+export type ProviderTerminalLoginStarter =
+  StartTerminalLoginMutationResult<undefined> & {
+    readonly start: () => void;
+  };
 
 /**
- * Runs the whole terminal sign-in gesture: ask the host for a fresh sign-in
- * terminal, retire the one it replaced, and put the new one in front of the
- * user in THIS view.
+ * Runs the whole terminal sign-in gesture for an EPIC surface: ask the host
+ * for a fresh sign-in terminal in this epic's scope, retire the one it
+ * replaced, and put the new one in front of the user in THIS view. The
+ * landing page's counterpart is `useLandingProviderStartTerminalLogin`, which
+ * lands the terminal in the landing panel instead of a canvas tile.
+ *
+ * Tab-bound by construction (`useTabHostClient` / `useTabHostId`): the tile
+ * this opens is bound to the tab's host, so the PTY has to be minted there.
+ * A surface whose composer resolves its host separately from the tab (the
+ * in-epic new-conversation modal) must not call this.
  *
  * Ordering is deliberate. Closing the retired tiles first and opening second is
  * one synchronous store sequence, so a close cannot land after the open; and
@@ -137,16 +154,17 @@ export function useProviderTerminalLogin(args: {
     ],
   );
 
-  const startTerminalLogin = useProvidersStartTerminalLoginForClient(
+  const startTerminalLogin = useProvidersStartTerminalLoginForClient<undefined>(
     tabClient,
     onSuccess,
+    undefined,
   );
 
   const start = useCallback((): void => {
     if (epicId === null || viewTabId === null) return;
     startTerminalLogin.mutate({
       providerId,
-      epicId,
+      scope: { kind: "epic", epicId },
       // The host resizes to these while the shell's output is still buffered,
       // so its first redraw is correctly sized. A concrete size beats guessing:
       // the tile resizes itself on mount anyway.
@@ -155,5 +173,5 @@ export function useProviderTerminalLogin(args: {
     });
   }, [epicId, providerId, startTerminalLogin, viewTabId]);
 
-  return { start, isPending: startTerminalLogin.isPending };
+  return { ...startTerminalLogin, start };
 }

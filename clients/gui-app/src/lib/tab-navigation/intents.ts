@@ -11,6 +11,7 @@ import type { SettingsSectionId } from "@/lib/settings-sections";
 import type { NestedFocusTarget } from "@/lib/epic-nested-focus-route";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
+import type { TileOpenGesture } from "@/lib/canvas/tile-open/intent";
 
 export interface EpicRouteFocus {
   readonly focusedAt: number | undefined;
@@ -24,12 +25,13 @@ export type EpicPostResolvePreparation =
       readonly kind: "open-tile";
       readonly node: EpicCanvasTileRef;
       /**
-       * Open as a preview tab (italic, evicted by the next preview, promoted
-       * by a double-click / deliberate re-open / drag) rather than a permanent
-       * one. Explicit at every construction site: whether a jump-to-owner is a
+       * The gesture the open is resolved with. `single` lands a preview tab
+       * (italic, evicted by the next preview, promoted by a double-click /
+       * deliberate re-open / drag); anything deliberate lands a permanent one.
+       * Explicit at every construction site: whether a jump-to-owner is a
        * glance or a keep is the caller's judgement, not a default.
        */
-      readonly preview: boolean;
+      readonly gesture: TileOpenGesture;
     }
   | {
       readonly kind: "activate-tile";

@@ -35,6 +35,12 @@ interface OnboardingState {
   readonly complete: () => void;
   /** Return to the first act without changing completion state. */
   readonly restart: () => void;
+  /**
+   * Put the position on `step` directly: the page's re-seat when the act
+   * list changes under the user and the act they were on now sits at another
+   * index. Not a navigation, so it records nothing and completes nothing.
+   */
+  readonly reseat: (step: number) => void;
   /** Clear completion and return to the first act. */
   readonly reset: () => void;
 }
@@ -72,6 +78,7 @@ export const useOnboardingStore = create<OnboardingState>()(
         }),
       complete: () => set({ completedAt: Date.now() }),
       restart: () => set({ step: 0 }),
+      reseat: (step) => set({ step: Math.max(0, step) }),
       reset: () => set({ completedAt: null, step: 0 }),
     }),
     {

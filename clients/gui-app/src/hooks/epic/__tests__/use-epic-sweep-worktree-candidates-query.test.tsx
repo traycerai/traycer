@@ -551,7 +551,7 @@ describe("useEpicSweepWorktreeCandidatesForClient", () => {
     expect(messenger.calls).toHaveLength(0);
   });
 
-  it("loads listHolders for in-use rows and keeps a digest for consent", async () => {
+  it("loads listHolders for in-use rows as informative context", async () => {
     const holder: WorktreeBusyHolder = {
       ownerRef: {
         epicId: "epic-1",
@@ -585,13 +585,11 @@ describe("useEpicSweepWorktreeCandidatesForClient", () => {
       note: "in-use",
       disabled: false,
       holdersStatus: "ready",
-      holdersRevision:
-        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       holders: [holder],
     });
   });
 
-  it("treats a missing holdersRevision as the unknown fallback", async () => {
+  it("treats holders without a revision as ready context", async () => {
     const holder: WorktreeBusyHolder = {
       ownerRef: {
         epicId: "epic-1",
@@ -615,12 +613,11 @@ describe("useEpicSweepWorktreeCandidatesForClient", () => {
     mockActTimeProbe(probed, probed);
     const { result } = renderCandidates(["epic-1"]);
     await waitFor(() => {
-      expect(result.current.rows[0]?.holdersStatus).toBe("unknown");
+      expect(result.current.rows[0]?.holdersStatus).toBe("ready");
     });
     expect(result.current.rows[0]).toMatchObject({
       disabled: false,
-      holders: [],
-      holdersRevision: undefined,
+      holders: [holder],
     });
   });
 });

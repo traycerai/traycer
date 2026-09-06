@@ -1228,7 +1228,10 @@ describe("openTileInPane (non-dedup, target-scoped open)", () => {
     let state = openPinned(createEmptyCanvas(), SPEC_A);
     const paneId = rootPane(state).id;
 
-    state = openTileInPane(state, paneId, SPEC_A);
+    state = openTileInPane(state, paneId, SPEC_A, {
+      mode: "permanent",
+      index: null,
+    });
     const pane = rootPane(state);
 
     // Same content id appears twice; the two tabs differ only by instanceId.
@@ -1259,7 +1262,10 @@ describe("openTileInPane (non-dedup, target-scoped open)", () => {
     expect(state.activePaneId).not.toBe(targetPaneId);
 
     // Open into the NON-active original pane.
-    state = openTileInPane(state, targetPaneId, SPEC_C);
+    state = openTileInPane(state, targetPaneId, SPEC_C, {
+      mode: "permanent",
+      index: null,
+    });
 
     const target = findPaneById(state.root, targetPaneId);
     expect(target === null ? null : paneTabIds(state, target)).toEqual([
@@ -1273,7 +1279,12 @@ describe("openTileInPane (non-dedup, target-scoped open)", () => {
 
   it("is a no-op when the target pane does not exist", () => {
     const state = openPinned(createEmptyCanvas(), SPEC_A);
-    expect(openTileInPane(state, "missing-pane", SPEC_B)).toBe(state);
+    expect(
+      openTileInPane(state, "missing-pane", SPEC_B, {
+        mode: "permanent",
+        index: null,
+      }),
+    ).toBe(state);
   });
 });
 
@@ -1324,7 +1335,10 @@ describe("openTileInPane fill-in-place (blank replacement)", () => {
     const blankIndex = 1;
 
     // Picking content while the blank is active replaces it at the same index.
-    state = openTileInPane(state, paneId, SPEC_B);
+    state = openTileInPane(state, paneId, SPEC_B, {
+      mode: "permanent",
+      index: null,
+    });
     const pane = rootPane(state);
 
     expect(pane.tabInstanceIds).toHaveLength(2);
@@ -1340,7 +1354,10 @@ describe("openTileInPane fill-in-place (blank replacement)", () => {
     let state = openPinned(createEmptyCanvas(), SPEC_A);
     const paneId = rootPane(state).id;
 
-    state = openTileInPane(state, paneId, SPEC_B);
+    state = openTileInPane(state, paneId, SPEC_B, {
+      mode: "permanent",
+      index: null,
+    });
     const pane = rootPane(state);
     expect(paneTabIds(state, pane)).toEqual([SPEC_A.id, SPEC_B.id]);
   });

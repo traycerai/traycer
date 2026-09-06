@@ -95,6 +95,11 @@ function stageQuietHost(markers: readonly Marker[]): void {
   }));
   vi.doMock("../../store/cli-lock", () => ({
     isProcessAlive: () => false,
+    // The doctor's marker-lock probe reads through this facade too.
+    probeCliScopedFileLock: async () => ({ kind: "absent" }),
+    probeCliScopedFileLockArbitration: async () => ({ kind: "free" }),
+    cliScopedFileLockAgeMs: async () => null,
+    CLI_SCOPED_FILE_LOCK_EMPTY_GRACE_MS: 5000,
   }));
 }
 

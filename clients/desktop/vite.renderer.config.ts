@@ -5,6 +5,7 @@ import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import react, { reactCompilerPreset } from "@vitejs/plugin-react";
 import { resolve } from "path";
 import { defineConfig, type HtmlTagDescriptor, type UserConfig } from "vite";
+import { pdfjsAssets } from "../gui-app/vite/pdfjs-assets";
 import { CONTENT_SECURITY_POLICY } from "./src/shared/content-security-policy";
 
 const rendererEnvPrefix = [
@@ -70,6 +71,7 @@ export default defineConfig((): UserConfig => {
       }),
       react(),
       tailwindcss(),
+      pdfjsAssets(),
       babel({ presets: [reactCompilerPreset()] }).then((plugin) => ({
         ...plugin,
         enforce: "post" as const,

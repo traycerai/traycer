@@ -13,6 +13,7 @@ import type {
   DesktopSupportLogTailResult,
   DesktopSupportSnapshot,
 } from "@/lib/windows/types";
+import type { DesktopJsHeapBreakdown } from "@/lib/resources/desktop-app-resource-usage";
 
 /**
  * Fixtures shared by the two Diagnostics suites.
@@ -41,7 +42,10 @@ import type {
  * branch under a test that only ever checked the heading.
  */
 interface TestHeapSnapshotBridge {
-  readonly takeHeapSnapshot: () => Promise<string | null>;
+  readonly takeHeapSnapshot: (() => Promise<string | null>) | undefined;
+  readonly measureJsHeaps:
+    | (() => Promise<DesktopJsHeapBreakdown | null>)
+    | undefined;
 }
 
 interface TestRunnerPlatform {
@@ -68,7 +72,33 @@ function mergePlatform(patch: Partial<TestRunnerPlatform>): void {
 export function installHeapSnapshotBridge(
   takeHeapSnapshot: () => Promise<string | null>,
 ): void {
-  mergePlatform({ diagnostics: { takeHeapSnapshot } });
+  const current: TestHeapSnapshotBridge = globalWithRunnerHost.runnerHost
+    ?.platform.diagnostics ?? {
+    takeHeapSnapshot: undefined,
+    measureJsHeaps: undefined,
+  };
+  mergePlatform({
+    diagnostics: { ...current, takeHeapSnapshot },
+  });
+}
+
+/**
+ * The JS-heap-breakdown half of `platform.diagnostics` — merged alongside
+ * `takeHeapSnapshot`, never in place of it, for the same reason the doc
+ * comment above states: replacing the whole `diagnostics` slot would
+ * silently uninstall whichever of the two bridges this call did not name.
+ */
+export function installJsHeapBridge(
+  measureJsHeaps: () => Promise<DesktopJsHeapBreakdown | null>,
+): void {
+  const current: TestHeapSnapshotBridge = globalWithRunnerHost.runnerHost
+    ?.platform.diagnostics ?? {
+    takeHeapSnapshot: undefined,
+    measureJsHeaps: undefined,
+  };
+  mergePlatform({
+    diagnostics: { ...current, measureJsHeaps },
+  });
 }
 
 export function defaultSnapshot(): LogLevelsSnapshot {

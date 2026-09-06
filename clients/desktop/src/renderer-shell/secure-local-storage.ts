@@ -67,6 +67,22 @@ function getEncryptStorage(): EncryptStorage {
     encryptStorage = new EncryptStorage(ENCRYPTION_KEY, {
       storageType: "localStorage",
       encAlgorithm: "AES",
+      // `ISecureStorage.get` returns exactly the string `set` was handed -
+      // this adapter stores opaque strings and every caller parses its own.
+      //
+      // encrypt-storage defaults this to `false`, and then `getItem`
+      // JSON-parses whatever it decrypted. For a JWT (the legacy token slots)
+      // the parse throws and the raw string comes back, so the default LOOKED
+      // correct for years. Hand it a value that happens to BE valid JSON and
+      // it returns an object instead - which `readEncryptedItem` below reports
+      // as `null`, because a non-string cannot be the string it promised. A
+      // stored value silently reads as absent, with no throw and no log.
+      //
+      // That is not hypothetical: it is exactly what happened to the auth
+      // provisional-session snapshot (a JSON object, written and then never
+      // readable), and it cost a whole boot optimisation with no error
+      // anywhere. Parsing is the caller's business; this layer moves strings.
+      doNotParseValues: true,
     });
   }
   return encryptStorage;

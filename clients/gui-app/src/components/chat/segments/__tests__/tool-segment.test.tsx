@@ -17,10 +17,11 @@ import {
   useSetChatFindForcedOpen,
 } from "@/stores/chats/chat-find-force-store-context";
 import { useToolOpenStore } from "@/stores/chats/tool-open-store";
+import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 
 const PREFIX_RECEIVER_ID = "9600b202-1111-4111-8111-111111111111";
 const tileNavigationMocks = vi.hoisted(() => ({
-  openTileInEpic: vi.fn(),
+  openTile: vi.fn(),
 }));
 
 function render(ui: ReactNode) {
@@ -75,7 +76,7 @@ vi.mock("@/lib/epic-selectors", () => ({
 
 vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
   useEpicTileNavigation: () => ({
-    openTileInEpic: tileNavigationMocks.openTileInEpic,
+    openTile: tileNavigationMocks.openTile,
   }),
 }));
 
@@ -116,7 +117,7 @@ function ForceA2ASendButton(props: ForceA2ASendButtonProps) {
 describe("<ToolSegment /> A2A send-message rendering", () => {
   afterEach(() => {
     useToolOpenStore.getState().reset("default");
-    tileNavigationMocks.openTileInEpic.mockClear();
+    tileNavigationMocks.openTile.mockClear();
     cleanup();
   });
 
@@ -344,15 +345,23 @@ describe("<ToolSegment /> A2A send-message rendering", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Prefix Receiver" }));
 
-    expect(tileNavigationMocks.openTileInEpic).toHaveBeenCalledWith(
-      "epic-1",
-      expect.objectContaining({
+    // The header link names the EPIC and asks for a deliberate, de-duped open;
+    // it carries no mouse event of its own (the shared `AgentHeaderLink` also
+    // fires on Enter/Space), so the modifier triple is absent by construction.
+    expect(tileNavigationMocks.openTile).toHaveBeenCalledWith({
+      node: expect.objectContaining({
         id: PREFIX_RECEIVER_ID,
         type: "chat",
         name: "Prefix Receiver",
         hostId: "host-1",
-      }),
-    );
+      }) as EpicCanvasTileRef,
+      target: { epicId: "epic-1" },
+      gesture: "explicit",
+      modifiers: null,
+      placement: null,
+      dedupe: true,
+      source: "direct_ui",
+    });
   });
 });
 

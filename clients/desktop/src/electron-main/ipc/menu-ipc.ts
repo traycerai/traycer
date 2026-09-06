@@ -5,6 +5,7 @@ import {
   isDesktopTopLevelMenuId,
 } from "../../ipc-contracts/window-types";
 import type { RunnerIpcBridge } from "./runner-ipc-bridge";
+import { cssPixelsToWindowDips } from "../windows/css-pixel-scale";
 
 /**
  * Opens a submenu from Electron's canonical application menu for the visible
@@ -43,9 +44,7 @@ export function registerMenuIpc(bridge: RunnerIpcBridge): void {
 }
 
 export function scaleMenuAnchor(value: number, zoomFactor: number): number {
-  const safeZoomFactor =
-    Number.isFinite(zoomFactor) && zoomFactor > 0 ? zoomFactor : 1;
-  return Math.round(Math.max(0, value) * safeZoomFactor);
+  return cssPixelsToWindowDips(Math.max(0, value), zoomFactor);
 }
 
 function readMenuAnchor(value: unknown, axis: "x" | "y"): number {

@@ -43,7 +43,7 @@ import { useProvidersAwaitLogin } from "@/hooks/providers/use-providers-await-lo
 import { useProvidersSubmitLoginCode } from "@/hooks/providers/use-providers-submit-login-code-mutation";
 import { useProvidersTouchLogin } from "@/hooks/providers/use-providers-touch-login-mutation";
 import { useTabRefreshProviders } from "@/hooks/providers/use-tab-refresh-providers";
-import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link-mutation";
+import { useOpenLink } from "@/lib/links/open-link";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { HostRuntimeContext, useHostBinding } from "@/lib/host/runtime";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
@@ -51,8 +51,16 @@ import { ReportIssueAction } from "@/components/report-issue/report-issue-action
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { handleSignInLinkCopyError } from "@/components/settings/panels/provider-sign-in-link";
 import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
-import { providerSupportsTerminalLogin } from "@/components/providers/provider-signin-availability";
+import {
+  providerSupportsTerminalLogin,
+  providerTerminalLoginPackBlock,
+} from "@/components/providers/provider-signin-availability";
+import {
+  providerPackPreparingLabel,
+  type ProviderPackPreparing,
+} from "@/components/providers/provider-pack-readiness";
 import { useProviderTerminalLogin } from "@/hooks/providers/use-provider-terminal-login";
+import { providerTerminalGuidance } from "@/lib/providers/provider-setup-guidance";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
 
 function noop(): void {}
@@ -232,6 +240,13 @@ function deriveLoginOptions(
   readonly envVars: ReadonlyArray<string>;
   readonly canOauth: boolean;
   readonly canTerminalLogin: boolean;
+  /**
+   * The pack state blocking the terminal login right now, or null. A terminal
+   * login spawns the provider's CLI, so a pack that cannot spawn yet turns
+   * the row's button into a request whose only answer is the host's
+   * `preparing` error; the row shows the wait instead.
+   */
+  readonly terminalLoginPackBlock: ProviderPackPreparing | null;
 } {
   const loginCapability: ProviderLoginCapability | null =
     state !== null ? state.loginCapability : null;
@@ -240,24 +255,69 @@ function deriveLoginOptions(
       ? loginCapability.token.vars
       : [];
   const oauthArgs = loginCapability !== null ? loginCapability.oauthArgs : null;
-  // Terminal-login providers HAVE real `oauthArgs` - that is the command the
-  // terminal runs - so they pass the check below and must be excluded first,
-  // or the banner offers a headless button the host refuses. No `isLocalHost`
-  // requirement: unlike browser OAuth there is no loopback here, so a device
-  // flow works just as well against a remote host. The `oauthArgs` requirement
-  // lives INSIDE the helper, so this surface and the two gate helpers cannot
-  // answer differently for the same provider.
+  // Terminal login is decided by `terminalLogin` alone, and it excludes the
+  // headless button whatever `oauthArgs` says: Copilot carries real ones (the
+  // host refuses them headlessly), Qwen / Droid / OMP / OpenCode carry `null`
+  // (they have no headless command; the host launches the CLI itself). No
+  // `isLocalHost` requirement: unlike browser OAuth there is no loopback here,
+  // so a device flow works just as well against a remote host. ONE helper for
+  // this surface and the two gate helpers, so they cannot answer differently
+  // for the same provider.
   const canTerminalLogin = providerSupportsTerminalLogin(loginCapability);
-  // A real login needs a non-empty subcommand. `null` = no OAuth; `[]` is also
-  // inert because the host would spawn the bare binary under piped stdio, which
-  // for an interactive-TUI CLI (e.g. droid) opens no browser and hangs the
-  // banner on "Waiting for browser sign-in…".
+  // A real HEADLESS login needs a non-empty subcommand. `null` = no OAuth;
+  // `[]` is also inert because the host would spawn the bare binary under
+  // piped stdio, which for an interactive-TUI CLI (e.g. droid) opens no
+  // browser and hangs the banner on "Waiting for browser sign-in…". (The
+  // terminal row above has no such constraint - a TUI is what it is for.)
   const canOauth =
     !canTerminalLogin &&
     isLocalHost &&
     oauthArgs !== null &&
     oauthArgs.length > 0;
-  return { envVars, canOauth, canTerminalLogin };
+  return {
+    envVars,
+    canOauth,
+    canTerminalLogin,
+    terminalLoginPackBlock: canTerminalLogin
+      ? providerTerminalLoginPackBlock(state)
+      : null,
+  };
+}
+
+/**
+ * What the terminal sign-in slot shows, decided in one place.
+ *
+ * Terminal sign-in needs a canvas view to open the terminal into. Outside one
+ * (the home composer) the banner falls through to the paste form / CLI stub
+ * rather than drawing a button that cannot deliver a terminal. A provider
+ * whose pack cannot spawn yet keeps its ROW - the wait is the thing to show -
+ * but not its button. The `button` arm carries the ids it narrowed, so the
+ * row it feeds cannot be handed a null view.
+ */
+function deriveTerminalLoginRow(input: {
+  readonly canTerminalLogin: boolean;
+  readonly terminalLoginPackBlock: ProviderPackPreparing | null;
+  readonly epicId: string | null;
+  readonly viewTabId: string | null;
+}):
+  | { readonly kind: "none" }
+  | {
+      readonly kind: "button";
+      readonly epicId: string;
+      readonly viewTabId: string;
+    }
+  | { readonly kind: "preparing"; readonly preparing: ProviderPackPreparing } {
+  if (
+    !input.canTerminalLogin ||
+    input.epicId === null ||
+    input.viewTabId === null
+  ) {
+    return { kind: "none" };
+  }
+  if (input.terminalLoginPackBlock !== null) {
+    return { kind: "preparing", preparing: input.terminalLoginPackBlock };
+  }
+  return { kind: "button", epicId: input.epicId, viewTabId: input.viewTabId };
 }
 
 /**
@@ -381,15 +441,14 @@ function ReauthBannerInner({
   readonly viewTabId: string | null;
 }) {
   const providerLabel = PROVIDER_DISPLAY_NAMES[providerId];
-  const { envVars, canOauth, canTerminalLogin } = deriveLoginOptions(
-    state,
-    isLocalHost,
-  );
-  // Terminal sign-in needs a canvas view to open the terminal into. Outside
-  // one (the home composer) fall through to the paste form / CLI stub rather
-  // than drawing a button that cannot deliver a terminal.
-  const showTerminalLogin =
-    canTerminalLogin && epicId !== null && viewTabId !== null;
+  const { envVars, canOauth, canTerminalLogin, terminalLoginPackBlock } =
+    deriveLoginOptions(state, isLocalHost);
+  const terminalRow = deriveTerminalLoginRow({
+    canTerminalLogin,
+    terminalLoginPackBlock,
+    epicId,
+    viewTabId,
+  });
   // Providers with a host-side encrypted API-key store (Cursor / Droid) save the
   // pasted key as that secret (`providers.setApiKey`) rather than a plaintext env
   // override, matching how Settings > Providers stores it.
@@ -400,7 +459,7 @@ function ReauthBannerInner({
   // vars. Direct the user to the CLI.
   if (
     !canOauth &&
-    !showTerminalLogin &&
+    terminalRow.kind === "none" &&
     envVars.length === 0 &&
     !apiKeySupported
   ) {
@@ -430,19 +489,23 @@ function ReauthBannerInner({
           loginCapability={state?.loginCapability ?? null}
         />
       ) : null}
-      {showTerminalLogin ? (
+      {terminalRow.kind === "button" ? (
         <TerminalLoginRow
           providerId={providerId}
-          providerLabel={providerLabel}
-          epicId={epicId}
-          viewTabId={viewTabId}
+          epicId={terminalRow.epicId}
+          viewTabId={terminalRow.viewTabId}
         />
+      ) : null}
+      {terminalRow.kind === "preparing" ? (
+        <span role="status" className="text-ui-xs text-muted-foreground">
+          {providerPackPreparingLabel(terminalRow.preparing, providerLabel)}
+        </span>
       ) : null}
       {envVars.length > 0 || apiKeySupported ? (
         <TokenReauthForm
           providerId={providerId}
           envVars={envVars}
-          secondary={canOauth || showTerminalLogin}
+          secondary={canOauth || terminalRow.kind === "button"}
           apiKeySupported={apiKeySupported}
         />
       ) : null}
@@ -468,12 +531,10 @@ function ReauthBannerInner({
  */
 function TerminalLoginRow({
   providerId,
-  providerLabel,
   epicId,
   viewTabId,
 }: {
   readonly providerId: ProviderId;
-  readonly providerLabel: string;
   readonly epicId: string;
   readonly viewTabId: string;
 }) {
@@ -485,6 +546,15 @@ function TerminalLoginRow({
     // host itself reports as replaced.
     launchedFromTile: null,
   });
+  // ONE resolver with the picker's setup CTA, never an inline fallback: the
+  // generic sentences are only generic until a provider needs different ones.
+  // A terminal flow that is a credential WIZARD rather than a device-code
+  // sign-in (Reasonix's `setup` asks for an API key) and one that opens the
+  // CLI's own UI (Qwen's `/auth`, Droid's first-run prompt, OMP's
+  // `login <provider>`, OpenCode's picker) each need their own label and hint
+  // - "prints a sign-in code" is false for both, and this is the copy the
+  // user reads while deciding what to do next.
+  const guidance = providerTerminalGuidance(providerId);
   return (
     <div className="flex flex-col gap-1.5">
       <div className="flex flex-wrap items-center gap-2">
@@ -494,13 +564,12 @@ function TerminalLoginRow({
           disabled={terminalLogin.isPending}
           onClick={terminalLogin.start}
         >
-          Sign in from a terminal
+          {guidance.terminalActionLabel}
           {terminalLogin.isPending ? <MutedAgentSpinner /> : null}
         </Button>
       </div>
       <span className="text-ui-xs text-muted-foreground">
-        {providerLabel} prints a sign-in code that only exists in the terminal.
-        Complete the sign-in there, then use Refresh above.
+        {guidance.terminalHint}
       </span>
     </div>
   );
@@ -624,7 +693,7 @@ function OAuthWaitingRow({
   readonly cancelDisabled: boolean;
   readonly onCancel: () => void;
 }) {
-  const openExternalLink = useRunnerOpenExternalLink();
+  const openLink = useOpenLink();
   const { copied, copy } = useClipboardCopy({
     resetMs: 1600,
     onSuccess: null,
@@ -657,7 +726,9 @@ function OAuthWaitingRow({
           <Button
             size="sm"
             variant="secondary"
-            onClick={() => openExternalLink.mutate(loginUrl)}
+            onClick={() => {
+              void openLink(loginUrl, "auth", null);
+            }}
           >
             <ExternalLink className="size-3.5" />
             Open browser again

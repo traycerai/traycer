@@ -119,7 +119,7 @@ function baseArgs(overrides: Partial<StartSideChatArgs>): StartSideChatArgs {
     settings: SETTINGS,
     accountContext: { type: "PERSONAL" },
     worktreeIntent: null,
-    placement: { kind: "active-tile" },
+    placement: null,
     createChat: recorder.createChat,
     onHistoryUnavailable: vi.fn(),
     ...overrides,
@@ -169,7 +169,7 @@ describe("startSideChat", () => {
         baseArgs({
           createChat: recorder.createChat,
           worktreeIntent: WORKTREE_INTENT,
-          placement: { kind: "split", groupId: "pane-1", position: "right" },
+          placement: { kind: "split", paneId: "pane-1", edge: "right" },
         }),
       );
 
@@ -198,8 +198,8 @@ describe("startSideChat", () => {
       expect(handoff?.status).toBe("pending");
       expect(handoff?.placement).toEqual({
         kind: "split",
-        groupId: "pane-1",
-        position: "right",
+        paneId: "pane-1",
+        edge: "right",
       });
       expect(handoff?.messageId).toBe(request.initialMessage?.messageId);
       expect(handoff?.clientActionId).toBe(
@@ -393,28 +393,24 @@ describe("sideChatPlacementForTile", () => {
     const placement = sideChatPlacementForTile(TAB_ID, SOURCE_CHAT_ID);
     expect(placement).toEqual({
       kind: "split",
-      groupId: paneId,
-      position: "right",
+      paneId,
+      edge: "right",
     });
   });
 
-  it("falls back to active-tile for an unknown tab", () => {
-    expect(sideChatPlacementForTile("unknown-tab", SOURCE_CHAT_ID)).toEqual({
-      kind: "active-tile",
-    });
+  it("falls back to null (configured placement) for an unknown tab", () => {
+    expect(sideChatPlacementForTile("unknown-tab", SOURCE_CHAT_ID)).toBeNull();
   });
 
-  it("falls back to active-tile when the chat is not on the canvas", () => {
+  it("falls back to null (configured placement) when the chat is not on the canvas", () => {
     useEpicCanvasStore
       .getState()
       .seedEpic(EPIC_ID, { tabId: TAB_ID, name: "Epic" }, []);
 
-    expect(sideChatPlacementForTile(TAB_ID, SOURCE_CHAT_ID)).toEqual({
-      kind: "active-tile",
-    });
+    expect(sideChatPlacementForTile(TAB_ID, SOURCE_CHAT_ID)).toBeNull();
   });
 
-  it("falls back to active-tile on the mobile app regardless of canvas state", () => {
+  it("falls back to null (configured placement) on the mobile app regardless of canvas state", () => {
     useEpicCanvasStore
       .getState()
       .seedEpic(EPIC_ID, { tabId: TAB_ID, name: "Epic" }, []);
@@ -427,8 +423,6 @@ describe("sideChatPlacementForTile", () => {
     });
     setMobileApp(true);
 
-    expect(sideChatPlacementForTile(TAB_ID, SOURCE_CHAT_ID)).toEqual({
-      kind: "active-tile",
-    });
+    expect(sideChatPlacementForTile(TAB_ID, SOURCE_CHAT_ID)).toBeNull();
   });
 });

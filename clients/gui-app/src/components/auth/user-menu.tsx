@@ -19,6 +19,8 @@ import { ExternalLink, LogOut, Settings } from "lucide-react";
 import { useState } from "react";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { formatChordForDisplay } from "@/lib/keybindings/chord";
+import { ignoreError } from "@/lib/browser-view/ignore-error";
+import { useOpenLink } from "@/lib/links/open-link";
 import { useBindingForAction } from "@/stores/settings/keybinding-store";
 
 export interface UserMenuProps {
@@ -36,6 +38,7 @@ export interface UserMenuProps {
  */
 export function UserMenu(props: UserMenuProps) {
   const runnerHost = useRunnerHost();
+  const openLink = useOpenLink();
   const [open, setOpen] = useState<boolean>(false);
   const [signOutOpen, setSignOutOpen] = useState<boolean>(false);
   const settingsChord = useBindingForAction("app.settings.open");
@@ -126,14 +129,17 @@ export function UserMenu(props: UserMenuProps) {
             data-testid="user-menu-manage-subscription"
             onSelect={() => {
               setOpen(false);
-              void runnerHost
-                .openExternalLink(manageSubscriptionUrl)
-                .then(() => {
+              // Tracked on the RESOLVED open only: a failed OS handoff is not
+              // a subscription-management visit (R11). The failure toast is
+              // the link seam's, so the rejection is ignored here.
+              void openLink(manageSubscriptionUrl, "account", null).then(
+                () =>
                   Analytics.getInstance().track(
                     AnalyticsEvent.SubscriptionManagementOpened,
                     { source: "direct_ui" },
-                  );
-                });
+                  ),
+                ignoreError,
+              );
             }}
           >
             <ExternalLink className="size-3.5" />

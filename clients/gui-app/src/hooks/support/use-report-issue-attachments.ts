@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   MAX_REPORT_IMAGE_BYTES,
   MAX_REPORT_IMAGES,
+  MAX_REPORT_LOG_ATTACHMENTS,
   REPORT_IMAGE_READ_TIMEOUT_MS,
   reportImageMediaTypeForMimeType,
   reportImagesExceedBudget,
@@ -192,7 +193,10 @@ async function ingestOneFile(
     return false;
   }
   if (
-    reportImagesExceedBudget(totalImageBytes(ctx.imagesRef.current) + file.size)
+    reportImagesExceedBudget(
+      totalImageBytes(ctx.imagesRef.current) + file.size,
+      MAX_REPORT_LOG_ATTACHMENTS,
+    )
   ) {
     ctx.setRejection(rejectionFor("budget", file.name));
     return false;
@@ -229,6 +233,7 @@ async function ingestOneFile(
   if (
     reportImagesExceedBudget(
       totalImageBytes(ctx.imagesRef.current) + bytes.byteLength,
+      MAX_REPORT_LOG_ATTACHMENTS,
     )
   ) {
     ctx.setRejection(rejectionFor("budget", file.name));

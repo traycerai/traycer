@@ -19,7 +19,7 @@ import { useHostScopedProvidersAwaitLogin } from "@/hooks/providers/use-provider
 import { useProvidersCancelLogin } from "@/hooks/providers/use-providers-cancel-login-mutation";
 import { useProvidersSubmitLoginCode } from "@/hooks/providers/use-providers-submit-login-code-mutation";
 import { useProvidersTouchLogin } from "@/hooks/providers/use-providers-touch-login-mutation";
-import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link-mutation";
+import { useOpenLink } from "@/lib/links/open-link";
 import { redactEmail } from "@/lib/providers/redact-email";
 import {
   AddProfileIdentityStep,
@@ -62,7 +62,7 @@ export function ProviderProfileReauthPanel({
   onCancel,
   onDone,
 }: ProviderProfileReauthPanelProps): ReactNode {
-  const openExternalLink = useRunnerOpenExternalLink();
+  const openLink = useOpenLink();
   const startLogin = useProvidersStartLogin();
   const awaitLogin = useHostScopedProvidersAwaitLogin();
   const cancelLogin = useProvidersCancelLogin();
@@ -176,7 +176,9 @@ export function ProviderProfileReauthPanel({
         identityChanged={identityChanged}
         emailRevealed={emailRevealed}
         setEmailRevealed={setEmailRevealed}
-        onOpenExternalLink={(url) => openExternalLink.mutate(url)}
+        onOpenExternalLink={(url) => {
+          void openLink(url, "auth", null);
+        }}
         onCancel={cancel}
         onRetry={start}
         onSignInAgain={signInAgain}

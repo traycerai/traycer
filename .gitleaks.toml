@@ -76,3 +76,12 @@ paths = [
   '''^clients/gui-app/src/components/epic-canvas/pr/__tests__/pr-local-diff-body\.test\.tsx$''',
 ]
 regexes = ['''^YmFkLf(?:8|4)udHh0$''']
+
+[[allowlists]]
+description = "Self-describing base64 placeholders in the browser-session key-custody suite: `d3JhcHBlZEtleQ==` decodes to the ASCII string `wrappedKey` and `cmF3S2V5` to `rawKey`. They are the payloads of `storeKeyWrapRequest` / `storeKeyUnwrapRequest` frames, and the assertions alongside them match on the value verbatim (`user-1:host-1:cmF3S2V5`), which is what a placeholder can do and a credential cannot. The generic-api-key rule matches on base64 shape and entropy only. Third instance of the pattern the two entries above describe: `fetch-depth: 0` makes every PR's scan read the in-flight branch that introduces them (`feat/browser-security-hardening`), so this one fixture fails the gitleaks job on every open PR in the repo and cannot wait for that branch to merge. Scoped to the exact values and the one source path so unrelated findings stay reportable."
+condition = "AND"
+regexTarget = "secret"
+paths = [
+  '''^clients/desktop/src/electron-main/browser-sessions/__tests__/browser-sessions-owner\.test\.ts$''',
+]
+regexes = ['''^(?:d3JhcHBlZEtleQ==|cmF3S2V5)$''']

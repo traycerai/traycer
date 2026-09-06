@@ -11,6 +11,7 @@ import type {
   PrCommitsSection,
   PrDetailCore,
 } from "@traycer/protocol/host/pr-schemas";
+import type { LinkClickEvent } from "@/lib/links/open-link";
 import { PrDetailCommits } from "@/components/epic-canvas/pr/pr-detail-commits";
 
 const writeText = vi.hoisted(() =>
@@ -79,7 +80,9 @@ function section(commits: readonly PrCommit[]): PrCommitsSection {
   };
 }
 
-function renderCommits(onOpenCommit: (url: string) => void): void {
+function renderCommits(
+  onOpenCommit: (url: string, event: LinkClickEvent) => void,
+): void {
   render(
     <PrDetailCommits
       core={core()}
@@ -122,14 +125,16 @@ describe("PrDetailCommits", () => {
     expect(opened).toEqual([]);
   });
 
-  it("keeps the row itself opening the commit on GitHub", () => {
-    const opened: string[] = [];
-    renderCommits((url) => opened.push(url));
+  it("keeps the row itself opening the commit on GitHub, passing the click event through", () => {
+    const opened: [string, LinkClickEvent][] = [];
+    renderCommits((url, event) => opened.push([url, event]));
 
     fireEvent.click(screen.getByLabelText(/Open commit e346a92 on GitHub/u));
-    expect(opened).toEqual([
+    expect(opened).toHaveLength(1);
+    expect(opened[0]?.[0]).toBe(
       `https://github.com/acme/widgets/pull/7/commits/${FULL_OID}`,
-    ]);
+    );
+    expect(opened[0]?.[1]).toBeTruthy();
   });
 
   it("confirms the copy so the click is not silent", async () => {

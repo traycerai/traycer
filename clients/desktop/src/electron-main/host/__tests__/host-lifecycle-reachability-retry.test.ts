@@ -97,6 +97,10 @@ function layoutIn(dir: string): HostFsLayout {
     pendingLoginItemRevisionFile: join(dir, "pending-login-item-revision.json"),
     substrateFile: join(dir, "substrate.json"),
     transitionJournalFile: join(dir, "transition.json"),
+    browserTelemetryFile: join(dir, "browser-telemetry.jsonl"),
+    browserTelemetryRotatedFile: join(dir, "browser-telemetry.jsonl.1"),
+    browserTraceFile: join(dir, "browser-trace.jsonl"),
+    browserTraceRotatedFile: join(dir, "browser-trace.jsonl.1"),
     environment: "production" as const,
   };
 }

@@ -18,7 +18,6 @@ import { drainDesktopTabsPersistence } from "@/stores/tabs/desktop-tabs-persiste
 import { appLogger } from "@/lib/logger";
 import { flushLiveReadingPositions } from "@/lib/reading-position";
 import { fileEditRuntimeRegistry } from "@/lib/workspace/file-edit-runtime-registry";
-import { captureFinalPrimaryProfiles } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
 
 /**
  * Terminal decision returned by the renderer to the Electron main process
@@ -83,12 +82,6 @@ interface AppLifecycleWindowBridge {
   respondFreshUnsyncedSnapshot?: (
     reply: FreshUnsyncedSnapshotResponse,
   ) => Promise<void>;
-  onCaptureFinalBrowserState?: (
-    handler: (request: { readonly requestId: string }) => void,
-  ) => { dispose: () => void };
-  respondFinalBrowserStateCaptured?: (reply: {
-    readonly requestId: string;
-  }) => Promise<void>;
 }
 
 interface RunnerHostWindowShape {
@@ -193,44 +186,6 @@ export function QuitInterceptBridge(): null | React.ReactElement {
       subscription.dispose();
     };
   }, [appLifecycle, registry]);
-
-  // Main asks for one final browser capture before the desktop route goes
-  // away. The host suspends the session on route loss and re-materializes it
-  // later from the durable tab URLs plus the primary-profile store, so that
-  // store is what has to be fresh before this window's `browser.sessions`
-  // streams close.
-  useEffect(() => {
-    const onCapture = appLifecycle?.onCaptureFinalBrowserState;
-    const respond = appLifecycle?.respondFinalBrowserStateCaptured;
-    if (onCapture === undefined || respond === undefined) return;
-    const subscription = onCapture((request) => {
-      // The capture's own failure is swallowed BEFORE the reply: a capture
-      // that fails is still "as captured as this renderer can manage", and
-      // must be reported rather than withheld - withholding leaves main's
-      // waiter to sit out its full timeout, a multi-second stall on every quit
-      // and window close that reaches it. A single trailing `catch` would
-      // report the failed capture and skip the reply, which is that stall.
-      void captureFinalPrimaryProfiles()
-        .catch((error: unknown) => {
-          appLogger.error(
-            "[quit-intercept] final browser capture failed",
-            { requestId: request.requestId },
-            error,
-          );
-        })
-        .then(() => respond({ requestId: request.requestId }))
-        .catch((error: unknown) => {
-          appLogger.error(
-            "[quit-intercept] final browser capture reply failed",
-            { requestId: request.requestId },
-            error,
-          );
-        });
-    });
-    return () => {
-      subscription.dispose();
-    };
-  }, [appLifecycle]);
 
   useEffect(() => {
     if (appLifecycle === null) return;

@@ -97,12 +97,7 @@ vi.mock("@/providers/use-open-epic-handle", () => ({
   useOpenEpicHandle: () => ({ store: { getState: () => ({}) } }),
 }));
 vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
-  useEpicTileNavigation: () => ({
-    openTilePreviewInTab: harness.openMock,
-    openTileInTab: vi.fn(),
-    openTileInEpic: vi.fn(),
-    openTilePreviewInEpic: vi.fn(),
-  }),
+  useEpicTileNavigation: () => ({ openTile: harness.openMock }),
 }));
 vi.mock("@/lib/epic-selectors", () => ({
   epicNodeRefForNodeId: () => harness.epicNodeRef,
@@ -203,6 +198,29 @@ function ready(
   truncated: boolean,
 ): SearchArtifactsResponse {
   return { outcome: "ready", results: [...results], truncated };
+}
+
+/**
+ * The `openTile` intent a resolved hit opens with - every field the box's
+ * `openHit` builds, so a regression to any one of them (wrong tab, a dropped
+ * `dedupe`, a modifier that should stay `null` for a keyboard/mouse trigger
+ * with no real event behind it) fails here rather than passing on a
+ * `toHaveBeenCalled()`-only check.
+ */
+function openTileIntent(
+  tabId: string,
+  node: EpicNodeRefStub,
+  gesture: "single" | "explicit",
+) {
+  return {
+    node,
+    target: { tabId },
+    gesture,
+    modifiers: null,
+    placement: null,
+    dedupe: true,
+    source: "direct_ui",
+  };
 }
 
 /**
@@ -465,11 +483,11 @@ describe("ArtifactSearchBox", () => {
     );
     fireEvent.keyDown(input, { key: "Enter" });
     // Enter opens the active hit through the authoritative tile-navigation
-    // route (the resolved ref is mocked identically for every hit here).
-    expect(harness.openMock).toHaveBeenCalledWith("tab-1", {
-      id: "a1",
-      type: "ticket",
-    });
+    // route (the resolved ref is mocked identically for every hit here), as
+    // an "explicit" gesture - a keyboard activation, not a click.
+    expect(harness.openMock).toHaveBeenCalledWith(
+      openTileIntent("tab-1", { id: "a1", type: "ticket" }, "explicit"),
+    );
   });
 
   it("reports a stale hit in place and does not open it", () => {
@@ -500,10 +518,10 @@ describe("ArtifactSearchBox", () => {
       epicId: "epic-1",
     });
     fireEvent.click(screen.getByTestId("epic-artifact-search-result-a1"));
-    expect(harness.openMock).toHaveBeenCalledWith("tab-1", {
-      id: "a1",
-      type: "ticket",
-    });
+    // A row CLICK is a "single" gesture, distinct from the Enter case above.
+    expect(harness.openMock).toHaveBeenCalledWith(
+      openTileIntent("tab-1", { id: "a1", type: "ticket" }, "single"),
+    );
   });
 
   it("distinguishes mirror-unavailable from a zero-match result", () => {
@@ -1270,9 +1288,8 @@ describe("ArtifactPanelSearchShell dual-surface isolation", () => {
       within(surfaceA).getByTestId("epic-artifact-search-result-a1"),
     );
     expect(harness.openMock).toHaveBeenCalledTimes(1);
-    expect(harness.openMock).toHaveBeenCalledWith(TAB_A, {
-      id: "a1",
-      type: "ticket",
-    });
+    expect(harness.openMock).toHaveBeenCalledWith(
+      openTileIntent(TAB_A, { id: "a1", type: "ticket" }, "single"),
+    );
   });
 });

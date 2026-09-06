@@ -9,18 +9,18 @@ import {
   type RenderResult,
 } from "@testing-library/react";
 import type {
-  ImageAssetRequest,
-  ImageAssetState,
-} from "@/hooks/assets/use-image-asset";
+  FileAssetRequest,
+  FileAssetState,
+} from "@/hooks/assets/use-file-asset";
 
 const state = vi.hoisted(() => ({
-  requests: [] as Array<ImageAssetRequest | null>,
-  old: null as ImageAssetState | null,
-  new: null as ImageAssetState | null,
+  requests: [] as Array<FileAssetRequest | null>,
+  old: null as FileAssetState | null,
+  new: null as FileAssetState | null,
 }));
 
-vi.mock("@/hooks/assets/use-image-asset", () => ({
-  useImageAsset: (request: ImageAssetRequest | null) => {
+vi.mock("@/hooks/assets/use-file-asset", () => ({
+  useFileAsset: (request: FileAssetRequest | null) => {
     // Dedupe by reference (round-2 review finding #4: `ImageDiffView` now
     // fires one legitimate extra render on mount, learning each side's
     // real initial bounds from `onInit` - the SAME memoized `request`
@@ -53,7 +53,7 @@ vi.mock("@/hooks/assets/use-image-asset", () => ({
     }
     const side = request.method === "git" ? request.side : "new";
     const reportDecodeFailure = () => {
-      const fallback: ImageAssetState = {
+      const fallback: FileAssetState = {
         status: "fallback",
         url: null,
         meta: null,

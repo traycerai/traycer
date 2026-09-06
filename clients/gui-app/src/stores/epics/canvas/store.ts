@@ -73,7 +73,6 @@ import {
   openTileInBackgroundTab as openTileInBackgroundTabCanvas,
   openTileInPane as openTileInPaneCanvas,
   findPaneTabForRef,
-  openSingletonTileInPane as openSingletonTileInPaneCanvas,
   promotePreview,
   restorePreview,
   renameArtifact,
@@ -159,9 +158,15 @@ import {
   withTerminalPendingCreate,
   withoutTerminalPendingCreate,
 } from "@/lib/terminals/pending-create-identity";
+import type { PaneTileOpenOptions } from "@/lib/canvas/tile-open/intent";
 export { parseEpicNodeRef as parseArtifactRef } from "@/stores/epics/canvas/tile-schema/artifact-tile";
 
-function trackOpenedCanvasTile(
+/**
+ * `<kind>Opened` analytics for a tile that just entered the canvas. Exported
+ * for `execute-tile-open.ts`, whose split path is the one prepare* action with
+ * no `FromSource` variant of its own.
+ */
+export function trackOpenedCanvasTile(
   node: EpicCanvasTileRef,
   source: AnalyticsSource,
 ): void {
@@ -269,6 +274,12 @@ export interface TabSplitArgs {
 export interface ClosedTilePayload {
   readonly node: EpicCanvasTileRef;
   readonly pendingCreate: boolean;
+}
+
+/** {@link PaneTileOpenOptions} plus the analytics source the `*FromSource`
+ * pane opener reports the open under. */
+export interface PaneTileOpenOptionsFromSource extends PaneTileOpenOptions {
+  readonly source: AnalyticsSource;
 }
 
 export interface EpicCanvasStore {
@@ -445,10 +456,6 @@ export interface EpicCanvasStore {
    * pane's existing preview. Same dedup as `openTileInTab`.
    */
   openTilePreviewInTab: (tabId: string, node: EpicCanvasTileRef) => void;
-  prepareOpenTilePreviewInTabFocusTarget: (
-    tabId: string,
-    node: EpicCanvasTileRef,
-  ) => NestedFocusTarget | null;
   prepareOpenTilePreviewInTabFocusTargetFromSource: (
     tabId: string,
     node: EpicCanvasTileRef,
@@ -486,10 +493,6 @@ export interface EpicCanvasStore {
    * stealing focus). Idempotent.
    */
   openTileInBackgroundTab: (tabId: string, node: EpicCanvasTileRef) => void;
-  prepareOpenTileInBackgroundTabFocusTarget: (
-    tabId: string,
-    node: EpicCanvasTileRef,
-  ) => NestedFocusTarget | null;
   prepareOpenTileInBackgroundTabFocusTargetFromSource: (
     tabId: string,
     node: EpicCanvasTileRef,
@@ -498,33 +501,21 @@ export interface EpicCanvasStore {
   /**
    * Opener-only path: open `ref` into the explicit `paneId` as a fresh tab
    * instance, bypassing dedup. A second view of an already-open content id is
-   * allowed (distinct `instanceId`). See {@link openTileInPaneCanvas}.
+   * allowed (distinct `instanceId`). `mode` picks pinned / preview /
+   * membership-only semantics and `index` the strip position (`null`
+   * appends). See {@link openTileInPaneCanvas}.
    */
   openTileInPane: (
     tabId: string,
     paneId: string,
     ref: EpicCanvasTileRef,
+    options: PaneTileOpenOptions,
   ) => void;
-  prepareOpenTileInPaneFocusTarget: (
-    tabId: string,
-    paneId: string,
-    ref: EpicCanvasTileRef,
-  ) => NestedFocusTarget | null;
   prepareOpenTileInPaneFocusTargetFromSource: (
     tabId: string,
     paneId: string,
     ref: EpicCanvasTileRef,
-    source: AnalyticsSource,
-  ) => NestedFocusTarget | null;
-  /**
-   * Opener path for a SINGLETON tile (one instance per content id, e.g. the
-   * per-epic comm graph): focus the existing tab if there is one, otherwise
-   * open into `paneId`. See {@link openSingletonTileInPaneCanvas}.
-   */
-  prepareOpenSingletonTileInPaneFocusTarget: (
-    tabId: string,
-    paneId: string,
-    ref: EpicCanvasTileRef,
+    options: PaneTileOpenOptionsFromSource,
   ) => NestedFocusTarget | null;
   /**
    * Open a blank "New tab" in `paneId`, made active. Reuse-if-active-is-blank:
@@ -614,12 +605,6 @@ export interface EpicCanvasStore {
     targetIndex: number,
     node: EpicCanvasTileRef,
   ) => void;
-  prepareInsertNodeOnTabStripFocusTarget: (
-    tabId: string,
-    targetPaneId: string,
-    targetIndex: number,
-    node: EpicCanvasTileRef,
-  ) => NestedFocusTarget | null;
   moveTabOnTabStrip: (tabId: string, args: TabMoveArgs) => void;
   prepareMoveActiveTabOnTabStripFocusTarget: (
     tabId: string,
@@ -1933,12 +1918,6 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
           );
         },
 
-        prepareOpenTilePreviewInTabFocusTarget: (tabId, node) => {
-          get().openTilePreviewInTab(tabId, node);
-          const after = currentNestedFocusTargetForTab(get(), tabId);
-          return after;
-        },
-
         prepareOpenTilePreviewInTabFocusTargetFromSource: (
           tabId,
           node,
@@ -2030,11 +2009,6 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
           );
         },
 
-        prepareOpenTileInBackgroundTabFocusTarget: (tabId, node) => {
-          get().openTileInBackgroundTab(tabId, node);
-          return null;
-        },
-
         prepareOpenTileInBackgroundTabFocusTargetFromSource: (
           tabId,
           node,
@@ -2047,58 +2021,27 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
           return null;
         },
 
-        openTileInPane: (tabId, paneId, ref) => {
+        openTileInPane: (tabId, paneId, ref, options) => {
           set((state) =>
             updateTabCanvas(state, tabId, (canvas) =>
-              openTileInPaneCanvas(canvas, paneId, ref),
+              openTileInPaneCanvas(canvas, paneId, ref, options),
             ),
           );
-        },
-
-        prepareOpenTileInPaneFocusTarget: (tabId, paneId, ref) => {
-          const before = canvasForExistingTab(get(), tabId);
-          const targetPane =
-            before === null ? null : findPaneById(before.root, paneId);
-          get().openTileInPane(tabId, paneId, ref);
-          const after = currentNestedFocusTargetForTab(get(), tabId);
-          const target = targetPane === null ? null : after;
-          return target;
-        },
-
-        prepareOpenSingletonTileInPaneFocusTarget: (tabId, paneId, ref) => {
-          const before = canvasForExistingTab(get(), tabId);
-          const targetPane =
-            before === null ? null : findPaneById(before.root, paneId);
-          const existingSingleton =
-            before === null ? null : findPaneTabForRef(before, ref);
-          set((state) =>
-            updateTabCanvas(state, tabId, (canvas) =>
-              openSingletonTileInPaneCanvas(canvas, paneId, ref),
-            ),
-          );
-          const after = currentNestedFocusTargetForTab(get(), tabId);
-          // A focus of an ALREADY-OPEN singleton is still a real focus target
-          // even when the requested pane is stale - the canvas focused the
-          // existing instance in ITS pane regardless. Null only when nothing
-          // could have happened: no pane to insert into AND no existing
-          // instance to focus.
-          return targetPane === null && existingSingleton === null
-            ? null
-            : after;
         },
 
         prepareOpenTileInPaneFocusTargetFromSource: (
           tabId,
           paneId,
           ref,
-          source,
+          options,
         ) => {
           const before = canvasForExistingTab(get(), tabId);
           const targetPane =
             before === null ? null : findPaneById(before.root, paneId);
-          get().openTileInPane(tabId, paneId, ref);
+          get().openTileInPane(tabId, paneId, ref, options);
           const canvas = canvasForExistingTab(get(), tabId);
-          if (before !== canvas) trackOpenedCanvasTile(ref, source);
+          if (before !== canvas) trackOpenedCanvasTile(ref, options.source);
+          if (options.mode === "background") return null;
           const after = currentNestedFocusTargetForTab(get(), tabId);
           const target = targetPane === null ? null : after;
           return target;
@@ -2300,21 +2243,6 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
               ),
             ),
           );
-        },
-
-        prepareInsertNodeOnTabStripFocusTarget: (
-          tabId,
-          targetPaneId,
-          targetIndex,
-          node,
-        ) => {
-          const before = canvasForExistingTab(get(), tabId);
-          const targetPane =
-            before === null ? null : findPaneById(before.root, targetPaneId);
-          get().insertNodeOnTabStrip(tabId, targetPaneId, targetIndex, node);
-          const after = currentNestedFocusTargetForTab(get(), tabId);
-          const target = targetPane === null ? null : after;
-          return target;
         },
 
         moveTabOnTabStrip: (tabId, args) => {

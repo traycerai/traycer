@@ -22,10 +22,13 @@ import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { EpicShell } from "@/components/epic-canvas/epic-shell";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { EpicSessionProvider } from "@/providers/epic-session-provider";
+import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
 import {
-  __getOpenEpicRegistryForTests,
-  __setEpicStreamClientFactoryForTests,
-} from "@/lib/registries/epic-session-registry";
+  __setEpicRuntimeWorkerFactoryForTests,
+  getEpicRuntimeWorkerFactoryOverride,
+} from "@/lib/registries/epic-runtime-worker-factory-slot";
+import { createInProcessEpicRuntimeWorker } from "@/stores/epics/open-epic/test-support/in-process-epic-runtime-worker";
+import type { RuntimeWorkerLike } from "@/stores/epics/open-epic/runtime/worker/spawn-epic-runtime-worker";
 
 /**
  * Ticket 12 successor to `epic-shell-cost-badge.test.tsx` (ticket-7
@@ -191,12 +194,19 @@ vi.mock("@/hooks/host/use-effective-host-id", () => ({
   useEffectiveHostId: () => effectiveHostId.current,
 }));
 
-const openTransportStub = vi.hoisted(() => () => {
-  throw new Error("openTransport must not be called in this test");
+// Threw until the stream-factory override was deleted and `EpicSessionProvider`
+// started opening its transport unconditionally; the throw was safe only while
+// that branch made the opener unreachable. The fake supplies "no socket in
+// tests" instead - this suite's real subject is the host RPC round trip, and
+// the session's stream is driven at the WORKER seam below.
+vi.mock("@/lib/host/use-durable-stream-transport", async () => {
+  const { fakeDurableStreamTransports } =
+    await import("@/lib/host/test-support/fake-durable-stream-transport");
+  return {
+    useDurableStreamTransportFactory: () =>
+      fakeDurableStreamTransports().opener,
+  };
 });
-vi.mock("@/lib/host/use-durable-stream-transport", () => ({
-  useDurableStreamTransportFactory: () => openTransportStub,
-}));
 
 vi.mock("@/hooks/epic/use-epic-title-mutation", () => ({
   useEpicUpdateTitle: () => ({
@@ -277,24 +287,41 @@ function buildSnapshot(title: string): Uint8Array {
   return Y.encodeStateAsUpdate(donor);
 }
 
+/** The jsdom setup file's coreless worker, put back in `afterEach`. */
+let previousWorkerFactory: (() => RuntimeWorkerLike) | null = null;
+
+/**
+ * The suite's stream, one seam over.
+ *
+ * The factory body is unchanged. What changed is where it is installed: a
+ * stream factory built on MAIN cannot cross `postMessage` to a runtime that
+ * lives in the worker, so it is supplied to the worker's own composition -
+ * a FRESH one per spawn, since one helper instance owns one bridge pair.
+ */
 function installControlledFactory(): {
   readonly streams: () => ReadonlyArray<ControlledStream>;
 } {
   const streams: ControlledStream[] = [];
-  __setEpicStreamClientFactoryForTests((_epicId, callbacks) => {
-    const stream: ControlledStream = { callbacks, closeCount: 0 };
-    streams.push(stream);
-    return {
-      applyUpdate: () => undefined,
-      awareness: () => undefined,
-      applyArtifactRoomUpdate: () => undefined,
-      artifactRoomAwareness: () => undefined,
-      retryMigration: () => undefined,
-      close: () => {
-        stream.closeCount += 1;
+  previousWorkerFactory = getEpicRuntimeWorkerFactoryOverride();
+  __setEpicRuntimeWorkerFactoryForTests(() =>
+    createInProcessEpicRuntimeWorker({
+      streamClientFactory: (_epicId, callbacks) => {
+        const stream: ControlledStream = { callbacks, closeCount: 0 };
+        streams.push(stream);
+        return {
+          applyUpdate: () => undefined,
+          awareness: () => undefined,
+          applyArtifactRoomUpdate: () => undefined,
+          artifactRoomAwareness: () => undefined,
+          retryMigration: () => undefined,
+          close: () => {
+            stream.closeCount += 1;
+          },
+        };
       },
-    };
-  });
+      laneSelection: null,
+    }).createWorker(),
+  );
   return { streams: () => streams };
 }
 
@@ -314,7 +341,6 @@ describe("<EpicShell /> usage entry point - real host RPC round trip", () => {
   beforeEach(() => {
     window.localStorage.clear();
     __getOpenEpicRegistryForTests().disposeAll();
-    __setEpicStreamClientFactoryForTests(null);
     usageSummaryCallCount.current = 0;
     usageSummaryRequests.length = 0;
     effectiveHostId.current = HOST_ID;
@@ -323,7 +349,8 @@ describe("<EpicShell /> usage entry point - real host RPC round trip", () => {
   afterEach(() => {
     cleanup();
     __getOpenEpicRegistryForTests().disposeAll();
-    __setEpicStreamClientFactoryForTests(null);
+    // RESTORED, not nulled - see `previousWorkerFactory`.
+    __setEpicRuntimeWorkerFactoryForTests(previousWorkerFactory);
     resetNegotiatedManifests();
   });
 

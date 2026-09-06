@@ -81,6 +81,7 @@ vi.mock("@/hooks/host/use-reactive-host-readiness", () => ({
 const support = vi.hoisted(() => ({ github: true }));
 
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
+  useHostMethodSchemaVersion: () => null,
   useHostSupportsMethod: () => support.github,
 }));
 

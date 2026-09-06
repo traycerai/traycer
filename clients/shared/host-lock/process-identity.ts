@@ -36,8 +36,12 @@ export type ProcessLivenessVerdict = "alive" | "dead" | "indeterminate";
 
 // Cross-platform process-liveness probe. POSIX uses `process.kill(pid, 0)`;
 // Windows uses `tasklist /FI "PID eq <pid>" /NH /FO CSV` and asserts the
-// CSV body is non-empty.
-function probeProcessLiveness(pid: number): ProcessLivenessVerdict {
+// CSV body is non-empty. Exported for the one reader that needs the
+// tri-state itself outside this module (`host update`'s progress-marker
+// takeover keeps a displaced record for restore only on POSITIVE evidence
+// its writer is alive); `verifyProcessIdentity` below consumes it too, and
+// everything else goes through the collapsing `isProcessAlive`.
+export function probeProcessLiveness(pid: number): ProcessLivenessVerdict {
   if (!Number.isInteger(pid) || pid <= 0) return "dead";
   if (process.platform === "win32") {
     let stdout: string;
@@ -283,7 +287,16 @@ export function computeProcessIdentityVerdict(
 // point of it). Backs the own-pid identity check below; unlike the general
 // cross-pid path there is nothing to gain from re-probing on every call.
 let cachedOwnStartIdentity: ProcessStartIdentity | null | "unread" = "unread";
-function ownProcessStartIdentity(): ProcessStartIdentity | null {
+/**
+ * This process's own creation stamp, or `null` when the platform probe could
+ * not produce one. Exported for a writer that stamps its own identity into a
+ * record another process will later hold against `verifyProcessIdentity`
+ * (the CLI's update-progress marker): stamping from the cached read that the
+ * own-pid verdict compares against keeps "what we wrote" and "what we are"
+ * one value, and a first call that fails stays `null` for the life of the
+ * process rather than flipping between reads.
+ */
+export function ownProcessStartIdentity(): ProcessStartIdentity | null {
   if (cachedOwnStartIdentity === "unread") {
     cachedOwnStartIdentity = readProcessStartIdentity(process.pid);
   }
@@ -414,6 +427,21 @@ export function __setAsyncProcessLivenessReaderForTest(
 
 export function readProcessStartTimeMs(pid: number): number | null {
   return readProcessStartTimeMsImpl(pid);
+}
+
+// This process's own start time, read once and cached like
+// `ownProcessStartIdentity`: a process's start time never changes, and the
+// read is a `ps`/`powershell` spawn on macOS and Windows. Backs every lock
+// acquisition's metadata (`cross-process-lock.ts`), which used to pay the
+// spawn per acquisition - and the update-progress marker lock now
+// acquires several times per `host update`. Reads the raw reader, not the
+// test seam: the seam models OTHER processes' probes.
+let cachedOwnStartTimeMs: number | null | "unread" = "unread";
+export function ownProcessStartTimeMs(): number | null {
+  if (cachedOwnStartTimeMs === "unread") {
+    cachedOwnStartTimeMs = readProcessStartTimeMsImpl(process.pid);
+  }
+  return cachedOwnStartTimeMs;
 }
 
 function readProcessStartTimeMsImpl(pid: number): number | null {

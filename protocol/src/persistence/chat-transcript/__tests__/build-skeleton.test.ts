@@ -246,6 +246,52 @@ describe("buildRowSkeleton", () => {
     expect(entries[4]?.role).toBe("system");
   });
 
+  it("seats an imported chat's provenance marker at ordinal 0 as a system row whose body is the event", () => {
+    const human = humanUserMessage({
+      messageId: "m-human",
+      timestamp: 1,
+      text: "hi",
+    });
+    const imported = chatEventSchema.parse({
+      eventId: "e-import",
+      type: "chat.imported",
+      timestamp: 9_000,
+      clientActionId: null,
+      actor: null,
+      message: null,
+      turnId: null,
+      messageId: null,
+      queueItemId: null,
+      approvalId: null,
+      blockId: null,
+      severity: "info",
+      metadata: {
+        sourceProvider: "claude",
+        nativeSessionId: "native-1",
+        importedAt: 9_000,
+        sourceCwd: "/repo",
+      },
+    });
+
+    const entries = buildRowSkeleton(
+      {
+        messages: [human],
+        events: [imported],
+        activeTurnId: null,
+        chatId: "chat-1",
+      },
+      previewText,
+    );
+
+    expect(entries.map((e) => e.rowId)).toEqual([
+      "imported-chat-marker:e-import",
+      "m-human",
+    ]);
+    expect(entries[0]?.role).toBe("system");
+    expect(entries[0]?.preview).toBeUndefined();
+    expect(entries[0]?.byteLength).toBeGreaterThan(0);
+  });
+
   it("gives a human user row a preview and no sentByAgent", () => {
     const human = humanUserMessage({
       messageId: "m-1",

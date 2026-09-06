@@ -7,6 +7,8 @@ import type { HarnessModelRow } from "@/components/home/data/harness-model-searc
 import type { GuiHarnessCatalogEntry } from "@/hooks/harnesses/use-gui-harness-catalog";
 import { HarnessModelPickerItem } from "@/components/home/pickers/harness-model-picker-item";
 import { ModelRowsState } from "@/components/home/pickers/harness-model-picker-empty";
+import type { ProviderTerminalLoginSurface } from "@/lib/providers/provider-terminal-login-surface";
+import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import type { ReactNode, RefObject } from "react";
 
 interface HarnessModelPickerListProps {
@@ -24,10 +26,14 @@ interface HarnessModelPickerListProps {
   readonly catalogError: boolean;
   readonly hostUnavailableLabel: string | null;
   readonly activeProvider: GuiHarnessCatalogEntry | null;
+  readonly activeProviderState: ProviderCliState | null;
   readonly onHover: (rowId: string) => void;
   readonly onActive: (rowId: string) => void;
   readonly onSelect: (row: HarnessModelRow) => void;
   readonly onOpenProviderSettings: () => void;
+  readonly terminalLoginSurface: ProviderTerminalLoginSurface | null;
+  readonly runTargetHostId: string | null;
+  readonly onClosePicker: () => void;
 }
 
 export function HarnessModelPickerList(
@@ -48,10 +54,14 @@ export function HarnessModelPickerList(
     catalogError,
     hostUnavailableLabel,
     activeProvider,
+    activeProviderState,
     onHover,
     onActive,
     onSelect,
     onOpenProviderSettings,
+    terminalLoginSurface,
+    runTargetHostId,
+    onClosePicker,
   } = props;
 
   const stateRow = ModelRowsState({
@@ -60,8 +70,12 @@ export function HarnessModelPickerList(
     hostUnavailableLabel,
     hasQuery,
     activeProvider,
+    activeProviderState,
     rowsCount: rows.length,
     onOpenProviderSettings,
+    terminalLoginSurface,
+    runTargetHostId,
+    onClosePicker,
   });
 
   if (stateRow !== null) {

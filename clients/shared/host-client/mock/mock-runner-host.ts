@@ -299,6 +299,7 @@ export class MockRunnerHost implements IRunnerHost {
   readonly hostTray: null = null;
   readonly zoom: null = null;
   readonly pushPermission: null = null;
+  readonly systemBack: null = null;
   readonly deviceFlow: MockDeviceFlowHost = new MockDeviceFlowHost();
 
   /**
@@ -596,6 +597,10 @@ export class MockRunnerHost implements IRunnerHost {
   }
 
   async openMicrophoneSettings(): Promise<void> {
+    // No-op: no OS settings pane in the in-memory host.
+  }
+
+  async openFullDiskAccessSettings(): Promise<void> {
     // No-op: no OS settings pane in the in-memory host.
   }
 

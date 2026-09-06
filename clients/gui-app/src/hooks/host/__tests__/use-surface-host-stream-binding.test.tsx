@@ -67,6 +67,9 @@ vi.mock("@/lib/host", () => ({
 vi.mock("@/hooks/host/use-host-stream-client-for", () => ({
   useHostStreamClientBindingFor: () => refs.binding,
   authenticatedOwnerIdentityKey: () => refs.expectedKey,
+  // The lease is the cache's business, not this hook's - these tests are about
+  // WHICH binding is published, so the retain is a no-op here.
+  streamTransportRetain: () => () => () => undefined,
 }));
 
 import { useSurfaceHostStreamBinding } from "@/hooks/host/use-surface-host-stream-binding";
@@ -106,6 +109,7 @@ const PINNED_CLIENT = fakeStreamClient("pinned-client");
 const AMBIENT: StreamRuntimeBinding = {
   wsStreamClient: AMBIENT_CLIENT,
   hostId: "host-a",
+  retain: null,
 };
 
 const HOST_B: HostDirectoryEntry = {
@@ -186,6 +190,7 @@ describe("useSurfaceHostStreamBinding", () => {
       const AMBIENT_B: StreamRuntimeBinding = {
         wsStreamClient: AMBIENT_CLIENT,
         hostId: "host-b",
+        retain: null,
       };
       let ambient: StreamRuntimeBinding = AMBIENT;
       const { result, rerender } = renderHook(

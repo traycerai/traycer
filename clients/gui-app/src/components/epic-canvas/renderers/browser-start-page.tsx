@@ -5,6 +5,7 @@ import {
   useHostDirectoryEntryForHostId,
 } from "@/hooks/host/use-host-client-for-host-id";
 import { useHostQuery } from "@/hooks/host/use-host-query";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 
 interface BrowserStartPageProps {
   readonly epicId: string;
@@ -17,6 +18,7 @@ export function BrowserStartPage(props: BrowserStartPageProps) {
   const headingId = useId();
   const client = useHostClientForHostId(props.hostId);
   const hostEntry = useHostDirectoryEntryForHostId(props.hostId);
+  const hostLabel = hostEntry?.label ?? props.hostId;
   const localServersReachable =
     client !== null && (props.browserRunsOnHost || hostEntry?.kind === "local");
   const query = useHostQuery({
@@ -39,10 +41,26 @@ export function BrowserStartPage(props: BrowserStartPageProps) {
         aria-labelledby={headingId}
         className="mx-auto w-full max-w-3xl px-4 py-6 sm:px-6 sm:py-10"
       >
-        <div className="mb-5 flex items-center gap-2 text-muted-foreground">
+        <div className="mb-5 flex min-w-0 items-center gap-2 text-muted-foreground">
           <RadioTower className="size-5" aria-hidden />
-          <h2 id={headingId} className="text-ui-lg font-medium text-foreground">
-            Local servers
+          <h2
+            id={headingId}
+            className="flex min-w-0 items-baseline gap-2 text-ui-lg font-medium text-foreground"
+          >
+            <span className="shrink-0">Local servers</span>
+            <TooltipWrapper
+              label={hostLabel}
+              side="top"
+              sideOffset={undefined}
+              align={undefined}
+            >
+              <span
+                className="min-w-0 truncate text-ui-sm font-normal text-muted-foreground"
+                aria-label={hostLabel}
+              >
+                on {hostLabel}
+              </span>
+            </TooltipWrapper>
           </h2>
         </div>
         {servers.length > 0 ? (

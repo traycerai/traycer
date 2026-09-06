@@ -87,6 +87,7 @@ export function HostDoctorReportContent(props: HostDoctorReportContentProps) {
       </div>
 
       <ConfirmDestructiveDialog
+        blockedReason={null}
         open={freePortPrompt !== null}
         onOpenChange={onFreePortOpenChange}
         title="Free port and restart?"

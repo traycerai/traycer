@@ -705,6 +705,7 @@ function SkillRemoveConfirm({
 }): ReactNode {
   return (
     <ConfirmDestructiveDialog
+      blockedReason={null}
       open={target !== null}
       onOpenChange={(open) => {
         if (!open) onCancel();
@@ -746,6 +747,7 @@ function SkillUpdateConfirm({
 }): ReactNode {
   return (
     <ConfirmDestructiveDialog
+      blockedReason={null}
       open={target !== null}
       onOpenChange={(open) => {
         if (!open) onCancel();

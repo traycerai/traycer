@@ -1,0 +1,18 @@
+/*
+ * pdf.js sizes `.page` assuming the CSS-default `content-box`: the page's
+ * 9px transparent border must sit OUTSIDE the width/height it computes.
+ * Tailwind's preflight forces `box-sizing: border-box` on every element,
+ * which pulls that border inside the box - the canvas (an in-flow child at
+ * 100% of the shrunken content box) loses 18px per axis while the
+ * absolutely-positioned text and annotation layers keep the full
+ * padding-box size. The ~2% size mismatch makes link hit-areas and search
+ * highlights drift down-right, about a full text line by mid-page.
+ * Maintainer-confirmed diagnosis: mozilla/pdf.js discussion #18142.
+ *
+ * This file must be imported AFTER `pdf_viewer.css`. The preflight rule
+ * lives in a cascade layer, so this unlayered rule wins regardless of
+ * order relative to Tailwind itself.
+ */
+.pdfViewer .page {
+  box-sizing: content-box;
+}

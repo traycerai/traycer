@@ -37,15 +37,55 @@ import {
   type FileDiffMetadata,
 } from "@pierre/diffs";
 import { Editor, type EditorOptions } from "@pierre/diffs/edit";
+import type { WorkerPoolManager } from "@pierre/diffs/worker";
 import type { ReactNode } from "react";
 import { DiffContentPrimitive } from "@/components/diff/diff-content-primitive";
+import { registerDiffWorkerPoolCreator } from "@/lib/diff/diff-worker-pool-demand";
 
 const capturedFileDiffs: FileDiffMetadata[] = [];
+interface CapturedFileRender {
+  readonly file: FileContents;
+  readonly edit: boolean;
+}
+const capturedFileRenders: CapturedFileRender[] = [];
+
+/**
+ * The worker pool `useWorkerPool()` reads from React context. No provider is
+ * ever mounted in this file's render tree, so every existing test's `pool`
+ * has always been `undefined` - this mock keeps that default, and lets the
+ * two new empty-file-editor tests below control it explicitly, the same
+ * store-vs-context seam `use-diff-highlight-ready.test.tsx` drives directly.
+ */
+const poolState = vi.hoisted(() => ({
+  pool: undefined as WorkerPoolManager | undefined,
+}));
+
+interface FakeWorkerPoolManager {
+  readonly setRenderOptions: () => Promise<void>;
+  readonly primeFileHighlightCache: () => Promise<void>;
+  readonly primeDiffHighlightCache: () => Promise<void>;
+}
+
+/**
+ * Same seam as `use-diff-highlight-ready.test.tsx`'s fake: a prototype-less
+ * object asserted to the class type, with the members the gates actually call
+ * assigned onto it (`as unknown as` is lint-forbidden; the real class has
+ * ~90 members, too many to overlap with a direct `as`).
+ */
+function fakeWorkerPoolManager(): WorkerPoolManager {
+  const fake: FakeWorkerPoolManager = {
+    setRenderOptions: () => Promise.resolve(),
+    primeFileHighlightCache: () => Promise.resolve(),
+    primeDiffHighlightCache: () => Promise.resolve(),
+  };
+  return Object.assign(Object.create(null) as WorkerPoolManager, fake);
+}
 
 vi.mock("@pierre/diffs/react", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@pierre/diffs/react")>();
   return {
     ...actual,
+    useWorkerPool: () => poolState.pool,
     FileDiff: (props: {
       readonly fileDiff: FileDiffMetadata;
       readonly edit?: boolean;
@@ -60,6 +100,21 @@ vi.mock("@pierre/diffs/react", async (importOriginal) => {
           data-is-partial={String(props.fileDiff.isPartial)}
           data-type={props.fileDiff.type}
           data-name={props.fileDiff.name}
+        />
+      );
+    },
+    File: (props: {
+      readonly file: FileContents;
+      readonly edit?: boolean;
+      readonly editorOptions?: EditorOptions<undefined>;
+      readonly options?: unknown;
+    }): ReactNode => {
+      capturedFileRenders.push({ file: props.file, edit: props.edit === true });
+      return (
+        <div
+          data-testid="instrumented-file"
+          data-edit={String(props.edit === true)}
+          data-name={props.file.name}
         />
       );
     },
@@ -126,6 +181,15 @@ index 1111111..2222222 100644
  same
 -old
 +new
+`;
+
+// Same empty-untracked-file shape `git-diff-empty-file-edit.test.ts` proves
+// against the raw library: zero hunks, so `isConfirmedEmptyNewFileDiff`
+// matches and `DiffContentPrimitive` renders `<File>` instead of `<FileDiff>`
+// once an edit session is present.
+const EMPTY_NEW_FILE_PATCH = `diff --git a/empty.txt b/empty.txt
+new file mode 100644
+index 000000000..e69de29bb
 `;
 
 const CHANGE_OLD: FileContents = {
@@ -257,10 +321,12 @@ function renderPrimitive(args: {
 describe("<DiffContentPrimitive /> edit hydration (real @pierre/diffs)", () => {
   beforeEach(() => {
     capturedFileDiffs.length = 0;
+    capturedFileRenders.length = 0;
   });
 
   afterEach(() => {
     cleanup();
+    poolState.pool = undefined;
   });
 
   it("pre-hydrates a change diff so the live→pinned parse swap still attaches", async () => {
@@ -593,5 +659,87 @@ index 1111111..2222222 100644
     expect(a).not.toBe(b);
     await assertLibraryAcceptsHydratedDiff(a, null);
     await assertLibraryAcceptsHydratedDiff(b, null);
+  });
+
+  it("renders the plain File editor for a confirmed-empty new file once the pool resolves to unavailable (no provider mounted)", async () => {
+    // No creator is ever registered anywhere in this file, so once this
+    // component's own mount asks for the pool, availability settles to
+    // "unavailable" the same way it does for every other test here -
+    // confirmed explicitly, not assumed, since this is the first test to
+    // exercise the emptyFileEditSession branch at all.
+    const rendered = render(
+      <DiffContentPrimitive
+        patch={EMPTY_NEW_FILE_PATCH}
+        cacheScope="empty-new-file-no-provider"
+        mode="unified"
+        wordWrap={false}
+        backgrounds
+        lineNumbers
+        indicatorStyle="bars"
+        fileHeaders={false}
+        isEmptyFile
+        editSession={{
+          editorOptions: EMPTY_EDITOR_OPTIONS,
+          oldFile: null,
+          newFile: { name: "empty.txt", contents: "" },
+        }}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(capturedFileRenders).toHaveLength(1);
+    });
+    expect(
+      rendered.container.querySelector('[data-testid="diff-highlighting"]'),
+    ).toBeNull();
+    expect(capturedFileDiffs).toHaveLength(0);
+    expect(capturedFileRenders[0]?.file.name).toBe("empty.txt");
+    expect(capturedFileRenders[0]?.edit).toBe(true);
+  });
+
+  it("holds the empty-file editor behind the highlight loader until the pool reaches React context, then renders File instead", async () => {
+    // The regression fix 3 closes: before it, `<File>` mounted as soon as
+    // `emptyFileEditSession` was non-null, regardless of `highlightReady` -
+    // before the pool ever reached context - and stayed on the main thread
+    // for that editor's whole lifetime. The gate now precedes the branch.
+    const manager = fakeWorkerPoolManager();
+    registerDiffWorkerPoolCreator(() => manager);
+
+    const props = {
+      patch: EMPTY_NEW_FILE_PATCH,
+      cacheScope: "empty-new-file-pool-context",
+      mode: "unified" as const,
+      wordWrap: false,
+      backgrounds: true,
+      lineNumbers: true,
+      indicatorStyle: "bars" as const,
+      fileHeaders: false,
+      isEmptyFile: true,
+      editSession: {
+        editorOptions: EMPTY_EDITOR_OPTIONS,
+        oldFile: null,
+        newFile: { name: "empty.txt", contents: "" },
+      },
+    };
+    const rendered = render(<DiffContentPrimitive {...props} />);
+
+    await waitFor(() => {
+      expect(
+        rendered.container.querySelector('[data-testid="diff-highlighting"]'),
+      ).not.toBeNull();
+    });
+    expect(capturedFileRenders).toHaveLength(0);
+
+    // The provider re-renders and the pool reaches context.
+    poolState.pool = manager;
+    rendered.rerender(<DiffContentPrimitive {...props} />);
+
+    await waitFor(() => {
+      expect(capturedFileRenders).toHaveLength(1);
+    });
+    expect(
+      rendered.container.querySelector('[data-testid="diff-highlighting"]'),
+    ).toBeNull();
+    expect(capturedFileRenders[0]?.file.name).toBe("empty.txt");
   });
 });
