@@ -1319,6 +1319,13 @@ describe("BrowserSessionTile lifecycle projection", () => {
     );
 
     releaseMove();
+    // Settled inside the test, so the re-enable does not land as an update
+    // outside `act` after it has returned.
+    await waitFor(() => {
+      expect(
+        isDisabled(screen.getByRole("button", { name: "Show here" })),
+      ).toBe(false);
+    });
   });
 
   it("re-enables the button when a move resolves without a binding arriving", async () => {

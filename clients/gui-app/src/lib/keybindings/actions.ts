@@ -608,7 +608,12 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
       "Open a new browser tab in the start page's panel, on the selected device.",
     category: "app",
     kind: "chord",
-    defaultChord: "mod+shift+b",
+    // ⌘⌥B: B for browser, in the ⌘⌥ family the panel already uses (⌘⌥J
+    // above). Not ⌘⇧B - that is the notification center's
+    // (`app.notifications.open`), and `findActionMatchForChord` answers the
+    // first action in `ACTION_IDS` bound to a chord, so a shared default
+    // leaves the later one unreachable.
+    defaultChord: "mod+alt+b",
     secondaryChord: undefined,
     // `app`, like its terminal twin: the chord has to reach the panel from
     // inside a focused terminal, which is the whole point of opening a second

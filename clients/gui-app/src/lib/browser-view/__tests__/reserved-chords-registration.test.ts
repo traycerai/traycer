@@ -59,10 +59,10 @@ describe("reserved browser chords", () => {
   // rebind moves both sides together.
   it("forwards the panel's own new-tab and toggle chords", () => {
     const bindings = getDefaultBindings();
-    expect(bindings["app.browser.new"]).toBe("mod+shift+b");
+    expect(bindings["app.browser.new"]).toBe("mod+alt+b");
     expect(bindings["app.terminal.new"]).toBe("mod+shift+j");
     expect(bindings["app.terminal.toggle"]).toBe("mod+j");
-    for (const token of ["mod+shift+b", "mod+shift+j", "mod+j"]) {
+    for (const token of ["mod+alt+b", "mod+shift+j", "mod+j"]) {
       expect(defaultCommandFor(token)).toBeNull();
     }
   });
@@ -125,7 +125,10 @@ describe("reserved browser chords", () => {
    * already holds is a silent last-write-wins.
    */
   it("emits one row when two forwarded actions share a chord", () => {
-    const collided = bindingsWith({ "epic.next": "mod+k" });
+    const collided = bindingsWith({
+      "epic.next": "mod+k",
+      "epic.prev": "mod+k",
+    });
     const rows = reservedBrowserChordsFor(collided).filter(
       (row) => row.token === "mod+k",
     );

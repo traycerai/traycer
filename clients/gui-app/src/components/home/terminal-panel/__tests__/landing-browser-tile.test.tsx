@@ -206,8 +206,11 @@ describe("<LandingBrowserTile />", () => {
     const view = render(tileElement({}));
     const firstPlacement = captured.props?.placement;
     const firstNode = captured.props?.node;
-    expect(firstPlacement).not.toBeNull();
-    expect(firstNode).not.toBeNull();
+    // `toBeDefined`, not `not.toBeNull`: an unrendered stub leaves both
+    // `undefined`, and the identity checks below would then compare
+    // `undefined` with `undefined` and pass for a tile that never rendered.
+    expect(firstPlacement).toBeDefined();
+    expect(firstNode).toBeDefined();
 
     view.rerender(tileElement({}));
 

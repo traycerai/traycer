@@ -1,7 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  QueryClient,
+  QueryClientProvider,
+  useMutation,
+} from "@tanstack/react-query";
 import { useState, type ReactNode } from "react";
+import { browserMutationKeys } from "@/lib/query-keys/browser-mutation-keys";
 import type { BrowserOpenedTab } from "@traycer/protocol/host/browser/contracts";
 import type { BrowserSessionsState } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
 import {
@@ -342,6 +347,64 @@ describe("useLandingBrowserOpenTab", () => {
   // The cap is re-checked inside the mutation and not only on the card: ⇧⌘B
   // never renders a disabled card, and the count can move between the render
   // that enabled one and the click on it.
+  // The shared mutation scope holds this open behind a popup's on the same
+  // device, and by the time it runs the popup may have taken the device's last
+  // slot. The cap is read when the open RUNS, not from the render `open()` was
+  // called in - otherwise a ninth open goes out for the device to refuse.
+  it("re-reads the device's inventory when a queued open finally runs", async () => {
+    const openTab = vi.fn(() =>
+      Promise.resolve({ sessionId: "s", tabId: "t", handoffToken: null }),
+    );
+    const oneBelowCap = sessionsState({
+      items: [independentSessionWith(LANDING_BROWSER_TAB_CAP - 1)],
+      openTab,
+    });
+    const atCap = sessionsState({
+      items: [independentSessionWith(LANDING_BROWSER_TAB_CAP)],
+      openTab,
+    });
+    let releaseBlocker: () => void = () => undefined;
+    const { result, rerender } = renderHook(
+      (props: { readonly sessions: BrowserSessionsState }) => ({
+        opener: useLandingBrowserOpenTab({
+          canDriveTabs: true,
+          hostId: HOST_ID,
+          sessions: props.sessions,
+          onOpened: () => undefined,
+        }),
+        // Stands in for the popup opener's mutation on the same device.
+        blocker: useMutation({
+          scope: { id: browserMutationKeys.openTabScope(HOST_ID) },
+          mutationFn: () =>
+            new Promise<void>((resolve) => {
+              releaseBlocker = resolve;
+            }),
+        }),
+      }),
+      { wrapper: QueryWrapper, initialProps: { sessions: oneBelowCap } },
+    );
+
+    act(() => {
+      result.current.blocker.mutate();
+    });
+    await waitFor(() => {
+      expect(result.current.blocker.isPending).toBe(true);
+    });
+    act(() => {
+      result.current.opener.open({ placeholderInstanceId: null });
+    });
+    // The popup lands while this open waits: the device is at the cap now.
+    rerender({ sessions: atCap });
+    act(() => {
+      releaseBlocker();
+    });
+
+    await waitFor(() => {
+      expect(mocks.toastError).toHaveBeenCalledWith(landingBrowserCapMessage());
+    });
+    expect(openTab).not.toHaveBeenCalled();
+  });
+
   it("refuses at the cap with the message the chooser's card carries", async () => {
     const openTab = vi.fn(() =>
       Promise.resolve({ sessionId: "s", tabId: "t", handoffToken: null }),

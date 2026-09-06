@@ -4,6 +4,7 @@ import type { BrowserSessionInfo } from "@traycer/protocol/host/browser/contract
 import type { HostResourceScope } from "@traycer/protocol/host/resource-scope";
 import type { BrowserSessionsState } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
 import { consumeIndependentPageOpenedTab } from "@/lib/browser-view/sessions/independent-page-open-registry";
+import { useDesktopWindowId } from "@/lib/windows/desktop-window-id";
 import {
   landingBrowserTabs,
   landingTabRefKey,
@@ -51,6 +52,7 @@ export function useLandingBrowserReconciliation(args: {
   const { hostId, sessions, enabled } = args;
   const inventoryReady = sessions.inventoryReady;
   const items = sessions.items;
+  const desktopWindowId = useDesktopWindowId();
 
   useEffect(() => {
     if (!enabled || !inventoryReady) return;
@@ -83,16 +85,43 @@ export function useLandingBrowserReconciliation(args: {
     // The last one wins because activation is single-valued and a pass can
     // adopt several: the most recent open is the one still on screen in the
     // reader's head.
-    const pageOpened = reconciliation.adoptedTabs.filter((tab) =>
-      consumeIndependentPageOpenedTab({
-        hostId: tab.hostId,
-        sessionId: tab.sessionId,
-        tabId: tab.tabId,
-      }),
-    );
+    //
+    // Consumed in every window, activated in one. `tabOpened` is broadcast to
+    // every subscriber of the device's independent stream, so each desktop
+    // window records the same popup in its own registry and would move its own
+    // panel onto it - a popup raised in one window stealing the selection in
+    // all of them. The popup is a native guest born in the window its opener
+    // lives in, and the device says which through `boundWindowId`; only that
+    // window's reader made the gesture. A popup bound nowhere (a headless
+    // session, watched from a shell with no window id) has one viewer to land.
+    const pageOpened = reconciliation.adoptedTabs
+      .filter((tab) =>
+        consumeIndependentPageOpenedTab({
+          hostId: tab.hostId,
+          sessionId: tab.sessionId,
+          tabId: tab.tabId,
+        }),
+      )
+      .filter((tab) => {
+        const boundWindowId = boundWindowIdOf(items, tab);
+        return boundWindowId === null || boundWindowId === desktopWindowId;
+      });
     const landed = pageOpened.at(-1);
     if (landed !== undefined) store.activateTab(landed.instanceId);
-  }, [enabled, hostId, inventoryReady, items]);
+  }, [desktopWindowId, enabled, hostId, inventoryReady, items]);
+}
+
+/** The window a tab's native guest is bound in, per the device; `null` if none. */
+function boundWindowIdOf(
+  sessions: readonly BrowserSessionInfo[],
+  tab: LandingBrowserTabRef,
+): string | null {
+  return (
+    sessions
+      .find((session) => session.sessionId === tab.sessionId)
+      ?.tabs.find((candidate) => candidate.tabId === tab.tabId)
+      ?.boundWindowId ?? null
+  );
 }
 
 export interface LandingBrowserReconciliationInput {

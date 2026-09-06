@@ -228,12 +228,31 @@ export interface ScreencastSessionOptions {
  * that primitive is exact rather than merely convenient.
  */
 function useStableScope(scope: HostResourceScope): HostResourceScope {
-  const epicId = scope.kind === "epic" ? scope.epicId : null;
+  const epicId = scopeEpicId(scope);
   return useMemo(
     () =>
       epicId === null ? { kind: "independent" } : { kind: "epic", epicId },
     [epicId],
   );
+}
+
+/**
+ * The one primitive a scope reduces to. Exhaustive on `kind`, so a third
+ * scope variant fails to compile here rather than being rebuilt as
+ * `independent` - which would silently change the authorization scope the
+ * subscription is opened under.
+ */
+function scopeEpicId(scope: HostResourceScope): string | null {
+  switch (scope.kind) {
+    case "epic":
+      return scope.epicId;
+    case "independent":
+      return null;
+    default: {
+      const unhandled: never = scope;
+      return unhandled;
+    }
+  }
 }
 
 /**

@@ -23,6 +23,12 @@ import {
   type LandingBrowserReconciliationInput,
 } from "../use-landing-browser-reconciliation";
 
+/** This renderer's desktop window, as `useDesktopWindowId` would report it. */
+const windowIdHarness = vi.hoisted(() => ({ windowId: null as string | null }));
+vi.mock("@/lib/windows/desktop-window-id", () => ({
+  useDesktopWindowId: () => windowIdHarness.windowId,
+}));
+
 const HOST_ID = "host-a";
 
 function browserTabRef(
@@ -321,6 +327,7 @@ describe("useLandingBrowserReconciliation", () => {
     cleanup();
     useLandingPanelStore.getState().resetForTests();
     resetIndependentPageOpensForTests();
+    windowIdHarness.windowId = null;
     vi.restoreAllMocks();
   });
 
@@ -453,6 +460,61 @@ describe("useLandingBrowserReconciliation", () => {
     expect(useLandingPanelStore.getState().activeInstanceId).toBe(
       popup?.instanceId,
     );
+  });
+
+  // `tabOpened` reaches every window's stream, so every window records the
+  // popup. Only the window whose reader raised it - the one its native guest
+  // is bound in - moves its panel onto it; the others adopt it quietly.
+  it("activates a page-opened tab only in the window its guest is bound in", () => {
+    const pass = (
+      boundWindowId: string | null,
+      thisWindowId: string | null,
+    ): boolean => {
+      useLandingPanelStore.getState().resetForTests();
+      storedBrowserTab("browser-1", "tab-1");
+      useLandingPanelStore.getState().activateTab("browser-1");
+      windowIdHarness.windowId = thisWindowId;
+      recordIndependentPageOpenedTab({
+        hostId: HOST_ID,
+        sessionId: "session-1",
+        tabId: "popup-tab",
+      });
+      const session = sessionInfo({
+        sessionId: "session-1",
+        hostId: HOST_ID,
+        scope: independentScope(),
+        tabs: [
+          tabInfo({ tabId: "tab-1", url: "https://example.com/" }),
+          tabInfo({
+            tabId: "popup-tab",
+            url: "https://example.com/next",
+            boundWindowId,
+          }),
+        ],
+      });
+      const view = renderHook(() =>
+        useLandingBrowserReconciliation({
+          hostId: HOST_ID,
+          sessions: sessionsState({ items: [session] }),
+          enabled: true,
+        }),
+      );
+      const state = useLandingPanelStore.getState();
+      const popup = state.tabs.find(
+        (tab) => tab.kind === "browser" && tab.tabId === "popup-tab",
+      );
+      // Adopted either way: the panel lists the device's tabs, whoever
+      // raised them.
+      expect(popup).not.toBeUndefined();
+      view.unmount();
+      return state.activeInstanceId === popup?.instanceId;
+    };
+
+    expect(pass("window-a", "window-a")).toBe(true);
+    expect(pass("window-a", "window-b")).toBe(false);
+    // Unbound - a headless popup - lands in the one window watching it.
+    expect(pass(null, "window-b")).toBe(true);
+    expect(pass(null, null)).toBe(true);
   });
 
   it("leaves the selection alone for tabs nobody at this keyboard opened", () => {

@@ -71,6 +71,17 @@ export interface LandingBrowserOpenRequest {
   readonly placeholderInstanceId: string | null;
 }
 
+/**
+ * What one `open()` hands its mutation: the request, and the device and
+ * stream state as of the dispatch. The mutation prefers the latest render's
+ * state for that device when it runs; the dispatch's is its fallback.
+ */
+interface LandingBrowserDispatch {
+  readonly request: LandingBrowserOpenRequest;
+  readonly hostId: string | null;
+  readonly sessions: BrowserSessionsState | null;
+}
+
 export interface LandingBrowserOpenTab {
   /** A tab has been asked for and the device has not answered yet. */
   readonly isOpening: boolean;
@@ -126,6 +137,23 @@ export function useLandingBrowserOpenTab(args: {
    * pending device through both guards and open a duplicate tab.
    */
   const pendingHostsRef = useRef<Set<string | null>>(new Set());
+  /**
+   * The device's stream state as of the LAST RENDER, for the mutation to read
+   * when it actually runs. A `mutationFn` closes over the render `mutate` was
+   * called in, and the shared scope below can hold this open behind a popup's
+   * for as long as the device takes to answer that one - long enough for the
+   * popup to take the device's last slot. Counting from the dispatching render
+   * then sends a ninth open the device refuses, instead of this side's cap
+   * refusing it first. The popup opener reads its inventory through a ref for
+   * the same reason.
+   */
+  const latestRef = useRef<{
+    readonly hostId: string | null;
+    readonly sessions: BrowserSessionsState | null;
+  }>({ hostId, sessions });
+  useEffect(() => {
+    latestRef.current = { hostId, sessions };
+  }, [hostId, sessions]);
   const openTabKey = browserMutationKeys.openTab(hostId);
   const tabCount = landingBrowserTabCount(sessions, hostId);
   const openMutation = useMutation({
@@ -135,8 +163,16 @@ export function useLandingBrowserOpenTab(args: {
     // whatever the other one just opened. See `openTabScope`.
     scope: { id: browserMutationKeys.openTabScope(hostId) },
     mutationFn: async (
-      _request: LandingBrowserOpenRequest,
+      dispatched: LandingBrowserDispatch,
     ): Promise<LandingBrowserTabRef> => {
+      // The device this open is for was fixed at dispatch. Its stream state is
+      // read NOW: the latest render's if the panel still targets that device,
+      // else the dispatch's own - the panel moved on, and the latest render
+      // describes some other device.
+      const latest = latestRef.current;
+      const target = dispatched.hostId;
+      const live =
+        latest.hostId === target ? latest.sessions : dispatched.sessions;
       // `inventoryReady` belongs in THIS guard rather than being left to the
       // cap check below: a live stream that has not published an inventory has
       // no count, so the cap check passes vacuously and the open goes to a
@@ -150,24 +186,26 @@ export function useLandingBrowserOpenTab(args: {
         throw new Error(landingBrowserViewerMessage());
       }
       if (
-        hostId === null ||
-        sessions === null ||
-        sessions.lifecycle !== "live" ||
-        !sessions.inventoryReady
+        target === null ||
+        live === null ||
+        live.lifecycle !== "live" ||
+        !live.inventoryReady
       ) {
-        throw new Error(browserSessionsRefusal(sessions));
+        throw new Error(browserSessionsRefusal(live));
       }
       // Re-checked here and not only at the affordance: the chord opens a tab
       // without ever rendering the chooser's disabled card, and the count can
-      // move between the render that enabled a card and the click on it.
-      if (tabCount !== null && tabCount >= LANDING_BROWSER_TAB_CAP) {
+      // move between the render that enabled a card and the click on it - or,
+      // through the shared scope, between the dispatch and this line.
+      const count = landingBrowserTabCount(live, target);
+      if (count !== null && count >= LANDING_BROWSER_TAB_CAP) {
         throw new Error(landingBrowserCapMessage());
       }
-      const opened = await sessions.openTab(null, DEFAULT_BROWSER_TILE_URL);
+      const opened = await live.openTab(null, DEFAULT_BROWSER_TILE_URL);
       return {
         kind: "browser",
         instanceId: `landing-browser-${uuidv4()}`,
-        hostId,
+        hostId: target,
         sessionId: opened.sessionId,
         tabId: opened.tabId,
         name: defaultLandingBrowserTitle({
@@ -181,9 +219,11 @@ export function useLandingBrowserOpenTab(args: {
     // a host-swap race, and here it is what lets the settle clear the right
     // latch. Reading `hostId` in `onSettled` instead would read the host of
     // whatever render the answer happened to arrive in.
-    onMutate: (): { readonly hostId: string | null } => ({ hostId }),
-    onSuccess: (tab, request) => {
-      onOpened(tab, request);
+    onMutate: (dispatched): { readonly hostId: string | null } => ({
+      hostId: dispatched.hostId,
+    }),
+    onSuccess: (tab, dispatched) => {
+      onOpened(tab, dispatched.request);
     },
     onError: (cause: Error) => {
       toast.error(cause.message);
@@ -208,9 +248,9 @@ export function useLandingBrowserOpenTab(args: {
       if (isOpening) return;
       if (pendingHostsRef.current.has(hostId)) return;
       pendingHostsRef.current.add(hostId);
-      mutate(request);
+      mutate({ request, hostId, sessions });
     },
-    [hostId, isOpening, mutate],
+    [hostId, isOpening, mutate, sessions],
   );
   return { isOpening, tabCount, open };
 }
