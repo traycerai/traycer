@@ -67,6 +67,10 @@ interface SerializerContext {
   listDepth: number;
   orderedListIndex: number;
   inListItem: boolean;
+  // True while rendering the content of a GFM table cell: inline text is
+  // escaped per text node, mark-aware, so a literal `|` cannot split the cell
+  // (see `escapeTableCellText` / `escapeTableCellCode`).
+  inTableCell: boolean;
 }
 
 function createContext(options: SerializerOptions): SerializerContext {
@@ -79,6 +83,7 @@ function createContext(options: SerializerOptions): SerializerContext {
     listDepth: 0,
     orderedListIndex: 0,
     inListItem: false,
+    inTableCell: false,
   };
 }
 
@@ -156,6 +161,75 @@ function renderableMarks(
   ];
 }
 
+interface TextRunEscaping {
+  text: (text: string, marks: RenderableMark[]) => string;
+  // Applied to every mark delimiter. The only delimiter carrying variable
+  // content is a link's `](href)`; the fixed ones (`**`, `` ` ``, `~~`, `[`)
+  // contain nothing a cell escape touches, so this is a no-op for them.
+  delimiter: (delimiter: string) => string;
+}
+
+const noEscaping: TextRunEscaping = {
+  text: (text) => text,
+  delimiter: (delimiter) => delimiter,
+};
+
+// GFM table cells escape a literal `|` as `\|`. The parser (marked's
+// `splitCells`) decides whether a pipe is escaped by the PARITY of the
+// backslashes in front of it, then strips exactly one backslash from each
+// `\|`. Outside inline code that is the ordinary CommonMark escape: doubling
+// every backslash keeps a literal `\` literal and guarantees the `\|` we add
+// is read as escaped even after a trailing `\`.
+function escapeTableCellText(text: string): string {
+  return text.replace(/\\/g, "\\\\").replace(/\|/g, "\\|");
+}
+
+// Inside inline code CommonMark processes no escapes, so a doubled backslash
+// comes back doubled and doubles AGAIN on the next md → doc → md pass. Every
+// agent write to an artifact is such a pass; three regex backslashes in one
+// table row grew to 3 × 2^21 characters in ~40 appends and blocked the host's
+// event loop inside the markdown lexer for good. Code text therefore keeps
+// its backslashes and escapes only the pipe. When the pipe follows an ODD run
+// of backslashes one more is added so the parity still reads "escaped" and
+// the cell cannot split: GFM has no encoding for a literal `\|` inside code,
+// so that one case is lossy by design, but it converges after a single pass
+// instead of growing (pinned by `json-content-serializer-tables.test.ts`).
+function escapeTableCellCode(text: string): string {
+  return text.replace(
+    /\|/g,
+    (_pipe: string, offset: number, source: string): string => {
+      let run = 0;
+      for (let i = offset - 1; i >= 0 && source[i] === "\\"; i--) run++;
+      return run % 2 === 1 ? "\\\\|" : "\\|";
+    },
+  );
+}
+
+const tableCellEscaping: TextRunEscaping = {
+  text: (text, marks) =>
+    marks.some((mark) => mark.type === "code")
+      ? escapeTableCellCode(text)
+      : escapeTableCellText(text),
+  // A link destination is parsed with CommonMark escapes (and marked strips
+  // the `\|`), so the plain-text escape round-trips it exactly as the whole
+  // cell used to.
+  delimiter: escapeTableCellText,
+};
+
+// Node types whose serializer renders its inline content through
+// `serializeChildren` and therefore escapes it per text node while
+// `inTableCell` is set. Anything else that lands in a cell (mention, image,
+// hard break, unknown nodes) is escaped as a rendered whole, exactly as the
+// entire cell used to be.
+const TABLE_CELL_CONTAINER_TYPES: ReadonlySet<string> = new Set([
+  "paragraph",
+  "heading",
+  "bulletList",
+  "orderedList",
+  "listItem",
+  "table",
+]);
+
 /**
  * Exported for the composer's recovery seam, which quotes a dead send's text
  * back to its author and is held to PARITY with this serializer: the marks a
@@ -181,8 +255,53 @@ function renderableMarks(
  * after "b" would force italic closed and reopened, doubling delimiters.
  */
 export function serializeTextRun(nodes: JsonContent[]): string {
-  const textNodes = nodes.filter((node) => Boolean(node.text));
-  const nodeMarks = textNodes.map((node) => renderableMarks(node.marks));
+  return serializeTextRunWith(nodes, noEscaping);
+}
+
+interface TextSegment {
+  text: string;
+  marks: RenderableMark[];
+}
+
+function sameMarkKeys(a: RenderableMark[], b: RenderableMark[]): boolean {
+  if (a.length !== b.length) return false;
+  const keys = new Set(b.map((mark) => mark.key));
+  return a.every((mark) => keys.has(mark.key));
+}
+
+// Adjacent text nodes carrying the same renderable marks are one continuous
+// span in the output - nothing closes or opens between them under the
+// boundary rules in `serializeTextRunWith` - so they are joined here and
+// escaped as ONE string. For the plain-text cell escape that changes nothing
+// (it is context-free per character), but the inline-code pipe escape reads
+// the backslash PARITY in front of the pipe, and a mark that renders nothing
+// (a thread anchor) can split one code span between a trailing `\` and a
+// leading `|`. Escaped on its own the second node sees no backslash, emits
+// `\|`, and the parser reads `a\\|b` as an even run and splits the cell.
+function coalesceTextSegments(nodes: JsonContent[]): TextSegment[] {
+  const segments: TextSegment[] = [];
+  for (const node of nodes) {
+    if (!node.text) continue;
+    const marks = renderableMarks(node.marks);
+    const last = segments[segments.length - 1];
+    if (last !== undefined && sameMarkKeys(last.marks, marks)) {
+      last.text += node.text;
+    } else {
+      segments.push({ text: node.text, marks });
+    }
+  }
+  return segments;
+}
+
+// `escaping.text` sees each segment's text together with its renderable
+// marks, so a table cell can escape plain text and code text differently
+// (see `tableCellEscaping`); `escaping.delimiter` sees each mark delimiter.
+function serializeTextRunWith(
+  nodes: JsonContent[],
+  escaping: TextRunEscaping,
+): string {
+  const segments = coalesceTextSegments(nodes);
+  const nodeMarks = segments.map((segment) => segment.marks);
 
   const continuation = (key: string, start: number): number => {
     let end = start;
@@ -200,12 +319,12 @@ export function serializeTextRun(nodes: JsonContent[]): string {
 
   const closeDownTo = (depth: number): void => {
     for (let i = open.length - 1; i >= depth; i--) {
-      out += open[i].close;
+      out += escaping.delimiter(open[i].close);
     }
     open = open.slice(0, depth);
   };
 
-  textNodes.forEach((node, index) => {
+  segments.forEach((segment, index) => {
     const marks = nodeMarks[index];
     const nextKeys = new Set(marks.map((mark) => mark.key));
 
@@ -233,10 +352,10 @@ export function serializeTextRun(nodes: JsonContent[]): string {
       ...toOpen.filter((mark) => mark.type === "code"),
     ];
     for (const mark of ordered) {
-      out += mark.open;
+      out += escaping.delimiter(mark.open);
       open.push(mark);
     }
-    out += node.text ?? "";
+    out += escaping.text(segment.text, marks);
   });
 
   closeDownTo(0);
@@ -827,10 +946,12 @@ function serializeTable(node: JsonContent, ctx: SerializerContext): string {
         if (cell.type === "tableHeader") {
           isHeader = true;
         }
-        const cellContent = serializeChildren(cell.content, ctx);
-        // Escape backslashes before pipes so a literal trailing `\` in a cell
-        // can't escape the `\|` we add and merge two cells together.
-        cells.push(cellContent.replace(/\\/g, "\\\\").replace(/\|/g, "\\|"));
+        // Escaping happens per text node under `inTableCell` (mark-aware, see
+        // `escapeTableCellRun`) - never on the rendered cell string, which
+        // cannot tell code text from plain text.
+        cells.push(
+          serializeChildren(cell.content, { ...ctx, inTableCell: true }),
+        );
       }
     }
 
@@ -866,9 +987,10 @@ function serializeChildren(
   // hardBreak, …) end the run and close any open marks.
   const parts: string[] = [];
   let textRun: JsonContent[] = [];
+  const escaping = ctx.inTableCell ? tableCellEscaping : noEscaping;
   const flushTextRun = (): void => {
     if (textRun.length > 0) {
-      parts.push(serializeTextRun(textRun));
+      parts.push(serializeTextRunWith(textRun, escaping));
       textRun = [];
     }
   };
@@ -878,7 +1000,14 @@ function serializeChildren(
       textRun.push(child);
     } else {
       flushTextRun();
-      parts.push(serializeNode(child, ctx));
+      const rendered = serializeNode(child, ctx);
+      const escapesItsOwnText =
+        child.type !== undefined && TABLE_CELL_CONTAINER_TYPES.has(child.type);
+      parts.push(
+        ctx.inTableCell && !escapesItsOwnText
+          ? escapeTableCellText(rendered)
+          : rendered,
+      );
     }
   }
   flushTextRun();
