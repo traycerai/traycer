@@ -654,6 +654,114 @@ describe("buildHostUpdateCommand composite", () => {
     expect(result.human).toContain("updated host 1.3.0-rc.1 → 1.2.0");
   });
 
+  it("EXPLICIT request for another build of the installed release with --allow-downgrade (2.0.0+foo over 2.0.0+bar): the owned installer installs it - never the shared stage's up-to-date no-op", async () => {
+    // Codex r3945280604. Falsification: keep the downgrade arm to
+    // `ordering === "less"` and the request takes the shared stage, whose
+    // phase 1 refuses the pair (or, before that refusal, reported it up to
+    // date) - the download mock is called and the installer is not.
+    mocks.readHostInstallRecordMock.mockResolvedValue(
+      sampleRecord("2.0.0+bar"),
+    );
+    mocks.installHostDowngradeMock.mockResolvedValue(
+      appliedOutcome("2.0.0+bar", "2.0.0+foo", null),
+    );
+
+    const result = await buildHostUpdateCommand({
+      force: false,
+      allowDowngrade: true,
+      versionRequest: "2.0.0+foo",
+      ackNonce: null,
+    })(fakeCtx());
+
+    expect(mocks.downloadAndStageHostMock).not.toHaveBeenCalled();
+    expect(mocks.installHostDowngradeMock).toHaveBeenCalledWith(
+      expect.objectContaining({ version: "2.0.0+foo" }),
+    );
+    expect(mocks.claimUpdateProgressMarkerBeforeLockMock).toHaveBeenCalledWith(
+      "production",
+      expect.objectContaining({
+        state: "updating",
+        targetVersion: "2.0.0+foo",
+      }),
+    );
+    expect(result.human).toContain("updated host 2.0.0+bar → 2.0.0+foo");
+  });
+
+  it("EXPLICIT request for the installed record's own string with --allow-downgrade (2.0.0+bar over 2.0.0+bar): the shared stage's up-to-date no-op, the installer never runs (control)", async () => {
+    mocks.readHostInstallRecordMock.mockResolvedValue(
+      sampleRecord("2.0.0+bar"),
+    );
+    mocks.downloadAndStageHostMock.mockResolvedValue({
+      outcome: "short-circuit",
+      reason: "installed-up-to-date",
+      targetVersion: "2.0.0+bar",
+      installedVersion: "2.0.0+bar",
+      stagedVersion: null,
+    } satisfies HostDownloadOutcome);
+    mocks.readHostPidMetadataMock.mockResolvedValue({
+      pid: 4242,
+      hostId: "host-1",
+      version: "2.0.0+bar",
+      websocketUrl: "ws://127.0.0.1:51820/rpc",
+      startedAt: "2026-01-01T00:00:00.000Z",
+      processStartIdentity: null,
+      layer0: null,
+      layer0Slot: null,
+    });
+    mocks.identityVerdictMock.mockResolvedValue("current");
+
+    const result = await buildHostUpdateCommand({
+      force: false,
+      allowDowngrade: true,
+      versionRequest: "2.0.0+bar",
+      ackNonce: null,
+    })(fakeCtx());
+
+    expect(mocks.installHostDowngradeMock).not.toHaveBeenCalled();
+    expect(mocks.stopHostForRestartWithAttemptMock).not.toHaveBeenCalled();
+    expect(result.human).toContain("no-op");
+  });
+
+  it("EXPLICIT request refused by the download before any transfer (no --allow-downgrade): the refusal surfaces with its code, nothing is announced and nothing is stamped (control - the seam, not the round's fix)", async () => {
+    // The download's phase-1 refusal is pinned in download-stage.test.ts;
+    // here it is a fixture. What this pins is the seam: a
+    // `E_HOST_UPDATE_NOT_NEWER` that arrives before `onWillDownload` has no
+    // announced target, so the catch stamps nothing and withdraws nothing
+    // (the same arm a manifest failure takes). The message is synthetic.
+    mocks.readHostInstallRecordMock.mockResolvedValue(
+      sampleRecord("2.0.0+bar"),
+    );
+    mocks.downloadAndStageHostMock.mockRejectedValue(
+      cliError({
+        code: CLI_ERROR_CODES.HOST_UPDATE_NOT_NEWER,
+        message: "synthetic phase-1 refusal",
+        details: { targetVersion: "2.0.0+foo", installedVersion: "2.0.0+bar" },
+        exitCode: 1,
+      }),
+    );
+
+    await expect(
+      buildHostUpdateCommand({
+        force: false,
+        allowDowngrade: false,
+        versionRequest: "2.0.0+foo",
+        ackNonce: null,
+      })(fakeCtx()),
+    ).rejects.toMatchObject({ code: CLI_ERROR_CODES.HOST_UPDATE_NOT_NEWER });
+    expect(mocks.installHostDowngradeMock).not.toHaveBeenCalled();
+    expect(mocks.stopHostForRestartWithAttemptMock).not.toHaveBeenCalled();
+    expect(
+      mocks.claimUpdateProgressMarkerBeforeLockMock,
+    ).not.toHaveBeenCalled();
+    expect(mocks.createUpdateProgressMarkerIfAbsentMock).not.toHaveBeenCalled();
+    expect(
+      mocks.replaceUpdateProgressMarkerIfUnchangedMock,
+    ).not.toHaveBeenCalled();
+    expect(
+      mocks.deleteUpdateProgressMarkerIfUnchangedMock,
+    ).not.toHaveBeenCalled();
+  });
+
   it("downgrade arm no-op (another actor installed the requested version under the lock) with the record not yet running: the same bound activation arm restarts onto it", async () => {
     // Falsification: treat the downgrade's no-op as applied and this
     // throws on the outcome's shape; skip the re-derivation and the debt
@@ -2754,6 +2862,59 @@ describe("buildHostUpdateCommand update-progress marker (T16)", () => {
     );
   });
 
+  it("catalog domain: the record IS the announced 2.0.0+foo but the host runs 2.0.0+bar - the lost download is stamped, not withdrawn (CodeRabbit r3945309408)", async () => {
+    // `targetObservedRunning` is record-string identity AND an `activated`
+    // reading; in the catalog domain that reading is now string identity of
+    // the running host with the record. Falsification: compare the running
+    // host with the record through the comparator and this run's record
+    // is withdrawn over a host that never ran what it announced.
+    mocks.downloadAndStageHostMock.mockImplementation(
+      async (opts: DownloadAndStageHostOptions) => {
+        if (opts.onWillDownload === null) {
+          throw new Error("expected onWillDownload to be provided");
+        }
+        await opts.onWillDownload("2.0.0+foo");
+        throw new Error("download failed: ECONNRESET");
+      },
+    );
+    mocks.readHostInstallRecordMock.mockResolvedValue(
+      sampleRecord("2.0.0+foo"),
+    );
+    mocks.readHostPidMetadataMock.mockResolvedValue({
+      pid: 4242,
+      hostId: "host-1",
+      version: "2.0.0+bar",
+      websocketUrl: "ws://127.0.0.1:51820/rpc",
+      startedAt: "2026-01-01T00:00:00.000Z",
+      processStartIdentity: null,
+      layer0: null,
+      layer0Slot: null,
+    });
+    mocks.identityVerdictMock.mockResolvedValue("current");
+
+    await expect(
+      buildHostUpdateCommand({
+        force: false,
+        allowDowngrade: false,
+        versionRequest: "2.0.0+foo",
+        ackNonce: null,
+      })(fakeCtx()),
+    ).rejects.toThrow("download failed: ECONNRESET");
+
+    const written = mocks.claimUpdateProgressMarkerBeforeLockMock.mock
+      .calls[0][1] as HostUpdateProgress;
+    expect(
+      mocks.deleteUpdateProgressMarkerIfUnchangedMock,
+    ).not.toHaveBeenCalled();
+    expect(
+      mocks.replaceUpdateProgressMarkerIfUnchangedMock,
+    ).toHaveBeenCalledWith(
+      "production",
+      written,
+      expect.objectContaining({ state: "failed", targetVersion: "2.0.0+foo" }),
+    );
+  });
+
   it("the same artifact observed running - record 2.0.0 for an announced 2.0.0 - is withdrawn (control for the build-metadata pin)", async () => {
     mocks.downloadAndStageHostMock.mockImplementation(
       async (opts: DownloadAndStageHostOptions) => {
@@ -2994,12 +3155,15 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
     );
   });
 
-  it("EXPLICIT request BELOW the install record (installed-up-to-date) with debt: the record's debt is left and logged, no restart, the no-op, exit 0", async () => {
-    // `--version 1.2.0` against an installed 2.0.0 short-circuits as
-    // installed-up-to-date (at or above the request). The 2.0.0 record's
-    // debt is not this run's to pay: the caller confirmed 1.2.0 and nothing
-    // else. Falsification: gate the pre-lock debt on the record alone and
-    // the host restarts onto 2.0.0 under a confirmation for 1.2.0.
+  it("EXPLICIT request whose record MOVED above it between the download's check and the debt read, with debt: the record's debt is left and logged, no restart, the no-op, exit 0", async () => {
+    // The download's phase 1 refuses an explicit request below the record
+    // before any transfer (round 16, pinned in download-stage.test.ts), so
+    // installed-up-to-date for `--version 1.2.0` means the record WAS
+    // 1.2.0 at that check; the 2.0.0 the debt read sees moved in the gap
+    // (another actor's commit). Its debt is not this run's to pay: the
+    // caller confirmed 1.2.0 and nothing else. Falsification: gate the
+    // pre-lock debt on the record alone and the host restarts onto 2.0.0
+    // under a confirmation for 1.2.0.
     mocks.downloadAndStageHostMock.mockResolvedValue({
       outcome: "short-circuit",
       reason: "installed-up-to-date",
@@ -3887,6 +4051,71 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
       }),
     );
     expect(result.human).toContain("no-op");
+  });
+
+  it("catalog domain (no runtime stamp): another build of the record's release running (2.0.0+bar under a 2.0.0+foo record) is DEBT, not activated - the host restarts onto the committed artifact", async () => {
+    // CodeRabbit r3945309408: the comparator called the pair equal, so a
+    // record without a stamp read as activated over a host serving another
+    // build - the debt gate saw nothing to collect, `targetObservedRunning`
+    // withdrew a failure naming 2.0.0+foo, and `clearStaleFailedMarker`
+    // cleared one. A release host publishes exactly its catalog version,
+    // so string identity is the rule in this domain too. Falsification:
+    // compare through `compareHostVersions` and no restart happens.
+    mocks.downloadAndStageHostMock.mockResolvedValue(upToDate("2.0.0+foo"));
+    mocks.readHostInstallRecordMock.mockResolvedValue(
+      sampleRecord("2.0.0+foo"),
+    );
+    mocks.readHostPidMetadataMock.mockResolvedValue(
+      pidRecord("2.0.0+bar", 4242),
+    );
+    mocks.identityVerdictMock.mockResolvedValue("current");
+
+    const result = await buildHostUpdateCommand({
+      force: false,
+      allowDowngrade: false,
+      ackNonce: null,
+    })(fakeCtx());
+
+    expect(mocks.stopHostForRestartWithAttemptMock).toHaveBeenCalledTimes(1);
+    const projected = projectInstallResultLikeDesktop(result.data);
+    expect(projected.previousVersion).toBe("2.0.0+bar");
+    expect(projected.version).toBe("2.0.0+foo");
+  });
+
+  it("catalog domain (no runtime stamp): a failed marker naming the record 2.0.0+foo while 2.0.0+bar runs is NOT cleared - the reading is debt, so the stale-failed reconcile never runs", async () => {
+    mocks.downloadAndStageHostMock.mockResolvedValue(upToDate("2.0.0+foo"));
+    mocks.readHostInstallRecordMock.mockResolvedValue(
+      sampleRecord("2.0.0+foo"),
+    );
+    mocks.readHostPidMetadataMock.mockResolvedValue(
+      pidRecord("2.0.0+bar", 4242),
+    );
+    mocks.identityVerdictMock.mockResolvedValue("current");
+    mocks.readUpdateProgressMarkerMock.mockResolvedValue({
+      state: "failed",
+      error: "host did not become healthy: tcp refused",
+      targetVersion: "2.0.0+foo",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      writerId: null,
+      writerStartIdentity: null,
+    });
+
+    await buildHostUpdateCommand({
+      force: false,
+      allowDowngrade: false,
+      ackNonce: null,
+    })(fakeCtx());
+
+    // The debt arm's own marker takes over the stale `failed` by CAS; the
+    // stale-failed reconcile's conditional delete of the FAILED record
+    // never fires. Falsification: compare through `compareHostVersions`
+    // and the reading is `activated`, the reconcile runs and deletes it.
+    expect(
+      mocks.deleteUpdateProgressMarkerIfUnchangedMock.mock.calls.filter(
+        (call) => (call[1] as HostUpdateProgress).state === "failed",
+      ),
+    ).toEqual([]);
+    expect(mocks.stopHostForRestartWithAttemptMock).toHaveBeenCalledTimes(1);
   });
 
   it("a non-SemVer runtime stamp the running host does NOT match: debt, activated - a staging host is never 'foreign'", async () => {

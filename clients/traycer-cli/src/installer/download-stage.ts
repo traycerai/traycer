@@ -406,6 +406,40 @@ async function downloadAndStageHostInSegment(
       );
       const installedAtOrAboveTarget =
         installedVsTarget.comparable && installedVsTarget.ordering !== "less";
+      // "Up to date" for an EXPLICIT request is the request's own string
+      // and nothing else. A record the comparator puts at or above the
+      // request by ANOTHER string - strictly newer (`--version 1.2.0` over
+      // an installed 2.0.0), or another build of the same release
+      // (`2.0.0+bar` over a requested `2.0.0+foo`: the comparator ignores
+      // build metadata) - is not the artifact the caller named. Reporting
+      // it as up to date handed `host update` a no-op, exit 0, with the
+      // requested artifact never delivered: a request that delivered
+      // nothing does not report success, the rule the promote gate and the
+      // version binding under the activation lock already apply to the same
+      // fact. Refused HERE, before any transfer, with the code that fact
+      // carries everywhere else and its remedy. An implicit "latest" keeps
+      // the at-or-above reading: the registry's release is installed, in a
+      // build the promote gate would not replace.
+      if (
+        !requestedLatest &&
+        installedAtOrAboveTarget &&
+        installed.version !== targetVersion
+      ) {
+        const relation =
+          installedVsTarget.ordering === "greater"
+            ? `newer than the requested ${targetVersion}`
+            : `another build of the same release as the requested ${targetVersion}`;
+        throw cliError({
+          code: CLI_ERROR_CODES.HOST_UPDATE_NOT_NEWER,
+          message: `host download: the installed host is ${installed.version}, ${relation}; nothing was transferred. Run 'traycer host status' to see what is installed, or pass --allow-downgrade to 'traycer host update' to install ${targetVersion} over it`,
+          details: {
+            environment: opts.environment,
+            targetVersion,
+            installedVersion: installed.version,
+          },
+          exitCode: 1,
+        });
+      }
       const alreadyStagedAtTarget =
         stagedAfterYankHeal !== null &&
         stagedAfterYankHeal.stageId !== null &&

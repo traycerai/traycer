@@ -469,6 +469,122 @@ describe("downloadAndStageHost", () => {
     expect(downloadStarted).toBe(false);
   });
 
+  it("EXPLICIT request for another build of the installed release (2.0.0+foo over 2.0.0+bar): refused as E_HOST_UPDATE_NOT_NEWER before any transfer, not 'up to date'", async () => {
+    // Codex r3945280604: the comparator calls the pair equal, so this read
+    // as installed-up-to-date and `host update --version 2.0.0+foo` exited 0
+    // with the requested artifact never delivered. Falsification: drop the
+    // string check in phase 1 and this resolves as a short-circuit.
+    await writeInstall("2.0.0+bar", {});
+    let downloadStarted = false;
+    let announced = false;
+    await expect(
+      downloadAndStageHost({
+        environment: ENV,
+        versionRequest: "2.0.0+foo",
+        automatic: false,
+        onProgress: noopProgress,
+        registryClient: fakeRegistryClient({
+          latest: "2.0.0+foo",
+          versions: [{ version: "2.0.0+foo", yanked: false }],
+          downloadGate: null,
+          onDownloadStart: () => {
+            downloadStarted = true;
+          },
+        }),
+        onWillDownload: async () => {
+          announced = true;
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_UPDATE_NOT_NEWER,
+      details: { targetVersion: "2.0.0+foo", installedVersion: "2.0.0+bar" },
+    });
+    expect(downloadStarted).toBe(false);
+    expect(announced).toBe(false);
+    expect(await readHostStagedRecord(ENV)).toBeNull();
+  });
+
+  it("EXPLICIT request BELOW the installed record (1.2.0 over 2.0.0): refused as E_HOST_UPDATE_NOT_NEWER before any transfer - a request that delivered nothing does not report 'up to date'", async () => {
+    // Falsification: narrow the phase-1 check back to the comparator's
+    // "equal" and this resolves as installed-up-to-date, exit 0, with
+    // nothing delivered for 1.2.0.
+    await writeInstall("2.0.0", {});
+    let downloadStarted = false;
+    await expect(
+      downloadAndStageHost({
+        environment: ENV,
+        versionRequest: "1.2.0",
+        automatic: false,
+        onProgress: noopProgress,
+        registryClient: fakeRegistryClient({
+          latest: "2.0.0",
+          versions: [
+            { version: "1.2.0", yanked: false },
+            { version: "2.0.0", yanked: false },
+          ],
+          downloadGate: null,
+          onDownloadStart: () => {
+            downloadStarted = true;
+          },
+        }),
+        onWillDownload: null,
+      }),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_UPDATE_NOT_NEWER,
+      message: expect.stringContaining("newer than the requested 1.2.0"),
+      details: { targetVersion: "1.2.0", installedVersion: "2.0.0" },
+    });
+    expect(downloadStarted).toBe(false);
+    expect(await readHostStagedRecord(ENV)).toBeNull();
+  });
+
+  it("EXPLICIT request for the installed record's own string (2.0.0+bar over 2.0.0+bar): up to date (control)", async () => {
+    await writeInstall("2.0.0+bar", {});
+    const outcome = await downloadAndStageHost({
+      environment: ENV,
+      versionRequest: "2.0.0+bar",
+      automatic: false,
+      onProgress: noopProgress,
+      registryClient: fakeRegistryClient({
+        latest: "2.0.0+bar",
+        versions: [{ version: "2.0.0+bar", yanked: false }],
+        downloadGate: null,
+        onDownloadStart: null,
+      }),
+      onWillDownload: null,
+    });
+    expect(outcome).toMatchObject({
+      outcome: "short-circuit",
+      reason: "installed-up-to-date",
+      installedVersion: "2.0.0+bar",
+    });
+  });
+
+  it("IMPLICIT latest 2.0.0 over an installed 2.0.0+bar: up to date - the registry's release is installed, in a build the promote gate would not replace (control)", async () => {
+    await writeInstall("2.0.0+bar", {});
+    let downloadStarted = false;
+    const outcome = await downloadAndStageHost({
+      environment: ENV,
+      versionRequest: null,
+      automatic: false,
+      onProgress: noopProgress,
+      registryClient: fakeRegistryClient({
+        latest: "2.0.0",
+        versions: [{ version: "2.0.0", yanked: false }],
+        downloadGate: null,
+        onDownloadStart: () => {
+          downloadStarted = true;
+        },
+      }),
+      onWillDownload: null,
+    });
+    expect(outcome).toMatchObject({
+      outcome: "short-circuit",
+      reason: "installed-up-to-date",
+    });
+    expect(downloadStarted).toBe(false);
+  });
+
   it("short-circuits when the target is already staged", async () => {
     await writeInstall("1.0.0", {});
     let downloadStarted = false;

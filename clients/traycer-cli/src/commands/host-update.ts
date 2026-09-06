@@ -55,8 +55,9 @@ import { createServiceController, serviceLabelFor } from "../service";
 // apply half below acquires the lock, matching `host apply`'s own
 // contract that the caller holds it across reconcile/read/no-op/busy/
 // commit. An explicit `--release X --allow-downgrade` below the installed
-// version uses a private install source instead, with the same progress,
-// mutation authority, busy checks, and post-swap health verification.
+// version, or naming another build of its release, uses a private install
+// source instead, with the same progress, mutation authority, busy checks,
+// and post-swap health verification.
 //
 // Busy (D6): the stage is kept - `applyHost`'s busy check runs before it
 // touches the stage - and this command re-throws `E_HOST_BUSY` with the
@@ -601,9 +602,13 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
           ? activationReading
           : null;
       // An EXPLICIT request owes the activation of ITS version and no other.
-      // The installed-up-to-date short-circuit fires for a record AT OR
-      // ABOVE the request, and a record above it (`--version 1.2.0` against
-      // an installed 2.0.0) is not this run's to restart onto - the caller
+      // For an explicit request the installed-up-to-date short-circuit
+      // fires only for a record that IS the request (the download refuses
+      // any other record at or above it before a transfer), so the record
+      // the debt read sees can name another version only if it MOVED since
+      // that check - another actor's commit in the gap - and a record above
+      // the request (2.0.0 after a request for 1.2.0) is not this run's to
+      // restart onto - the caller
       // confirmed 1.2.0 and nothing else (`installedVersionMismatch`). That
       // record's debt is left, logged, to an implicit `host update` or a
       // `host restart`, and this run reports the no-op the short-circuit
@@ -884,7 +889,10 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
       }
       // A refusal because a NEWER host is installed than the version this
       // run was asked for - `E_HOST_UPDATE_NOT_NEWER`, from the promote-time
-      // discard or from `installedVersionMismatch`'s newer arm - is a
+      // discard or from `installedVersionMismatch`'s newer arm (the
+      // download's phase-1 refusal carries the same code, but arrives
+      // before any target is announced, so no record of this run's exists
+      // and none of the arms below runs) - is a
       // SUPERSEDED request, not a failure: another actor delivered
       // something newer and nothing was wrong. It is treated exactly like a
       // target observed running: this run's record is WITHDRAWN, never
@@ -1237,8 +1245,24 @@ async function readActivationState(
   if (!isValidHostVersion(running.version)) {
     return { kind: "foreign-runtime", installedVersion: installed.version };
   }
+  // A release host publishes exactly its catalog version (the build stamps
+  // `src/config.ts`'s version into the binary and into the archive's
+  // `version.json` alike), so the record's string IS what an activated host
+  // of that record publishes: identity is the string here as in the
+  // runtime-stamp domain, and another build of the same release
+  // (`2.0.0+bar` running under a `2.0.0+foo` record) is debt - the committed
+  // artifact is not the one serving. The comparator's build-metadata-blind
+  // "equal" would read it as activated, and every consumer keyed on
+  // `activated` - the debt gate, `targetObservedRunning`'s withdrawal, the
+  // stale-failed clear - would then treat an artifact that never ran as
+  // delivered. The comparator is kept for what it is for: a pair it
+  // cannot ORDER (a `local-*` record, a runtime the catalog does not name)
+  // is not this command's debt to collect and stays activated by policy.
+  if (running.version === installed.version) {
+    return { kind: "activated", installedVersion: installed.version };
+  }
   const comparison = compareHostVersions(running.version, installed.version);
-  if (!comparison.comparable || comparison.ordering === "equal") {
+  if (!comparison.comparable) {
     return { kind: "activated", installedVersion: installed.version };
   }
   return {
@@ -1305,9 +1329,9 @@ async function targetObservedRunning(
  * failed before the swap, read by a later `host update` while the registry
  * offers only 1.9.0, or an attempt at `2.0.0+foo` over a host that runs
  * `2.0.0+bar` - is a report the observed state does not contradict, and it
- * stays until a later run that does work replaces it (a retry at that
- * target over a record at or above it short-circuits and never touches
- * the marker).
+ * stays until a later run that does work replaces it (an implicit retry
+ * over a record at or above it short-circuits; an explicit retry at that
+ * target is refused before any transfer; neither touches the marker).
  */
 async function clearStaleFailedMarker(
   logger: ILogger,
@@ -1542,7 +1566,21 @@ async function prepareHostUpdate(input: {
   if (input.allowDowngrade && input.version !== null) {
     const installed = await requireInstalled(input.environment);
     const comparison = compareHostVersions(input.version, installed.version);
-    if (comparison.comparable && comparison.ordering === "less") {
+    // Below the record, or ANOTHER BUILD of the record's release (the
+    // comparator's "equal" over a different string - `2.0.0+foo` over an
+    // installed `2.0.0+bar`): the shared stage would refuse both as not
+    // newer, so both take the owned installer. The record's own string
+    // falls through to the download's up-to-date short-circuit: delivered.
+    // This read is out of lock, like the shared stage's own pre-lock
+    // reads: a record another actor moves in the gap meets the shared
+    // stage's phase-1 refusal, whose remedy names a flag this caller
+    // already passed - a retry takes the owned installer. Accepted.
+    if (
+      comparison.comparable &&
+      (comparison.ordering === "less" ||
+        (comparison.ordering === "equal" &&
+          input.version !== installed.version))
+    ) {
       // Reconciliation deliberately deletes older shared stages. The explicit
       // install keeps its verified source private until the locked swap.
       return { kind: "downgrade", version: input.version };
@@ -1580,7 +1618,7 @@ async function prepareHostUpdate(input: {
  * | ------------------------------------- | ----------------------------------------------------------------- |
  * | staged apply (`applyHost`)            | the staged record: `expectedStagedVersion` → `stage-version-mismatch` |
  * | download discarded at promote time    | nothing - refused outright (`discardedExplicitRequestError`), before the publish; unless the record IS the request (committed by another actor during the transfer), which is the request delivered and takes the recovery below |
- * | pre-lock debt (installed-up-to-date)  | the record the short-circuit saw: a record ABOVE the request keeps its debt, this run reports the no-op (never enters the arm) |
+ * | pre-lock debt (installed-up-to-date)  | the record the debt read sees: the request's own string enters the arm; any other record at or above an explicit request is refused by the download before a transfer (`E_HOST_UPDATE_NOT_NEWER`, remedy `--allow-downgrade`, which takes the downgrade arm), so a record ABOVE the request here is one that moved since - it keeps its debt, this run reports the no-op (never enters the arm) |
  * | consumed-stage recovery (apply no-op) | the re-derived record on EVERY reading that names one (`debt`, `activated`, `no-live-host`), before the log line and the arm |
  * | activation arm (every route)          | the record read UNDER the lock, before the activation reading, the busy gate and the takeover |
  * | downgrade (`installHostDowngrade`)    | its own download of `preparation.version`; a record another actor moved to that version under the lock is a no-op, re-derived here like a consumed stage |

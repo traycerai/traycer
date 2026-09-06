@@ -18,9 +18,11 @@ import type { ProgressInfo } from "../runner/output";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 
 /**
- * Explicit rollback uses the install primitive, whose private verified source
- * survives independently of the monotonic background-update stage. Keep the
- * update command's progress marker and health check around this operation.
+ * An explicit install the monotonic shared stage would refuse - a rollback
+ * below the record, or another build of the record's release - uses the
+ * install primitive, whose private verified source survives independently
+ * of the background-update stage. Keep the update command's progress marker
+ * and health check around this operation.
  */
 export async function installHostDowngrade(input: {
   readonly environment: Environment;
@@ -75,8 +77,9 @@ export async function installHostDowngrade(input: {
               exitCode: 1,
             });
           }
-          // The caller decided "requested below installed" before this
-          // lock; re-derived here like every pre-lock fact. Another actor
+          // The caller decided "requested below installed, or another
+          // build of its release" before this lock; re-derived here like
+          // every pre-lock fact. Another actor
           // may have installed the requested version meanwhile (an explicit
           // `host update` of its own): committing identical bytes again
           // would restart the host for nothing. The no-op is decided before
