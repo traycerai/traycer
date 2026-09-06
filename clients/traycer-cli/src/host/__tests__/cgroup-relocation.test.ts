@@ -732,6 +732,29 @@ describe("relocateOutOfHostCgroupIfNeeded", () => {
     expect(spawnMocks.recorded).toHaveLength(0);
   });
 
+  it("host service install is in HOST_STOPPING_COMMANDS unconditionally: its rollback stops the live unit", async () => {
+    // `service/platforms/linux.ts` rolls a failed `enable --now` back with
+    // `disable --now` on the live unit. Run unrelocated from a Traycer-hosted
+    // terminal, that rollback kills the CLI with the host before the manifest
+    // is removed or the install's own error is reported.
+    expect(HOST_STOPPING_COMMANDS.get("host service install")?.({})).toBe(true);
+    mocks.cgroup = V2_HOST_UNIT_CGROUP;
+    mocks.packaged = true;
+    process.argv = packagedArgv() as string[];
+    process.execPath = "/slot/traycer";
+    process.execArgv = [];
+    spawnMocks.respond = acknowledgeThenExit(0);
+
+    await expect(
+      relocateOutOfHostCgroupIfNeeded("host service install", {}),
+    ).resolves.toEqual({ kind: "completed", exitCode: 0 });
+    expect(spawnMocks.recorded).toHaveLength(1);
+
+    // Ablation: remove the `"host service install"` entry from
+    // `HOST_STOPPING_COMMANDS` → this test fails on the first assertion and
+    // the relocation resolves `not-needed` without spawning.
+  });
+
   it("does nothing for a command outside HOST_STOPPING_COMMANDS, even inside a host unit", async () => {
     mocks.cgroup = V2_HOST_UNIT_CGROUP;
     expect(HOST_STOPPING_COMMANDS.has("agent turn-ended-from-hook")).toBe(

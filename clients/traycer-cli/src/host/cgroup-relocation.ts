@@ -110,6 +110,12 @@ export const HOST_STOPPING_COMMANDS: ReadonlyMap<string, HostStopReachable> =
     ["host stop", ALWAYS_STOPS],
     ["host free-port-and-restart", ALWAYS_STOPS],
     ["host service uninstall", ALWAYS_STOPS],
+    // Stops only in its rollback (`systemctl --user disable --now` on the live
+    // unit when `enable --now` fails, `service/platforms/linux.ts`), but that
+    // rollback is reachable from any failure of the enable, so it relocates
+    // unconditionally: a CLI that dies with the unit it is rolling back never
+    // removes the manifest or reports the install's own error.
+    ["host service install", ALWAYS_STOPS],
     ["host install", (options) => options.serviceRegister !== false],
     ["host ensure", (options) => options.serviceRegister !== false],
     ["host apply", (options) => options.service !== false],
