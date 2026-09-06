@@ -130,10 +130,14 @@ export type DesktopRegistrationTakeover =
       readonly kind: "took-over";
       readonly agentLabelId: string;
       // How the running host was handled: "stopped" through its own
-      // lifecycle RPCs, "no-host" when nothing was running,
-      // "skipped-unreachable" when the host could not be asked (it is the
-      // broken part - the takeover IS the recovery) and the job was booted
-      // out underneath it.
+      // lifecycle RPCs; "no-host" when nothing was running to ask (the
+      // claim answered `no-host` or `no-metadata` with the agent idle - no
+      // process under the label, so there was nothing to interrupt whatever
+      // the metadata said - or the process seen under the CLI label at the
+      // probe had exited before its stand-down could ask it); "skipped-unreachable" when the host could not be asked
+      // (it is the broken part - the takeover IS the recovery) and the job
+      // was booted out underneath it. A running agent process that could
+      // not be asked is refused, never proceeded past.
       readonly cooperativeStop: "stopped" | "no-host" | "skipped-unreachable";
     }
   // No Desktop agent to retire, but the CLI label itself was loaded - a job

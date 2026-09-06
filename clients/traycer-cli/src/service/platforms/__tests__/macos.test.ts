@@ -57,6 +57,9 @@ const MOCKS = vi.hoisted(() => ({
   cliLoggerInfo: vi.fn(),
   requestCooperativeShutdown: vi.fn(),
   forceStopHostProcess: vi.fn(),
+  readProcessStartIdentity: vi.fn(),
+  getPublishedProcessIdentityVerdict: vi.fn(),
+  probeHostHealth: vi.fn(),
 }));
 
 // The cooperative-shutdown RPC flow and the forced-kill path each have their
@@ -109,6 +112,31 @@ vi.mock("../../../store/cli-lock", async (importOriginal) => {
     await importOriginal<typeof import("../../../store/cli-lock")>();
   return { ...actual, isProcessAlive: MOCKS.isProcessAlive };
 });
+
+// `probeLabelForTakeover` reads a live pid's start identity, and
+// `processMayLiveOn` asks whether launchd's process is still the one it
+// published - both live in `store/process-identity`. Stubbed the same way
+// as `cli-lock` above so the takeover tests control the recycled-pid
+// evidence directly instead of reading the real OS process table.
+vi.mock("../../../store/process-identity", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../../store/process-identity")>();
+  return {
+    ...actual,
+    readProcessStartIdentity: MOCKS.readProcessStartIdentity,
+    getPublishedProcessIdentityVerdict:
+      MOCKS.getPublishedProcessIdentityVerdict,
+  };
+});
+
+// `refuseIfPublishedHostAlive` dials `probeHostHealth` once for an
+// `indeterminate` verdict whose record predates identity tracking, to tell
+// a still-running hand-run host apart from a stale record left behind by
+// one long gone. Stubbed so the takeover tests control that dial directly
+// instead of opening a real loopback socket.
+vi.mock("../../health-probe", () => ({
+  probeHostHealth: MOCKS.probeHostHealth,
+}));
 
 // Test isolation: `serviceManifestPath` normally resolves to the REAL
 // `~/Library/LaunchAgents/<label>.plist` (via `os.homedir()`, which ignores
@@ -437,6 +465,15 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
     MOCKS.readHostPidMetadata.mockResolvedValue(null);
     MOCKS.isProcessAlive.mockReset();
     MOCKS.isProcessAlive.mockReturnValue(false);
+    MOCKS.readProcessStartIdentity.mockReset();
+    MOCKS.readProcessStartIdentity.mockReturnValue(null);
+    MOCKS.getPublishedProcessIdentityVerdict.mockReset();
+    MOCKS.getPublishedProcessIdentityVerdict.mockResolvedValue("indeterminate");
+    MOCKS.probeHostHealth.mockReset();
+    MOCKS.probeHostHealth.mockResolvedValue({
+      healthy: false,
+      detail: "no host",
+    });
     MOCKS.cliLoggerWarn.mockReset();
     MOCKS.cliLoggerInfo.mockReset();
     MOCKS.requestCooperativeShutdown.mockReset();
@@ -2121,9 +2158,15 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
     // post-bootout re-probe `unloadCliLabelJob` runs) answers per
     // `afterBootout` - "absent" is launchd's not-found output, "still-loaded"
     // repeats the loaded answer.
+    // `agentRunning` puts a `\tpid = 777\n` line on the FIRST agent print -
+    // the only one `agentProbe` is read from - so `agentProbe.running` is
+    // true and the took-over arm actually makes a cooperative claim. Idle
+    // (false) is the default shape most fixtures used before the claim was
+    // conditioned on it: `path = ...` alone, no pid or state line.
     function stageTakeoverRunner(input: {
       cliLabelOwned: boolean;
       agentLoadedAfterBootout: boolean;
+      agentRunning: boolean;
       cliLabelLoadedAsCliOrOther?: {
         afterBootout: "absent" | "still-loaded";
       };
@@ -2141,8 +2184,14 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
             agentPrints += 1;
             const loaded =
               agentPrints === 1 ? true : input.agentLoadedAfterBootout;
+            const pidLine =
+              agentPrints === 1 && input.agentRunning ? "\tpid = 777\n" : "";
             return loaded
-              ? { stdout: `path = ${smAgentPath}\n`, stderr: "", exitCode: 0 }
+              ? {
+                  stdout: `path = ${smAgentPath}\n${pidLine}`,
+                  stderr: "",
+                  exitCode: 0,
+                }
               : {
                   stdout: "",
                   stderr: "Could not find specified service\n",
@@ -2188,6 +2237,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       const { calls, controller } = stageTakeoverRunner({
         cliLabelOwned: false,
         agentLoadedAfterBootout: false,
+        agentRunning: true,
       });
       MOCKS.requestCooperativeShutdown.mockResolvedValue({ kind: "stopped" });
 
@@ -2225,6 +2275,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       const { calls, controller } = stageTakeoverRunner({
         cliLabelOwned: false,
         agentLoadedAfterBootout: true,
+        agentRunning: true,
       });
       MOCKS.requestCooperativeShutdown.mockResolvedValue({ kind: "busy" });
 
@@ -2241,6 +2292,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       const { calls, controller } = stageTakeoverRunner({
         cliLabelOwned: false,
         agentLoadedAfterBootout: false,
+        agentRunning: true,
       });
       MOCKS.requestCooperativeShutdown.mockResolvedValue({
         kind: "unreachable",
@@ -2319,6 +2371,9 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       const { calls, controller } = stageTakeoverRunner({
         cliLabelOwned: true,
         agentLoadedAfterBootout: true,
+        // Irrelevant here: the pre-split refusal fires on the CLI label's
+        // own probe, before the agent's `running` flag is ever read.
+        agentRunning: false,
       });
 
       await expect(
@@ -2334,10 +2389,58 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       expect(calls.map((c) => c.args[0])).toEqual(["print", "print"]);
     });
 
+    // A job loaded under the AGENT label that Desktop itself never
+    // registered - a raw `~/Library/LaunchAgents/<label>.agent.plist`,
+    // `cli-or-other` ownership rather than an in-bundle SMAppService path.
+    // This command only manages Desktop's own registration, so it refuses
+    // rather than bootstrap the CLI label beside a job nobody asked to
+    // stand down. Idle here (no pid, no `running` claim to make) - the
+    // refusal fires on ownership alone, before any liveness is read.
+    it("rejects with SERVICE_INSTALL_FAILED ('is not Traycer Desktop's registration') when the agent label is loaded idle but not by Desktop", async () => {
+      const loadedPath = `/Users/me/Library/LaunchAgents/${label.id}.agent.plist`;
+      const calls: RecordedCall[] = [];
+      const runner: ProcessRunner = async (command, args) => {
+        calls.push({ command, args });
+        if (args[0] === "print") {
+          if (args[1]?.endsWith(".agent") === true) {
+            return {
+              stdout: `\tpath = ${loadedPath}\n\ttype = LaunchAgent\n`,
+              stderr: "",
+              exitCode: 0,
+            };
+          }
+          return {
+            stdout: "",
+            stderr: "Could not find specified service\n",
+            exitCode: 113,
+          };
+        }
+        return buildSuccessResult();
+      };
+
+      await expect(
+        createMacosController(runner).takeoverDesktopRegistration(label),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+        message: expect.stringContaining(
+          "is not Traycer Desktop's registration",
+        ),
+        details: expect.objectContaining({
+          agentLabel: `${label.id}.agent`,
+          loadedPath,
+        }),
+      });
+      expect(MOCKS.requestCooperativeShutdown).not.toHaveBeenCalled();
+      expect(calls.some((c) => c.args[0] === "bootout")).toBe(false);
+    });
+
     it("reports not-applicable when Desktop owns nothing", async () => {
       const { calls, controller } = stageTakeoverRunner({
         cliLabelOwned: false,
         agentLoadedAfterBootout: true,
+        // Irrelevant: this runner and controller are discarded below in
+        // favour of `notLoadedRunner`.
+        agentRunning: false,
       });
       // Agent print must read not-loaded on the FIRST probe for this case.
       calls.length = 0;
@@ -2359,12 +2462,201 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       void controller;
     });
 
+    // Rule 3, no-agent arm: `refuseIfPublishedHostAlive` runs even when
+    // Desktop owns nothing and the CLI label itself is absent - a hand-run
+    // host can still be the one `pid.json` names, and nothing under either
+    // label ever asked it to stand down.
+    it("rejects with SERVICE_INSTALL_FAILED ('a host is still running') when Desktop owns nothing but a published endpoint's identity verdict is 'current'", async () => {
+      const calls: RecordedCall[] = [];
+      const notLoadedRunner: ProcessRunner = async (command, args) => {
+        calls.push({ command, args });
+        return {
+          stdout: "",
+          stderr: "Could not find specified service\n",
+          exitCode: 113,
+        };
+      };
+      MOCKS.readHostPidMetadata.mockResolvedValue({
+        pid: 9001,
+        hostId: "hand-run-host",
+        version: "1.2.3",
+        websocketUrl: "ws://127.0.0.1:9001/rpc",
+        startedAt: "2026-07-12T00:00:00.000Z",
+        processStartIdentity: null,
+      });
+      MOCKS.getPublishedProcessIdentityVerdict.mockResolvedValue("current");
+
+      await expect(
+        createMacosController(notLoadedRunner).takeoverDesktopRegistration(
+          label,
+        ),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+        message: expect.stringContaining(
+          "a host is still running (pid 9001, per its published endpoint)",
+        ),
+        details: expect.objectContaining({ pid: 9001, verdict: "current" }),
+      });
+      expect(calls.some((c) => c.args[0] === "bootout")).toBe(false);
+    });
+
+    it("resolves not-applicable when Desktop owns nothing and a published endpoint's identity verdict is 'mismatch'", async () => {
+      const notLoadedRunner: ProcessRunner = async () => ({
+        stdout: "",
+        stderr: "Could not find specified service\n",
+        exitCode: 113,
+      });
+      MOCKS.readHostPidMetadata.mockResolvedValue({
+        pid: 9001,
+        hostId: "hand-run-host",
+        version: "1.2.3",
+        websocketUrl: "ws://127.0.0.1:9001/rpc",
+        startedAt: "2026-07-12T00:00:00.000Z",
+        processStartIdentity: null,
+      });
+      MOCKS.getPublishedProcessIdentityVerdict.mockResolvedValue("mismatch");
+
+      await expect(
+        createMacosController(notLoadedRunner).takeoverDesktopRegistration(
+          label,
+        ),
+      ).resolves.toEqual({ kind: "not-applicable" });
+    });
+
+    // An "indeterminate" verdict on a record that predates identity
+    // tracking (`processStartIdentity === null`) cannot be told apart from
+    // a host still running by the verdict alone, so `refuseIfPublishedHostAlive`
+    // dials the endpoint once via `probeHostHealth`. Nothing answering means
+    // the record is stale (most likely a host that crashed without
+    // cleaning up `pid.json`), and the reload proceeds under a warning.
+    it("resolves not-applicable and warns 'treating the record as stale' when an indeterminate, identity-less record's endpoint answers unhealthy", async () => {
+      const notLoadedRunner: ProcessRunner = async () => ({
+        stdout: "",
+        stderr: "Could not find specified service\n",
+        exitCode: 113,
+      });
+      MOCKS.readHostPidMetadata.mockResolvedValue({
+        pid: 9001,
+        hostId: "hand-run-host",
+        version: "1.2.3",
+        websocketUrl: "ws://127.0.0.1:9001/rpc",
+        startedAt: "2026-07-12T00:00:00.000Z",
+        processStartIdentity: null,
+      });
+      MOCKS.getPublishedProcessIdentityVerdict.mockResolvedValue(
+        "indeterminate",
+      );
+      MOCKS.probeHostHealth.mockResolvedValue({
+        healthy: false,
+        detail: "no host loopback port reachable",
+      });
+
+      await expect(
+        createMacosController(notLoadedRunner).takeoverDesktopRegistration(
+          label,
+        ),
+      ).resolves.toEqual({ kind: "not-applicable" });
+      expect(MOCKS.probeHostHealth).toHaveBeenCalledTimes(1);
+      expect(MOCKS.cliLoggerWarn).toHaveBeenCalledWith(
+        expect.stringContaining("treating the record as stale"),
+        expect.objectContaining({ pid: 9001 }),
+      );
+    });
+
+    // The opposite dial result: something DOES answer on the endpoint the
+    // record advertises, so it is a host, whatever its identity record
+    // says - refused with wording distinct from the "current" branch, since
+    // there is no process-identity match here, only a live TCP answer.
+    it("rejects with SERVICE_INSTALL_FAILED ('a host answered on the endpoint') when an indeterminate, identity-less record's endpoint answers healthy", async () => {
+      const notLoadedRunner: ProcessRunner = async () => ({
+        stdout: "",
+        stderr: "Could not find specified service\n",
+        exitCode: 113,
+      });
+      MOCKS.readHostPidMetadata.mockResolvedValue({
+        pid: 9001,
+        hostId: "hand-run-host",
+        version: "1.2.3",
+        websocketUrl: "ws://127.0.0.1:9001/rpc",
+        startedAt: "2026-07-12T00:00:00.000Z",
+        processStartIdentity: null,
+      });
+      MOCKS.getPublishedProcessIdentityVerdict.mockResolvedValue(
+        "indeterminate",
+      );
+      MOCKS.probeHostHealth.mockResolvedValue({
+        healthy: true,
+        detail: "process alive and loopback port reachable",
+      });
+
+      await expect(
+        createMacosController(notLoadedRunner).takeoverDesktopRegistration(
+          label,
+        ),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+        message: expect.stringContaining(
+          "a host answered on the endpoint the published host record",
+        ),
+        details: expect.objectContaining({
+          pid: 9001,
+          verdict: "indeterminate",
+        }),
+      });
+    });
+
+    // With a NON-null `processStartIdentity`, an "indeterminate" verdict is
+    // a probe fault (the recorded stamp could not be compared), not a
+    // record that predates identity tracking - so it refuses like
+    // "current", with its OWN wording, and never dials `probeHostHealth`.
+    it("rejects with SERVICE_INSTALL_FAILED ('its process identity could not be read') and never dials the endpoint when the record HAS a process identity", async () => {
+      const notLoadedRunner: ProcessRunner = async () => ({
+        stdout: "",
+        stderr: "Could not find specified service\n",
+        exitCode: 113,
+      });
+      MOCKS.readHostPidMetadata.mockResolvedValue({
+        pid: 9001,
+        hostId: "hand-run-host",
+        version: "1.2.3",
+        websocketUrl: "ws://127.0.0.1:9001/rpc",
+        startedAt: "2026-07-12T00:00:00.000Z",
+        processStartIdentity: "darwin:1699999999.123456",
+      });
+      MOCKS.getPublishedProcessIdentityVerdict.mockResolvedValue(
+        "indeterminate",
+      );
+
+      await expect(
+        createMacosController(notLoadedRunner).takeoverDesktopRegistration(
+          label,
+        ),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+        message: expect.stringContaining(
+          "its process identity could not be read",
+        ),
+        details: expect.objectContaining({
+          pid: 9001,
+          verdict: "indeterminate",
+        }),
+      });
+      expect(MOCKS.probeHostHealth).not.toHaveBeenCalled();
+    });
+
     it("fails closed when the bootout does not take effect", async () => {
       const { calls, controller } = stageTakeoverRunner({
         cliLabelOwned: false,
         agentLoadedAfterBootout: true,
+        agentRunning: true,
       });
-      MOCKS.requestCooperativeShutdown.mockResolvedValue({ kind: "no-host" });
+      // `no-metadata`/`no-host` with a running agent now refuse OUTRIGHT
+      // (before any bootout), so this "did not take effect" pin needs an
+      // outcome that still proceeds to the bootout - `hung` does.
+      MOCKS.requestCooperativeShutdown.mockResolvedValue({
+        kind: "hung",
+        pid: 777,
+      });
 
       await expect(
         controller.takeoverDesktopRegistration(label),
@@ -2397,16 +2689,20 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
      * still alive" - a single row over `stopped` would pass while every
      * dangerous arm regressed.
      */
+    // `no-metadata`/`no-host` dropped from this table: with a running
+    // agent those two now refuse OUTRIGHT (pinned separately below) instead
+    // of proceeding to the bootout, so a row here would have asserted the
+    // pre-change behaviour.
     it.each([
       ["unreachable", { kind: "unreachable", cause: "dial failed" }],
       ["hung", { kind: "hung", pid: 4242 }],
-      ["no-metadata", { kind: "no-metadata" }],
     ] as const)(
       "waits for the evicted host to exit before install can race it (%s)",
       async (_name, outcome) => {
         const { calls, controller } = stageTakeoverRunner({
           cliLabelOwned: false,
           agentLoadedAfterBootout: false,
+          agentRunning: true,
         });
         MOCKS.requestCooperativeShutdown.mockResolvedValue(outcome);
 
@@ -2418,6 +2714,74 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         expect(bootout?.args).toEqual(["bootout", "--wait", agentTarget]);
       },
     );
+
+    // A running agent process that nobody could ask - `unaskableHost`, the
+    // same refusal the CLI-label stand-down uses. `agentProbe.running` gates
+    // it: the claim went through `pid.json`, and a fresh host in its first
+    // seconds (no-metadata) or between children (no-host) gets no bootout
+    // at all here, unlike `unreachable`/`hung` above.
+    it.each([
+      [
+        "no-metadata",
+        { kind: "no-metadata" } as const,
+        "has not published a live endpoint yet",
+      ],
+      [
+        "no-host",
+        { kind: "no-host" } as const,
+        "names a host that has already exited",
+      ],
+    ] as const)(
+      "rejects with SERVICE_INSTALL_FAILED ('%s') and never boots out when a running Desktop-managed agent's claim can find no endpoint to ask",
+      async (metadataKind, outcome, messageFragment) => {
+        const { calls, controller } = stageTakeoverRunner({
+          cliLabelOwned: false,
+          agentLoadedAfterBootout: false,
+          agentRunning: true,
+        });
+        MOCKS.requestCooperativeShutdown.mockResolvedValue(outcome);
+
+        await expect(
+          controller.takeoverDesktopRegistration(label),
+        ).rejects.toMatchObject({
+          code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+          message: expect.stringContaining(messageFragment),
+          details: expect.objectContaining({
+            probedLabel: `${label.id}.agent`,
+            metadata: metadataKind,
+          }),
+        });
+        expect(calls.some((c) => c.args[0] === "bootout")).toBe(false);
+      },
+    );
+
+    // The mirror case: an IDLE agent (no process for the claim to have
+    // reached in the first place) gets the SAME `no-metadata`/`no-host`
+    // answer, but `agentProbe.running` is false, so the refusal above never
+    // fires - there was nothing to ask, and the agent is booted out exactly
+    // as it would be for any other non-`busy` outcome. No degradation
+    // warning either: that only logs for `unreachable`/`hung`.
+    it("boots out an idle agent and resolves cooperativeStop 'no-host' when the claim answers no-metadata, with no warning logged", async () => {
+      const { calls, controller } = stageTakeoverRunner({
+        cliLabelOwned: false,
+        agentLoadedAfterBootout: false,
+        agentRunning: false,
+      });
+      MOCKS.requestCooperativeShutdown.mockResolvedValue({
+        kind: "no-metadata",
+      });
+
+      await expect(
+        controller.takeoverDesktopRegistration(label),
+      ).resolves.toEqual({
+        kind: "took-over",
+        agentLabelId: `${label.id}.agent`,
+        cooperativeStop: "no-host",
+      });
+      const bootout = calls.find((c) => c.args[0] === "bootout");
+      expect(bootout?.args).toEqual(["bootout", "--wait", agentTarget]);
+      expect(MOCKS.cliLoggerWarn).not.toHaveBeenCalled();
+    });
 
     // A dual-registered machine: Desktop's agent AND the raw CLI-label
     // plist are both loaded. `takeoverDesktopRegistration` boots out the
@@ -2435,6 +2799,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       const { calls, controller } = stageTakeoverRunner({
         cliLabelOwned: false,
         agentLoadedAfterBootout: false,
+        agentRunning: true,
         cliLabelLoadedAsCliOrOther: { afterBootout: "absent" },
       });
       MOCKS.requestCooperativeShutdown.mockResolvedValue({ kind: "stopped" });
@@ -2457,6 +2822,10 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       ]);
       expect(calls[5]?.args).toEqual(["bootout", "--wait", cliTarget]);
       expect(calls[6]?.args[1]).toEqual(cliTarget);
+      // The CLI label was idle (no pid) both times it was read, so its
+      // stand-down never itself asks for a claim - only the agent's claim
+      // above was made.
+      expect(MOCKS.requestCooperativeShutdown).toHaveBeenCalledTimes(1);
       // `standDownLiveCliLabelHost`'s pid-null branch logs the same generic
       // message whether or not an agent was just retired - there is no
       // agent-specific copy any more, so this pins the message it does log.
@@ -2472,6 +2841,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       const { controller } = stageTakeoverRunner({
         cliLabelOwned: false,
         agentLoadedAfterBootout: false,
+        agentRunning: true,
         cliLabelLoadedAsCliOrOther: { afterBootout: "still-loaded" },
       });
       MOCKS.requestCooperativeShutdown.mockResolvedValue({ kind: "stopped" });
@@ -2492,14 +2862,108 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       });
     });
 
-    it("rejects before any bootout when the CLI label has a live pid beside the agent and the claim finds no endpoint (pre-check)", async () => {
+    // Rule 2: the claim is skipped ONLY when the CLI label is the one
+    // holding a process. An idle agent with the CLI label absent is not
+    // that case - `pid.json` could still name a hand-run host, so the claim
+    // is made here even though the agent itself reports no process.
+    it("still makes the cooperative claim for an idle agent when the CLI label is absent, because a hand-run host must be asked", async () => {
+      const { calls, controller } = stageTakeoverRunner({
+        cliLabelOwned: false,
+        agentLoadedAfterBootout: false,
+        agentRunning: false,
+      });
+      MOCKS.requestCooperativeShutdown.mockResolvedValue({ kind: "no-host" });
+
+      await expect(
+        controller.takeoverDesktopRegistration(label),
+      ).resolves.toEqual({
+        kind: "took-over",
+        agentLabelId: `${label.id}.agent`,
+        cooperativeStop: "no-host",
+      });
+      expect(MOCKS.requestCooperativeShutdown).toHaveBeenCalledTimes(1);
+      const bootout = calls.find((c) => c.args[0] === "bootout");
+      expect(bootout?.args).toEqual(["bootout", "--wait", agentTarget]);
+    });
+
+    // The other half of rule 2: an idle agent beside a CLI label that DOES
+    // hold a process. Here the first claim IS skipped - the CLI label is
+    // the one with the process, so the stand-down asks it afterwards, with
+    // a claim that reaches only that host. The agent is still booted out
+    // unconditionally (idle, so its own liveness check is trivially "no");
+    // the CLI label is then re-read fresh and its own stand-down makes the
+    // ONLY cooperative claim in this run, and that claim's answer -
+    // "stopped" - is what the overall result reports.
+    it("skips the first claim for an idle agent when the CLI label holds the process, and reports the stand-down's claim as the outcome", async () => {
+      const calls: RecordedCall[] = [];
+      let agentPrints = 0;
+      let cliPrints = 0;
+      const cliLoadedPidResult = {
+        stdout: `\tpath = /Users/me/Library/LaunchAgents/${label.id}.plist\n\ttype = LaunchAgent\n\tpid = 4242\n`,
+        stderr: "",
+        exitCode: 0,
+      };
+      const notFoundResult = {
+        stdout: "",
+        stderr: "Could not find specified service\n",
+        exitCode: 113,
+      };
+      const runner: ProcessRunner = async (command, args) => {
+        calls.push({ command, args });
+        if (args[0] === "print") {
+          if (args[1]?.endsWith(".agent") === true) {
+            agentPrints += 1;
+            // First probe: idle SMAppService agent (no pid, no state
+            // line). Second probe (post-bootout verify): gone.
+            return agentPrints === 1
+              ? { stdout: `path = ${smAgentPath}\n`, stderr: "", exitCode: 0 }
+              : notFoundResult;
+          }
+          cliPrints += 1;
+          // Both reads before the CLI-label bootout - the initial
+          // `cliProbe` (decides `claimHere`) and the fresh re-probe after
+          // the agent is retired - see the same running process; the third
+          // (post-bootout verify) answers absent.
+          return cliPrints <= 2 ? cliLoadedPidResult : notFoundResult;
+        }
+        return buildSuccessResult();
+      };
+      MOCKS.requestCooperativeShutdown.mockResolvedValue({ kind: "stopped" });
+
+      await expect(
+        createMacosController(runner).takeoverDesktopRegistration(label),
+      ).resolves.toEqual({
+        kind: "took-over",
+        agentLabelId: `${label.id}.agent`,
+        cooperativeStop: "stopped",
+      });
+      expect(MOCKS.requestCooperativeShutdown).toHaveBeenCalledTimes(1);
+      expect(calls.map((c) => c.args[0])).toEqual([
+        "print",
+        "print",
+        "bootout",
+        "print",
+        "print",
+        "bootout",
+        "print",
+      ]);
+      expect(calls[2]?.args).toEqual(["bootout", "--wait", agentTarget]);
+      expect(calls[5]?.args).toEqual(["bootout", "--wait", cliTarget]);
+    });
+
+    // Replaces an older "pre-check" pin: with the dual-live refusal below
+    // added, a live pid on the CLI label beside a running agent is caught by
+    // THAT guard instead, before any claim is even considered - there is no
+    // longer a distinct "claim finds no endpoint" pre-check to pin on its
+    // own.
+    it("rejects with SERVICE_INSTALL_FAILED ('two hosts on one machine') before any claim or bootout when both the agent and the CLI label report a running process", async () => {
       const calls: RecordedCall[] = [];
       const runner: ProcessRunner = async (command, args) => {
         calls.push({ command, args });
         if (args[0] === "print") {
           if (args[1]?.endsWith(".agent") === true) {
             return {
-              stdout: `path = ${smAgentPath}\n`,
+              stdout: `path = ${smAgentPath}\n\tpid = 777\n`,
               stderr: "",
               exitCode: 0,
             };
@@ -2512,21 +2976,62 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         }
         return buildSuccessResult();
       };
-      MOCKS.requestCooperativeShutdown.mockResolvedValue({
-        kind: "no-metadata",
-      });
 
-      const takeover =
-        createMacosController(runner).takeoverDesktopRegistration(label);
-      await expect(takeover).rejects.toMatchObject({
+      await expect(
+        createMacosController(runner).takeoverDesktopRegistration(label),
+      ).rejects.toMatchObject({
         code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
-        message: expect.stringContaining(
-          "has not published a live endpoint yet",
-        ),
+        message: expect.stringContaining("two hosts on one machine"),
+        details: expect.objectContaining({
+          agentLabel: `${label.id}.agent`,
+          agentPid: 777,
+          cliPid: 4242,
+        }),
       });
-      await expect(takeover).rejects.toMatchObject({
-        message: expect.not.stringContaining("already deregistered"),
+      expect(MOCKS.requestCooperativeShutdown).not.toHaveBeenCalled();
+      expect(calls.some((c) => c.args[0] === "bootout")).toBe(false);
+    });
+
+    // Rule 1 is keyed on both probes' `running`, WHATEVER owns the agent
+    // label - not only the SMAppService took-over arm. A pre-split-style
+    // machine where the agent label itself was loaded as a raw
+    // `~/Library/LaunchAgents/<label>.agent.plist` (`cli-or-other`
+    // ownership, not an in-bundle SMAppService path) with a live process
+    // beside a running CLI label is refused by the SAME dual-live guard,
+    // before the no-agent early return ever reads `agentProbe.ownership`.
+    it("rejects with SERVICE_INSTALL_FAILED ('two hosts on one machine') when the agent label is loaded cli-or-other (not SMAppService) and both labels report a running process", async () => {
+      const calls: RecordedCall[] = [];
+      const runner: ProcessRunner = async (command, args) => {
+        calls.push({ command, args });
+        if (args[0] === "print") {
+          if (args[1]?.endsWith(".agent") === true) {
+            return {
+              stdout: `\tpath = /Users/me/Library/LaunchAgents/${label.id}.agent.plist\n\ttype = LaunchAgent\n\tpid = 777\n`,
+              stderr: "",
+              exitCode: 0,
+            };
+          }
+          return {
+            stdout: `\tpath = /Users/me/Library/LaunchAgents/${label.id}.plist\n\ttype = LaunchAgent\n\tpid = 4242\n`,
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+        return buildSuccessResult();
+      };
+
+      await expect(
+        createMacosController(runner).takeoverDesktopRegistration(label),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+        message: expect.stringContaining("two hosts on one machine"),
+        details: expect.objectContaining({
+          agentLabel: `${label.id}.agent`,
+          agentPid: 777,
+          cliPid: 4242,
+        }),
       });
+      expect(MOCKS.requestCooperativeShutdown).not.toHaveBeenCalled();
       expect(calls.some((c) => c.args[0] === "bootout")).toBe(false);
     });
 
@@ -2658,13 +3163,16 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       });
     });
 
-    // Staging for the two pins below: the CLI label is absent on the FIRST
-    // print (so the initial `standDownLiveCliLabelHost(..., null)` call from
-    // the no-agent branch never fires here - the agent IS loaded), but
-    // loaded with a live pid on the SECOND, fresh print the takeover runs
-    // after retiring the agent. That live pid means a real cooperative claim
-    // is made (a SECOND `requestCooperativeShutdown` call), unlike the
-    // idle-job case above.
+    // Staging for the two pins below: the agent is running (a live pid on
+    // its FIRST print) so the took-over arm's own claim actually fires - a
+    // claim is only made when the agent reports a process now. The CLI
+    // label is absent on the FIRST print (so the initial
+    // `standDownLiveCliLabelHost(..., null)` call from the no-agent branch
+    // never fires here - the dual-live guard also stays clear, since the CLI
+    // label has no process yet when the agent's claim is made), but loaded
+    // with a live pid on the SECOND, fresh print the takeover runs after
+    // retiring the agent. That live pid means a real, SECOND cooperative
+    // claim is made for the CLI label's own stand-down.
     function stageCliAbsentThenLoadedRunner(input: {
       cliVerifyAfterBootout: "absent" | "still-loaded";
     }): {
@@ -2690,7 +3198,11 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
           if (args[1]?.endsWith(".agent") === true) {
             agentPrints += 1;
             return agentPrints === 1
-              ? { stdout: `path = ${smAgentPath}\n`, stderr: "", exitCode: 0 }
+              ? {
+                  stdout: `path = ${smAgentPath}\n\tpid = 777\n`,
+                  stderr: "",
+                  exitCode: 0,
+                }
               : notFound;
           }
           cliPrints += 1;
@@ -2750,6 +3262,70 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         "print",
       ]);
       expect(MOCKS.requestCooperativeShutdown).toHaveBeenCalledTimes(2);
+    });
+
+    // Rule 3, took-over arm: `refuseIfPublishedHostAlive` runs after the
+    // agent is retired and the CLI label's own stand-down has resolved. A
+    // "dead" verdict on a leftover `pid.json` is proof the process is gone,
+    // so the takeover still succeeds.
+    it("still resolves took-over when a published endpoint's identity verdict is 'dead'", async () => {
+      const { controller } = stageTakeoverRunner({
+        cliLabelOwned: false,
+        agentLoadedAfterBootout: false,
+        agentRunning: true,
+      });
+      MOCKS.requestCooperativeShutdown.mockResolvedValue({ kind: "stopped" });
+      MOCKS.readHostPidMetadata.mockResolvedValue({
+        pid: 9001,
+        hostId: "hand-run-host",
+        version: "1.2.3",
+        websocketUrl: "ws://127.0.0.1:9001/rpc",
+        startedAt: "2026-07-12T00:00:00.000Z",
+        processStartIdentity: null,
+      });
+      MOCKS.getPublishedProcessIdentityVerdict.mockResolvedValue("dead");
+
+      await expect(
+        controller.takeoverDesktopRegistration(label),
+      ).resolves.toEqual({
+        kind: "took-over",
+        agentLabelId: `${label.id}.agent`,
+        cooperativeStop: "stopped",
+      });
+    });
+
+    // The gate now runs BEFORE the "CLI now owns host registration" audit
+    // line - a took-over arm refused at `refuseIfPublishedHostAlive` must
+    // never have logged that line, or a support thread would show the
+    // ownership hand-off succeeding right above the error that says it
+    // didn't.
+    it("does not log 'the CLI now owns host registration' when the gate refuses the takeover (verdict 'current')", async () => {
+      const { controller } = stageTakeoverRunner({
+        cliLabelOwned: false,
+        agentLoadedAfterBootout: false,
+        agentRunning: true,
+      });
+      MOCKS.requestCooperativeShutdown.mockResolvedValue({ kind: "stopped" });
+      MOCKS.readHostPidMetadata.mockResolvedValue({
+        pid: 9001,
+        hostId: "hand-run-host",
+        version: "1.2.3",
+        websocketUrl: "ws://127.0.0.1:9001/rpc",
+        startedAt: "2026-07-12T00:00:00.000Z",
+        processStartIdentity: null,
+      });
+      MOCKS.getPublishedProcessIdentityVerdict.mockResolvedValue("current");
+
+      await expect(
+        controller.takeoverDesktopRegistration(label),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+        message: expect.stringContaining("a host is still running (pid 9001"),
+      });
+      expect(MOCKS.cliLoggerInfo).not.toHaveBeenCalledWith(
+        expect.stringContaining("the CLI now owns host registration"),
+        expect.anything(),
+      );
     });
   });
 
@@ -3009,6 +3585,53 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       });
     });
 
+    // The "recycled pid" control above passes because the identity verdict
+    // defaults to "indeterminate", which still falls back to the bootout
+    // exit code. A "current" verdict is stronger evidence than any exit code
+    // or cooperative answer: it is the SAME process the probe read, so it
+    // refuses even after the host answered `stopped` and even with a clean
+    // bootout exit.
+    it("rejects with SERVICE_INSTALL_FAILED ('is still running after the wait') when the published identity verdict is 'current', regardless of a clean bootout exit or a stopped answer", async () => {
+      const { controller } = stageStandDownRunner({
+        pid: 4242,
+        bootoutExitCode: 0,
+      });
+      MOCKS.requestCooperativeShutdown.mockResolvedValue({ kind: "stopped" });
+      MOCKS.isProcessAlive.mockImplementation((pid: number) => pid === 4242);
+      MOCKS.getPublishedProcessIdentityVerdict.mockResolvedValue("current");
+
+      await expect(
+        controller.takeoverDesktopRegistration(label),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+        message: expect.stringContaining("is still running after the wait"),
+        details: expect.objectContaining({
+          pid: 4242,
+          verification: "process-alive",
+        }),
+      });
+    });
+
+    // The opposite evidence: a "mismatch" verdict means the alive pid is NOT
+    // the process launchd reported (it was recycled) - conclusive enough to
+    // resolve even though the bootout wait itself did not end cleanly.
+    it("resolves cli-host-stopped/stopped when the published identity verdict is 'mismatch', even though the bootout wait exits non-zero", async () => {
+      const { controller } = stageStandDownRunner({
+        pid: 4242,
+        bootoutExitCode: -1,
+      });
+      MOCKS.requestCooperativeShutdown.mockResolvedValue({ kind: "stopped" });
+      MOCKS.isProcessAlive.mockImplementation((pid: number) => pid === 4242);
+      MOCKS.getPublishedProcessIdentityVerdict.mockResolvedValue("mismatch");
+
+      await expect(
+        controller.takeoverDesktopRegistration(label),
+      ).resolves.toEqual({
+        kind: "cli-host-stopped",
+        cooperativeStop: "stopped",
+      });
+    });
+
     it("rejects with SERVICE_INSTALL_FAILED ('did not take effect') when the post-bootout probe still finds the CLI-label job loaded", async () => {
       const { controller } = stageStandDownRunner({
         pid: 4242,
@@ -3166,7 +3789,14 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       });
     });
 
-    it("does not refuse a running, pidless CLI-label job whose host ANSWERED the claim with stopped, even when the bootout wait exits non-zero (the stale running flag is not evidence after an answer)", async () => {
+    // `processMayLiveOn` is never cleared by a cooperative `stopped` answer:
+    // the claim goes through `pid.json`, which need not name THIS label's
+    // process, so evidence about the process itself - not the claim's own
+    // outcome - decides whether the bootout wait proved it gone. A pidless
+    // running job has nothing to check the kernel with, so launchd's own
+    // exit is the only tiebreak: non-zero (the runner-timeout shape) still
+    // refuses even after a `stopped` answer.
+    it("rejects with SERVICE_INSTALL_FAILED ('the wait did not end with its exit') for a running, pidless CLI-label job even when the host ANSWERED the claim with stopped, because the bootout wait exits non-zero", async () => {
       const { calls, controller } = stageStandDownRunner({
         pid: null,
         stateLine: "running",
@@ -3176,11 +3806,31 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
 
       await expect(
         controller.takeoverDesktopRegistration(label),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+        message: expect.stringContaining("the wait did not end with its exit"),
+        details: expect.objectContaining({
+          verification: "process-unverified",
+          pid: null,
+        }),
+      });
+      expect(calls.some((c) => c.args[0] === "bootout")).toBe(true);
+    });
+
+    it("resolves cli-host-stopped/stopped for a running, pidless CLI-label job that ANSWERED the claim with stopped, when the bootout wait exits cleanly (0)", async () => {
+      const { controller } = stageStandDownRunner({
+        pid: null,
+        stateLine: "running",
+        bootoutExitCode: 0,
+      });
+      MOCKS.requestCooperativeShutdown.mockResolvedValue({ kind: "stopped" });
+
+      await expect(
+        controller.takeoverDesktopRegistration(label),
       ).resolves.toEqual({
         kind: "cli-host-stopped",
         cooperativeStop: "stopped",
       });
-      expect(calls.some((c) => c.args[0] === "bootout")).toBe(true);
     });
 
     it("resolves cli-host-stopped/no-host via the idle unload path (no claim) when the CLI-label job's state is explicitly not running (state = waiting, no pid)", async () => {
