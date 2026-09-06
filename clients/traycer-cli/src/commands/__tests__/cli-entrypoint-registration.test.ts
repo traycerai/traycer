@@ -17,6 +17,15 @@ const mocks = vi.hoisted(() => ({
     readonly versionRequest: string | null;
     readonly automatic: boolean;
   }>,
+  // `host update`'s own forwarding point since the executor cutover: the run
+  // no longer calls `downloadAndStageHost` at all, it resolves an ADVISORY
+  // plan first and only then transfers under a claim. The version request an
+  // argv rewrite produces is observable here, at the first thing the run does.
+  planCalls: [] as Array<{
+    readonly environment: string;
+    readonly versionRequest: string | null;
+    readonly allowDowngrade: boolean;
+  }>,
   applyCalls: [] as Array<{
     readonly environment: string;
     readonly force: boolean;
@@ -82,6 +91,47 @@ vi.mock("../../host/host-start-adoption", () => ({
   }),
 }));
 
+// SANDBOXED HOST HOME. `host update` on the executor takes a real attempt
+// lock and reads a real attempt record under `hostHomeDir(environment)`, and
+// the runner appends to the real `~/.traycer/cli/cli.log` - none of which any
+// per-module mock above intercepts, because only the PATHS decide where a
+// write lands. One directory for the whole file: this suite has no per-test
+// state to isolate, it only needs to be somewhere other than the operator's
+// own host home.
+vi.mock("../../store/paths", async () => {
+  const actual =
+    await vi.importActual<typeof import("../../store/paths")>(
+      "../../store/paths",
+    );
+  const nodePath = await import("node:path");
+  const { mkdirSync, mkdtempSync } = await import("node:fs");
+  const os = await import("node:os");
+  const home = mkdtempSync(nodePath.join(os.tmpdir(), "cli-entrypoint-"));
+  const under = (...parts: readonly string[]): string => {
+    const path = nodePath.join(home, ...parts);
+    mkdirSync(nodePath.dirname(path), { recursive: true });
+    return path;
+  };
+  return {
+    ...actual,
+    hostHomeDir: (): string => home,
+    hostInstallDir: (): string => nodePath.join(home, "install"),
+    ensureHostInstallDir: async (): Promise<void> => {
+      mkdirSync(nodePath.join(home, "install"), { recursive: true });
+    },
+    hostInstallRecordPath: (): string =>
+      nodePath.join(home, "install", "install.json"),
+    hostStagedDir: (): string => nodePath.join(home, "staged"),
+    hostStagedRecordPath: (): string =>
+      nodePath.join(home, "staged", "staged.json"),
+    hostPidMetadataPath: (): string => nodePath.join(home, "pid.json"),
+    hostUpdateProgressMarkerPath: (): string =>
+      nodePath.join(home, "update-progress.json"),
+    cliLogPath: (): string => under("logs", "cli.log"),
+    cliLockPath: (): string => under("cli", ".lock"),
+  };
+});
+
 vi.mock("../../installer/download-stage", () => ({
   downloadAndStageHost: async (opts: {
     readonly environment: string;
@@ -109,6 +159,39 @@ vi.mock("../../installer/download-stage", () => ({
       installedVersion: "1.0.0",
       stagedVersion: null,
     };
+  },
+  // `host update`'s entry into this module after the executor cutover. It
+  // records the same fact the `downloadAndStageHost` recorder above does - the
+  // version request that survived the argv rewrite - and answers `no-op`, so
+  // the run releases `nothing-to-do` without an actuator or a transfer. The
+  // suite's subject is the REGISTRATION, not the update.
+  resolveUpdatePlan: async (opts: {
+    readonly environment: string;
+    readonly request: {
+      readonly intent: string;
+      readonly versionRequest: string | null;
+      readonly allowDowngrade: boolean;
+    };
+  }) => {
+    mocks.planCalls.push({
+      environment: opts.environment,
+      versionRequest: opts.request.versionRequest ?? null,
+      allowDowngrade: opts.request.allowDowngrade === true,
+    });
+    return {
+      kind: "no-op",
+      targetVersion: "1.0.0",
+      identity: {
+        installedVersion: "1.0.0",
+        installGeneration: "id:install-test",
+        installedRuntimeVersion: null,
+        stagedVersion: null,
+        stageFingerprint: null,
+      },
+    };
+  },
+  downloadAndStageHostInSegment: async () => {
+    throw new Error("the transfer must not run on a no-op plan");
   },
 }));
 
@@ -700,7 +783,7 @@ describe("traycer CLI entrypoint registration", () => {
   });
 
   it("host update parses --version/--force and forwards both explicit and latest requests", async () => {
-    mocks.downloadCalls.length = 0;
+    mocks.planCalls.length = 0;
 
     const explicit = buildProgram();
     explicit.exitOverride();
@@ -713,9 +796,17 @@ describe("traycer CLI entrypoint registration", () => {
     latest.exitOverride();
     await latest.parseAsync(["host", "update"], { from: "user" });
 
-    expect(mocks.downloadCalls).toEqual([
-      { environment: "production", versionRequest: "2.1.0", automatic: false },
-      { environment: "production", versionRequest: null, automatic: false },
+    expect(mocks.planCalls).toEqual([
+      {
+        environment: "production",
+        versionRequest: "2.1.0",
+        allowDowngrade: false,
+      },
+      {
+        environment: "production",
+        versionRequest: null,
+        allowDowngrade: false,
+      },
     ]);
   });
 
@@ -726,7 +817,7 @@ describe("traycer CLI entrypoint registration", () => {
     // the host-update check failed, and --version fell through to root - which
     // prints the CLI version instead of selecting a host version. The offset
     // now comes from Commander's `from` contract.
-    mocks.downloadCalls.length = 0;
+    mocks.planCalls.length = 0;
 
     const nodeStyle = buildProgram();
     nodeStyle.exitOverride();
@@ -755,9 +846,17 @@ describe("traycer CLI entrypoint registration", () => {
       "3.1.5",
     ]);
 
-    expect(mocks.downloadCalls).toEqual([
-      { environment: "production", versionRequest: "3.1.4", automatic: false },
-      { environment: "production", versionRequest: "3.1.5", automatic: false },
+    expect(mocks.planCalls).toEqual([
+      {
+        environment: "production",
+        versionRequest: "3.1.4",
+        allowDowngrade: false,
+      },
+      {
+        environment: "production",
+        versionRequest: "3.1.5",
+        allowDowngrade: false,
+      },
     ]);
   });
 
@@ -810,7 +909,7 @@ describe("traycer CLI entrypoint registration", () => {
   });
 
   it("host update forwards an explicit --version and a bare invocation as latest", async () => {
-    mocks.downloadCalls.length = 0;
+    mocks.planCalls.length = 0;
     const explicit = buildProgram();
     explicit.exitOverride();
     await explicit.parseAsync(["host", "update", "--version", "2.2.0"], {
@@ -819,13 +918,17 @@ describe("traycer CLI entrypoint registration", () => {
     const bare = buildProgram();
     bare.exitOverride();
     await bare.parseAsync(["host", "update"], { from: "user" });
-    expect(mocks.downloadCalls).toEqual([
+    expect(mocks.planCalls).toEqual([
       {
         environment: "production",
         versionRequest: "2.2.0",
-        automatic: false,
+        allowDowngrade: false,
       },
-      { environment: "production", versionRequest: null, automatic: false },
+      {
+        environment: "production",
+        versionRequest: null,
+        allowDowngrade: false,
+      },
     ]);
   });
 
@@ -833,19 +936,23 @@ describe("traycer CLI entrypoint registration", () => {
     // The registered spelling has to work on its own merits: nothing about
     // `--release` goes through `rewriteHostUpdateVersion`, so this pins the
     // option itself rather than the compatibility path above.
-    mocks.downloadCalls.length = 0;
+    mocks.planCalls.length = 0;
     const program = buildProgram();
     program.exitOverride();
     await program.parseAsync(["host", "update", "--release", "2.4.1"], {
       from: "user",
     });
-    expect(mocks.downloadCalls).toEqual([
-      { environment: "production", versionRequest: "2.4.1", automatic: false },
+    expect(mocks.planCalls).toEqual([
+      {
+        environment: "production",
+        versionRequest: "2.4.1",
+        allowDowngrade: false,
+      },
     ]);
   });
 
   it("host update --version=<v> and --release=<v> land on the same option", async () => {
-    mocks.downloadCalls.length = 0;
+    mocks.planCalls.length = 0;
     const inline = buildProgram();
     inline.exitOverride();
     await inline.parseAsync(["host", "update", "--version=3.0.0"], {
@@ -856,9 +963,17 @@ describe("traycer CLI entrypoint registration", () => {
     await release.parseAsync(["host", "update", "--release=3.0.0"], {
       from: "user",
     });
-    expect(mocks.downloadCalls).toEqual([
-      { environment: "production", versionRequest: "3.0.0", automatic: false },
-      { environment: "production", versionRequest: "3.0.0", automatic: false },
+    expect(mocks.planCalls).toEqual([
+      {
+        environment: "production",
+        versionRequest: "3.0.0",
+        allowDowngrade: false,
+      },
+      {
+        environment: "production",
+        versionRequest: "3.0.0",
+        allowDowngrade: false,
+      },
     ]);
   });
 
@@ -875,7 +990,7 @@ describe("traycer CLI entrypoint registration", () => {
   ])(
     "host update rejects an explicitly empty target (%s)",
     async (_n, argv) => {
-      mocks.downloadCalls.length = 0;
+      mocks.planCalls.length = 0;
       const program = buildProgram();
       program.exitOverride();
       await expect(
@@ -884,7 +999,7 @@ describe("traycer CLI entrypoint registration", () => {
         code: CLI_ERROR_CODES.INVALID_ARGUMENT,
       });
       // Crucially: it must not have fallen through to a latest-version update.
-      expect(mocks.downloadCalls).toEqual([]);
+      expect(mocks.planCalls).toEqual([]);
     },
   );
 
