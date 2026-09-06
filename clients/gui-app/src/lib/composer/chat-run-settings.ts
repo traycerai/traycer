@@ -24,6 +24,18 @@ const IMAGE_INPUT_MODALITIES = new Set([
   "visual",
 ]);
 
+// The kimi harness (Kimi Code CLI) advertises image input for these models in
+// its own catalog (`provider list` → `capabilities: ["image_in", ...]`), but
+// the host's kimi adapter does not yet forward that capability into
+// `model.metadata`. Keep the GUI image-attachment gate honest so attachments
+// are not blocked on a vision-capable model. Matches the Codex/`parseCodexModel`
+// pattern of GUI-known model facts.
+const KIMI_VISION_MODEL_SLUGS = new Set([
+  "kimi-code/kimi-for-coding",
+  "kimi-code/kimi-for-coding-highspeed",
+  "kimi-code/k3",
+]);
+
 export function buildChatRunSettings(input: {
   selection: HarnessModelSelection;
   permission: PermissionMode;
@@ -121,7 +133,8 @@ export function modelSupportsImageAttachments(model: ModelOption): boolean {
     model.metadata.supportsImages === true ||
     model.metadata.supportsImageAttachments === true ||
     model.metadata.multimodal === true ||
-    model.metadata.vision === true
+    model.metadata.vision === true ||
+    (model.harnessId === "kimi" && KIMI_VISION_MODEL_SLUGS.has(model.slug))
   );
 }
 
