@@ -306,6 +306,12 @@ async function probeLaunchdJobProcess(
   const probe = classifyLaunchctlPrintResult(result, null, labelId);
   if (probe.kind === "absent") return "none";
   if (probe.kind === "indeterminate") return "job-indeterminate";
+  // An exit-0 answer with no recognizable job fields (truncated output, a
+  // changed format) is `observed` with an indeterminate OWNERSHIP, and its
+  // run state is then empty by construction, not because the job is idle.
+  // Reading that as "no process" would let unreadable evidence authorize
+  // the takeover (Codex, traycer#1761); it fails closed like a non-answer.
+  if (probe.ownership.kind === "indeterminate") return "job-indeterminate";
   const { pid, jobState } = probe.runState;
   // `pid = 0` is launchd's idle job, not a process: the shared parser keeps
   // every finite number as observed, and the CLI's ownership classifier and

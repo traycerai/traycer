@@ -1449,6 +1449,22 @@ describe("readParkedRegistrationTakeover", () => {
     expect(printRunner).toHaveBeenCalledTimes(2);
   });
 
+  it("an exit-0 print with no recognizable job fields (indeterminate ownership) is no-takeover/job-indeterminate, not an idle job", async () => {
+    getLoginItemSettings
+      .mockReturnValueOnce({ status: "not-found" }) // primary
+      .mockReturnValueOnce({ status: "not-registered" }); // legacy
+    printRunner.mockImplementation(async () =>
+      observedPrintResult(["some unknown field = value"]),
+    );
+
+    await expect(readParkedRegistrationTakeover()).resolves.toEqual({
+      kind: "no-takeover",
+      reason: "job-indeterminate",
+    });
+    // Fails closed on the agent label's read; the CLI label is never probed.
+    expect(printRunner).toHaveBeenCalledTimes(1);
+  });
+
   it("a spawn-failed print is no-takeover/job-indeterminate", async () => {
     getLoginItemSettings
       .mockReturnValueOnce({ status: "not-found" }) // primary

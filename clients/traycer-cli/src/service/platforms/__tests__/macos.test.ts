@@ -3220,6 +3220,44 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
     // exit) is `indeterminate` - and an indeterminate read of EITHER label
     // must abort the takeover rather than fall through to "not applicable"
     // and let `installService`'s later plain bootout run with no claim.
+    it("rejects when the CLI-label print exits 0 with no recognizable job fields (indeterminate ownership), instead of reading it as an idle cli-or-other job and unloading it with no claim", async () => {
+      const calls: RecordedCall[] = [];
+      const runner: ProcessRunner = async (command, args) => {
+        calls.push({ command, args });
+        if (args[0] === "print") {
+          if (args[1]?.endsWith(".agent") === true) {
+            return {
+              stdout: "",
+              stderr: "Could not find specified service\n",
+              exitCode: 113,
+            };
+          }
+          return {
+            stdout: "some unknown field = value\n",
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+        return buildSuccessResult();
+      };
+      const controller = createMacosController(runner);
+
+      await expect(
+        controller.takeoverDesktopRegistration(label),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+        message: expect.stringContaining(
+          `could not read launchd's state for '${label.id}'`,
+        ),
+        details: expect.objectContaining({
+          probedLabel: label.id,
+          cause: "unrecognized-format",
+        }),
+      });
+      expect(MOCKS.requestCooperativeShutdown).not.toHaveBeenCalled();
+      expect(calls.some((c) => c.args[0] === "bootout")).toBe(false);
+    });
+
     it("rejects when the CLI-label print exits non-zero with unrelated output, naming the CLI label and never touching cooperative shutdown or launchd", async () => {
       // The agent is probed FIRST now; it must read cleanly (not-loaded)
       // here so the indeterminate CLI-label read - not the agent read - is

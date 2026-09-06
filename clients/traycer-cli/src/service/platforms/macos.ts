@@ -461,6 +461,14 @@ async function probeLabelForTakeover(
   if (probe.kind === "indeterminate") {
     return { kind: "indeterminate", cause: probe.cause };
   }
+  // An exit-0 answer with no recognizable job fields (truncated output, a
+  // changed format) is `observed` with an indeterminate OWNERSHIP; the
+  // CLI-local classifier below would read it as `cli-or-other` with no pid
+  // and the stand-down would unload it with no claim (Codex, traycer#1761).
+  // Same fail-closed verdict as a non-answer, naming the cause.
+  if (probe.ownership.kind === "indeterminate") {
+    return { kind: "indeterminate", cause: probe.ownership.cause };
+  }
   const ownership = classifyLaunchdPrintOutput(probe.raw);
   if (ownership.kind === "not-loaded") return { kind: "absent" };
   const { pid, jobState } = probe.runState;
