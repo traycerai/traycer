@@ -2376,8 +2376,15 @@ describe("canonical status: localAttempt retention (Ticket 07 §5.2.7)", () => {
 // one seam it is named for.
 describe("readLocalAttemptFacts: probed liveness (D13, Ticket 05)", () => {
   const ATTEMPT_ID = "local-attempt-d13";
+  // A DIFFERENT attempt, for the replacement arm of the join. The id is a
+  // fixture parameter rather than a constant baked into the writer because a
+  // hardcoded id cannot exercise the first of the join's three comparisons -
+  // and a join that had lost that comparison would hand a replacement attempt
+  // the holder evidence gathered for its predecessor.
+  const REPLACEMENT_ATTEMPT_ID = "local-attempt-d13-replacement";
 
   function writeActiveAttemptRecord(overrides: {
+    readonly attemptId: string;
     readonly generation: number;
     readonly sequence: number;
     readonly updatedAt: string;
@@ -2388,7 +2395,7 @@ describe("readLocalAttemptFacts: probed liveness (D13, Ticket 05)", () => {
       updateAttemptRecordPath(layout.rootDir),
       JSON.stringify({
         schemaVersion: 2,
-        attemptId: ATTEMPT_ID,
+        attemptId: overrides.attemptId,
         generation: overrides.generation,
         sequence: overrides.sequence,
         trigger: "manual",
@@ -2452,6 +2459,45 @@ describe("readLocalAttemptFacts: probed liveness (D13, Ticket 05)", () => {
     return status.localAttempt;
   }
 
+  interface AttemptIdentity {
+    readonly attemptId: string;
+    readonly generation: number;
+    readonly sequence: number;
+  }
+
+  /**
+   * Drive one record identity into another ACROSS the probe.
+   *
+   * The three bracket pins below each move exactly ONE of the join's three
+   * fields and hold everything else - `updatedAt` included - constant. That
+   * is the point of the shared driver: with only one field ever differing,
+   * dropping any single comparison from the real join has exactly one pin
+   * that can catch it, and a pin cannot pass for the wrong reason (a moving
+   * timestamp, say, which the join does not read at all).
+   */
+  async function attemptMovedAcrossTheBracket(
+    before: AttemptIdentity,
+    after: AttemptIdentity,
+  ): Promise<LocalAttemptFacts | null> {
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    removePidMetadata("production");
+    const updatedAt = new Date().toISOString();
+    writeActiveAttemptRecord({ ...before, updatedAt });
+    probeAttemptHolderMock.probe.mockImplementationOnce(async () => {
+      // The probe runs between the two reads - rewrite the record from
+      // INSIDE it, exactly where a genuinely advancing (or replaced) attempt
+      // would land. The holder evidence is deliberately `holder-live`: it is
+      // the verdict a broken join would publish, so each pin fails as `live`
+      // rather than merely reporting the wrong facts.
+      writeActiveAttemptRecord({ ...after, updatedAt });
+      return holderLive();
+    });
+    return getLocalAttempt();
+  }
+
   // A1: `live` is minted ONLY from `holder-live` joined to an identity that
   // held still across the bracket. Ablation (a) - mapping the derivation's
   // grace-period `active` to `live` - does not touch this pin (the holder
@@ -2463,6 +2509,7 @@ describe("readLocalAttemptFacts: probed liveness (D13, Ticket 05)", () => {
     });
     removePidMetadata("production");
     writeActiveAttemptRecord({
+      attemptId: ATTEMPT_ID,
       generation: 1,
       sequence: 1,
       updatedAt: new Date().toISOString(),
@@ -2478,44 +2525,65 @@ describe("readLocalAttemptFacts: probed liveness (D13, Ticket 05)", () => {
     expect(localAttempt?.livenessObservedAtMs).toEqual(expect.any(Number));
   });
 
-  // A2: the probe runs BETWEEN the two record reads, so a record that moved
-  // during the bracket must publish the FRESHER facts (making the bracket
-  // observable, not just its verdict) with an explicitly unknown liveness -
-  // pairing the pre-probe record with post-probe holder evidence would
-  // describe two different worlds. Ablation (b) - dropping the bracket
-  // entirely and publishing the first read's verdict - reddens this pin: a
-  // dropped bracket would report `live` (the probe's own answer) at
-  // generation/sequence 1/1, never the fresher 1/2 this pin asserts.
-  it("publishes the FRESHER record with `unknown` when identity changes across the bracket", async () => {
-    writeInstallRecord("production", {
-      version: "1.7.0",
-      runtimeVersion: "1.7.0",
-    });
-    removePidMetadata("production");
-    writeActiveAttemptRecord({
-      generation: 1,
-      sequence: 1,
-      updatedAt: new Date().toISOString(),
-    });
-    const advancedUpdatedAt = new Date().toISOString();
-    probeAttemptHolderMock.probe.mockImplementationOnce(async () => {
-      // The probe runs between the two reads - rewrite the record to a new
-      // identity from INSIDE it, exactly where a genuinely advancing
-      // executor would.
-      writeActiveAttemptRecord({
-        generation: 1,
-        sequence: 2,
-        updatedAt: advancedUpdatedAt,
-      });
-      return holderLive();
-    });
+  // A2a-A2c: the probe runs BETWEEN the two record reads, so a record that
+  // moved during the bracket must publish the FRESHER facts (making the
+  // bracket observable, not just its verdict) with an explicitly unknown
+  // liveness - pairing the pre-probe record with post-probe holder evidence
+  // would describe two different worlds. Ablation (b) - dropping the bracket
+  // entirely and publishing the first read's verdict - reddens all three.
+  //
+  // THREE pins rather than one because the join compares three fields
+  // (`attemptId + generation + sequence`, the host observer's ordering key,
+  // never a timestamp) and one pin can only witness one of them: with a fixed
+  // id and a sequence-only move, deleting the id AND generation comparisons
+  // from the real join left the entire suite green (cold review A, R3).
 
-    const localAttempt = await getLocalAttempt();
+  // A2a: a REPLACEMENT attempt across the bracket - a different `attemptId`
+  // with the counters held EQUAL, so the id is the only thing that moved.
+  // This is the arm with teeth: a join blind to the id would hand a brand-new
+  // attempt the holder evidence gathered for its predecessor and publish
+  // `live` about it.
+  it("publishes the FRESHER record with `unknown` when a REPLACEMENT attempt appears across the bracket (id only)", async () => {
+    const localAttempt = await attemptMovedAcrossTheBracket(
+      { attemptId: ATTEMPT_ID, generation: 1, sequence: 1 },
+      { attemptId: REPLACEMENT_ATTEMPT_ID, generation: 1, sequence: 1 },
+    );
 
     expect(localAttempt?.liveness).toBe("unknown");
+    expect(localAttempt?.attemptId).toBe(REPLACEMENT_ATTEMPT_ID);
+    expect(localAttempt?.generation).toBe(1);
+    expect(localAttempt?.sequence).toBe(1);
+    expect(localAttempt?.livenessObservedAtMs).toEqual(expect.any(Number));
+  });
+
+  // A2b: a recovery bumps `generation` and resets `sequence`, so generation
+  // is an independent leg of the key - the same attempt id at a new
+  // generation is not the record this probe was paired with.
+  it("publishes the FRESHER record with `unknown` when the generation moves across the bracket", async () => {
+    const localAttempt = await attemptMovedAcrossTheBracket(
+      { attemptId: ATTEMPT_ID, generation: 1, sequence: 1 },
+      { attemptId: ATTEMPT_ID, generation: 2, sequence: 1 },
+    );
+
+    expect(localAttempt?.liveness).toBe("unknown");
+    expect(localAttempt?.attemptId).toBe(ATTEMPT_ID);
+    expect(localAttempt?.generation).toBe(2);
+    expect(localAttempt?.sequence).toBe(1);
+    expect(localAttempt?.livenessObservedAtMs).toEqual(expect.any(Number));
+  });
+
+  // A2c: the ordinary case - an executor advancing its own record while the
+  // probe is in flight bumps `sequence` alone.
+  it("publishes the FRESHER record with `unknown` when the sequence advances across the bracket", async () => {
+    const localAttempt = await attemptMovedAcrossTheBracket(
+      { attemptId: ATTEMPT_ID, generation: 1, sequence: 1 },
+      { attemptId: ATTEMPT_ID, generation: 1, sequence: 2 },
+    );
+
+    expect(localAttempt?.liveness).toBe("unknown");
+    expect(localAttempt?.attemptId).toBe(ATTEMPT_ID);
     expect(localAttempt?.generation).toBe(1);
     expect(localAttempt?.sequence).toBe(2);
-    expect(localAttempt?.updatedAt).toBe(advancedUpdatedAt);
     expect(localAttempt?.livenessObservedAtMs).toEqual(expect.any(Number));
   });
 
@@ -2531,6 +2599,7 @@ describe("readLocalAttemptFacts: probed liveness (D13, Ticket 05)", () => {
     });
     removePidMetadata("production");
     writeActiveAttemptRecord({
+      attemptId: ATTEMPT_ID,
       generation: 1,
       sequence: 1,
       updatedAt: new Date().toISOString(),
@@ -2554,6 +2623,7 @@ describe("readLocalAttemptFacts: probed liveness (D13, Ticket 05)", () => {
     removePidMetadata("production");
     const futureUpdatedAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
     writeActiveAttemptRecord({
+      attemptId: ATTEMPT_ID,
       generation: 1,
       sequence: 1,
       updatedAt: futureUpdatedAt,
@@ -2578,6 +2648,7 @@ describe("readLocalAttemptFacts: probed liveness (D13, Ticket 05)", () => {
     removePidMetadata("production");
     const staleUpdatedAt = new Date(Date.now() - 130_000).toISOString();
     writeActiveAttemptRecord({
+      attemptId: ATTEMPT_ID,
       generation: 1,
       sequence: 1,
       updatedAt: staleUpdatedAt,
