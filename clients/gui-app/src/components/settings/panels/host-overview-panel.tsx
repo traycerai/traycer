@@ -784,6 +784,22 @@ export function HostOverviewPanel(props: {
   ) {
     setForceUpdateOffer(null);
   }
+  // And when the route to the host is gone. `usable` withdraws the controls
+  // that OPEN these two confirms (`onRestart` / `onForceUpdate` are `null`
+  // below), but a confirm opened while the route was up is not withdrawn by
+  // that: answered, it would dispatch over a client the scope no longer
+  // vouches for, and it cannot be re-opened either, so closing it is the
+  // same withdrawal one commit late. Adjust-during-render like the gate rule
+  // above, so no unusable render ever commits an answerable dialog and the
+  // handlers need no guard of their own. NOT the force-restart offer below:
+  // its Force is the bridge respawn, the one action that stays legitimate —
+  // and is most needed — while this machine's host is unreachable.
+  if (!usable && restartConfirmOpen) {
+    setRestartConfirmOpen(false);
+  }
+  if (!usable && forceUpdateOffer !== null) {
+    setForceUpdateOffer(null);
+  }
 
   // Which write IS this dialog's own dispatch: the cooperative `host.restart`
   // ordinarily, the bridge respawn when the fallback routes Restart to the
