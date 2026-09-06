@@ -72,6 +72,14 @@ export function epochMicrosNow(): number {
 
 /** Seams the kill loop needs from the outside world. */
 export interface WindowsControllerDeps {
+  /**
+   * The current time in MICROSECONDS since the Unix epoch - the unit
+   * `WindowsProcessTableRow.created` is projected in, because the kill loop
+   * compares the two directly to bound each victim's lifetime. Production
+   * passes `epochMicrosNow`. A caller that passed `Date.now()` (milliseconds)
+   * would place every bound a thousand times too early and classify every
+   * carry-over row as unattributed, failing every stop that needed one.
+   */
   readonly now: () => number;
 }
 

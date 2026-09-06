@@ -4195,11 +4195,11 @@ describe("platform matrix", () => {
         return true;
       },
     );
-    vi.mocked(runBundledTraycerCliJson).mockImplementation(async (args) => {
-      if (args.includes("uninstall")) {
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
+      if (opts.args.includes("uninstall")) {
         sentinelWasSetWhenUninstallRan.push(await isHostRemovedByUser());
       }
-      return { removedInstallDir: true, serviceUninstalled: true };
+      return { data: { removedInstallDir: true, serviceUninstalled: true } };
     });
 
     expect(await isHostRemovedByUser()).toBe(false);
@@ -4209,6 +4209,14 @@ describe("platform matrix", () => {
     expect(sentinelWasSetWhenUnregisterRan).toEqual([true]);
     expect(sentinelWasSetWhenUninstallRan).toEqual([true]);
     expect(await isHostRemovedByUser()).toBe(true);
+    // Route pin: the removal streams `host uninstall --all` (the Windows
+    // kill loop can outlive the run path's flat timeout) and never runs it.
+    expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
+      expect.objectContaining({ args: ["host", "uninstall", "--all"] }),
+    );
+    expect(runBundledTraycerCliJson).not.toHaveBeenCalledWith(
+      expect.arrayContaining(["uninstall"]),
+    );
   });
 
   // P3: the signal must reach the real download child, and removal must wait
@@ -4228,10 +4236,7 @@ describe("platform matrix", () => {
       if (args.includes("available")) {
         return availableSnapshotFixture("1.8.0", ["1.8.0"]);
       }
-      if (args.includes("uninstall")) {
-        uninstallCalls += 1;
-      }
-      return { removedInstallDir: true, serviceUninstalled: true };
+      return {};
     });
     // Signals that the download is genuinely in flight WITH its abort
     // listener attached. Without this handshake the test has no in-flight
@@ -4272,6 +4277,13 @@ describe("platform matrix", () => {
         await downloadGate.promise;
         return { data: {} };
       }
+      if (opts.args.includes("uninstall")) {
+        // `host uninstall --all` is streamed too (the Windows kill loop can
+        // outlive the run path's flat timeout), so the removal's uninstall
+        // is counted here, on the same mock the download lane uses.
+        uninstallCalls += 1;
+        return { data: { removedInstallDir: true, serviceUninstalled: true } };
+      }
       return { data: {} };
     });
 
@@ -4310,13 +4322,20 @@ describe("platform matrix", () => {
       version: "1.7.0",
       runtimeVersion: "1.7.0",
     });
-    vi.mocked(runBundledTraycerCliJson).mockResolvedValue({
-      removedInstallDir: true,
-      serviceUninstalled: true,
+    vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+      data: { removedInstallDir: true, serviceUninstalled: true },
     });
 
     await controller.uninstallHost(true);
     expect(await isHostRemovedByUser()).toBe(false);
+    // Route pin: `uninstallHost` streams `host uninstall --all` for the same
+    // reason `deregisterService` and `removeTraycer` do.
+    expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
+      expect.objectContaining({ args: ["host", "uninstall", "--all"] }),
+    );
+    expect(runBundledTraycerCliJson).not.toHaveBeenCalledWith(
+      expect.arrayContaining(["uninstall"]),
+    );
   });
 });
 
