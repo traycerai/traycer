@@ -323,7 +323,7 @@ describe("relocateOutOfHostCgroupIfNeeded", () => {
     process.execArgv = [];
     spawnMocks.respond = acknowledgeThenExit(0);
 
-    const result = await relocateOutOfHostCgroupIfNeeded("host update");
+    const result = await relocateOutOfHostCgroupIfNeeded("host update", {});
 
     expect(result).toEqual({ kind: "completed", exitCode: 0 });
     expect(spawnMocks.recorded).toHaveLength(1);
@@ -376,7 +376,7 @@ describe("relocateOutOfHostCgroupIfNeeded", () => {
     // `completed`, not a rejection: the relocated CLI ran and emitted its own
     // terminal envelope, so this process forwards the code and writes nothing.
     await expect(
-      relocateOutOfHostCgroupIfNeeded("host update"),
+      relocateOutOfHostCgroupIfNeeded("host update", {}),
     ).resolves.toEqual({ kind: "completed", exitCode: 3 });
   });
 
@@ -389,7 +389,7 @@ describe("relocateOutOfHostCgroupIfNeeded", () => {
     spawnMocks.respond = acknowledgeThenExit(null);
 
     await expect(
-      relocateOutOfHostCgroupIfNeeded("host update"),
+      relocateOutOfHostCgroupIfNeeded("host update", {}),
     ).resolves.toEqual({ kind: "completed", exitCode: 1 });
 
     // Ablation: in `runInTransientScope`, change `resolve(code ?? 1)` to
@@ -419,7 +419,7 @@ describe("relocateOutOfHostCgroupIfNeeded", () => {
     };
 
     await expect(
-      relocateOutOfHostCgroupIfNeeded("host update"),
+      relocateOutOfHostCgroupIfNeeded("host update", {}),
     ).rejects.toMatchObject({
       code: "E_SERVICE_CONTROL_FAILED",
       details: { systemdRunExitCode: 1 },
@@ -456,7 +456,7 @@ describe("relocateOutOfHostCgroupIfNeeded", () => {
     };
 
     await expect(
-      relocateOutOfHostCgroupIfNeeded("host update"),
+      relocateOutOfHostCgroupIfNeeded("host update", {}),
     ).resolves.toEqual({ kind: "completed", exitCode: 7 });
     expect(loggerMock.info).toHaveBeenCalledWith(
       "relocated host-stopping command into a transient scope",
@@ -488,7 +488,7 @@ describe("relocateOutOfHostCgroupIfNeeded", () => {
 
     let caught: unknown = null;
     try {
-      await relocateOutOfHostCgroupIfNeeded("host update");
+      await relocateOutOfHostCgroupIfNeeded("host update", {});
     } catch (error) {
       caught = error;
     }
@@ -520,14 +520,14 @@ describe("relocateOutOfHostCgroupIfNeeded", () => {
     };
 
     await expect(
-      relocateOutOfHostCgroupIfNeeded("host update"),
+      relocateOutOfHostCgroupIfNeeded("host update", {}),
     ).resolves.toEqual({ kind: "completed", exitCode: 0 });
   });
 
   it("does nothing and never spawns for a relocated scope cgroup (run-*.scope)", async () => {
     mocks.cgroup = SCOPE_CGROUP;
     await expect(
-      relocateOutOfHostCgroupIfNeeded("host update"),
+      relocateOutOfHostCgroupIfNeeded("host update", {}),
     ).resolves.toEqual({ kind: "not-needed" });
     expect(spawnMocks.recorded).toHaveLength(0);
   });
@@ -538,7 +538,7 @@ describe("relocateOutOfHostCgroupIfNeeded", () => {
       false,
     );
     await expect(
-      relocateOutOfHostCgroupIfNeeded("agent turn-ended-from-hook"),
+      relocateOutOfHostCgroupIfNeeded("agent turn-ended-from-hook", {}),
     ).resolves.toEqual({ kind: "not-needed" });
     expect(spawnMocks.recorded).toHaveLength(0);
 
@@ -552,7 +552,7 @@ describe("relocateOutOfHostCgroupIfNeeded", () => {
     mocks.cgroup = V2_HOST_UNIT_CGROUP;
     process.env[TRAYCER_CLI_RELOCATED_ENV] = "1";
     await expect(
-      relocateOutOfHostCgroupIfNeeded("host update"),
+      relocateOutOfHostCgroupIfNeeded("host update", {}),
     ).resolves.toEqual({ kind: "not-needed" });
     expect(spawnMocks.recorded).toHaveLength(0);
   });
@@ -561,7 +561,7 @@ describe("relocateOutOfHostCgroupIfNeeded", () => {
     mocks.platform = "darwin";
     mocks.cgroup = V2_HOST_UNIT_CGROUP;
     await expect(
-      relocateOutOfHostCgroupIfNeeded("host update"),
+      relocateOutOfHostCgroupIfNeeded("host update", {}),
     ).resolves.toEqual({ kind: "not-needed" });
     expect(spawnMocks.recorded).toHaveLength(0);
   });
@@ -587,7 +587,7 @@ describe("relocateOutOfHostCgroupIfNeeded", () => {
     process.execArgv = [];
 
     await expect(
-      relocateOutOfHostCgroupIfNeeded("host install"),
+      relocateOutOfHostCgroupIfNeeded("host install", {}),
     ).rejects.toMatchObject({
       code: "E_SERVICE_CONTROL_FAILED",
       details: { argument: "/tmp/${BUILD}/host.tar.gz" },
@@ -618,7 +618,7 @@ describe("relocateOutOfHostCgroupIfNeeded", () => {
     spawnMocks.respond = acknowledgeThenExit(0);
 
     await expect(
-      relocateOutOfHostCgroupIfNeeded("host install"),
+      relocateOutOfHostCgroupIfNeeded("host install", {}),
     ).resolves.toEqual({ kind: "completed", exitCode: 0 });
     expect(spawnMocks.recorded).toHaveLength(1);
   });
@@ -629,7 +629,7 @@ describe("relocateOutOfHostCgroupIfNeeded", () => {
     // written, and the stop kills the process issuing it.
     mocks.cgroup = { errno: "EACCES" };
     await expect(
-      relocateOutOfHostCgroupIfNeeded("host update"),
+      relocateOutOfHostCgroupIfNeeded("host update", {}),
     ).rejects.toMatchObject({
       code: "E_SERVICE_CONTROL_FAILED",
       details: { path: "/proc/self/cgroup" },
@@ -648,10 +648,156 @@ describe("relocateOutOfHostCgroupIfNeeded", () => {
     for (const errno of ["ENOENT", "ENOTDIR"]) {
       mocks.cgroup = { errno };
       await expect(
-        relocateOutOfHostCgroupIfNeeded("host update"),
+        relocateOutOfHostCgroupIfNeeded("host update", {}),
       ).resolves.toEqual({ kind: "not-needed" });
     }
     expect(spawnMocks.recorded).toHaveLength(0);
+  });
+
+  // The four commands whose reachability now depends on the parsed options,
+  // not just the command path (Codex review on #1755: command path alone
+  // relocated bytes-only forms that never reach a stop, exposing them to the
+  // `$` refusal and the "scope never started" refusal for nothing). Each gets
+  // a positive (skips relocation) and a negative (still relocates) case.
+  describe("option-gated commands", () => {
+    it("host install --no-service-register: not-needed, no refusal, no spawn - even with a $ in --from", async () => {
+      // The exact form from the Codex report. A composed --from path with a
+      // `$` WOULD trip `assertArgvSurvivesSystemdRun` if this reached
+      // relocation - it must not, because `createBytesOnlyInstallLifecycle`
+      // never calls `controller.stop` on any platform.
+      mocks.cgroup = V2_HOST_UNIT_CGROUP;
+      mocks.packaged = true;
+      process.argv = [
+        "/slot/traycer",
+        "/slot/traycer",
+        "host",
+        "install",
+        "--from",
+        "/tmp/${BUILD}/host.tar.gz",
+        "--no-service-register",
+      ];
+      process.execPath = "/slot/traycer";
+      process.execArgv = [];
+
+      await expect(
+        relocateOutOfHostCgroupIfNeeded("host install", {
+          serviceRegister: false,
+        }),
+      ).resolves.toEqual({ kind: "not-needed" });
+      expect(spawnMocks.recorded).toHaveLength(0);
+
+      // Ablation (§4): in `HOST_STOPPING_COMMANDS`, change the `host install`
+      // entry from `(options) => options.serviceRegister !== false` to
+      // `ALWAYS_STOPS` → this test fails: the `$` in `--from` now reaches
+      // `assertArgvSurvivesSystemdRun` and the call rejects with
+      // `E_SERVICE_CONTROL_FAILED` instead of resolving `not-needed`.
+    });
+
+    it("host install without --no-service-register still relocates (positive control)", async () => {
+      mocks.cgroup = V2_HOST_UNIT_CGROUP;
+      mocks.packaged = true;
+      process.argv = packagedArgv() as string[];
+      process.execPath = "/slot/traycer";
+      process.execArgv = [];
+      spawnMocks.respond = acknowledgeThenExit(0);
+
+      await expect(
+        relocateOutOfHostCgroupIfNeeded("host install", {}),
+      ).resolves.toEqual({ kind: "completed", exitCode: 0 });
+      expect(spawnMocks.recorded).toHaveLength(1);
+    });
+
+    it("host ensure --no-service-register: not-needed, no spawn", async () => {
+      // `provisionHost`'s bytes-only path is the ONLY reachable one when
+      // `serviceRegister` is false - its register/start branches cannot run.
+      mocks.cgroup = V2_HOST_UNIT_CGROUP;
+      await expect(
+        relocateOutOfHostCgroupIfNeeded("host ensure", {
+          serviceRegister: false,
+        }),
+      ).resolves.toEqual({ kind: "not-needed" });
+      expect(spawnMocks.recorded).toHaveLength(0);
+    });
+
+    it("host ensure without --no-service-register still relocates (positive control)", async () => {
+      mocks.cgroup = V2_HOST_UNIT_CGROUP;
+      mocks.packaged = true;
+      process.argv = packagedArgv() as string[];
+      process.execPath = "/slot/traycer";
+      process.execArgv = [];
+      spawnMocks.respond = acknowledgeThenExit(0);
+
+      await expect(
+        relocateOutOfHostCgroupIfNeeded("host ensure", {}),
+      ).resolves.toEqual({ kind: "completed", exitCode: 0 });
+      expect(spawnMocks.recorded).toHaveLength(1);
+    });
+
+    it("host apply --no-service: not-needed, no spawn", async () => {
+      // `lifecycle: null` is passed to the commit, so there is no
+      // `beforeSwap` - and therefore no `controller.stop` - on any platform.
+      mocks.cgroup = V2_HOST_UNIT_CGROUP;
+      await expect(
+        relocateOutOfHostCgroupIfNeeded("host apply", { service: false }),
+      ).resolves.toEqual({ kind: "not-needed" });
+      expect(spawnMocks.recorded).toHaveLength(0);
+    });
+
+    it("host apply without --no-service still relocates (positive control)", async () => {
+      mocks.cgroup = V2_HOST_UNIT_CGROUP;
+      mocks.packaged = true;
+      process.argv = packagedArgv() as string[];
+      process.execPath = "/slot/traycer";
+      process.execArgv = [];
+      spawnMocks.respond = acknowledgeThenExit(0);
+
+      await expect(
+        relocateOutOfHostCgroupIfNeeded("host apply", {}),
+      ).resolves.toEqual({ kind: "completed", exitCode: 0 });
+      expect(spawnMocks.recorded).toHaveLength(1);
+    });
+
+    it("host uninstall without --all: not-needed, no spawn - the default path tears nothing down", async () => {
+      mocks.cgroup = V2_HOST_UNIT_CGROUP;
+      await expect(
+        relocateOutOfHostCgroupIfNeeded("host uninstall", {}),
+      ).resolves.toEqual({ kind: "not-needed" });
+      expect(spawnMocks.recorded).toHaveLength(0);
+    });
+
+    it("host uninstall --all: still relocates (positive control) - the only inverted entry, where true means stop", async () => {
+      mocks.cgroup = V2_HOST_UNIT_CGROUP;
+      mocks.packaged = true;
+      process.argv = packagedArgv() as string[];
+      process.execPath = "/slot/traycer";
+      process.execArgv = [];
+      spawnMocks.respond = acknowledgeThenExit(0);
+
+      await expect(
+        relocateOutOfHostCgroupIfNeeded("host uninstall", { all: true }),
+      ).resolves.toEqual({ kind: "completed", exitCode: 0 });
+      expect(spawnMocks.recorded).toHaveLength(1);
+    });
+
+    it("host uninstall polarity is explicit: {all: false} skips, {all: true} relocates, in the same cgroup", async () => {
+      mocks.cgroup = V2_HOST_UNIT_CGROUP;
+
+      await expect(
+        relocateOutOfHostCgroupIfNeeded("host uninstall", { all: false }),
+      ).resolves.toEqual({ kind: "not-needed" });
+      expect(spawnMocks.recorded).toHaveLength(0);
+
+      mocks.packaged = true;
+      process.argv = packagedArgv() as string[];
+      process.execPath = "/slot/traycer";
+      process.execArgv = [];
+      spawnMocks.respond = acknowledgeThenExit(0);
+
+      await expect(
+        relocateOutOfHostCgroupIfNeeded("host uninstall", { all: true }),
+      ).resolves.toEqual({ kind: "completed", exitCode: 0 });
+      expect(spawnMocks.recorded).toHaveLength(1);
+    });
   });
 });
 

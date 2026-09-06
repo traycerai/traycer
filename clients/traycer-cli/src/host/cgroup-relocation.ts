@@ -50,6 +50,26 @@ import { isPackagedRun } from "../store/well-known-cli";
  */
 
 /**
+ * Whether THIS invocation of an allowlisted command can reach a host stop,
+ * given the options Commander parsed for it.
+ *
+ * Command path alone is too coarse. Four of the nine have a documented
+ * bytes-only or leave-it-running form whose body provably never reaches
+ * `withStopIntent` or `killHostProcessTree`, and relocating those buys nothing
+ * while exposing them to two refusals they cannot deserve: a `$` in a `--from`
+ * path, and a machine where a transient scope cannot be started at all.
+ *
+ * SAFE BECAUSE IT FAILS CLOSED. A predicate that wrongly says "no stop" does
+ * not remove the protection, it removes the FIRST line of it: the command runs
+ * in place, and `assertNotInsideHostUnit` - which is unconditional, on all four
+ * stop routes - refuses the stop before any intent is written. The cost of
+ * being wrong here is a refused command, not a killed updater.
+ */
+export type HostStopReachable = (options: Record<string, unknown>) => boolean;
+
+const ALWAYS_STOPS: HostStopReachable = () => true;
+
+/**
  * The commands whose bodies reach a host stop, keyed by Commander command path.
  *
  * Checked once in `withRunner`, the same shape as `READONLY_REFUSED_COMMANDS`,
@@ -61,18 +81,40 @@ import { isPackagedRun } from "../store/well-known-cli";
  * `host start` is deliberately absent: it IS the unit's main process and never
  * stops anything. So are the `agent *-from-hook` commands, which run inside an
  * agent process and are supposed to die with the host.
+ *
+ * The four conditional entries, each traced to the branch that decides it.
+ * They are Linux answers, which is all this map is ever asked for - the caller
+ * has already returned on every other platform, and each of these forms is
+ * refused outright on Windows anyway:
+ *
+ *   - `host install` / `host ensure` with `--no-service-register`
+ *     (`serviceRegister === false`) take `createBytesOnlyInstallLifecycle`,
+ *     whose `beforeSwap` returns immediately off win32, and
+ *     `swapLockRecoveryFor` - the only other kill seam in an install - is null
+ *     off win32. For `ensure` the bytes-only path is also the ONLY reachable
+ *     one: `provisionHost`'s `!registerService` branch either no-ops or
+ *     reinstalls, so its register and start branches cannot be reached.
+ *   - `host apply --no-service` (`service === false`) passes `lifecycle: null`
+ *     to the commit, so there is no `beforeSwap` on any platform.
+ *   - `host uninstall` stops only under `--all`; the default path removes bytes
+ *     and deliberately "tears nothing down", leaving a running host serving.
+ *
+ * Everything else stops unconditionally, `host update` included: whether it
+ * finds work to do is a question about STATE, and only options are consulted
+ * here.
  */
-export const HOST_STOPPING_COMMANDS: ReadonlySet<string> = new Set([
-  "host update",
-  "host apply",
-  "host install",
-  "host ensure",
-  "host restart",
-  "host stop",
-  "host uninstall",
-  "host free-port-and-restart",
-  "host service uninstall",
-]);
+export const HOST_STOPPING_COMMANDS: ReadonlyMap<string, HostStopReachable> =
+  new Map<string, HostStopReachable>([
+    ["host update", ALWAYS_STOPS],
+    ["host restart", ALWAYS_STOPS],
+    ["host stop", ALWAYS_STOPS],
+    ["host free-port-and-restart", ALWAYS_STOPS],
+    ["host service uninstall", ALWAYS_STOPS],
+    ["host install", (options) => options.serviceRegister !== false],
+    ["host ensure", (options) => options.serviceRegister !== false],
+    ["host apply", (options) => options.service !== false],
+    ["host uninstall", (options) => options.all === true],
+  ]);
 
 /**
  * Recursion flag set on the relocated child.
@@ -138,9 +180,11 @@ export type CgroupRelocation =
  */
 export async function relocateOutOfHostCgroupIfNeeded(
   commandPath: string,
+  options: Record<string, unknown>,
 ): Promise<CgroupRelocation> {
   if (osPlatform() !== "linux") return NOT_NEEDED;
-  if (!HOST_STOPPING_COMMANDS.has(commandPath)) return NOT_NEEDED;
+  const reachesStop = HOST_STOPPING_COMMANDS.get(commandPath);
+  if (reachesStop === undefined || !reachesStop(options)) return NOT_NEEDED;
   if ((process.env[TRAYCER_CLI_RELOCATED_ENV] ?? "").length > 0) {
     return NOT_NEEDED;
   }

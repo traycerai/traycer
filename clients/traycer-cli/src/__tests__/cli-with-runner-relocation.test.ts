@@ -186,6 +186,20 @@ describe("withRunner - cgroup relocation hook", () => {
     expect(hostStopSpy).toHaveBeenCalledTimes(1);
   });
 
+  it("forwards the parsed options (optsBag), not just the command path, to the relocation predicate", async () => {
+    // The whole finding this task pins is that `HOST_STOPPING_COMMANDS` now
+    // reads OPTIONS, not just the command path - and that is worthless if
+    // `withRunner` never hands the parsed flags to the predicate at all.
+    relocationSpy.mockResolvedValue({ kind: "not-needed" });
+
+    await parseHostStop(["host", "stop", "--json"]);
+
+    expect(relocationSpy).toHaveBeenCalledTimes(1);
+    const [commandPath, options] = relocationSpy.mock.calls[0] ?? [];
+    expect(commandPath).toBe("host stop");
+    expect(options).toMatchObject({ json: true });
+  });
+
   it("relocation failure: keeps E_SERVICE_CONTROL_FAILED through the runner's error path under --json, and never builds the command body", async () => {
     const failure = cliError({
       code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,

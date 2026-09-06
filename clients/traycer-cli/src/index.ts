@@ -277,7 +277,10 @@ function withRunner(
     // behind this point too, so nothing the command does has happened yet.
     let relocation: CgroupRelocation;
     try {
-      relocation = await relocateOutOfHostCgroupIfNeeded(commandPath);
+      // Keyed by command path AND the parsed options: `host uninstall` without
+      // `--all`, and the bytes-only forms of install/ensure/apply, never reach
+      // a stop, so relocating them would only expose them to its failure modes.
+      relocation = await relocateOutOfHostCgroupIfNeeded(commandPath, optsBag);
     } catch (error) {
       // Rendered through the runner's normal error path rather than thrown from
       // the action: an error escaping Commander lands in the entry's generic
