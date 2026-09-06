@@ -158,8 +158,9 @@ async function stageMarkerFile(
  * delete that cannot erase a marker another writer landed in between.
  *
  * For a clear that decided from a marker it READ ("this `failed` is stale,
- * the host is current") or WROTE (this invocation's own `updating`, by the
- * time the update finished). Another updater can replace that marker with a
+ * the host is current"), WROTE, or TOOK OVER under the contender lock (this
+ * invocation's own `updating`, by the time the update finished). Another
+ * updater can replace that marker with a
  * live `updating` at any point, and deleting that would erase the only
  * progress signal the legacy path has, rendering a real download → swap →
  * restart as a quiet host. A read-then-unlink pair leaves exactly that window
@@ -177,14 +178,17 @@ export async function deleteUpdateProgressMarkerIfUnchanged(
 
 /**
  * Replace the marker with `next` only if it still reads as `expected` - the
- * failure stamp's compare-and-swap.
+ * compare-and-swap behind `host update`'s failure stamp, its re-point and
+ * takeover under the contender lock, and the restore of a taken-over record
+ * when the run then does nothing.
  *
- * `host update` stamps `failed` over the `updating` IT wrote, and by then
- * another updater may have landed its own `updating` at the same path (its
- * write precedes its lock wait, so holding the lock proves nothing about the
- * marker). Stamping over that would report the old failure for the whole of
- * the new update. A read-then-write pair only narrows that window; this
- * closes it with the same rename/link protocol the conditional delete uses.
+ * `host update` stamps `failed` over the `updating` IT wrote or took over,
+ * and by then another updater may have landed its own `updating` at the
+ * same path (its write precedes its lock wait, so holding the lock proves
+ * nothing about the marker). Stamping over that would report the old failure
+ * for the whole of the new update. A read-then-write pair only narrows that
+ * window; this closes it with the same rename/link protocol the conditional
+ * delete uses.
  *
  * An ABSENT marker is `changed`, not a free slot: the live path is also empty
  * for the instant another conditional swap holds the current marker in its

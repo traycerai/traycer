@@ -43,6 +43,13 @@ const mocks = vi.hoisted(() => ({
   // sandboxRoot` - a direct reference there hits a TDZ `ReferenceError`,
   // so the live sandbox value has to live in this hoisted object instead.
   sandboxHome: "",
+  // Cross-mock ordering timeline for the `onWillCommitStaged` placement
+  // pins below: `assertHostNotBusy` and `createServiceInstallLifecycle`
+  // (whose construction is `applyHost`'s first commit-path step after the
+  // hook) both push into this SHARED array, alongside the hook itself, so
+  // a single assertion can pin the hook strictly between the busy check
+  // and the commit machinery.
+  callOrder: [] as string[],
 }));
 
 // `store/paths` computes `TRAYCER_HOME` from `os.homedir()` once at module
@@ -62,6 +69,7 @@ vi.mock("node:os", async (importOriginal) => {
 
 vi.mock("../../host/busy-check", () => ({
   assertHostNotBusy: async () => {
+    mocks.callOrder.push("busy-check");
     if (mocks.busyOverride === "busy") {
       throw Object.assign(new Error("host is busy"), { code: "E_HOST_BUSY" });
     }
@@ -73,6 +81,7 @@ vi.mock("../../service/install-lifecycle", () => ({
     bootstrap: unknown;
     force: boolean;
   }) => {
+    mocks.callOrder.push("lifecycle-created");
     mocks.lifecycleCalls.push({
       bootstrap: options.bootstrap,
       force: options.force,
@@ -221,6 +230,7 @@ describe("applyHost", () => {
     mocks.lifecycleBeforeSwapShouldThrow = false;
     mocks.lifecyclePostSwapAction = "restart";
     mocks.lifecyclePostSwapError = null;
+    mocks.callOrder = [];
     rmSync(sandboxRoot, { recursive: true, force: true });
   });
 
@@ -380,6 +390,96 @@ describe("applyHost", () => {
 
     expect(existsSync(stagedDirFor(ENV))).toBe(true);
     expect(existsSync(installDirFor(ENV))).toBe(true);
+  });
+
+  describe("onWillCommitStaged", () => {
+    it("is called exactly once with the staged version, after the busy check and before the commit", async () => {
+      // Falsification: move the `onWillCommitStaged` call above the busy
+      // gate in `apply.ts` and "busy-check" would land AFTER "hook" in the
+      // order below instead of before it.
+      await writeInstall("1.0.0", {});
+      await writeStaged("2.0.0", {});
+      const onWillCommitStaged = vi.fn(async (stagedVersion: string) => {
+        mocks.callOrder.push("hook");
+        expect(stagedVersion).toBe("2.0.0");
+      });
+
+      const result = await applyHost({
+        environment: ENV,
+        force: false,
+        noService: false,
+        expectedStageFingerprint: null,
+        onProgress: () => {},
+        onWillCommitStaged,
+      });
+
+      expect(result.outcome).toBe("applied");
+      expect(onWillCommitStaged).toHaveBeenCalledTimes(1);
+      expect(onWillCommitStaged).toHaveBeenCalledWith("2.0.0");
+      // Strictly between the busy check and the commit machinery
+      // (`createServiceInstallLifecycle` is `applyHost`'s first commit-path
+      // step once it decides to proceed).
+      expect(mocks.callOrder).toEqual([
+        "busy-check",
+        "hook",
+        "lifecycle-created",
+      ]);
+    });
+
+    it("is not called when nothing is staged (the no-op outcome)", async () => {
+      await writeInstall("1.0.0", {});
+      const onWillCommitStaged = vi.fn(async () => undefined);
+
+      const result = await applyHost({
+        environment: ENV,
+        force: false,
+        noService: false,
+        expectedStageFingerprint: null,
+        onProgress: () => {},
+        onWillCommitStaged,
+      });
+
+      expect(result).toEqual({ outcome: "no-op", installedVersion: "1.0.0" });
+      expect(onWillCommitStaged).not.toHaveBeenCalled();
+    });
+
+    it("is not called on a fingerprint mismatch", async () => {
+      await writeInstall("1.0.0", {});
+      await writeStaged("2.0.0", { stageId: "stage-a" });
+      const onWillCommitStaged = vi.fn(async () => undefined);
+
+      const result = await applyHost({
+        environment: ENV,
+        force: false,
+        noService: false,
+        expectedStageFingerprint: "stage-b",
+        onProgress: () => {},
+        onWillCommitStaged,
+      });
+
+      expect(result.outcome).toBe("stage-fingerprint-mismatch");
+      expect(onWillCommitStaged).not.toHaveBeenCalled();
+    });
+
+    it("is not called when the busy check throws", async () => {
+      await writeInstall("1.0.0", {});
+      await writeStaged("2.0.0", {});
+      mocks.busyOverride = "busy";
+      const onWillCommitStaged = vi.fn(async () => undefined);
+
+      await expect(
+        applyHost({
+          environment: ENV,
+          force: false,
+          noService: false,
+          expectedStageFingerprint: null,
+          onProgress: () => {},
+          onWillCommitStaged,
+        }),
+      ).rejects.toMatchObject({ code: "E_HOST_BUSY" });
+
+      expect(onWillCommitStaged).not.toHaveBeenCalled();
+    });
   });
 
   it("--force bypasses the busy check", async () => {

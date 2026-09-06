@@ -59,10 +59,11 @@ import { createServiceController, serviceLabelFor } from "../service";
 // touches the stage - and this command re-throws `E_HOST_BUSY` with the
 // staged version attached to `details`, rather than the generic
 // `details: null` `assertHostNotBusy` throws on its own. A busy exit is a
-// PARK, not a failure: the run withdraws its own `updating` marker and stamps
-// no `failed` (see the catch below), because the refusal was the policy
-// working and the surfaces derive "staged, waiting" / "installed, restart to
-// finish" from the install and staged records instead.
+// PARK, not a failure: the run withdraws its own `updating` marker (or puts
+// back the record it took over under the lock) and stamps no `failed` (see
+// the catch below), because the refusal was the policy working and the
+// surfaces derive "staged, waiting" / "installed, restart to finish" from
+// the install and staged records instead.
 //
 // The `updating` marker is published from `onWillDownload` - after the
 // short-circuit decision, before the first byte - so the whole transfer is
@@ -77,7 +78,10 @@ import { createServiceController, serviceLabelFor } from "../service";
 //     target short-circuits before the probe and re-checks nothing. When the
 //     running host is NOT at the target (bytes committed by `host apply
 //     --no-service` and never activated), this command owes the activation
-//     and performs it - restart, marker, probe - see `readActivationState`;
+//     and performs it - restart, marker, probe - see `readActivationState`.
+//     The same debt can appear AFTER the lock wait: a stage this run
+//     promoted and then found consumed by such an apply is re-derived and
+//     activated the same way (see the staged arm);
 //   - `probeHostHealth` asks "is the recorded pid alive and its port
 //     accepting?" - it does not compare versions. On the Desktop-managed macOS
 //     degraded path a surviving OLD host can answer it, so a healthy probe is
@@ -195,22 +199,40 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
     // allowed to fail the update itself - a missing marker degrades the
     // remote progress readout, it must not break the local update.
     //
-    // The marker THIS invocation wrote, kept so every later write is
-    // conditional on it: marker writes happen before their writer takes the
-    // contender lock, so by the time this command reaches its stamp or clear
-    // another updater may have landed its own `updating` at the same path,
-    // and an unconditional write would erase that updater's only progress
-    // signal. Non-null from the first write attempt on, whether or not the
-    // write landed (a failed write is warned about, not retried). The version
-    // it names is the one a `failed` stamp has to name too, which is why the
-    // re-point under the lock replaces the whole record rather than one field.
+    // The marker THIS invocation wrote (or, under the lock, took over), kept
+    // so every later write is conditional on it: marker writes happen before
+    // their writer takes the contender lock, so by the time this command
+    // reaches its stamp or clear another updater may have landed its own
+    // `updating` at the same path, and an unconditional write would erase
+    // that updater's only progress signal. Non-null from the first write
+    // attempt on, whether or not the write landed (a failed write is warned
+    // about, not retried). The version it names is the one a `failed` stamp
+    // has to name too, which is why the re-point under the lock replaces the
+    // whole record rather than one field.
     //
     // It is a CLAIM about the disk, not a fact: every write after the
-    // pre-lock publish is conditional on it, including the republish in
-    // `reassertMarkerUnderLock` below, which lands only into a path that is
-    // STILL empty at the write (create-if-absent) - the case where a faster
-    // updater cleared this run's marker while it waited - and erases nothing.
+    // pre-lock publish is conditional on it. The one place the claim is
+    // turned into a fact is `reassertMarkerUnderLock` below, which runs
+    // under the contender lock and makes the path this run's whatever it
+    // holds by then - by conditional replace or conditional create, never
+    // by a blind write.
     const ownMarker: { current: HostUpdateProgress | null } = { current: null };
+    // The record `reassertMarkerUnderLock` displaced when it took the marker
+    // over, kept for one purpose: an exit that follows the takeover WITHOUT
+    // this run having disturbed the host - a busy park (the stop's
+    // cooperative stand-down claim can still be denied past the busy gate)
+    // or a failure before the stop - puts it back. The displaced writer's
+    // marker, or a dead writer's `failed` that may still be exactly true, is
+    // not this run's to remove when this run ends up doing nothing. The
+    // restore is not loss-free in one corner: a writer that finished while
+    // its record was displaced found the path changed, left it, and exited,
+    // so the restored record has no writer left to clear it. The host side
+    // suppresses an `updating` whose writer is dead, which is what makes
+    // the restore the lesser harm; removing the record outright would hide
+    // a live writer's whole update.
+    const displacedMarker: { current: HostUpdateProgress | null } = {
+      current: null,
+    };
     const publishUpdating = async (targetVersion: string): Promise<void> => {
       ownMarker.current = progressRecord({
         state: "updating",
@@ -223,87 +245,119 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
         ownMarker.current,
       );
     };
-    // Under the contender lock, before the disruptive half, re-establish
-    // what the pre-lock marker only claimed. The marker is published BEFORE
-    // this run waits for admission (`onWillDownload`, or the no-transfer
-    // arms above), and the wait is unbounded by anything this run controls:
-    // a second `host update` can land its own `updating` over ours, do its
-    // work, and clear it while we were still downloading. Reaching the apply
-    // with `ownMarker.current` non-null then proves nothing about the disk -
-    // the swap and restart would run with no marker at all, and the `failed`
-    // stamp (CAS against a record that is long gone) could never land.
+    // Under the contender lock, before the disruptive half, make the marker
+    // THIS run's. The marker is published BEFORE this run waits for admission
+    // (`onWillDownload`, or the no-transfer publish below), and the wait is
+    // unbounded by anything this run controls: a second `host update` can
+    // land its own `updating` over ours, do its work, and clear it while we
+    // were still downloading. Reaching the apply with `ownMarker.current`
+    // non-null then proves nothing about the disk - the swap and restart
+    // would run with no marker at all, and the `failed` stamp (CAS against a
+    // record that is long gone) could never land.
     //
-    // Three cases, decided from the file rather than from memory:
-    //  - ours is still there → keep it, re-pointed if the target moved under
-    //    the lock (the activation arm reads the record again there);
-    //  - another updater's is there → leave it. It is that updater's only
-    //    progress signal and this run's later stamp/clear are conditional on
-    //    a record the disk no longer holds, so they degrade to no-ops rather
-    //    than erase it;
-    //  - none → republish. Nothing is erased, and this run's work is once
-    //    again visible to every remote surface.
+    // THE RULE: the contender lock's holder owns the marker. Whatever the
+    // path holds when this run is about to do the disruptive work is either
+    // this run's own record (kept, re-pointed if the target moved under the
+    // lock), a record of an updater that is NOT doing disruptive work right
+    // now (it is waiting for this lock, or it released it and is probing out
+    // of lock, or it died), or nothing. The middle case is taken OVER, not
+    // deferred to: a prior updater's post-lock probe ends in a conditional
+    // clear, and had this run kept swapping under that marker the clear
+    // would have landed mid-swap and left the restart invisible, with this
+    // run's own stamp CAS'd against a record no longer on disk. Every write
+    // here is conditional on what was read (replace-if-unchanged,
+    // create-if-absent), so a marker that lands between the read and the
+    // write wins that round and is read again; nothing is ever overwritten
+    // blind. The displaced updater's later stamp/clear are CAS'd against ITS
+    // record and degrade to no-ops - correct, because the marker now
+    // describes the update that is actually in progress.
+    //
+    // WHEN it runs matters as much as what it does: every arm calls it only
+    // once that arm has committed to the disruptive half - after the apply's
+    // reconcile has settled what is staged, after the no-op decision, after
+    // the busy gate. A run that takes the marker over and then does nothing
+    // would end by clearing a record that was never about it (see
+    // `displacedMarker` for the one park that can still follow).
     const reassertMarkerUnderLock = async (
       targetVersion: string,
     ): Promise<void> => {
-      const own = ownMarker.current;
-      const onDisk = await readUpdateProgressMarker(environment);
-      if (own !== null && onDisk !== null && sameProgress(onDisk, own)) {
-        if (own.targetVersion === targetVersion) return;
-        const repointed = progressRecord({
+      // What the previous iteration's conditional write was compared
+      // against. `replaceUpdateProgressMarkerIfUnchanged` answers "changed"
+      // for a record that moved AND for a write that failed (the marker
+      // layer has warned about the latter); reading the same record back
+      // tells the two apart, and a failed write is not retried - the update
+      // must not fail, or spin, on its progress signal.
+      let lastExpected: HostUpdateProgress | null = null;
+      // Bounded: each iteration either settles or observed a concurrent
+      // write, and concurrent marker writers are the handful of updaters
+      // racing one lock, not an unbounded stream.
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const own = ownMarker.current;
+        const onDisk = await readUpdateProgressMarker(environment);
+        if (
+          lastExpected !== null &&
+          onDisk !== null &&
+          sameProgress(onDisk, lastExpected)
+        ) {
+          ctx.runtime.logger.warn(
+            "Host update could not write the progress marker under the lock; proceeding without re-asserting it",
+            { environment, targetVersion },
+          );
+          return;
+        }
+        const fresh = progressRecord({
           state: "updating",
           error: null,
           targetVersion,
         });
-        const outcome = await replaceUpdateProgressMarkerIfUnchanged(
-          environment,
-          own,
-          repointed,
-        );
-        if (outcome === "replaced") {
-          ownMarker.current = repointed;
-        } else {
-          ctx.runtime.logger.info(
-            "Host update did not re-point the progress marker - another updater owns it now",
-            { environment, targetVersion },
+        if (onDisk !== null) {
+          const isOwn = own !== null && sameProgress(onDisk, own);
+          if (isOwn && onDisk.targetVersion === targetVersion) return;
+          const replaced = await replaceUpdateProgressMarkerIfUnchanged(
+            environment,
+            onDisk,
+            fresh,
           );
+          if (replaced === "replaced") {
+            ownMarker.current = fresh;
+            if (!isOwn) {
+              displacedMarker.current = onDisk;
+              ctx.runtime.logger.info(
+                "Host update took over the progress marker under the lock - its writer is not doing disruptive work",
+                {
+                  environment,
+                  targetVersion,
+                  previousState: onDisk.state,
+                  previousTarget: onDisk.targetVersion,
+                },
+              );
+            }
+            return;
+          }
+          lastExpected = onDisk;
+          continue;
         }
-        return;
-      }
-      if (onDisk !== null) {
-        ctx.runtime.logger.info(
-          "Host update proceeds under another updater's progress marker; this run's own marker was withdrawn while it waited",
-          { environment, targetVersion: onDisk.targetVersion },
+        const created = await createUpdateProgressMarkerIfAbsent(
+          environment,
+          fresh,
         );
-        return;
+        if (created === "created") {
+          ownMarker.current = fresh;
+          return;
+        }
+        if (created === "failed") {
+          // Already warned by the marker layer; the update itself must not
+          // fail on its progress signal.
+          return;
+        }
+        // "exists": a marker landed between the read and the create; the
+        // next iteration reads it and takes it over.
+        lastExpected = null;
       }
-      // The path read empty - but the read is not the write. A second
-      // updater publishes its marker BEFORE its own lock wait, so one can
-      // land here between that read and this republish; a plain write would
-      // overwrite it with this run's record, and this run's conditional
-      // clear after the apply - CAS'd against exactly that record - would
-      // then erase what stood in the other updater's place, hiding its whole
-      // download from every remote surface until it re-asserted under the
-      // lock. Create-if-absent lands only into a still-empty path; losing the
-      // race is the same answer as the non-empty arm above.
-      const republished = progressRecord({
-        state: "updating",
-        error: null,
-        targetVersion,
-      });
-      const created = await createUpdateProgressMarkerIfAbsent(
-        environment,
-        republished,
+      ctx.runtime.logger.warn(
+        "Host update could not establish ownership of the progress marker under the lock; proceeding without re-asserting it",
+        { environment, targetVersion },
       );
-      if (created === "created") {
-        ownMarker.current = republished;
-        return;
-      }
-      if (created === "exists") {
-        ctx.runtime.logger.info(
-          "Host update proceeds under another updater's progress marker; it landed while this run re-asserted its own",
-          { environment, targetVersion },
-        );
-      }
     };
 
     let preparation: HostUpdatePreparation;
@@ -319,6 +373,42 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
     // stamping the no-op `failed` when that probe misses, would report a
     // failure for an update that did not happen.
     let activationPerformed = false;
+    // Likewise for the apply: `needsApply` is what the PRE-lock preparation
+    // decided, `applyPerformed` is whether bytes were actually swapped under
+    // the lock. They part when the stage is consumed by another actor while
+    // this run waits (see the staged arm), and only the second is work worth
+    // probing.
+    let applyPerformed = false;
+    // Whether the activation arm was entered at all, from either of its two
+    // call sites (the pre-lock debt, or a stage consumed while waiting):
+    // "attempted but not performed" is the debt another actor paid first.
+    let activationAttempted = false;
+    // Whether this run has begun to disturb the host: the stop before a swap
+    // (or a swap with no service to stop), or the activation arm's stop. It
+    // decides what a failure AFTER a marker takeover leaves behind. Before
+    // this point the host is exactly as the displaced writer left it, so its
+    // record goes back (a `failed` stamped there would stand over that
+    // writer's live update, which could never repair it - its stamp and
+    // clear CAS against a record that is gone). From this point on the
+    // host's state is this run's doing, and its `failed` is the truth the
+    // next updater takes over in turn. The apply and downgrade arms report
+    // the boundary through the progress stream - `commitInstallFromSource`
+    // emits `service-stop` immediately before the stop and `swap` before
+    // the rename - and the activation arm's hook runs immediately before
+    // its stop, with nothing that can fail in between.
+    let disruptionStarted = false;
+    const reportProgress = (info: ProgressInfo): void => {
+      if (info.stage === "service-stop" || info.stage === "swap") {
+        disruptionStarted = true;
+      }
+      ctx.progress(info);
+    };
+    const reassertMarkerThenDisrupt = async (
+      targetVersion: string,
+    ): Promise<void> => {
+      await reassertMarkerUnderLock(targetVersion);
+      disruptionStarted = true;
+    };
     // The preparation runs INSIDE the try whose catch owns the marker. The
     // marker is published from within it - `onWillDownload`, before the first
     // byte - so a transfer that rejects has a marker to stamp `failed` onto;
@@ -332,7 +422,7 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
         environment,
         version: args.versionRequest ?? null,
         allowDowngrade: args.allowDowngrade,
-        onProgress: (info) => ctx.progress(info),
+        onProgress: reportProgress,
         onWillDownload: publishUpdating,
       });
       const installedUpToDate =
@@ -405,25 +495,66 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
       }
 
       if (activationDebt !== null) {
+        activationAttempted = true;
         const activation = await activateInstalledAndProjectLegacy(
           environment,
           args.force,
           activationDebt.runningVersion,
-          // The record is read again under the lock; the marker follows it
-          // (or is re-established if another updater withdrew it meanwhile).
-          (installedVersion) => reassertMarkerUnderLock(installedVersion),
+          // The record is read again under the lock; the marker is made this
+          // run's there, naming the version as read, and the stop follows.
+          reassertMarkerThenDisrupt,
         );
         legacy = activation.legacy;
         activationPerformed = activation.activated;
       } else if (preparation.kind === "staged") {
-        const stagedTarget = downloadTargetVersion(preparation.download);
-        legacy = await applyAndProjectLegacy(
+        const apply = await applyAndProjectLegacy(
           environment,
           args.force,
           needsApply,
-          (info) => ctx.progress(info),
-          () => reassertMarkerUnderLock(stagedTarget),
+          reportProgress,
+          // The marker names the version `applyHost` is committing, not the
+          // one this run promoted before it waited - the shared stage
+          // directory holds whatever the latest promoter left there, and
+          // `applyHost` installs what its reconcile leaves.
+          (stagedVersion) => reassertMarkerUnderLock(stagedVersion),
         );
+        legacy = apply.legacy;
+        applyPerformed = apply.applied;
+        if (needsApply && !apply.applied) {
+          // The stage this run promoted was gone by the time it held the
+          // lock: another actor consumed it - Desktop's launch converge runs
+          // `host apply --no-service`, which commits the bytes and restarts
+          // nothing. `applyHost` reported the no-op it saw, and the debt that
+          // this command checks BEFORE the lock (only on the up-to-date
+          // short-circuit) was not there to be seen then. Treating this as
+          // done would probe the still-healthy OLD process, clear the marker
+          // and exit 0 over an install nobody activated. Re-derive the state
+          // now, under the same rule the pre-lock check applies (only a
+          // `debt` is a reason to act out of lock - see `ActivationReading`),
+          // and run the same activation arm the debt path runs: it re-reads
+          // under its own lock and is the plain no-op if the debt cleared
+          // meanwhile.
+          const reading = await readActivationState(environment);
+          if (reading.kind === "debt") {
+            activationAttempted = true;
+            ctx.runtime.logger.info(
+              "Host update found its stage consumed by another actor without activation; activating the committed install",
+              {
+                environment,
+                installedVersion: reading.installedVersion,
+                runningVersion: reading.runningVersion,
+              },
+            );
+            const activation = await activateInstalledAndProjectLegacy(
+              environment,
+              args.force,
+              reading.runningVersion,
+              reassertMarkerThenDisrupt,
+            );
+            legacy = activation.legacy;
+            activationPerformed = activation.activated;
+          }
+        }
       } else {
         const downgradeTarget = preparation.version;
         legacy = projectApplied(
@@ -431,10 +562,13 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
             environment,
             version: downgradeTarget,
             force: args.force,
-            onProgress: (info) => ctx.progress(info),
+            onProgress: reportProgress,
             onBeforeCommit: () => reassertMarkerUnderLock(downgradeTarget),
           }),
         );
+        // `installHostDowngrade` returns only an `applied` outcome; a park
+        // or a failure throws past this line.
+        applyPerformed = true;
       }
     } catch (err) {
       if (err instanceof CliError && err.code === CLI_ERROR_CODES.HOST_BUSY) {
@@ -448,32 +582,64 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
         // asked to; the GUI derives the truth - installed-but-not-running, or
         // staged-and-waiting - from the records, and the marker's job is only
         // to get out of the way. Withdrawn CONDITIONALLY, like the clear
-        // below: a newer updater's marker is not this run's to remove.
+        // below: a newer updater's marker is not this run's to remove. And
+        // a marker this run took over under the lock is put BACK rather than
+        // removed: the park means this run did no disruptive work after all,
+        // so the record it displaced - another updater's live `updating`, or
+        // a `failed` whose failure may still be exactly true - is what the
+        // path should hold.
         if (ownMarker.current !== null) {
-          const withdrawn = await deleteUpdateProgressMarkerIfUnchanged(
-            environment,
-            ownMarker.current,
-          );
+          const displaced = displacedMarker.current;
+          const withdrawn =
+            displaced === null
+              ? await deleteUpdateProgressMarkerIfUnchanged(
+                  environment,
+                  ownMarker.current,
+                )
+              : await replaceUpdateProgressMarkerIfUnchanged(
+                  environment,
+                  ownMarker.current,
+                  displaced,
+                );
           ctx.runtime.logger.info(
-            "Host update parked - the host has work in progress; the progress marker was withdrawn",
+            displaced === null
+              ? "Host update parked - the host has work in progress; the progress marker was withdrawn"
+              : "Host update parked - the host has work in progress; the progress marker it took over was restored to its previous writer",
             { environment, withdrawn },
           );
         }
         throw err;
       }
       if (ownMarker.current !== null) {
-        await markUpdateFailed(
-          ctx.runtime.logger,
-          environment,
-          ownMarker.current.targetVersion,
-          err instanceof Error ? err.message : String(err),
-          ownMarker.current,
-        );
+        const displaced = displacedMarker.current;
+        if (displaced !== null && !disruptionStarted) {
+          // Failed after taking the marker over but before touching the
+          // host (a lost mutation capability, a stop that could not be
+          // issued): the host is as the displaced writer left it, and so is
+          // its marker. See `disruptionStarted`.
+          const restored = await replaceUpdateProgressMarkerIfUnchanged(
+            environment,
+            ownMarker.current,
+            displaced,
+          );
+          ctx.runtime.logger.info(
+            "Host update failed before disturbing the host; the progress marker it took over was restored to its previous writer",
+            { environment, restored },
+          );
+        } else {
+          await markUpdateFailed(
+            ctx.runtime.logger,
+            environment,
+            ownMarker.current.targetVersion,
+            err instanceof Error ? err.message : String(err),
+            ownMarker.current,
+          );
+        }
       }
       throw err;
     }
 
-    const workPerformed = needsApply || activationPerformed;
+    const workPerformed = applyPerformed || activationPerformed;
     if (workPerformed) {
       // Verify the host the swap just installed actually comes back before
       // reporting success: a binary that commits cleanly but never listens
@@ -542,7 +708,8 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
       version: legacy.version,
       changed: legacy.previousVersion !== legacy.version,
       activatedInstalled: activationPerformed,
-      activationClearedWhileWaiting: needsActivate && !activationPerformed,
+      activationClearedWhileWaiting:
+        activationAttempted && !activationPerformed,
       hasPostSwapError: legacy.serviceLifecycle.postSwapError !== null,
     });
     return {
@@ -566,10 +733,12 @@ interface ActivationDebt {
 
 /**
  * What the install record and the live process say about each other. Every
- * reading is named rather than collapsed to "debt or not", because the two
+ * reading is named rather than collapsed to "debt or not", because the
  * places that consult it need different things from the non-debt cases:
- * before the lock, only `debt` is a reason to act; under the lock, `debt`
- * and `no-live-host` both are, while `activated` is the reason NOT to.
+ * OUT of the contender lock (before it, and again after a staged apply that
+ * found its stage consumed), only `debt` is a reason to act; UNDER the
+ * activation arm's lock, `debt` and `no-live-host` both are, while
+ * `activated` is the reason NOT to.
  *
  * - `no-install`: nothing to activate (the caller throws later anyway);
  * - `no-live-host`: no pid metadata, or a pid that is not alive. Before the
@@ -737,9 +906,10 @@ async function clearStaleFailedMarker(
  * `activated` tells the caller which of the two happened, because the two
  * need different aftercare (a health probe for a restart, none for a no-op).
  * `onInstalledVersionUnderLock` is called with the record's version as read
- * under the lock, before anything is restarted, so the caller can re-point a
- * progress marker it wrote from the pre-lock record if another actor
- * installed a different version in between.
+ * under the lock, after the busy gate and before anything is restarted, so
+ * the caller can take ownership of the progress marker (and re-point it if
+ * another actor installed a different version in between) only once this
+ * arm has committed to restarting.
  *
  * A debt is CLEARED only by observing the running host at the installed
  * version. A host that is simply gone under the lock - it exited, crashed,
@@ -782,13 +952,18 @@ async function activateInstalledAndProjectLegacy(
     }
     const previousVersion =
       reading.kind === "debt" ? reading.runningVersion : lastSeenRunningVersion;
-    await onInstalledVersionUnderLock(installed.version);
     // Same gate `applyHost` runs before it touches anything: a host with
     // live work is not restarted under it unless the caller said `--force`.
     // A host that is gone has no work to protect, so the gate is not asked.
     if (!force && reading.kind === "debt") {
       await assertHostNotBusy(environment);
     }
+    // After the gate (where one runs - a host that is gone is not asked),
+    // not before: the caller takes the progress marker over here, and a park
+    // must not follow a takeover for work never done. The stop below is the
+    // only thing that can still park, and the caller's park path restores
+    // the displaced record for that case.
+    await onInstalledVersionUnderLock(installed.version);
     // The stop → relaunch pair `host restart` drives, with `force` threaded
     // into the stop half. The busy gate above is only the pre-check: on a
     // Desktop-managed macOS host the stop itself claims a cooperative
@@ -898,7 +1073,10 @@ async function writeUpdateProgressMarkerSafely(
  * still reported by exit code and log. `ours` is `null` only when this run
  * never wrote a marker, in which case there is nothing to compare against and
  * the stamp lands unconditionally - every caller today passes the marker it
- * wrote, so that arm is a contract for the signature rather than a live path.
+ * wrote or took over under the lock, so that arm is a contract for the
+ * signature rather than a live path. A stamp over a TAKEN-OVER record is
+ * right: this run did the disruptive work, so its failure is the host's
+ * current state, and the next updater takes the `failed` over in turn.
  */
 async function markUpdateFailed(
   logger: ILogger,
@@ -933,9 +1111,18 @@ async function applyAndProjectLegacy(
   force: boolean,
   needsApply: boolean,
   onProgress: (info: ProgressInfo) => void,
-  /** Runs under the contender lock, after the no-op decision, before the apply. */
-  onUnderLock: () => Promise<void>,
-): Promise<LegacyHostUpdateResult> {
+  /**
+   * `ApplyHostOptions.onWillCommitStaged`: runs inside `applyHost`, after
+   * its reconcile has settled what is staged and after its busy gate, with
+   * the version of the stage it is about to commit. A no-op never reaches
+   * it; there is then no disruptive work to announce.
+   */
+  onWillCommitStaged: (stagedVersion: string) => Promise<void>,
+): Promise<{
+  readonly legacy: LegacyHostUpdateResult;
+  /** Whether bytes were swapped under the lock; a no-op is `false`. */
+  readonly applied: boolean;
+}> {
   // ONE options value for acquisition and revalidation: two literals that
   // must stay identical are how admission policies drift.
   const contenderOptions: WithCliUpdateContenderOptions = {
@@ -947,9 +1134,11 @@ async function applyAndProjectLegacy(
   };
   return withCliUpdateContender(contenderOptions, async (capability) => {
     if (!needsApply) {
-      return projectNoOp(await requireInstalled(environment));
+      return {
+        legacy: projectNoOp(await requireInstalled(environment)),
+        applied: false,
+      };
     }
-    await onUnderLock();
     let outcome: ApplyHostOutcome;
     try {
       outcome = await applyHostWithAttempt(capability, contenderOptions, {
@@ -958,6 +1147,12 @@ async function applyAndProjectLegacy(
         noService: false,
         expectedStageFingerprint: null,
         onProgress,
+        // What this run promoted before it waited is a pre-lock fact: the
+        // shared stage may have been replaced (a later promoter, a parked
+        // explicit `--version`), consumed, or reconciled away since, and a
+        // read from HERE would still be on the wrong side of `applyHost`'s
+        // own reconcile. `applyHost` reports the version it is committing.
+        onWillCommitStaged,
       });
     } catch (err) {
       if (err instanceof CliError && err.code === CLI_ERROR_CODES.HOST_BUSY) {
@@ -990,7 +1185,10 @@ async function applyAndProjectLegacy(
       // (it assumes the caller holds `cli-lock`, never re-acquires)
       // - this re-read observes exactly the state `applyHost` had
       // internal access to but didn't return, not a fresh race.
-      return projectNoOp(await requireInstalled(environment));
+      return {
+        legacy: projectNoOp(await requireInstalled(environment)),
+        applied: false,
+      };
     }
     if (outcome.outcome === "stage-fingerprint-mismatch") {
       throw cliError({
@@ -1003,7 +1201,7 @@ async function applyAndProjectLegacy(
         exitCode: 1,
       });
     }
-    return projectApplied(outcome);
+    return { legacy: projectApplied(outcome), applied: true };
   });
 }
 

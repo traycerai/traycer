@@ -289,18 +289,48 @@ describe("installHostDowngrade", () => {
     expect(readdirSync(stagingRoot())).toEqual([]);
   });
 
-  it("invokes onBeforeCommit exactly once, before the commit lands - even on the busy path, since the busy gate runs AFTER it", async () => {
-    // `onBeforeCommit` is `host update`'s re-assertion hook, run under the
-    // mutation lock before anything else touches the install - the source's
-    // own comment on the field says it runs "before the busy gate and the
-    // commit". Observing the install record from INSIDE the callback (rather
-    // than just counting calls) pins that ordering: a call that ran after
-    // the swap would see the NEW version already committed.
+  it("invokes onBeforeCommit exactly once, after the busy gate and before the commit lands", async () => {
+    // `onBeforeCommit` is `host update`'s marker-takeover hook, run under
+    // the mutation lock AFTER the busy gate and immediately before the
+    // commit - the first point at which this command is the only updater
+    // acting AND has committed to acting (a busy refusal must come first,
+    // so a parked run never seizes a marker for work it then does not do).
+    // Observing the install record from INSIDE the callback (rather than
+    // just counting calls) pins the "before the commit" half: a call that
+    // ran after the swap would see the NEW version already committed.
+    await writeInstalled("1.3.0-rc.1", "old");
+    configureRegistry("1.2.0", "new");
+    mocks.busy = false;
+    let beforeCommitCalls = 0;
+    let installedVersionAtCallTime: string | undefined;
+
+    await installHostDowngrade({
+      environment: ENV,
+      version: "1.2.0",
+      force: false,
+      onProgress: noopProgress,
+      onBeforeCommit: async () => {
+        beforeCommitCalls += 1;
+        const installed = await readHostInstallRecord(ENV);
+        installedVersionAtCallTime = installed?.version;
+      },
+    });
+
+    expect(beforeCommitCalls).toBe(1);
+    expect(installedVersionAtCallTime).toBe("1.3.0-rc.1");
+    expect(readFileSync(join(installDir(), "traycer-host"), "utf8")).toBe(
+      "new",
+    );
+  });
+
+  it("is NOT called when the busy gate throws - a parked run never seizes the marker for work it then does not do", async () => {
+    // Falsification: move the `onBeforeCommit()` call in
+    // `installHostDowngrade` to before `assertHostNotBusy` and
+    // `beforeCommitCalls` below goes to 1 even though the run is busy.
     await writeInstalled("1.3.0-rc.1", "old");
     configureRegistry("1.2.0", "new");
     mocks.busy = true;
     let beforeCommitCalls = 0;
-    let installedVersionAtCallTime: string | undefined;
 
     await expect(
       installHostDowngrade({
@@ -310,17 +340,11 @@ describe("installHostDowngrade", () => {
         onProgress: noopProgress,
         onBeforeCommit: async () => {
           beforeCommitCalls += 1;
-          const installed = await readHostInstallRecord(ENV);
-          installedVersionAtCallTime = installed?.version;
         },
       }),
     ).rejects.toThrow("host is busy");
 
-    // Falsification: move the `onBeforeCommit()` call in
-    // `installHostDowngrade` to after `assertHostNotBusy` and this goes red
-    // - a busy host would reject before the hook ever ran.
-    expect(beforeCommitCalls).toBe(1);
-    expect(installedVersionAtCallTime).toBe("1.3.0-rc.1");
+    expect(beforeCommitCalls).toBe(0);
     expect(readFileSync(join(installDir(), "traycer-host"), "utf8")).toBe(
       "old",
     );

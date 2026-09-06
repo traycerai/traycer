@@ -54,6 +54,18 @@ export interface ApplyHostOptions {
    * `host start` does not deadlock trying to reacquire the same outer lock.
    */
   readonly publishHostStartAdoption?: HostStartAdoptionPublisher;
+  /**
+   * Called once this function has committed to the disruptive half: after
+   * reconcile has settled what is staged (it deletes stale stages and
+   * restores an aside left by a crashed promoter, so what the caller read
+   * before this call is not what is applied), after the no-op and
+   * fingerprint decisions, and after the busy gate where one runs (`force`
+   * and `noService` skip it) - with the version of the stage about to be
+   * committed. `host update` takes ownership of its progress marker here; a
+   * no-op, a fingerprint mismatch and a busy refusal never reach it, so
+   * nothing is announced for work that does not happen.
+   */
+  readonly onWillCommitStaged?: (stagedVersion: string) => Promise<void>;
 }
 
 // The facts `createServiceInstallLifecycle` observed around the swap -
@@ -175,6 +187,9 @@ export async function applyHost(
 
   if (!opts.noService && !opts.force) {
     await assertHostNotBusy(opts.environment);
+  }
+  if (opts.onWillCommitStaged !== undefined) {
+    await opts.onWillCommitStaged(staged.version);
   }
 
   // `bootstrap: null` - apply is strictly an update over an existing,

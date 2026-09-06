@@ -28,10 +28,13 @@ export async function installHostDowngrade(input: {
   readonly force: boolean;
   readonly onProgress: (info: ProgressInfo) => void;
   /**
-   * Runs under the mutation lock, before the busy gate and the commit - the
-   * first point at which this command is the only updater acting. `host
-   * update` re-establishes its progress marker here, since the one it wrote
-   * before waiting for admission may have been withdrawn by another run.
+   * Runs under the mutation lock, AFTER the busy gate and immediately before
+   * the commit - the first point at which this command is the only updater
+   * acting and has committed to acting. `host update` takes ownership of the
+   * progress marker here (the one it wrote before waiting for admission may
+   * have been withdrawn or replaced by another run); a busy refusal must
+   * come first, so a parked run never seizes a marker for work it then does
+   * not do.
    */
   readonly onBeforeCommit: () => Promise<void>;
 }): Promise<Extract<ApplyHostOutcome, { outcome: "applied" }>> {
@@ -68,8 +71,8 @@ export async function installHostDowngrade(input: {
               exitCode: 1,
             });
           }
-          await input.onBeforeCommit();
           if (!input.force) await assertHostNotBusy(input.environment);
+          await input.onBeforeCommit();
           const handle = createServiceInstallLifecycle({
             environment: input.environment,
             bootstrap: null,
