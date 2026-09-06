@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import {
@@ -40,6 +41,14 @@ import {
 } from "@/hooks/host/use-host-negotiated-method-version";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import type { HostRpcRegistry } from "@/lib/host";
+import { hostQueryKeys } from "@/lib/query-keys";
+
+/**
+ * How often the catalog is re-asked while a CLI-floor remedy is on screen. A
+ * fixed cadence, not a backoff: the thing being waited on is a person running
+ * the copied command, and the remedy's copy promises the page notices.
+ */
+export const CLI_FLOOR_RECHECK_MS = 30_000;
 
 /**
  * The version the catalog is compared against: the install record's under
@@ -341,6 +350,42 @@ export function useHostOverviewUpdates(input: {
       hostName,
     },
   );
+  // THE CLI-FLOOR RECHECK. While the remedy is on screen, re-ask the catalog
+  // every `CLI_FLOOR_RECHECK_MS` so a repaired CLI reveals Update now without
+  // a click - the remedy's own copy promises exactly that. Keyed on the
+  // REMEDY, not on the response: which floored catalog row the remedy names
+  // is the summary walk's answer (the matching stable and the later RCs on
+  // the installed line, strictly newer than what runs), and that walk needs
+  // the installed version, which the check's response does not carry. A
+  // classifier over the response alone - the table-owned condition lane this
+  // replaced - kept a 30 s cadence on ANY floored row of an `installed-rc`
+  // catalog, a release on another line included, with no remedy on screen to
+  // end it. Invalidating the shared key rather than holding a private query
+  // is the choice `useActiveUpdatePollAccelerator` makes, for the same
+  // reason: one key, one answer, every observer of it refreshed alike.
+  // Non-cancelling for the reason recorded there too - a round trip slower
+  // than the cadence is coalesced, never aborted by the next tick. The
+  // query's own scheduling stays table-owned; this only marks it stale.
+  //
+  // "On screen" is literal: a RETIRED region (`degrade` non-null - an
+  // externally-managed host discovered at install, an unsupported install
+  // method) renders a notice in place of the remedy, and two of those
+  // retirements leave the check query enabled, so a floor read before the
+  // retirement would otherwise keep re-asking a host with nothing on screen
+  // to end it - the defect this recheck exists to avoid, relocated.
+  const queryClient = useQueryClient();
+  const recheckFloor = degrade === null && cliFloor !== null;
+  const { hostId } = input;
+  useEffect(() => {
+    if (!recheckFloor || hostId === null) return;
+    const timer = setInterval(() => {
+      void queryClient.invalidateQueries(
+        { queryKey: hostQueryKeys.methodScope(hostId, "host.update.check") },
+        { cancelRefetch: false },
+      );
+    }, CLI_FLOOR_RECHECK_MS);
+    return () => clearInterval(timer);
+  }, [recheckFloor, hostId, queryClient]);
   // Read off the resolved target rather than `manifest.latest`, which for an
   // installed-RC catalog is the WRONG pointer: `latest` tracks the stable
   // channel, so a host on `2.0.0-rc.1` sees `1.9.0` there and would be told it

@@ -2412,7 +2412,20 @@ aria-live="polite"` carrying the equivalent text for
       longer carries its stage (the running version moving re-keys the
       query, and the `usable` rule closes the confirm there), and an attempt
       park's Restart is offered only when a live leg vouches that no stage
-      waits (Restart cannot activate a stage). The Overview is the only leg that derives: the landing
+      waits (Restart cannot activate a stage). The offers need a live STATUS
+      read as well (`statusLive`: the same `canonicalReadIsLive` over the
+      status read's health, `usable` included). The retained status payload
+      stays in the facts so a park renders qualified ("Last seen: …"), but
+      Restart on the debt fact, Force update… and an attempt park's Force
+      restart are withdrawn while the status read has failed or aged - a
+      Restart pressed off an old `hostVersion` would restart a host that may
+      already have activated; the evidence stays, the dispatch does not. An
+      open restart confirm is closed by the `!usable` rule only when it was
+      armed for the cooperative `host.restart`; one armed for the bridge
+      respawn (`restartViaForceFallback`, captured at open) survives the
+      scope going unusable - the respawn needs no client and is the recovery
+      an unreachable local host needs most - and closes on its own
+      settlement or when this page's host stops being this machine's. The Overview is the only leg that derives: the landing
       banner keeps its desktop-status debt arm, and the fleet legs pass
       `legacyFacts: null`, which the projector reads as "not observed".
     - **A CLI requirement has a remedy in the card.** The best target's
@@ -2445,12 +2458,21 @@ aria-live="polite"` carrying the equivalent text for
       stranded on its release line / up to date → unavailable / available**.
       A failed catalog read drops the remedy along with the actionable catalog.
 
-    - **Repair rechecks while the Overview is open.** A table-owned condition
-      lane polls `host.update.check` every 30 seconds while the latest
-      non-yanked candidate carries the CLI refusal. For `installed-rc`, every
-      non-yanked entry is considered because the response has no installed
-      version with which to reconstruct the same-line walk. The first clear
-      response stops the lane and restores Update now. The existing 10-second
+    - **Repair rechecks while the Overview is open.** The Overview re-asks
+      `host.update.check` every 30 seconds while it renders a CLI-floor
+      remedy (`useHostOverviewUpdates`, invalidating the shared key the way
+      the active-update accelerator does), and the first answer that clears
+      the floor ends the recheck and restores Update now. Keyed on the
+      rendered remedy, not on the response: which floored row the remedy
+      names is the summary walk's answer (the installed line's matching
+      stable and later RCs, strictly newer than what runs), and the response
+      carries no installed version - a table lane over the response alone
+      kept polling on floored rows of an `installed-rc` catalog that no
+      remedy named, a release on another line included. The recheck stops
+      with the remedy: a retired region (externally managed, unsupported
+      install) shows a notice in its place and is not re-asked. The table
+      keeps the `cli-unavailable` lane and the two error lanes for this
+      method, nothing data-driven beyond that. The existing 10-second
       installation-info poll refreshes the stored CLI facts beside it.
       A floored staged version, or one absent from the actionable manifest,
       offers neither Force update nor Force restart: restarting cannot activate

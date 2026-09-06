@@ -1210,7 +1210,14 @@ describe("HostOverviewOperationCard — installation query keyed by running vers
     // installation query re-keys onto a fresh, still-pending read.
     await vi.advanceTimersByTimeAsync(11_000);
     await screen.findByText(/1\.3\.0-rc\.3/);
-    await waitFor(() => expect(installationCalls).toBe(2));
+    // AT LEAST two, not exactly two: the installation query's own 10 s poll
+    // and the status poll that re-keys it fire from the same tick, and their
+    // order is not this pin's to assume - when the installation poll lands
+    // first it is the second call (served the pending read below) and the
+    // re-key is the third. Every call past the first returns the still-pending
+    // read, so the count says only that the re-key asked afresh; the
+    // load-bearing assertions are the two card checks below.
+    await waitFor(() => expect(installationCalls).toBeGreaterThanOrEqual(2));
 
     // While that fresh read is pending, there is nothing to compare against -
     // "not observed", never a debt derived from the OLD rc.2 record.
@@ -1291,6 +1298,60 @@ describe("HostOverviewOperationCard — installation query keyed by running vers
       ).toBe("Update installed — restart host to finish");
     });
     await screen.findByTestId("host-overview-operation-restart");
+
+    vi.useRealTimers();
+  });
+
+  it("a failed STATUS read withdraws the debt park's Restart while its last-known sentence stays - the offer needs a live status read, the projection keeps the evidence", async () => {
+    // The status leg's twin of the installation-read pin above. `legacyFacts`
+    // keeps the retained status payload on purpose - its `hostVersion` is
+    // what lets the projection render the park qualified - but the OFFERS
+    // are gated on `statusLive` (`canonicalReadIsLive` over the status
+    // read's health, `usable` included): a Restart pressed off an old
+    // `hostVersion` would restart a host that may already have activated.
+    // Falsification: gate `onRestart` on `usable` alone again and the
+    // Restart below stays pressable under the "Last seen:" sentence.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let statusCalls = 0;
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.3.0-rc.2",
+      overrideHandlers: {
+        "host.status": () => {
+          statusCalls += 1;
+          if (statusCalls > 1) {
+            throw new Error("host unreachable");
+          }
+          return statusWithBusy("1.3.0-rc.2", { kind: "none" }, false, 0);
+        },
+        "host.getInstallationInfo": () =>
+          managedInstallation(installRecord("1.3.0-rc.3", null), null),
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    // Debt visible and live: record rc.3 ahead of the running rc.2.
+    await screen.findByTestId("host-overview-operation-restart");
+    expect(
+      screen.getByTestId("host-overview-operation-card").textContent,
+    ).not.toContain("Last seen:");
+
+    // The next status poll throws; the installation read keeps succeeding
+    // beside it, so this is the status leg's own failure. The park is
+    // DEMOTED, not withdrawn - the retained payload still says what was last
+    // seen - and the control that would act on it is gone.
+    await vi.advanceTimersByTimeAsync(11_000);
+    await waitFor(() => expect(statusCalls).toBe(2));
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("host-overview-operation-phase").textContent,
+      ).toContain("Last seen:");
+    });
+    expect(screen.queryByTestId("host-overview-operation-restart")).toBeNull();
 
     vi.useRealTimers();
   });

@@ -518,8 +518,8 @@ describe("HostOverviewPanel — lifecycle gate matrix (G1)", () => {
   });
 
   it("(c3) an open restart confirmation CLOSES when the scope turns unusable — the withdrawal of the Restart control, one commit late", async () => {
-    // `host-overview-panel.tsx`: `if (!usable && restartConfirmOpen)
-    // setRestartConfirmOpen(false);`. The control that OPENS this dialog is
+    // `host-overview-panel.tsx`: `if (!usable && restartConfirm ===
+    // "cooperative") closeRestartConfirm();`. The control that OPENS this dialog is
     // already withdrawn on `!usable` (c2's own assertion), but a confirmation
     // opened while the scope was still usable is not touched by that
     // withdrawal — answered, it would dispatch `host.restart` over a client
