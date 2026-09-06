@@ -35,6 +35,7 @@ import {
   isActivePhase,
   isTerminalRetentionExpired,
   sameAttemptIdentity,
+  type HostUpdateAttemptClaimBaseline,
   type HostUpdateAttemptContinuation,
   type HostUpdateAttemptError,
   type HostUpdateAttemptIdentity,
@@ -50,6 +51,7 @@ import {
   decideAttemptClaim,
   decideAttemptRecovery,
   type AttemptAdvance,
+  type AttemptClaimRefresh,
   type AttemptClaimRequest,
   type AttemptRecoveryArtifactEvidence,
   type AttemptRecoveryEvidence,
@@ -410,6 +412,7 @@ const CLAIM_ACTIONS: ReadonlySet<string> = new Set([
   "resume-apply",
   "activate",
   "force",
+  "continue",
   "defer",
 ]);
 const TRIGGERS: ReadonlySet<string> = new Set(HOST_UPDATE_TRIGGERS);
@@ -518,6 +521,72 @@ function normalizeError(value: unknown): HostUpdateAttemptError | "invalid" {
   return { code, message, phase };
 }
 
+// The claim baseline and the park refresh are RECONSTRUCTED here, field by
+// field, for the same reason every other input is: the record this store
+// writes is derived from what these functions return, so a field the
+// allowlist does not name is a field the committed record silently loses.
+// `claim` in particular authorizes a later resume - losing it would turn an
+// authorized park into an unverifiable one at the next write.
+function normalizeClaimBaseline(
+  value: unknown,
+): HostUpdateAttemptClaimBaseline | null | "invalid" {
+  if (value === null) return null;
+  if (!isSerializableInputObject(value)) return "invalid";
+  const installedVersion = nonEmptyString(
+    dataProperty(value, "installedVersion"),
+  );
+  const installGeneration = nonEmptyString(
+    dataProperty(value, "installGeneration"),
+  );
+  const stageFingerprint = normalizeStageFingerprint(
+    dataProperty(value, "stageFingerprint"),
+  );
+  const allowDowngrade = dataProperty(value, "allowDowngrade");
+  if (
+    installedVersion === null ||
+    installGeneration === null ||
+    stageFingerprint === "invalid" ||
+    typeof allowDowngrade !== "boolean"
+  ) {
+    return "invalid";
+  }
+  return {
+    installedVersion,
+    installGeneration,
+    stageFingerprint,
+    allowDowngrade,
+  };
+}
+
+function normalizeStageFingerprint(value: unknown): string | null | "invalid" {
+  if (value === null) return null;
+  return nonEmptyString(value) ?? "invalid";
+}
+
+function normalizeClaimRefresh(
+  value: unknown,
+): AttemptClaimRefresh | null | "invalid" {
+  if (value === null) return null;
+  if (!isSerializableInputObject(value)) return "invalid";
+  const installedVersion = nonEmptyString(
+    dataProperty(value, "installedVersion"),
+  );
+  const installGeneration = nonEmptyString(
+    dataProperty(value, "installGeneration"),
+  );
+  const stageFingerprint = normalizeStageFingerprint(
+    dataProperty(value, "stageFingerprint"),
+  );
+  if (
+    installedVersion === null ||
+    installGeneration === null ||
+    stageFingerprint === "invalid"
+  ) {
+    return "invalid";
+  }
+  return { installedVersion, installGeneration, stageFingerprint };
+}
+
 function normalizeClaimRequest(value: unknown): AttemptClaimRequest | null {
   if (!isSerializableInputObject(value)) return null;
   const targetVersion = nonEmptyString(dataProperty(value, "targetVersion"));
@@ -525,6 +594,8 @@ function normalizeClaimRequest(value: unknown): AttemptClaimRequest | null {
   const action = dataProperty(value, "action");
   const newAttemptId = nonEmptyString(dataProperty(value, "newAttemptId"));
   const initialPhase = dataProperty(value, "initialPhase");
+  const initialContinuation = dataProperty(value, "initialContinuation");
+  const claim = normalizeClaimBaseline(dataProperty(value, "claim"));
   const nowIso = nonEmptyString(dataProperty(value, "nowIso"));
   const expected = dataProperty(value, "expected");
   if (
@@ -537,7 +608,9 @@ function normalizeClaimRequest(value: unknown): AttemptClaimRequest | null {
     !CLAIM_ACTIONS.has(action) ||
     typeof initialPhase !== "string" ||
     !PHASES.has(initialPhase) ||
-    !isActivePhase(initialPhase as HostUpdateAttemptPhase)
+    !isActivePhase(initialPhase as HostUpdateAttemptPhase) ||
+    (initialContinuation !== null && initialContinuation !== "activate") ||
+    claim === "invalid"
   ) {
     return null;
   }
@@ -551,6 +624,8 @@ function normalizeClaimRequest(value: unknown): AttemptClaimRequest | null {
     expected: normalizedExpected,
     newAttemptId,
     initialPhase: initialPhase as AttemptClaimRequest["initialPhase"],
+    initialContinuation,
+    claim,
     nowIso,
   };
 }
@@ -562,6 +637,9 @@ function normalizeAdvance(value: unknown): AttemptAdvance | null {
   const nowIso = nonEmptyString(dataProperty(value, "nowIso"));
   const progress = normalizeProgress(dataProperty(value, "progress"));
   const error = normalizeError(dataProperty(value, "error"));
+  const claimRefresh = normalizeClaimRefresh(
+    dataProperty(value, "claimRefresh"),
+  );
   if (
     typeof phase !== "string" ||
     !PHASES.has(phase) ||
@@ -570,7 +648,8 @@ function normalizeAdvance(value: unknown): AttemptAdvance | null {
       continuation !== "activate") ||
     nowIso === null ||
     progress === "invalid" ||
-    error === "invalid"
+    error === "invalid" ||
+    claimRefresh === "invalid"
   ) {
     return null;
   }
@@ -579,6 +658,7 @@ function normalizeAdvance(value: unknown): AttemptAdvance | null {
     continuation: continuation as HostUpdateAttemptContinuation,
     progress,
     error,
+    claimRefresh,
     nowIso,
   };
 }
@@ -600,6 +680,21 @@ function normalizeRecoveryRunningEvidence(
   if (!isSerializableInputObject(value)) return null;
   const kind = dataProperty(value, "kind");
   if (kind === "absent" || kind === "unreadable") return { kind };
+  // PRESERVED as `foreign`, never lowered to `unbound` here. This normalizer
+  // sanitizes LIVE recovery inputs for the recomputed `decideAttemptRecovery`
+  // below, and `foreign` vs `unbound` is a different DECISION, not a different
+  // encoding: at the record's own target version, `foreign` is activation debt
+  // (`resume-new-generation / activate`) while `unbound` is an evidence
+  // contradiction (`terminalize-failed`). Lowering here would leave the
+  // executor's chosen continuation and the record this store writes in
+  // disagreement about the same evidence. The lowering belongs to
+  // `recoverySummary`, which runs when a terminal record is PERSISTED.
+  if (kind === "foreign") {
+    const runtimeIdentity = nonEmptyString(
+      dataProperty(value, "runtimeIdentity"),
+    );
+    return runtimeIdentity === null ? null : { kind, runtimeIdentity };
+  }
   const version = nonEmptyString(dataProperty(value, "version"));
   if (version === null) return null;
   if (kind === "unbound") return { kind, version };
@@ -738,7 +833,26 @@ function sameRecovery(
     a.evidence.staged.version === b.evidence.staged.version &&
     a.evidence.running.kind === b.evidence.running.kind &&
     a.evidence.running.version === b.evidence.running.version &&
-    a.evidence.running.ownerBound === b.evidence.running.ownerBound
+    a.evidence.running.ownerBound === b.evidence.running.ownerBound &&
+    // Compared, not assumed: this equality is what the write-side round trip
+    // uses to prove the decoder read back exactly the record the transition
+    // authorized. Leaving the key out here would let a summary whose
+    // `runtimeIdentity` the decoder dropped still compare EQUAL, which is the
+    // one thing the round trip exists to catch.
+    a.evidence.running.runtimeIdentity === b.evidence.running.runtimeIdentity
+  );
+}
+
+function sameClaimBaseline(
+  a: HostUpdateAttemptClaimBaseline | undefined,
+  b: HostUpdateAttemptClaimBaseline | undefined,
+): boolean {
+  if (a === undefined || b === undefined) return a === b;
+  return (
+    a.installedVersion === b.installedVersion &&
+    a.installGeneration === b.installGeneration &&
+    a.stageFingerprint === b.stageFingerprint &&
+    a.allowDowngrade === b.allowDowngrade
   );
 }
 
@@ -762,7 +876,8 @@ function sameRecord(
     a.updatedAt === b.updatedAt &&
     a.completedAt === b.completedAt &&
     sameNullableError(a.error, b.error) &&
-    sameRecovery(a.recovery, b.recovery)
+    sameRecovery(a.recovery, b.recovery) &&
+    sameClaimBaseline(a.claim, b.claim)
   );
 }
 

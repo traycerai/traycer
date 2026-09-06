@@ -12,6 +12,7 @@ export {
 } from "./paths";
 
 export type {
+  HostUpdateAttemptClaimBaseline,
   HostUpdateAttemptContinuation,
   HostUpdateAttemptError,
   HostUpdateAttemptExecution,
@@ -102,6 +103,7 @@ export type {
   AttemptClaimDecision,
   AttemptClaimAction,
   AttemptClaimHolderDisposition,
+  AttemptClaimRefresh,
   AttemptClaimRequest,
   AttemptRecoveryArtifactEvidence,
   AttemptRecoveryContext,

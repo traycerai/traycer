@@ -425,6 +425,21 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // The two bound dispatches, FIFO for exactly `host.update.install`'s reason:
+  // they mutate the host's own lifecycle, so two in flight must never collapse
+  // to "the latest". Unpolled — each is a one-shot command, and the progress
+  // it starts is read from `host.status.updateOperation`, never by re-asking
+  // the method what happened.
+  "host.update.activate": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "host.update.continue": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Polled, at the `host.status` cadence, for one consumer: the Overview
   // derives "installed, restart to finish" and "staged, waiting for work"
   // from the install and staged records beside the live status. Those

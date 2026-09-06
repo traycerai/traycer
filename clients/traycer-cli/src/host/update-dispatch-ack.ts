@@ -53,10 +53,17 @@ export async function stampUpdateDispatchAck(input: {
   const ack: UpdateDispatchAck = {
     v: UPDATE_DISPATCH_ACK_VERSION,
     nonce: input.nonce,
-    attemptId: input.identity.attemptId,
-    generation: input.identity.generation,
-    sequence: input.identity.sequence,
-    claimedAt: input.claimedAtIso,
+    // The v2 `claimed` arm — the same facts v1 carried at the top level. The
+    // `no-attempt` arm has no producer here yet: the decision that reaches it
+    // is made by `host update`'s selector, which lands with the executor
+    // cutover; this writer is still only ever invoked after a durable claim.
+    result: {
+      kind: "claimed",
+      attemptId: input.identity.attemptId,
+      generation: input.identity.generation,
+      sequence: input.identity.sequence,
+      claimedAt: input.claimedAtIso,
+    },
   };
   const target = updateDispatchAckPath(input.hostHomeDir);
   // Agent-scoped temp name: pid AND a monotonic-ish suffix, so two children of

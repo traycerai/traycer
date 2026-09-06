@@ -141,6 +141,42 @@ export type HostUpdateAttemptRecoveryRunningLeg = {
   readonly kind: "absent" | "verified" | "unbound" | "unreadable";
   readonly version: string | null;
   readonly ownerBound: boolean;
+  /**
+   * The raw runtime identity a host process reported, when the in-memory
+   * evidence was the `foreign` kind - a process whose identity matches no
+   * catalog leg of the install record (a staging build, or the record's
+   * catalog version while the record names a different `runtimeVersion`).
+   *
+   * Additive and OPTIONAL, for the same reason `recovery` itself was: the
+   * summary must stay readable by an observer built before this key existed.
+   * That is also why `foreign` is persisted as `unbound` with the raw identity
+   * as `version` rather than as a fourth kind or a null version - the leg
+   * validation below requires a non-null version on `unbound`, so an older
+   * decoder would read either of those as CORRUPT, which is a fail-closed
+   * verdict on a perfectly good record.
+   */
+  readonly runtimeIdentity?: string;
+};
+
+/**
+ * What the claimant knew about the local installation when it claimed, carried
+ * so a later resume can prove the install it was authorized against is still
+ * the one on disk (tech plan D19).
+ *
+ * `installGeneration` is always the string `encodeInstallGeneration` returns -
+ * never `installId` or any other single field - so a baseline, an advisory
+ * plan and an under-lock re-read compare byte-equal values.
+ *
+ * `allowDowngrade` records the CONSENT the claim was made under. It is copied
+ * forward by every park refresh and never recomputed from arguments or from
+ * version order: version ordering cannot establish an authorization an earlier
+ * actor gave.
+ */
+export type HostUpdateAttemptClaimBaseline = {
+  readonly installedVersion: string;
+  readonly installGeneration: string;
+  readonly stageFingerprint: string | null;
+  readonly allowDowngrade: boolean;
 };
 
 export type HostUpdateAttemptRecord = {
@@ -160,6 +196,15 @@ export type HostUpdateAttemptRecord = {
   readonly error: HostUpdateAttemptError;
   /** Omitted for ordinary executor terminal writes and all active records. */
   readonly recovery?: HostUpdateAttemptRecovery;
+  /**
+   * The claim baseline, written at creation and refreshed at every park.
+   *
+   * Additive and optional on the SAME terms as `recovery`, and legal on any
+   * phase (unlike `recovery`, which describes a terminal conclusion): records
+   * written before this key existed have none, and a record with none is
+   * resumable only as an upgrade park (D19).
+   */
+  readonly claim?: HostUpdateAttemptClaimBaseline;
 };
 
 // ---- Phase classification ---------------------------------------------------
@@ -503,6 +548,14 @@ function parseAttemptFields(
     return null;
   }
 
+  // Deliberately NOT phase-gated. The baseline is what the claimant knew when
+  // it claimed, so it is legal on an active record, on a park (where it is
+  // refreshed and where it is actually consumed), and on the terminal record a
+  // park becomes - unlike `recovery`, whose whole meaning is a terminal
+  // conclusion.
+  const claim = parseClaimBaseline(obj.claim);
+  if (claim === "invalid") return null;
+
   return {
     schemaVersion,
     attemptId,
@@ -519,6 +572,7 @@ function parseAttemptFields(
     completedAt,
     error,
     ...(recovery === undefined ? {} : { recovery }),
+    ...(claim === undefined ? {} : { claim }),
   };
 }
 
@@ -692,7 +746,59 @@ function parseRecoveryRunningLeg(
     return "invalid";
   }
   if (raw.kind !== "verified" && raw.ownerBound) return "invalid";
-  return { kind: raw.kind, version, ownerBound: raw.ownerBound };
+  // Additive and optional, like `recovery` and `claim`. Present it is a
+  // non-empty string or the record is corrupt; RETAINED only on `unbound`,
+  // the one kind the encoder lowers a `foreign` process identity onto. On
+  // every other kind it is dropped rather than refused: a writer that has no
+  // business emitting it says nothing this reader needs, and reading such a
+  // record as corrupt would fail closed over a field with no meaning there.
+  const runtimeIdentity = raw.runtimeIdentity;
+  if (runtimeIdentity !== undefined && nonEmptyString(runtimeIdentity) === null)
+    return "invalid";
+  return {
+    kind: raw.kind,
+    version,
+    ownerBound: raw.ownerBound,
+    ...(raw.kind === "unbound" && typeof runtimeIdentity === "string"
+      ? { runtimeIdentity }
+      : {}),
+  };
+}
+
+/**
+ * Parse the optional claim baseline (D19).
+ *
+ * The same three-way contract as `parseRecovery`: `undefined` is ABSENT (a
+ * record written before the key existed, or by a caller that had no baseline
+ * to record), and anything else must be exactly this shape or the record is
+ * corrupt. Best-effort parsing is not an option for a value whose whole job is
+ * to authorize a later resume.
+ */
+function parseClaimBaseline(
+  value: unknown,
+): HostUpdateAttemptClaimBaseline | undefined | "invalid" {
+  if (value === undefined) return undefined;
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return "invalid";
+  }
+  const raw = value as Record<string, unknown>;
+  const installedVersion = nonEmptyString(raw.installedVersion);
+  const installGeneration = nonEmptyString(raw.installGeneration);
+  const stageFingerprint = nullableNonEmptyString(raw.stageFingerprint);
+  if (
+    installedVersion === null ||
+    installGeneration === null ||
+    stageFingerprint === "invalid" ||
+    typeof raw.allowDowngrade !== "boolean"
+  ) {
+    return "invalid";
+  }
+  return {
+    installedVersion,
+    installGeneration,
+    stageFingerprint,
+    allowDowngrade: raw.allowDowngrade,
+  };
 }
 
 function nullableNonEmptyString(value: unknown): string | null | "invalid" {

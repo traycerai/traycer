@@ -22,6 +22,7 @@
 // verbatim and are the proof of that.
 
 export type {
+  HostUpdateAttemptClaimBaseline,
   HostUpdateAttemptContinuation,
   HostUpdateAttemptError,
   HostUpdateAttemptExecution,

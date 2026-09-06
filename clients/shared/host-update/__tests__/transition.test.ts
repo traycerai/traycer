@@ -52,6 +52,8 @@ function baseRequest(
     expected: null,
     newAttemptId: "new-attempt",
     initialPhase: "downloading",
+    initialContinuation: null,
+    claim: null,
     nowIso: "2026-01-01T00:10:00.000Z",
     ...overrides,
   };
@@ -783,6 +785,7 @@ describe("advanceAttempt - continuation provenance matrix", () => {
         continuation,
         progress: null,
         error: null,
+        claimRefresh: null,
         nowIso: "2026-01-01T00:05:00.000Z",
       });
       expect(outcome).toEqual({ kind: "rejected", reason });
@@ -801,6 +804,7 @@ describe("advanceAttempt - continuation provenance matrix", () => {
         continuation: "activate",
         progress: null,
         error: null,
+        claimRefresh: null,
         nowIso: "2026-01-01T00:05:00.000Z",
       });
       expect(outcome.kind).toBe("advanced");
@@ -821,6 +825,7 @@ describe("advanceAttempt - continuation provenance matrix", () => {
       continuation: "activate",
       progress: null,
       error: null,
+      claimRefresh: null,
       nowIso: "2026-01-01T00:05:00.000Z",
     });
     expect(reparking.kind).toBe("advanced");
@@ -831,6 +836,7 @@ describe("advanceAttempt - continuation provenance matrix", () => {
       continuation: "activate",
       progress: null,
       error: null,
+      claimRefresh: null,
       nowIso: "2026-01-01T00:06:00.000Z",
     });
     expect(restarting.kind).toBe("advanced");
@@ -844,6 +850,7 @@ describe("advanceAttempt - continuation provenance matrix", () => {
         continuation: "activate",
         progress: null,
         error: null,
+        claimRefresh: null,
         nowIso: "2026-01-01T00:07:00.000Z",
       },
     );
@@ -863,6 +870,7 @@ describe("advanceAttempt", () => {
       continuation: null,
       progress: null,
       error: null,
+      claimRefresh: null,
       nowIso: "2026-01-01T00:05:00.000Z",
     });
     expect(outcome.kind).toBe("advanced");
@@ -883,6 +891,7 @@ describe("advanceAttempt", () => {
         continuation: null,
         progress: null,
         error: null,
+        claimRefresh: null,
         nowIso: "2026-01-01T00:05:00.000Z",
       },
     );
@@ -899,6 +908,7 @@ describe("advanceAttempt", () => {
         continuation: null,
         progress: null,
         error: null,
+        claimRefresh: null,
         nowIso: "2026-01-01T00:05:00.000Z",
       },
     );
@@ -918,6 +928,7 @@ describe("advanceAttempt", () => {
         continuation: null,
         progress: null,
         error: null,
+        claimRefresh: null,
         nowIso: "2026-01-01T00:05:00.000Z",
       },
     );
@@ -931,6 +942,7 @@ describe("advanceAttempt", () => {
       continuation: null,
       progress: null,
       error: null,
+      claimRefresh: null,
       nowIso: "2026-01-01T00:05:00.000Z",
     });
     expect(outcome).toEqual({ kind: "rejected", reason: "terminal" });
@@ -953,6 +965,7 @@ describe("advanceAttempt", () => {
         continuation,
         progress: null,
         error: null,
+        claimRefresh: null,
         nowIso: "2026-01-01T00:05:00.000Z",
       });
       expect(outcome).toEqual({ kind: "rejected", reason: "not-active" });
@@ -970,6 +983,7 @@ describe("advanceAttempt", () => {
       continuation: "activate",
       progress: null,
       error: null,
+      claimRefresh: null,
       nowIso: "2026-01-01T00:05:00.000Z",
     });
     expect(outcome).toEqual({
@@ -989,6 +1003,7 @@ describe("advanceAttempt", () => {
       continuation: "activate",
       progress: null,
       error: null,
+      claimRefresh: null,
       nowIso: "2026-01-01T00:05:00.000Z",
     });
     expect(outcome).toEqual({
@@ -1008,6 +1023,7 @@ describe("advanceAttempt", () => {
       continuation: null,
       progress: null,
       error: null,
+      claimRefresh: null,
       nowIso: "2026-01-01T00:05:00.000Z",
     });
     expect(outcome).toEqual({
@@ -1027,6 +1043,7 @@ describe("advanceAttempt", () => {
       continuation: "resume-apply",
       progress: null,
       error: null,
+      claimRefresh: null,
       nowIso: "2026-01-01T00:05:00.000Z",
     });
     expect(outcome).toEqual({
@@ -1046,6 +1063,7 @@ describe("advanceAttempt", () => {
       continuation: "resume-apply",
       progress: null,
       error: null,
+      claimRefresh: null,
       nowIso: "2026-01-01T00:05:00.000Z",
     });
     expect(outcome).toEqual({
@@ -1065,6 +1083,7 @@ describe("advanceAttempt", () => {
       continuation: "activate",
       progress: null,
       error: null,
+      claimRefresh: null,
       nowIso: "2026-01-01T00:05:00.000Z",
     });
     expect(outcome.kind).toBe("advanced");
@@ -1085,6 +1104,7 @@ describe("advanceAttempt", () => {
       continuation: null,
       progress: null,
       error: { code: "restart-failed", message: "boom", phase: "restarting" },
+      claimRefresh: null,
       nowIso: "2026-01-01T00:05:00.000Z",
     });
     expect(outcome.kind).toBe("advanced");
@@ -1101,6 +1121,7 @@ describe("advanceAttempt", () => {
       continuation: null,
       progress: null,
       error: null,
+      claimRefresh: null,
       nowIso: "2026-01-01T00:05:00.000Z",
     });
     expect(outcome).toEqual({ kind: "rejected", reason: "counter-exhausted" });
@@ -1113,6 +1134,7 @@ describe("advanceAttempt", () => {
       continuation: null,
       progress: null,
       error: null,
+      claimRefresh: null,
       nowIso: "2026-01-01T00:05:00.000Z",
     });
     expect(outcome).toEqual({ kind: "rejected", reason: "illegal-phase" });
@@ -1127,6 +1149,7 @@ describe("advanceAttempt", () => {
       continuation: null,
       progress: null,
       error: null,
+      claimRefresh: null,
       nowIso: "2026-01-01T00:05:00.000Z",
     });
     expect(outcome).toEqual({
@@ -1143,6 +1166,7 @@ describe("advanceAttempt", () => {
       continuation: null,
       progress: null,
       error: null,
+      claimRefresh: null,
       nowIso: "2026-01-01T00:06:00.000Z",
     });
     expect(nonTerminal.kind).toBe("advanced");
@@ -1155,6 +1179,7 @@ describe("advanceAttempt", () => {
       continuation: null,
       progress: null,
       error: null,
+      claimRefresh: null,
       nowIso: "2026-01-01T00:07:00.000Z",
     });
     expect(terminal.kind).toBe("advanced");

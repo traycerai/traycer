@@ -8,14 +8,36 @@ import {
 
 // Direct unit suite for the §5.2.8 dispatch-ACK contract.
 
+const CLAIMED = {
+  kind: "claimed",
+  attemptId: "attempt-1",
+  generation: 2,
+  sequence: 5,
+  claimedAt: "2026-01-01T00:00:00.000Z",
+};
+
 const VALID = {
   v: UPDATE_DISPATCH_ACK_VERSION,
+  nonce: "nonce-abcdefgh",
+  result: CLAIMED,
+};
+
+/** The same ACK as a v1 producer wrote it: the claimed fields at top level. */
+const VALID_V1 = {
+  v: 1,
   nonce: "nonce-abcdefgh",
   attemptId: "attempt-1",
   generation: 2,
   sequence: 5,
   claimedAt: "2026-01-01T00:00:00.000Z",
 };
+
+function withClaimedField(
+  key: string,
+  value: unknown,
+): Record<string, unknown> {
+  return { ...VALID, result: { ...CLAIMED, [key]: value } };
+}
 
 describe("updateDispatchAckPath", () => {
   it("resolves inside the host home it is given", () => {
@@ -63,12 +85,18 @@ describe("decodeUpdateDispatchAck", () => {
   });
 
   it.each([
-    ["a missing attemptId", { ...VALID, attemptId: undefined }],
-    ["an empty attemptId", { ...VALID, attemptId: "" }],
-    ["a non-integer generation", { ...VALID, generation: 1.5 }],
-    ["a NaN sequence", { ...VALID, sequence: Number.NaN }],
-    ["a missing claimedAt", { ...VALID, claimedAt: undefined }],
+    ["a missing attemptId", withClaimedField("attemptId", undefined)],
+    ["an empty attemptId", withClaimedField("attemptId", "")],
+    ["a non-integer generation", withClaimedField("generation", 1.5)],
+    ["a NaN sequence", withClaimedField("sequence", Number.NaN)],
+    ["a missing claimedAt", withClaimedField("claimedAt", undefined)],
+    ["an unknown result kind", withClaimedField("kind", "settled")],
+    [
+      "a missing result",
+      { v: UPDATE_DISPATCH_ACK_VERSION, nonce: VALID.nonce },
+    ],
     ["an illegal nonce", { ...VALID, nonce: "../../etc/passwd" }],
+    ["a v1 body missing its attemptId", { ...VALID_V1, attemptId: undefined }],
   ])("rejects %s", (_label, payload) => {
     // Every one of these would otherwise become a correlation the resolver
     // could act on. `NaN` and `1.5` are both `number`, which is why the
