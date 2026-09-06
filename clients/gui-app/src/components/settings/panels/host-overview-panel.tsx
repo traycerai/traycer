@@ -1100,9 +1100,15 @@ export function HostOverviewPanel(props: {
             // Restart cannot activate a stage. A floor gate must not turn a
             // staged wait's Force update into a different, ineffective force
             // - and a record leg that is not live does not vouch that no
-            // stage waits, so it offers nothing either.
+            // stage waits, so it offers nothing either. Gated on `usable`
+            // like its two siblings: the confirm it opens is closed by the
+            // `!usable` rule above, so an offer without a route would be a
+            // control that cannot open its own confirmation. (The projection
+            // withholds the whole force control under an unusable scope
+            // already - the view is demoted - but the dispatch gate belongs
+            // here, not in the card's layout.)
             onForceRestart={
-              legacyFacts !== null && legacyFacts.stagedWait === null
+              usable && legacyFacts !== null && legacyFacts.stagedWait === null
                 ? () => {
                     // Attempt parks keep the existing cooperative restart
                     // confirmation and its fresh live-work check.
