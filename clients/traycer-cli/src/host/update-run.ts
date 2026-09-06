@@ -8,6 +8,7 @@ import {
   attemptIdentityOf,
   isParkedPhase,
   isTerminalPhase,
+  readUpdateAttemptRecord,
   type AttemptAdvance,
   type AttemptClaimRefresh,
   type AttemptCommitOutcome,
@@ -27,6 +28,7 @@ import type { ApplyHostOutcome } from "../installer/apply";
 import {
   downloadAndStageHostInSegment,
   resolveUpdatePlan,
+  type HostDownloadOutcome,
   type HostUpdatePlan,
   type HostUpdatePlanIdentity,
   type StageMaintenanceContenderOptions,
@@ -114,6 +116,34 @@ import { currentInstallPlatform } from "../installer/install";
 /** The bound intents an argv option may carry (Plan D16). `install` is absent. */
 export type HostUpdateBoundIntent = "activate" | "continue";
 
+// EVERY EXIT OF THIS FILE AND ITS SHELL, and what each stamps (Plan D7).
+// Thirteen in total; eleven are `runHostUpdate`'s. All of them funnel through
+// ONE once-only settlement (`createDispatchSettlement`), so where two are
+// reached in sequence the FIRST wins and the second is not even called.
+//
+//  1. throw, illegal `--ack-nonce`      - no ACK is possible: the correlation
+//                                         is already lost, and a nonce this
+//                                         build rejects cannot be one the
+//                                         resolver minted.
+//  2. throw, illegal bound-intent pair  - `refused-e-invalid-argument`
+//  3. throw from the advisory plan      - `refused-<code>` / `refused-unexpected`
+//  4. throw from the selector           - `refused-e-host-not-installed`
+//  5. throw from an arm after the claim - `claimed` (stamped at the boundary)
+//  6. `E_HOST_BUSY` park after a claim  - `claimed`
+//  7. return, executed                  - `claimed`
+//  8. return, released                  - `no-attempt {reason}`
+//  9. throw, rejected segment           - `no-attempt {segment's own reason}`,
+//                                         then `E_HOST_UPDATE_ATTEMPT_ACTIVE`
+// 10. throw, projection cannot backfill - the release's reason, already stamped
+// 11. throw/return, terminalized        - `recovered-complete` / `-failed`
+//                                         (unreachable under `reselect`)
+// 12. shell returns the legacy payload  - whatever this file stamped
+// 13. shell rethrows                    - whatever this file stamped
+//
+// Exit 2 is why the bound-intent parse lives HERE and not in the command body:
+// a run dispatched with a nonce and an unusable intent pair must still answer
+// its dispatcher, and only a parse that happens after the stamper exists can.
+
 /** Everything the run decides from, all of it from ARGV or the process env. */
 export interface HostUpdateRunArgs {
   readonly environment: Environment;
@@ -131,7 +161,7 @@ export interface HostUpdateRunArgs {
    * can do. The trigger is provenance and rides the env for the opposite
    * reason - it must keep working on every CLI.
    */
-  readonly intent: HostUpdateBoundIntent | null;
+  readonly intent: string | null;
   /** The attempt a bound intent is bound to; required with `intent`. */
   readonly expectAttempt: string | null;
   /** Test seam, as `DownloadAndStageHostOptions.registryClient`. */
@@ -212,7 +242,6 @@ export async function runHostUpdate(
   // destructive work for a dispatch that can only ever report indeterminate.
   const ack = installDispatchAckStamper(home, args.ackNonce);
   const trigger = triggerFromEnvironment(env);
-  const intent: "install" | HostUpdateBoundIntent = args.intent ?? "install";
 
   const mirror = createMarkerMirror(environment, logger);
   const writerRef: { current: AttemptRecordWriter | null } = { current: null };
@@ -239,8 +268,17 @@ export async function runHostUpdate(
     planActivationReading: null,
   };
 
-  let acknowledged = false;
+  // The ONE settlement point every exit in the table above funnels through.
+  // The stamper is idempotent too, but that only makes the second WRITE a
+  // no-op; this makes the second CALL one, which is what "exactly once" has to
+  // mean for an exit that decides its reason from what the first one already
+  // answered (exits 9→10 are precisely that sequence).
+  const settlement = createDispatchSettlement(ack, logger);
   try {
+    // Inside the try, so exit 2 answers its dispatcher like every other
+    // refusal. Nothing has been read or written at this point.
+    const intent: "install" | HostUpdateBoundIntent =
+      parseBoundIntent(args.intent, args.expectAttempt) ?? "install";
     const plan = await resolvePlan(args, intent, selection);
     const segment = await runLocalAttemptExecutorSegment(
       {
@@ -258,8 +296,7 @@ export async function runHostUpdate(
         faults: NO_UPDATE_EXECUTOR_FAULTS,
       },
       async (claim) => {
-        acknowledged = true;
-        if (ack !== null) await ack.acknowledge(claim);
+        await settlement.claimed(claim);
       },
       async (capability, claim, complete) =>
         runArm({
@@ -274,9 +311,9 @@ export async function runHostUpdate(
           complete,
         }),
     );
-    return await projectSegment({ args, ack, selection, segment });
+    return await projectSegment({ args, settlement, selection, segment });
   } catch (err) {
-    if (!acknowledged) await stampNoAttempt(ack, logger, refusedAckReason(err));
+    await settlement.refused(refusedAckReason(err));
     throw err;
   }
 }
@@ -296,22 +333,110 @@ function triggerFromEnvironment(
   return "manual";
 }
 
-async function stampNoAttempt(
-  ack: DispatchAckStamper | null,
-  logger: ILogger,
-  reason: string,
-): Promise<void> {
-  if (ack === null) return;
-  try {
-    await ack.noAttempt(reason);
-  } catch {
-    // The ACK is correlation, not the outcome: a stamp that cannot land turns
-    // the dispatcher's wait into a deadline, which is a true answer. It must
-    // never replace the error (or the result) this run is actually reporting.
-    logger.info("Host update could not stamp its dispatch acknowledgement", {
-      reason,
+/**
+ * The `--intent` / `--expect-attempt` pairing and legal-value check.
+ *
+ * Commander has no option pairing: its parser rejects UNKNOWN options - which
+ * is the whole point of putting the intent on argv, so a pre-cutover parser
+ * exits before any body runs - but it has nothing to say about two options
+ * that are only meaningful together. A bound intent with no attempt to bind to
+ * is an authorization with no subject, and running it as a plain install would
+ * be exactly the broader authorization the argv contract exists to prevent.
+ *
+ * The value arrives RAW from argv so an illegal one is refused with a CLI
+ * error a caller can read, rather than being silently widened at the
+ * registration site.
+ */
+function parseBoundIntent(
+  intent: string | null,
+  expectAttempt: string | null,
+): HostUpdateBoundIntent | null {
+  if (intent !== null && intent !== "activate" && intent !== "continue") {
+    throw cliError({
+      code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+      message: `host update: --intent must be 'activate' or 'continue' (got '${intent}')`,
+      details: { intent },
+      exitCode: 1,
     });
   }
+  if (intent === null && expectAttempt !== null) {
+    throw cliError({
+      code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+      message:
+        "host update: --expect-attempt names the attempt a bound intent acts on; pass --intent too",
+      details: { expectAttempt },
+      exitCode: 1,
+    });
+  }
+  if (intent !== null && expectAttempt === null) {
+    throw cliError({
+      code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+      message: `host update: --intent ${intent} needs the attempt it is bound to; pass --expect-attempt <id>`,
+      details: { intent },
+      exitCode: 1,
+    });
+  }
+  return intent;
+}
+
+/**
+ * The run's single answer to its dispatcher.
+ *
+ * One run, one ACK: whichever of the two arms is reached FIRST is the true
+ * one, and every later exit is a consequence of it rather than a better
+ * description of it. A rejected segment reports the claim refusal and then
+ * throws `E_HOST_UPDATE_ATTEMPT_ACTIVE`; a release whose projection cannot read
+ * the install record reports the release and then throws
+ * `E_HOST_NOT_INSTALLED`. Letting the second win would replace "the cohort
+ * refused this claim" with "something was already active".
+ *
+ * Idempotent HERE as well as inside the stamper, and the difference matters:
+ * the stamper's flag makes a second write a no-op, this makes the second CALL
+ * one - so "stamped exactly once" is observable at the call site and not only
+ * in the file that survives.
+ */
+interface DispatchSettlement {
+  readonly claimed: (claim: {
+    readonly identity: HostUpdateAttemptIdentity;
+  }) => Promise<void>;
+  readonly refused: (reason: string) => Promise<void>;
+}
+
+function createDispatchSettlement(
+  ack: DispatchAckStamper | null,
+  logger: ILogger,
+): DispatchSettlement {
+  let settled = false;
+  return {
+    claimed: async (claim): Promise<void> => {
+      if (settled) return;
+      settled = true;
+      // NOT swallowed, unlike the refusal below: this one runs at the
+      // executor's acknowledgement boundary, where a throw is the executor's
+      // to handle, and a run that cannot answer a dispatcher which is waiting
+      // on a claim has not quietly succeeded.
+      if (ack !== null) await ack.acknowledge(claim);
+    },
+    refused: async (reason): Promise<void> => {
+      if (settled) return;
+      settled = true;
+      if (ack === null) return;
+      try {
+        await ack.noAttempt(reason);
+      } catch {
+        // The ACK is correlation, not the outcome: a stamp that cannot land
+        // turns the dispatcher's wait into a deadline, which is a true
+        // answer. It must never replace the error (or the result) this run is
+        // actually reporting.
+        logger.info(
+          "Host update could not stamp its dispatch acknowledgement",
+          {
+            reason,
+          },
+        );
+      }
+    },
+  };
 }
 
 /**
@@ -419,9 +544,15 @@ async function resolvePlan(
           intent: "continue",
           targetVersion,
           // The ONLY case that touches the registry: a `resume-apply` park
-          // with no stage, which is the downgrade re-download (Plan D14).
-          // Every other park resumes from bytes already on disk.
-          needsTransfer: await parkNeedsTransfer(environment),
+          // with no usable stage, which is the downgrade re-download (Plan
+          // D14). Every other park resumes from bytes already on disk - and
+          // an ACTIVATION park has no bytes to fetch at all, so a `continue`
+          // that resolved an asset for one would fail offline on work that
+          // needs no network.
+          needsTransfer: await parkNeedsTransfer(
+            environment,
+            args.expectAttempt,
+          ),
         },
         onProgress: args.onProgress,
         registryClient: args.registryClient,
@@ -456,10 +587,38 @@ async function resolvePlan(
   };
 }
 
-/** The park's own shape decides whether a `continue` may reach the registry. */
-async function parkNeedsTransfer(environment: Environment): Promise<boolean> {
+/**
+ * The park's own shape decides whether a `continue` may reach the registry.
+ *
+ * Read from the CONTINUATION first and the stage second. Stage presence alone
+ * cannot answer this: an activation park normally has no stage - its bytes are
+ * already installed - so a stage-only test says "needs a transfer" for the one
+ * continuation that needs nothing, and an offline `continue` on an activation
+ * park then fails in the plan, before selection, on a run that could have
+ * completed with no network at all.
+ *
+ * Advisory, like the whole plan: it reads pre-lock and the selector decides
+ * again under the lock. A record that is not the one this intent names, or one
+ * this read cannot make sense of, needs no transfer - the selector will refuse
+ * it anyway, and reaching the registry to discover that would be worse.
+ */
+async function parkNeedsTransfer(
+  environment: Environment,
+  expectAttempt: string | null,
+): Promise<boolean> {
+  const read = await readUpdateAttemptRecord(hostHomeDir(environment));
+  const record = read.kind === "valid" ? read.value : null;
+  if (record === null) return false;
+  if (expectAttempt !== null && record.attemptId !== expectAttempt)
+    return false;
+  if (record.continuation !== "resume-apply") return false;
   const staged = await readHostStagedRecord(environment);
-  return staged === null || staged.stageId === null;
+  // "Usable" is all three: present, fingerprinted, and AT this park's target.
+  return (
+    staged === null ||
+    staged.stageId === null ||
+    staged.version !== record.targetVersion
+  );
 }
 
 /** The target this run would work toward, as the plan sees it (advisory). */
@@ -1066,7 +1225,12 @@ async function runArmBody(
     return applyArm(
       input,
       writer,
-      input.claim.record.claim?.stageFingerprint ?? null,
+      await bindApplyToClaimTarget(
+        input,
+        writer,
+        input.claim.record.claim?.stageFingerprint ?? null,
+        null,
+      ),
     );
   }
   return upgradeArm(input, writer);
@@ -1077,8 +1241,23 @@ async function upgradeArm(
   input: RunArmInput,
   writer: AttemptRecordWriter,
 ): Promise<LegacyHostUpdateResult> {
-  await transferUnderClaim(input, writer, input.args.versionRequest);
-  return applyArm(input, writer, null);
+  const transfer = await transferUnderClaim(
+    input,
+    writer,
+    input.args.versionRequest,
+  );
+  // The transfer's own promote-time policy may DISCARD what it fetched and
+  // leave an unrelated stage standing (a pre-existing higher version is
+  // `not-strictly-newer`, and no competing writer is needed for that). The
+  // apply would then commit those bytes, because a null expected fingerprint
+  // means "whatever is staged". So the stage is bound to the CLAIM's target
+  // here, before any actuator, and the observed fingerprint - not the plan's,
+  // which predates this very transfer - is what the apply is pinned to.
+  return applyArm(
+    input,
+    writer,
+    await bindApplyToClaimTarget(input, writer, null, transfer),
+  );
 }
 
 /** A resumed `resume-apply` park: re-download only when its stage is gone. */
@@ -1091,7 +1270,16 @@ async function resumedApplyArm(
   const staged = await readHostStagedRecord(input.args.environment);
   const stageIsHere = staged !== null && staged.version === target;
   if (stageIsHere) {
-    return applyArm(input, writer, baseline?.stageFingerprint ?? null);
+    return applyArm(
+      input,
+      writer,
+      await bindApplyToClaimTarget(
+        input,
+        writer,
+        baseline?.stageFingerprint ?? null,
+        null,
+      ),
+    );
   }
   if (
     baseline !== undefined &&
@@ -1103,15 +1291,74 @@ async function resumedApplyArm(
     await writer.phaseWrite("downloading");
     return downgradeArm(input, writer);
   }
-  await transferUnderClaim(input, writer, target);
-  return applyArm(input, writer, null);
+  const transfer = await transferUnderClaim(input, writer, target);
+  return applyArm(
+    input,
+    writer,
+    await bindApplyToClaimTarget(input, writer, null, transfer),
+  );
+}
+
+/**
+ * The stage this attempt is allowed to apply, or a terminal failure.
+ *
+ * An apply with a `null` expected fingerprint commits WHATEVER is staged, and
+ * "whatever is staged" is not always this attempt's target: the transfer's
+ * promote-time policy discards a candidate that is not strictly newer than an
+ * existing stage, so a host installed at 1.0.0 with a stage for 3.0.0 and a
+ * claim for 2.0.0 would install 3.0.0 and then fail verification for 2.0.0.
+ * There is no race in that: the higher stage was simply already there.
+ *
+ * `claimFingerprint` is the claim's own expectation and wins where it exists -
+ * it detects a stage REPLACED since the claim, which a version check cannot
+ * see. It is deliberately NOT used on an arm whose own transfer just ran: the
+ * claim's fingerprint predates that transfer, so pinning to it would refuse
+ * the bytes this run just placed.
+ */
+async function bindApplyToClaimTarget(
+  input: RunArmInput,
+  writer: AttemptRecordWriter,
+  claimFingerprint: string | null,
+  transfer: HostDownloadOutcome | null,
+): Promise<string | null> {
+  const target = input.claim.record.targetVersion;
+  const staged = await readHostStagedRecord(input.args.environment);
+  if (staged !== null && staged.version === target) {
+    return claimFingerprint ?? staged.stageId;
+  }
+  // Terminal, and the same family as the identity re-validation above: the
+  // world this claim was authorized against is not the world in front of it.
+  // Never a refusal - a same-target park admits only a resume, so a refusal
+  // would leave it for a level-triggered reconciler to re-spawn forever.
+  const message = `host update: no stage for ${target} was present when the apply was about to run (found ${staged?.version ?? "none"})`;
+  await writer.fail({ code: "install-changed", message, phase: "preparing" });
+  throw cliError({
+    code: CLI_ERROR_CODES.HOST_INSTALL_RECORD_INVALID,
+    message,
+    details: {
+      environment: input.args.environment,
+      attemptId: input.claim.identity.attemptId,
+      targetVersion: target,
+      stagedVersion: staged?.version ?? null,
+      // The transfer's own account of what it did, when there was one. A
+      // `discarded` outcome is the common cause and is not an error: the
+      // policy was right to keep the newer stage, and wrong only if this
+      // attempt then applied it.
+      transferOutcome: transfer?.outcome ?? null,
+      transferReason:
+        transfer !== null && transfer.outcome !== "promoted"
+          ? transfer.reason
+          : null,
+    },
+    exitCode: 1,
+  });
 }
 
 async function transferUnderClaim(
   input: RunArmInput,
   writer: AttemptRecordWriter,
   versionRequest: string | null,
-): Promise<void> {
+): Promise<HostDownloadOutcome> {
   const { args } = input;
   const contenderOptions: StageMaintenanceContenderOptions = {
     environment: args.environment,
@@ -1120,7 +1367,7 @@ async function transferUnderClaim(
     pollIntervalMs: CONTENDER_POLL_INTERVAL_MS,
     admission: "attempt-executor",
   };
-  await downloadAndStageHostInSegment(
+  return downloadAndStageHostInSegment(
     {
       environment: args.environment,
       versionRequest,
@@ -1473,7 +1720,7 @@ function delay(ms: number): Promise<void> {
 
 interface ProjectSegmentInput {
   readonly args: HostUpdateRunArgs;
-  readonly ack: DispatchAckStamper | null;
+  readonly settlement: DispatchSettlement;
   readonly selection: SelectionFacts;
   readonly segment: ExecutorSegmentOutcome<LegacyHostUpdateResult>;
 }
@@ -1495,7 +1742,7 @@ async function projectSegment(
         ? "recovered-complete"
         : "recovered-failed"
       : segment.reason;
-  await stampNoAttempt(input.ack, args.logger, reason);
+  await input.settlement.refused(reason);
   if (segment.kind === "rejected") {
     throw cliError({
       code: CLI_ERROR_CODES.HOST_UPDATE_ATTEMPT_ACTIVE,
@@ -1913,6 +2160,19 @@ function createMarkerMirror(
   async function failed(record: HostUpdateAttemptRecord): Promise<void> {
     const cause =
       record.error?.message ?? record.error?.code ?? "update failed";
+    // The evidence loop's deadline is the ONE failure that must be reported
+    // whatever the coarse observation says. It is disturbed by construction -
+    // the bytes are committed and the host was restarted - and it fires
+    // precisely because the host did NOT come back healthy at the target. The
+    // observed-running suppressions below read `pid.json`, which a host that
+    // is up but not yet answering still fills in at the target version, so
+    // reusing them here withholds the only signal a 1.2.x host would ever
+    // show for a failed update. The legacy health-failure branch stamps
+    // unconditionally, and so does this.
+    //
+    // Ownership protection is NOT relaxed: the stamp is still a CAS over this
+    // run's own record, or a create into a path that reads EMPTY.
+    const unconditional = record.error?.code === "verify-timeout";
     if (own === null) {
       // No record of this run's on disk (the entry mirror's primitive
       // answered `failed`). The failure is still this run's to report whenever
@@ -1922,7 +2182,10 @@ function createMarkerMirror(
       // X failed" over a host serving X reports a failure that did not happen.
       // Disturbance is NOT consulted in this arm.
       if (announcedTarget === null) return;
-      if (await targetObservedRunning(environment, announcedTarget)) {
+      if (
+        !unconditional &&
+        (await targetObservedRunning(environment, announcedTarget))
+      ) {
         logger.info(
           "Host update did not stamp its failure - the running host has been observed at the target it announced",
           { environment, targetVersion: announcedTarget },
@@ -1934,7 +2197,7 @@ function createMarkerMirror(
     }
     // Liveness re-read here for the same reason as in the park arm.
     const restoreTo = liveDisplacedRecord();
-    if (restoreTo !== null && !disturbed) {
+    if (restoreTo !== null && !disturbed && !unconditional) {
       const restored = await replaceUpdateProgressMarkerIfUnchanged(
         environment,
         own,
@@ -1952,6 +2215,7 @@ function createMarkerMirror(
       return;
     }
     if (
+      !unconditional &&
       !disturbed &&
       (await targetObservedRunning(environment, own.targetVersion))
     ) {

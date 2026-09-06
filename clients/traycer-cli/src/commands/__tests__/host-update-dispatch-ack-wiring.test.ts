@@ -12,6 +12,42 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 // Must go RED if the call to `installDispatchAckStamper` is removed from
 // `buildHostUpdateCommand`.
 
+// SANDBOXED HOST HOME. The stamper module is mocked here, so nothing in the
+// happy path writes - but the plan mock is what stops the run, and a future
+// edit that lets it return instead of throwing would put a real attempt lock
+// and a real attempt record in the operator's own host home. The paths, not
+// the module mocks, are what decide where a write lands, and `hostHomeDir` is
+// also the value this suite ASSERTS the stamper was called with - so it must
+// be the sandboxed one on both sides.
+vi.mock("../../store/paths", async () => {
+  const actual =
+    await vi.importActual<typeof import("../../store/paths")>(
+      "../../store/paths",
+    );
+  const nodePath = await import("node:path");
+  const { mkdirSync, mkdtempSync } = await import("node:fs");
+  const os = await import("node:os");
+  const home = mkdtempSync(nodePath.join(os.tmpdir(), "ack-wiring-"));
+  const under = (...parts: readonly string[]): string => {
+    const path = nodePath.join(home, ...parts);
+    mkdirSync(nodePath.dirname(path), { recursive: true });
+    return path;
+  };
+  return {
+    ...actual,
+    hostHomeDir: (): string => home,
+    hostInstallDir: (): string => nodePath.join(home, "install"),
+    hostInstallRecordPath: (): string =>
+      nodePath.join(home, "install", "install.json"),
+    hostStagedDir: (): string => nodePath.join(home, "staged"),
+    hostPidMetadataPath: (): string => nodePath.join(home, "pid.json"),
+    hostUpdateProgressMarkerPath: (): string =>
+      nodePath.join(home, "update-progress.json"),
+    cliLogPath: (): string => under("logs", "cli.log"),
+    cliLockPath: (): string => under("cli", ".lock"),
+  };
+});
+
 const mocks = vi.hoisted(() => ({
   resolveUpdatePlanMock: vi.fn(),
   installDispatchAckStamperMock: vi.fn(),
