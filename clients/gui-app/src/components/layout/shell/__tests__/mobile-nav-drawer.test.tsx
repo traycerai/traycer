@@ -1,6 +1,8 @@
 import "../../../../../__tests__/test-browser-apis";
 
 import type { HistoryItem } from "@/components/home/data/home-page.data";
+import type { EpicActivityStatus } from "@/hooks/epic/use-epic-activity-status";
+import type { SurfaceNotificationIndicators } from "@/stores/notifications/notification-indicator-state";
 
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
@@ -12,11 +14,51 @@ const testState: {
   items: ReadonlyArray<HistoryItem>;
   signOut: () => Promise<void>;
   openSettings: () => void;
+  /** Live agent activity per epic id; anything unlisted is idle. */
+  activity: Readonly<Record<string, EpicActivityStatus>>;
+  /**
+   * What the notifications source answers for the drawer's epics, keyed by
+   * epic id; anything unlisted has no indicator state.
+   */
+  indicators: SurfaceNotificationIndicators["epics"];
+  /** The epic-id sets the drawer asked the notifications source about. */
+  indicatorEpicIdCalls: ReadonlyArray<string>[];
 } = {
   items: [],
   signOut: () => Promise.resolve(),
   openSettings: () => undefined,
+  activity: {},
+  indicators: {},
+  indicatorEpicIdCalls: [],
 };
+
+const UNREAD_DONE: SurfaceNotificationIndicators["epics"][string] = {
+  unreadFailure: false,
+  pendingFork: false,
+  pendingApproval: false,
+  pendingInterview: false,
+  unreadDone: true,
+};
+
+// The two status sources behind the shared row indicator. Live activity is
+// asked per row, about ITS epic id (`null` for a phase, which has none). The
+// notifications source is asked ONCE for the ids on screen and reaches the
+// rows through the drawer's own provider - the real context path, so a drawer
+// mounted without that provider would fail these tests rather than pass them
+// on a mocked hook.
+vi.mock("@/hooks/epic/use-epic-activity-status", () => ({
+  useEpicActivityStatus: (epicId: string | null): EpicActivityStatus =>
+    epicId === null ? "idle" : (testState.activity[epicId] ?? "idle"),
+}));
+
+vi.mock("@/hooks/notifications/use-notification-indicators-query", () => ({
+  useNotificationIndicators: (args: {
+    readonly epicIds: ReadonlyArray<string>;
+  }): SurfaceNotificationIndicators => {
+    testState.indicatorEpicIdCalls.push(args.epicIds);
+    return { epics: testState.indicators, chats: {} };
+  },
+}));
 
 const openLink = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/links/open-link", () => ({ useOpenLink: () => openLink }));
@@ -141,6 +183,9 @@ describe("MobileNavDrawer", () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     vi.setSystemTime(NOW_MS);
     testState.items = [];
+    testState.activity = {};
+    testState.indicators = {};
+    testState.indicatorEpicIdCalls = [];
     testState.signOut = () => Promise.resolve();
     testState.openSettings = () => undefined;
     openLink.mockClear();
@@ -736,7 +781,9 @@ describe("MobileNavDrawer", () => {
       expect(rows[1]?.textContent).not.toContain("about 1 month ago");
     });
 
-    it("renders no leading glyph on a task row", async () => {
+    it("renders no leading glyph on an idle task row", async () => {
+      // Every row is a task, so a default glyph would carry nothing and cost
+      // the title width; an idle row with nothing unread shows none.
       testState.items = [
         historyItem({ id: "a", title: "hello", updatedAtMs: NOW_MS - DAY_MS }),
       ];
@@ -744,6 +791,99 @@ describe("MobileNavDrawer", () => {
       const rows = await screen.findAllByTestId("mobile-nav-task-row");
 
       expect(rows[0]?.querySelector("svg")).toBeNull();
+      expect(rows[0]?.querySelector('[role="status"]')).toBeNull();
+    });
+
+    it("shows the running indicator on a task an agent is working on", async () => {
+      // The same indicator the desktop list and the history page render: an
+      // in-progress task is information the row must carry, unlike a glyph
+      // repeated on every row.
+      testState.items = [
+        historyItem({ id: "a", title: "busy", updatedAtMs: NOW_MS - DAY_MS }),
+        historyItem({ id: "b", title: "quiet", updatedAtMs: NOW_MS - DAY_MS }),
+      ];
+      testState.activity = { a: "turn" };
+      renderDrawer();
+      const rows = await screen.findAllByTestId("mobile-nav-task-row");
+
+      const status = rows[0]?.querySelector('[role="status"]');
+      expect(status?.getAttribute("aria-label")).toBe(
+        "Task activity in progress",
+      );
+      expect(screen.getByTestId("mobile-nav-task-activity-a")).toBeTruthy();
+      expect(rows[1]?.querySelector('[role="status"]')).toBeNull();
+    });
+
+    it("shows the pin and then the running indicator on a pinned running task", async () => {
+      testState.items = [
+        {
+          ...historyItem({
+            id: "a",
+            title: "pinned and busy",
+            updatedAtMs: NOW_MS - DAY_MS,
+          }),
+          isPinned: true,
+        },
+      ];
+      testState.activity = { a: "turn" };
+      renderDrawer();
+      const rows = await screen.findAllByTestId("mobile-nav-task-row");
+
+      const pin = screen.getByTestId("mobile-nav-task-pin");
+      const activity = screen.getByTestId("mobile-nav-task-activity-a");
+      expect(rows[0]?.contains(pin)).toBe(true);
+      expect(rows[0]?.contains(activity)).toBe(true);
+      expect(
+        pin.compareDocumentPosition(activity) &
+          Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+    });
+
+    it("shows the indicator for a task with an unread result, through its own provider", async () => {
+      // No live activity, only notification state: this is the case that
+      // needs the drawer to supply indicators itself, since the shell mounts
+      // it outside the providers the tab strip and the list panel put around
+      // their own rows.
+      testState.items = [
+        historyItem({ id: "a", title: "done", updatedAtMs: NOW_MS - DAY_MS }),
+        historyItem({ id: "b", title: "quiet", updatedAtMs: NOW_MS - DAY_MS }),
+      ];
+      testState.indicators = { a: UNREAD_DONE };
+      renderDrawer();
+      const rows = await screen.findAllByTestId("mobile-nav-task-row");
+
+      // Asked about exactly the ids on screen, epic ids only.
+      expect(testState.indicatorEpicIdCalls.at(-1)).toEqual(["a", "b"]);
+      const status = rows[0]?.querySelector('[role="status"]');
+      expect(status).not.toBeNull();
+      expect(
+        status?.querySelector('[data-testid^="mobile-nav-task-"]'),
+      ).not.toBeNull();
+      expect(rows[1]?.querySelector('[role="status"]')).toBeNull();
+    });
+
+    it("never looks a phase up for live activity or notifications", async () => {
+      // A phase is not an epic: its `epicId` is a phase id. The activity
+      // source is asked with `null` for it, so even an id that happens to be
+      // marked busy renders no status, and the notification query is asked
+      // about the epics beside it only.
+      testState.items = [
+        {
+          ...historyItem({
+            id: "p",
+            title: "Legacy phase",
+            updatedAtMs: NOW_MS - DAY_MS,
+          }),
+          taskType: "phase",
+        },
+        historyItem({ id: "a", title: "epic", updatedAtMs: NOW_MS - DAY_MS }),
+      ];
+      testState.activity = { p: "turn" };
+      renderDrawer();
+      const rows = await screen.findAllByTestId("mobile-nav-task-row");
+
+      expect(rows[0]?.querySelector('[role="status"]')).toBeNull();
+      expect(testState.indicatorEpicIdCalls.at(-1)).toEqual(["a"]);
     });
   });
 });
