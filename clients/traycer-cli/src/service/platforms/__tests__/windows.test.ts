@@ -2288,9 +2288,13 @@ describe("killHostProcessTree convergence loop", () => {
     //       stop over a stranger.
     const samples = [5000, 7000, 9000];
     let sample = 0;
-    const host100 = {
+    // An unreadable age zeroes the row's own edge (the scan cannot validate
+    // a parent for a birth it cannot read), so the host carries its claim on
+    // pid 1 with `parentProcessId` 0.
+    const host100: TableRowInput = {
       processId: 100,
-      parentProcessId: 1,
+      parentProcessId: 0,
+      claimedParentProcessId: 1,
       created: 0,
       slot: true,
     };
@@ -2494,7 +2498,7 @@ describe("killHostProcessTree convergence loop", () => {
     // Ablation: in `killHostProcessTree`, drop the `priorProtected`
     // recording (or in `computeWindowsHostKillSet` the identity lookup) →
     // this test reddens: round 1 issues `taskkill /F /PID 700` as well -
-    // the shell this CLI is running in - before 888.
+    // the shell this CLI is running in - after 888 (descendants first).
   });
 
   // The unattributed refusal exercised through all four callers that run
@@ -3128,7 +3132,8 @@ describe("computeWindowsHostKillSet and the taskkill self-protection it drives",
         ]),
       );
       const table = rowsOf([
-        victimRow(100, 1, 1, 0, true),
+        // Unreadable age, so the host's own edge is zeroed too.
+        victimRow(100, 0, 1, 0, true),
         victimRow(cliPid, 0, 100, 2500, false),
         victimRow(777, cliPid, cliPid, 7500, true),
       ]);
