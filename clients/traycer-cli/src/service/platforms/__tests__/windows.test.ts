@@ -2262,6 +2262,100 @@ describe("killHostProcessTree convergence loop", () => {
     // the stop RESOLVES after three scans with 888 and 889 alive.
   });
 
+  it("round-7 P2: the CLI's own scan is never remembered as a host suspect - a stranger reusing its pid does not refuse a later stop", async () => {
+    // The CLI (pid 9999) claims a host whose age is unreadable, so it is
+    // undecided for as long as that host is remembered - and every scan it
+    // runs is its validated child AND slot-matched (the scan's command line
+    // names the slot paths). Chronology (samples 5000, 7000, 9000):
+    //   R0 (sample 5000): host 100 (slot, `created` 0), the CLI (born 2500)
+    //       claiming it, and this round's own scan 555 (born 5500, under the
+    //       CLI, slot-matched). Memory is empty, so nothing is undecided yet.
+    //       kill=[100]; the CLI's branch is spared.
+    //   R1 (sample 7000): 100 lingers (seed), the CLI is now undecided
+    //       against victim 100 of unreadable age, and this round's scan 777
+    //       (born 7500) sits under it - in the suspect closure, spared from
+    //       the kill. kill=[100]. NOTHING is remembered as a suspect: the
+    //       CLI's branch is its own, not the host's.
+    //   R2 (sample 9000): scan 777 has long exited; an unrelated process
+    //       took pid 777 (born 8000), forked 888 (born 8500) and exited. 888
+    //       claims 777 as an orphan. Nothing remembers 777: converged. Had
+    //       777 been recorded as a host suspect, 888 would have refused the
+    //       stop over a stranger.
+    const samples = [5000, 7000, 9000];
+    let sample = 0;
+    const host100 = {
+      processId: 100,
+      parentProcessId: 1,
+      created: 0,
+      slot: true,
+    };
+    const cli = {
+      processId: 9999,
+      parentProcessId: 0,
+      claimedParentProcessId: 100,
+      created: 2500,
+      slot: false,
+    };
+    const ownScan = (pid: number, created: number): TableRowInput => ({
+      processId: pid,
+      parentProcessId: 9999,
+      claimedParentProcessId: 9999,
+      created,
+      slot: true,
+    });
+    const { runner, calls } = roundedRunner([
+      { kind: "table", rows: [host100, cli, ownScan(555, 5500)] },
+      { kind: "table", rows: [host100, cli, ownScan(777, 7500)] },
+      {
+        kind: "table",
+        rows: [
+          cli,
+          {
+            processId: 888,
+            parentProcessId: 0,
+            claimedParentProcessId: 777,
+            created: 8500,
+            slot: false,
+          },
+        ],
+      },
+    ]);
+    const controller = createWindowsController(runner, {
+      now: () => {
+        const value = samples[sample] ?? 9000;
+        sample += 1;
+        return value;
+      },
+    });
+
+    const originalPid = Object.getOwnPropertyDescriptor(process, "pid");
+    Object.defineProperty(process, "pid", { value: 9999, configurable: true });
+    try {
+      await controller.stop(serviceLabelFor("staging"), { force: false });
+    } finally {
+      if (originalPid !== undefined) {
+        Object.defineProperty(process, "pid", originalPid);
+      }
+    }
+
+    expect(
+      calls.filter((call) => call.command === "powershell.exe"),
+    ).toHaveLength(3);
+    expect(
+      calls
+        .filter((call) => call.command === "taskkill")
+        .map((call) => call.args),
+    ).toEqual([
+      ["/F", "/PID", "100"],
+      ["/F", "/PID", "100"],
+    ]);
+
+    // Ablation: in `computeWindowsHostKillSet`, drop `!cliBranch.has(pid)`
+    // from the `undecided` filter → this test reddens: round 1 remembers
+    // scan 777 (born 7500) as a suspect, round 2 finds 888 (born 8500)
+    // claiming it, and the stop REFUSES naming 888 - a stranger's child.
+  });
+
   // The unattributed refusal exercised through all four callers that run
   // `killHostProcessTree`: none of them may treat it as anything softer than
   // the scan-unavailable refusal already covered above. The fourth is the
@@ -2793,10 +2887,11 @@ describe("computeWindowsHostKillSet and the taskkill self-protection it drives",
       // Traycer-hosted terminal whose shell happens to sit on a pid the host
       // once held.
       //
-      // Excluded from the REPORT, not from the memory feed: 700 and the CLI
-      // under it are still the round's undecided closure, and the loop
-      // remembers them as suspects so that a child of 700 that shows up after
-      // 700 has exited still finds its parent's pid remembered.
+      // Excluded from the REPORT, not from the memory feed: 700 is still the
+      // round's undecided closure, and the loop remembers it as a suspect so
+      // that a child of 700 that shows up after 700 has exited still finds
+      // its parent's pid remembered. The CLI itself, though under 700, is
+      // not: the CLI's own branch is never a host suspect.
       const table = rowsOf([
         victimRow(700, 0, 100, 6000, false),
         victimRow(cliPid, 700, 700, 6500, false),
@@ -2804,7 +2899,7 @@ describe("computeWindowsHostKillSet and the taskkill self-protection it drives",
       expect(computeWindowsHostKillSet(table, cliPid, remembered)).toEqual({
         kill: [],
         protectedAncestors: [],
-        undecided: [700, cliPid],
+        undecided: [700],
         unattributed: [],
       });
     });
@@ -2831,7 +2926,7 @@ describe("computeWindowsHostKillSet and the taskkill self-protection it drives",
       expect(computeWindowsHostKillSet(table, cliPid, unreadableHost)).toEqual({
         kill: [200],
         protectedAncestors: [],
-        undecided: [700, 888, cliPid],
+        undecided: [700, 888],
         unattributed: [888],
       });
 
@@ -2865,17 +2960,46 @@ describe("computeWindowsHostKillSet and the taskkill self-protection it drives",
         kill: [100, 888],
         // 700 is a PLACED ancestor of the CLI (a validated child of the
         // lingering host, which is a seed): reported as lineage to remember
-        // with a window, and therefore out of `undecided`. The CLI, placed
-        // only through 700 and an ancestor of nothing, stays undecided.
+        // with a window, and therefore out of `undecided`. The CLI is out of
+        // it as its own branch.
         protectedAncestors: [700],
-        undecided: [cliPid],
+        undecided: [],
         unattributed: [],
       });
 
-      // Ablation: subtract `victims` (the closure) instead of `remembered`
-      // when building `undecided` → `undecided: []`; drop
-      // `protectedAncestors` from `remembered` → 700 is listed in BOTH
-      // `protectedAncestors` and `undecided`.
+      // Ablation: drop `protectedAncestors` from `remembered` → 700 is
+      // listed in BOTH `protectedAncestors` and `undecided`.
+    });
+
+    it("the CLI's own branch is never a host suspect: its slot-matched scan under an undecided CLI is neither reported nor remembered", () => {
+      // The cold review's round-7 P2, as one round. The host (100) was
+      // killed with an UNREADABLE age, so the CLI (9999, claiming it) is
+      // undecided this round, and its own PowerShell scan 777 - a validated
+      // child, slot-MATCHED because its command line names the slot paths -
+      // lands in the suspect closure. Spared from the kill and not an
+      // ancestor, it would otherwise stay in `undecided` and be remembered
+      // as a HOST suspect; a stranger that later reuses pid 777 would then
+      // have its child refuse a stop.
+      const unreadableHost = victimMemory(
+        new Map<number, readonly WindowsKillVictim[]>([
+          [100, [{ created: 0, seenAliveAt: 5000 }]],
+        ]),
+      );
+      const table = rowsOf([
+        victimRow(100, 1, 1, 0, true),
+        victimRow(cliPid, 0, 100, 2500, false),
+        victimRow(777, cliPid, cliPid, 7500, true),
+      ]);
+      expect(computeWindowsHostKillSet(table, cliPid, unreadableHost)).toEqual({
+        kill: [100],
+        protectedAncestors: [],
+        undecided: [],
+        unattributed: [],
+      });
+
+      // Ablation: in `computeWindowsHostKillSet`, drop `!cliBranch.has(pid)`
+      // from the `undecided` filter → `undecided: [777, 9999]`, and the
+      // loop-level "round-7 P2" test refuses a stop over a stranger's child.
     });
 
     it("both non-empty: a killable seed and an unattributed row coexist in the same verdict", () => {

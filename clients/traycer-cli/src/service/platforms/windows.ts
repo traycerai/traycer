@@ -1284,7 +1284,11 @@ export function computeWindowsHostKillSet(
   // avoid.
   const victims = withDescendants(seeds, children);
   const suspects = withDescendants(undecided, children);
-  const spared = withDescendants(new Set([cliPid]), children);
+  // The CLI's own branch: itself and everything under it over validated edges.
+  // Positively identified, and never the host's - it is this process's scan
+  // and kill subprocesses.
+  const cliBranch = withDescendants(new Set([cliPid]), children);
+  const spared = new Set(cliBranch);
   // The CLI's non-slot ancestors are spared from the kill, and the ones the
   // scan has placed in the host's tree are ALSO reported as lineage to
   // remember. A shell the host spawned to run the CLI is a host descendant
@@ -1316,15 +1320,26 @@ export function computeWindowsHostKillSet(
   // and a spared row can sit in both closures at once; if it is not going to
   // be remembered with a window it has to stay undecided, or it is remembered
   // as nothing at all.
+  //
+  // The CLI's own branch is out of `undecided` altogether, and that is a
+  // different statement from the sparing above. The branch is positively
+  // identified - validated edges from this very process - and it is never the
+  // host's, but its scan subprocess is slot-MATCHED (its command line names the
+  // slot paths), so whenever the CLI itself is undecided (it claims a killed
+  // host of unreadable age, say) the scan lands in the suspect closure. Kept
+  // there it would be remembered as a HOST suspect, and a stranger that reuses
+  // the scan's pid after it exits would have its child refuse a later round.
+  // Only the uncertain non-slot ANCESTORS of the CLI stay undecided: sparing
+  // them answers nothing about their other children.
   const remembered = new Set([...kill, ...protectedAncestors]);
   const undecidedClosure = [...suspects]
-    .filter((pid) => !remembered.has(pid))
+    .filter((pid) => !remembered.has(pid) && !cliBranch.has(pid))
     .sort((left, right) => left - right);
   return {
     kill,
     protectedAncestors,
     undecided: undecidedClosure,
-    // The CLI's own branch is spared from the REPORT. A protected row that
+    // The uncertain ancestors are spared from the REPORT. A protected row that
     // happens to claim a victim pid is not an open question about the host - it
     // is a process we have already decided never to kill - and reporting it
     // would fail every stop issued from a Traycer-hosted terminal. It stays in
