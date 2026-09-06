@@ -28,6 +28,7 @@ import {
   commitAppliedDesktopTabsSnapshot,
   configureBrowserTabsPersistence,
   configureDesktopTabsAuthority,
+  configureSingleContextTabs,
   drainDesktopTabsPersistence,
   hydrateDesktopTabs,
   installDesktopTabsPersistence,
@@ -153,11 +154,15 @@ export function WindowsBridgeProvider(
   const hasHydrated =
     hydrationRequest === null || completedRequest === hydrationRequest;
 
+  // Read off the shell rather than inside the installer: the tab posture is a
+  // fact about the shell, and the effect has to re-run if it ever changes.
+  const hasAppTabs = runnerHost.hasAppTabs;
+
   useLayoutEffect(() => {
-    if (bridge === null) return installMissingDesktopWindowsBridge();
+    if (bridge === null) return installMissingDesktopWindowsBridge(hasAppTabs);
     if (hydrationRequest === null) return;
     return installDesktopWindowsBridge(bridge, hydrationRequest);
-  }, [bridge, hydrationRequest]);
+  }, [bridge, hydrationRequest, hasAppTabs]);
 
   const value = useMemo<WindowsBridgeContextValue>(
     () => ({ bridge, hasHydrated }),
@@ -170,9 +175,19 @@ export function WindowsBridgeProvider(
   );
 }
 
-function installMissingDesktopWindowsBridge(): () => void {
+function installMissingDesktopWindowsBridge(hasAppTabs: boolean): () => void {
   clearDesktopWindowsBridge();
-  configureBrowserTabsPersistence();
+  // Two different shells arrive here - both lack a desktop windows bridge,
+  // and they disagree about whether a tab layout exists to keep. The one that
+  // draws its own strip keeps the local writer; the one whose contexts come
+  // from its surroundings has no strip to write, and restoring one origin's
+  // arrangement into a freshly opened context would contradict the address
+  // that context was opened at.
+  if (hasAppTabs) {
+    configureBrowserTabsPersistence();
+  } else {
+    configureSingleContextTabs();
+  }
   // No desktop bridge here (web/browser path), so `installDesktopWindowsBridge`
   // below never runs and its `pagehide`/`beforeunload` flush never installs
   // either. File-edit drafts still need that flush independent of the bridge:

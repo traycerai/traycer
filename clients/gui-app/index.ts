@@ -12,6 +12,10 @@ export {
 } from "@/stores/replica-memory/retention-profile";
 export { setNativeKeyboardState } from "@/lib/native-keyboard";
 export {
+  setAnalyticsAppSurface,
+  type AnalyticsAppSurface,
+} from "@/lib/analytics";
+export {
   hostRpcRegistry,
   type HostRpcRegistry,
   type MessengerFactory,

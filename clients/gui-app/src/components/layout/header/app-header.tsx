@@ -15,6 +15,7 @@ import { cn } from "@/lib/utils";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
+import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import { useTitleBarDraggingSuppressed } from "@/stores/layout/title-bar-drag-store";
 
 // Frameless-desktop detection: Electron's preload bridge exposes
@@ -67,14 +68,62 @@ export function AppHeader(props: AppHeaderProps): ReactNode {
  * native title bar: tabs and controls stay interactive, while the empty spacer
  * before the right-side controls remains available for window dragging.
  */
+interface HeaderComposition {
+  /**
+   * The app's own navigation chrome: the Task-tab strip and the history
+   * controls beside it, plus the gutter the strip reserves.
+   *
+   * One flag for both because they answer one question. A shell whose
+   * surroundings already hand the user tabs hands them history with the same
+   * chrome, and on such a shell the router's history IS that history - the
+   * non-Electron branch routes through the browser's own. So an in-app strip
+   * and in-app arrows there are not merely redundant, they are the same two
+   * controls drawn twice.
+   */
+  readonly showAppNavChrome: boolean;
+  readonly navDisabled: boolean;
+  readonly showBell: boolean;
+}
+
+/**
+ * Which pieces of the header this render puts on screen.
+ *
+ * Two independent inputs. `variant` says what the app is currently able to
+ * show - host-loading renders above the router and above the notifications
+ * provider, so nav links would crash and the bell would throw looking for a
+ * stream context. `drawsTabLayer` says whether this SHELL draws the app's own
+ * navigation chrome at all, which is a fact about its surroundings and not
+ * about this render.
+ */
+function headerComposition(
+  variant: AppHeaderVariant,
+  drawsTabLayer: boolean,
+): HeaderComposition {
+  return {
+    showAppNavChrome: variant === "app" && drawsTabLayer,
+    navDisabled: variant === "host-loading",
+    showBell: variant !== "host-loading",
+  };
+}
+
+/**
+ * Whether the shell around this render draws the app's own tab layer.
+ *
+ * `null` is a host-less harness rather than a shell that declined, so it keeps
+ * the strip the app has always drawn.
+ */
+function useShellDrawsTabLayer(): boolean {
+  const runnerHost = useRunnerHostOrNull();
+  return runnerHost?.hasAppTabs ?? true;
+}
+
 function DesktopAppHeader(props: AppHeaderProps): ReactNode {
   const { variant } = props;
-  const showTabStrip = variant === "app";
-  // Host-loading renders above the router and above the
-  // notifications provider: nav links would crash, and the bell would
-  // throw when its hooks can't find the stream context.
-  const navDisabled = variant === "host-loading";
-  const showBell = variant !== "host-loading";
+  const drawsTabLayer = useShellDrawsTabLayer();
+  const { showAppNavChrome, navDisabled, showBell } = headerComposition(
+    variant,
+    drawsTabLayer,
+  );
   const framelessDesktop = isFramelessDesktop();
   const showGlobalResourceMonitor = useSettingsStore(
     (state) => state.showGlobalResourceMonitor,
@@ -105,7 +154,7 @@ function DesktopAppHeader(props: AppHeaderProps): ReactNode {
       )}
     >
       <WindowsMenuBar />
-      {showTabStrip ? <HistoryNavButtons /> : null}
+      {showAppNavChrome ? <HistoryNavButtons /> : null}
       {/* Left drag handle: breathing room beside the traffic lights +
           back/forward arrows so the window can be grabbed from the left end
           too. Desktop-only (the browser app has neither traffic lights nor
@@ -118,7 +167,7 @@ function DesktopAppHeader(props: AppHeaderProps): ReactNode {
           spacer, a direct header child, dragged). Electron registers
           `-webkit-app-region: drag` reliably only on top-level title-bar
           elements. */}
-      {showTabStrip && framelessDesktop ? (
+      {showAppNavChrome && framelessDesktop ? (
         <div
           aria-hidden
           className="relative z-10 hidden h-full shrink-0 basis-[clamp(2rem,6vw,6rem)] md:block"
@@ -131,13 +180,13 @@ function DesktopAppHeader(props: AppHeaderProps): ReactNode {
           draggable && "[-webkit-app-region:drag]",
         )}
       >
-        {showTabStrip ? <TabStrip /> : null}
+        {showAppNavChrome ? <TabStrip /> : null}
       </div>
       <div
         aria-hidden
         className={cn(
           "relative z-10 h-full",
-          showTabStrip
+          showAppNavChrome
             ? "hidden shrink-0 basis-[clamp(2rem,6vw,6rem)] md:block"
             : "min-w-0 flex-1",
         )}

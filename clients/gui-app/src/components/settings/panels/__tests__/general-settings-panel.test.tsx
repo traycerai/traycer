@@ -99,12 +99,33 @@ const windowsBridgeMock = vi.hoisted(
   (): { current: TestWindowsBridge | null } => ({ current: null }),
 );
 
+/**
+ * Desktop-shaped, because this suite asserts the DESKTOP General panel's
+ * section layout - and two of its rows are keyed on shell capabilities. The
+ * voice row wants a local host (dictation is host-executed) and the
+ * prevent-sleep row wants the duck-typed `power` bridge its controller drives;
+ * a remote-only shell legitimately renders neither.
+ */
+interface TestRunnerHost {
+  hostManagement: { uninstallTraycer: Mock } | null;
+  readonly hasLocalHost: boolean;
+  readonly power: { setSleepBlocked: () => Promise<void> };
+}
+
 interface TestFeatureSettingsBridge {
   readonly get: Mock<() => Promise<{ readonly agentRoles: boolean }>>;
   readonly setAgentRolesEnabled: Mock<
     (enabled: boolean) => Promise<{ readonly agentRoles: boolean }>
   >;
 }
+
+const runnerHostMock = vi.hoisted((): { current: TestRunnerHost } => ({
+  current: {
+    hostManagement: null,
+    hasLocalHost: true,
+    power: { setSleepBlocked: () => Promise.resolve() },
+  },
+}));
 
 const hostQueryMocks = vi.hoisted((): HostQueryMocks => ({
   queryResult: {
@@ -192,6 +213,15 @@ vi.mock("@/providers/windows-bridge-context", () => ({
   useWindowsBridge: () => windowsBridgeMock.current,
 }));
 
+// Both accessors, because replacing the module removes whichever one is left
+// out: rows in this panel read the throwing one for capabilities they cannot
+// render without, and the non-throwing one where absence is a legitimate
+// answer. Same host either way - the difference is only what each promises.
+vi.mock("@/providers/use-runner-host", () => ({
+  useRunnerHost: () => runnerHostMock.current,
+  useRunnerHostOrNull: () => runnerHostMock.current,
+}));
+
 vi.mock("@tanstack/react-router", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("@tanstack/react-router")>();
@@ -249,6 +279,11 @@ describe("GeneralSettingsPanel", () => {
     ];
     navigateMock.mockReset();
     windowsBridgeMock.current = null;
+    runnerHostMock.current = {
+      hostManagement: null,
+      hasLocalHost: true,
+      power: { setSleepBlocked: () => Promise.resolve() },
+    };
     clearAllPersistedStoresMock.mockClear();
     clearAllPersistedStoresMock.mockResolvedValue(undefined);
     useAuthStore.setState({

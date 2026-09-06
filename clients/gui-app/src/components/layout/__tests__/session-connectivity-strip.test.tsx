@@ -31,8 +31,8 @@ describe("<SessionConnectivityStrip />", () => {
 
   // The un-announced verdicts must render NOTHING: `settling` is inside the
   // announce window (most drops heal on the first redial), `dialing` has never
-  // been ready, and `unknown` is not the mobile app at all. A strip that
-  // painted any of them would cry wolf on every tunnel.
+  // been ready, and `unknown` is a shell that does not announce at all. A strip
+  // that painted any of them would cry wolf on every tunnel.
   for (const quiet of ["ready", "settling", "dialing", "unknown"] as const) {
     it(`renders nothing on the un-announced '${quiet}' verdict`, () => {
       mocks.connectivity = quiet;

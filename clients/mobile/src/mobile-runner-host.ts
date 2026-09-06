@@ -173,6 +173,15 @@ export interface MobileRunnerHostOptions {
    */
   readonly linkLoginDeepLinks: ILinkLoginDeepLinkSource | null;
   /**
+   * Whether the app draws its own top-level tab layer here. `true` on an
+   * installed app, where one webview holds every context; `false` on the dev
+   * web entry, where the browser's own tabs already separate them and a strip
+   * inside one of them would be a second row of tabs above the first. Decided
+   * by the entry point, like every other browser-vs-native difference in this
+   * shell.
+   */
+  readonly hasAppTabs: boolean;
+  /**
    * Native save route for everything the GUI exports (artifact markdown, the
    * usage image, a Mermaid PNG, a chat image), or `null` where the plugins it
    * needs have no implementation - the dev web entry, tests. Constructed by
@@ -218,6 +227,7 @@ export class MobileRunnerHost implements IRunnerHost {
   readonly authnBaseUrl: string;
   readonly relayBaseUrl: string;
   readonly hasLocalHost = false;
+  readonly hasAppTabs: boolean;
   readonly secureStorage: ISecureStorage = buildSecureStorage();
   readonly tokenStore: ITokenStore;
   readonly notifications: INotificationHost;
@@ -302,6 +312,7 @@ export class MobileRunnerHost implements IRunnerHost {
     this.linkCodeScanner = options.linkCodeScanner;
     this.deviceDescriber = options.deviceDescriber;
     this.linkLoginDeepLinks = options.linkLoginDeepLinks;
+    this.hasAppTabs = options.hasAppTabs;
     this.fileSave = options.fileSave;
     this.canCopyImages = options.canCopyImages;
     this.systemBack = options.systemBack;

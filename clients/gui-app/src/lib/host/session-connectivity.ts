@@ -2,7 +2,7 @@ import { useCallback, useMemo, useSyncExternalStore } from "react";
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import { useWsStreamClient } from "@/lib/host/stream-runtime-context";
-import { isMobileApp } from "@/lib/mobile-app";
+import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 
 /**
  * The SESSION plane of host connectivity: whether this device's own live
@@ -46,7 +46,7 @@ export type HostSessionConnectivity =
   | "interrupted-prolonged"
   /** Not ready and has never been ready - a first dial, not a drop. */
   | "dialing"
-  /** Nothing to say: no live client, or not the mobile app. */
+  /** Nothing to say: no live client, or a shell that does not announce. */
   | "unknown";
 
 /**
@@ -308,13 +308,30 @@ export function createSessionConnectivityStore(args: {
 /**
  * The active host's session connectivity, for app-wide chrome.
  *
- * Answers `"unknown"` outside the installed mobile app, which is a product
- * choice rather than a correctness one: the readiness read is the client's own,
- * so it is equally sound for a local transport.
+ * Announced on shells with NO LOCAL HOST, where every host this client can
+ * reach is another machine: the transport crosses a relay whose far end is not
+ * observable from here, and the runtime itself is one the platform suspends -
+ * a backgrounded app, a frozen or discarded tab - so a session that has
+ * silently stopped carrying frames is the ORDINARY failure rather than an
+ * exotic one, and the user is otherwise told nothing while it is reattaching.
+ *
+ * The gate used to key on the mobile PRODUCT flag, which coincided with that
+ * capability for exactly as long as the phone was the only shell without a
+ * local host. A browser tab has the phone's capabilities and the desktop's
+ * product flag, so the coincidence no longer holds and the capability is read
+ * directly. A shell that HAS a local host keeps the posture it has today: the
+ * readiness read is equally sound there, and widening it is a separate product
+ * decision this does not make.
+ *
+ * A shell that declares no runner host answers `"unknown"` rather than
+ * throwing. This drives one advisory line of app chrome, and a tree mounted
+ * without a host must not be lost to it.
  */
 export function useHostSessionConnectivity(): HostSessionConnectivity {
   const activeClient = useWsStreamClient();
-  const streamClient = isMobileApp() ? activeClient : null;
+  const runnerHost = useRunnerHostOrNull();
+  const announces = runnerHost !== null && !runnerHost.hasLocalHost;
+  const streamClient = announces ? activeClient : null;
   const store = useMemo(
     () =>
       createSessionConnectivityStore({

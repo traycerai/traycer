@@ -2,8 +2,8 @@ import { useEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useHostQuery, useHostMutation } from "@/hooks/host/use-host-query";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
-import { isMobileApp } from "@/lib/mobile-app";
 import { hostQueryKeys, speechMutationKeys } from "@/lib/query-keys";
+import { useRunnerHost } from "@/providers/use-runner-host";
 
 // `modelId: null` selects the host's default dictation model.
 const SPEECH_MODEL_PARAMS = { modelId: null };
@@ -55,17 +55,21 @@ export interface DictationAvailability {
 export function useDictationAvailability(
   enabled: boolean,
 ): DictationAvailability {
-  // The installed mobile app never offers dictation, whatever the setting says.
-  // Dictation is HOST-executed: `speech.dictate` streams live microphone audio
-  // to the app-wide host (see above) and that host's on-device engine
-  // transcribes it. On desktop the app-wide host is the same machine, which is
-  // what Settings' "audio never leaves your machine" promise rests on. The
-  // mobile app has no local host - every host it can reach is a remote machine
-  // - so offering the mic there would stream phone microphone audio off the
-  // device and break that promise. Hence the gate is on the BUILD
-  // (`isMobileApp()`) and not on viewport width: a phone-width desktop browser
-  // can still be talking to an honest localhost host, and keeps its mic.
-  const available = enabled && !isMobileApp();
+  // A shell with no local host never offers dictation, whatever the setting
+  // says. Dictation is HOST-executed: `speech.dictate` streams live microphone
+  // audio to the app-wide host (see above) and that host's on-device engine
+  // transcribes it. Where the shell bundles a local host, that host is this
+  // machine, which is what Settings' "audio never leaves your machine" promise
+  // rests on. Where it does not, every host it can reach is a remote machine,
+  // so offering the mic would stream the microphone off the device and break
+  // that promise.
+  //
+  // The gate is therefore the CAPABILITY (`hasLocalHost`) and not the product
+  // build or the viewport: the phone, the browser app and the in-browser dev
+  // loop all fail this promise for one reason, while a phone-width desktop
+  // window is still talking to an honest localhost host and keeps its mic.
+  const hasLocalHost = useRunnerHost().hasLocalHost;
+  const available = enabled && hasLocalHost;
   const client = useHostClient();
   const queryClient = useQueryClient();
 

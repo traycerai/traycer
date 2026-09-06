@@ -1,0 +1,9 @@
+/*
+ * Web renderer Tailwind entrypoint. The shared GUI is consumed as source, so
+ * Tailwind must scan both workspaces or its utility classes are absent from
+ * this bundle.
+ */
+@import "../../gui-app/src/index.css";
+
+@source "../../gui-app/src";
+@source ".";

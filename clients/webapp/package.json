@@ -1,0 +1,37 @@
+{
+  "name": "@traycer-clients/webapp",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Browser shell for the Traycer gui-app. Mounts the shared renderer in a plain tab under a path-scoped base, bridging browser APIs to the shared IRunnerHost contract.",
+  "type": "module",
+  "scripts": {
+    "compile": "tsgo -b",
+    "build": "TRAYCER_WEBAPP_ENV=production vite build --config vite.config.ts",
+    "build:staging": "TRAYCER_WEBAPP_ENV=staging vite build --config vite.config.ts",
+    "dev": "vite --config vite.config.ts",
+    "lint": "oxlint -c oxlint.config.ts --fix --deny-warnings .",
+    "format": "oxfmt .",
+    "format:check": "oxfmt --check .",
+    "test": "vitest run --config vitest.config.ts",
+    "test:watch": "vitest --config vitest.config.ts"
+  },
+  "dependencies": {
+    "react": "catalog:",
+    "react-dom": "catalog:"
+  },
+  "devDependencies": {
+    "@rolldown/plugin-babel": "catalog:",
+    "@tailwindcss/vite": "catalog:",
+    "@tanstack/router-plugin": "catalog:",
+    "@types/node": "catalog:",
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
+    "@typescript-eslint/eslint-plugin": "catalog:",
+    "@typescript-eslint/parser": "catalog:",
+    "@vitejs/plugin-react": "catalog:",
+    "eslint": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vitest": "catalog:"
+  }
+}

@@ -378,13 +378,15 @@ export interface IRunnerHost {
   onAuthCallback(handler: () => void): Disposable;
 
   /**
-   * OAuth 2.0 Device Authorization Grant (RFC 8628) controller, owned by the
-   * shell's privileged process. On desktop the authorize call AND the
-   * `/device/token` poll loop run in Electron main so they are CORS-safe (the
-   * authn endpoints don't allow the renderer origin) and survive renderer
-   * window close / sleep - the renderer only observes the terminal outcome.
-   * Shells with no device-flow
-   * backend (mobile, web, in-browser dev) install a no-op whose `start()`
+   * OAuth 2.0 Device Authorization Grant (RFC 8628) controller. Every shipping
+   * shell runs a real loop; what differs is WHERE. On desktop the authorize
+   * call AND the `/device/token` poll run in Electron main, so they are
+   * CORS-safe (the authn endpoints don't allow the renderer origin) and survive
+   * renderer window close / sleep - the renderer only observes the terminal
+   * outcome. The mobile and browser shells have no privileged process to
+   * escape into, so they run the same loop IN-PROCESS over HTTP, which works
+   * because their own origin is one authn allows; the cost is that the loop
+   * dies with the page. Only test doubles install a no-op whose `start()`
    * resolves `null`. Always present; callers never branch on `null`.
    */
   readonly deviceFlow: IDeviceFlowHost;
@@ -410,9 +412,12 @@ export interface IRunnerHost {
   /**
    * Typed token-storage capability shared across shells. Always present -
    * same convention as `tray` and `notifications`. Callers never branch on
-   * `null`. Desktop backs this with the OS keychain via the Electron
-   * preload bridge; mobile backs it with the native secure store; in-memory
-   * implementations (dev runner, tests) keep a single round-trippable entry.
+   * `null`. Desktop reaches a main-process `FileTokenStore` through the
+   * Electron preload bridge - one machine-local credentials file under a lock,
+   * NOT the OS keychain; mobile backs it with the native secure store; the
+   * browser shell backs it with origin-scoped storage under a Web Lock;
+   * in-memory implementations (dev runner, tests) keep a single
+   * round-trippable entry.
    */
   readonly tokenStore: ITokenStore;
 
@@ -432,6 +437,26 @@ export interface IRunnerHost {
    * stream are not exposed to a branch on capability.
    */
   readonly hasLocalHost: boolean;
+
+  /**
+   * Whether this shell draws the app's own top-level Task-tab layer.
+   *
+   * `true` where one window holds every context and nothing outside the app
+   * separates them: the desktop shell and the installed phone app each have a
+   * single surface to put everything in, so the app has to provide the tabs
+   * itself.
+   *
+   * `false` where the surroundings ALREADY multiplex contexts, and an in-app
+   * strip would be a second row of tabs above the first. A browser tab is a
+   * whole document - its own URL, its own history, its own place in a tab bar
+   * the person already knows - so the browser's tabs ARE this app's tabs, and
+   * drawing more inside one of them splits one idea across two controls.
+   *
+   * A fact about the surroundings, not a product identity: it says what the
+   * environment already provides, which is why it is declared here beside the
+   * other capabilities instead of derived from which build is running.
+   */
+  readonly hasAppTabs: boolean;
 
   /**
    * Whether an image written through the web clipboard API on this shell
@@ -487,10 +512,19 @@ export interface IRunnerHost {
    * the preload IPC bridge. Mobile raises it when the app returns to the
    * foreground (the DOM visibility edge and the native app-state edge,
    * deduplicated) - "the machine woke" means the OS un-suspended its WebView.
-   * Shells with no wake signal at all (web, tests)
-   * install a no-op whose handler never fires; consumers still pair this with
-   * the cross-platform `window` `online` event, so wake recovery degrades
-   * gracefully where no native signal exists.
+   * A browser tab raises it on its own hidden -> visible edge, which is the
+   * same fact a level out: a tab the browser froze or discarded lost its
+   * sockets and its timers while the network never moved. That edge carries
+   * no stamp of when the freeze began, so it is published with
+   * `backgroundedForMs: null` - a real wake whose duration is unmeasurable,
+   * which is exactly the case that selects the conservative recovery instead
+   * of a dwell-tuned one. It is publishable only because the wake path probes
+   * before it re-dials; a consumer that reconnected blindly on it would tear
+   * healthy streams down once per hide/show.
+   * Shells with no wake signal at all (tests) install a no-op whose handler
+   * never fires; consumers still pair this with the cross-platform `window`
+   * `online` event, so wake recovery degrades gracefully where no signal
+   * exists.
    */
   onSystemResumed(handler: (event: SystemResumeEvent) => void): Disposable;
 
