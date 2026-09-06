@@ -17,6 +17,7 @@ import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
+import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
 import {
   hostRpcRegistry,
   type HostRpcRegistry,
@@ -135,6 +136,9 @@ vi.mock("@/providers/use-runner-host", () => ({
  * frame is discarded until the stream reports `open` (provider lifecycle
  * `live`) - matching host behavior that drops pre-live readiness frames.
  */
+/** What a host serving the live `browser.sessions` line negotiates. */
+const LIVE_BROWSER_STREAM_VERSION: SchemaVersion = { major: 2, minor: 0 };
+
 class FakeStreamSession {
   readonly sentFrames: Array<Record<string, unknown>> = [];
   readonly droppedFrames: Array<Record<string, unknown>> = [];
@@ -189,6 +193,11 @@ class FakeStreamSession {
 
   close(): void {
     this.closed = true;
+  }
+
+  /** A peer on the live line; the wrapper reads this to pick lift or not. */
+  getNegotiatedSchemaVersion(): SchemaVersion | null {
+    return LIVE_BROWSER_STREAM_VERSION;
   }
 
   emitStatus(status: StreamConnectionStatus): void {
@@ -250,6 +259,26 @@ class FakeStreamClient {
       params,
     });
     return session;
+  }
+
+  // These three are one seam, and a double must answer all three: the browser
+  // wrappers open through `subscribeWithParamsProvider` (the open request is
+  // shaped for the negotiated major) and through `subscribeAtVersion` for the
+  // `independent` scope, which pins `@2`. A double answering only `subscribe`
+  // sends this suite down a path production never takes.
+  subscribeWithParamsProvider(
+    method: string,
+    paramsProvider: (onWireVersion: SchemaVersion | null) => unknown,
+  ): FakeStreamSession {
+    return this.subscribe(method, paramsProvider(LIVE_BROWSER_STREAM_VERSION));
+  }
+
+  subscribeAtVersion(
+    method: string,
+    _schemaVersion: SchemaVersion,
+    params: unknown,
+  ): FakeStreamSession {
+    return this.subscribe(method, params);
   }
 
   setEndpoint(endpoint: string): void {
