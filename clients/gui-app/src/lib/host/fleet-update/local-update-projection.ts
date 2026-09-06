@@ -47,8 +47,8 @@ import {
  * is not a vacuous comparison — it is the statement that a HEALTHY read is
  * fresh and only health demotes it. Measured against a ticking clock it becomes
  * a race against the round trip: one `host.status` slower than the fresh window
- * (2.5 × the poll delay, so ~3 s while an update is active) demotes a live
- * attempt to "last seen", DROPS the page-wide lifecycle gate, and disengages
+ * (2.5 × the poll delay, so 5 s while the accelerator holds the poll at 2 s)
+ * demotes a live attempt to "last seen", DROPS the page-wide lifecycle gate, and disengages
  * the accelerator that was keeping the poll fast — repeating every cycle, on a
  * host that is merely far away. A gate that blinks open mid-apply is the exact
  * failure the gate exists to prevent.

@@ -680,8 +680,8 @@ export function HostOverviewPanel(props: {
   // there is a HEALTH verdict — not a race against how long the round trip
   // took. This page briefly fed the tick to both, and the cost was not the
   // "one extra condition" the comment here used to claim: a single `host.status`
-  // slower than the fresh window (2.5 × the poll delay, ~3 s while an update is
-  // active — ordinary for a remote host over the relay) demoted the card to
+  // slower than the fresh window (2.5 × the poll delay, so 5 s while the
+  // accelerator holds the poll at 2 s — reachable over the relay) demoted the card to
   // "Last seen", dropped the page-wide gate, and disengaged the very
   // accelerator that was supposed to keep ahead of it, once per cycle.
   //
