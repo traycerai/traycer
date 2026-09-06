@@ -367,8 +367,18 @@ export function withCliInvocationRecord(
 ): ServiceController {
   return {
     ...controller,
-    install: (options) =>
-      runServiceRegistrationWithInvocationRecord({
+    install: async (options) => {
+      // The Linux self-protection guard runs BEFORE the record transaction
+      // here too, for the mirror image of the `uninstall` reason below: a
+      // throw from `register` is treated as an OS registration that may be
+      // half-done and marks the live record stale, and a refusal that touched
+      // nothing must not do that to an intact registration. The guard is on
+      // `install` at all because the Linux install's failure path is a stop:
+      // `installService` rolls a failed `enable --now` back with
+      // `disable --now` on the unit, which stops the live host - and the CLI
+      // with it, if the relocation silently left it inside the unit.
+      await assertNotInsideHostUnit();
+      return runServiceRegistrationWithInvocationRecord({
         environment: options.label.environment,
         hostHomeDir: hostHomeDir(options.label.environment),
         serviceLabel: options.label.id,
@@ -376,7 +386,8 @@ export function withCliInvocationRecord(
         register: () => controller.install(options),
         waitMs: CLI_INVOCATION_TXN_WAIT_MS,
         pollIntervalMs: CLI_INVOCATION_TXN_POLL_MS,
-      }),
+      });
+    },
     uninstall: async (options) => {
       // The Linux self-protection guard runs BEFORE the record transaction,
       // not only inside `withStopIntent` beneath it. Inside the transaction a
@@ -463,7 +474,17 @@ export function withStopIntent(
     // refused here instead of killing the process issuing the stop. `restart`
     // is included because it is a real actuator - `systemctl --user restart`
     // goes through it, not through `stop` - and leaving it out would leave one
-    // allowlisted command with no second line.
+    // allowlisted command with no second line. `install` carries the guard for
+    // the same reason and nothing else: it is not a stop and announces no
+    // intent, but the Linux `installService` rolls a failed `enable --now`
+    // back with `disable --now` on the unit, and that rollback stops the live
+    // host. Every route into it - `host service install`, and the
+    // registration inside `host install` / `ensure` / `apply` / `update` -
+    // reaches this decorator through the production factory.
+    install: async (options) => {
+      await assertNotInsideHostUnit();
+      return controller.install(options);
+    },
     stop: async (label, options) => {
       await assertNotInsideHostUnit();
       await announceStop(label.environment, "stop", options.force);

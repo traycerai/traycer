@@ -88,13 +88,17 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 // it and not around it.
 const recordMocks = vi.hoisted(() => ({
   uninstallTransactions: 0,
+  registrationTransactions: 0,
 }));
 
 vi.mock("../cli-invocation-record", () => ({
   CLI_INVOCATION_TXN_POLL_MS: 10,
   CLI_INVOCATION_TXN_WAIT_MS: 100,
-  runServiceRegistrationWithInvocationRecord: async () => {
-    throw new Error("not used in this test");
+  runServiceRegistrationWithInvocationRecord: async (options: {
+    readonly register: () => Promise<void>;
+  }) => {
+    recordMocks.registrationTransactions += 1;
+    await options.register();
   },
   runServiceRemovalWithInvocationRecord: async () => {
     throw new Error("not used in this test");
@@ -144,7 +148,14 @@ beforeEach(() => {
   mocks.persisted = true;
   mocks.cgroup = HOST_UNIT_CGROUP;
   recordMocks.uninstallTransactions = 0;
+  recordMocks.registrationTransactions = 0;
 });
+
+const installOptions = {
+  label,
+  cli: { command: "/opt/traycer/traycer", args: [] },
+  enableLinger: false,
+} as const;
 
 describe("withCliInvocationRecord(withStopIntent(...)) - the guard runs before the record transaction", () => {
   // The production composition puts the record decorator OUTSIDE the
@@ -198,6 +209,59 @@ describe("withCliInvocationRecord(withStopIntent(...)) - the guard runs before t
     expect(mocks.writes).toEqual(["uninstall"]);
     expect(ran).toBe(true);
   });
+
+  // The install actuator is the fifth guarded route, and the outer guard
+  // matters for it for the mirror-image reason: a throw from `register` inside
+  // `runServiceRegistrationWithInvocationRecord` marks the live record stale
+  // (the OS may describe a half-done registration), which a refusal that
+  // touched nothing must not do to an intact registration.
+  it("install: a guard refusal opens no registration transaction, announces nothing, and never reaches the controller", async () => {
+    let ran = false;
+    const controller = withCliInvocationRecord(
+      withStopIntent(
+        baseController({
+          install: async () => {
+            ran = true;
+          },
+        }),
+      ),
+    );
+
+    await expect(controller.install(installOptions)).rejects.toMatchObject({
+      code: "E_SERVICE_CONTROL_FAILED",
+    });
+
+    expect(recordMocks.registrationTransactions).toBe(0);
+    expect(mocks.writes).toEqual([]);
+    expect(ran).toBe(false);
+
+    // Ablation: remove the `await assertNotInsideHostUnit();` from
+    // `withCliInvocationRecord`'s install → this test reddens on
+    // `registrationTransactions` (1, not 0): the inner guard still refuses,
+    // but only after the transaction stand-in has been entered.
+  });
+
+  it("install: outside a host unit the registration transaction is entered exactly once, the controller runs through it, and no intent is written", async () => {
+    mocks.cgroup = SCOPE_CGROUP;
+    let ran = false;
+    const controller = withCliInvocationRecord(
+      withStopIntent(
+        baseController({
+          install: async () => {
+            ran = true;
+          },
+        }),
+      ),
+    );
+
+    await controller.install(installOptions);
+
+    expect(recordMocks.registrationTransactions).toBe(1);
+    // An install is not a stop: the guard is there for the Linux rollback's
+    // sake, and no stop intent is announced on the way in.
+    expect(mocks.writes).toEqual([]);
+    expect(ran).toBe(true);
+  });
 });
 
 describe("withStopIntent - Linux cgroup self-protection guard", () => {
@@ -218,6 +282,28 @@ describe("withStopIntent - Linux cgroup self-protection guard", () => {
     expect(mocks.writes).toEqual([]);
     expect(stopped).toBe(false);
     expect(mocks.clears).toEqual([]);
+  });
+
+  // Not a stop route, but its Linux failure path is one: `installService`
+  // rolls a failed `enable --now` back with `disable --now` on the unit, which
+  // stops the live host and, from inside the unit, the CLI issuing it.
+  it("install: refuses before running the controller, and writes no intent either way", async () => {
+    let ran = false;
+    const controller = withStopIntent(
+      baseController({
+        install: async () => {
+          ran = true;
+        },
+      }),
+    );
+
+    await expect(controller.install(installOptions)).rejects.toMatchObject({
+      code: "E_SERVICE_CONTROL_FAILED",
+    });
+
+    expect(mocks.writes).toEqual([]);
+    expect(mocks.clears).toEqual([]);
+    expect(ran).toBe(false);
   });
 
   it("stopForRestart: refuses before announcing, writing, or running the controller", async () => {
@@ -283,12 +369,13 @@ describe("withStopIntent - Linux cgroup self-protection guard", () => {
   // before this change - `stop-intent-decorator.test.ts` covers the ordering
   // and withdrawal semantics in full; this is just proof the guard is not
   // gating every call unconditionally regardless of cgroup content.
-  it("proceeds through all four routes when outside a host unit (run-*.scope)", async () => {
+  it("proceeds through all five routes when outside a host unit (run-*.scope)", async () => {
     mocks.cgroup = SCOPE_CGROUP;
     let stopRan = false;
     let stopForRestartRan = false;
     let uninstallRan = false;
     let restartRan = false;
+    let installRan = false;
 
     const stopController = withStopIntent(
       baseController({
@@ -327,10 +414,21 @@ describe("withStopIntent - Linux cgroup self-protection guard", () => {
     );
     await restartController.restart(label);
 
+    const installController = withStopIntent(
+      baseController({
+        install: async () => {
+          installRan = true;
+        },
+      }),
+    );
+    await installController.install(installOptions);
+
     expect(stopRan).toBe(true);
     expect(stopForRestartRan).toBe(true);
     expect(uninstallRan).toBe(true);
     expect(restartRan).toBe(true);
+    expect(installRan).toBe(true);
+    // Four intents for four stops; the install writes none.
     expect(mocks.writes).toEqual(["stop", "restart", "uninstall", "restart"]);
   });
 
@@ -338,11 +436,14 @@ describe("withStopIntent - Linux cgroup self-protection guard", () => {
   // and it has to refuse on every route for the same reason the host-unit case
   // does: EACCES leaves us just as likely to be inside the unit, and proceeding
   // writes intent and then kills the process issuing the stop.
-  it("refuses on all four routes when the cgroup cannot be read (EACCES)", async () => {
+  it("refuses on all five routes when the cgroup cannot be read (EACCES)", async () => {
     mocks.cgroup = { errno: "EACCES" };
     let ran = false;
     const controller = withStopIntent(
       baseController({
+        install: async () => {
+          ran = true;
+        },
         stop: async () => {
           ran = true;
         },
@@ -371,6 +472,9 @@ describe("withStopIntent - Linux cgroup self-protection guard", () => {
     await expect(controller.restart(label)).rejects.toMatchObject({
       code: "E_SERVICE_CONTROL_FAILED",
     });
+    await expect(controller.install(installOptions)).rejects.toMatchObject({
+      code: "E_SERVICE_CONTROL_FAILED",
+    });
 
     expect(mocks.writes).toEqual([]);
     expect(mocks.clears).toEqual([]);
@@ -383,11 +487,15 @@ describe("withStopIntent - Linux cgroup self-protection guard", () => {
   });
 
   // An ABSENT cgroup file is a different machine and a real answer: no cgroup
-  // exists that could kill us, so all four proceed.
-  it("proceeds on all four routes when /proc/self/cgroup is absent (ENOENT)", async () => {
+  // exists that could kill us, so all five proceed.
+  it("proceeds on all five routes when /proc/self/cgroup is absent (ENOENT)", async () => {
     mocks.cgroup = { errno: "ENOENT" };
+    let installRan = false;
     const controller = withStopIntent(
       baseController({
+        install: async () => {
+          installRan = true;
+        },
         stop: async () => undefined,
         stopForRestart: async () => ({ forcedRecycle: false }),
         uninstall: async () => undefined,
@@ -399,18 +507,23 @@ describe("withStopIntent - Linux cgroup self-protection guard", () => {
     await controller.stopForRestart(label, { force: false });
     await controller.uninstall({ label });
     await controller.restart(label);
+    await controller.install(installOptions);
 
     expect(mocks.writes).toEqual(["stop", "restart", "uninstall", "restart"]);
+    expect(installRan).toBe(true);
   });
 
-  // Ablation (run once per method, one at a time - four separate ablations):
+  // Ablation (run once per method, one at a time - five separate ablations):
   // in `service/index.ts`'s `withStopIntent`, delete the
   // `await assertNotInsideHostUnit();` line from `stop` → its refusal test
   // above fails (the write/controller-call assertions flip: writes becomes
   // ["stop"] and `stopped` becomes true instead of staying at their refused
-  // values). Same recipe for `stopForRestart`, `uninstall`, and `restart` -
-  // deleting any one of the four guard calls turns exactly that method's
-  // refusal test red while leaving the other three green, which is what
+  // values). Same recipe for `stopForRestart`, `uninstall`, `restart`, and
+  // `install` (whose `ran` flips to true; it writes nothing either way) -
+  // deleting any one of the five guard calls turns exactly that method's
+  // refusal test red (plus the combined EACCES test, which exercises every
+  // route) while leaving the other four refusal tests green, which is what
   // proves the guard is wired into each route independently rather than
-  // shared through some common choke point that would fail all four at once.
+  // shared through some common choke point that would fail all five at once.
+  // Run and confirmed for `install`: 2 failed, 10 passed.
 });

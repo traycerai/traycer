@@ -62,8 +62,9 @@ import { isPackagedRun } from "../store/well-known-cli";
  * SAFE BECAUSE IT FAILS CLOSED. A predicate that wrongly says "no stop" does
  * not remove the protection, it removes the FIRST line of it: the command runs
  * in place, and `assertNotInsideHostUnit` - which is unconditional, on all four
- * stop routes - refuses the stop before any intent is written. The cost of
- * being wrong here is a refused command, not a killed updater.
+ * stop routes and on the install actuator, whose Linux rollback is a stop -
+ * refuses before any intent is written. The cost of being wrong here is a
+ * refused command, not a killed updater.
  */
 export type HostStopReachable = (options: Record<string, unknown>) => boolean;
 
@@ -114,7 +115,9 @@ export const HOST_STOPPING_COMMANDS: ReadonlyMap<string, HostStopReachable> =
     // unit when `enable --now` fails, `service/platforms/linux.ts`), but that
     // rollback is reachable from any failure of the enable, so it relocates
     // unconditionally: a CLI that dies with the unit it is rolling back never
-    // removes the manifest or reports the install's own error.
+    // removes the manifest or reports the install's own error. Its second
+    // line is the guard on the install actuator in `service/index.ts`, ahead
+    // of the registration transaction.
     ["host service install", ALWAYS_STOPS],
     ["host install", (options) => options.serviceRegister !== false],
     ["host ensure", (options) => options.serviceRegister !== false],
