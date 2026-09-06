@@ -53,7 +53,12 @@ import {
   recordNegotiatedHostMethods,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
-import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
+import type {
+  HostControllerStatus,
+  IHostManagement,
+  IRunnerHost,
+  LocalAttemptFacts,
+} from "@traycer-clients/shared/platform/runner-host";
 import type { HostStatusUpdateOperation } from "@traycer/protocol/host/status/index";
 import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -63,9 +68,11 @@ import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { HostSettingsPanel } from "@/components/settings/panels/host-settings-panel";
 import {
   buildOverviewHostFixture,
+  buildOverviewManagement,
   openHostOverviewMenu,
   type OverviewHostFixture,
 } from "@/components/settings/panels/__tests__/host-overview-test-support";
+import { LOCAL_LIVENESS_PROOF_MS } from "@/lib/host/fleet-update/fleet-update-view";
 
 /**
  * G1 — the selected-Overview lifecycle-gate matrix. This is the independent
@@ -96,6 +103,29 @@ const ALL_OVERVIEW_METHODS = [
   "diagnostics.logs.tail",
 ] as const;
 
+/**
+ * A local base `HostControllerStatus`, built here rather than imported: the
+ * support module's own `NOT_INSTALLED_CONTROLLER_STATUS` is private to it (not
+ * exported), by design — each suite owns the shape it needs rather than
+ * sharing a mutable fixture that would let one suite's assumptions leak into
+ * another's.
+ */
+const LOCAL_CONTROLLER_STATUS_BASE: HostControllerStatus = {
+  download: null,
+  mutation: null,
+  installedVersion: "1.4.1",
+  latestVersion: "2.1.0",
+  stagedVersion: null,
+  installedRuntimeVersion: null,
+  runningRuntimeVersion: null,
+  updateReady: false,
+  activation: "activated",
+  reachable: false,
+  localAttempt: null,
+  removedByUser: false,
+  checkedAt: "2026-08-27T00:00:00.000Z",
+};
+
 function scopeFrom(
   hostId: string,
   fixture: OverviewHostFixture,
@@ -112,7 +142,7 @@ function scopeFrom(
   };
 }
 
-function makeRunnerHost(): IRunnerHost {
+function makeRunnerHost(hostManagement?: IHostManagement): IRunnerHost {
   return new MockRunnerHost({
     signInUrl: "https://example.invalid/signin",
     authnBaseUrl: "https://example.invalid",
@@ -121,10 +151,15 @@ function makeRunnerHost(): IRunnerHost {
     workspaceFolderPickerPaths: undefined,
     hasLocalHost: undefined,
     traycerCli: undefined,
+    // Every existing test in this suite passes no management, which leaves
+    // the record leg inert (`useRunnerHostOrNull()?.hostManagement ?? null`
+    // resolves to `null`) — that behaviour must not change for them. Only the
+    // record-leg pins below pass one.
+    hostManagement,
   });
 }
 
-function renderPanel(): void {
+function renderPanel(hostManagement?: IHostManagement): void {
   render(
     <QueryClientProvider
       client={
@@ -133,7 +168,7 @@ function renderPanel(): void {
         })
       }
     >
-      <RunnerHostProvider runnerHost={makeRunnerHost()}>
+      <RunnerHostProvider runnerHost={makeRunnerHost(hostManagement)}>
         <HostSettingsPanel />
       </RunnerHostProvider>
     </QueryClientProvider>,
@@ -185,6 +220,23 @@ function attemptOperation(
     busySessionCount: null,
     busyBreakdown: null,
     error: null,
+    ...overrides,
+  };
+}
+
+function localAttempt(
+  overrides: Partial<LocalAttemptFacts>,
+): LocalAttemptFacts {
+  return {
+    attemptId: "attempt-restarting-1",
+    generation: 1,
+    sequence: 1,
+    targetVersion: "2.1.0",
+    phase: "restarting",
+    continuation: null,
+    updatedAt: "2026-08-27T00:00:00.000Z",
+    liveness: "unknown",
+    livenessObservedAtMs: null,
     ...overrides,
   };
 }
@@ -564,5 +616,174 @@ describe("HostOverviewPanel — lifecycle gate matrix (G1)", () => {
     await waitFor(() => {
       expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull();
     });
+  });
+});
+
+/**
+ * The RECORD leg (Ticket 06 D13), through the mounted Overview: the same
+ * `useLocalAttemptRecordObservation` + `projectLocalUpdate` pair the pure
+ * `fleet-update-view.test.ts` suite exercises directly, wired through a real
+ * `hostManagement.getHostControllerStatus()` this time. `makeRunnerHost` above
+ * grew an optional `hostManagement` parameter for exactly this section; every
+ * test above it still passes none and keeps the leg inert.
+ *
+ * `host.status` fails from the very first call in every case here — the wire
+ * leg never produces a fresh observation, so `preferLiveOverRecord` always
+ * falls through to the record, which is the host-down window this arm exists
+ * for.
+ */
+describe("HostOverviewPanel — probed local liveness on the record leg (Ticket 06 D13)", () => {
+  it("a live, fresh restarting record renders the operation card as restarting, with a progress bar, and holds the gate", async () => {
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      overrideHandlers: {
+        "host.status": () => {
+          throw new Error("host unreachable — no live route in this fixture");
+        },
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    const management = buildOverviewManagement({
+      getHostControllerStatus: vi.fn(() =>
+        Promise.resolve({
+          ...LOCAL_CONTROLLER_STATUS_BASE,
+          localAttempt: localAttempt({
+            liveness: "live",
+            livenessObservedAtMs: Date.now(),
+          }),
+        }),
+      ),
+    });
+    renderPanel(management);
+
+    // Falsifies: `recordObservationView` reaching its qualified-stale arm
+    // instead of the live `restarting` one for a fresh, valid `live` proof —
+    // or the panel still calling `projectFleetUpdateView` directly with no
+    // `localAttempt` leg at all (the invariant §19 of the ticket names).
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("host-overview-operation-phase").textContent,
+      ).toContain("Restarting host");
+    });
+    expect(screen.getByRole("progressbar")).toBeTruthy();
+    // The gate holds exactly as it would for a live WIRE `restarting` (G1's
+    // own matrix, case (a)) — same predicate, this time fed by the record.
+    await waitFor(async () => {
+      expect(await editNameDisabled()).toBe(true);
+    });
+  });
+
+  it("the same record with liveness:'interrupted' shows last-seen copy and releases the gate — controls stay available", async () => {
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      overrideHandlers: {
+        "host.status": () => {
+          throw new Error("host unreachable — no live route in this fixture");
+        },
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    const management = buildOverviewManagement({
+      getHostControllerStatus: vi.fn(() =>
+        Promise.resolve({
+          ...LOCAL_CONTROLLER_STATUS_BASE,
+          localAttempt: localAttempt({
+            liveness: "interrupted",
+            livenessObservedAtMs: Date.now(),
+          }),
+        }),
+      ),
+    });
+    renderPanel(management);
+
+    // Falsifies: `localLivenessProofHolds` checking only the stamp's age and
+    // dropping the `liveness !== "live"` guard — an `interrupted` verdict, no
+    // matter how fresh its stamp, must never reach the live `restarting` arm.
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("host-overview-operation-phase").textContent,
+      ).toContain("Last seen:");
+    });
+    await waitFor(async () => {
+      expect(await editNameDisabled()).toBe(false);
+    });
+    expect(await restartMenuAriaDisabled()).not.toBe("true");
+  });
+
+  it("INTEGRATION: the lifecycle gate releases on the renderer TICK, host.status failing throughout and the scope itself unreachable", async () => {
+    // The pin the ticket calls out by name as needing the MOUNTED Overview
+    // rather than the pure projector: `fleet-update-view.test.ts` supplies
+    // `nowMs` directly and can never observe whether the panel is feeding it
+    // from a real ticking clock. Falsifies: wiring the panel's `nowMs` from
+    // `statusQuery.dataUpdatedAt` (or any other clock that stops advancing
+    // once `host.status` starts failing) instead of the 1s `useNowMs` tick —
+    // with either of those, this pin's second `waitFor` never resolves and
+    // the test times out still reading "Restarting host".
+    //
+    // The scope is UNREACHABLE throughout, which the suite's own (c2) pin
+    // proves withdraws `host-overview-edit-name` / the overflow menu entirely
+    // rather than merely disabling them — so `editNameDisabled()` cannot be
+    // this pin's observable. The card itself stays reachable independent of
+    // `usable` (also (c2)), and its phase sentence is exactly
+    // `holdsLifecycleGate`'s input run through `describeUpdateOperation`, so
+    // the sentence flipping from the live copy to "Last seen: …" is a
+    // gate-only observable and the one this pin asserts on.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const fixture = buildOverviewHostFixture({
+        hostId: "host-a",
+        isLocalMachine: true,
+        overrideHandlers: {
+          "host.status": () => {
+            throw new Error("host unreachable — no live route in this fixture");
+          },
+        },
+      });
+      recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+      hostBindingMock.current = { hostClient: fixture.client };
+      scopeOverrides.current = {
+        ...scopeFrom("host-a", fixture),
+        status: "unreachable",
+      };
+      const livenessObservedAtMs = Date.now();
+      const management = buildOverviewManagement({
+        getHostControllerStatus: vi.fn(() =>
+          Promise.resolve({
+            ...LOCAL_CONTROLLER_STATUS_BASE,
+            localAttempt: localAttempt({
+              liveness: "live",
+              livenessObservedAtMs,
+            }),
+          }),
+        ),
+      });
+      renderPanel(management);
+
+      await waitFor(() => {
+        expect(
+          screen.getByTestId("host-overview-operation-phase").textContent,
+        ).toContain("Restarting host");
+      });
+
+      // No new publication lands (`getHostControllerStatus` answers once;
+      // `staleTime: Infinity` keeps the query event-sourced, not re-read) and
+      // `host.status` keeps failing throughout. Advancing the clock past the
+      // 5s proof window is the only thing that changes.
+      await vi.advanceTimersByTimeAsync(LOCAL_LIVENESS_PROOF_MS + 1_100);
+
+      await waitFor(() => {
+        expect(
+          screen.getByTestId("host-overview-operation-phase").textContent,
+        ).toContain("Last seen:");
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

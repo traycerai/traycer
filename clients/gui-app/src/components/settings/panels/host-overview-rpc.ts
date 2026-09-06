@@ -8,6 +8,7 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 import {
   HostTransportFailureError,
   type HostRpcError,
+  type ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
   HostDoctorResponse,
@@ -24,7 +25,10 @@ import { keepPreviousDataForSameHost } from "@/hooks/host/keep-previous-data-sam
 import { hostMaintenanceMutationKeys, hostQueryKeys } from "@/lib/query-keys";
 import { getChatSessionRegistry } from "@/lib/registries/chat-session-registry";
 import { getTerminalSessionRegistry } from "@/lib/registries/terminal-session-registry";
-import { useHostServiceWriteLatchStore } from "@/components/settings/panels/host-service-write-latch-store";
+import {
+  isLiveOverviewIncarnation,
+  useHostServiceWriteLatchStore,
+} from "@/components/settings/panels/host-service-write-latch-store";
 import type { HostRpcRegistry } from "@/lib/host";
 
 /**
@@ -599,6 +603,12 @@ export function useHostServiceDeregister(
  */
 export function useHostUpdateInstall(
   client: HostClient<HostRpcRegistry> | null,
+  /**
+   * The dispatching `HostOverviewPanel` mount's token (D8). Captured in
+   * `onMutate` and compared at settle, so ownership is written only while the
+   * mount that asked is still on screen — see {@link settleUpdateDispatch}.
+   */
+  incarnation: string,
   // The @1.1 response type, which is what this client's registry negotiates
   // and therefore what callers actually receive. Annotating the @1.0 type here
   // used to compile only by accident: `attemptId` is an EXTRA property, and an
@@ -611,13 +621,13 @@ export function useHostUpdateInstall(
   HostUpdateInstallResponseV11,
   HostRpcError,
   { readonly version: string; readonly force: boolean },
-  HostOverviewMutationContext
+  HostUpdateDispatchContext
 > {
   const queryClient = useQueryClient();
   return useHostMutation<
     HostRpcRegistry,
     "host.update.install",
-    HostOverviewMutationContext,
+    HostUpdateDispatchContext,
     { readonly version: string; readonly force: boolean }
   >({
     client,
@@ -631,15 +641,7 @@ export function useHostUpdateInstall(
       // Same dispatch-arm / settle-release inversion as the service writes:
       // `accepted` settles before `updateProgress` exists, and that gap must
       // stay locked even if the settle is lost to a host-keyed unmount.
-      onMutate: () => {
-        const hostId = client?.getActiveHostId() ?? null;
-        if (hostId !== null) {
-          useHostServiceWriteLatchStore
-            .getState()
-            .armUpdateInstallAccepted(hostId);
-        }
-        return { hostId };
-      },
+      onMutate: () => armUpdateDispatchMutation(client, incarnation),
       // HOOK-level, not in the caller's per-`mutate` callbacks.
       //
       // The swap is detached and outlives this response, so
@@ -654,11 +656,10 @@ export function useHostUpdateInstall(
       // Uses the ARM-TIME host id, so the refresh lands on the host that is
       // actually updating rather than whichever one the picker has reached.
       onSuccess: (response, _variables, context) => {
-        if (context.hostId === null) return;
-        // AN UNRESOLVED DISPATCH IS ITS OWN ANSWER, and it is handled before
-        // the refusal test below rather than falling into it.
+        // AN UNRESOLVED DISPATCH IS ITS OWN ANSWER, and it is classified apart
+        // from the refusals below rather than folded into them.
         //
-        // Both branches release the latch, so this arm could be left to the
+        // Both release the latch, so this arm could be left to the
         // `!== accepted && !== already-updating` test and would behave
         // correctly today. It is written out anyway because that test's comment
         // says "no swap was dispatched" — which is the one thing
@@ -675,32 +676,18 @@ export function useHostUpdateInstall(
         // it to this call — and observation through `updateOperation` is the
         // negotiated route to that fact, so the read that would reveal it has
         // to be re-armed rather than skipped.
-        if (response.outcome === "dispatch-indeterminate") {
-          useHostServiceWriteLatchStore
-            .getState()
-            .releaseUpdateInstallAccepted(context.hostId);
-          invalidateUpdateReads(queryClient, context.hostId);
-          return;
-        }
-        if (
-          response.outcome !== "accepted" &&
-          response.outcome !== "already-updating"
-        ) {
-          // A refusal: no swap was dispatched, nothing to guard.
-          useHostServiceWriteLatchStore
-            .getState()
-            .releaseUpdateInstallAccepted(context.hostId);
-          return;
-        }
+        //
         // `already-updating` keeps the latch exactly as `accepted` does:
         // SOMEONE'S swap is running — another window's, a direct CLI
         // caller's — inside the same blind gap before the CLI writes
         // `updateProgress`, which is the precise window the latch covers.
-        // Releasing here would re-enable restart and the service verbs
-        // against that active swap. The refresh below is how the progress
-        // row appears once the CLI reports it, and the panel's release
-        // effect (or the bounded timer) unwinds the latch from there.
-        invalidateUpdateReads(queryClient, context.hostId);
+        // Releasing there would re-enable restart and the service verbs
+        // against that active swap.
+        settleUpdateDispatch(
+          queryClient,
+          context,
+          classifyInstallOutcome(response),
+        );
       },
       onError: (_error, _variables, context) => {
         if (context === undefined || context.hostId === null) return;
@@ -710,6 +697,259 @@ export function useHostUpdateInstall(
       },
     },
   });
+}
+
+/**
+ * `host.update.activate {attemptId, force}` — restart into bytes an attempt
+ * has already placed.
+ *
+ * A distinct METHOD rather than an intent field on `host.update.install`, and
+ * that is the whole authorization story: a host too old to know it lacks it, so
+ * the transport refuses the dispatch outright and the GUI keeps its legacy
+ * routes instead of projecting this request onto a shape that would silently
+ * become a plain install. Nothing here consults the release catalog — an
+ * activation places no bytes, so there is no version to verify and no CLI floor
+ * to clear.
+ */
+export function useHostUpdateActivate(
+  client: HostClient<HostRpcRegistry> | null,
+  incarnation: string,
+): UseMutationResult<
+  BoundDispatchResponse,
+  HostRpcError,
+  BoundDispatchVariables,
+  HostUpdateDispatchContext
+> {
+  const queryClient = useQueryClient();
+  return useHostMutation<
+    HostRpcRegistry,
+    "host.update.activate",
+    HostUpdateDispatchContext,
+    BoundDispatchVariables
+  >({
+    client,
+    method: "host.update.activate",
+    mapVariables: (variables) => ({
+      attemptId: variables.attemptId,
+      force: variables.force,
+    }),
+    options: boundDispatchOptions(client, queryClient, incarnation),
+  });
+}
+
+/**
+ * `host.update.continue {attemptId, force}` — carry on with whatever this
+ * attempt was already authorized to do.
+ *
+ * Also catalog-free, for a different reason than activate's: the bytes this
+ * resumes were authorized when the attempt was created, and a downgrade park
+ * re-downloads the SAME version it was created for. Re-deriving a target from
+ * the catalog here would be a second opinion about a decision the record
+ * already owns — and one a stale UI could get wrong.
+ */
+export function useHostUpdateContinue(
+  client: HostClient<HostRpcRegistry> | null,
+  incarnation: string,
+): UseMutationResult<
+  BoundDispatchResponse,
+  HostRpcError,
+  BoundDispatchVariables,
+  HostUpdateDispatchContext
+> {
+  const queryClient = useQueryClient();
+  return useHostMutation<
+    HostRpcRegistry,
+    "host.update.continue",
+    HostUpdateDispatchContext,
+    BoundDispatchVariables
+  >({
+    client,
+    method: "host.update.continue",
+    mapVariables: (variables) => ({
+      attemptId: variables.attemptId,
+      force: variables.force,
+    }),
+    options: boundDispatchOptions(client, queryClient, incarnation),
+  });
+}
+
+/**
+ * Both bound methods answer the same union, so the two mutations share one set
+ * of settle callbacks — and, deliberately, ONE mutation key with the install.
+ *
+ * The shared key is what makes "an update dispatch is in flight for this host"
+ * a single question whatever the intent behind it. Three keys would let the
+ * page grey its controls for an install and leave them live for an activation,
+ * which is the same dispatch race with a different verb on it.
+ */
+function boundDispatchOptions(
+  client: HostClient<HostRpcRegistry> | null,
+  queryClient: QueryClient,
+  incarnation: string,
+): {
+  readonly mutationKey: readonly string[];
+  readonly onMutate: () => HostUpdateDispatchContext;
+  readonly onSuccess: (
+    response: BoundDispatchResponse,
+    variables: unknown,
+    context: HostUpdateDispatchContext,
+  ) => void;
+  readonly onError: (
+    error: unknown,
+    variables: unknown,
+    context: HostUpdateDispatchContext | undefined,
+  ) => void;
+} {
+  return {
+    mutationKey: hostMaintenanceMutationKeys.updateInstall(),
+    onMutate: () => armUpdateDispatchMutation(client, incarnation),
+    onSuccess: (response, _variables, context) => {
+      settleUpdateDispatch(
+        queryClient,
+        context,
+        classifyBoundDispatchOutcome(response),
+      );
+    },
+    onError: (_error, _variables, context) => {
+      if (context === undefined || context.hostId === null) return;
+      useHostServiceWriteLatchStore
+        .getState()
+        .releaseUpdateInstallAccepted(context.hostId);
+    },
+  };
+}
+
+/** The request both bound methods take, as the page's callers express it. */
+export interface BoundDispatchVariables {
+  readonly attemptId: string;
+  readonly force: boolean;
+}
+
+/**
+ * Named through the registry rather than imported from the protocol's schema
+ * module: both bound methods have exactly one minor, so what this client
+ * negotiates IS the 1.0 shape and there is no version to state explicitly (the
+ * install's annotation exists precisely because it has three).
+ */
+export type BoundDispatchResponse = ResponseOfMethod<
+  HostRpcRegistry,
+  "host.update.activate"
+>;
+
+/**
+ * What every update dispatch's settle needs, whatever its method.
+ *
+ * `hostId` is captured at ARM time for the reason this module's header states.
+ * `incarnation` is captured for a narrower one: the settle can outlive the
+ * mount, on purpose, and one of the things it does must not.
+ */
+export interface HostUpdateDispatchContext {
+  readonly hostId: string | null;
+  readonly incarnation: string;
+}
+
+function armUpdateDispatchMutation(
+  client: HostClient<HostRpcRegistry> | null,
+  incarnation: string,
+): HostUpdateDispatchContext {
+  const hostId = client?.getActiveHostId() ?? null;
+  if (hostId !== null) {
+    useHostServiceWriteLatchStore.getState().armUpdateInstallAccepted(hostId);
+  }
+  return { hostId, incarnation };
+}
+
+/**
+ * The three things a dispatch's answer decides, reduced to one vocabulary so
+ * the install and the two bound methods cannot drift on them.
+ *
+ * `attemptId` rides on `accepted` alone. `already-updating` names an attempt
+ * too — someone else's, by definition — and claiming ownership of it would put
+ * this page's activation dialog in front of a person for a dispatch they did
+ * not make.
+ */
+type UpdateDispatchSettlement =
+  | { readonly kind: "accepted"; readonly attemptId: string | null }
+  | { readonly kind: "already-updating" }
+  | { readonly kind: "indeterminate" }
+  | { readonly kind: "refused" };
+
+function classifyInstallOutcome(
+  response: HostUpdateInstallResponseV11,
+): UpdateDispatchSettlement {
+  if (response.outcome === "accepted") {
+    return { kind: "accepted", attemptId: response.attemptId };
+  }
+  if (response.outcome === "already-updating")
+    return { kind: "already-updating" };
+  if (response.outcome === "dispatch-indeterminate") {
+    return { kind: "indeterminate" };
+  }
+  return { kind: "refused" };
+}
+
+function classifyBoundDispatchOutcome(
+  response: BoundDispatchResponse,
+): UpdateDispatchSettlement {
+  if (response.outcome === "accepted") {
+    // Non-nullable on this schema, unlike the install's: these methods are new
+    // at 1.0, so there is no peer that predates attempt ids to accommodate.
+    return { kind: "accepted", attemptId: response.attemptId };
+  }
+  if (response.outcome === "already-updating")
+    return { kind: "already-updating" };
+  if (response.outcome === "dispatch-indeterminate") {
+    return { kind: "indeterminate" };
+  }
+  // `cli-failed`: the host tried and the CLI it spawned refused. Nothing was
+  // dispatched, so this is a refusal — the reason reaches the user through the
+  // caller's own settle, which is where the page's copy lives.
+  return { kind: "refused" };
+}
+
+/**
+ * The latch, the invalidations and the ownership write, in the one order they
+ * are allowed to happen in.
+ *
+ * ⚠ THE OWNERSHIP WRITE IS INCARNATION-GATED AND NOTHING ELSE IS. This settle
+ * deliberately runs after the panel unmounts — that is how a swap the user
+ * navigated away from still settles its latch and still invalidates the reads
+ * that would otherwise show a stale version — and both of those must keep
+ * happening for a retired mount. The slot must not: its only consumer is a
+ * one-shot dialog that a mount opens, so writing it for a mount that is gone
+ * would leave a stale grant for the NEXT mount to act on, opening a modal
+ * nobody asked for.
+ */
+function settleUpdateDispatch(
+  queryClient: QueryClient,
+  context: HostUpdateDispatchContext,
+  settlement: UpdateDispatchSettlement,
+): void {
+  const hostId = context.hostId;
+  if (hostId === null) return;
+  const latchStore = useHostServiceWriteLatchStore.getState();
+  if (settlement.kind === "refused") {
+    // No swap was dispatched, nothing to guard — and nothing to refresh
+    // either: a refusal changes neither the coarse marker nor the records.
+    latchStore.releaseUpdateInstallAccepted(hostId);
+    return;
+  }
+  if (settlement.kind === "indeterminate") {
+    latchStore.releaseUpdateInstallAccepted(hostId);
+    invalidateUpdateReads(queryClient, hostId);
+    return;
+  }
+  if (
+    settlement.kind === "accepted" &&
+    settlement.attemptId !== null &&
+    isLiveOverviewIncarnation(context.incarnation)
+  ) {
+    latchStore.armUpdateDispatch(hostId, {
+      attemptId: settlement.attemptId,
+      incarnation: context.incarnation,
+    });
+  }
+  invalidateUpdateReads(queryClient, hostId);
 }
 
 /**

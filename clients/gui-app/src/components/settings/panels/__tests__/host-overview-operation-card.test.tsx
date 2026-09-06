@@ -1171,6 +1171,7 @@ describe("HostOverviewOperationCard — installation query keyed by running vers
     vi.useFakeTimers({ shouldAdvanceTime: true });
     let statusCalls = 0;
     let installationCalls = 0;
+    const installationReadsByStatusCall: number[] = [];
     const secondRead = deferredInstallationResponse();
     const fixture = buildOverviewHostFixture({
       hostId: "host-a",
@@ -1187,6 +1188,13 @@ describe("HostOverviewOperationCard — installation query keyed by running vers
         },
         "host.getInstallationInfo": () => {
           installationCalls += 1;
+          // WHICH running version this read was issued under, which is the
+          // property the pin is actually about. A raw call COUNT is not: the
+          // old key has its own 10 s poll, and whether that fires before or
+          // after the status response re-keys the query is timer-interleaving,
+          // not behaviour — an extra read on a key the observer is about to
+          // abandon changes nothing on screen.
+          installationReadsByStatusCall.push(statusCalls);
           if (installationCalls === 1) {
             return managedInstallation(installRecord("1.3.0-rc.2", null), null);
           }
@@ -1210,7 +1218,16 @@ describe("HostOverviewOperationCard — installation query keyed by running vers
     // installation query re-keys onto a fresh, still-pending read.
     await vi.advanceTimersByTimeAsync(11_000);
     await screen.findByText(/1\.3\.0-rc\.3/);
-    await waitFor(() => expect(installationCalls).toBe(2));
+    await waitFor(() => {
+      // A read issued UNDER the new running version — the re-key actually
+      // happened — rather than "exactly two reads have happened", which the
+      // old key's own poll can make false without changing anything the pin
+      // is about.
+      expect(
+        installationReadsByStatusCall.filter((call) => call > 1),
+      ).not.toHaveLength(0);
+    });
+    expect(installationCalls).toBeGreaterThanOrEqual(2);
 
     // While that fresh read is pending, there is nothing to compare against -
     // "not observed", never a debt derived from the OLD rc.2 record.
@@ -1405,6 +1422,7 @@ describe("HostOverviewOperationCard — installation query keyed by running vers
     vi.useFakeTimers({ shouldAdvanceTime: true });
     let statusCalls = 0;
     let installationCalls = 0;
+    const installationReadsByStatusCall: number[] = [];
     const secondRead = deferredInstallationResponse();
     const fixture = buildOverviewHostFixture({
       hostId: "host-a",
@@ -1421,6 +1439,9 @@ describe("HostOverviewOperationCard — installation query keyed by running vers
         },
         "host.getInstallationInfo": () => {
           installationCalls += 1;
+          // See the sibling pin above: WHICH running version the read was
+          // issued under is the property, not how many reads there were.
+          installationReadsByStatusCall.push(statusCalls);
           if (installationCalls === 1) {
             return managedInstallation(
               installRecord("1.3.0-rc.2", "1.3.0-rc.2"),
@@ -1454,7 +1475,11 @@ describe("HostOverviewOperationCard — installation query keyed by running vers
     // install query re-keys onto a fresh, still-pending read. The dialog
     // stays open through it.
     await vi.advanceTimersByTimeAsync(11_000);
-    await waitFor(() => expect(installationCalls).toBe(2));
+    await waitFor(() => {
+      expect(
+        installationReadsByStatusCall.filter((call) => call > 1),
+      ).not.toHaveLength(0);
+    });
     // Give any (incorrect) close a render cycle to have taken effect
     // before asserting the dialog is still there.
     await waitFor(() => {

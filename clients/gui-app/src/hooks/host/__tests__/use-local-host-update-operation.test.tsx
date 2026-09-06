@@ -38,7 +38,7 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
 }));
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
@@ -51,6 +51,10 @@ import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { buildOverviewHostFixture } from "@/components/settings/panels/__tests__/host-overview-test-support";
 import { createFakeRunnerHost } from "../../../../__tests__/create-fake-runner-host";
 import { useLocalHostUpdateOperation } from "../use-local-host-update-operation";
+import {
+  LOCAL_LIVENESS_PROOF_MS,
+  holdsLifecycleGate,
+} from "@/lib/host/fleet-update/fleet-update-view";
 
 const LOCAL_HOST_ID = "local-1";
 
@@ -281,5 +285,107 @@ describe("useLocalHostUpdateOperation — F1 host-down window (Ticket 07 §5.2.7
     expect(result.current.view.kind).toBe("unknown");
     expect(result.current.view.lastKnownKind).toBeNull();
     expect(result.current.view.attemptId).toBeNull();
+  });
+});
+
+/**
+ * The 1s renderer-tick clock (Ticket 06 D13), exercised on the REAL hook. The
+ * suite above fakes only `Date` (`toFake: ["Date"]`) because it never needs to
+ * drive a timer; this pin needs the 1s `useNowMs` interval to actually fire on
+ * a deadline it controls, so it fakes every timer instead
+ * (`shouldAdvanceTime: true` so `waitFor`'s own real-timer-shaped polling
+ * still makes progress against the fake clock).
+ *
+ * Falsifies: feeding `useLocalHostUpdateOperation`'s `nowMs` from
+ * `statusQuery.dataUpdatedAt` again instead of `useNowMs` — the pure
+ * `fleet-update-view.test.ts` suite cannot see this regression because it
+ * supplies `nowMs` directly; only a real mounted hook, with a real 1s tick
+ * racing a real (frozen) `dataUpdatedAt` that never advances because
+ * `host.status` never resolves, can catch it.
+ */
+describe("useLocalHostUpdateOperation — the 1s renderer tick ages the live-restarting proof out (Ticket 06 D13)", () => {
+  // Mirrors the hook's own private `LOCAL_RECORD_TICK_MS`, which is not
+  // exported — the tick interval is an implementation detail the hook is free
+  // to change; this test only needs a duration long enough for at least one
+  // tick to land.
+  const LOCAL_RECORD_TICK_MS = 1_000;
+
+  it("flips restarting -> unknown on the first 1s tick after the 5s deadline, and a backward clock step does not revive it", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    // The WALL clock is driven separately from the timer clock, and that
+    // separation is load-bearing for the backward-step half below.
+    //
+    // Sinon (and so vitest) runs both off one counter: `vi.setSystemTime` moves
+    // `Date.now()` AND the scheduler's notion of the present, so a backward
+    // step also pushes every pending interval's `callAt` out of reach and the
+    // 1s tick never fires again. The assertion would then pass because nothing
+    // re-rendered — vacuously, and identically whether or not
+    // `localLivenessProofHolds` still has its lower bound.
+    //
+    // A real backward clock step behaves the opposite way: browser timers are
+    // scheduled monotonically, so the interval keeps firing on time and hands
+    // the projector a `Date.now()` that has moved BACKWARD past the stamp. That
+    // is the state the lower bound exists for, so the test has to reproduce it
+    // — spying on `Date.now` over the fake timers is what decouples the two.
+    let wallClockMs = CONTROLLER_READ_AT_MS;
+    vi.spyOn(Date, "now").mockImplementation(() => wallClockMs);
+    try {
+      bindUnreachableLocalHost();
+      const livenessObservedAtMs = CONTROLLER_READ_AT_MS;
+      const management = notImplementedManagement({
+        ...CONTROLLER_STATUS_BASE,
+        localAttempt: localAttempt({
+          phase: "restarting",
+          liveness: "live",
+          livenessObservedAtMs,
+        }),
+      });
+
+      const { result } = renderOperation(management);
+
+      // First projection: the proof is fresh, so the live `restarting` kind
+      // holds the lifecycle gate — exactly as a live wire `restarting` would.
+      await waitFor(() => {
+        expect(result.current.view.kind).toBe("restarting");
+      });
+      expect(holdsLifecycleGate(result.current.view)).toBe(true);
+
+      // No new publication lands — `getHostControllerStatus` is called once
+      // and the query's `staleTime: Infinity` means it is event-sourced, not
+      // re-read — and `host.status` keeps failing throughout. Advancing the
+      // clock past the 5s deadline is the ONLY thing that changes.
+      wallClockMs =
+        livenessObservedAtMs + LOCAL_LIVENESS_PROOF_MS + LOCAL_RECORD_TICK_MS;
+      await vi.advanceTimersByTimeAsync(LOCAL_RECORD_TICK_MS * 2);
+
+      await waitFor(() => {
+        expect(result.current.view.kind).toBe("unknown");
+      });
+      expect(holdsLifecycleGate(result.current.view)).toBe(false);
+      // The retained phase, not a bare unknown — the record is still on disk
+      // even though its liveness proof has expired.
+      expect(result.current.view.lastKnownKind).toBe("reconnecting");
+
+      // A wall-clock step BACKWARD, well past both the deadline that just
+      // fired and `LOCAL_LIVENESS_CLOCK_SLACK_MS`, must not make the stamp look
+      // fresh again. Falsifies: dropping the lower bound from
+      // `localLivenessProofHolds` — with only `ageMs <= LOCAL_LIVENESS_PROOF_MS`
+      // left a negative age reads as "even fresher than new", and this revives
+      // to `restarting` with the gate re-held.
+      // `act`, not a bare advance: the tick fires either way, but without a
+      // commit boundary `result.current` is still the PREVIOUS render and the
+      // negative assertion below passes vacuously — it would read "unknown"
+      // whether or not the lower bound survived. The forward step above gets
+      // this for free from `waitFor`.
+      await act(async () => {
+        wallClockMs = livenessObservedAtMs - 20_000;
+        await vi.advanceTimersByTimeAsync(LOCAL_RECORD_TICK_MS * 2);
+      });
+
+      expect(result.current.view.kind).not.toBe("restarting");
+      expect(holdsLifecycleGate(result.current.view)).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -202,6 +202,15 @@ export function operationProgressPercent(view: FleetUpdateView): number | null {
  * reading that `projectProgress` already refuses to create for parked
  * attempts. The measured numbers still render, because a static "80 MB of
  * 200 MB" under an explicitly past-tense sentence claims nothing.
+ *
+ * A `restarting` kind projected from the DURABLE RECORD (D13 — an active
+ * record whose holder a probe found alive, within the proof's five-second
+ * life) draws the bar for the same reason the wire's `restarting` does, and
+ * that is consistent rather than an exception: it is not a retained phase.
+ * `kind` is the live phase and `qualified` is false, because a live holder is
+ * an observation, not a memory. The instant the proof lapses the projection
+ * returns to `unknown` + `lastKnownKind`, and the bar goes with it — through
+ * the rule above, with no arm of its own here.
  */
 export function showsProgressBar(view: FleetUpdateView): boolean {
   if (view.progress.kind === "none") return false;

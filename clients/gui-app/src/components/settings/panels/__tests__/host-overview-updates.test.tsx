@@ -523,6 +523,7 @@ function renderUpdatesHook(
         checkDegrade: null,
         installDegrade: null,
         busy: false,
+        incarnation: "test-incarnation",
       }),
     {
       wrapper: (props: { readonly children: ReactNode }) => (
@@ -2598,6 +2599,7 @@ describe("Overview updates — stagedEntryOfferable", () => {
           checkDegrade: null,
           installDegrade: null,
           busy: false,
+          incarnation: "test-incarnation",
         }),
       {
         wrapper: (props: { readonly children: ReactNode }) => (
@@ -2676,6 +2678,7 @@ describe("Overview updates — stagedEntryOfferable", () => {
             checkDegrade: null,
             installDegrade: null,
             busy: false,
+            incarnation: "test-incarnation",
           }),
         {
           wrapper: (props: { readonly children: ReactNode }) => (

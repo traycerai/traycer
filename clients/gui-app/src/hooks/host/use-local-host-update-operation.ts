@@ -3,18 +3,24 @@ import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id
 import { useReactiveLocalHostId } from "@/hooks/host/use-reactive-local-host-id";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { useActiveUpdatePollAccelerator } from "@/hooks/host/use-active-update-poll-accelerator";
-import { useRunnerHostControllerStatusQuery } from "@/hooks/runner/use-runner-host-controller-status-query";
+import { useLocalAttemptRecordObservation } from "@/hooks/host/use-local-attempt-record-observation";
+import { useNowMs } from "@/components/settings/panels/host-settings-panel-hooks";
 import { observationFromCanonicalRead } from "@/lib/host/fleet-update/canonical-status-observation";
-import { recordObservationFromLocalAttempt } from "@/lib/host/fleet-update/record-attempt-observation";
+import { projectLocalUpdate } from "@/lib/host/fleet-update/local-update-projection";
 import {
-  preferLiveOverRecord,
-  projectFleetUpdateView,
   UNKNOWN_FLEET_UPDATE_VIEW,
   type FleetUpdateView,
 } from "@/lib/host/fleet-update/fleet-update-view";
 import type { HostRpcRegistry } from "@/lib/host";
 
 const EMPTY_PARAMS = {} as const;
+
+/**
+ * How often this hook re-reads the wall clock — one second, and it is a
+ * DEADLINE clock. See `projectLocalUpdate` for why the record leg's proof
+ * cannot be aged against any query's `dataUpdatedAt`.
+ */
+const LOCAL_RECORD_TICK_MS = 1_000;
 
 export interface LocalHostUpdateOperation {
   /** `null` before this client knows which host is local. */
@@ -68,9 +74,6 @@ export function useLocalHostUpdateOperation(): LocalHostUpdateOperation {
   const hostId = useReactiveLocalHostId();
   const client = useHostClientForHostId(hostId);
   const readiness = useReactiveHostReadiness(client);
-  // The durable-record leg's source. Event-sourced and already shared by the
-  // host gate, update banner and Settings, so this adds no poll.
-  const controllerStatusQuery = useRunnerHostControllerStatusQuery();
   const statusQuery = useHostQuery<HostRpcRegistry, "host.status">({
     cacheKeyIdentity: undefined,
     client,
@@ -118,60 +121,46 @@ export function useLocalHostUpdateOperation(): LocalHostUpdateOperation {
           legacyFacts: null,
         });
 
-  // `dataUpdatedAt`, not a clock — and on this leg that is the CORRECT input,
-  // not a workaround for `react-hooks/purity`.
-  //
-  // Which mechanism demotes a reading is the thing to keep straight. On the
-  // BORROWED leg the deadline does it: the observation is the cached value
-  // itself, nothing else knows how old it is, so the projection has to compare
-  // it against a real clock. On a CANONICAL leg the query knows its own health
-  // — errored, paused, aged past `staleTime` with no fetch replacing it — and
-  // `observationFromCanonicalRead` has already folded that verdict into the
-  // deadline, stamping an unhealthy read as expired outright. So `nowMs` needs
-  // only to be a finite instant at or after the observation for that verdict to
-  // apply, and `dataUpdatedAt` is precisely that.
-  //
-  // It is also the reactive one. A render-time clock advances only when
-  // something else re-renders this component, so a query that stops polling
-  // would keep projecting whatever it last computed; the health signals change
-  // the query's own state and therefore notify. Reaching for a clock here would
-  // add impurity and subtract reliability.
   // Ticket 07 §5.2.7 — the host-down window.
   //
   // Desktop re-reads `update-attempt.json` and publishes the facts on the
   // controller status for exactly this moment: the host is unreachable, so the
   // wire observation above has gone stale, but a durable attempt is still on
-  // this machine's disk and the banner can still say what it was doing.
+  // this machine's disk and the banner can still say what it was doing. The
+  // read (and the `observedAtMs` stamp that must come from the query that
+  // performed it) lives in `useLocalAttemptRecordObservation`, shared with the
+  // selected-host Overview.
+  const recordObservation = useLocalAttemptRecordObservation(hostId);
+  // ⚠ A TICKING CLOCK, replacing `statusQuery.dataUpdatedAt`.
   //
-  // Precedence is NOT decided here. `preferLiveOverRecord` already encodes it
-  // (a FRESH wire read wins; the record fills the window only once that read is
-  // stale or absent) and it is deliberately freshness-based rather than
-  // recency-based — the record is re-read every tick, so "newest wins" would
-  // let it outrank a healthy live read and permanently suppress real progress.
-  // Re-deriving that rule here would be a second copy of it.
-  // Both inputs come from the CONTROLLER query, and that pairing is the point:
-  // `observedAtMs` describes when THIS record was read, so it must be stamped
-  // by the query that read it. Borrowing `statusQuery.dataUpdatedAt` here — the
-  // live `host.status` leg — is wrong in exactly the situation the arm exists
-  // for: in the host-down window that query has never succeeded, so its
-  // `dataUpdatedAt` is `0`, and a record freshly read from local disk would be
-  // reported as observed at the Unix epoch. After an older successful live
-  // read it is subtler and no better: an unrelated read's time.
-  const recordObservation =
-    hostId === null
-      ? null
-      : recordObservationFromLocalAttempt({
-          hostId,
-          localAttempt: controllerStatusQuery.data?.localAttempt ?? null,
-          observedAtMs: controllerStatusQuery.dataUpdatedAt,
-        });
-  const view = projectFleetUpdateView({
-    observation: preferLiveOverRecord(
-      observation,
-      recordObservation,
-      statusQuery.dataUpdatedAt,
-    ),
-    nowMs: statusQuery.dataUpdatedAt,
+  // The comment this replaces argued FOR the frozen clock, and its argument
+  // was sound for the WIRE leg alone: `observationFromCanonicalRead` folds the
+  // query's own health into the deadline and stamps an unhealthy read as
+  // already expired, so `nowMs` only had to be a finite instant at or after the
+  // observation for that verdict to apply — and it was the reactive choice,
+  // since the health signals move the query's state and notify while a
+  // render-time clock does not.
+  //
+  // The record leg breaks the premise, because its evidence expires on its own
+  // and nothing re-renders when it does. Desktop's probe verdict is proof for
+  // five seconds (`LOCAL_LIVENESS_PROOF_MS`), and both candidate timestamps
+  // stop advancing exactly when that matters: `statusQuery.dataUpdatedAt`
+  // because the host is down (which is the whole situation), and the controller
+  // query's own because Desktop's broadcaster keeps its idle loop running
+  // through a failing `publish()` — the loop continues, nothing new lands in a
+  // query with `staleTime: Infinity`, and the payload saying `liveness: "live"`
+  // sits there indefinitely. A deadline measured against either would never
+  // arrive, so the proof would hold the lifecycle gate for as long as this hook
+  // stayed mounted.
+  //
+  // Precedence is still not decided here — `projectLocalUpdate` owns it, and
+  // owns it jointly with the Overview so the two surfaces cannot disagree about
+  // one host in the one window this arm exists for.
+  const nowMs = useNowMs(LOCAL_RECORD_TICK_MS);
+  const { view } = projectLocalUpdate({
+    wire: observation,
+    record: recordObservation,
+    nowMs,
     connected: readiness.isReady,
   });
 
