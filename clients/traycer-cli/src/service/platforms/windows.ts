@@ -380,10 +380,17 @@ async function stopService(
 // (worse) its CWD stays open inside the install dir, so the next install-swap
 // rename fails with EBUSY. Kill the processes a slot-scoped scan verifies by
 // exe path/command line - that covers the recorded pid.json host too, when it
-// is genuinely still the host. The raw recorded pid is used only when the scan
-// itself is unavailable: a host that died without cleanup leaves pid.json
-// behind, and Windows may have recycled that pid for an unrelated process an
-// unverified kill would take down.
+// is genuinely still the host.
+//
+// There is no unverified fallback. An unreadable scan used to degrade to
+// `taskkill` on the pid.json pid, which is both weaker than it looks (Windows
+// may have recycled that pid for an unrelated process) and, worse, silent: the
+// caller went on to delete the pid metadata and report the host stopped while
+// descendants the fallback never enumerated kept running and kept the install
+// dir open. Every exit below therefore either PROVES the slot is empty with a
+// scan or throws. Refusing before anything is killed is the safer half of that
+// trade: a stop that cannot be verified leaves the tree whole for the next
+// attempt instead of half torn down.
 //
 // NEVER `/T`. This CLI is routinely a CHILD of the host it is stopping - a
 // maintenance RPC, the reconciler, or a person's command in a Traycer-hosted
@@ -400,42 +407,68 @@ async function stopService(
 // `Get-CimInstance` materializes the table is in no round's kill set; killing
 // its parent orphans it, and the caller goes on to delete the pid metadata
 // while it still holds the install dir open. So this rescans and kills again
-// until a round comes back empty. Each round kills exactly what THAT round's
+// until a scan comes back empty. Each round kills exactly what THAT round's
 // scan returned - the scan verifies by exe path/command line, so a pid Windows
 // recycled between rounds is simply not in it.
+//
+// `WINDOWS_KILL_CONVERGENCE_ROUNDS` counts KILL passes, so the loop scans one
+// more time than it kills: the last scan is always a confirming one, and an
+// empty scan is the ONLY way out that reports success.
+//
+// Known and deliberately not mechanised: `taskkill /F` is `TerminateProcess`,
+// which is asynchronous - the confirming scan can briefly still list a pid the
+// previous round killed. The bound absorbs one such round (that pid is gone by
+// the next scan and the loop converges normally). If the live Windows run shows
+// this flaking, the lever is a short settle before the re-scan, NOT a wider
+// bound: more rounds would only spend more time re-killing the same pids.
 async function killHostProcessTree(
   label: ServiceLabel,
   run: ProcessRunner,
 ): Promise<void> {
-  for (let round = 1; round <= WINDOWS_KILL_CONVERGENCE_ROUNDS; round += 1) {
+  for (let round = 0; round <= WINDOWS_KILL_CONVERGENCE_ROUNDS; round += 1) {
     const scannedPids = await findSlotProcessIds(label, run, process.pid);
     if (scannedPids === null) {
-      // A LATER round without a scan is not the round-1 fallback below: the
-      // earlier rounds already killed the recorded pid, so pid.json is not a
-      // second opinion - it is a stale one, pointing at a pid Windows is now
-      // free to have recycled. And a round we cannot enumerate is a round we
-      // cannot call converged, so say nothing rather than claim it.
-      if (round > 1) return;
-      const pidMetadata = await readHostPidMetadata(label.environment);
-      // The no-scan fallback: kill the recorded pid, still without `/T`, and
-      // stop there - rescanning cannot help when the scan is the thing that is
-      // unavailable. We cannot enumerate that pid's tree here, and a tree we
-      // cannot enumerate is a tree we cannot prove this process is outside of.
-      // Children that keep handles inside the install dir fail the swap
-      // loudly, naming themselves through the detail scan, which is the better
-      // failure of the two.
-      const fallbackPids = pidMetadata === null ? [] : [pidMetadata.pid];
-      await killProcessIds(uniqueProcessIds(fallbackPids), run);
       return;
+      // Before the first kill this refuses to start; after one it refuses to
+      // claim the tree came down. Both are the same statement - we cannot see
+      // the slot, so we cannot say what is in it - and neither may be softened
+      // into a success the caller would act on by purging pid.json.
+      throw cliError({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message:
+          `could not enumerate the ${label.id} host process tree: the PowerShell process scan failed or timed out. ` +
+          "Refusing to report the host stopped. Retry, or end the Traycer host processes from Task Manager.",
+        details: { label: label.id, killRoundsCompleted: round },
+        exitCode: 1,
+      });
     }
     // The kill boundary, and the only place a pid has to be POSITIVE: the scan
     // and its algebra work over an unfiltered table that includes pid 0, and
     // `isKillableProcessId` is what keeps 0 - and our own pid - out of an argv.
     const pids = uniqueProcessIds(scannedPids);
-    // Converged: a scan taken after the previous round's kills found nothing
-    // left in this slot. (Round 1 reaches here whenever there was never
-    // anything to kill, which is the ordinary stop of an already-dead host.)
+    // Converged, and the only success: a scan taken AFTER the previous round's
+    // kills found nothing left in this slot. Round 0 reaches here whenever
+    // there was never anything to kill, which is the ordinary stop of a host
+    // that already exited - one scan, no kills.
     if (pids.length === 0) return;
+    // Out of kill passes with the slot still occupied. Falling through here
+    // would report exactly what a converged scan reports, which is the one
+    // thing this function must never do: name the survivors instead, so the
+    // caller's error says which processes to deal with.
+    if (round === WINDOWS_KILL_CONVERGENCE_ROUNDS) {
+      throw cliError({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message:
+          `${label.id} host processes are still running after ${WINDOWS_KILL_CONVERGENCE_ROUNDS} kill rounds (pids ${pids.join(", ")}). ` +
+          "Retry, or end them from Task Manager.",
+        details: {
+          label: label.id,
+          survivingPids: pids,
+          killRounds: WINDOWS_KILL_CONVERGENCE_ROUNDS,
+        },
+        exitCode: 1,
+      });
+    }
     await killProcessIds(pids, run);
   }
 }
@@ -1042,6 +1075,12 @@ function readNonEmptyString(value: unknown): string | null {
 // swap; anything the rename now trips over either outlived it (an orphan
 // re-matching the scan) or spawned since, and both answer to another pass.
 // Pass `null` to use the real process runner.
+//
+// This one is allowed to fail: `swapLockRetryHook` logs a refusal and lets the
+// rename retry anyway (only a lost mutation authority propagates), so a stop
+// that cannot be verified HERE degrades to the swap's own EBUSY reporting -
+// which names the lock holders - rather than aborting a swap that may yet
+// succeed.
 export async function killLingeringSlotProcesses(
   label: ServiceLabel,
   runner: ProcessRunner | null,

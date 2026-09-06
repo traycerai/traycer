@@ -448,38 +448,6 @@ describe("Windows service stale host cleanup", () => {
     ).toEqual(["402"]);
   });
 
-  it("falls back to the recorded pid when the slot scan cannot run", async () => {
-    mocks.readHostPidMetadata.mockResolvedValue({
-      pid: 401,
-      hostId: "host-test",
-      version: "1.0.0",
-      websocketUrl: "ws://127.0.0.1:54321/rpc",
-      startedAt: "2026-01-01T00:00:00.000Z",
-    });
-    const calls: RecordedCall[] = [];
-    const runner: ProcessRunner = async (command, args) => {
-      calls.push({ command, args });
-      if (command === "powershell.exe") throw new Error("spawn failed");
-      return success("");
-    };
-    const controller = createWindowsController(runner);
-
-    await controller.stop(serviceLabelFor("staging"), { force: false });
-
-    expect(
-      calls
-        .filter((call) => call.command === "taskkill")
-        .map((call) => call.args[2]),
-    ).toEqual(["401"]);
-    expect(calls.every((call) => !call.args.includes("/T"))).toBe(true);
-
-    // Ablation (for the "NEVER /T" pins in this describe block): in
-    // `killHostProcessTree`, put `"/T"` back into the `taskkill` argv (i.e.
-    // `run("taskkill", ["/T", "/F", "/PID", String(pid)], ...)`) → every
-    // `.toEqual([["/F", ...`) assertion above fails, and every
-    // `.every((call) => !call.args.includes("/T"))` check flips to false.
-  });
-
   it("purges pid metadata on uninstall like it does on stop", async () => {
     const runner: ProcessRunner = async (command) =>
       command === "powershell.exe" ? success("[]") : success("");
@@ -498,6 +466,29 @@ describe("Windows service stale host cleanup", () => {
     await controller.stop(serviceLabelFor("staging"), { force: false });
 
     expect(mocks.removeHostPidMetadata).toHaveBeenCalledWith("staging");
+  });
+
+  // The other side of the same rule as the test above: a stop that could not
+  // be VERIFIED must not purge pid.json either. Codex's finding in full was
+  // "`stopService` then deletes pid.json and `host stop` says success while
+  // descendants live" - a refused stop reporting the host gone would be that
+  // exact bug wearing a different trigger.
+  //
+  // Ablation (§ablation table, row 2): the same `scannedPids === null`
+  // `throw` → `return` mutation reddens this test too - the promise
+  // resolves, so `removeHostPidMetadata` gets called after all.
+  it("does NOT purge pid metadata when the stop refuses - a refusal must not read as a clean exit", async () => {
+    const runner: ProcessRunner = async (command) => {
+      if (command === "powershell.exe") throw new Error("spawn failed");
+      return success("");
+    };
+    const controller = createWindowsController(runner);
+
+    await expect(
+      controller.stop(serviceLabelFor("staging"), { force: false }),
+    ).rejects.toMatchObject({ code: "E_SERVICE_CONTROL_FAILED" });
+
+    expect(mocks.removeHostPidMetadata).not.toHaveBeenCalled();
   });
 });
 
@@ -594,12 +585,13 @@ describe("killHostProcessTree convergence loop", () => {
     // spawn - survives the stop exactly as the Codex finding describes.
   });
 
-  it("the bound holds: a host that never stops spawning is scanned and killed exactly WINDOWS_KILL_CONVERGENCE_ROUNDS times, not forever", async () => {
+  it("the bound holds AND the stop fails naming the survivors: a host that never stops spawning is not killed forever", async () => {
     // Every round's scan hands back a BRAND NEW pid, so the loop never
     // converges on its own - the only thing that ends it is the round bound.
     // Bounded is the right call: a host spawning faster than we can scan is
-    // not converging, and grinding on it forever is worse than stopping and
-    // reporting the swap's own EBUSY detail scan naming the survivors.
+    // not converging, and grinding on it forever is worse than refusing and
+    // naming the survivors so an operator (or the swap's own EBUSY detail
+    // scan) can act on them.
     let scanCount = 0;
     const calls: RecordedCall[] = [];
     const runner: ProcessRunner = async (command, args) => {
@@ -615,11 +607,19 @@ describe("killHostProcessTree convergence loop", () => {
     };
     const controller = createWindowsController(runner);
 
-    await controller.stop(serviceLabelFor("staging"), { force: false });
+    // One more scan than kills: the confirming scan after the last kill
+    // round is the one that catches the still-occupied slot and refuses,
+    // rather than a scan that silently reports converged.
+    await expect(
+      controller.stop(serviceLabelFor("staging"), { force: false }),
+    ).rejects.toMatchObject({
+      code: "E_SERVICE_CONTROL_FAILED",
+      details: { survivingPids: [800 + WINDOWS_KILL_CONVERGENCE_ROUNDS] },
+    });
 
     expect(
       calls.filter((call) => call.command === "powershell.exe"),
-    ).toHaveLength(WINDOWS_KILL_CONVERGENCE_ROUNDS);
+    ).toHaveLength(WINDOWS_KILL_CONVERGENCE_ROUNDS + 1);
     const taskkillPids = calls
       .filter((call) => call.command === "taskkill")
       .map((call) => call.args[2]);
@@ -629,62 +629,51 @@ describe("killHostProcessTree convergence loop", () => {
       ),
     );
 
-    // Ablation (§C): removing the round bound (e.g. `for (;;)` instead of
-    // `for (let round = 1; round <= WINDOWS_KILL_CONVERGENCE_ROUNDS; ...)`)
-    // has no one-line inverse that stays safe to run in a test process - a
-    // fixture that never converges would hang the suite instead of failing
-    // it. Nothing here exercises that mutation; the finite scan count this
-    // test asserts is what an unbounded loop would violate.
+    // Ablation (§ablation table, row 1): in `killHostProcessTree`, change
+    // the bound refusal's `throw cliError(...)` to `return;` (restore the
+    // silent fallthrough) → this test fails: the call resolves instead of
+    // rejecting, and the still-running pid (800 + ROUNDS) is reported as a
+    // successful stop.
   });
 
-  it("round-1 fallback stays a one-round affair: an unavailable scan is not retried", async () => {
-    mocks.readHostPidMetadata.mockResolvedValue({
-      pid: 401,
-      hostId: "host-test",
-      version: "1.0.0",
-      websocketUrl: "ws://127.0.0.1:54321/rpc",
-      startedAt: "2026-01-01T00:00:00.000Z",
-    });
+  it("refuses before killing anything when the scan is unavailable - the round-0 case of the general rule", async () => {
+    // There used to be a pid.json fallback here: kill the one recorded pid,
+    // unverified, and move on. That let a stop report success while
+    // descendants the fallback never enumerated kept running and kept the
+    // install dir open - the finding this pins the fix for. An unreadable
+    // scan now refuses the whole stop, before anything is touched, so the
+    // tree is left whole for the next attempt. The "NEVER /T" pin the old
+    // fallback test carried is still covered by "re-kills scan-verified
+    // processes" and "host-spawned" elsewhere in this file, which exercise a
+    // real kill.
     const { runner, calls } = roundedRunner([{ kind: "throw" }]);
     const controller = createWindowsController(runner);
 
-    await controller.stop(serviceLabelFor("staging"), { force: false });
+    await expect(
+      controller.stop(serviceLabelFor("staging"), { force: false }),
+    ).rejects.toMatchObject({ code: "E_SERVICE_CONTROL_FAILED" });
 
-    // Rescanning cannot help when the scan itself is what is unavailable, so
-    // round 1's fallback is the whole story: one attempt, one kill.
     expect(
       calls.filter((call) => call.command === "powershell.exe"),
     ).toHaveLength(1);
-    expect(
-      calls
-        .filter((call) => call.command === "taskkill")
-        .map((call) => call.args),
-    ).toEqual([["/F", "/PID", "401"]]);
+    expect(calls.filter((call) => call.command === "taskkill")).toHaveLength(0);
+    expect(mocks.readHostPidMetadata).not.toHaveBeenCalled();
 
-    // Ablation (§C): in `killHostProcessTree`, delete the `if (round > 1)
-    // return;` guard (letting the loop fall through to another
-    // `findSlotProcessIds` call after a round-1 failure) → this test still
-    // passes, because round 1 already `return`s unconditionally after the
-    // fallback kill. There is no one-line mutation of the round-1 path this
-    // test can distinguish from correct behaviour; test (d) below is what
-    // pins the guard that actually matters: a scan failure LATER than
-    // round 1.
+    // Ablation (§ablation table, row 2): in `killHostProcessTree`, change
+    // `if (scanned === null) throw cliError(...)` to `if (scanned === null)
+    // return;` → this test fails: the call resolves instead of rejecting,
+    // and a scan that never ran is reported as a clean stop.
   });
 
-  it("a later round's failed scan ends the loop without touching pid.json - a stale recorded pid is not a second opinion", async () => {
-    // Round 1 kills 901 normally. Round 2's scan is unavailable - and unlike
-    // round 1, this is NOT the moment to fall back to pid.json: round 1 may
-    // already have killed the recorded pid, so it now names a slot Windows is
-    // free to have recycled for something unrelated. Consulting it here would
-    // be exactly the recycled-pid kill the scan-verification exists to
-    // prevent.
-    mocks.readHostPidMetadata.mockResolvedValue({
-      pid: 901,
-      hostId: "host-test",
-      version: "1.0.0",
-      websocketUrl: "ws://127.0.0.1:54321/rpc",
-      startedAt: "2026-01-01T00:00:00.000Z",
-    });
+  it("a scan that fails after earlier kills still fails the stop - a stale recorded pid is not a second opinion", async () => {
+    // Round 0 kills 901 normally. Round 1's scan is unavailable - and this is
+    // NOT a moment for any fallback: round 0 may already have killed the one
+    // pid a fallback would have named, so consulting a recorded pid here
+    // would be exactly the recycled-pid kill the scan-verification exists to
+    // prevent. There is no fallback at all now, so the question this test
+    // pins is narrower than it used to be: does an EARLIER round's real kill
+    // still happen before the LATER round's refusal, and does the refusal
+    // still refuse rather than quietly accepting round 0's kill as enough.
     const { runner, calls } = roundedRunner([
       {
         kind: "table",
@@ -694,11 +683,15 @@ describe("killHostProcessTree convergence loop", () => {
     ]);
     const controller = createWindowsController(runner);
 
-    await controller.stop(serviceLabelFor("staging"), { force: false });
+    await expect(
+      controller.stop(serviceLabelFor("staging"), { force: false }),
+    ).rejects.toMatchObject({ code: "E_SERVICE_CONTROL_FAILED" });
 
     expect(
       calls.filter((call) => call.command === "powershell.exe"),
     ).toHaveLength(2);
+    // Round 0's kill still happened - the refusal is about round 1's scan,
+    // not a reason to have skipped work already done.
     expect(
       calls
         .filter((call) => call.command === "taskkill")
@@ -706,11 +699,10 @@ describe("killHostProcessTree convergence loop", () => {
     ).toEqual([["/F", "/PID", "901"]]);
     expect(mocks.readHostPidMetadata).not.toHaveBeenCalled();
 
-    // Ablation (§C): in `killHostProcessTree`, change `if (round > 1) return;`
-    // to `if (false) return;` (always falling through to the round-1
-    // fallback, whatever the round) → this test fails: `readHostPidMetadata`
-    // is called on round 2, and the stale pid 901 - already killed in round 1
-    // - is handed to `killProcessIds` a second time.
+    // Ablation (§ablation table, row 2): the same `scanned === null` `throw`
+    // → `return` mutation reddens this test too - round 1's unreadable scan
+    // stops refusing, so the whole stop resolves even though it never
+    // confirmed the tree came down.
   });
 });
 
@@ -873,30 +865,6 @@ describe("computeWindowsHostKillSet and the taskkill self-protection it drives",
     ];
 
     expect(computeWindowsHostKillSet(rows, 200)).toEqual([100, 400]);
-  });
-
-  it("fallback: the powershell run throws, so the recorded pid.json pid is killed exactly once, without /T", async () => {
-    mocks.readHostPidMetadata.mockResolvedValue({
-      pid: 100,
-      hostId: "host-test",
-      version: "1.0.0",
-      websocketUrl: "ws://127.0.0.1:54321/rpc",
-      startedAt: "2026-01-01T00:00:00.000Z",
-    });
-    const calls: RecordedCall[] = [];
-    const runner: ProcessRunner = async (command, args) => {
-      calls.push({ command, args });
-      if (command === "powershell.exe") throw new Error("spawn failed");
-      return success("");
-    };
-    const controller = createWindowsController(runner);
-
-    await controller.stop(serviceLabelFor("staging"), { force: false });
-
-    const taskkillCalls = calls.filter((call) => call.command === "taskkill");
-    expect(taskkillCalls).toHaveLength(1);
-    expect(taskkillCalls[0]?.args).toEqual(["/F", "/PID", "100"]);
-    expect(taskkillCalls[0]?.args.includes("/T")).toBe(false);
   });
 
   // Direct algebra pins for the three subtraction terms, each isolating one

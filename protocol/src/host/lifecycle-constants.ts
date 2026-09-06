@@ -33,7 +33,8 @@ export const STOP_EXIT_GRACE_MARGIN_MS = 2_000;
  * single graceful-stop signal like launchd SIGTERM - `restart` runs a
  * sequence of independently-capped steps: `schtasks /End`, then up to
  * `WINDOWS_KILL_CONVERGENCE_ROUNDS` PowerShell process-tree scans each
- * followed by `taskkill` on the pids that scan returns, then `schtasks /Run`,
+ * followed by `taskkill` on the pids that scan returns plus one final
+ * confirming scan, then `schtasks /Run`,
  * post-`/Run` spawn-evidence verification, and (on verification failure) a
  * Last Run Result query.
  * Exported here (not left as local literals in `windows.ts`) so the outer
@@ -47,14 +48,19 @@ export const WINDOWS_SCHTASKS_RUN_TIMEOUT_MS = 30_000;
 export const WINDOWS_SCHTASKS_QUERY_TIMEOUT_MS = 10_000;
 
 /**
- * How many scan-then-kill passes `killHostProcessTree` may make before it
- * stops claiming convergence. The scan is a SNAPSHOT: a process the host (or
+ * How many KILL passes `killHostProcessTree` may make before it gives up and
+ * fails naming the survivors. The scan is a SNAPSHOT: a process the host (or
  * an agent under it) spawns after the table is materialized is in no round's
  * kill set, and `taskkill /T` - which this CLI must never use, being routinely
  * a child of the host it is stopping - is what used to sweep it up. Rescanning
  * is the only enumerator left. Bounded, because a host spawning faster than we
- * can scan is not converging and grinding on it is worse than stopping: the
- * install swap's own EBUSY detail scan already names the survivors.
+ * can scan is not converging and grinding on it is worse than failing: the
+ * error names the surviving pids, and the install swap's own EBUSY detail scan
+ * names the lock holders.
+ *
+ * The loop scans once MORE than it kills, so the last scan is always a
+ * confirming one: N kill passes, N+1 scans. Only an empty scan reports
+ * success, which is why the budget below counts scans and kills separately.
  */
 export const WINDOWS_KILL_CONVERGENCE_ROUNDS = 3;
 
@@ -87,8 +93,10 @@ export const WINDOWS_RESTART_SEQUENCE_TIMEOUT_MS =
   // worst case scales with the round bound. Leaving this as one scan + one
   // taskkill would understate the sequence and let the caller's SIGKILL land
   // mid-restart - the exact failure the outer budget below exists to prevent.
-  WINDOWS_KILL_CONVERGENCE_ROUNDS *
-    (WINDOWS_PROCESS_SCAN_TIMEOUT_MS + WINDOWS_TASKKILL_TIMEOUT_MS) +
+  // Scans and kills are counted separately because the loop confirms with a
+  // final scan it does not kill from: N+1 scans, N kills.
+  (WINDOWS_KILL_CONVERGENCE_ROUNDS + 1) * WINDOWS_PROCESS_SCAN_TIMEOUT_MS +
+  WINDOWS_KILL_CONVERGENCE_ROUNDS * WINDOWS_TASKKILL_TIMEOUT_MS +
   WINDOWS_SCHTASKS_RUN_TIMEOUT_MS +
   WINDOWS_START_SPAWN_VERIFY_MS +
   WINDOWS_SCHTASKS_QUERY_TIMEOUT_MS;
