@@ -657,10 +657,11 @@ async function killHostProcessTree(
     // that reaches the same pid again adds the incarnation it saw beside the
     // earlier one.
     //
-    // From the FULL undecided closure, not from the reported subset. The CLI's
-    // own branch is withheld from the report and the kill, but the shell above
+    // From `undecided`, not from the reported subset: the CLI's uncertain
+    // ancestors are withheld from the report and the kill, but the shell above
     // the CLI is under no obligation to still be there next round, and its
-    // other children then claim a pid that only this entry remembers.
+    // other children then claim a pid that only this entry remembers. The
+    // CLI's own descendants are in neither list - they are never the host's.
     for (const pid of undecided) {
       rememberIncarnation(priorSuspects, pid, created.get(pid) ?? 0);
     }
@@ -1500,8 +1501,9 @@ type CarryOverClaim = "seed" | "unattributed" | "none";
 // a child whose LIVE parent is itself undecided is preserved by the descendant
 // closure in `computeWindowsHostKillSet`, not here; and once that parent has
 // exited, by the suspect entry the loop recorded for it - for every member of
-// the closure, the CLI's protected branch included, so a child that outlives a
-// spared shell still finds its parent's pid remembered.
+// the closure outside the CLI's own descendant branch - its uncertain
+// ancestors included - so a child that outlives a spared shell still finds its
+// parent's pid remembered.
 //
 // The gate is NOT redundant with the rules below. The case it decides is a
 // live, validated parent wearing a pid this loop killed earlier: an unrelated
