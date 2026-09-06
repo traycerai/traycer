@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
-import type { WorktreeFolderIntent } from "@traycer/protocol/host/worktree-schemas";
+import type {
+  WorktreeFolderIntent,
+  WorktreeWorkspaceSummary,
+} from "@traycer/protocol/host/worktree-schemas";
 import {
   HoverCard,
   HoverCardContent,
@@ -18,6 +21,7 @@ function folder(over: {
   readonly mode: "local" | "worktree";
   readonly currentIntent: WorktreeFolderIntent | null;
   readonly hasStagedIntent?: boolean;
+  readonly summary?: WorktreeWorkspaceSummary;
 }) {
   return {
     key: over.key,
@@ -29,7 +33,7 @@ function folder(over: {
     isGitRepo: true,
     mode: over.mode,
     branchLabel: over.branchLabel,
-    summary: null,
+    summary: over.summary ?? null,
     currentIntent: over.currentIntent,
     defaultNewBranchName: "traycer/swift-otter",
     branchPrefixWarning: null,
@@ -134,6 +138,99 @@ describe("WorkspaceFolderHoverList", () => {
     const copies = screen.getAllByTestId("workspace-folder-hover-list");
     expect(copies).toHaveLength(1);
     expect(copies[0].getAttribute("tabindex")).toBe("-1");
+  });
+
+  it("shows the source branch of an adopted worktree once its disk metadata resolves", () => {
+    const worktreePath = "/Users/me/.traycer/worktrees/infra/feat-login";
+    const importIntent: WorktreeFolderIntent = {
+      kind: "import",
+      workspacePath: "/Users/me/Work/infra",
+      repoIdentifier: null,
+      isPrimary: true,
+      worktreePath,
+    };
+    const summary = (
+      sourceBranch: string | null,
+    ): WorktreeWorkspaceSummary => ({
+      workspacePath: "/Users/me/Work/infra",
+      isGitRepo: true,
+      repoIdentifier: null,
+      mainBranch: "main",
+      scripts: null,
+      worktrees: [
+        {
+          worktreePath: "/Users/me/Work/infra",
+          branch: "main",
+          sourceBranch: null,
+          head: "abc",
+          isMain: true,
+          isLocked: false,
+        },
+        {
+          worktreePath,
+          branch: "feat/login",
+          sourceBranch,
+          head: "def",
+          isMain: false,
+          isLocked: false,
+        },
+      ],
+    });
+    const { rerender } = render(
+      <WorkspaceFolderHoverList
+        items={[
+          folder({
+            key: "/b",
+            displayName: "infra",
+            branchLabel: "feat/login",
+            displayPath: "/Users/me/Work/infra",
+            mode: "worktree",
+            currentIntent: importIntent,
+          }),
+        ]}
+      />,
+    );
+    // No summary yet → no provenance line (never a placeholder).
+    expect(screen.queryByTestId("workspace-hover-source-branch")).toBeNull();
+
+    rerender(
+      <WorkspaceFolderHoverList
+        items={[
+          folder({
+            key: "/b",
+            displayName: "infra",
+            branchLabel: "feat/login",
+            displayPath: "/Users/me/Work/infra",
+            mode: "worktree",
+            currentIntent: importIntent,
+            summary: summary("develop"),
+          }),
+        ]}
+      />,
+    );
+    expect(
+      screen.getByTestId("workspace-hover-source-branch").textContent,
+    ).toBe("from develop");
+
+    // A worktree with no recorded source falls back to the main checkout.
+    rerender(
+      <WorkspaceFolderHoverList
+        items={[
+          folder({
+            key: "/b",
+            displayName: "infra",
+            branchLabel: "feat/login",
+            displayPath: "/Users/me/Work/infra",
+            mode: "worktree",
+            currentIntent: importIntent,
+            summary: summary(null),
+          }),
+        ]}
+      />,
+    );
+    expect(
+      screen.getByTestId("workspace-hover-source-branch").textContent,
+    ).toBe("from main");
   });
 
   it("shows 'New worktree' with no path for a to-be-created worktree", () => {

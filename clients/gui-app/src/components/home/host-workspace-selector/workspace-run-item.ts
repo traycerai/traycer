@@ -180,6 +180,25 @@ export function workspaceRunBranchLabel(input: {
   return workspaceFolderName(importIntent.worktreePath);
 }
 
+/**
+ * The branch an adopted (`import`) worktree was forked from, best effort:
+ * the disk entry's own `sourceBranch`, else the main checkout's branch, else
+ * the repository's main branch. `null` when the row is not an import or its
+ * disk metadata has not resolved yet.
+ */
+export function importedWorktreeSourceBranch(
+  item: WorkspaceRunItem,
+): string | null {
+  const intent = item.currentIntent;
+  if (intent?.kind !== "import" || item.summary === null) return null;
+  const matching =
+    item.summary.worktrees.find(
+      (worktree) => worktree.worktreePath === intent.worktreePath,
+    ) ?? null;
+  const mainEntry = item.summary.worktrees.find((worktree) => worktree.isMain);
+  return matching?.sourceBranch ?? mainEntry?.branch ?? item.summary.mainBranch;
+}
+
 /** Secondary source context for a new-worktree target label. */
 export function workspaceRunBranchSourceLabel(
   intent: WorktreeFolderIntent | null,
