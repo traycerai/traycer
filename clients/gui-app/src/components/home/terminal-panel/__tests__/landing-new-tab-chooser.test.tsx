@@ -96,9 +96,7 @@ describe("<LandingNewTabChooser />", () => {
     // a Windows or Linux reader sees them.
     expect(
       screen.getByTestId("landing-new-tab-chooser-shortcuts").textContent,
-    ).toBe(
-      "Enter opens Terminal · Ctrl+Shift+J terminal · Ctrl+Shift+B browser",
-    );
+    ).toBe("Enter opens Terminal · Ctrl+Shift+J terminal · Ctrl+Alt+B browser");
   });
 
   // Both actions are rebindable, and either can be left with no chord at all -
