@@ -390,8 +390,8 @@ describe("fulfillPlaceholder", () => {
         sessionId: "session-2",
         hostId: HOST_A,
       }),
-      // A create that was answering no particular row, which is what every
-      // terminal create is.
+      // An ask that named no row, made while no chooser was up - a chord, or
+      // the open gesture's own auto-spawn.
       null,
     );
     expect(instanceIds(useLandingPanelStore.getState().tabs)).toEqual([
@@ -399,6 +399,45 @@ describe("fulfillPlaceholder", () => {
       "instance-2",
     ]);
     expect(useLandingPanelStore.getState().activeInstanceId).toBe("instance-2");
+  });
+
+  // The chord was pressed with no chooser up, so it named no row; the reader
+  // then pressed `+` while the device was answering. That chooser is a LATER
+  // choice than this answer, and consuming it took the row and the selection
+  // away from the reader mid-gesture.
+  it("leaves a chooser opened after a rowless ask alone", () => {
+    const store = useLandingPanelStore.getState();
+    store.addTab(
+      terminalTab({
+        instanceId: "instance-1",
+        sessionId: "session-1",
+        hostId: HOST_A,
+      }),
+    );
+    useLandingPanelStore.getState().openPlaceholder("placeholder-late", 1);
+
+    useLandingPanelStore.getState().fulfillPlaceholder(
+      browserTab({
+        instanceId: "instance-2",
+        hostId: HOST_A,
+        sessionId: BROWSER_SESSION_A,
+        tabId: "tab-1",
+      }),
+      null,
+    );
+
+    // The tab landed - the device opened it - but at the end of the strip,
+    // not in the chooser's row.
+    expect(instanceIds(useLandingPanelStore.getState().tabs)).toEqual([
+      "instance-1",
+      "instance-2",
+    ]);
+    expect(useLandingPanelStore.getState().placeholder?.instanceId).toBe(
+      "placeholder-late",
+    );
+    expect(useLandingPanelStore.getState().activeInstanceId).toBe(
+      "placeholder-late",
+    );
   });
 
   // The reader picked Browser, changed their mind and picked Terminal, and the

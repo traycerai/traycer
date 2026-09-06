@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => {
   const initialAuthorityStatus = (): "legacy" | "capable" | "unknown" =>
     "legacy";
   const terminalsById: Readonly<Record<string, unknown>> = {};
+  const browserSessionsByHost: Record<string, unknown> = {};
   // Whether the registry has answered for the fleet, held in a cell so
   // `binding` can stay one stable object: it sits in a dependency list, and a
   // fresh identity per render would recompute on every commit. The fleet ITSELF
@@ -33,6 +34,20 @@ const mocks = vi.hoisted(() => {
     closeAsync: vi.fn(() => Promise.resolve()),
     /** The host ids the authority fleet was last asked to probe. */
     probedHostIds: [] as readonly string[],
+    /**
+     * The host ids the fleet was last asked to put on a BROWSER stream. Its
+     * own list, not the probe's: a stream is a socket the desktop bounds per
+     * window, so which devices land here is a decision of its own.
+     */
+    browserStreamHostIds: [] as readonly string[],
+    /**
+     * What each mounted device's coordinator reports. A host absent from here
+     * is one whose stream has published nothing - the silence the recovery
+     * arm's lease is measured against.
+     */
+    browserSessionsByHost,
+    /** Bump to make the fleet mock re-report the current browser sessions. */
+    browserSessionsRevision: 0,
     /** `false` models a registry nobody has successfully reached yet. */
     fleetSettled,
     /** Drives the directory's `onChange`, which is how settlement propagates. */
@@ -78,9 +93,29 @@ vi.mock(
     return {
       LandingTerminalAuthorityFleet: (props: {
         readonly hostIds: readonly string[];
+        readonly browserHostIds: readonly string[];
         readonly onEntry: (hostId: string, entry: unknown) => void;
+        readonly onBrowserSessions: (hostId: string, sessions: unknown) => void;
       }) => {
-        const { onEntry } = props;
+        const { onEntry, onBrowserSessions } = props;
+        const browserHostKey = props.browserHostIds.join("|");
+        const browserRevision = mocks.browserSessionsRevision;
+        useEffect(() => {
+          const hostIds =
+            browserHostKey.length === 0 ? [] : browserHostKey.split("|");
+          mocks.browserStreamHostIds = hostIds;
+          // What the real fleet does: report each mounted device's coordinator
+          // state, and report `null` when its stream goes away.
+          hostIds.forEach((hostId) => {
+            onBrowserSessions(
+              hostId,
+              mocks.browserSessionsByHost[hostId] ?? null,
+            );
+          });
+          return () => {
+            hostIds.forEach((hostId) => onBrowserSessions(hostId, null));
+          };
+        }, [browserHostKey, browserRevision, onBrowserSessions]);
         const hostKey = props.hostIds.join("\u0000");
         const revision = mocks.authorityRevision;
         useEffect(() => {
@@ -137,6 +172,8 @@ vi.mock(
   },
 );
 
+import { LANDING_BROWSER_RECOVERY_HOST_CAP } from "@/components/home/terminal-panel/landing-browser-presentation";
+import { LANDING_BROWSER_RECOVERY_ATTEMPT_MS } from "@/providers/landing-browser-recovery-slots";
 import { LandingTerminalTombstoneRecoveryBridge } from "@/providers/landing-terminal-tombstone-recovery-bridge";
 import { terminalTombstoneOutstanding } from "@/providers/landing-terminal-tombstone-outstanding";
 import { requestLandingTerminalClose } from "@/lib/terminals/landing-terminal-close-coordinator";
@@ -181,6 +218,9 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
     mocks.canMutate = false;
     mocks.authorityRevision = 0;
     mocks.terminalsById = {};
+    mocks.browserStreamHostIds = [];
+    mocks.browserSessionsByHost = {};
+    mocks.browserSessionsRevision = 0;
     mocks.closeAsync.mockReset();
     mocks.closeAsync.mockImplementation(() => Promise.resolve());
     // Drain cases run with the registry unanswered, so every tombstoned host
@@ -1763,6 +1803,243 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
     // had climbed to.
     await advance(1_000);
     expect(mocks.closeAsync.mock.calls.length).toBeGreaterThan(1);
+  });
+
+  /**
+   * The browser arm mounts a STREAM per device, and the desktop bounds those
+   * per window (`MAX_STREAMS_PER_WINDOW`). An outstanding tombstone is
+   * unbounded and survives the device's absence, so what this arm mounts has
+   * to be bounded twice: to devices with a route, and to a budget.
+   */
+  describe("browser recovery mounts", () => {
+    function tombstoneBrowserTab(hostId: string): void {
+      useLandingPanelStore.getState().addTab({
+        kind: "browser",
+        instanceId: `browser-${hostId}`,
+        sessionId: `session-${hostId}`,
+        hostId,
+        tabId: `tab-${hostId}`,
+        name: `${hostId}.example`,
+        titleSource: "default",
+      });
+      useLandingPanelStore
+        .getState()
+        .closeTab("landing-page", `browser-${hostId}`);
+    }
+
+    function dialable(hostId: string): HostDirectoryEntry {
+      return {
+        ...offlineHost,
+        hostId,
+        websocketUrl: `ws://${hostId}/rpc`,
+        transportDialability: "dialable",
+      };
+    }
+
+    it("mounts no stream for a tombstoned device with no route", async () => {
+      mocks.entries = [offlineHost];
+      tombstoneBrowserTab("host-b");
+      const view = render(<LandingTerminalTombstoneRecoveryBridge />);
+
+      await waitFor(() => {
+        expect(mocks.probedHostIds).toEqual([]);
+      });
+      // Redden: mounting every tombstoned device spends a place under the
+      // desktop's per-window cap on a device that answers nothing, for as
+      // long as it stays away - which is exactly as long as the tombstone
+      // lasts.
+      expect(mocks.browserStreamHostIds).toEqual([]);
+
+      // The route arrives and the mount follows it.
+      mocks.entries = [dialable("host-b")];
+      view.rerender(<LandingTerminalTombstoneRecoveryBridge />);
+      await waitFor(() => {
+        expect(mocks.browserStreamHostIds).toEqual(["host-b"]);
+      });
+    });
+
+    it("mounts at most the recovery budget, oldest tombstone first, and rotates as one clears", async () => {
+      const hostIds = ["host-1", "host-2", "host-3", "host-4"];
+      mocks.entries = hostIds.map(dialable);
+      for (const hostId of hostIds) tombstoneBrowserTab(hostId);
+      const view = render(<LandingTerminalTombstoneRecoveryBridge />);
+
+      // Redden: without the budget all four devices are on a stream at once,
+      // and the window's allowance goes to background closes nobody is
+      // watching instead of to the panel's own device or a canvas tile.
+      await waitFor(() => {
+        expect(mocks.browserStreamHostIds).toEqual(
+          hostIds.slice(0, LANDING_BROWSER_RECOVERY_HOST_CAP),
+        );
+      });
+
+      // The oldest tombstone drains; its device unmounts and the next takes
+      // the slot - which is also the release edge a refused coordinator is
+      // re-asked on.
+      act(() => {
+        useLandingPanelStore.getState().clearPendingKill({
+          kind: "browser",
+          hostId: "host-1",
+          sessionId: "session-host-1",
+          tabId: "tab-host-1",
+        });
+      });
+      view.rerender(<LandingTerminalTombstoneRecoveryBridge />);
+      await waitFor(() => {
+        expect(mocks.browserStreamHostIds).toEqual(
+          hostIds.slice(1, 1 + LANDING_BROWSER_RECOVERY_HOST_CAP),
+        );
+      });
+    });
+
+    // A route is PERMISSION to dial, not evidence anyone is home: an
+    // `indeterminate` remote entry is admitted deliberately. So the two oldest
+    // tombstones can name devices that never answer, and a fixed oldest-first
+    // list would park every device behind them for as long as their tombstones
+    // last - which is for as long as they do not answer. The slot is a lease.
+    it("rotates the slots through every silent device rather than parking the queue behind two", async () => {
+      vi.useFakeTimers();
+      const hostIds = ["host-1", "host-2", "host-3"];
+      mocks.entries = hostIds.map(dialable);
+      for (const hostId of hostIds) tombstoneBrowserTab(hostId);
+      // Nothing publishes an inventory: the fleet mock never calls
+      // `onBrowserSessions`, so every mounted device reads as silent.
+      const view = render(<LandingTerminalTombstoneRecoveryBridge />);
+      const settle = async (ms: number): Promise<void> => {
+        await act(async () => {
+          vi.advanceTimersByTime(ms);
+          await Promise.resolve();
+          await Promise.resolve();
+          await Promise.resolve();
+        });
+        view.rerender(<LandingTerminalTombstoneRecoveryBridge />);
+      };
+      await settle(0);
+      expect(mocks.browserStreamHostIds).toEqual(["host-1", "host-2"]);
+
+      // Redden: without a lease both hold their slots forever and `host-3`
+      // never mounts, so its tombstones can never drain. `host-3` has never
+      // yielded, so it takes the front; `host-1` yielded before `host-2` and
+      // takes the slot behind it.
+      await settle(LANDING_BROWSER_RECOVERY_ATTEMPT_MS);
+      expect(mocks.browserStreamHostIds).toEqual(["host-3", "host-1"]);
+
+      // Silent again, so the queue keeps turning - and the device that has
+      // been waiting longest is always the one at the front.
+      await settle(LANDING_BROWSER_RECOVERY_ATTEMPT_MS);
+      expect(mocks.browserStreamHostIds).toEqual(["host-2", "host-3"]);
+
+      // A full cycle: every device has now had a turn and the rotation comes
+      // back to the first pair, tombstones intact.
+      await settle(LANDING_BROWSER_RECOVERY_ATTEMPT_MS);
+      expect(mocks.browserStreamHostIds).toEqual(["host-1", "host-2"]);
+    });
+
+    // The lease is a DEADLINE, not a countdown that anything may restart. Both
+    // lists this arm derives are rebuilt - with identical contents - whenever
+    // an unrelated host's readiness moves or an unrelated TERMINAL tombstone
+    // does, and a fleet that stirs oftener than once per budget would then
+    // never rotate at all: the starvation the lease exists to prevent, arriving
+    // through the dependency array.
+    it("holds a silent cohort's lease through churn that names no new device", async () => {
+      vi.useFakeTimers();
+      const tombstoned = ["host-1", "host-2", "host-3"];
+      // `host-idle` has a route and never a tombstone: it is in the directory
+      // the readiness lookup is keyed on, and never a recovery candidate.
+      mocks.entries = [...tombstoned, "host-idle", "host-4"].map(dialable);
+      for (const hostId of tombstoned) tombstoneBrowserTab(hostId);
+      const view = render(<LandingTerminalTombstoneRecoveryBridge />);
+      const settle = async (ms: number): Promise<void> => {
+        await act(async () => {
+          vi.advanceTimersByTime(ms);
+          await Promise.resolve();
+          await Promise.resolve();
+          await Promise.resolve();
+        });
+        view.rerender(<LandingTerminalTombstoneRecoveryBridge />);
+      };
+      await settle(0);
+      expect(mocks.browserStreamHostIds).toEqual(["host-1", "host-2"]);
+
+      // A third of the way in, a device nobody here is waiting on becomes
+      // ready. `useRemoteSessionsPollReadiness` hands back a new lookup for
+      // that, which rebuilds both lists with the same host ids in them.
+      await settle(LANDING_BROWSER_RECOVERY_ATTEMPT_MS / 3);
+      mocks.readySessionHosts = new Set(["host-idle"]);
+      await settle(LANDING_BROWSER_RECOVERY_ATTEMPT_MS / 3);
+      expect(mocks.browserStreamHostIds).toEqual(["host-1", "host-2"]);
+
+      // And a REAL change with the last third to run: a fourth tombstone joins
+      // the queue. It does not buy the cohort holding the slots a fresh budget.
+      act(() => {
+        tombstoneBrowserTab("host-4");
+      });
+      await settle(0);
+      expect(mocks.browserStreamHostIds).toEqual(["host-1", "host-2"]);
+
+      // The deadline was set when this cohort mounted, so it still expires on
+      // time - and the yield names the candidates as they stand NOW.
+      await settle(LANDING_BROWSER_RECOVERY_ATTEMPT_MS / 3);
+      expect(mocks.browserStreamHostIds).toEqual(["host-3", "host-4"]);
+    });
+
+    // The other half of the lease. Rotation is a remedy for silence, so a
+    // device that IS answering must not be rotated away from the tombstones it
+    // is in the middle of draining - and a device that stops answering has to
+    // be picked up on that later edge, not only at the moment it mounts.
+    it("leaves an answering device alone, and rotates it away once it goes quiet", async () => {
+      vi.useFakeTimers();
+      const hostIds = ["host-1", "host-2", "host-3"];
+      mocks.entries = hostIds.map(dialable);
+      for (const hostId of hostIds) tombstoneBrowserTab(hostId);
+      // An inventory that still carries the tombstoned tab, and a close that
+      // never settles. The device answers, so it earns its slot - and its
+      // tombstone stays outstanding, which is the only way an ANSWERING device
+      // holds one long enough to starve the queue behind it.
+      const answering = (hostId: string): unknown => ({
+        lifecycle: "live",
+        inventoryReady: true,
+        items: [
+          {
+            sessionId: `session-${hostId}`,
+            hostId,
+            scope: { kind: "independent" },
+            tabs: [{ tabId: `tab-${hostId}` }],
+          },
+        ],
+        closeTab: () => new Promise<void>(() => undefined),
+      });
+      mocks.browserSessionsByHost = {
+        "host-1": answering("host-1"),
+        "host-2": answering("host-2"),
+      };
+      const view = render(<LandingTerminalTombstoneRecoveryBridge />);
+      const settle = async (ms: number): Promise<void> => {
+        await act(async () => {
+          vi.advanceTimersByTime(ms);
+          await Promise.resolve();
+          await Promise.resolve();
+          await Promise.resolve();
+        });
+        view.rerender(<LandingTerminalTombstoneRecoveryBridge />);
+      };
+      await settle(0);
+      expect(mocks.browserStreamHostIds).toEqual(["host-1", "host-2"]);
+
+      // Both are publishing, so `host-3` waits however long that takes.
+      await settle(LANDING_BROWSER_RECOVERY_ATTEMPT_MS * 4);
+      expect(mocks.browserStreamHostIds).toEqual(["host-1", "host-2"]);
+
+      // `host-1`'s stream drops. Its lease is not renewed, and this edge -
+      // long after it mounted - is what has to re-arm the rotation.
+      delete mocks.browserSessionsByHost["host-1"];
+      mocks.browserSessionsRevision += 1;
+      await settle(0);
+      expect(mocks.browserStreamHostIds).toEqual(["host-1", "host-2"]);
+
+      await settle(LANDING_BROWSER_RECOVERY_ATTEMPT_MS);
+      expect(mocks.browserStreamHostIds).toEqual(["host-2", "host-3"]);
+    });
   });
 });
 

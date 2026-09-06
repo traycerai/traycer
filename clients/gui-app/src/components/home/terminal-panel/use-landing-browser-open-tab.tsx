@@ -67,7 +67,12 @@ export function landingBrowserTabCount(
  * construction, which is what makes each answer act on its own row.
  */
 export interface LandingBrowserOpenRequest {
-  /** The chooser row the ask was made from, or `null` for a chord. */
+  /**
+   * The chooser row the ask was made from, read at DISPATCH, or `null` when
+   * there was none. A chord names one too when the strip is showing one - what
+   * it must not do is name a row that appeared while the device was answering,
+   * which is a choice the reader made after this ask.
+   */
   readonly placeholderInstanceId: string | null;
 }
 

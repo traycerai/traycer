@@ -2444,6 +2444,115 @@ describe("<LandingTerminalPanel />", () => {
     await waitFor(() => {
       expect(openTab).toHaveBeenCalledWith(null, "about:blank");
     });
+    // The reveal opened the chooser this gesture answers, and named it - so
+    // the tab lands IN that row rather than beside it.
+    await waitFor(() => {
+      expect(useLandingPanelStore.getState().placeholder).toBeNull();
+    });
+    expect(
+      useLandingPanelStore.getState().tabs.map((tab) => tab.instanceId),
+    ).toHaveLength(1);
+    expect(useLandingPanelStore.getState().activeInstanceId).toBe(
+      useLandingPanelStore.getState().tabs[0]?.instanceId,
+    );
+  });
+
+  // The chord names the row it was asked from and no other. A `+` pressed
+  // while the device is answering is a LATER choice, so the answer appends
+  // instead of taking that chooser's row and its selection.
+  it("does not consume a chooser opened after app.browser.new was dispatched", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    const opened = Promise.withResolvers<{
+      readonly sessionId: string;
+      readonly tabId: string;
+      readonly handoffToken: string | null;
+    }>();
+    mocks.browserSessionsByHost = {
+      "host-a": browserSessionsState({ openTab: () => opened.promise }),
+    };
+    addBrowserTab("host-a", "browser-existing");
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+    const router = fakeKeybindingRouter();
+    await waitFor(() => {
+      expect(mocks.browserStreamHostIds).toContain("host-a");
+    });
+
+    act(() => {
+      dispatchAction("app.browser.new", router);
+    });
+    // The reader asks for a new row while the device is still answering.
+    act(() => {
+      useLandingPanelStore.getState().openPlaceholder("placeholder-late", 1);
+    });
+    await act(async () => {
+      opened.resolve({
+        sessionId: "device-session",
+        tabId: "device-tab",
+        handoffToken: null,
+      });
+      await opened.promise;
+    });
+
+    await waitFor(() => {
+      expect(useLandingPanelStore.getState().tabs).toHaveLength(2);
+    });
+    // Redden: with the answer owning whatever row it found, the chooser would
+    // be gone and the selection would have moved to the arriving tab.
+    expect(useLandingPanelStore.getState().placeholder?.instanceId).toBe(
+      "placeholder-late",
+    );
+    expect(useLandingPanelStore.getState().activeInstanceId).toBe(
+      "placeholder-late",
+    );
+  });
+
+  // The other side of that rule. `⇧⌘J` claims a row and the host then makes it
+  // wait (no workspace folder, and the home has not reconciled yet), so the
+  // create is finished by the settlement instead. That settlement is the SAME
+  // ask arriving late, so it belongs in the row the command claimed - reading
+  // the strip again there would be the mistake above, and naming no row at all
+  // would append behind the reader's own chooser.
+  it("lands a deferred app.terminal.new in the row it claimed", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = null;
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    mocks.browserSessionsByHost = { "host-a": browserSessionsState({}) };
+    addBrowserTab("host-a", "browser-instance");
+    // The chooser the reader already had open when they pressed the chord.
+    useLandingPanelStore.getState().openPlaceholder("placeholder-open", 1);
+    render(panelUi());
+    const router = fakeKeybindingRouter();
+
+    act(() => {
+      dispatchAction("app.terminal.new", router);
+    });
+    // Nothing yet - there is no launch directory to spawn into.
+    expect(landingTerminalTabs(useLandingPanelStore.getState().tabs)).toEqual(
+      [],
+    );
+
+    await act(async () => {
+      for (let pass = 0; pass < 5; pass += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+    });
+
+    const terminals = landingTerminalTabs(useLandingPanelStore.getState().tabs);
+    expect(terminals).toHaveLength(1);
+    // Redden: with only the generation carried, the settlement names no row,
+    // the terminal lands behind the chooser, and the keyboard is handed to a
+    // tab the reader cannot see while the chooser keeps the selection.
+    expect(useLandingPanelStore.getState().placeholder).toBeNull();
+    expect(useLandingPanelStore.getState().activeInstanceId).toBe(
+      terminals[0]?.instanceId,
+    );
   });
 
   // A browser stream is a socket, a relay attach, an identity attestation and

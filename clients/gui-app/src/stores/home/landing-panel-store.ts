@@ -445,12 +445,16 @@ export interface LandingPanelStoreState {
    * Lands an answered tab on the placeholder row it was asked for.
    *
    * `forPlaceholderInstanceId` names the row the caller was answering, and
-   * `null` is a caller that never had one - a chord, which takes the tab live
-   * wherever it lands. When it names a row that is no longer the placeholder,
-   * the answer LOST that row: something else fulfilled or dismissed it while
-   * the device was replying. The tab still lands, because the device opened it
-   * and a tab with no row would be unreachable, but it lands quietly - the
-   * keyboard stays with whatever the reader chose in the meantime.
+   * `null` is a caller that never had one - a chord, or the settlement
+   * auto-spawn. When it names a row that is no longer the placeholder, the
+   * answer LOST that row: something else fulfilled or dismissed it while the
+   * device was replying. The tab still lands, because the device opened it and
+   * a tab with no row would be unreachable, but it lands quietly - the keyboard
+   * stays with whatever the reader chose in the meantime.
+   *
+   * `null` lands quietly for the same reason once a chooser is on screen: an
+   * ask that named no row cannot have been answering the one the reader opened
+   * after it. It appends and activates only while there is no chooser to take.
    */
   readonly fulfillPlaceholder: (
     tab: LandingPanelTabRef,
@@ -760,9 +764,21 @@ export const useLandingPanelStore = create<LandingPanelStoreState>()(
         }),
       fulfillPlaceholder: (tab, forPlaceholderInstanceId) =>
         set((state) => {
+          // A ROWLESS ask - one made from no chooser at all - owns the strip
+          // only while no chooser is up. It may not consume one that appeared
+          // while the device was answering: a `+` pressed after the ask is a
+          // LATER choice than this answer, and taking its row would clear the
+          // chooser the reader is looking at and move the selection off it.
+          // With no chooser on screen there is nothing to take, and the tab
+          // appends and activates exactly as it always did.
+          //
+          // A NAMED ask owns the row it named while that row is still there,
+          // which is the case this parameter exists for; the callers that can
+          // name one read it at DISPATCH, never at settlement.
           const ownsRow =
-            forPlaceholderInstanceId === null ||
-            state.placeholder?.instanceId === forPlaceholderInstanceId;
+            forPlaceholderInstanceId === null
+              ? state.placeholder === null
+              : state.placeholder?.instanceId === forPlaceholderInstanceId;
           const existing = findEquivalentTab(state.tabs, tab);
           if (existing !== undefined) {
             // Not ours to clear, and not ours to select: the row this answered

@@ -512,6 +512,90 @@ function settleDirectoryRequest(args: {
 }
 
 /**
+ * A `⇧⌘J` the host could not serve synchronously: the gesture generation it was
+ * made in, and the row it claimed on the way out.
+ *
+ * The row travels with it because the settlement that finishes such a command is
+ * the same ask arriving late, not a new one. Reading the strip again at
+ * settlement would name whatever chooser is up by then, which is the mistake
+ * `fulfillPlaceholder` refuses; naming nothing would append behind the row this
+ * very command claimed, leaving the chooser selected while the keyboard is
+ * handed to a terminal nobody can see.
+ */
+interface LandingDeferredTerminalCreate {
+  readonly generation: number;
+  readonly placeholderInstanceId: string | null;
+}
+
+/**
+ * The reveal half of a settled reconciliation pass: reuse a terminal already
+ * running at the launch cwd, else spawn one, and hand it the keyboard.
+ *
+ * Split out of `runReconciliationSettlement` the way `settleDirectoryRequest`
+ * is - it decides everything from the settled snapshot it is handed and the
+ * store as it stands, never from React state - and because that callback is
+ * already carrying the whole gate ladder above this point.
+ */
+function settleTerminalReveal(args: {
+  readonly context: LandingTerminalHostContext;
+  readonly launchCwd: string;
+  readonly deferredCreate: LandingDeferredTerminalCreate | null;
+  readonly addTerminalTab: (
+    hostId: string,
+    cwd: string,
+    forPlaceholderInstanceId: string | null,
+  ) => string | null;
+  readonly clearIfPending: () => void;
+}): void {
+  const state = useLandingPanelStore.getState();
+  const terminals = landingTerminalTabs(state.tabs);
+  // A strip with no TERMINAL row is being REVEALED, not added to. The
+  // empty-panel branch in the caller cannot cover this one: a browser-only
+  // strip is not empty, so the chooser does not claim it, and reuse-or-create
+  // then found nothing to reuse and spawned a shell the reader never asked for
+  // - a state this feature created by making the strip mixed.
+  //
+  // `⇧⌘J` is exempt, because it asks for a terminal in as many words. It
+  // reaches here only when it could not create synchronously (a host whose
+  // context has not reconciled yet), which is exactly what the record carries.
+  if (terminals.length === 0 && args.deferredCreate === null) {
+    args.clearIfPending();
+    return;
+  }
+  const existing = terminalForTarget(
+    terminals,
+    state.activeInstanceId,
+    args.context.hostId,
+    args.launchCwd,
+  );
+  if (existing === undefined) {
+    // Creation can be refused (the host's authority went unready between this
+    // generation's reconciliation and its settlement), so the focus hand-off is
+    // conditional on a tab actually existing.
+    //
+    // The row is the DEFERRED command's own, when this settlement is one:
+    // `⇧⌘J` claimed a row before the host made it wait, and this is that same
+    // ask landing late. Everything else here answers the OPEN gesture and asked
+    // from no row at all, so it appends and takes the strip live - leaving a
+    // chooser alone if one is up, because that chooser was opened after the
+    // gesture being answered.
+    const created = args.addTerminalTab(
+      args.context.hostId,
+      args.launchCwd,
+      args.deferredCreate?.placeholderInstanceId ?? null,
+    );
+    if (created !== null) focusTerminalInstance(created);
+    args.clearIfPending();
+    return;
+  }
+  if (existing.instanceId !== state.activeInstanceId) {
+    state.activateTab(existing.instanceId);
+  }
+  focusTerminalInstance(existing.instanceId);
+  args.clearIfPending();
+}
+
+/**
  * Landing-only independent-terminal surface. It is a CONSUMER of
  * `LandingTerminalGestureProvider`: routing identity comes from its captured
  * target, while chooser presentation reads the provider's workspace source for
@@ -747,6 +831,32 @@ export function LandingTerminalPanel(): ReactNode {
     [landingPageId, setPanelMaximizedForPage],
   );
 
+  /**
+   * The row the ask being dispatched RIGHT NOW is answering, opening the one
+   * an empty panel is about to show when there is none.
+   *
+   * Every opener reads the placeholder at dispatch, because an answer must not
+   * consume a chooser the reader opened while the device (or the directory
+   * picker) was replying - that is a later choice than the ask. A gesture that
+   * REVEALS the panel has a gap in that rule: an empty panel shows the
+   * chooser, and the open-transition effect is what opens it, AFTER this
+   * handler runs. So a revealing ask would name no row and then land beside
+   * the very chooser it was meant to fill.
+   *
+   * Claiming the row here closes the gap in one place: the effect finds a
+   * placeholder and adds none, and the ask names what it is going to fill.
+   * Returns the existing row when there already is one, and `null` when the
+   * strip has tabs and no chooser - an ask made from no row at all.
+   */
+  const claimAskedRow = useCallback((): string | null => {
+    const state = useLandingPanelStore.getState();
+    const existing = state.placeholder?.instanceId ?? null;
+    if (existing !== null || state.tabs.length > 0) return existing;
+    const instanceId = `landing-placeholder-${uuidv4()}`;
+    openPlaceholder(instanceId, 0);
+    return instanceId;
+  }, [openPlaceholder]);
+
   // The single creation point every path funnels through - the "+", the
   // `app.terminal.new` / `tab.new` chords, the directory picker's settlement,
   // and reconciliation's auto-spawn - so the authority gate lives here rather
@@ -800,7 +910,7 @@ export function LandingTerminalPanel(): ReactNode {
   // React re-renders, so the captured `routing.hostId` alone is not enough to
   // satisfy the host-identity guardrail.
   /**
-   * The gesture generation that asked for a TERMINAL and could not be served
+   * The gesture that asked for a TERMINAL and could not be served
    * synchronously, or `null`.
    *
    * `capture()` cannot say what it was captured for: `app.terminal.toggle`, the
@@ -809,8 +919,12 @@ export function LandingTerminalPanel(): ReactNode {
    * terminal on a strip holding only browser tabs - nothing to reuse, and not
    * empty enough for the chooser to cover it. Keyed by generation so it can
    * never leak onto the next gesture.
+   *
+   * It carries the ROW the gesture was made from as well - see
+   * {@link LandingDeferredTerminalCreate} for why the settlement cannot read
+   * the strip again for one.
    */
-  const deferredCreateGenerationRef = useRef<number | null>(null);
+  const deferredCreateRef = useRef<LandingDeferredTerminalCreate | null>(null);
   const createTerminalTab = useCallback(
     (routing: LandingTerminalTarget): string | null => {
       if (routing.hostId === null || routing.availability !== "supported") {
@@ -851,6 +965,7 @@ export function LandingTerminalPanel(): ReactNode {
       replaceDirectoryRequest(null);
     }
     if (panelOpen) {
+      claimAskedRow();
       const request =
         target.workspacePaths.length > 1
           ? directoryRequestFor(
@@ -869,6 +984,9 @@ export function LandingTerminalPanel(): ReactNode {
     }
     const captured = pending ? target : capture();
     setPanelOpen(true);
+    // Before the request is built: it reads the row the ask is for, and on a
+    // panel this call just revealed there is none until the claim opens it.
+    const claimedRow = claimAskedRow();
     const request = directoryRequestFor(captured, "always-create", true);
     if (request !== null) {
       replaceDirectoryRequest(request);
@@ -881,10 +999,16 @@ export function LandingTerminalPanel(): ReactNode {
     }
     // Refused for now - a host whose context has not reconciled yet has no
     // launch directory to spawn into. This chord asked for a terminal, so the
-    // settlement finishes it; nothing else may.
-    deferredCreateGenerationRef.current = captured.generation;
+    // settlement finishes it; nothing else may - and it finishes it into the
+    // row claimed above, which is the row this command was made from however
+    // long the host takes to answer.
+    deferredCreateRef.current = {
+      generation: captured.generation,
+      placeholderInstanceId: claimedRow,
+    };
   }, [
     capture,
+    claimAskedRow,
     createTerminalTab,
     panelOpen,
     pending,
@@ -1103,10 +1227,20 @@ export function LandingTerminalPanel(): ReactNode {
       // exactly once. Clear it on EVERY outcome below (spawn, reuse, no-op) so a
       // later gesture projects live focus instead of this stale snapshot, and
       // `+`/workspace projection follow the newly focused draft after settling.
+      const deferredCreate =
+        deferredCreateRef.current?.generation === generation
+          ? deferredCreateRef.current
+          : null;
       const clearIfPending = (): void => {
         if (pending) clearPending();
-        if (deferredCreateGenerationRef.current === generation) {
-          deferredCreateGenerationRef.current = null;
+        // Re-read at clear time, exactly as the generation compare did: only
+        // the record this settlement is answering is consumed, never one a
+        // newer gesture wrote in the meantime.
+        if (
+          deferredCreate !== null &&
+          deferredCreateRef.current === deferredCreate
+        ) {
+          deferredCreateRef.current = null;
         }
       };
       // Host may have switched after this generation began; never spawn with
@@ -1135,44 +1269,13 @@ export function LandingTerminalPanel(): ReactNode {
         return;
       }
       if (!pending) return;
-      // A strip with no TERMINAL row is being REVEALED, not added to. The
-      // empty-panel branch above cannot cover this one: a browser-only strip is
-      // not empty, so the chooser does not claim it, and reuse-or-create then
-      // found nothing to reuse and spawned a shell the reader never asked for -
-      // a state this feature created by making the strip mixed.
-      //
-      // `⇧⌘J` is exempt, because it asks for a terminal in as many words. It
-      // reaches here only when it could not create synchronously (a host whose
-      // context has not reconciled yet), which is exactly what the ref records.
-      if (
-        landingTerminalTabs(state.tabs).length === 0 &&
-        deferredCreateGenerationRef.current !== generation
-      ) {
-        clearIfPending();
-        return;
-      }
-      const existing = terminalForTarget(
-        landingTerminalTabs(state.tabs),
-        state.activeInstanceId,
-        context.hostId,
+      settleTerminalReveal({
+        context,
         launchCwd,
-      );
-      if (existing === undefined) {
-        // Creation can be refused (the host's authority went unready between
-        // this generation's reconciliation and its settlement), so the focus
-        // hand-off is conditional on a tab actually existing.
-        // Nobody asked from a row: the auto-spawn answers the open gesture
-        // itself, so it takes whatever the strip shows.
-        const created = addTerminalTab(context.hostId, launchCwd, null);
-        if (created !== null) focusTerminalInstance(created);
-        clearIfPending();
-        return;
-      }
-      if (existing.instanceId !== state.activeInstanceId) {
-        state.activateTab(existing.instanceId);
-      }
-      focusTerminalInstance(existing.instanceId);
-      clearIfPending();
+        deferredCreate,
+        addTerminalTab,
+        clearIfPending,
+      });
     },
     [
       addTerminalTab,
@@ -1422,9 +1525,12 @@ export function LandingTerminalPanel(): ReactNode {
   // question the chooser asks.
   const revealAndOpenBrowserTab = useCallback(() => {
     if (!panelOpen) setPanelOpen(true);
-    // No row: the chord answers the chooser's question without being asked it.
-    openBrowserTab({ placeholderInstanceId: null });
-  }, [openBrowserTab, panelOpen, setPanelOpen]);
+    // The row this ask is for, read NOW like every other opener - a chooser
+    // the reader opens while the device is answering is a later choice than
+    // this one, and `fulfillPlaceholder` leaves a row this ask did not name
+    // alone.
+    openBrowserTab({ placeholderInstanceId: claimAskedRow() });
+  }, [claimAskedRow, openBrowserTab, panelOpen, setPanelOpen]);
 
   // A link the page asked to open in a new tab, on the raising tab's device
   // and through the same serializing scope the chooser's opener uses. The

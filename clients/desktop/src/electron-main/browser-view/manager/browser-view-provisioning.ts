@@ -18,6 +18,7 @@ import type {
   BrowserViewNativeIdentity,
 } from "./browser-view-entry";
 import {
+  nativeBrowserSessionKey as nativeSessionKey,
   nativeBrowserViewGuestKey as nativeGuestKey,
   type BrowserViewEntryRegistry,
 } from "./browser-view-entry-registry";
@@ -114,6 +115,27 @@ export class BrowserViewProvisioning {
    * window supersedes that mint instead of inheriting its guest.
    */
   private readonly inFlightEnsures = new Map<string, InFlightEnsure>();
+  /**
+   * The isolated release one SESSION still owes, and any entry of that session
+   * that can answer it.
+   *
+   * A guest closed to be re-born elsewhere is not its session's last tab, so
+   * its close skips the partition release (`succeededByReplacement`). Who runs
+   * that release if the successor never arrives is the obligation kept here,
+   * and it has to OUTLIVE the successor: a third window can supersede a
+   * replacement mid-birth, and its own cold ensure knows nothing about the
+   * entry whose release was skipped.
+   *
+   * Keyed by SESSION and not by guest key, because the partition is the
+   * session's and every one of its tabs is born into the same one. A guest-key
+   * debt could only ask "is anything still coming for THIS tab", and a move of
+   * two sibling tabs (the host restores or rebinds a session's tabs together)
+   * answers no for the first while the second is still being born with no
+   * registry entry yet - so the partition would be cleared out from under it.
+   * `releaseIsolatedSessionStorage` cannot catch that either: it consults
+   * REGISTERED siblings, and an ensure held before `onAttached` has none.
+   */
+  private readonly owedIsolatedReleases = new Map<string, BrowserViewEntry>();
 
   constructor(options: BrowserViewProvisioningOptions) {
     this.entries = options.entries;
@@ -161,8 +183,10 @@ export class BrowserViewProvisioning {
 
     logEnsureStage(input, startedAt, "manager_started", "started", null);
     const lifecycle = new NativeBrowserViewLifecycle();
+    const sessionKey = nativeSessionKey(input);
     const record: InFlightEnsure = {
       windowId,
+      sessionKey,
       registrationId: null,
       entry: null,
       lifecycle,
@@ -186,9 +210,41 @@ export class BrowserViewProvisioning {
         if (this.inFlightEnsures.get(guestKey) === record) {
           this.inFlightEnsures.delete(guestKey);
         }
+        // Every ensure settles here, so the session's debt is revisited
+        // whenever one of the births that was holding it off ends - this tab's
+        // or a sibling tab's, a cold successor's included.
+        this.settleOwedIsolatedRelease(record.sessionKey);
       })
       .catch(() => undefined);
     return record.promise;
+  }
+
+  /**
+   * Runs or defers the release {@link owedIsolatedReleases} holds for this
+   * SESSION.
+   *
+   * Deferred while any ensure for the session is still in flight - each of
+   * them is a guest that will be born into this partition, and each settles
+   * later and asks again. Otherwise the mark is lifted and the release runs
+   * against the registry as it stands: `releaseIsolatedSessionStorage` is what
+   * decides, so a sibling tab that HAS an entry by now keeps the partition and
+   * its own close carries it out later.
+   */
+  private settleOwedIsolatedRelease(sessionKey: string): void {
+    const owed = this.owedIsolatedReleases.get(sessionKey);
+    if (owed === undefined) return;
+    if (this.hasEnsureForSession(sessionKey)) return;
+    this.owedIsolatedReleases.delete(sessionKey);
+    owed.succeededByReplacement = false;
+    this.releaseIsolatedSessionStorage(owed);
+  }
+
+  /** Is any guest of this session still being born? */
+  private hasEnsureForSession(sessionKey: string): boolean {
+    for (const record of this.inFlightEnsures.values()) {
+      if (record.sessionKey === sessionKey) return true;
+    }
+    return false;
   }
 
   private supersedeInFlightEnsure(
@@ -198,6 +254,20 @@ export class BrowserViewProvisioning {
     this.inFlightEnsures.delete(guestKey);
     const entry = inFlight.entry;
     if (entry !== null) {
+      // Marked for the reason a move marks its old entry: this guest is being
+      // succeeded at the same tab identity, so its close is not the isolated
+      // session's last one and must not take the partition the successor is
+      // about to be born into.
+      //
+      // Belt and braces rather than a live defect. A record's `entry` is set
+      // in the same breath as `entries.register`, so an unclosed one is always
+      // findable by guest key - which means `ensureTab` routed through
+      // `replaceNativeGuestForWindow` and marked it already, and a closed one
+      // makes this close a no-op. The mark is here so the branch is right on
+      // its own terms instead of resting on that routing, and so both supersede
+      // routes leave the same obligation behind.
+      entry.succeededByReplacement = true;
+      this.owedIsolatedReleases.set(inFlight.sessionKey, entry);
       void this.closeEntry(entry).catch((cleanupError: unknown) => {
         log.warn("[browser-view] native tab cleanup failed", {
           error: describeLogError(cleanupError),
@@ -402,9 +472,20 @@ export class BrowserViewProvisioning {
    * long as the successor has not been born. The old entry is therefore marked
    * `succeededByReplacement` before it closes, so the close leaves the
    * partition alone and the replacement is born into the same signed-in
-   * session. Should the replacement never arrive - its birth fails, or a third
-   * window supersedes it - the mark is lifted and the release the close
-   * skipped runs then, against the registry as it stands at that moment.
+   * session.
+   *
+   * Should the replacement never arrive, the mark is lifted and the release
+   * the close skipped runs then, against the registry as it stands at that
+   * moment. "Never arrive" includes the case a THIRD window takes the move
+   * over mid-birth, and that is why the obligation is held in
+   * `owedIsolatedReleases` rather than in this method's own rejection handler:
+   * the third window's ensure is an ordinary cold mint with no reference to
+   * the entry whose release was skipped, so if IT fails before creating an
+   * entry there is no close left to carry the partition out.
+   *
+   * The debt is keyed by SESSION, so a move of two sibling tabs settles it
+   * once, when the last of their births ends - not when the first one does,
+   * while the other is still on its way into the same partition.
    */
   private replaceNativeGuestForWindow(
     guestKey: string,
@@ -418,6 +499,8 @@ export class BrowserViewProvisioning {
       toWindowId: windowId,
     });
     entry.succeededByReplacement = true;
+    const sessionKey = nativeSessionKey(entry.identity.key);
+    this.owedIsolatedReleases.set(sessionKey, entry);
     const inFlight = this.inFlightEnsures.get(guestKey);
     if (inFlight !== undefined && inFlight.entry === entry) {
       this.supersedeInFlightEnsure(guestKey, inFlight);
@@ -431,13 +514,16 @@ export class BrowserViewProvisioning {
     }
     const replacement = this.ensureTab(windowId, input);
     void replacement.catch(() => {
-      // A third window may have taken the move over while this successor was
-      // being born; its own replacement then owns this decision. (The failed
-      // ensure's in-flight record is already gone: its `finally` was attached
-      // before this handler.)
-      if (this.inFlightEnsures.has(guestKey)) return;
-      entry.succeededByReplacement = false;
-      this.releaseIsolatedSessionStorage(entry);
+      // The obligation recorded above, answered here or deferred to whichever
+      // ensure for this SESSION settles last - a third window may have taken
+      // the move over while this successor was being born, and its own cold
+      // ensure carries no reference to the entry whose release was skipped.
+      //
+      // Both doors are needed. This one covers a replacement that failed
+      // before it was ever recorded in flight (a synchronous throw out of
+      // `ensureAttachedGuestTab`); the in-flight `finally` covers every
+      // successor after it, and every sibling tab's birth as well.
+      this.settleOwedIsolatedRelease(sessionKey);
     });
     return replacement;
   }
@@ -516,6 +602,12 @@ export function isNativeTabAvailable(
 
 interface InFlightEnsure {
   readonly windowId: string;
+  /**
+   * The session this birth belongs to. Read by the isolated-release debt,
+   * which is owed per SESSION: every tab of one shares its partition, so a
+   * sibling still being born is a reason not to clear it.
+   */
+  readonly sessionKey: string;
   registrationId: string | null;
   entry: BrowserViewEntry | null;
   readonly lifecycle: NativeBrowserViewLifecycle;

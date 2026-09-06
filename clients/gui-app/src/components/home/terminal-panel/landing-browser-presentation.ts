@@ -22,6 +22,34 @@ import { defaultLandingBrowserTitle } from "./use-landing-browser-reconciliation
 export const LANDING_BROWSER_WATCHED_HOST_CAP = 4;
 
 /**
+ * How many devices the always-mounted tombstone recovery bridge puts on a
+ * browser stream at a time.
+ *
+ * The same budget against the same desktop ceiling, for the arm nobody is
+ * looking at. The bridge mounts a device because a browser tombstone still
+ * names it, and an outstanding tombstone is unbounded in a way the strip is
+ * not: it survives sign-out, reload and the device's absence, so a fleet with
+ * a dozen of them would spend the whole window allowance on background closes
+ * and the desktop would refuse the panel's own stream, or a canvas tile's -
+ * the surfaces a reader is actually watching. Those are refused LAST, and a
+ * refusal is only re-asked when some coordinator RELEASES its stream
+ * (`retryFailedCoordinators`) - an edge a recovery stream reaches when its
+ * tombstones drain, and, since the rotation below, also when it yields.
+ *
+ * Two, and deliberately the smallest of the three budgets: this arm has no
+ * reader, and it makes progress by rotation rather than by breadth. A slot is
+ * a LEASE on a place in a QUEUE: a device renews it by answering and goes to
+ * the back otherwise. `landing-browser-recovery-slots.ts` owns that policy,
+ * and it is what keeps this bound from starving the devices behind a silent
+ * one.
+ *
+ * The bound is on DEVICES this bridge names, not on streams it opens: a device
+ * the panel is already watching shares that coordinator by key and costs no
+ * second stream, so the real spend is at most this number and usually less.
+ */
+export const LANDING_BROWSER_RECOVERY_HOST_CAP = 2;
+
+/**
  * The tooltip on a row whose device this window is not watching.
  *
  * It is an admission rather than a claim: a row past the bound is rendered

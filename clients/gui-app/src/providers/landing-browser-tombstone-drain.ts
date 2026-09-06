@@ -72,6 +72,20 @@ export function landingBrowserTombstoneDecision(args: {
  * coordinator releases its stream (`browser-sessions-coordinator.ts`), which
  * is the edge a slot frees on, and that covers the panel's and a tile's
  * refused stream the same way as this one's.
+ *
+ * That edge is only reachable because the bridge BOUNDS what it mounts
+ * (`LANDING_BROWSER_RECOVERY_HOST_CAP`, and only for devices with a route).
+ * Mounting one per tombstoned device would have filled the window's allowance
+ * with streams that release exactly when their tombstones settle - which, for
+ * the devices that cannot answer, is never - so the refusal would have landed
+ * on the panel's own stream with nothing left to free a slot.
+ *
+ * Every tombstone is still passed here, mounted device or not: a key whose
+ * device is unmounted reads as "wait" and is re-examined when the mount
+ * rotates to it. Rotation is what makes that a promise rather than a hope - a
+ * mounted device that does not answer within its attempt budget yields its
+ * slot (`landing-browser-recovery-slots.ts`), so no device is parked behind a
+ * silent one indefinitely.
  */
 export function useLandingBrowserTombstoneDrain(args: {
   readonly pendingKills: ReadonlyArray<LandingBrowserPendingKill>;
