@@ -1362,6 +1362,47 @@ describe("runHostUpdate - bound intents", () => {
     expect(ack).toMatchObject({ kind: "claimed", attemptId });
   });
 
+  it("the same consumed-stage park is terminalized by a plain `install` too, with no bound intent", async () => {
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    const attemptId = await parkUpgrade("2.0.0");
+    world.installId = "install-consumed";
+    await seedInstalled("2.0.0");
+    await seedStaged(null);
+    mocks.ackWrites.length = 0;
+
+    // A plain `install` whose plan target EQUALS the park's admits exactly
+    // one action - a RESUME of that attempt - so it meets the same gate. The
+    // twin matters because a bound intent is not the only way here: 07 and
+    // the reconciler pass one, but a person typing `traycer host update`, and
+    // the desktop's own idle sweep, do not.
+    //
+    // What this pin discriminates is the SELECTION, not the arm: if a plain
+    // `install` started a fresh attempt over the park instead of resuming it,
+    // the terminalization would never run and the park would be superseded
+    // silently. It does NOT discriminate which arm then runs - both the
+    // resumed-apply arm and the activation arm re-validate the install
+    // identity first, and either would report the same failure.
+    await expect(
+      runUpdate({ ackNonce: "nonce-abcdefgh" }),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_INSTALL_RECORD_INVALID,
+    });
+
+    const record = await requireRecord();
+    expect(record.attemptId).toBe(attemptId);
+    expect(record.phase).toBe("failed");
+    expect(record.error).toMatchObject({
+      code: "install-changed",
+      phase: "preparing",
+    });
+    expect(mocks.applyHostWithAttempt).not.toHaveBeenCalled();
+    expect(await readAck("nonce-abcdefgh")).toMatchObject({
+      kind: "claimed",
+      attemptId,
+    });
+  });
+
   it("after the terminalization a plain host update starts the debt arm and completes", async () => {
     await seedInstalled("1.0.0");
     world.runningVersion = "1.0.0";
@@ -3422,13 +3463,14 @@ describe("ported: reassertMarkerUnderLock under the lock", () => {
   it("busy park after a takeover: the displaced record is RESTORED, and no `failed` stamp lands", async () => {
     await seedInstalled("1.0.0");
     world.runningVersion = "1.0.0";
-    mocks.disk.current = {
+    const foreign: HostUpdateProgress = {
       state: "updating",
       error: null,
       targetVersion: "2.0.0",
       updatedAt: "2026-01-01T00:00:00.000Z",
       writerId: "foreign-writer",
     };
+    mocks.disk.current = foreign;
     mocks.applyHostWithAttempt.mockRejectedValue(busyError());
 
     await expect(runUpdate({})).rejects.toMatchObject({
@@ -3442,6 +3484,24 @@ describe("ported: reassertMarkerUnderLock under the lock", () => {
       targetVersion: "2.0.0",
       writerId: "foreign-writer",
     });
+    // The final state above is ALSO what a run that never took the marker
+    // over would leave, so on its own it does not distinguish "took it and
+    // put it back" from "left it alone". These are the two writes, in order,
+    // each conditional on exactly what it expected to find.
+    const swaps = mocks.replaceUpdateProgressMarkerIfUnchanged.mock.calls;
+    expect(swaps).toHaveLength(2);
+    // 1. the TAKEOVER, under the lock: the lock holder owns the marker.
+    expect(swaps[0]?.[1]).toEqual(foreign);
+    const own = swaps[0]?.[2];
+    expect(own).toMatchObject({
+      state: "updating",
+      targetVersion: "2.0.0",
+      writerId: "test-writer",
+    });
+    // 2. the RESTORE: this run's own record back to the VERY record it
+    // displaced - not a reconstruction of it, and never a blind write.
+    expect(swaps[1]?.[1]).toEqual(own);
+    expect(swaps[1]?.[2]).toEqual(foreign);
   });
 
   it("a failure after a takeover but before the host is disturbed restores the displaced record", async () => {
