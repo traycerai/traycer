@@ -12,6 +12,7 @@ import {
   parseWindowsProcessIdJson,
   setWindowsStartEvidenceDepsForTests,
   setWindowsTaskInstallDepsForTests,
+  WINDOWS_SLOT_PROCESS_SCAN_FILTER_LINE_COUNT,
   type ProcessRunner,
   type WindowsStartEvidenceDeps,
   type WindowsTaskInstallDeps,
@@ -128,11 +129,35 @@ describe("Windows service stale host cleanup", () => {
       "c:\\users\\traycer dev\\.traycer\\host\\install\\",
     );
     expect(detail).toContain("Select-Object ProcessId, Name, ExecutablePath");
-    // Everything but the projection line is byte-identical to the pid scan
-    // - the filter must never drift between the kill and the diagnostic.
+    // Everything up to the projection is byte-identical to the pid scan - the
+    // filter must never drift between the kill and the diagnostic.
     const pidScan = buildWindowsSlotProcessScanScript(options);
-    expect(detail.split("\n").slice(0, -1)).toEqual(
-      pidScan.split("\n").slice(0, -1),
+    const filter = WINDOWS_SLOT_PROCESS_SCAN_FILTER_LINE_COUNT;
+    expect(detail.split("\n").slice(0, filter)).toEqual(
+      pidScan.split("\n").slice(0, filter),
+    );
+    expect(detail.split("\n")).toHaveLength(filter + 1);
+    expect(pidScan.split("\n").length).toBeGreaterThan(filter + 1);
+  });
+
+  it("expands the pid scan into the host tree minus this CLI's own subtree", () => {
+    const script = buildWindowsSlotProcessScanScript({
+      hostHome: "C:\\Users\\Traycer Dev\\.traycer\\host",
+      currentPid: 1234,
+    });
+    // The tree is walked from the one snapshot the filter took, over parent
+    // links guarded by creation order (pid reuse turns a dead parent's id
+    // into an unrelated process's).
+    expect(script).toContain("ParentProcessId");
+    expect(script).toContain("$parent.CreationDate -gt $p.CreationDate");
+    // This process and everything under it (the scan, the taskkills) is
+    // spared - the daemon spawns `host update` as its own child, so the CLI
+    // is routinely inside the very tree it is stopping.
+    expect(script).toContain("$spared = @{ $PID = $true }");
+    expect(script).toContain("& $expand @(1234)");
+    expect(script).toContain("-not $spared.ContainsKey([int]$_)");
+    expect(script.trim().endsWith("@($victims) | ConvertTo-Json -Compress")).toBe(
+      true,
     );
   });
 
@@ -208,7 +233,7 @@ describe("Windows service stale host cleanup", () => {
       calls
         .filter((call) => call.command === "taskkill")
         .map((call) => call.args),
-    ).toEqual([["/T", "/F", "/PID", "401"]]);
+    ).toEqual([["/F", "/PID", "401"]]);
   });
 
   it("kills slot-scanned processes when pid metadata is missing", async () => {
@@ -231,8 +256,8 @@ describe("Windows service stale host cleanup", () => {
         .filter((call) => call.command === "taskkill")
         .map((call) => call.args),
     ).toEqual([
-      ["/T", "/F", "/PID", "401"],
-      ["/T", "/F", "/PID", "402"],
+      ["/F", "/PID", "401"],
+      ["/F", "/PID", "402"],
     ]);
   });
 
@@ -256,8 +281,11 @@ describe("Windows service stale host cleanup", () => {
     expect(
       calls
         .filter((call) => call.command === "taskkill")
-        .map((call) => call.args[3]),
-    ).toEqual(["401", "402"]);
+        .map((call) => call.args),
+    ).toEqual([
+      ["/F", "/PID", "401"],
+      ["/F", "/PID", "402"],
+    ]);
   });
 
   it("does not kill the recorded pid when the scan verifies it no longer matches the host", async () => {
@@ -282,8 +310,8 @@ describe("Windows service stale host cleanup", () => {
     expect(
       calls
         .filter((call) => call.command === "taskkill")
-        .map((call) => call.args[3]),
-    ).toEqual(["402"]);
+        .map((call) => call.args),
+    ).toEqual([["/F", "/PID", "402"]]);
   });
 
   it("falls back to the recorded pid when the slot scan cannot run", async () => {
@@ -304,11 +332,39 @@ describe("Windows service stale host cleanup", () => {
 
     await controller.stop(serviceLabelFor("staging"), { force: false });
 
+    // Unverified, so the tree flag stays: the fallback cannot enumerate.
     expect(
       calls
         .filter((call) => call.command === "taskkill")
-        .map((call) => call.args[3]),
-    ).toEqual(["401"]);
+        .map((call) => call.args),
+    ).toEqual([["/T", "/F", "/PID", "401"]]);
+  });
+
+  it("never tree-kills its own parent on the unverified fallback", async () => {
+    // The daemon spawns this CLI as its child; when the scan is unavailable
+    // and pid.json names that daemon, `/T` would take the CLI down with it.
+    mocks.readHostPidMetadata.mockResolvedValue({
+      pid: process.ppid,
+      hostId: "host-test",
+      version: "1.0.0",
+      websocketUrl: "ws://127.0.0.1:54321/rpc",
+      startedAt: "2026-01-01T00:00:00.000Z",
+    });
+    const calls: RecordedCall[] = [];
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (command === "powershell.exe") throw new Error("spawn failed");
+      return success("");
+    };
+    const controller = createWindowsController(runner);
+
+    await controller.stop(serviceLabelFor("staging"), { force: false });
+
+    expect(
+      calls
+        .filter((call) => call.command === "taskkill")
+        .map((call) => call.args),
+    ).toEqual([["/F", "/PID", String(process.ppid)]]);
   });
 
   it("purges pid metadata on uninstall like it does on stop", async () => {

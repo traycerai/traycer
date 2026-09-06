@@ -379,10 +379,28 @@ async function stopService(
 // (worse) its CWD stays open inside the install dir, so the next install-swap
 // rename fails with EBUSY. Kill the processes a slot-scoped scan verifies by
 // exe path/command line - that covers the recorded pid.json host too, when it
-// is genuinely still the host. The raw recorded pid is used only when the scan
-// itself is unavailable: a host that died without cleanup leaves pid.json
-// behind, and Windows may have recycled that pid for an unrelated process an
-// unverified `taskkill /T /F` would take down.
+// is genuinely still the host - AND their descendants, which the scan expands
+// itself (see `buildSlotProcessScanScript`) rather than leaving to
+// `taskkill /T`.
+//
+// The difference is whether this CLI survives its own stop. The host daemon
+// spawns `traycer host update` / `traycer host service uninstall` as ITS
+// child (`detached` on win32 opens no gap in the parent chain), so a
+// `taskkill /T` rooted at the host walks straight into the updater that
+// issued it: the update died mid-`beforeSwap` every time, between stopping
+// the old host and swapping the new one in, leaving an `updating` progress
+// marker nobody would ever clear and the old install still in place. The
+// scan's expansion subtracts this process and everything under it (the
+// PowerShell running the scan, the taskkills below), so the kill is the host
+// tree MINUS the process performing it - which is the only tree a stop can
+// ever have meant. Each survivor is then killed on its own, without `/T`.
+//
+// The raw recorded pid is used only when the scan itself is unavailable: a
+// host that died without cleanup leaves pid.json behind, and Windows may have
+// recycled that pid for an unrelated process an unverified kill would take
+// down. That path cannot enumerate, so it keeps `/T` - except when the
+// recorded pid is this process's own parent, the one shape in which `/T` is
+// known to be suicide.
 async function killHostProcessTree(
   label: ServiceLabel,
   run: ProcessRunner,
@@ -392,9 +410,11 @@ async function killHostProcessTree(
     scannedPids === null ? await readHostPidMetadata(label.environment) : null;
   const fallbackPids = pidMetadata === null ? [] : [pidMetadata.pid];
   const pids = uniqueProcessIds(scannedPids ?? fallbackPids);
+  const treeFlag = (pid: number): readonly string[] =>
+    scannedPids === null && pid !== process.ppid ? ["/T"] : [];
   await Promise.all(
     pids.map((pid) =>
-      run("taskkill", ["/T", "/F", "/PID", String(pid)], {
+      run("taskkill", [...treeFlag(pid), "/F", "/PID", String(pid)], {
         env: undefined,
         cwd: undefined,
         timeoutMs: WINDOWS_TASKKILL_TIMEOUT_MS,
@@ -641,28 +661,75 @@ interface SlotProcessScanOptions {
   readonly currentPid: number;
 }
 
+// The kill set: every slot-matching process AND its descendants, minus this
+// CLI's own subtree. Expanded here, from the one `Win32_Process` snapshot the
+// filter already took, instead of by `taskkill /T` per root - `/T` cannot be
+// told to spare anything, and this CLI is routinely a descendant of the host
+// it is stopping (the daemon spawns `host update` as its child). See
+// `killHostProcessTree`.
+//
+// Parent links are trusted only when the parent started no later than the
+// child: `ParentProcessId` is a bare number, and once the real parent has
+// exited Windows can hand its pid to an unrelated process that then reads as
+// the orphan's parent. `taskkill /T` walks that link blindly; the creation
+// order check refuses it. Cycles from the same reuse are closed by the
+// visited set.
 function buildSlotProcessScanScript(options: SlotProcessScanOptions): string {
-  return buildSlotProcessScanScriptWithProjection(
-    options,
-    "@($matches | Select-Object -ExpandProperty ProcessId) | ConvertTo-Json -Compress",
-  );
+  return buildSlotProcessScanScriptWithProjection(options, [
+    "$byId = @{}",
+    "foreach ($p in $all) { $byId[[int]$p.ProcessId] = $p }",
+    "$children = @{}",
+    "foreach ($p in $all) {",
+    "  $parentId = [int]$p.ParentProcessId",
+    "  $parent = $byId[$parentId]",
+    "  if ($null -eq $parent) { continue }",
+    "  if ($null -ne $parent.CreationDate -and $null -ne $p.CreationDate -and $parent.CreationDate -gt $p.CreationDate) { continue }",
+    "  if (-not $children.ContainsKey($parentId)) { $children[$parentId] = New-Object System.Collections.ArrayList }",
+    "  [void]$children[$parentId].Add([int]$p.ProcessId)",
+    "}",
+    "$expand = {",
+    "  param($roots)",
+    "  $seen = @{}",
+    "  $queue = New-Object System.Collections.ArrayList",
+    "  foreach ($root in $roots) { [void]$queue.Add([int]$root) }",
+    "  while ($queue.Count -gt 0) {",
+    "    $id = [int]$queue[0]",
+    "    $queue.RemoveAt(0)",
+    "    if ($seen.ContainsKey($id)) { continue }",
+    "    $seen[$id] = $true",
+    "    if ($children.ContainsKey($id)) { foreach ($child in $children[$id]) { [void]$queue.Add($child) } }",
+    "  }",
+    "  @($seen.Keys)",
+    "}",
+    `$spared = @{ $PID = $true }`,
+    `foreach ($id in (& $expand @(${options.currentPid}))) { $spared[[int]$id] = $true }`,
+    "$roots = @($matches | ForEach-Object { [int]$_.ProcessId })",
+    "$victims = @(& $expand $roots) | Where-Object { -not $spared.ContainsKey([int]$_) } | ForEach-Object { [int]$_ }",
+    "@($victims) | ConvertTo-Json -Compress",
+  ]);
 }
 
 // Same filter as the pid scan, projecting name + executable path as well so
 // the install swap's EBUSY error can NAME the processes still matching the
-// slot instead of surfacing a bare errno.
+// slot instead of surfacing a bare errno. Direct matches only: this names the
+// handle holders the swap rename tripped over, and their children are not
+// what holds the rename.
 function buildSlotProcessDetailScanScript(
   options: SlotProcessScanOptions,
 ): string {
-  return buildSlotProcessScanScriptWithProjection(
-    options,
+  return buildSlotProcessScanScriptWithProjection(options, [
     "@($matches | Select-Object ProcessId, Name, ExecutablePath) | ConvertTo-Json -Compress",
-  );
+  ]);
 }
+
+// The lines shared by every scan: the snapshot and the slot filter. Exported
+// (as a count) so the suite can pin that the kill and the diagnostic never
+// drift apart on what they call a host process.
+export const WINDOWS_SLOT_PROCESS_SCAN_FILTER_LINE_COUNT = 19;
 
 function buildSlotProcessScanScriptWithProjection(
   options: SlotProcessScanOptions,
-  projection: string,
+  projection: readonly string[],
 ): string {
   const hostPaths = powershellStringArray(
     slotHostProcessPaths(options.hostHome),
@@ -671,7 +738,8 @@ function buildSlotProcessScanScriptWithProjection(
     "$ErrorActionPreference = 'SilentlyContinue'",
     `$excluded = @(${options.currentPid}, $PID)`,
     `$hostPaths = @(${hostPaths})`,
-    "$matches = Get-CimInstance Win32_Process | Where-Object {",
+    "$all = @(Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId, CreationDate, Name, ExecutablePath, CommandLine)",
+    "$matches = $all | Where-Object {",
     "  $pidValue = [int]$_.ProcessId",
     "  if ($excluded -contains $pidValue) {",
     "    $false",
@@ -686,7 +754,7 @@ function buildSlotProcessScanScriptWithProjection(
     "    $hostMatch",
     "  }",
     "}",
-    projection,
+    ...projection,
   ].join("\n");
 }
 
