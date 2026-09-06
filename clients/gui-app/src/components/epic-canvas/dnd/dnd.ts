@@ -243,6 +243,14 @@ export interface ComposerAttachmentDropTargetData {
 export type LeftPanelRailDropPosition = "before" | "after" | "combine";
 
 /**
+ * Which way a rail lays its slots out. The drop bands run along that axis, so
+ * a rail item has to say which one it is: read down a row of icons and every
+ * sideways drag stays inside the band it started in, which reads as a nest
+ * rather than the reorder the gesture asked for.
+ */
+export type LeftPanelRailOrientation = "horizontal" | "vertical";
+
+/**
  * Canvas drop targets carry the view-tab (and, for the empty shell, the
  * epic) that owns them so the root-level commit can address the right
  * canvas without React context.
@@ -276,6 +284,7 @@ export type EpicCanvasDropTargetData =
       readonly kind: "left-panel-rail-item";
       readonly viewTabId?: string;
       readonly panelId: LeftPanelId;
+      readonly orientation: LeftPanelRailOrientation;
     }
   | {
       readonly kind: "left-panel-rail-list";
@@ -312,6 +321,7 @@ type EpicCanvasLeftPanelDropTargetData =
       readonly kind: "left-panel-rail-item";
       readonly viewTabId?: string;
       readonly panelId: LeftPanelId;
+      readonly orientation: LeftPanelRailOrientation;
     }
   | {
       readonly kind: "left-panel-rail-list";
@@ -489,6 +499,12 @@ function isLeftPanelRailDragOrigin(
   value: unknown,
 ): value is EpicCanvasLeftPanelRailDragData["origin"] {
   return value === "rail" || value === "panel-section";
+}
+
+function isLeftPanelRailOrientation(
+  value: unknown,
+): value is LeftPanelRailOrientation {
+  return value === "horizontal" || value === "vertical";
 }
 
 function isNonEmptyString(value: unknown): value is string {
@@ -850,13 +866,18 @@ function readLeftPanelDropTargetData(
   value: Record<string, unknown>,
 ): EpicCanvasLeftPanelDropTargetData | null {
   if (value.kind === "left-panel-rail-item") {
-    if (!isNonEmptyString(value.viewTabId) || !isLeftPanelId(value.panelId)) {
+    if (
+      !isNonEmptyString(value.viewTabId) ||
+      !isLeftPanelId(value.panelId) ||
+      !isLeftPanelRailOrientation(value.orientation)
+    ) {
       return null;
     }
     return {
       kind: "left-panel-rail-item",
       viewTabId: value.viewTabId,
       panelId: value.panelId,
+      orientation: value.orientation,
     };
   }
   if (value.kind === "left-panel-rail-list") {
@@ -941,18 +962,10 @@ export function getArtifactTabDropIndexFromPoint(
 
 /**
  * The rail's own drop bands, along whichever axis the slots are laid out on:
- * the outer 30% at each end reorders, the middle 40% nests. `"y"` is the rail
- * itself; `"x"` is for a surface that lays the same slots out in a row, such
- * as the strip on Layout ▸ Sidebar, which resolves a drop to the same three
- * outcomes from the same fractions.
- *
- * The FRACTIONS are shared; the axis is not. `getEpicCanvasDropPreview` has no
- * orientation in hand for a `left-panel-rail-item` - the drop data carries only
- * `viewTabId` and `panelId` - so the rail reads `"y"` in both of its
- * orientations, and a drag along a HORIZONTAL rail is decided by how high in
- * the icon the pointer sits rather than which side of it. Teaching the rail its
- * own axis means widening that drop data, which is a change to the rail's live
- * drag behaviour and belongs to its own line of work.
+ * the outer 30% at each end reorders, the middle 40% nests. Every surface that
+ * lays those slots out resolves through here - the rail down a column (`"y"`)
+ * or across a row (`"x"`), and the strip on Layout ▸ Sidebar - so the same
+ * gesture reads the same way wherever it is made.
  */
 export function getLeftPanelRailDropPositionOnAxis(
   point: PointLike,
@@ -965,13 +978,6 @@ export function getLeftPanelRailDropPositionOnAxis(
   if (offset < extent * 0.3) return "before";
   if (offset > extent * 0.7) return "after";
   return "combine";
-}
-
-export function getLeftPanelRailDropPositionFromPoint(
-  point: PointLike,
-  rect: RectLike | null,
-): LeftPanelRailDropPosition {
-  return getLeftPanelRailDropPositionOnAxis(point, rect, "y");
 }
 
 function getRectBottom(rect: RectLike): number {
@@ -1090,7 +1096,11 @@ export function getEpicCanvasDropPreview(
       kind: "left-panel-rail",
       viewTabId: target.viewTabId,
       panelId: target.panelId,
-      position: getLeftPanelRailDropPositionFromPoint(point, rect),
+      position: getLeftPanelRailDropPositionOnAxis(
+        point,
+        rect,
+        target.orientation === "horizontal" ? "x" : "y",
+      ),
     };
   }
   if (target.kind === "left-panel-rail-list") {

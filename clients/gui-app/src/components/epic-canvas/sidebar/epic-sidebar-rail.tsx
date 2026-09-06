@@ -521,8 +521,9 @@ function RailGroupButton(props: RailGroupButtonProps) {
       kind: "left-panel-rail-item",
       viewTabId: tabId,
       panelId: primaryPanel.id,
+      orientation,
     }),
-    [primaryPanel.id, tabId],
+    [orientation, primaryPanel.id, tabId],
   );
   const { setNodeRef: dropRef, isOver } = useDroppable({
     id: getPaneScopedDndId(tabId, getLeftPanelRailDropId(primaryPanel.id)),

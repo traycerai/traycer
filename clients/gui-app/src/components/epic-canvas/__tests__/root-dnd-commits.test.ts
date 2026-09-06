@@ -362,6 +362,7 @@ describe("root dnd commits - left panel", () => {
     const target = {
       kind: "left-panel-rail-item",
       panelId: "chats",
+      orientation: "vertical",
     } as const;
     const preview = resolveCanvasDropPreview({
       source,
@@ -378,6 +379,93 @@ describe("root dnd commits - left panel", () => {
       position: "combine",
     });
     expect(isLeftPanelDropNoop(source, preview)).toBe(true);
+  });
+
+  // A rail slot is square, so the pointer below sits in the middle band of one
+  // axis and the leading band of the other. Which one is read is the whole
+  // difference between reordering the rail and nesting into it.
+  const RAIL_SLOT_RECT = { left: 0, top: 0, width: 36, height: 36 };
+  const LEADING_X_MIDDLE_Y = { x: 4, y: 18 };
+
+  it("reorders a horizontal rail drop from the pointer's x, whatever its height", () => {
+    const source = railSource("file-tree", "rail");
+    const target = {
+      kind: "left-panel-rail-item",
+      panelId: "terminals",
+      orientation: "horizontal",
+    } as const;
+    for (const y of [2, 18, 34]) {
+      expect(
+        resolveCanvasDropPreview({
+          source,
+          target,
+          point: { x: LEADING_X_MIDDLE_Y.x, y },
+          targetRect: RAIL_SLOT_RECT,
+          targetElement: null,
+          activeRect: null,
+        }),
+      ).toEqual({
+        kind: "left-panel-rail",
+        panelId: "terminals",
+        position: "before",
+      });
+    }
+    const preview = resolveCanvasDropPreview({
+      source,
+      target,
+      point: LEADING_X_MIDDLE_Y,
+      targetRect: RAIL_SLOT_RECT,
+      targetElement: null,
+      activeRect: null,
+    });
+
+    expect(isLeftPanelDropNoop(source, preview)).toBe(false);
+    commitResolvedCanvasDrop({ source, target, preview }, rawNestedFocus);
+
+    expect(useLeftPanelStore.getState().getPanelGroups()).toEqual([
+      { panelIds: ["chats", "artifacts"] },
+      { panelIds: ["file-tree"] },
+      { panelIds: ["terminals"] },
+      { panelIds: ["browsers"] },
+      { panelIds: ["git-diff"] },
+      { panelIds: ["pull-requests"] },
+      { panelIds: ["sharing"] },
+      { panelIds: ["comments"] },
+    ]);
+  });
+
+  it("still nests a vertical rail drop at that same point", () => {
+    const source = railSource("file-tree", "rail");
+    const target = {
+      kind: "left-panel-rail-item",
+      panelId: "terminals",
+      orientation: "vertical",
+    } as const;
+    const preview = resolveCanvasDropPreview({
+      source,
+      target,
+      point: LEADING_X_MIDDLE_Y,
+      targetRect: RAIL_SLOT_RECT,
+      targetElement: null,
+      activeRect: null,
+    });
+
+    expect(preview).toEqual({
+      kind: "left-panel-rail",
+      panelId: "terminals",
+      position: "combine",
+    });
+    commitResolvedCanvasDrop({ source, target, preview }, rawNestedFocus);
+
+    expect(useLeftPanelStore.getState().getPanelGroups()).toEqual([
+      { panelIds: ["chats", "artifacts"] },
+      { panelIds: ["terminals", "file-tree"] },
+      { panelIds: ["browsers"] },
+      { panelIds: ["git-diff"] },
+      { panelIds: ["pull-requests"] },
+      { panelIds: ["sharing"] },
+      { panelIds: ["comments"] },
+    ]);
   });
 
   it("inserts a rail group into a single-panel group via section bounds", () => {
@@ -669,7 +757,11 @@ describe("root dnd commits - left panel drop resolver", () => {
     commitResolvedCanvasDrop(
       {
         source,
-        target: { kind: "left-panel-rail-item", panelId: "chats" },
+        target: {
+          kind: "left-panel-rail-item",
+          panelId: "chats",
+          orientation: "vertical",
+        },
         preview,
       },
       rawNestedFocus,
