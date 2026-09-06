@@ -22,13 +22,14 @@ function folder(over: {
   readonly currentIntent: WorktreeFolderIntent | null;
   readonly hasStagedIntent?: boolean;
   readonly summary?: WorktreeWorkspaceSummary;
+  readonly metadataPending?: boolean;
 }) {
   return {
     key: over.key,
     displayName: over.displayName,
     displayPath: over.displayPath,
     unresolved: false,
-    metadataPending: false,
+    metadataPending: over.metadataPending ?? false,
     missing: false,
     isGitRepo: true,
     mode: over.mode,
@@ -231,6 +232,55 @@ describe("WorkspaceFolderHoverList", () => {
     expect(
       screen.getByTestId("workspace-hover-source-branch").textContent,
     ).toBe("from main");
+  });
+
+  it("omits the source branch while the row's metadata is still pending", () => {
+    // A pending row still carries a non-null summary - the binding-entry
+    // fallback, whose `mainBranch` comes from the folder's own checkout. That
+    // is a guess, not provenance, so nothing is attributed until it resolves.
+    render(
+      <WorkspaceFolderHoverList
+        items={[
+          folder({
+            key: "/b",
+            displayName: "infra",
+            branchLabel: "feat/login",
+            displayPath: "/Users/me/Work/infra",
+            mode: "worktree",
+            metadataPending: true,
+            currentIntent: {
+              kind: "import",
+              workspacePath: "/Users/me/Work/infra",
+              repoIdentifier: null,
+              isPrimary: true,
+              worktreePath: "/Users/me/.traycer/worktrees/infra/feat-login",
+            },
+            summary: {
+              workspacePath: "/Users/me/Work/infra",
+              isGitRepo: true,
+              repoIdentifier: null,
+              mainBranch: "main",
+              scripts: null,
+              worktrees: [
+                {
+                  worktreePath: "/Users/me/.traycer/worktrees/infra/feat-login",
+                  branch: "feat/login",
+                  sourceBranch: "develop",
+                  head: "def",
+                  isMain: false,
+                  isLocked: false,
+                },
+              ],
+            },
+          }),
+        ]}
+      />,
+    );
+    expect(screen.queryByTestId("workspace-hover-source-branch")).toBeNull();
+    // The branch itself still renders - only the provenance is withheld.
+    expect(screen.getByTestId("workspace-hover-branch-name").textContent).toBe(
+      "feat/login",
+    );
   });
 
   it("shows 'New worktree' with no path for a to-be-created worktree", () => {
