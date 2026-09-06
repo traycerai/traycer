@@ -343,7 +343,11 @@ async function landMarkerAtomically(
         // `from` is gone (or the marker directory is) - nothing to retain,
         // so neither this warning nor the caller's may name a retained
         // path. Neither route landed anything; the distinct value is what
-        // keeps the callers' "retained at <path>" lines honest.
+        // keeps the callers' "retained at <path>" lines honest. The drop is
+        // a best-effort no-op on a path that is already gone; it matters
+        // only when `from` still exists and the wx create failed for a
+        // missing DIRECTORY on the target side, so no scratch is left.
+        await dropMarkerFile(environment, from, `${step}-gone`);
         createCliLogger(environment).warn(
           "Host update progress marker conditional swap failed - the file to land is gone, nothing was retained",
           {
@@ -563,7 +567,14 @@ export async function createUpdateProgressMarkerIfAbsent(
       staged,
       "create",
     );
-    if (landing === "failed") return "failed";
+    // BOTH failure landings: nothing of `next` is on the live path either
+    // way, and a `created` answered over an empty path would have `host
+    // update` record ownership of a marker that does not exist and skip
+    // every later claim - the download and the disruptive work would then
+    // run with no progress or drain protection at all.
+    if (landing === "failed" || landing === "failed-nothing-retained") {
+      return "failed";
+    }
     if (landing === "exists") {
       const standing = await readMarkerState(target, environment);
       if (standing.kind === "unrecognised") {

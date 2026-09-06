@@ -572,6 +572,49 @@ describe("update-progress-marker", () => {
   // the same path before the stamp writes. Replacing unconditionally there
   // would bury that updater's live progress under a failure that is not
   // about it.
+  describe("createUpdateProgressMarkerIfAbsent when the landing cannot happen", () => {
+    it("answers `failed` (never `created`) when neither landing route finds the file or its directory, and leaves no staging file", async () => {
+      // `link` answers ENOENT and the `wx` fallback's read of the staged
+      // file answers ENOENT too - the staged file vanished between staging
+      // and landing. `landMarkerAtomically` reports that as its own value
+      // so callers do not name a retained scratch; the create must still
+      // read it as a FAILURE. Falsification: handle only `"failed"` at the
+      // create's landing check (the round-10 shape) and this returns
+      // `created` over an EMPTY live path - `host update` then records
+      // ownership of a marker that does not exist.
+      vi.doMock("node:fs/promises", async (importOriginal) => {
+        const actual =
+          await importOriginal<typeof import("node:fs/promises")>();
+        const enoent = (): never => {
+          throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+        };
+        return {
+          ...actual,
+          link: async () => enoent(),
+          readFile: async () => enoent(),
+        };
+      });
+      try {
+        const { createUpdateProgressMarkerIfAbsent, readUpdateProgressMarker } =
+          await import("../update-progress-marker");
+        const next = {
+          state: "updating" as const,
+          error: null,
+          targetVersion: "1.4.0",
+          updatedAt: "2026-07-03T00:00:00.000Z",
+          writerId: "writer-a",
+        };
+        expect(
+          await createUpdateProgressMarkerIfAbsent("production", next),
+        ).toBe("failed");
+        expect(await readUpdateProgressMarker("production")).toBeNull();
+        expect(scratchAndStagingFiles()).toEqual([]);
+      } finally {
+        vi.doUnmock("node:fs/promises");
+      }
+    });
+  });
+
   describe("replaceUpdateProgressMarkerIfUnchanged", () => {
     const expectedUpdating = {
       state: "updating" as const,
