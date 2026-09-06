@@ -1683,25 +1683,18 @@ function registerHostCommands(program: Command): void {
     (opts) => {
       const release = typeof opts.release === "string" ? opts.release : null;
       return async (ctx) => {
-        // An EXPLICIT empty target is a mistake, not a request for latest.
-        // `--version=`, `--release=` and an unset shell variable
-        // (`--release "$PIN"`) all arrive here as "", and treating that as
-        // "resolve latest" would silently update a machine the caller meant
-        // to pin. The hidden-flag version of this option passed "" through to
-        // SemVer validation, which rejected it; keep that refusal, with a
-        // message that names the flag.
-        if (release !== null && release.length === 0) {
-          throw cliError({
-            code: CLI_ERROR_CODES.INVALID_ARGUMENT,
-            message:
-              "host update: --release (or its --version alias) needs a version; pass one, or omit the flag entirely to update to the latest release",
-            details: { release },
-            exitCode: 1,
-          });
-        }
         return buildHostUpdateCommand({
           force: opts.force === true,
           allowDowngrade: opts.allowDowngrade === true,
+          // RAW, empty string included. An EXPLICIT empty target is a mistake
+          // and not a request for latest - `--version=`, `--release=` and an
+          // unset shell variable (`--release "$PIN"`) all arrive as "" - and
+          // it is still refused with the same error. It is refused INSIDE the
+          // run, though, because Commander ACCEPTS these arguments: this is
+          // not the unknown-option exit an old parser takes, so a refusal
+          // thrown out here happens before the dispatch-ACK settlement exists
+          // and leaves a host that passed `--ack-nonce` waiting to its
+          // deadline for a refusal the CLI knew instantly.
           versionRequest: release,
           ackNonce: typeof opts.ackNonce === "string" ? opts.ackNonce : null,
           // Passed through RAW: the pairing rule and the legal-value check

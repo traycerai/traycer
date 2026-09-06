@@ -109,6 +109,10 @@ const mocks = vi.hoisted(() => ({
   // which is the only shape the recovery arm exists to reconcile. Without it
   // a thrown error is just a failure, and the record says `failed`.
   refuseFailedWrites: false,
+  // The stage id each mocked transfer actually placed, in order. Needed
+  // because the apply CLEARS the stage, so `world.stageId` no longer names it
+  // by the time a pin reads back what the apply was pinned to.
+  transferStageIds: [] as string[],
   // Every dispatch ACK this run asked for, in order. The FILE only shows the
   // last one, so a run that announced `nothing-to-do` and then overwrote it
   // with a refusal is indistinguishable from one that only ever refused -
@@ -286,6 +290,25 @@ vi.mock("../../registry", async (importOriginal) => {
       fakeRegistry(),
   };
 });
+// The ARGV pins below drive the real `buildProgram()`, and `runCommand` is
+// what stands between Commander's action and the command function. Its job -
+// resolving runtime flags, building an output sink, mapping a throw to a
+// process exit code - is another suite's subject, and here it would swallow
+// the very rejection these pins assert. Replaced with the thinnest adapter
+// that still runs the REAL registration, the REAL parse and the REAL command:
+// `index.ts` is the thing under test on those two pins, not this.
+vi.mock("../../runner/runner", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../runner/runner")>();
+  return {
+    ...actual,
+    runCommand: async (
+      fn: import("../../runner/runner").CommandFn,
+    ): Promise<void> => {
+      await fn(shellContext());
+    },
+  };
+});
+
 // `resolveUpdatePlan` stays REAL - the advisory plan is under test, and its
 // registry access is already seamed through `registryClient`. Only the
 // actuator is replaced.
@@ -331,6 +354,7 @@ import {
 } from "@traycer/protocol/config/host-update-ack";
 import { runHostUpdate, type HostUpdateRunArgs } from "../update-run";
 import { buildHostUpdateCommand } from "../../commands/host-update";
+import { buildProgram } from "../../index";
 import { verifyHostUpdateAttempt } from "../update-verify";
 import {
   readHostInstallRecord,
@@ -368,6 +392,8 @@ const world = {
   runtimeVersion: null as string | null,
   stagedVersion: null as string | null,
   stageId: null as string | null,
+  /** Bumped by every staging, so two stages of one version differ by id. */
+  stageSerial: 0,
   runningVersion: null as string | null,
   latest: "2.0.0",
 };
@@ -429,7 +455,14 @@ async function seedStaged(version: string | null): Promise<void> {
     return;
   }
   world.stagedVersion = version;
-  world.stageId = `stage-${version}`;
+  // INDEPENDENT per staging, deliberately: a stage id derived from the version
+  // alone makes a REPLACEMENT invisible - re-staging 2.0.0 produced the same
+  // fingerprint as the one a park had already claimed, so "the claim's
+  // fingerprint" and "whatever is on disk now" were the same string and
+  // neither of the two binding rules could be told from the other. The serial
+  // resets per test, so within one test the ids are still deterministic.
+  world.stageSerial += 1;
+  world.stageId = `stage-${version}#${world.stageSerial}`;
   await mkdir(dir, { recursive: true });
   await writeHostStagedRecordAt(dir, stagedRecordOf(version, world.stageId));
 }
@@ -768,6 +801,7 @@ function armWorld(): void {
   mocks.writes.length = 0;
   mocks.refuseFailedWrites = false;
   mocks.ackWrites.length = 0;
+  mocks.transferStageIds.length = 0;
 
   mocks.readUpdateProgressMarker.mockImplementation(
     async () => mocks.disk.current,
@@ -834,6 +868,14 @@ function armWorld(): void {
       options.onProgress(progress("download", 50));
       await options.beforeExtract();
       await seedStaged(target);
+      if (world.stageId !== null) mocks.transferStageIds.push(world.stageId);
+      // The real outcome shape, so an arm that reads it (the apply binding
+      // reports it in its refusal details) sees what production would give it.
+      return {
+        outcome: "promoted" as const,
+        stagedVersion: target,
+        installedVersion: world.installedVersion,
+      };
     },
   );
 
@@ -848,6 +890,24 @@ function armWorld(): void {
     ) => {
       const target = world.stagedVersion;
       if (target === null) return { outcome: "no-op" as const };
+      // The REAL refusal, modelled (`installer/apply.ts`): a non-null expected
+      // fingerprint that does not name the stage actually on disk is a
+      // replaced handoff, and the installer answers
+      // `stage-fingerprint-mismatch` rather than committing it. Without this
+      // the fixture ignored `expectedStageFingerprint` entirely, so which
+      // fingerprint the runner chose to pass had no observable consequence
+      // and either choice could be inverted with every test still green.
+      if (
+        options.expectedStageFingerprint !== null &&
+        options.expectedStageFingerprint !== world.stageId
+      ) {
+        return {
+          outcome: "stage-fingerprint-mismatch" as const,
+          installedVersion: world.installedVersion ?? target,
+          expectedStageFingerprint: options.expectedStageFingerprint,
+          actualStageFingerprint: world.stageId,
+        };
+      }
       const previous = world.installedVersion ?? target;
       // Production passes none; the fixture fires it when present so an
       // implementation that wrote a phase here would be observable.
@@ -931,6 +991,7 @@ beforeEach(async () => {
   world.runtimeVersion = null;
   world.stagedVersion = null;
   world.stageId = null;
+  world.stageSerial = 0;
   world.runningVersion = null;
   world.latest = "2.0.0";
   logger = fakeLogger();
@@ -973,8 +1034,10 @@ describe("runHostUpdate - the install intent's arms", () => {
       installGeneration: installGenerationNow(),
       allowDowngrade: false,
       // Refreshed AT THE PARK: the transfer ran under this claim, so the
-      // stage the resume will find is this run's own.
-      stageFingerprint: "stage-2.0.0",
+      // stage the resume will find is this run's own - the id THIS transfer
+      // minted, which (stage ids being independent per staging) is not the id
+      // any other staging of 2.0.0 would have produced.
+      stageFingerprint: world.stageId,
     });
   });
 
@@ -1090,6 +1153,7 @@ describe("runHostUpdate - bound intents", () => {
     // not be counted against the resume under test.
     mocks.downloadAndStageHostInSegment.mockClear();
     mocks.applyHostWithAttempt.mockClear();
+    mocks.transferStageIds.length = 0;
     return record.attemptId;
   }
 
@@ -1439,19 +1503,30 @@ describe("runHostUpdate - bound intents", () => {
     await seedInstalled("1.0.0");
     world.runningVersion = "1.0.0";
     const attemptId = await parkUpgrade("2.0.0");
-    // Another actor stages 3.0.0 while the park waits, so the resume's own
-    // re-download is DISCARDED as `not-strictly-newer` and 3.0.0 stands.
+    // Another actor stages 3.0.0 while the park waits.
     await seedStaged("3.0.0");
-    mocks.downloadAndStageHostInSegment.mockImplementation(
-      async (options: { readonly beforeExtract: () => Promise<void> }) => {
-        await options.beforeExtract();
-        return {
-          outcome: "discarded" as const,
-          reason: "not-strictly-newer" as const,
-          targetVersion: "2.0.0",
-        };
-      },
-    );
+    const stagedBefore = world.stageId;
+    // The REAL promote-time policy runs here - nothing about the transfer is
+    // forced. That matters, because the intuition that a higher stage
+    // protects itself is FALSE for this call: the resume passes an EXPLICIT
+    // `2.0.0`, and for an explicit request the settled policy is
+    // replace-any-STAGE (D6), so `decideHostDownloadPromotion` answers
+    // `promote` and the transfer would overwrite 3.0.0 with 2.0.0 and then
+    // apply it. Asserted, not assumed, so this pin cannot drift back into
+    // modelling a discard the real path never produces.
+    const { decideHostDownloadPromotion } = await vi.importActual<
+      typeof import("../../installer/download-stage")
+    >("../../installer/download-stage");
+    expect(
+      decideHostDownloadPromotion({
+        candidateVersion: "2.0.0",
+        installedVersion: "1.0.0",
+        stagedVersion: "3.0.0",
+        stagedStageId: stagedBefore,
+        explicitVersionRequested: true,
+        automatic: false,
+      }),
+    ).toEqual({ kind: "promote" });
 
     await expect(
       runUpdate({
@@ -1462,11 +1537,21 @@ describe("runHostUpdate - bound intents", () => {
       }),
     ).rejects.toMatchObject({
       code: CLI_ERROR_CODES.HOST_INSTALL_RECORD_INVALID,
-      details: { targetVersion: "2.0.0", stagedVersion: "3.0.0" },
+      details: {
+        targetVersion: "2.0.0",
+        stagedVersion: "3.0.0",
+        // No transfer ran at all, which is the whole point: a transfer here
+        // would have destroyed the very stage the mismatch is about.
+        transferOutcome: null,
+      },
     });
 
+    expect(mocks.downloadAndStageHostInSegment).not.toHaveBeenCalled();
     expect(mocks.applyHostWithAttempt).not.toHaveBeenCalled();
     expect(world.installedVersion).toBe("1.0.0");
+    // 3.0.0 is still on disk, byte for byte the stage this run found.
+    expect(world.stagedVersion).toBe("3.0.0");
+    expect(world.stageId).toBe(stagedBefore);
     const record = await requireRecord();
     expect(record.attemptId).toBe(attemptId);
     expect(record.targetVersion).toBe("2.0.0");
@@ -1483,6 +1568,59 @@ describe("runHostUpdate - bound intents", () => {
       kind: "claimed",
       attemptId,
     });
+  });
+
+  it("a resumed park whose stage was replaced AT THE SAME VERSION is refused by the claim's fingerprint", async () => {
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    const attemptId = await parkUpgrade("2.0.0");
+    const claimed = (await requireRecord()).claim?.stageFingerprint ?? null;
+    // Another actor re-stages the SAME version. Nothing about the version
+    // distinguishes these bytes from the ones the park authorized - only the
+    // stage id does, which is exactly why the claim carries one.
+    await seedStaged("2.0.0");
+    expect(world.stageId).not.toBe(claimed);
+
+    await expect(
+      runUpdate({
+        intent: "continue",
+        expectAttempt: attemptId,
+        versionRequest: "2.0.0",
+      }),
+    ).rejects.toMatchObject({ code: CLI_ERROR_CODES.UNEXPECTED });
+
+    // The refusal is the INSTALLER's, reached because the runner passed the
+    // CLAIM's fingerprint and not the one it just read off disk.
+    expect(mocks.applyHostWithAttempt).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ expectedStageFingerprint: claimed }),
+    );
+    expect(world.installedVersion).toBe("1.0.0");
+  });
+
+  it("a resume that re-downloads applies with the fingerprint of the stage IT placed, not the claim's", async () => {
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    const attemptId = await parkUpgrade("2.0.0");
+    const claimed = (await requireRecord()).claim?.stageFingerprint ?? null;
+    // The stage is GONE - a stage sweep, an uninstall/reinstall - so this
+    // resume legitimately re-downloads, and the bytes it places are ITS OWN.
+    await seedStaged(null);
+
+    const outcome = await runUpdate({
+      intent: "continue",
+      expectAttempt: attemptId,
+      versionRequest: "2.0.0",
+    });
+
+    expect(outcome.legacy.version).toBe("2.0.0");
+    // The transfer minted a NEW id, so pinning the apply to the claim's - the
+    // fingerprint of bytes that no longer exist - would refuse the very stage
+    // this run just placed.
+    const applied = mocks.applyHostWithAttempt.mock.calls[0]?.[2];
+    expect(applied?.expectedStageFingerprint).not.toBe(claimed);
+    expect(applied?.expectedStageFingerprint).toBe(mocks.transferStageIds[0]);
   });
 
   it("an activation park whose install was REMATERIALIZED at the same version is terminalized before any restart", async () => {
@@ -1892,6 +2030,49 @@ describe("runHostUpdate - the dispatch ACK and the trigger", () => {
 
     expect(mocks.ackWrites).toEqual(["refused-e-invalid-argument"]);
   });
+
+  // An EXPLICITLY EMPTY target, through the real program.
+  //
+  // These two go through argv rather than calling the run directly, because
+  // the failure they guard against is a refusal thrown at the REGISTRATION -
+  // where this check used to live, and where it stamped nothing at all.
+  // Commander ACCEPTS `--release=`: it is a well-formed option with an empty
+  // value, not the unknown-option exit an old parser takes, so nothing about
+  // the parse rescues it. A run dispatched with a nonce would have waited to
+  // its deadline and reported `dispatch-indeterminate` for a refusal this CLI
+  // knew before it read anything.
+  it.each([
+    [
+      "--release=",
+      ["host", "update", "--release=", "--ack-nonce", "nonce-abcdefgh"],
+    ],
+    [
+      "--version=",
+      ["host", "update", "--version=", "--ack-nonce", "nonce-abcdefgh"],
+    ],
+  ])(
+    "an explicitly empty target (%s) refuses through the real program AND stamps its refusal",
+    async (_name, argv) => {
+      await seedInstalled("1.0.0");
+      world.runningVersion = "1.0.0";
+      const program = buildProgram();
+      program.exitOverride();
+      for (const group of program.commands) {
+        group.exitOverride();
+        for (const leaf of group.commands) leaf.exitOverride();
+      }
+
+      await expect(
+        program.parseAsync(argv as string[], { from: "user" }),
+      ).rejects.toMatchObject({ code: CLI_ERROR_CODES.INVALID_ARGUMENT });
+
+      expect(mocks.ackWrites).toEqual(["refused-e-invalid-argument"]);
+      // Refused before anything was read or written, exactly as the
+      // registration-time check was.
+      expect(await readRecord()).toBeNull();
+      expect(mocks.downloadAndStageHostInSegment).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe("runHostUpdate - the coarse marker mirror", () => {
@@ -2181,7 +2362,7 @@ describe("ported: buildHostUpdateCommand composite", () => {
     // The park write itself carries the staged fingerprint the busy error
     // names - read once, inside the same lock span the busy decision was
     // made in, never a later re-read that could disagree with it.
-    expect(record.claim).toMatchObject({ stageFingerprint: "stage-2.0.0" });
+    expect(record.claim).toMatchObject({ stageFingerprint: world.stageId });
   });
 
   it("propagates E_HOST_NOT_INSTALLED thrown by downloadAndStageHost's own precondition", async () => {
@@ -3921,6 +4102,7 @@ describe("acceptance: cells with no legacy ancestor", () => {
     mocks.writes.length = 0;
     mocks.downloadAndStageHostInSegment.mockClear();
     mocks.applyHostWithAttempt.mockClear();
+    mocks.transferStageIds.length = 0;
     return record.attemptId;
   }
 
