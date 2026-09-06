@@ -131,7 +131,7 @@ export function useLocalHostUpdateOperation(): LocalHostUpdateOperation {
   // performed it) lives in `useLocalAttemptRecordObservation`, shared with the
   // selected-host Overview.
   const recordObservation = useLocalAttemptRecordObservation(hostId);
-  // ⚠ A TICKING CLOCK, replacing `statusQuery.dataUpdatedAt`.
+  // ⚠ A TICKING CLOCK, and it belongs to the RECORD leg ALONE.
   //
   // The WIRE leg keeps the frozen instant, and the argument for it was always
   // sound: `observationFromCanonicalRead` folds the query's own health into the
