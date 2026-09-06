@@ -16,7 +16,10 @@
  */
 import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
-import type { IStreamClient } from "@traycer-clients/shared/host-transport/i-stream-client";
+import type {
+  IStreamClient,
+  StreamParamsProvider,
+} from "@traycer-clients/shared/host-transport/i-stream-client";
 import type {
   IStreamSession,
   ServerFrameHandler,
@@ -192,9 +195,14 @@ export function createWorkerStreamClient(
       Method extends keyof HostStreamRpcRegistry & string,
     >(
       method: Method,
-      paramsProvider: () => ParamsOf<HostStreamRpcRegistry, Method>,
+      paramsProvider: StreamParamsProvider<HostStreamRpcRegistry, Method>,
     ): IStreamSession {
-      return open(method, paramsProvider, true);
+      // `null`, and it has to be: the negotiation happens on MAIN, and this
+      // provider runs here in the worker so its value can be pushed across
+      // ahead of a re-declare (`StreamProxyOpen.withParamsProvider`). Every
+      // method this proxy carries is single-major, so no consumer of the
+      // argument is reachable through it - see `StreamParamsProvider`.
+      return open(method, () => paramsProvider(null), true);
     },
     getMethodSchemaVersion<Method extends keyof HostStreamRpcRegistry & string>(
       method: Method,

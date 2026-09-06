@@ -373,6 +373,38 @@ function completeHandshake(socket: StubStreamWebSocket): void {
   });
 }
 
+/**
+ * Like {@link completeHandshake}, but ONE method's echoed manifest entry is
+ * replaced with `override` - a host that differs from this client on exactly
+ * that method (a restricted major, an older minor) while agreeing on every
+ * other one, which is what a version-skew test needs and echoing the whole
+ * manifest back verbatim cannot produce.
+ */
+function completeHandshakeWithMethodOverride(
+  socket: StubStreamWebSocket,
+  method: string,
+  override: {
+    major: number;
+    minor: number;
+    supportedMajors?: readonly number[];
+  },
+): void {
+  socket.fireOpen();
+  const openRaw = socket.textSent[0];
+  const openParsed = JSON.parse(openRaw) as {
+    readonly kind: "open";
+    readonly token: string;
+    readonly manifest: Record<
+      string,
+      { major: number; minor: number; supportedMajors?: readonly number[] }
+    >;
+  };
+  socket.fireText({
+    kind: "openAck",
+    manifest: { ...openParsed.manifest, [method]: override },
+  });
+}
+
 function streamOpenAck(
   manifest: Record<string, { major: number; minor: number }>,
   capabilities: readonly string[] | undefined,
@@ -1839,6 +1871,111 @@ describe("WsStreamClient", () => {
 
     session.close();
     vi.useRealTimers();
+  });
+
+  it("invokes the params provider with the version the subscribe frame will actually declare", async () => {
+    // `selectStreamSubscribeVersion` decides the on-wire version from the two
+    // manifests BEFORE the params are read (see its doc comment) - this pins
+    // that a method served on more than one major gets told which one, three
+    // ways: a major restricted downward, a major left unrestricted, and a
+    // same-major MINOR skew, which is the one `prepareStreamSubscribeRequest`
+    // would otherwise silently mis-declare (the `chat.subscribe@1.1` incident
+    // its own comment cites).
+    const { factory, sockets } = makeFactory();
+    const client = new WsStreamClient({
+      clientIdentity: TEST_CLIENT_IDENTITY,
+      registry: hostStreamRpcRegistry,
+      endpoint: () => mockLocalHostEntry,
+      hostId: mockLocalHostEntry.hostId,
+      bearer: () => makeRequestContext("t")?.credentials ?? null,
+      auth: null,
+      clock: null,
+      hostCredentialMint: null,
+      onHostCredentialState: null,
+      evidence: NO_TRANSPORT_EVIDENCE,
+      webSocketFactory: factory,
+      dialTimeoutMs: 10_000,
+      openAckTimeoutMs: 10_000,
+      pingIntervalMs: 60_000,
+      pongTimeoutMs: 120_000,
+      initialBackoffMs: 10,
+      maxBackoffMs: 1_000,
+    });
+
+    let capturedBrowserSessionsVersion: {
+      major: number;
+      minor: number;
+    } | null = null;
+    const browserSessionsSession = client.subscribeWithParamsProvider(
+      "browser.sessions",
+      (onWireVersion) => {
+        capturedBrowserSessionsVersion = onWireVersion;
+        // `browser.sessions@1` addresses by epicId; `@2` by scope - the same
+        // branch the real wrapper (`browser-sessions-stream-client.ts`) takes.
+        return onWireVersion?.major === 1
+          ? { epicId: "epic-1" }
+          : { scope: { kind: "epic" as const, epicId: "epic-1" } };
+      },
+    );
+
+    // Host restricts `browser.sessions` to `@1` only (a v1.3.0 host): every
+    // other method keeps the client's own unrestricted manifest, echoed back
+    // verbatim, exactly like `completeHandshake` does.
+    completeHandshakeWithMethodOverride(sockets[0].socket, "browser.sessions", {
+      major: 1,
+      minor: 0,
+      supportedMajors: [1],
+    });
+    expect(capturedBrowserSessionsVersion).toMatchObject({
+      major: 1,
+      minor: 0,
+    });
+    browserSessionsSession.close();
+
+    // A host that offers both installed majors: the client's own canonical
+    // (major 2) is what gets declared, since neither side is older here.
+    let capturedBrowserSessionsBothMajorsVersion: {
+      major: number;
+      minor: number;
+    } | null = null;
+    const browserSessionsBothMajorsSession = client.subscribeWithParamsProvider(
+      "browser.sessions",
+      (onWireVersion) => {
+        capturedBrowserSessionsBothMajorsVersion = onWireVersion;
+        return onWireVersion?.major === 1
+          ? { epicId: "epic-1" }
+          : { scope: { kind: "epic" as const, epicId: "epic-1" } };
+      },
+    );
+    completeHandshake(sockets[1].socket);
+    expect(capturedBrowserSessionsBothMajorsVersion).toMatchObject({
+      major: 2,
+      minor: 0,
+    });
+    browserSessionsBothMajorsSession.close();
+
+    // Same-major MINOR downgrade: `chat.subscribe`'s client canonical is its
+    // newest installed minor (8), but a host that only installs up through
+    // minor 5 must have the provider told THAT minor, not the client's own -
+    // declaring the client's canonical here is exactly what broke
+    // `chat.subscribe@1.1` against a host whose registry had no `@1.1`
+    // contract (see `prepareStreamSubscribeRequest`'s doc comment).
+    let capturedChatSubscribeVersion: { major: number; minor: number } | null =
+      null;
+    const chatSubscribeSession = client.subscribeWithParamsProvider(
+      "chat.subscribe",
+      (onWireVersion) => {
+        capturedChatSubscribeVersion = onWireVersion;
+        return { epicId: "epic-1", chatId: "chat-1" };
+      },
+    );
+    completeHandshakeWithMethodOverride(sockets[2].socket, "chat.subscribe", {
+      major: 1,
+      minor: 5,
+      supportedMajors: [1],
+    });
+    expect(capturedChatSubscribeVersion).toMatchObject({ major: 1, minor: 5 });
+    chatSubscribeSession.close();
   });
 
   it("emits availability recovery when a session re-opens after a drop, not on the initial clean open", async () => {

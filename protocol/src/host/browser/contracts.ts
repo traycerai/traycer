@@ -1,11 +1,15 @@
 /**
- * `browser.sessions@1.0` and `browser.screencast@1.0` - browser V1 stream
+ * `browser.sessions@2.0` and `browser.screencast@2.0` - browser stream
  * contracts between the GUI and host-owned headless browser sessions.
  *
- * These are intentionally stream-only additions. Until their first release,
- * the browser contracts extend the 1.0 baseline in place. After release,
- * additive changes use negotiated minors with version-gated emission;
- * breaking semantics require a separately served major.
+ * These are intentionally stream-only additions. `@1.0` shipped in the
+ * v1.3.0 release and is frozen in `contracts-v1.ts`; this file is the live
+ * `@2.0` line, opened because the Start Page addresses the device's epic-less
+ * `independent` inventory - a breaking change to every open request - and
+ * carrying the placement handoff token, window-bound tabs and the `attachTab`
+ * / `moveTab` frames with it. From here, additive changes use negotiated
+ * minors with version-gated emission; breaking semantics require another
+ * separately served major.
  */
 import { z } from "zod";
 import { defineRpcContract } from "@traycer/protocol/framework/index";
@@ -1263,10 +1267,14 @@ export type BrowserSessionsUxClientFrame = Extract<
   }
 >;
 
-/** Unreleased browser stream baseline. */
-export const browserSessionsV1 = defineStreamRpcContract({
+/**
+ * The live browser sessions line. `@1.0` is frozen in `contracts-v1.ts` and
+ * served beside it; the host projects these frames down to that shape for a
+ * v1.3.0 peer, and the client lifts that peer's frames up to this one.
+ */
+export const browserSessionsV20 = defineStreamRpcContract({
   method: "browser.sessions",
-  schemaVersion: { major: 1, minor: 0 } as const,
+  schemaVersion: { major: 2, minor: 0 } as const,
   openRequestSchema: browserSessionsOpenRequestSchema,
   serverFrameSchema: browserSessionsServerFrameSchema,
   clientFrameSchema: browserSessionsClientFrameSchema,
@@ -1987,9 +1995,10 @@ export type BrowserScreencastClientFrame = z.infer<
   typeof browserScreencastClientFrameSchema
 >;
 
-export const browserScreencastV1 = defineStreamRpcContract({
+/** The live screencast line; `@1.0` is frozen in `contracts-v1.ts`. */
+export const browserScreencastV20 = defineStreamRpcContract({
   method: "browser.screencast",
-  schemaVersion: { major: 1, minor: 0 } as const,
+  schemaVersion: { major: 2, minor: 0 } as const,
   openRequestSchema: browserScreencastOpenRequestSchema,
   serverFrameSchema: browserScreencastServerFrameSchema,
   clientFrameSchema: browserScreencastClientFrameSchema,

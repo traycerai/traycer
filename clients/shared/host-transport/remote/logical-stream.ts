@@ -49,7 +49,13 @@ export interface LogicalStreamPort {
 export interface LogicalStreamInit {
   readonly streamId: number;
   readonly method: string;
-  readonly paramsProvider: () => unknown;
+  /**
+   * Read once per wire subscribe, and handed the version the params are about
+   * to be declared at. The mux knows it by then - `openSubscription` derives it
+   * from the two manifests before it reads the params - so this transport, like
+   * the local one, never passes `null`.
+   */
+  readonly paramsProvider: (onWireVersion: SchemaVersion) => unknown;
   /** On-wire negotiated subscribe version (recomputed at open against the host). */
   readonly schemaVersion: SchemaVersion;
   /** Exact client version that must be served, or null for normal negotiation. */
@@ -67,7 +73,7 @@ export class LogicalStream implements IStreamSession {
   private currentStreamId: number;
   readonly method: string;
   readonly qos: QosClassValue;
-  private readonly paramsProvider: () => unknown;
+  private readonly paramsProvider: (onWireVersion: SchemaVersion) => unknown;
   private schemaVersion: SchemaVersion;
   readonly requiredSchemaVersion: SchemaVersion | null;
   /**
@@ -100,8 +106,8 @@ export class LogicalStream implements IStreamSession {
   }
 
   /** Reads the latest params at the wire subscribe boundary. */
-  readParams(): unknown {
-    return this.paramsProvider();
+  readParams(onWireVersion: SchemaVersion): unknown {
+    return this.paramsProvider(onWireVersion);
   }
 
   get streamId(): number {

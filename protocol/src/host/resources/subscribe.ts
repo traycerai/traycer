@@ -39,7 +39,11 @@
  */
 import { z } from "zod";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
-import { defineRpcContract } from "@traycer/protocol/framework/index";
+import {
+  defineDowngradePath,
+  defineRpcContract,
+  defineUpgradePath,
+} from "@traycer/protocol/framework/index";
 import { hostResourceScopeSchema } from "@traycer/protocol/host/resource-scope";
 
 export const resourcesSubscribeOpenRequestV10Schema = z.object({
@@ -635,7 +639,37 @@ export const resourcesKillV10 = defineRpcContract({
   responseSchema: resourcesKillResponseSchema,
 });
 
-// ── `resources.listLocalServers@1.0` — unary ───────────────────────────────
+// ── `resources.listLocalServers@1.0` — unary, FROZEN ─────────────────────────
+// Shipped in the v1.3.0 release addressed by `epicId`. The `@2.0` line below
+// takes the shared host-resource scope instead, so the Start Page can ask for
+// the ports its own epic-less terminals own; a v1.3.0 peer keeps this shape.
+// Its own copy of the response too: a frozen line composed from the live
+// response schema would move with it.
+export const resourcesListLocalServersRequestSchemaV10 = z.object({
+  epicId: z.string(),
+});
+export type ResourcesListLocalServersRequestV10 = z.infer<
+  typeof resourcesListLocalServersRequestSchemaV10
+>;
+
+const localServerSchemaV10 = z.object({
+  pid: z.number().int().nonnegative(),
+  port: z.number().int().min(1).max(65_535),
+  processName: z.string(),
+});
+
+export const resourcesListLocalServersResponseSchemaV10 = z.object({
+  servers: z.array(localServerSchemaV10),
+});
+
+export const resourcesListLocalServersV10 = defineRpcContract({
+  method: "resources.listLocalServers",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: resourcesListLocalServersRequestSchemaV10,
+  responseSchema: resourcesListLocalServersResponseSchemaV10,
+});
+
+// ── `resources.listLocalServers@2.0` — unary ───────────────────────────────
 // Lists listening TCP ports owned by process trees already attributed to one
 // scope. Discovery is intentionally on demand rather than part of the resource
 // stream: port scans are useful only while a blank browser tab is visible.
@@ -665,9 +699,45 @@ export type ResourcesListLocalServersResponse = z.infer<
   typeof resourcesListLocalServersResponseSchema
 >;
 
-export const resourcesListLocalServersV10 = defineRpcContract({
+export const resourcesListLocalServersV20 = defineRpcContract({
   method: "resources.listLocalServers",
-  schemaVersion: { major: 1, minor: 0 } as const,
+  schemaVersion: { major: 2, minor: 0 } as const,
   requestSchema: resourcesListLocalServersRequestSchema,
   responseSchema: resourcesListLocalServersResponseSchema,
+});
+
+export const resourcesListLocalServersUpgradeV10ToV20 = defineUpgradePath<
+  typeof resourcesListLocalServersV10,
+  typeof resourcesListLocalServersV20
+>({
+  from: resourcesListLocalServersV10.schemaVersion,
+  to: resourcesListLocalServersV20.schemaVersion,
+  // A v1.0 caller can only ever name an epic; the response is the same shape.
+  upgradeRequest: (request) => ({
+    scope: { kind: "epic", epicId: request.epicId },
+  }),
+  upgradeResponse: (response) => response,
+});
+
+export const resourcesListLocalServersDowngradeV20ToV10 = defineDowngradePath<
+  typeof resourcesListLocalServersV20,
+  typeof resourcesListLocalServersV10
+>({
+  from: resourcesListLocalServersV20.schemaVersion,
+  to: resourcesListLocalServersV10.schemaVersion,
+  // An epic-less inventory is exactly what a v1.0 host has no way to name, so
+  // the Start Page's request to one is unsupported rather than answered with
+  // some epic's ports.
+  downgradeRequest: (request) =>
+    request.scope.kind === "epic"
+      ? { ok: true, value: { epicId: request.scope.epicId } }
+      : {
+          ok: false,
+          error: {
+            code: "DOWNGRADE_UNSUPPORTED",
+            message:
+              "resources.listLocalServers@1.0 lists one epic's servers and has no epic-less inventory",
+          },
+        },
+  downgradeResponse: (response) => ({ ok: true, value: response }),
 });

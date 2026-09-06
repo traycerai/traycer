@@ -13,6 +13,7 @@ import type {
   ParamsOf,
   StreamMethodSupport,
 } from "@traycer-clients/shared/host-transport/ws-stream-client";
+import type { StreamParamsProvider } from "@traycer-clients/shared/host-transport/i-stream-client";
 import { epicStateSubscribeServerFrameSchemaV10 } from "@traycer/protocol/host/epic/state-subscribe";
 import { epicStatusSubscribeServerFrameSchemaV10 } from "@traycer/protocol/host/epic/status-subscribe";
 import { fakeDurableStreamTransports } from "@/lib/host/test-support/fake-durable-stream-transport";
@@ -192,7 +193,7 @@ export function createEpicSessionFixture(
       Method extends keyof HostStreamRpcRegistry & string,
     >(
       method: Method,
-      paramsProvider: () => ParamsOf<HostStreamRpcRegistry, Method>,
+      paramsProvider: StreamParamsProvider<HostStreamRpcRegistry, Method>,
     ): IStreamSession =>
       capture(() =>
         recording.client.subscribeWithParamsProvider(method, paramsProvider),

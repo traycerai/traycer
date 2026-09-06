@@ -506,9 +506,13 @@ import {
 } from "@traycer/protocol/host/terminal/contracts";
 import {
   browserSavedLoginSitesV10,
-  browserScreencastV1,
-  browserSessionsV1,
+  browserScreencastV20,
+  browserSessionsV20,
 } from "@traycer/protocol/host/browser/contracts";
+import {
+  browserScreencastV10,
+  browserSessionsV10,
+} from "@traycer/protocol/host/browser/contracts-v1";
 import {
   terminalPlainCloseDowngradeV21ToV10,
   terminalPlainCloseUpgradeV10ToV21,
@@ -583,7 +587,10 @@ import {
   resourcesSubscribeV14,
   resourcesSubscribeV15,
   resourcesKillV10,
+  resourcesListLocalServersDowngradeV20ToV10,
+  resourcesListLocalServersUpgradeV10ToV20,
   resourcesListLocalServersV10,
+  resourcesListLocalServersV20,
 } from "@traycer/protocol/host/resources/subscribe";
 import {
   speechEnsureModelV10,
@@ -7097,6 +7104,8 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   "resources.listLocalServers": {
     degrade: { kind: "unsupported" },
     1: {
+      // Shipped in the v1.3.0 release naming an epic; frozen, and served for
+      // that peer.
       latestMinor: 0,
       versions: {
         0: {
@@ -7105,6 +7114,22 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
         },
       },
       downgradePathsFromLatest: {},
+    },
+    2: {
+      // Addressed by the shared host-resource scope, so the Start Page can
+      // list the ports its own epic-less terminals own. A v2.0 caller asking a
+      // v1.0 host for that inventory gets `DOWNGRADE_UNSUPPORTED`: the old
+      // host has no way to name it.
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: resourcesListLocalServersV20,
+          upgradeFromPreviousVersion: resourcesListLocalServersUpgradeV10ToV20,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: resourcesListLocalServersDowngradeV20ToV10,
+      },
     },
   },
   // The human lifecycle controls for monitors and shells. Brand-new v1.0
@@ -9062,17 +9087,31 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
       },
     },
   },
+  // Two majors each, and both served: `@1.0` is what the v1.3.0 release
+  // shipped, frozen in `browser/contracts-v1.ts` and addressed by `epicId`;
+  // `@2.0` is the live line in `browser/contracts.ts`, addressed by a scope so
+  // the Start Page can speak for the device's epic-less inventory, and
+  // carrying the placement handoff token, window-bound tabs and the
+  // `attachTab` / `moveTab` frames. A major rather than a minor because the
+  // open request changed shape and the released peer's `.strict()` frame
+  // schemas reject every added field - version-gated emission cannot reach a
+  // client that drops the frame. The GUI feature-detects browser support by
+  // these two NAMES in the host's openAck manifest, so a served major is the
+  // only way to evolve them (`released-stream-surface-compat.test.ts`).
   "browser.sessions": {
     1: {
-      // Shared-browser-runtime ticket 01: `browser.sessions` never shipped,
-      // so its prior in-repo minor history (@1.0-@1.4) is collapsed into one
-      // fresh @1.0 baseline carrying every frame kind - see the doc comment
-      // on `browserSessionsV1` in `contracts.ts`. Agent-browser PiP ticket 01
-      // extends that same 1.0 in place.
       latestMinor: 0,
       versions: {
         0: {
-          contract: browserSessionsV1,
+          contract: browserSessionsV10,
+        },
+      },
+    },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: browserSessionsV20,
         },
       },
     },
@@ -9082,7 +9121,15 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
       latestMinor: 0,
       versions: {
         0: {
-          contract: browserScreencastV1,
+          contract: browserScreencastV10,
+        },
+      },
+    },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: browserScreencastV20,
         },
       },
     },

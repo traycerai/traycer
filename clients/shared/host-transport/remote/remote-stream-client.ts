@@ -8,6 +8,7 @@ import type {
   ReconnectAllOptions,
 } from "../host-stream-client";
 import type { IStreamSession } from "../i-stream-session";
+import type { StreamParamsProvider } from "../i-stream-client";
 import type { ParamsOf, StreamMethodSupport } from "../ws-stream-client";
 import {
   PLAN_RESTRICTED_FATAL_CODE,
@@ -61,7 +62,7 @@ export class RemoteStreamClient<
 
   subscribeWithParamsProvider<Method extends keyof StreamRegistry & string>(
     method: Method,
-    paramsProvider: () => ParamsOf<StreamRegistry, Method>,
+    paramsProvider: StreamParamsProvider<StreamRegistry, Method>,
   ): IStreamSession {
     return this.session.subscribeWithParamsProvider(method, paramsProvider);
   }
