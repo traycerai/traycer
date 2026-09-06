@@ -3740,6 +3740,34 @@ describe("platform matrix", () => {
     expect(waitForHostReady).toHaveBeenCalledTimes(1);
   });
 
+  it("deregisterService streams `host service uninstall` on non-macOS rather than running it under the flat JSON timeout", async () => {
+    // On Windows the uninstall stops the host through the bounded
+    // scan-then-kill loop, whose worst case is several 30 s scans plus
+    // `schtasks /End` and `taskkill` before `/Delete`. The run path's flat
+    // 45 s budget would SIGKILL the CLI mid-loop and leave the host
+    // half-stopped with its task still registered; the streaming path's idle
+    // timeout (re-armed by output, ten minutes) is what `host restart`
+    // already relies on for the same loop.
+    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(false);
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+
+    const outcome = await controller.deregisterService();
+
+    expect(outcome).toEqual({ kind: "ok", value: { registered: false } });
+    expect(runBundledTraycerCliJson).not.toHaveBeenCalled();
+    expect(streamBundledTraycerCliJson).toHaveBeenCalledTimes(1);
+    expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
+      expect.objectContaining({ args: ["host", "service", "uninstall"] }),
+    );
+
+    // Ablation: route the call back through `this.runBundled` → this test
+    // reddens on both mock assertions.
+  });
+
   // ---- user-repair reprovision intent -------------------------------------
   //
   // These pin the half of a Doctor lifecycle repair that the IPC handler

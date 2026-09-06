@@ -3849,8 +3849,18 @@ export class HostController {
           }
           return { kind: "ok", value: { registered: false } };
         }
+        // Streamed, not run: on Windows `host service uninstall` stops the
+        // host through the bounded scan-then-kill loop, whose worst case is
+        // several 30 s scans plus `schtasks /End` and `taskkill` before the
+        // confirming scan and `schtasks /Delete`
+        // (`WINDOWS_RESTART_SEQUENCE_TIMEOUT_MS` in the protocol's
+        // lifecycle constants). The run path's flat 45 s budget could SIGKILL
+        // the CLI after a kill pass and before `/Delete`, leaving the host
+        // half-stopped with its task still registered. The streaming path's
+        // idle timeout is what `host restart` already relies on for the same
+        // loop.
         try {
-          await this.runBundled<unknown>(["host", "service", "uninstall"]);
+          await this.streamBundled<unknown>(["host", "service", "uninstall"]);
         } catch (err) {
           return this.classifyMutationSubprocessError(err, "retry-with-force");
         }
