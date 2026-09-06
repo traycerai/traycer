@@ -8,6 +8,7 @@ import {
   type AcquireLockOptions,
   type LockHandle,
   type LockMetadata,
+  type WithLockOutcome,
 } from "@traycer-clients/shared/host-lock/cross-process-lock";
 
 // Re-exported for existing callers (`host/busy-check.ts`, service
@@ -112,6 +113,39 @@ export async function __acquireCliLockAtPathForTest(
 
 // `withCliLock(opts, fn)` - acquire, run fn, release in finally. Catches
 // nothing on the inner function; the lock is released either way.
+export interface CliScopedFileLockOptions {
+  /** The lock file, beside the file it guards. */
+  readonly lockPath: string;
+  readonly reason: string;
+  readonly waitMs: number;
+  readonly pollIntervalMs: number;
+}
+
+/**
+ * A short cross-process lock at an explicit path, for a CLI writer that
+ * guards ONE file rather than the install (`host/update-progress-marker.ts`
+ * guards the progress marker's conditional writes with it). Same protocol as
+ * the CLI lock - O_EXCL create, holder identity, a dead holder broken by
+ * liveness - through this facade so the shared protocol keeps a single CLI
+ * importer (`clients/shared/__tests__/host-update-contender-architecture`).
+ * Never throws on contention: the outcome says `busy`, and the caller
+ * decides what a write it could not make means.
+ */
+export async function withCliScopedFileLock<T>(
+  opts: CliScopedFileLockOptions,
+  fn: () => Promise<T>,
+): Promise<WithLockOutcome<T>> {
+  return withLock(
+    {
+      lockPath: opts.lockPath,
+      reason: opts.reason,
+      waitMs: opts.waitMs,
+      pollIntervalMs: opts.pollIntervalMs,
+    },
+    () => fn(),
+  );
+}
+
 export async function withCliLock<T>(
   opts: AcquireCliLockOptions,
   fn: (handle: CliLockHandle) => Promise<T>,

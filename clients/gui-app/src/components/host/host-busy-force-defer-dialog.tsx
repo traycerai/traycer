@@ -8,6 +8,12 @@ import {
 } from "@/components/ui/dialog";
 
 export interface HostBusyForceDeferDialogProps {
+  /**
+   * What Force does here, exposed as `data-purpose` on the dialog: a page
+   * can mount one of each (the Overview's force-restart and force-update
+   * dialogs), and a pin on the shared test id alone cannot tell them apart.
+   */
+  readonly purpose: "restart" | "update";
   readonly open: boolean;
   /**
    * The dialog's heading, and REQUIRED rather than defaulted.
@@ -54,6 +60,7 @@ export function HostBusyForceDeferDialog(props: HostBusyForceDeferDialogProps) {
         showCloseButton={false}
         className="w-[min(92vw,28rem)] gap-0 overflow-hidden p-0 sm:max-w-md"
         data-testid="host-busy-force-defer-dialog"
+        data-purpose={props.purpose}
       >
         <div className="flex flex-col gap-1.5 p-5">
           <DialogTitle className="text-ui font-semibold leading-snug">

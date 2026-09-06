@@ -370,6 +370,9 @@ describe("applyHostWithAttempt through the REAL service install lifecycle", () =
         onProgress: (info) => {
           if (info.stage === "swap") swapProgressSeen.release();
         },
+        expectedStagedVersion: null,
+        onWillCommitStaged: null,
+        onWillDisruptHost: null,
         hooks,
       },
     );
@@ -450,6 +453,9 @@ describe("applyHostWithAttempt through the REAL service install lifecycle", () =
         noService: false,
         expectedStageFingerprint: null,
         onProgress: () => {},
+        expectedStagedVersion: null,
+        onWillCommitStaged: null,
+        onWillDisruptHost: null,
         hooks: {
           beforeSwapCommit: async () => {
             beforeSwapCommitCalled = true;
@@ -538,6 +544,7 @@ describe("createBytesOnlyInstallLifecycle forwarding, through the real commit", 
       lifecycle,
       onCommitted: () => {},
       verifyMutationCapability: async () => undefined,
+      onWillSwap: null,
     });
 
     await expectReached(commitHookEntered.promise, "beforeSwapCommit");

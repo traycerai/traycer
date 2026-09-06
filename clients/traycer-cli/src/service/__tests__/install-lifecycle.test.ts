@@ -12,8 +12,8 @@ import {
 } from "../install-lifecycle";
 import { CLI_ERROR_CODES, CliError } from "../../runner/errors";
 import { NO_INSTALL_PHASE_HOOKS, type SwapLockRecovery } from "../../installer";
-import { epochMicrosNow } from "../platforms/windows";
 import { makeBarrierGate } from "../../__tests__/support/barrier-gate";
+import { epochMicrosNow } from "../platforms/windows";
 
 const mocks = vi.hoisted(() => ({
   createServiceControllerMock: vi.fn(),
@@ -177,6 +177,7 @@ async function runLifecycle(
     environment: "production",
     bootstrap: options,
     force,
+    onWillStopHost: null,
     hooks: NO_INSTALL_PHASE_HOOKS,
   });
   await handle.lifecycle.beforeSwap();
@@ -260,6 +261,7 @@ describe("service install lifecycle re-registration", () => {
       environment: "production",
       bootstrap,
       force: false,
+      onWillStopHost: null,
       hooks: {
         beforeSwapCommit: async () => {},
         afterSwap: async () => {
@@ -317,6 +319,7 @@ describe("service install lifecycle re-registration", () => {
       environment: "production",
       bootstrap,
       force: false,
+      onWillStopHost: null,
       hooks: NO_INSTALL_PHASE_HOOKS,
     });
     runningHandle.lifecycle.setMutationVerifier?.(async () => {
@@ -336,6 +339,7 @@ describe("service install lifecycle re-registration", () => {
       environment: "production",
       bootstrap,
       force: false,
+      onWillStopHost: null,
       hooks: NO_INSTALL_PHASE_HOOKS,
     });
     let verifierCalls = 0;
@@ -361,6 +365,7 @@ describe("service install lifecycle re-registration", () => {
       environment: "production",
       bootstrap,
       force: false,
+      onWillStopHost: null,
       hooks: NO_INSTALL_PHASE_HOOKS,
     });
     bootstrapHandle.lifecycle.setMutationVerifier?.(async () => {
@@ -512,6 +517,7 @@ describe("service install lifecycle re-registration", () => {
         environment: "production",
         bootstrap,
         force: false,
+        onWillStopHost: null,
         hooks: NO_INSTALL_PHASE_HOOKS,
       });
 
@@ -548,6 +554,7 @@ describe("service install lifecycle re-registration", () => {
         environment: "production",
         bootstrap,
         force: false,
+        onWillStopHost: null,
         hooks: NO_INSTALL_PHASE_HOOKS,
       });
 
@@ -588,6 +595,7 @@ describe("service install lifecycle re-registration", () => {
         environment: "production",
         bootstrap,
         force: false,
+        onWillStopHost: null,
         hooks: NO_INSTALL_PHASE_HOOKS,
       });
 
@@ -616,6 +624,7 @@ describe("service install lifecycle re-registration", () => {
         environment: "production",
         bootstrap,
         force: false,
+        onWillStopHost: null,
         hooks: NO_INSTALL_PHASE_HOOKS,
       });
       await handle.lifecycle.beforeSwap();
@@ -653,6 +662,7 @@ describe("service install lifecycle re-registration", () => {
       environment: "production",
       bootstrap,
       force: false,
+      onWillStopHost: null,
       hooks: NO_INSTALL_PHASE_HOOKS,
     });
     await handle.lifecycle.beforeSwap();
@@ -833,6 +843,7 @@ describe("runWithPublishedHostStartAdoption (via registerService's install)", ()
       environment: "production",
       bootstrap,
       force: false,
+      onWillStopHost: null,
       hooks: NO_INSTALL_PHASE_HOOKS,
     });
     const setPublisher = handle.lifecycle.setHostStartAdoptionPublisher;
@@ -867,6 +878,7 @@ describe("runWithPublishedHostStartAdoption (via registerService's install)", ()
       environment: "production",
       bootstrap,
       force: false,
+      onWillStopHost: null,
       hooks: NO_INSTALL_PHASE_HOOKS,
     });
     const setPublisher = handle.lifecycle.setHostStartAdoptionPublisher;
@@ -908,6 +920,7 @@ describe("runWithPublishedHostStartAdoption (via registerService's install)", ()
       environment: "production",
       bootstrap,
       force: false,
+      onWillStopHost: null,
       hooks: NO_INSTALL_PHASE_HOOKS,
     });
     const setPublisher = handle.lifecycle.setHostStartAdoptionPublisher;
@@ -939,6 +952,7 @@ describe("runWithPublishedHostStartAdoption (via registerService's install)", ()
       environment: "production",
       bootstrap,
       force: false,
+      onWillStopHost: null,
       hooks: NO_INSTALL_PHASE_HOOKS,
     });
     const setPublisher = handle.lifecycle.setHostStartAdoptionPublisher;
@@ -981,6 +995,7 @@ describe("runWithPublishedHostStartAdoption (via registerService's install)", ()
       environment: "production",
       bootstrap,
       force: false,
+      onWillStopHost: null,
       hooks: NO_INSTALL_PHASE_HOOKS,
     });
     const setPublisher = handle.lifecycle.setHostStartAdoptionPublisher;
@@ -1032,6 +1047,7 @@ describe("swap-lock recovery wiring", () => {
         environment: "production",
         bootstrap: null,
         force: false,
+        onWillStopHost: null,
         hooks: NO_INSTALL_PHASE_HOOKS,
       });
       const bytesOnly = createBytesOnlyInstallLifecycle(
@@ -1088,6 +1104,7 @@ describe("swap-lock recovery wiring", () => {
         environment: "production",
         bootstrap: null,
         force: false,
+        onWillStopHost: null,
         hooks: NO_INSTALL_PHASE_HOOKS,
       });
       const bytesOnly = createBytesOnlyInstallLifecycle(
@@ -1098,6 +1115,108 @@ describe("swap-lock recovery wiring", () => {
       expect(serviceHandle.lifecycle.swapLockRecovery).toBeNull();
       expect(bytesOnly.swapLockRecovery).toBeNull();
     });
+  });
+});
+
+// The disruption boundary `host update` restores a taken-over progress
+// marker against: reported from the actuator, after the status probe and
+// the authority check, never before either.
+describe("service install lifecycle onWillStopHost", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.serviceLabelForMock.mockReturnValue(label);
+    mocks.resolveServiceCliInvocationMock.mockResolvedValue({
+      command: "/usr/local/bin/traycer",
+      args: [],
+    });
+    mocks.readRegisteredCliInvocationMock.mockResolvedValue(null);
+  });
+
+  it("fires once, after the authority check and immediately before the stop of a running host", async () => {
+    // Falsification: call it before `withServiceMutationAuthority` and the
+    // refused-authority pin below reddens; call it after `controller.stop`
+    // and the order here flips.
+    const harness = makeController("running");
+    mocks.createServiceControllerMock.mockReturnValue(harness.controller);
+    const order: string[] = [];
+    harness.stop.mockImplementation(async () => {
+      order.push("stop");
+    });
+    const handle = createServiceInstallLifecycle({
+      environment: "production",
+      bootstrap: null,
+      force: false,
+      onWillStopHost: () => {
+        order.push("boundary");
+      },
+      hooks: NO_INSTALL_PHASE_HOOKS,
+    });
+
+    await handle.lifecycle.beforeSwap();
+
+    expect(order).toEqual(["boundary", "stop"]);
+    expect(handle.state.stoppedBeforeSwap).toBe(true);
+  });
+
+  it("does not fire when the mutation authority is refused - nothing was touched", async () => {
+    const harness = makeController("running");
+    mocks.createServiceControllerMock.mockReturnValue(harness.controller);
+    const onWillStopHost = vi.fn();
+    const handle = createServiceInstallLifecycle({
+      environment: "production",
+      bootstrap: null,
+      force: false,
+      onWillStopHost,
+      hooks: NO_INSTALL_PHASE_HOOKS,
+    });
+    const lost = new Error("update attempt capability was lost");
+    handle.lifecycle.setMutationVerifier?.(async () => {
+      throw lost;
+    });
+
+    await expect(handle.lifecycle.beforeSwap()).rejects.toBe(lost);
+
+    expect(onWillStopHost).not.toHaveBeenCalled();
+    expect(harness.stop).not.toHaveBeenCalled();
+  });
+
+  it("does not fire when the status probe itself throws - nothing was touched", async () => {
+    const harness = makeController("running");
+    const probeFailure = new Error("launchctl print failed");
+    vi.mocked(harness.controller.status).mockRejectedValue(probeFailure);
+    mocks.createServiceControllerMock.mockReturnValue(harness.controller);
+    const onWillStopHost = vi.fn();
+    const handle = createServiceInstallLifecycle({
+      environment: "production",
+      bootstrap: null,
+      force: false,
+      onWillStopHost,
+      hooks: NO_INSTALL_PHASE_HOOKS,
+    });
+
+    await expect(handle.lifecycle.beforeSwap()).rejects.toBe(probeFailure);
+
+    expect(onWillStopHost).not.toHaveBeenCalled();
+    expect(harness.stop).not.toHaveBeenCalled();
+  });
+
+  it("does not fire for a service the lifecycle decides not to stop (stopped, on POSIX) - the swap reports that boundary", async () => {
+    const harness = makeController("stopped");
+    mocks.createServiceControllerMock.mockReturnValue(harness.controller);
+    const onWillStopHost = vi.fn();
+    const handle = createServiceInstallLifecycle({
+      environment: "production",
+      bootstrap: null,
+      force: false,
+      onWillStopHost,
+      hooks: NO_INSTALL_PHASE_HOOKS,
+    });
+
+    await withPlatformAsync("linux", () => handle.lifecycle.beforeSwap());
+
+    expect(onWillStopHost).not.toHaveBeenCalled();
+    expect(harness.stop).not.toHaveBeenCalled();
+    expect(handle.state.stoppedBeforeSwap).toBe(false);
   });
 });
 
@@ -1124,6 +1243,7 @@ describe("InstallPhaseHooks forwarding", () => {
       environment: "production",
       bootstrap,
       force: false,
+      onWillStopHost: null,
       hooks: {
         beforeSwapCommit: async () => {
           calls.push("beforeSwapCommit");

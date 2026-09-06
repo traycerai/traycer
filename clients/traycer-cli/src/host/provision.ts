@@ -580,6 +580,7 @@ async function commitInstall(
         // denied the cooperative shutdown claim and `--force` aborted
         // anyway.
         force: opts.force,
+        onWillStopHost: null,
         // `host ensure` provisions bytes; it drives no attempt record, so
         // it observes neither swap barrier.
         hooks: NO_INSTALL_PHASE_HOOKS,
@@ -610,6 +611,7 @@ async function commitInstall(
       staged,
       onProgress: progress,
       lifecycle,
+      onWillSwap: null,
     },
   );
   const post = await readProvisionState(controller, label, opts.runtime);

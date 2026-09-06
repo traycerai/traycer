@@ -762,8 +762,8 @@ function coarseProgressView(
  *
  * The two kinds already exist for the schema-v2 attempt's own parks and carry
  * exactly the right copy, gates and cadence: `waiting-to-activate` ("Update
- * installed — restart host to finish") and `waiting-for-work` ("Update will
- * continue when N sessions finish", with **Force** when the count is
+ * installed — restart host to finish") and `waiting-for-work` ("Update
+ * waits for N sessions to finish", with **Force** when the count is
  * positive). Neither holds the lifecycle gate nor earns the fast poll — a park
  * can sit for days, and the restart it waits for must stay pressable.
  *
@@ -898,10 +898,36 @@ function phaseKind(
     case "failed":
       return "failed";
     case "superseded":
-      // A superseded attempt is terminal bookkeeping, not something a person
-      // needs to act on: a NEWER attempt replaced it, and that attempt is what
-      // the record now describes. Showing it would put a dead target on screen
-      // beside the live one.
+      // A superseded attempt is terminal bookkeeping: the request it recorded
+      // was WITHDRAWN. THREE causes, one rendering, and the record carries no
+      // discriminator between them.
+      //
+      //  1. A NEWER attempt replaced it, and that attempt is what the record
+      //     now describes - showing the old one would put a dead target on
+      //     screen beside the live one.
+      //  2. The executor refused the request as not newer than what is
+      //     already installed (`E_HOST_UPDATE_NOT_NEWER`, D-46). It withdraws
+      //     its own marker rather than failing, because "you asked for a
+      //     version you already have" is not a failure to report.
+      //  3. Another actor delivered the requested version but the host is not
+      //     RUNNING it (D-47). Nothing failed; the remedy is a restart, and a
+      //     record must not carry an `error` for that.
+      //
+      // `idle` is right for all three as far as THIS projection goes - there
+      // is no operation - and it is why this phase is dropped by
+      // `recordObservationFromLocalAttempt` rather than memorialised the way
+      // `failed` is.
+      //
+      // Cause 3 is the one where saying nothing is least acceptable, and the
+      // answer is deliberately NOT here: `install.json` names the delivered
+      // version and the runtime does not, which is the activation-debt park,
+      // and `legacyFactsView` renders it with its Restart from the RECORDS
+      // alone. That arm is reached only once the peer stops reporting the
+      // terminal attempt (`updateOperation: {kind:"none"}`) - see the `none`
+      // arm above; while the terminal attempt is still on the wire this
+      // `idle` wins and the card is quiet. Telling the three apart in COPY
+      // would need the record to carry a cause, which is a CLI-side change
+      // and an accepted residual of the cutover, not something to infer here.
       return "idle";
   }
 }

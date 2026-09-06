@@ -185,6 +185,7 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
             allowSelfInvocation: args.allowSelfInvocation,
           },
           force: args.force,
+          onWillStopHost: null,
           // `host install` advances no attempt record - it is not an
           // update - so it observes neither swap barrier.
           hooks: NO_INSTALL_PHASE_HOOKS,
@@ -247,6 +248,7 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
                   staged,
                   onProgress: (info) => ctx.progress(info),
                   lifecycle,
+                  onWillSwap: null,
                 },
               );
             },

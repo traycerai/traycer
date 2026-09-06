@@ -448,6 +448,47 @@ export async function downloadAndStageHostInSegment(
       );
       const installedAtOrAboveTarget =
         installedVsTarget.comparable && installedVsTarget.ordering !== "less";
+      // "Up to date" for an EXPLICIT request is the request's own string
+      // and nothing else. A record the comparator puts at or above the
+      // request by ANOTHER string - strictly newer (`--version 1.2.0` over
+      // an installed 2.0.0), or another build of the same release
+      // (`2.0.0+bar` over a requested `2.0.0+foo`: the comparator ignores
+      // build metadata) - is not the artifact the caller named. Reporting
+      // it as up to date handed `host update` a no-op, exit 0, with the
+      // requested artifact never delivered: a request that delivered
+      // nothing does not report success, the rule the promote gate and the
+      // version binding under the activation lock already apply to the same
+      // fact. Refused HERE, before `onWillDownload` and any transfer, with
+      // the code that fact carries everywhere else and its remedy. An
+      // implicit "latest" keeps the at-or-above reading: the registry's
+      // release is installed, in a build the promote gate would not
+      // replace.
+      //
+      // Thrown from INSIDE the lock closure rather than returned as one
+      // more `shortCircuit`: the short-circuit arms are outcomes this
+      // function reports to a caller that then decides what to do, and
+      // there is nothing to decide here. It also keeps the refusal on the
+      // same side of the lock as the reads it is derived from.
+      if (
+        !requestedLatest &&
+        installedAtOrAboveTarget &&
+        installed.version !== targetVersion
+      ) {
+        const relation =
+          installedVsTarget.ordering === "greater"
+            ? `newer than the requested ${targetVersion}`
+            : `another build of the same release as the requested ${targetVersion}`;
+        throw cliError({
+          code: CLI_ERROR_CODES.HOST_UPDATE_NOT_NEWER,
+          message: `host download: the installed host is ${installed.version}, ${relation}; nothing was transferred. Run 'traycer host status' to see what is installed, or pass --allow-downgrade to 'traycer host update' to install ${targetVersion} over it`,
+          details: {
+            environment: opts.environment,
+            targetVersion,
+            installedVersion: installed.version,
+          },
+          exitCode: 1,
+        });
+      }
       const alreadyStagedAtTarget =
         stagedAfterYankHeal !== null &&
         stagedAfterYankHeal.stageId !== null &&
@@ -1024,16 +1065,47 @@ export async function resolveUpdatePlan(
   const installedAtOrAboveTarget =
     installedVsTarget.comparable && installedVsTarget.ordering !== "less";
   if (installedAtOrAboveTarget) {
+    // Identity is the STRING. `installedAtOrAboveTarget` is a COMPARATOR
+    // reading, and the comparator orders `2.0.0+bar` and `2.0.0+foo` equal:
+    // at-or-above by a different string is a different artifact, not the
+    // one the caller named. An implicit `latest` keeps the comparator
+    // reading - the registry's release is installed, in a build nothing
+    // here would replace - so this is gated on an EXPLICIT request.
+    const explicitOtherArtifact =
+      request.versionRequest !== null && installed.version !== targetVersion;
     // The downgrade exception is `install`-intent only and needs BOTH an
     // explicit version request and the flag - a bare `host update
     // --allow-downgrade` resolving `latest` below the installed version is
-    // still up to date, exactly as the legacy command reads it.
-    if (
-      request.allowDowngrade &&
-      request.versionRequest !== null &&
-      installedVsTarget.ordering === "greater"
-    ) {
+    // still up to date, exactly as the legacy command reads it. It covers
+    // BOTH shapes the shared monotonic stage refuses: a target below the
+    // record, and another build of the record's release.
+    if (request.allowDowngrade && explicitOtherArtifact) {
       return { kind: "downgrade", targetVersion, identity };
+    }
+    // Refused, not a no-op. A no-op here exits 0 with the requested
+    // artifact never delivered, and no surface ever says so - the exact
+    // "a request for X answered `already at Y`" this whole binding exists
+    // to prevent. It is thrown at PLAN time, before the executor segment
+    // opens: no attempt record exists yet and no marker has been
+    // published, so this refusal creates nothing and has nothing to
+    // withdraw. The same fact discovered LATER - under a lock, against a
+    // record this run already claimed - is the arms' business, and there
+    // it supersedes the record and withdraws the marker.
+    if (explicitOtherArtifact) {
+      const relation =
+        installedVsTarget.ordering === "greater"
+          ? `newer than the requested ${targetVersion}`
+          : `another build of the same release as the requested ${targetVersion}`;
+      throw cliError({
+        code: CLI_ERROR_CODES.HOST_UPDATE_NOT_NEWER,
+        message: `host update: the installed host is ${installed.version}, ${relation}; nothing was transferred. Run 'traycer host status' to see what is installed, or pass --allow-downgrade to install ${targetVersion} over it`,
+        details: {
+          environment: opts.environment,
+          targetVersion,
+          installedVersion: installed.version,
+        },
+        exitCode: 1,
+      });
     }
     return { kind: "no-op", targetVersion, identity };
   }

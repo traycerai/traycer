@@ -152,11 +152,15 @@ function phaseSentence(
  * rather than saying "0".
  */
 function waitingForWorkSentence(blockingSessionCount: number | null): string {
+  // "Waits", not "will continue": the park is a fact about the stage, and
+  // what resumes it is the next update run - a host's own automatic check
+  // where one is enabled, or the next Update now - which this sentence has
+  // no evidence of. The same copy serves the attempt's own park and the
+  // record-derived legacy one.
   if (blockingSessionCount === null) {
-    return "Update will continue when work finishes";
+    return "Update waits for work to finish";
   }
-  const verb = blockingSessionCount === 1 ? "finishes" : "finish";
-  return `Update will continue when ${describeSessions(blockingSessionCount)} ${verb}`;
+  return `Update waits for ${describeSessions(blockingSessionCount)} to finish`;
 }
 
 function completeSentence(targetVersion: string | null): string {

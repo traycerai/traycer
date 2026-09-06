@@ -123,12 +123,33 @@ export interface CreateServiceInstallLifecycleOptions {
   // ensure/update/apply only skipped the busy PRE-check and the
   // cooperative stop's own busy denial still aborted the install.
   readonly force: boolean;
+  /**
+   * Runs once the pre-swap stop's mutation-capability check has passed and
+   * immediately before the actuator stops the host: the first point at
+   * which this lifecycle can have disturbed it. NOT before that check, and
+   * not on the status probe: a probe that throws, or an authority that is
+   * refused, has touched nothing - and `host update` restores a marker it
+   * took over only for a failure that touched nothing. The `service-stop`
+   * progress line precedes both and says nothing about either. A lifecycle
+   * that decides not to stop (a stopped or unregistered service on POSIX)
+   * never calls it; the swap itself reports that boundary
+   * (`CommitInstallFromSourceOptions.onWillSwap`). `null` when no caller is
+   * tracking the boundary.
+   */
+  readonly onWillStopHost: (() => void) | null;
   // The caller's two swap barriers (`installer/install.ts`'s
   // `InstallPhaseHooks`). `beforeSwapCommit` becomes the lifecycle member of
   // the same name verbatim; `afterSwap` runs at the TOP of this lifecycle's
   // own `afterSwap`, before any retire/kickstart/register work, so a
   // caller's write always precedes the start request. Callers driving no
   // attempt record pass `NO_INSTALL_PHASE_HOOKS`.
+  //
+  // Distinct from `onWillStopHost`, which sits a few lines away in
+  // `beforeSwap`: that one ANNOUNCES the disruption boundary and may not
+  // fail the install, while `beforeSwapCommit` is a durable record advance
+  // the executor must land before the swap. They also fire in different
+  // places - `onWillStopHost` immediately before the stop actuator,
+  // `beforeSwapCommit` only once that stop has RESOLVED.
   readonly hooks: InstallPhaseHooks;
 }
 
@@ -170,9 +191,10 @@ export function createServiceInstallLifecycle(
       // open handles inside the install dir would fail the swap rename, so
       // it runs even when the service wasn't observed running.
       if (status.state === "running" || process.platform === "win32") {
-        await withServiceMutationAuthority(verifyMutationCapability, () =>
-          controller.stop(label, { force: options.force }),
-        );
+        await withServiceMutationAuthority(verifyMutationCapability, () => {
+          if (options.onWillStopHost !== null) options.onWillStopHost();
+          return controller.stop(label, { force: options.force });
+        });
         state.stoppedBeforeSwap = true;
         return;
       }
@@ -196,9 +218,13 @@ export function createServiceInstallLifecycle(
         process.platform === "darwin"
       ) {
         try {
-          await withServiceMutationAuthority(verifyMutationCapability, () =>
-            controller.stop(label, { force: options.force }),
-          );
+          await withServiceMutationAuthority(verifyMutationCapability, () => {
+            // Fired before a cooperative stop a busy host may still DENY;
+            // that denial is `HOST_BUSY`, which every caller routes to the
+            // park arm - the one exit that never reads the boundary.
+            if (options.onWillStopHost !== null) options.onWillStopHost();
+            return controller.stop(label, { force: options.force });
+          });
           state.stoppedBeforeSwap = true;
         } catch (cause) {
           if (isServiceMutationAuthorityError(cause)) throw cause;

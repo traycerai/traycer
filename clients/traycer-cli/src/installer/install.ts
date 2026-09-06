@@ -250,6 +250,7 @@ export async function installHost(
     onProgress: opts.onProgress,
     lifecycle: opts.lifecycle,
     verifyMutationCapability: legacyMutationVerifier,
+    onWillSwap: null,
   });
   logger.info("Host install completed", {
     environment: opts.environment,
@@ -489,6 +490,8 @@ export interface CommitHostInstallSourceOptions {
    * authority-checked one.
    */
   readonly verifyMutationCapability: () => Promise<void>;
+  /** See `CommitInstallFromSourceOptions.onWillSwap`. */
+  readonly onWillSwap: (() => void) | null;
 }
 
 export interface CommitHostInstallSourceResult {
@@ -539,6 +542,7 @@ export async function commitHostInstallSource(
       onProgress: opts.onProgress,
       lifecycle: opts.lifecycle,
       verifyMutationCapability: opts.verifyMutationCapability,
+      onWillSwap: opts.onWillSwap,
       onCommitted: () => {
         swapped = true;
       },
@@ -673,6 +677,17 @@ export interface CommitInstallFromSourceOptions {
   readonly onCommitted: () => void;
   /** See `CommitHostInstallSourceOptions.verifyMutationCapability`. */
   readonly verifyMutationCapability: () => Promise<void>;
+  /**
+   * Runs once the pre-swap mutation-capability check has passed and
+   * immediately before the rename replaces `install/`: the point at which
+   * this commit disturbs a host the lifecycle did not stop (a stopped or
+   * unregistered service on POSIX, or no lifecycle at all). The `swap`
+   * progress line precedes the check and says nothing about it. A stop
+   * that happened first already reported the boundary
+   * (`CreateServiceInstallLifecycleOptions.onWillStopHost`); a caller
+   * tracking it treats the two as one edge. `null` when no caller is.
+   */
+  readonly onWillSwap: (() => void) | null;
 }
 
 export interface CommitInstallFromSourceResult {
@@ -772,6 +787,7 @@ export async function commitInstallFromSource(
     workUnits: null,
   });
   await verifyMutationCapability();
+  if (opts.onWillSwap !== null) opts.onWillSwap();
   await atomicSwap({
     environment: opts.environment,
     stagingDir: opts.sourceDir,

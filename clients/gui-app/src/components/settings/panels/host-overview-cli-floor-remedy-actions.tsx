@@ -1,9 +1,10 @@
-import { useEffect, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import type { CliFloorRemedyAction } from "@/components/settings/panels/host-overview-cli-floor-remedy";
 import { copyTerminalCommand } from "@/components/settings/panels/host-doctor-actions";
+import { useUpdateCheckOnBlockingMount } from "@/components/host/use-update-check-on-blocking-mount";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { requestAppUpdateInstall } from "@/lib/app-update/request-app-update-install";
 import type { DesktopAppUpdatesBridge } from "@/lib/windows/types";
@@ -119,12 +120,17 @@ function DesktopRemedyCheck(props: {
   readonly checkOnMount: boolean;
 }): ReactNode {
   const { bridge, label, checkOnMount } = props;
-  // Only an idle updater needs an initial check. A failed check stays visible
-  // until the user retries; entering checking must not issue a second request.
-  // Keeping one component across these states avoids a mount-driven retry loop.
-  useEffect(() => {
-    if (checkOnMount) checkDesktopRemedy(bridge);
-  }, [bridge, checkOnMount]);
+  // The mount check is the SAME guarded one the client-update dialog runs,
+  // for the same reason (see `useUpdateCheckOnBlockingMount`): the rendered
+  // snapshot this remedy was derived from is the store's placeholder on the
+  // first commit - `idle`, never checked - whatever main actually holds, so
+  // deciding from it fired a check on every mount; and a MANUAL check
+  // publishes "Checking…" then "up to date" into the app-wide snapshot every
+  // other surface reads, popping toasts from a settings pane. The guarded
+  // hook reads the bridge's authoritative snapshot, asks only an updater
+  // that has never been asked, once per mount, with automatic intent. The
+  // button below is the user's own manual check.
+  useUpdateCheckOnBlockingMount(checkOnMount ? bridge : null);
   if (label === null) return null;
   return (
     <Button

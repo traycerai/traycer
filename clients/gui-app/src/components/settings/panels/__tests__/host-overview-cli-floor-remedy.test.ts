@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
+import type { CliInstallSource } from "@traycer/protocol/config/installation-records";
 import {
   CLI_NPM_PACKAGE_NAME,
   PACKAGE_MANAGER_UPGRADE_COMMAND,
-  type CliInstallSource,
-} from "@traycer/protocol/config/installation-records";
+} from "@traycer-clients/shared/cli-install/package-manager-upgrade-command";
 import {
   CLI_FLOOR_REMEDY_ACTION_KINDS,
   describeCliFloorRemedy,
@@ -235,8 +235,8 @@ describe("describeCliFloorRemedy", () => {
       {
         source: "homebrew" as const,
         stable: "brew upgrade traycer",
-        prerelease: "brew upgrade traycer",
-        rc: "brew upgrade traycer",
+        prerelease: null,
+        rc: null,
         missing: "brew upgrade traycer",
         build: "brew upgrade traycer",
       },
@@ -315,16 +315,20 @@ describe("describeCliFloorRemedy", () => {
       if (command === null) {
         // Removing the publisher guard would offer a command for a feed that
         // does not publish prereleases; this help-only pin must turn RED.
+        // Homebrew is in this set on purpose: its formula carries a prerelease
+        // only after a manual dispatch AND a merged tap PR, so `brew upgrade`
+        // under an RC floor usually reports nothing newer - a command that
+        // does not reach the floor (see the route's comment).
         expect(result.sentence).toBe(
-          `Traycer CLI prereleases aren't published through ${testCase.row.source}. Install Traycer CLI ${testCase.requiredVersion} another way, then select Check now.`,
+          `Traycer CLI prereleases aren't published through ${testCase.row.source}. Install Traycer CLI ${testCase.requiredVersion} another way; this page rechecks while it is open.`,
         );
         expect(result.actions).toEqual([
           { kind: "help", label: "Show installation help" },
         ]);
       } else {
         // Replacing exact npm floors with the generic latest table, or
-        // disabling the Homebrew/npm prerelease exemptions, makes these
-        // concrete package-manager command pins RED.
+        // disabling the npm prerelease exemption, makes these concrete
+        // package-manager command pins RED.
         // The npm missing-floor row additionally turns RED if only the
         // requiredVersion !== null guard is removed and @null is interpolated.
         expect(result.actions).toEqual([
@@ -350,6 +354,56 @@ describe("describeCliFloorRemedy", () => {
       );
       // Removing the isValidHostVersion guard would interpolate shell text
       // into the npm command; these malformed-floor help pins must turn RED.
+      expect(result.sentence).toBe(
+        "Traycer couldn't verify the required command-line tools version on build-host.",
+      );
+      expect(result.actions).toEqual([
+        { kind: "help", label: "Show installation help" },
+      ]);
+    }
+  });
+
+  it("a floor that is not a version is installation help on EVERY route, not only the one that interpolates it", () => {
+    // The validity check is hoisted into `describeCliFloorRemedy` itself,
+    // ahead of routing. Before that it lived in the package-manager route
+    // alone, so a Desktop, recorded-path or Windows route rendered a
+    // concrete command (and, on the Desktop route, an update offer) for a
+    // requirement this page cannot establish compatibility for - and the
+    // mounted recheck then polled a floor no upgrade can clear. Every
+    // route below must answer the same help-only remedy. Falsification:
+    // move the check back under `describePackageManagerRemedy` and every
+    // non-package-manager row goes RED.
+    const desktopStatuses: readonly DesktopAppUpdateStatus[] = [
+      "available",
+      "ready",
+      "idle",
+      "error",
+    ];
+    const cases = [true, false].flatMap((isLocalMachine) =>
+      sources.flatMap((source) =>
+        platforms.flatMap((platform) =>
+          [null, ...desktopStatuses.map((status) => snapshot(status, {}))].map(
+            (desktopUpdate) => ({
+              isLocalMachine,
+              source,
+              platform,
+              desktopUpdate,
+            }),
+          ),
+        ),
+      ),
+    );
+    expect(cases.length).toBeGreaterThan(300);
+    for (const testCase of cases) {
+      const result = describeCliFloorRemedy(
+        input({
+          source: testCase.source,
+          platform: testCase.platform,
+          isLocalMachine: testCase.isLocalMachine,
+          desktopUpdate: testCase.desktopUpdate,
+          overrides: { requiredCliVersion: "v1.3.0" },
+        }),
+      );
       expect(result.sentence).toBe(
         "Traycer couldn't verify the required command-line tools version on build-host.",
       );
@@ -448,7 +502,7 @@ describe("describeCliFloorRemedy", () => {
         },
       ]);
       expect(result.sentence).toBe(
-        "Run the copied commands on build-host from a PowerShell window outside Traycer on that machine (a Windows Terminal tab there, or an SSH session that opens PowerShell). Restarting briefly disconnects this host. When it reconnects, select Check now, then Update now.",
+        "Run the copied commands on build-host from a PowerShell window outside Traycer on that machine (a Windows Terminal tab there, or an SSH session that opens PowerShell). Restarting briefly disconnects this host. When it reconnects, this page rechecks on its own, and Update now appears once the host accepts the update.",
       );
     }
 
@@ -756,7 +810,7 @@ describe("describeCliFloorRemedy", () => {
           // Desktop action for this refusal; these fallback pins must turn RED
           // under the concrete D01 ablation.
           expect(result.sentence).toBe(
-            `Traycer v${candidate.version} is the latest on this update channel and its command-line tools are below 1.3.0-rc.4. Open a terminal on build-host and run the copied command, then select Check now.`,
+            `Traycer v${candidate.version} is the latest on this update channel and its command-line tools are below 1.3.0-rc.4. Open a terminal on build-host and run the copied command; this page rechecks while it is open.`,
           );
           expect(result.actions).toEqual([
             {
@@ -1004,9 +1058,12 @@ describe("describeCliFloorRemedy", () => {
     );
     // Changing idle's sentence back to Checking would claim work is in
     // flight before the initial check starts; this copy pin must turn RED.
+    // The idle arm keeps a labelled button: the mount check publishes
+    // nothing when it fails, so the updater can sit at `idle` AFTER that
+    // check and a label-less arm would be a dead end.
     expect(idle.sentence).toBe("Check for a Traycer Desktop update.");
     expect(idle.actions).toEqual([
-      { kind: "desktop-check", label: null, checkOnMount: true },
+      { kind: "desktop-check", label: "Check for updates", checkOnMount: true },
     ]);
   });
 

@@ -312,17 +312,21 @@ function renderOverview(input: {
   readonly management: IHostManagement;
   readonly queryClient: QueryClient;
   readonly extra: ReactNode | undefined;
-}): void {
-  render(
+}): { readonly rerender: () => void } {
+  const runnerHost = makeRunnerHostWithManagement(input.management);
+  // A fresh element per call, as the lifecycle-gate suite's persistent render
+  // does: React skips a subtree whose element reference is unchanged, so a
+  // reused tree would never re-read a mutated `scopeOverrides.current`.
+  const buildTree = (): ReactNode => (
     <QueryClientProvider client={input.queryClient}>
-      <RunnerHostProvider
-        runnerHost={makeRunnerHostWithManagement(input.management)}
-      >
+      <RunnerHostProvider runnerHost={runnerHost}>
         {input.extra ?? null}
         <HostSettingsPanel />
       </RunnerHostProvider>
-    </QueryClientProvider>,
+    </QueryClientProvider>
   );
+  const { rerender } = render(buildTree());
+  return { rerender: () => rerender(buildTree()) };
 }
 
 function mountFallbackOverview(options: {
@@ -340,6 +344,7 @@ function mountFallbackOverview(options: {
   readonly fixture: OverviewHostFixture;
   readonly queryClient: QueryClient;
   readonly rpcLogCalls: { count: number };
+  readonly rerender: () => void;
 } {
   const rpcCheckCalls = options.rpcCheckCalls;
   const rpcLogCalls = { count: 0 };
@@ -426,12 +431,12 @@ function mountFallbackOverview(options: {
   localHostIdMock.current = HOST_ID;
   hostBindingMock.current = bindingWith(fixture.client);
   scopeOverrides.current = fallbackScope(fixture, management);
-  renderOverview({
+  const { rerender } = renderOverview({
     management,
     queryClient,
     extra: options.extra,
   });
-  return { management, fixture, queryClient, rpcLogCalls };
+  return { management, fixture, queryClient, rpcLogCalls, rerender };
 }
 
 function expectButtonEnabled(button: HTMLElement): void {
@@ -655,6 +660,118 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
       description: "Another process holds the host lock.",
     });
     expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it("a bridge-route Restart confirm SURVIVES the scope turning unusable and still dispatches the respawn - the recovery this machine needs most while its host is unreachable", async () => {
+    // `host-overview-panel.tsx`: `if (!usable && restartConfirm ===
+    // "cooperative") closeRestartConfirm()`. The cooperative confirm closes
+    // under `!usable` (lifecycle-gate (c3)) because its dispatch needs the
+    // scope's client; this confirm was ARMED for the bridge respawn at open,
+    // which needs none. Falsification: close on `!usable` regardless of the
+    // armed route and the dialog below is gone before it can be answered.
+    let releaseRestart: (() => void) | null = null;
+    const gate = new Promise<void>((resolve) => {
+      releaseRestart = resolve;
+    });
+    const { management, fixture, rerender } = mountFallbackOverview({
+      installOutcome: {
+        kind: "ok",
+        value: { installedVersion: "1.2.0", runningActivated: true },
+      },
+      rpcCheckCalls: { count: 0 },
+      restartHostIfIdle: async () => {
+        await gate;
+        return {
+          kind: "declined" as const,
+          message: "Another process holds the host lock.",
+        };
+      },
+      extraHandshakeMethods: undefined,
+      extra: undefined,
+    });
+
+    await openHostOverviewMenu();
+    fireEvent.click(await screen.findByTestId("host-overview-restart"));
+    await screen.findByTestId("confirm-destructive-dialog");
+    expect(management.restartHostIfIdle).not.toHaveBeenCalled();
+
+    // The scope turns unusable under the open confirm - this machine's host
+    // stopped answering. The bridge is still right here.
+    scopeOverrides.current = {
+      ...fallbackScope(fixture, management),
+      status: "unreachable",
+    };
+    rerender();
+    expect(screen.getByTestId("confirm-destructive-dialog")).toBeTruthy();
+
+    // Answered, it dispatches the respawn over the bridge, never the client.
+    fireEvent.click(screen.getByTestId("confirm-action"));
+    await waitFor(() => {
+      expect(management.restartHostIfIdle).toHaveBeenCalledWith({
+        expectedHostId: HOST_ID,
+      });
+    });
+    expect(management.restartHost).not.toHaveBeenCalled();
+    expect(fixture.restartCalls()).toBe(0);
+
+    await act(async () => {
+      releaseRestart?.();
+      await gate;
+    });
+    await waitFor(() => {
+      expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull();
+    });
+  });
+
+  it("a cooperative confirm CLOSES when the handshake re-routes Restart to the bridge under it, and the re-opened confirm dispatches over the bridge", async () => {
+    // The route is armed at OPEN, so a confirm armed for the cooperative leg
+    // must not stay answerable once the page routes Restart to the bridge -
+    // it would send the refused `host.restart`. The reachable window in
+    // production is the handshake's tri-state `null` (Restart live, route
+    // cooperative) landing `false` under the open dialog; this pin drives the
+    // same rule from `true` to `false`, which is the transition the registry
+    // lets a test express. Falsification: drop the `restartConfirm ===
+    // "cooperative" && restartViaForceFallback` close in the panel and the
+    // first `waitFor` below goes red with the dialog still on screen.
+    const { management, fixture } = mountFallbackOverview({
+      installOutcome: {
+        kind: "ok",
+        value: { installedVersion: "1.2.0", runningActivated: true },
+      },
+      rpcCheckCalls: { count: 0 },
+      restartHostIfIdle: () => Promise.resolve({ kind: "restarted" as const }),
+      extraHandshakeMethods: ["host.restart"],
+      extra: undefined,
+    });
+
+    await openHostOverviewMenu();
+    fireEvent.click(await screen.findByTestId("host-overview-restart"));
+    await screen.findByTestId("confirm-destructive-dialog");
+
+    // The handshake lands without `host.restart`: the page now routes
+    // Restart to the bridge respawn.
+    act(() => {
+      recordNegotiatedHostMethods(HOST_ID, [
+        ...RELEASED_FLOOR_METHODS,
+        ...LOCAL_MAINTENANCE_FALLBACK_METHODS,
+      ]);
+    });
+    await waitFor(() => {
+      expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull();
+    });
+    expect(fixture.restartCalls()).toBe(0);
+    expect(management.restartHostIfIdle).not.toHaveBeenCalled();
+
+    // Re-opened, the confirm is armed for the bridge and dispatches there.
+    await openHostOverviewMenu();
+    fireEvent.click(await screen.findByTestId("host-overview-restart"));
+    fireEvent.click(await screen.findByTestId("confirm-action"));
+    await waitFor(() => {
+      expect(management.restartHostIfIdle).toHaveBeenCalledWith({
+        expectedHostId: HOST_ID,
+      });
+    });
+    expect(fixture.restartCalls()).toBe(0);
   });
 
   it("an external same-key hostRestart closes an open idle confirm without treating it as this dialog's dispatch", async () => {

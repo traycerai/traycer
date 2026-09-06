@@ -2006,7 +2006,8 @@ describe("Overview updates — CLI floor remedy", () => {
     await screen.findByTestId("host-busy-force-defer-dialog");
     // The confirmation re-asks before dispatch so this rendered panel records
     // a real refusal against the exact staged version, rather than a synthetic
-    // hook state. The repair below must come only from the condition poll.
+    // hook state. The repair below must come only from the Overview's own
+    // floor recheck (`useHostOverviewUpdates`), never from a click.
     await act(async () => {
       await queryClient.invalidateQueries();
     });
@@ -2026,8 +2027,9 @@ describe("Overview updates — CLI floor remedy", () => {
     });
     await screen.findByRole("button", { name: "Update now" });
     const checksAfterRecovery = checks;
-    // Removing the floor recovery lane, or changing its fixed interval above
-    // 30s, would leave this refusal visible and fail the assertion above.
+    // Removing the Overview's floor recheck (`useHostOverviewUpdates`), or
+    // raising `CLI_FLOOR_RECHECK_MS` above 30s, would leave this refusal
+    // visible and fail the assertion above.
     expect(checksAfterRecovery).toBeGreaterThan(1);
     // Removing describeUpdateFailure's live-descriptor condition and returning
     // stored refusal text whenever refusal exists would keep both stale
@@ -2066,6 +2068,156 @@ describe("Overview updates — CLI floor remedy", () => {
       expect(notice.textContent).not.toContain("needs Traycer CLI");
     });
     expect(installCalls).toEqual([]);
+  });
+
+  it("rechecks only while a remedy is on screen: a floored row on ANOTHER release line under installed-rc earns no recheck, a floored later RC on the installed line does", async () => {
+    // The recheck is keyed on the rendered remedy (`useHostOverviewUpdates`),
+    // not on the response: the response carries no installed version, so a
+    // classifier over it alone - the table lane this replaced - re-asked the
+    // host every 30 s on ANY floored row of an `installed-rc` catalog, a
+    // release on another line included, with no remedy on screen to end it.
+    // Falsification: key the effect on "any floored row in the manifest" (or
+    // restore the table lane) and the first half goes RED - the 1.4.0-rc.1
+    // floor keeps re-asking a host that shows no remedy.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let checks = 0;
+    let sameLineFloored = false;
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.3.0-rc.1",
+      installation: managedInstallationWithCli(
+        installRecord("1.3.0-rc.1", null),
+        "1.2.0",
+        "manual",
+        "/home/u/.local/bin/traycer",
+      ),
+      overrideHandlers: {
+        "host.update.check": () => {
+          checks += 1;
+          const base = multiVersionManifest(["1.2.0", "1.3.0-rc.1"]);
+          const flooredOtherLine = floorManifest("1.4.0-rc.1", false)
+            .versions[0];
+          const flooredSameLine = floorManifest("1.3.0-rc.2", false)
+            .versions[0];
+          return Promise.resolve({
+            outcome: "ok" as const,
+            effectiveIncludePreReleases: true,
+            includePreReleasesSource: "installed-rc" as const,
+            manifest: {
+              ...base,
+              versions: [
+                flooredOtherLine,
+                ...(sameLineFloored ? [flooredSameLine] : []),
+                ...base.versions,
+              ],
+            },
+          });
+        },
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    // The catalog answered. The installed line (1.3.0) has no matching stable
+    // and no later RC, so the summary walk names nothing and no remedy
+    // renders - the 1.4.0-rc.1 floor is another line's business.
+    await waitFor(() => expect(checks).toBe(1));
+    await waitForButton("Check now");
+    expect(screen.queryByRole("button", { name: "Copy command" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Show installation help" }),
+    ).toBeNull();
+    // Two full recheck periods pass and the host is not asked again.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(31_000);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(31_000);
+    });
+    expect(checks).toBe(1);
+
+    // Positive control, same host, same catalog plus a floored later RC on
+    // the INSTALLED line: the remedy renders and the recheck runs.
+    sameLineFloored = true;
+    fireEvent.click(await waitForButton("Check now"));
+    await waitFor(() => expect(checks).toBe(2));
+    await screen.findByRole("button", { name: "Copy command" });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    await waitFor(() => expect(checks).toBe(3));
+
+    vi.useRealTimers();
+  });
+
+  it("a retired region ends the recheck: an externally-managed discovery under a floored catalog stops re-asking the host", async () => {
+    // "On screen" is literal. `installDiscovered: "externally-managed"` is
+    // latched for the life of the mount (only `cli-unavailable` is ever
+    // refuted) and replaces the whole region with a notice, while the check
+    // query stays ENABLED - so a floor read before the retirement would keep
+    // re-asking a host with nothing on screen to end it, the very defect the
+    // table lane had. Falsification: drop `degrade === null` from
+    // `recheckFloor` and the count below climbs across the two periods.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let checks = 0;
+    const floored = floorManifest("1.3.0", false);
+    const installable = multiVersionManifest(["1.2.5"]).versions[0];
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.2.0",
+      installation: managedInstallationWithCli(
+        installRecord("1.2.0", null),
+        "1.2.0",
+        "manual",
+        "/home/u/.local/bin/traycer",
+      ),
+      overrideHandlers: {
+        "host.update.check": () => {
+          checks += 1;
+          return Promise.resolve({
+            outcome: "ok" as const,
+            effectiveIncludePreReleases: false,
+            includePreReleasesSource: "stable-default" as const,
+            manifest: {
+              ...floored,
+              versions: [...floored.versions, installable],
+            },
+          });
+        },
+        "host.update.install": () =>
+          Promise.resolve({ outcome: "externally-managed" as const }),
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    // The floored latest renders the remedy: the recheck is armed.
+    await screen.findByRole("button", { name: "Copy command" });
+    await waitFor(() => expect(checks).toBe(1));
+
+    // An install of the lower installable row discovers the host is
+    // externally managed; the region retires behind its notice.
+    await openHostOverviewAdvanced();
+    fireEvent.click(await waitForButton("Install 1.2.5"));
+    await screen.findByTestId("host-overview-updates-degraded");
+    expect(screen.queryByRole("button", { name: "Copy command" })).toBeNull();
+
+    // Nothing on screen to repair, so nothing is re-asked.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(31_000);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(31_000);
+    });
+    expect(checks).toBe(1);
+
+    vi.useRealTimers();
   });
 
   it("settles Force refusal synchronously exactly once for floored, absent, and incomplete-floor entries", async () => {
@@ -2241,9 +2393,10 @@ describe("Overview updates — CLI floor remedy", () => {
     const onSettled = vi.fn(() => {
       expect(returned).toBe(false);
     });
-    // Adding entry.yanked to readCliFloor's early return would authorize this
-    // staged release; the synchronous no-mutation pin must RED under that
-    // shared-reader ablation.
+    // This pins the WITHDRAWAL gate of `describeForceUpdateRefusal`, which
+    // is consulted before any floor: `readCliFloor` is never reached for a
+    // yanked entry, so no change to it can authorize this release. Dropping
+    // the `entry.yanked` refusal is what reddens the no-mutation pin.
     act(() => {
       yankedRendered.result.current.installForce("1.3.0", onSettled);
       returned = true;
@@ -2375,7 +2528,7 @@ describe("Overview updates — CLI floor remedy", () => {
     renderPanel();
 
     const sentence =
-      "On host-a, run this command to prepare the host update: npm install -g @traycerai/cli@1.3.0-rc.4. Then select Check now.";
+      "On host-a, run this command to prepare the host update: npm install -g @traycerai/cli@1.3.0-rc.4. This page rechecks while it is open, and Update now appears once the host accepts the update.";
     await screen.findByText(sentence);
     // Skipping floor acceptance after the unusable preferred stable would
     // remove this selected RC remedy; with no installable fallback, it would
@@ -2846,5 +2999,293 @@ describe("Overview updates — activation debt", () => {
     });
 
     await screen.findByTestId("host-overview-operation-restart");
+  });
+});
+
+describe("Overview updates — record-leg liveness and entry-level floor gates", () => {
+  it("a failed installation read keeps the debt sentence as (last known) and withholds Update now, instead of re-offering the installed version", async () => {
+    // The catalog's comparison baseline is the facts as READ, qualified by
+    // the record leg's liveness - not the live-only facts the card's
+    // controls take. Erasing the facts on one failed poll dropped the
+    // baseline, and the region then re-offered the version that is already
+    // on disk as "available" with a live Update now, for bytes a failed poll
+    // did not change. Falsification: build `activationDebt` from
+    // `legacyFacts` (live-only) instead of `legacyFactsRead` in
+    // `host-overview-panel.tsx` and the (last known) sentence below becomes
+    // "v1.3.0-rc.3 is available." beside an Update now button.
+    let installationCalls = 0;
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.3.0-rc.2",
+      overrideHandlers: {
+        "host.getInstallationInfo": () => {
+          installationCalls += 1;
+          if (installationCalls === 2) {
+            throw new Error("host unreachable");
+          }
+          return managedInstallation(installRecord("1.3.0-rc.3", null), null);
+        },
+        "host.update.check": () => ({
+          outcome: "ok" as const,
+          effectiveIncludePreReleases: true,
+          includePreReleasesSource: "installed-rc" as const,
+          manifest: multiVersionManifest(["1.3.0-rc.3"]),
+        }),
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    const { queryClient } = renderPanel();
+
+    // Live debt: the record (rc.3) is ahead of the running host (rc.2), and
+    // the catalog's rc.3 is what is installed - no offer, a restart.
+    await waitFor(() => {
+      expect(screen.getByRole("status").textContent).toBe(
+        "v1.3.0-rc.3 is installed — restart host to finish.",
+      );
+    });
+    expect(screen.queryByRole("button", { name: "Update now" })).toBeNull();
+    await screen.findByTestId("host-overview-operation-restart");
+
+    // The record poll fails while the status read keeps succeeding beside
+    // it. The debt is retained as EVIDENCE (the comparison baseline), said
+    // as last known; the controls that would dispatch on it are withdrawn.
+    await act(async () => {
+      await queryClient.invalidateQueries();
+    });
+    await waitFor(() => expect(installationCalls).toBe(2));
+    await waitFor(() => {
+      expect(screen.getByRole("status").textContent).toBe(
+        "v1.3.0-rc.3 is installed (last known) — restart host to finish.",
+      );
+    });
+    expect(screen.queryByRole("button", { name: "Update now" })).toBeNull();
+    expect(screen.queryByTestId("host-overview-operation-restart")).toBeNull();
+
+    // The next successful read restores the live sentence and its control.
+    await act(async () => {
+      await queryClient.invalidateQueries();
+    });
+    await waitFor(() => expect(installationCalls).toBe(3));
+    await waitFor(() => {
+      expect(screen.getByRole("status").textContent).toBe(
+        "v1.3.0-rc.3 is installed — restart host to finish.",
+      );
+    });
+    await screen.findByTestId("host-overview-operation-restart");
+  });
+
+  it("a failed STATUS read qualifies the debt sentence as (last known) too - the running version it compares against is retained data", async () => {
+    // The debt is the record's installed version read against the status
+    // read's running version. A status poll that fails while the record
+    // poll keeps succeeding leaves `legacyFactsRead` built on a retained
+    // `hostVersion`, and the host may already have restarted onto the
+    // installed version - so the sentence must say "last known" exactly
+    // as it does for a failed record read (the pin above). Falsification:
+    // key `activationDebt.live` on `installationLive` alone and the
+    // qualified sentence below never appears.
+    let statusCalls = 0;
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.3.0-rc.2",
+      installation: managedInstallation(
+        installRecord("1.3.0-rc.3", null),
+        null,
+      ),
+      overrideHandlers: {
+        "host.status": () => {
+          statusCalls += 1;
+          if (statusCalls === 2) {
+            throw new Error("host unreachable");
+          }
+          return {
+            ready: true,
+            hostVersion: "1.3.0-rc.2",
+            protocolVersion: { major: 1, minor: 1 },
+            busy: false,
+            busySessionCount: 0,
+            updateProgress: null,
+            busyBreakdown: null,
+            updateOperation: null,
+            updateTransaction: null,
+          };
+        },
+        "host.update.check": () => ({
+          outcome: "ok" as const,
+          effectiveIncludePreReleases: true,
+          includePreReleasesSource: "installed-rc" as const,
+          manifest: multiVersionManifest(["1.3.0-rc.3"]),
+        }),
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    const { queryClient } = renderPanel();
+
+    await waitFor(() => {
+      expect(screen.getByRole("status").textContent).toBe(
+        "v1.3.0-rc.3 is installed — restart host to finish.",
+      );
+    });
+
+    await act(async () => {
+      await queryClient.invalidateQueries();
+    });
+    await waitFor(() => expect(statusCalls).toBe(2));
+    await waitFor(() => {
+      expect(screen.getByRole("status").textContent).toBe(
+        "v1.3.0-rc.3 is installed (last known) — restart host to finish.",
+      );
+    });
+    expect(screen.queryByRole("button", { name: "Update now" })).toBeNull();
+  });
+
+  it("a floor that is not a version renders help and does NOT arm the recheck; a readable floor beside it does", async () => {
+    // `CliFloor.repairable` is what the recheck is keyed on: the mounted
+    // 30 s recheck exists to notice a CLI upgrade clearing the floor, and no
+    // upgrade clears a requirement this page cannot read - so polling it
+    // would re-ask the host forever with nothing on screen able to end it.
+    // Falsification: drop `cliFloor.repairable` from `recheckFloor` in
+    // `host-overview-updates-state.ts` and the count climbs across the two
+    // quiet periods below.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let checks = 0;
+    let floorReadable = false;
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.2.0",
+      installation: managedInstallationWithCli(
+        installRecord("1.2.0", null),
+        "1.2.0",
+        "manual",
+        "/home/u/.local/bin/traycer",
+      ),
+      overrideHandlers: {
+        "host.update.check": () => {
+          checks += 1;
+          const floored = floorManifest("1.3.0", false);
+          const declared = floorReadable ? "1.3.0" : "v1.3.0";
+          return Promise.resolve({
+            outcome: "ok" as const,
+            effectiveIncludePreReleases: false,
+            includePreReleasesSource: "stable-default" as const,
+            manifest: {
+              ...floored,
+              versions: floored.versions.map((entry) => ({
+                ...entry,
+                requiredCliVersion: declared,
+                platforms: {
+                  "darwin-arm64": {
+                    ...entry.platforms["darwin-arm64"],
+                    unavailableReason: `Needs Traycer CLI ${declared} or newer (this host's CLI is 1.2.0).`,
+                  },
+                },
+              })),
+            },
+          });
+        },
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    // Help on screen, no command - and no recheck behind it.
+    await waitFor(() => expect(checks).toBe(1));
+    await waitForButton("Show installation help");
+    expect(screen.getByRole("status").textContent).toBe(
+      "Traycer couldn't verify the required command-line tools version on host-a.",
+    );
+    expect(screen.queryByRole("button", { name: "Copy command" })).toBeNull();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(31_000);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(31_000);
+    });
+    expect(checks).toBe(1);
+
+    // Positive control, same host: a READABLE floor renders the command and
+    // arms the recheck.
+    floorReadable = true;
+    fireEvent.click(await waitForButton("Check now"));
+    await waitFor(() => expect(checks).toBe(2));
+    await waitForButton("Copy command");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    await waitFor(() => expect(checks).toBe(3));
+
+    vi.useRealTimers();
+  });
+
+  it("Force update… is withheld for a staged version whose catalog entry declares a floor this page cannot read, even with the asset available", async () => {
+    // Staged bytes install whatever the asset's availability says: the
+    // CLI's already-staged short-circuit resolves no asset and applies no
+    // floor. So the Force gate reads the catalog ENTRY's own floor, apart
+    // from the asset's authored reason, and refuses one that is not a
+    // version - the executing CLI's verdict never reached it. A READABLE
+    // floor is left to the asset's verdict (`available` is the executing
+    // CLI's own comparison), which the positive control below relies on.
+    // Falsification: drop the `!isValidHostVersion(declaredFloor)` arm from
+    // `describeForceUpdateRefusal` and the first absence goes RED.
+    let declaredFloor = "v1.3.0";
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      busy: true,
+      busySessionCount: 1,
+      hostVersion: "1.2.0",
+      installation: managedInstallationWithCliAndStage(
+        installRecord("1.2.0", null),
+        stagedRecord("1.3.0"),
+      ),
+      overrideHandlers: {
+        "host.update.check": () => {
+          const cleared = floorManifest("1.3.0", true);
+          return Promise.resolve({
+            outcome: "ok" as const,
+            effectiveIncludePreReleases: false,
+            includePreReleasesSource: "stable-default" as const,
+            manifest: {
+              ...cleared,
+              versions: cleared.versions.map((entry) => ({
+                ...entry,
+                requiredCliVersion: declaredFloor,
+              })),
+            },
+          });
+        },
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    const card = await screen.findByTestId("host-overview-operation-card");
+    expect(card.textContent).toContain("Update waits for 1 session to finish");
+    // The check has answered (the region left "Checking…") before the
+    // absence is read, so this is the gate's decision, not a loading frame.
+    await waitFor(() => {
+      expect(screen.getByRole("status").textContent).not.toBe(
+        "Checking for updates…",
+      );
+    });
+    expect(
+      screen.queryByTestId("host-overview-operation-force-update"),
+    ).toBeNull();
+
+    // Positive control: the same entry with a readable floor the asset
+    // clears offers Force.
+    declaredFloor = "1.3.0";
+    fireEvent.click(await waitForButton("Check now"));
+    await screen.findByTestId("host-overview-operation-force-update");
   });
 });

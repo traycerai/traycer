@@ -89,7 +89,7 @@ const mocks = vi.hoisted(() => ({
   replaceUpdateProgressMarkerIfUnchanged: vi.fn(),
   deleteUpdateProgressMarkerIfUnchanged: vi.fn(),
   createUpdateProgressMarkerIfAbsent: vi.fn(),
-  updateProgressRecordHasLiveWriter: vi.fn(),
+  updateProgressRecordHasProvenLiveWriter: vi.fn(),
   readHostPidMetadata: vi.fn(),
   identityVerdict: vi.fn(),
   assertHostNotBusy: vi.fn(),
@@ -196,7 +196,8 @@ vi.mock("../update-progress-marker", () => ({
   deleteUpdateProgressMarkerIfUnchanged:
     mocks.deleteUpdateProgressMarkerIfUnchanged,
   createUpdateProgressMarkerIfAbsent: mocks.createUpdateProgressMarkerIfAbsent,
-  updateProgressRecordHasLiveWriter: mocks.updateProgressRecordHasLiveWriter,
+  updateProgressRecordHasProvenLiveWriter:
+    mocks.updateProgressRecordHasProvenLiveWriter,
   progressRecord: (fields: {
     state: "updating" | "failed";
     error: string | null;
@@ -205,6 +206,10 @@ vi.mock("../update-progress-marker", () => ({
     ...fields,
     updatedAt: new Date().toISOString(),
     writerId: "test-writer",
+    // Stamped by the real `progressRecord` from `ownProcessStartIdentity`
+    // (#1752 round 13). `null` here is the shape an older CLI's record has,
+    // which is exactly what the fail-open/proven split above must handle.
+    writerStartIdentity: null,
   }),
   // The REAL comparator (not a `vi.fn()`), so the "is this marker still ours"
   // decisions under test compare the way production does.
@@ -753,8 +758,17 @@ interface ApplyMockOptions {
    */
   readonly onWillCommitStaged:
     | ((stagedVersion: string) => Promise<void>)
+    | null
     | undefined;
   readonly expectedStageFingerprint: string | null;
+  /**
+   * The ONE version binding (ticket 08 decision 2): production always passes
+   * the CLAIM's target here, explicit request or not, because the claim is the
+   * authorization. `null` is the shape `host apply` and `host install` pass.
+   */
+  readonly expectedStagedVersion: string | null;
+  /** The actuator-reported disruption boundary. */
+  readonly onWillDisruptHost: (() => void) | null;
   readonly force: boolean;
 }
 
@@ -808,7 +822,7 @@ function armWorld(): void {
   );
   // The real rule shape: a `failed` has no writer by construction, and an
   // `updating` is live unless the test declared its writer dead.
-  mocks.updateProgressRecordHasLiveWriter.mockImplementation(
+  mocks.updateProgressRecordHasProvenLiveWriter.mockImplementation(
     (record: HostUpdateProgress) =>
       record.state !== "failed" &&
       (record.writerId === null || !mocks.deadWriterIds.has(record.writerId)),
@@ -890,6 +904,23 @@ function armWorld(): void {
     ) => {
       const target = world.stagedVersion;
       if (target === null) return { outcome: "no-op" as const };
+      // The ONE version binding, modelled (`installer/apply.ts`, #1752 round
+      // 10): an explicit `expectedStagedVersion` that does not name the stage
+      // actually on disk is refused BEFORE the busy gate and before
+      // `onWillCommitStaged`, having consumed and announced nothing. Checked
+      // ahead of the fingerprint so the coarser, better-worded refusal wins
+      // when both would fire - which is the order production decides them in.
+      if (
+        options.expectedStagedVersion !== null &&
+        options.expectedStagedVersion !== target
+      ) {
+        return {
+          outcome: "stage-version-mismatch" as const,
+          installedVersion: world.installedVersion ?? target,
+          expectedStagedVersion: options.expectedStagedVersion,
+          actualStagedVersion: target,
+        };
+      }
       // The REAL refusal, modelled (`installer/apply.ts`): a non-null expected
       // fingerprint that does not name the stage actually on disk is a
       // replaced handoff, and the installer answers
@@ -932,6 +963,16 @@ function armWorld(): void {
     }) => {
       const previous = world.installedVersion ?? input.version;
       await input.beforeExtract();
+      // The under-lock no-op (#1752 round 14): another actor installed the
+      // requested version while this run staged its private source. Decided
+      // before the busy gate and before every barrier, and the private source
+      // is discarded - so nothing below this line runs.
+      if (world.installedVersion === input.version) {
+        return {
+          outcome: "no-op" as const,
+          installedVersion: input.version,
+        };
+      }
       input.onProgress(progress("service-stop", null));
       await input.hooks.beforeSwapCommit();
       input.onProgress(progress("swap", null));
@@ -1079,11 +1120,20 @@ describe("runHostUpdate - the install intent's arms", () => {
       },
     });
 
-    // The apply is never reached. A `null` expected fingerprint means
-    // "whatever is staged", and whatever is staged here is a version this
-    // claim never named: 3.0.0 would be installed under a claim for 2.0.0,
-    // and the verification would then fail for the wrong reason.
-    expect(mocks.applyHostWithAttempt).not.toHaveBeenCalled();
+    // The apply IS reached now, and REFUSES - ticket 08 decision 2 collapsed
+    // the two version bindings into one, the installer's. It is fed the
+    // CLAIM's target, decides before the busy gate and before
+    // `onWillCommitStaged`, and consumes nothing: 3.0.0 stays staged and
+    // 1.0.0 stays installed. What must never happen is the apply COMMITTING
+    // 3.0.0 under a claim for 2.0.0, and that is what these assertions pin.
+    // Falsification: pass `expectedStagedVersion: null` from `applyArm` and
+    // the fixture installs 3.0.0, then fails verification for 2.0.0 - the
+    // wrong error, over a host that was moved.
+    expect(mocks.applyHostWithAttempt).toHaveBeenCalledTimes(1);
+    expect(mocks.applyHostWithAttempt.mock.calls[0][2]).toMatchObject({
+      expectedStagedVersion: "2.0.0",
+    });
+    expect(world.stagedVersion).toBe("3.0.0");
     expect(world.installedVersion).toBe("1.0.0");
     const record = await requireRecord();
     expect(record.targetVersion).toBe("2.0.0");
@@ -1178,6 +1228,49 @@ describe("runHostUpdate - bound intents", () => {
       "verifying",
     ]);
     expect(outcome.legacy.version).toBe("2.0.0");
+  });
+
+  it("continue whose stage another actor consumed, installed AND activated: superseded, exit 0, nothing restarted (D-47b)", async () => {
+    // The corner where the world is right and only the RECORD stands in the
+    // way. A `resume-apply` continuation may not write `complete` before it
+    // has written `applying`, and this resume never applied - the stage was
+    // taken under its own lock. That is a record-shape limit, not a missing
+    // verification: the run READ the live host serving 2.0.0 under that lock,
+    // which is the same evidence the delivered-and-running arm exits 0 on. A
+    // non-zero exit for a host running exactly what was asked would be a lie
+    // in the other direction from the RCA's finding 3.
+    // Falsification (the ablation): throw from the delivered arm instead and
+    // this reports a failure over a host that is exactly right.
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    const attemptId = await parkUpgrade("2.0.0");
+    mocks.applyHostWithAttempt.mockImplementationOnce(async () => {
+      // Another actor consumed the stage under the lock, committed it, and
+      // restarted the host onto it.
+      await seedInstalled("2.0.0");
+      world.runningVersion = "2.0.0";
+      await seedStaged(null);
+      return { outcome: "no-op" as const };
+    });
+
+    const outcome = await runUpdate({
+      intent: "continue",
+      expectAttempt: attemptId,
+      versionRequest: "2.0.0",
+    });
+
+    expect(outcome.legacy.version).toBe("2.0.0");
+    const record = await requireRecord();
+    expect(record.phase).toBe("superseded");
+    expect(record.execution).toBe("terminal");
+    expect(record.continuation).toBeNull();
+    expect(record.error).toBeNull();
+    expect(mocks.writes).not.toContain("failed");
+    expect(mocks.disk.current).toBeNull();
+    // Never claimed as verified: the trace stops where the record's own rule
+    // stops it, and the exit code does not pretend otherwise.
+    expect(phaseTrace()).not.toContain("verifying");
+    expect(mocks.stopHostForRestartWithAttempt).not.toHaveBeenCalled();
   });
 
   it("continue names an attempt that is gone: released refused-attempt-gone, nothing claimed", async () => {
@@ -2222,15 +2315,40 @@ describe("ported: buildHostUpdateCommand composite", () => {
     expect(mocks.writes.length).toBeGreaterThan(0);
   });
 
-  it("keeps an explicit lower target on the monotonic stage path unless downgrade is explicitly enabled", async () => {
+  it("REFUSES an explicit lower target without consent, and takes the owned installer with it", async () => {
+    // This pin used to read "keeps an explicit lower target on the monotonic
+    // stage path" and assert a `nothing-to-do` release - exit 0 for a request
+    // that delivered nothing, which is the answer #1752 round 14 removed.
+    // The refusal happens at the PLAN, before any claim, so no attempt record
+    // and no marker are created and there is nothing to withdraw.
     await seedInstalled("2.0.0");
     world.runningVersion = "2.0.0";
 
-    const outcome = await runUpdate({ versionRequest: "1.0.0" });
-
-    expect(outcome.releasedReason).toBe("nothing-to-do");
+    await expect(
+      runUpdate({ versionRequest: "1.0.0", ackNonce: "nonce-abcdefgh" }),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_UPDATE_NOT_NEWER,
+      details: { installedVersion: "2.0.0", targetVersion: "1.0.0" },
+    });
     expect(mocks.installHostDowngradeInSegment).not.toHaveBeenCalled();
     expect(mocks.downloadAndStageHostInSegment).not.toHaveBeenCalled();
+    expect(mocks.disk.current).toBeNull();
+    expect(await readRecord()).toBeNull();
+    // The dispatcher still hears an answer - the refusal is thrown INSIDE the
+    // run, on the far side of the settlement.
+    expect(await readAck("nonce-abcdefgh")).toMatchObject({
+      kind: "no-attempt",
+    });
+
+    // With consent the owned installer takes it: the shared monotonic stage
+    // would refuse to promote a candidate that is not strictly newer, which
+    // is exactly why this arm exists.
+    mocks.installHostDowngradeInSegment.mockClear();
+    await runUpdate({ versionRequest: "1.0.0", allowDowngrade: true });
+    expect(mocks.installHostDowngradeInSegment).toHaveBeenCalledTimes(1);
+    expect(world.installedVersion).toBe("1.0.0");
+    // Falsification: drop `explicitOtherArtifact` from `resolveUpdatePlan` and
+    // the first half resolves `no-op` again, exit 0, nothing delivered.
   });
 
   it("keeps a null version request for latest semantics", async () => {
@@ -2576,6 +2694,7 @@ describe("ported: update-progress marker (T16)", () => {
       targetVersion: "2.1.0",
       updatedAt: "2026-01-02T00:00:00.000Z",
       writerId: "third-updater",
+      writerStartIdentity: null,
     };
     // The first evidence read is inside the verification loop: past the apply,
     // so this run's own `updating` is long since published, and before the
@@ -2762,6 +2881,7 @@ describe("ported: update-progress marker (T16)", () => {
         targetVersion: "1.7.0",
         updatedAt: "2026-01-02T00:00:00.000Z",
         writerId: "third-updater",
+        writerStartIdentity: null,
       };
       throw new Error("transfer lost");
     });
@@ -2978,6 +3098,7 @@ describe("ported: update-progress marker (T16)", () => {
       targetVersion: "1.9.0",
       updatedAt: "2026-01-01T00:00:00.000Z",
       writerId: "dead-writer",
+      writerStartIdentity: null,
     };
 
     const outcome = await runUpdate({});
@@ -2997,6 +3118,7 @@ describe("ported: update-progress marker (T16)", () => {
       targetVersion: "1.9.0",
       updatedAt: "2026-01-01T00:00:00.000Z",
       writerId: "dead-writer",
+      writerStartIdentity: null,
     };
     mocks.applyHostWithAttempt.mockRejectedValue(busyError());
 
@@ -3015,6 +3137,7 @@ describe("ported: update-progress marker (T16)", () => {
       targetVersion: "1.9.0",
       updatedAt: "2026-01-01T00:00:00.000Z",
       writerId: "424242-dead",
+      writerStartIdentity: null,
     };
     mocks.applyHostWithAttempt.mockRejectedValue(busyError());
 
@@ -3033,6 +3156,7 @@ describe("ported: update-progress marker (T16)", () => {
       targetVersion: "1.9.0",
       updatedAt: "2026-01-01T00:00:00.000Z",
       writerId: "dead-writer",
+      writerStartIdentity: null,
     };
     mocks.downloadAndStageHostInSegment.mockImplementation(async () => {
       throw new Error("download failed again: ECONNRESET");
@@ -3113,12 +3237,37 @@ describe("ported: update-progress marker (T16)", () => {
     });
   });
 
-  it("the observed-match comparator ignores build metadata: 2.0.0+build.7 satisfies an announced 2.0.0", async () => {
+  it("build metadata is artifact identity: a host observed at 2.0.0+build.7 does NOT satisfy an announced 2.0.0 - the lost download is stamped, not withdrawn", async () => {
+    // This pin is the INVERSE of the one ticket 04 ported from #1752 round 8
+    // ("the observed-match comparator ignores build metadata"). Rounds 14-15
+    // deleted that rule: `2.0.0+build.7` is another artifact than `2.0.0`, and
+    // a run for one that finds the other running was not delivered - its
+    // failure stands. The withdrawal exists to withhold a failure another
+    // actor CONTRADICTED, and this reading contradicts nothing.
+    // Falsification: put `compareHostVersions` back into
+    // `targetObservedRunning` and the marker is withdrawn again.
     await seedInstalled("1.0.0");
     world.runningVersion = "1.0.0";
     mocks.downloadAndStageHostInSegment.mockImplementation(async () => {
       await seedInstalled("2.0.0+build.7");
       world.runningVersion = "2.0.0+build.7";
+      throw new Error("transfer lost");
+    });
+
+    await expect(runUpdate({})).rejects.toThrow("transfer lost");
+
+    expect(mocks.disk.current).toMatchObject({
+      state: "failed",
+      targetVersion: "2.0.0",
+    });
+  });
+
+  it("the SAME artifact observed running - record 2.0.0 for an announced 2.0.0 - is withdrawn (control)", async () => {
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    mocks.downloadAndStageHostInSegment.mockImplementation(async () => {
+      await seedInstalled("2.0.0");
+      world.runningVersion = "2.0.0";
       throw new Error("transfer lost");
     });
 
@@ -3212,6 +3361,7 @@ describe("ported: activation debt (installed-up-to-date short-circuit)", () => {
       targetVersion: "1.9.0",
       updatedAt: "2026-01-01T00:00:00.000Z",
       writerId: null,
+      writerStartIdentity: null,
     };
     const thirdUpdater: HostUpdateProgress = {
       state: "updating",
@@ -3219,6 +3369,7 @@ describe("ported: activation debt (installed-up-to-date short-circuit)", () => {
       targetVersion: "2.1.0",
       updatedAt: "2026-01-02T00:00:00.000Z",
       writerId: "third-updater",
+      writerStartIdentity: null,
     };
     mocks.disk.current = staleFailed;
     mocks.readUpdateProgressMarker.mockImplementationOnce(async () => {
@@ -3243,6 +3394,7 @@ describe("ported: activation debt (installed-up-to-date short-circuit)", () => {
       targetVersion: "2.1.0",
       updatedAt: "2026-01-02T00:00:00.000Z",
       writerId: "third-updater",
+      writerStartIdentity: null,
     };
     mocks.stopHostForRestartWithAttempt.mockImplementation(
       async (
@@ -3323,15 +3475,19 @@ describe("ported: activation debt (installed-up-to-date short-circuit)", () => {
     expect(outcome.legacy.previousVersion).toBe("1.0.0");
   });
 
-  it("no work owed and the running host is OBSERVED at the installed version: a stale `failed` marker is cleared", async () => {
+  it("no work owed and the running host is OBSERVED at the installed version: a `failed` marker NAMING that version is cleared", async () => {
     await seedInstalled("2.0.0");
     world.runningVersion = "2.0.0";
     mocks.disk.current = {
       state: "failed",
       error: "an older run failed",
-      targetVersion: "1.9.0",
+      // NAMES the observed version. `clearStaleFailedMarker` applies the same
+      // string rule the host's `isStaleUpdateProgress` does: a `failed` is
+      // stale when the version it names IS the one now running.
+      targetVersion: "2.0.0",
       updatedAt: "2026-01-01T00:00:00.000Z",
       writerId: null,
+      writerStartIdentity: null,
     };
 
     const outcome = await runUpdate({});
@@ -3340,7 +3496,11 @@ describe("ported: activation debt (installed-up-to-date short-circuit)", () => {
     expect(mocks.disk.current).toBeNull();
   });
 
-  it("the stale-failure clear could not be written: left alone, logged, no throw", async () => {
+  it("no work owed: a `failed` marker naming a target OTHER than the observed running version is LEFT ALONE", async () => {
+    // It may still be exactly true - nothing here contradicts it - and the
+    // rule that would clear it is the artifact-identity one, not "any failure
+    // over a healthy host". Falsification: drop the target comparison in
+    // `clearStaleFailedMarker` and this marker is deleted.
     await seedInstalled("2.0.0");
     world.runningVersion = "2.0.0";
     mocks.disk.current = {
@@ -3349,6 +3509,55 @@ describe("ported: activation debt (installed-up-to-date short-circuit)", () => {
       targetVersion: "1.9.0",
       updatedAt: "2026-01-01T00:00:00.000Z",
       writerId: null,
+      writerStartIdentity: null,
+    };
+
+    const outcome = await runUpdate({});
+
+    expect(outcome.releasedReason).toBe("nothing-to-do");
+    expect(mocks.disk.current).toMatchObject({
+      state: "failed",
+      targetVersion: "1.9.0",
+    });
+    expect(logger.info).toHaveBeenCalledWith(
+      "Host update left the failed progress marker alone - it names a target the running host has not been observed at",
+      expect.objectContaining({
+        failedTargetVersion: "1.9.0",
+        observedInstalledVersion: "2.0.0",
+      }),
+    );
+  });
+
+  it("a `failed` marker naming 2.0.0+foo over a host observed at 2.0.0+bar is NOT stale - build metadata is artifact identity for this rule too", async () => {
+    await seedInstalled("2.0.0+bar");
+    world.runningVersion = "2.0.0+bar";
+    mocks.disk.current = {
+      state: "failed",
+      error: "an older run failed",
+      targetVersion: "2.0.0+foo",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      writerId: null,
+      writerStartIdentity: null,
+    };
+
+    await runUpdate({});
+
+    expect(mocks.disk.current).toMatchObject({
+      state: "failed",
+      targetVersion: "2.0.0+foo",
+    });
+  });
+
+  it("the stale-failure clear could not be written: left alone, logged, no throw", async () => {
+    await seedInstalled("2.0.0");
+    world.runningVersion = "2.0.0";
+    mocks.disk.current = {
+      state: "failed",
+      error: "an older run failed",
+      targetVersion: "2.0.0",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      writerId: null,
+      writerStartIdentity: null,
     };
     mocks.deleteUpdateProgressMarkerIfUnchanged.mockResolvedValueOnce("failed");
 
@@ -3370,6 +3579,7 @@ describe("ported: activation debt (installed-up-to-date short-circuit)", () => {
       targetVersion: "1.9.0",
       updatedAt: "2026-01-01T00:00:00.000Z",
       writerId: null,
+      writerStartIdentity: null,
     };
     mocks.disk.current = stale;
 
@@ -3399,6 +3609,7 @@ describe("ported: activation debt (installed-up-to-date short-circuit)", () => {
       targetVersion: "1.9.0",
       updatedAt: "2026-01-01T00:00:00.000Z",
       writerId: null,
+      writerStartIdentity: null,
     };
     mocks.disk.current = stale;
 
@@ -3420,6 +3631,7 @@ describe("ported: activation debt (installed-up-to-date short-circuit)", () => {
       targetVersion: "2.1.0",
       updatedAt: "2026-01-01T00:00:00.000Z",
       writerId: null,
+      writerStartIdentity: null,
     };
     mocks.disk.current = liveThirdUpdater;
 
@@ -3522,6 +3734,7 @@ describe("ported: activation debt (installed-up-to-date short-circuit)", () => {
       targetVersion: "2.0.0",
       updatedAt: "2026-01-01T00:00:00.000Z",
       writerId: null,
+      writerStartIdentity: null,
     };
 
     const outcome = await runUpdate({});
@@ -3630,6 +3843,7 @@ describe("ported: reassertMarkerUnderLock under the lock", () => {
       targetVersion: "9.9.9",
       updatedAt: "2026-01-01T00:00:00.000Z",
       writerId: "foreign-writer",
+      writerStartIdentity: null,
     };
 
     const outcome = await runUpdate({});
@@ -3650,6 +3864,7 @@ describe("ported: reassertMarkerUnderLock under the lock", () => {
       targetVersion: "2.0.0",
       updatedAt: "2026-01-01T00:00:00.000Z",
       writerId: "foreign-writer",
+      writerStartIdentity: null,
     };
     mocks.disk.current = foreign;
     mocks.applyHostWithAttempt.mockRejectedValue(busyError());
@@ -3664,6 +3879,7 @@ describe("ported: reassertMarkerUnderLock under the lock", () => {
       state: "updating",
       targetVersion: "2.0.0",
       writerId: "foreign-writer",
+      writerStartIdentity: null,
     });
     // The final state above is ALSO what a run that never took the marker
     // over would leave, so on its own it does not distinguish "took it and
@@ -3678,6 +3894,7 @@ describe("ported: reassertMarkerUnderLock under the lock", () => {
       state: "updating",
       targetVersion: "2.0.0",
       writerId: "test-writer",
+      writerStartIdentity: null,
     });
     // 2. the RESTORE: this run's own record back to the VERY record it
     // displaced - not a reconstruction of it, and never a blind write.
@@ -3694,6 +3911,7 @@ describe("ported: reassertMarkerUnderLock under the lock", () => {
       targetVersion: "2.0.0",
       updatedAt: "2026-01-01T00:00:00.000Z",
       writerId: "foreign-writer",
+      writerStartIdentity: null,
     };
     mocks.applyHostWithAttempt.mockRejectedValue(
       cliError({
@@ -3712,6 +3930,7 @@ describe("ported: reassertMarkerUnderLock under the lock", () => {
       state: "updating",
       targetVersion: "2.0.0",
       writerId: "foreign-writer",
+      writerStartIdentity: null,
     });
   });
 
@@ -3724,6 +3943,7 @@ describe("ported: reassertMarkerUnderLock under the lock", () => {
       targetVersion: "1.5.0",
       updatedAt: "2026-01-01T00:00:00.000Z",
       writerId: "foreign-writer",
+      writerStartIdentity: null,
     };
     mocks.applyHostWithAttempt.mockImplementation(async () => {
       // The displaced writer had the whole stop attempt to die in.
@@ -3747,6 +3967,7 @@ describe("ported: reassertMarkerUnderLock under the lock", () => {
       targetVersion: "2.0.0",
       updatedAt: "2026-01-01T00:00:00.000Z",
       writerId: "will-die-writer",
+      writerStartIdentity: null,
     };
     mocks.applyHostWithAttempt.mockImplementation(async () => {
       // The takeover already read this writer as live; it dies here, before
@@ -3779,6 +4000,7 @@ describe("ported: reassertMarkerUnderLock under the lock", () => {
       targetVersion: "2.0.0",
       updatedAt: "2026-01-01T00:00:00.000Z",
       writerId: "foreign-writer",
+      writerStartIdentity: null,
     };
     mocks.applyHostWithAttempt.mockImplementation(
       async (
@@ -3815,6 +4037,7 @@ describe("ported: reassertMarkerUnderLock under the lock", () => {
       targetVersion: "2.0.0",
       updatedAt: "2026-01-01T00:00:00.000Z",
       writerId: "foreign-writer",
+      writerStartIdentity: null,
     };
     mocks.stopHostForRestartWithAttempt.mockImplementation(
       async (
@@ -3856,6 +4079,7 @@ describe("ported: reassertMarkerUnderLock under the lock", () => {
       targetVersion: "2.0.0",
       updatedAt: "2026-01-01T00:00:00.000Z",
       writerId: "foreign-writer",
+      writerStartIdentity: null,
     };
     // The check failed WITHOUT calling the boundary callback - the actuator
     // never ran.
@@ -3877,6 +4101,7 @@ describe("ported: reassertMarkerUnderLock under the lock", () => {
       state: "updating",
       targetVersion: "2.0.0",
       writerId: "foreign-writer",
+      writerStartIdentity: null,
     });
   });
 
@@ -3889,6 +4114,7 @@ describe("ported: reassertMarkerUnderLock under the lock", () => {
       targetVersion: "9.9.9",
       updatedAt: "2026-01-01T00:00:00.000Z",
       writerId: "foreign-writer",
+      writerStartIdentity: null,
     };
     mocks.createUpdateProgressMarkerIfAbsent.mockImplementationOnce(
       async () => {
@@ -3926,6 +4152,7 @@ describe("ported: reassertMarkerUnderLock under the lock", () => {
       targetVersion: "9.9.9",
       updatedAt: "2026-01-01T00:00:00.000Z",
       writerId: "foreign-writer",
+      writerStartIdentity: null,
     };
     mocks.replaceUpdateProgressMarkerIfUnchanged.mockResolvedValue("failed");
 
@@ -3946,6 +4173,7 @@ describe("ported: reassertMarkerUnderLock under the lock", () => {
       targetVersion: "9.9.9",
       updatedAt: "2026-01-01T00:00:00.000Z",
       writerId: "foreign-writer",
+      writerStartIdentity: null,
     };
     const newerRecord: HostUpdateProgress = {
       state: "updating",
@@ -3953,6 +4181,7 @@ describe("ported: reassertMarkerUnderLock under the lock", () => {
       targetVersion: "9.9.9",
       updatedAt: "2026-01-01T00:00:01.000Z",
       writerId: "newer-writer",
+      writerStartIdentity: null,
     };
     mocks.disk.current = foreignRecord;
     mocks.replaceUpdateProgressMarkerIfUnchanged.mockImplementationOnce(
@@ -3982,6 +4211,7 @@ describe("ported: reassertMarkerUnderLock under the lock", () => {
       targetVersion: "2.0.0",
       updatedAt: "2026-01-01T00:00:00.000Z",
       writerId: "foreign-writer",
+      writerStartIdentity: null,
     };
     mocks.applyHostWithAttempt.mockRejectedValue(
       cliError({
@@ -4352,5 +4582,396 @@ describe("acceptance: cells with no legacy ancestor", () => {
     // Reading the env at all would answer `refused-attempt-gone` here.
     expect(outcome.releasedReason).toBeNull();
     expect(outcome.legacy.version).toBe("2.0.0");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #1752 round 14, re-ported onto the executor (ticket 08)
+// ---------------------------------------------------------------------------
+//
+// An explicit `host update <version>` restarts the host onto THAT version or
+// refuses. Every arm that can deliver a version is held to the request, and a
+// request another actor OUTGREW is superseded, not failed (D-46).
+describe("ported: the explicit request's version binding (#1752 round 14)", () => {
+  it("another actor committed a NEWER version under the lock: superseded, marker WITHDRAWN, no `failed` replace, and the ACK still says claimed", async () => {
+    // The coordinator's D-46 trio, first row. The record ends `superseded` -
+    // a non-failure terminal the GUI's live projection maps to `idle` and its
+    // record leg drops - and this run's own `updating` marker is withdrawn by
+    // CONDITIONAL delete. A `failed` here would name 2.0.0 over a host at
+    // 3.0.0, and no stale rule clears a `failed` whose target is not running.
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    mocks.downloadAndStageHostInSegment.mockImplementation(
+      async (options: { readonly beforeExtract: () => Promise<void> }) => {
+        await options.beforeExtract();
+        // Another actor commits something NEWER during the transfer.
+        await seedInstalled("3.0.0");
+        world.runningVersion = "3.0.0";
+        return {
+          outcome: "discarded" as const,
+          reason: "not-newer-than-installed" as const,
+          targetVersion: "2.0.0",
+        };
+      },
+    );
+
+    await expect(
+      runUpdate({ versionRequest: "2.0.0", ackNonce: "nonce-abcdefgh" }),
+    ).rejects.toMatchObject({ code: CLI_ERROR_CODES.HOST_UPDATE_NOT_NEWER });
+
+    const record = await requireRecord();
+    expect(record.phase).toBe("superseded");
+    expect(record.execution).toBe("terminal");
+    expect(record.continuation).toBeNull();
+    expect(record.error).toBeNull();
+    // Withdrawn, not replaced: the path is empty and no `failed` was written.
+    expect(mocks.disk.current).toBeNull();
+    expect(mocks.refuseFailedWrites).toBe(false);
+    expect(mocks.writes).not.toContain("failed");
+    expect(mocks.deleteUpdateProgressMarkerIfUnchanged).toHaveBeenCalledTimes(
+      1,
+    );
+    // Nothing was restarted.
+    expect(mocks.stopHostForRestartWithAttempt).not.toHaveBeenCalled();
+    // A claim happened, so the dispatching host hears the attempt - once.
+    expect(mocks.ackWrites).toEqual(["claimed"]);
+    expect(await readAck("nonce-abcdefgh")).toMatchObject({
+      kind: "claimed",
+      attemptId: record.attemptId,
+    });
+    // Falsification (the ablation): route `HOST_UPDATE_NOT_NEWER` to
+    // `writer.fail` in `writeFailure` and the record reads `failed` with a
+    // `failed` marker naming 2.0.0 standing over a host at 3.0.0.
+  });
+
+  it("the stage was consumed and the record another actor left is OLDER: E_UNEXPECTED, STAMPED - something did go wrong", async () => {
+    // The consumed-stage arm, the second of the three that settle through
+    // `settleDeliveredByAnotherActor`. A record BELOW the request is not the
+    // request being outgrown - it is a changed handoff - so it takes the
+    // stamped terminal, not the superseded one.
+    await seedInstalled("1.5.0");
+    world.runningVersion = "1.5.0";
+    mocks.downloadAndStageHostInSegment.mockImplementation(
+      async (options: { readonly beforeExtract: () => Promise<void> }) => {
+        await options.beforeExtract();
+        // Another actor consumed the stage and committed something OLDER.
+        await seedInstalled("1.0.0");
+        world.runningVersion = "1.0.0";
+        await seedStaged(null);
+        return {
+          outcome: "promoted" as const,
+          targetVersion: "2.0.0",
+        };
+      },
+    );
+
+    await expect(runUpdate({ versionRequest: "2.0.0" })).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.UNEXPECTED,
+    });
+
+    const record = await requireRecord();
+    expect(record.phase).toBe("failed");
+    expect(mocks.disk.current).toMatchObject({
+      state: "failed",
+      targetVersion: "2.0.0",
+    });
+  });
+
+  it("the stage was consumed and the record another actor left is NEWER: superseded, marker withdrawn - the same rule on the same closure", async () => {
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    mocks.downloadAndStageHostInSegment.mockImplementation(
+      async (options: { readonly beforeExtract: () => Promise<void> }) => {
+        await options.beforeExtract();
+        await seedInstalled("3.0.0");
+        world.runningVersion = "3.0.0";
+        await seedStaged(null);
+        return {
+          outcome: "promoted" as const,
+          targetVersion: "2.0.0",
+        };
+      },
+    );
+
+    await expect(runUpdate({ versionRequest: "2.0.0" })).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_UPDATE_NOT_NEWER,
+    });
+
+    const record = await requireRecord();
+    expect(record.phase).toBe("superseded");
+    expect(record.error).toBeNull();
+    expect(mocks.disk.current).toBeNull();
+  });
+
+  it("another actor committed the SAME STRING and it is RUNNING: the attempt completes, exit 0, nothing restarted", async () => {
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    mocks.downloadAndStageHostInSegment.mockImplementation(
+      async (options: { readonly beforeExtract: () => Promise<void> }) => {
+        await options.beforeExtract();
+        // The request DELIVERED, by someone else, and already serving.
+        await seedInstalled("2.0.0");
+        world.runningVersion = "2.0.0";
+        return {
+          outcome: "discarded" as const,
+          reason: "not-newer-than-installed" as const,
+          targetVersion: "2.0.0",
+        };
+      },
+    );
+
+    const outcome = await runUpdate({ versionRequest: "2.0.0" });
+
+    expect(outcome.legacy.version).toBe("2.0.0");
+    const record = await requireRecord();
+    expect(record.phase).toBe("complete");
+    // Verified independently through the ordinary evidence loop, never
+    // assumed: the run reports success only for a host it observed at the
+    // target.
+    expect(phaseTrace()).toContain("verifying");
+    expect(mocks.stopHostForRestartWithAttempt).not.toHaveBeenCalled();
+    expect(mocks.applyHostWithAttempt).not.toHaveBeenCalled();
+    expect(mocks.disk.current).toBeNull();
+  });
+
+  it("another actor committed the SAME STRING but it is NOT running: superseded with the restart remedy, and the NEXT run pays the debt (D-47)", async () => {
+    // The third answer. The request was DELIVERED - `install.json` names
+    // exactly 2.0.0 - so nothing failed and the record must not carry an
+    // `error` for a state whose only remedy is a restart. This attempt cannot
+    // pay it itself: a `waiting-to-activate` park may be born only from an
+    // `applying` write, and this segment never applied.
+    // Falsification (the ablation): stamp `failed` here and the record reads
+    // `failed {stage-missing}` with a `failed` marker standing over a host
+    // whose install record is exactly what was asked for.
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    mocks.downloadAndStageHostInSegment.mockImplementation(
+      async (options: { readonly beforeExtract: () => Promise<void> }) => {
+        await options.beforeExtract();
+        // Committed by someone else - and NOT activated. The runtime stays at
+        // 1.0.0, which is the durable debt the next run collects.
+        await seedInstalled("2.0.0");
+        return {
+          outcome: "discarded" as const,
+          reason: "not-newer-than-installed" as const,
+          targetVersion: "2.0.0",
+        };
+      },
+    );
+
+    const rejection = await runUpdate({
+      versionRequest: "2.0.0",
+      ackNonce: "nonce-abcdefgh",
+    }).then(
+      () => null,
+      (err: unknown) => err,
+    );
+
+    // Non-zero, and it names the remedy: exit 0 for "the host does not run
+    // what you asked for" is the finding-3 class this ticket exists to remove.
+    expect(rejection).toMatchObject({
+      code: CLI_ERROR_CODES.HOST_NOT_RUNNING,
+      exitCode: 1,
+      details: { targetVersion: "2.0.0", runningVersion: "1.0.0" },
+    });
+    expect(String(rejection)).toMatch(/traycer host restart/);
+
+    const record = await requireRecord();
+    expect(record.phase).toBe("superseded");
+    expect(record.execution).toBe("terminal");
+    expect(record.continuation).toBeNull();
+    expect(record.error).toBeNull();
+    expect(mocks.writes).not.toContain("failed");
+    // Withdrawn by conditional delete, exactly as the not-newer arm does.
+    expect(mocks.disk.current).toBeNull();
+    expect(mocks.deleteUpdateProgressMarkerIfUnchanged).toHaveBeenCalledTimes(
+      1,
+    );
+    // A claim happened, so the dispatching host hears the attempt - once - and
+    // the GUI follows the record to idle rather than latching the exit.
+    expect(mocks.ackWrites).toEqual(["claimed"]);
+    // Nothing was disturbed on the way to that terminal.
+    expect(mocks.stopHostForRestartWithAttempt).not.toHaveBeenCalled();
+
+    // ...and the debt is durable: the next run meets the terminal record, sees
+    // installed != running in its plan, and runs the activation arm that IS
+    // born with `continuation: "activate"`.
+    mocks.downloadAndStageHostInSegment.mockReset();
+    const next = await runUpdate({ versionRequest: "2.0.0" });
+
+    expect(next.legacy.version).toBe("2.0.0");
+    expect(mocks.stopHostForRestartWithAttempt).toHaveBeenCalledTimes(1);
+    expect(mocks.relaunchHostAfterRestartWithAttempt).toHaveBeenCalledTimes(1);
+    expect((await requireRecord()).phase).toBe("complete");
+  });
+
+  it("an IMPLICIT request is bound to nothing: another actor's different version is not refused", async () => {
+    // The binding is the explicit request's alone. An implicit `latest` that
+    // meets a record it did not ask for takes the ordinary route - here, the
+    // apply's own version binding, which refuses a stage that is not this
+    // claim's rather than the RECORD being wrong.
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    world.latest = "2.0.0";
+    mocks.downloadAndStageHostInSegment.mockImplementation(
+      async (options: { readonly beforeExtract: () => Promise<void> }) => {
+        await options.beforeExtract();
+        await seedInstalled("3.0.0");
+        world.runningVersion = "3.0.0";
+        return {
+          outcome: "discarded" as const,
+          reason: "not-newer-than-installed" as const,
+          targetVersion: "2.0.0",
+        };
+      },
+    );
+
+    await expect(runUpdate({})).rejects.toMatchObject({
+      // NOT `E_HOST_UPDATE_NOT_NEWER`: no request was made to outgrow.
+      code: CLI_ERROR_CODES.UNEXPECTED,
+    });
+  });
+
+  it("a DISCARDED explicit transfer that is not the delivery is refused with the discard's own reason, before any apply", async () => {
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    await seedStaged("3.0.0");
+    mocks.downloadAndStageHostInSegment.mockImplementation(
+      async (options: { readonly beforeExtract: () => Promise<void> }) => {
+        await options.beforeExtract();
+        return {
+          outcome: "discarded" as const,
+          reason: "not-strictly-newer" as const,
+          targetVersion: "2.0.0",
+        };
+      },
+    );
+
+    await expect(runUpdate({ versionRequest: "2.0.0" })).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.UNEXPECTED,
+      details: { targetVersion: "2.0.0", reason: "not-strictly-newer" },
+    });
+
+    // Never reaches the apply: a run that has decided not to act does not open
+    // a mutation lock to ask about a stage it must not commit.
+    expect(mocks.applyHostWithAttempt).not.toHaveBeenCalled();
+    expect(world.stagedVersion).toBe("3.0.0");
+  });
+
+  it("the EXPLICIT request's record MOVED above it between the plan and the debt read: the debt is LEFT and logged, the no-op, exit 0, no marker", async () => {
+    // The pre-lock gate, and the only window it is reachable through: the plan
+    // reads the install record, and `readActivationState` reads it AGAIN. The
+    // manifest fetch sits between the two, so moving the record from inside it
+    // reproduces exactly the race main's comment describes - the plan resolves
+    // `no-op` for a record that IS the request, and the debt read then sees
+    // one that is not.
+    //
+    // Nothing is claimed, announced or written: the debt is real and stays
+    // owed to an implicit `host update` or a `host restart`.
+    // Falsification: drop the `requested !== reading.installedVersion` gate in
+    // `resolvePlan` and this run restarts the host onto 3.0.0 under a
+    // confirmation, and a CLI-floor check, made for 2.0.0.
+    await seedInstalled("2.0.0");
+    world.runningVersion = "1.0.0";
+    const moving = fakeRegistry();
+    const registryClient: RegistryClient = {
+      ...moving,
+      fetchManifest: async () => {
+        const manifest = await moving.fetchManifest();
+        await seedInstalled("3.0.0");
+        return manifest;
+      },
+    };
+
+    const outcome = await runUpdate({
+      versionRequest: "2.0.0",
+      registryClient,
+    });
+
+    expect(outcome.releasedReason).toBe("nothing-to-do");
+    expect(mocks.stopHostForRestartWithAttempt).not.toHaveBeenCalled();
+    expect(mocks.disk.current).toBeNull();
+    expect(await readRecord()).toBeNull();
+    expect(logger.info).toHaveBeenCalledWith(
+      "Host update leaves the install record's activation debt: the explicit request names another version",
+      expect.objectContaining({
+        requestedVersion: "2.0.0",
+        installedVersion: "3.0.0",
+      }),
+    );
+  });
+
+  it("catalog domain: another build of the record's release running (2.0.0+bar under a 2.0.0+foo record) is DEBT, not activated", async () => {
+    // The comparator calls these equal - it ignores build metadata - and the
+    // old reading therefore called the host activated and did nothing. The
+    // committed artifact is not the one serving, so a restart is owed.
+    // Falsification: compare with `compareHostVersions` in
+    // `readActivationState`'s catalog branch and this reads `activated`.
+    await seedInstalled("2.0.0+foo");
+    world.runningVersion = "2.0.0+bar";
+
+    await runUpdate({});
+
+    expect(mocks.stopHostForRestartWithAttempt).toHaveBeenCalledTimes(1);
+    expect(mocks.relaunchHostAfterRestartWithAttempt).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("ported: the activation arm's under-lock re-read (#1752 round 14)", () => {
+  it("the record moved to a NEWER version while this run waited: refused BEFORE the busy gate and the stop, superseded, marker withdrawn", async () => {
+    // `selectDebtStart` read the record as the request and claimed. The arm
+    // re-reads under its OWN mutation lock - which the claim lock does not
+    // span - and holds it to the request again, first, so a changed handoff
+    // disturbs nothing and takes nothing over. The seam that moves the record
+    // is the entry mirror's marker create, which runs after the claim and
+    // before the arm.
+    // Falsification: move the check below `assertHostNotBusy`, or delete it,
+    // and the run restarts the host onto 3.0.0 under a request for 2.0.0.
+    await seedInstalled("2.0.0");
+    world.runningVersion = "1.0.0";
+    mocks.createUpdateProgressMarkerIfAbsent.mockImplementationOnce(
+      async (_environment: unknown, next: HostUpdateProgress) => {
+        await seedInstalled("3.0.0");
+        mocks.disk.current = next;
+        return "created" as const;
+      },
+    );
+
+    await expect(runUpdate({ versionRequest: "2.0.0" })).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_UPDATE_NOT_NEWER,
+      details: {
+        expectedInstalledVersion: "2.0.0",
+        actualInstalledVersion: "3.0.0",
+      },
+    });
+
+    expect(mocks.assertHostNotBusy).not.toHaveBeenCalled();
+    expect(mocks.stopHostForRestartWithAttempt).not.toHaveBeenCalled();
+    const record = await requireRecord();
+    expect(record.phase).toBe("superseded");
+    expect(mocks.disk.current).toBeNull();
+  });
+
+  it("an activation park names the stage waiting BESIDE the debt in its details and message (D6)", async () => {
+    // A stage for a later version can be waiting while this park owes the
+    // restart onto the one already installed; the operator is told which.
+    // Falsification: return `busy` unchanged from `parkForActivation` and the
+    // message loses the sentence and `details.stagedVersion` is gone.
+    await seedInstalled("2.0.0");
+    world.runningVersion = "1.0.0";
+    await seedStaged("4.0.0");
+    mocks.assertHostNotBusy.mockRejectedValue(busyError());
+
+    const rejection = await runUpdate({}).then(
+      () => null,
+      (err: unknown) => err,
+    );
+    expect(rejection).toMatchObject({
+      code: CLI_ERROR_CODES.HOST_BUSY,
+      details: { stagedVersion: "4.0.0" },
+    });
+    expect(String(rejection)).toMatch(/Host 4\.0\.0 stays staged/);
+    const record = await requireRecord();
+    expect(record.phase).toBe("waiting-to-activate");
   });
 });

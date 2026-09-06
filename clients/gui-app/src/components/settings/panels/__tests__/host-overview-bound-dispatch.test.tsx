@@ -50,6 +50,7 @@ vi.mock("sonner", () => ({
 
 import type { ReactElement } from "react";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -1383,5 +1384,273 @@ describe("HostOverviewPanel — the bound methods' cli-failed and dispatch-indet
       hostBindingMock.current = null;
       vi.clearAllMocks();
     }
+  });
+});
+
+/**
+ * The bound control behind the page's OWN gates (ticket 08).
+ *
+ * `main` gave the card's three legacy controls a live status read plus the
+ * two page-wide gates the header's Restart and the region's Update now take
+ * (`restartDegrade` / `updates.degrade`, `anyPending`); the reconciliation
+ * puts the bound control behind the same two, because a control whose confirm
+ * the render-time rules would close in the same commit is not a control.
+ *
+ * A live STATUS read is deliberately not pinned here as a fourth case: the
+ * projector already demotes a stale wire observation to `unknown`, so
+ * `deriveAttemptControl` finds no `waiting-to-activate` kind to key on and
+ * the control is gone before `statusLive` is consulted. Passing `statusLive`
+ * rather than `usable` is the uniform statement of a rule the view enforces,
+ * not an independently falsifiable guard, and a pin claiming otherwise would
+ * be green under its own ablation.
+ */
+describe("HostOverviewPanel — the bound control takes the page's gates (ticket 08)", () => {
+  /** The parked `waiting-to-activate` frame these three pins all render. */
+  function parkedActivationFixture(
+    overrides: Record<string, unknown>,
+  ): OverviewHostFixture {
+    return buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      overrideHandlers: {
+        "host.status": () => ({
+          ready: true,
+          hostVersion: "1.5.0",
+          protocolVersion: { major: 1, minor: 3 },
+          busy: false,
+          busySessionCount: 2,
+          updateProgress: null,
+          busyBreakdown: null,
+          updateOperation: attempt({
+            phase: "waiting-to-activate",
+            execution: "parked",
+            targetVersion: "1.6.0",
+            busySessionCount: 2,
+          }),
+          updateTransaction: {
+            recordSchemaVersion: 2 as const,
+            authority: "attempt" as const,
+          },
+        }),
+        ...overrides,
+      },
+    });
+  }
+
+  it("(n1) the page-wide gate WITHDRAWS the bound Restart while it is armed, and the control returns when it clears", async () => {
+    // `anyPending`, reached through the accepted latch — the same gate that
+    // freezes Check now, Update now and the header's Restart. Falsification:
+    // drop `|| anyPending` from `openBoundOffer` in `host-overview-panel.tsx`
+    // and the second assertion below stays green with a button on screen
+    // whose confirm the stale-open rule closes in the commit it opens.
+    const fixture = parkedActivationFixture({});
+    record("host-a", METHODS_WITH_BOUND);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    // Control: the same park, same host, gate clear — the button IS offered,
+    // so the absence below is the gate's and not the fixture's.
+    await screen.findByTestId("host-overview-operation-restart");
+
+    act(() => {
+      useHostServiceWriteLatchStore
+        .getState()
+        .armUpdateInstallAccepted("host-a");
+    });
+    await waitFor(() => {
+      expect(
+        screen.queryByTestId("host-overview-operation-restart"),
+      ).toBeNull();
+    });
+    // The park itself is still reported — the evidence stays, the dispatch
+    // does not — which is what makes this a withdrawal rather than the card
+    // disappearing for some other reason.
+    expect(
+      screen.getByTestId("host-overview-operation-phase").textContent,
+    ).toContain("Update installed");
+
+    act(() => {
+      useHostServiceWriteLatchStore
+        .getState()
+        .releaseUpdateInstallAccepted("host-a");
+    });
+    await screen.findByTestId("host-overview-operation-restart");
+  });
+
+  it("(n2) a RETIRED updates region withdraws the bound Restart, and closes an offer that is already open", async () => {
+    // The region gate `main` put on the card's Force update…, applied to the
+    // bound control and to the offer it opens. Two halves, two
+    // falsifications: drop `updates.degrade !== null` from `openBoundOffer`
+    // and the button survives the withdrawal of `host.update.install`; drop
+    // the `boundOffer !== null && updates.degrade !== null` close rule and
+    // the dialog stays answerable over a region that renders a notice in
+    // place of the card's controls.
+    //
+    // `host.update.install` is deliberately the method withdrawn rather than
+    // `host.update.activate`: withdrawing the bound method itself would take
+    // the control away through `deriveAttemptControl`'s own `canActivate`
+    // gate (pin (k) covers that route) and prove nothing about the region.
+    const fixture = parkedActivationFixture({});
+    record("host-a", METHODS_WITH_BOUND);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    fireEvent.click(
+      await screen.findByTestId("host-overview-operation-restart"),
+    );
+    await screen.findByTestId("host-busy-force-defer-dialog");
+
+    // The negotiated set is a subscribed store, so re-recording it under the
+    // mounted page is the same signal a re-handshake sends. Recorded as a
+    // MANIFEST rather than through this file's `record` helper, which pins
+    // `host.update.install`'s version unconditionally and so would put the
+    // method straight back into the negotiated set.
+    act(() => {
+      const manifest: Record<string, ManifestMethodEntry> = {};
+      for (const method of METHODS_WITH_BOUND) {
+        if (method === "host.update.install") continue;
+        manifest[method] = { major: 1, minor: 0 };
+      }
+      recordNegotiatedHostManifest("host-a", manifest);
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("host-busy-force-defer-dialog")).toBeNull();
+    });
+    expect(screen.queryByTestId("host-overview-operation-restart")).toBeNull();
+  });
+
+  it("(n3) the bound confirmation marks itself as an UPDATE, like the region's force and unlike the force-restart beside it", async () => {
+    // `HostBusyForceDeferDialog` grew a `purpose` in `main` precisely because
+    // one page can mount more than one of these and a pin on the shared test
+    // id cannot tell them apart. Force here dispatches a bound UPDATE method
+    // on both legs — an activation's restart is the update finishing, not a
+    // `host.restart` — so this dialog is an update's. Falsification: pass
+    // `purpose="restart"` at the bound dialog in `host-overview-panel.tsx`
+    // and the assertion below reddens.
+    const fixture = parkedActivationFixture({});
+    record("host-a", METHODS_WITH_BOUND);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    fireEvent.click(
+      await screen.findByTestId("host-overview-operation-restart"),
+    );
+    const dialog = await screen.findByTestId("host-busy-force-defer-dialog");
+    expect(dialog.getAttribute("data-purpose")).toBe("update");
+    // And the heading is the bound offer's own, not the "Host is busy" the
+    // two legacy confirmations state: this park is typically an idle host
+    // waiting to be restarted.
+    expect(dialog.textContent).toContain("Restart to finish the update");
+  });
+});
+
+/**
+ * WHAT DEFER PROMISES, by park (ticket 08, coordinator item 2).
+ *
+ * Round 11 rewrote the staged-wait force's Defer because a stage on disk has
+ * nobody scheduled to install it. The rule it established is about EVIDENCE,
+ * not phrasing, so the three dialogs land differently and nothing pinned that:
+ * the `waiting-for-work` park is resumed by the reconciler and keeps the
+ * promise; the `waiting-to-activate` park is resumed by nobody and must not.
+ */
+describe("HostOverviewPanel — the Defer promise follows the continuation (ticket 08)", () => {
+  it("(n4) the ACTIVATION dialog promises no continuation; the BUSY-PARK dialog does", async () => {
+    // Falsification, both halves at once: give `boundDispatchMessage`'s
+    // `activate` arm the continue arm's Defer sentence (or hoist one sentence
+    // for both intents) and the first `not.toContain` reddens; take the
+    // promise off the `continue` arm and the second assertion reddens.
+    const PROMISE = "continue on its own once the host is idle";
+
+    const activateFixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      overrideHandlers: {
+        "host.status": () => ({
+          ready: true,
+          hostVersion: "1.5.0",
+          protocolVersion: { major: 1, minor: 3 },
+          busy: false,
+          busySessionCount: 2,
+          updateProgress: null,
+          busyBreakdown: null,
+          updateOperation: attempt({
+            phase: "waiting-to-activate",
+            execution: "parked",
+            targetVersion: "1.6.0",
+            busySessionCount: 2,
+          }),
+          updateTransaction: {
+            recordSchemaVersion: 2 as const,
+            authority: "attempt" as const,
+          },
+        }),
+      },
+    });
+    record("host-a", METHODS_WITH_BOUND);
+    hostBindingMock.current = { hostClient: activateFixture.client };
+    scopeOverrides.current = scopeFrom("host-a", activateFixture);
+    renderPanel();
+
+    fireEvent.click(
+      await screen.findByTestId("host-overview-operation-restart"),
+    );
+    const activateDialog = await screen.findByTestId(
+      "host-busy-force-defer-dialog",
+    );
+    // Anchor first: this IS the activation dialog and it IS counting the
+    // park's work, so the absence below is about the Defer sentence and not
+    // about having found some other dialog.
+    expect(activateDialog.textContent).toContain(
+      "Restart to finish the update",
+    );
+    expect(activateDialog.textContent).toContain("Defer to restart later.");
+    expect(activateDialog.textContent).not.toContain(PROMISE);
+
+    cleanup();
+    resetHostServiceWriteLatchesForTest();
+    resetNegotiatedManifests();
+
+    const continueFixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      overrideHandlers: {
+        "host.status": () => ({
+          ready: true,
+          hostVersion: "1.5.0",
+          protocolVersion: { major: 1, minor: 3 },
+          busy: true,
+          busySessionCount: 2,
+          updateProgress: null,
+          busyBreakdown: null,
+          updateOperation: attempt({
+            phase: "waiting-for-work",
+            execution: "parked",
+            targetVersion: "1.6.0",
+            busySessionCount: 2,
+          }),
+          updateTransaction: {
+            recordSchemaVersion: 2 as const,
+            authority: "attempt" as const,
+          },
+        }),
+      },
+    });
+    record("host-a", METHODS_WITH_BOUND);
+    hostBindingMock.current = { hostClient: continueFixture.client };
+    scopeOverrides.current = scopeFrom("host-a", continueFixture);
+    renderPanel();
+
+    fireEvent.click(
+      await screen.findByTestId("host-overview-operation-force-update"),
+    );
+    const continueDialog = await screen.findByTestId(
+      "host-busy-force-defer-dialog",
+    );
+    expect(continueDialog.textContent).toContain("Finish the update now");
+    expect(continueDialog.textContent).toContain(PROMISE);
   });
 });

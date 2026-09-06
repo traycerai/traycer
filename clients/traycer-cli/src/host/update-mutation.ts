@@ -205,7 +205,7 @@ export async function stopHostForRestartWithAttempt(
   const verify = (): Promise<void> =>
     requireCliUpdateMutationCapability(capability, contenderOptions);
   return withServiceMutationAuthority(verify, () => {
-    onAuthorityVerified?.();
+    if (onAuthorityVerified !== null) onAuthorityVerified();
     return controller.stopForRestart(label, options);
   });
 }

@@ -219,14 +219,20 @@ const commitHostInstallSource = (
 type CommitSourceOptions = Parameters<
   typeof commitInstallFromSourceWithAuthority
 >[0];
+// `onWillSwap` joins `verifyMutationCapability` in the defaulted set: it is
+// the actuator-reported disruption boundary (#1752 rounds 10/11), which every
+// call must STATE in production and which only the pins that assert the
+// boundary care about here. The sites that do assert it pass their own.
+type CommitDefaultedOptions = "verifyMutationCapability" | "onWillSwap";
 const commitInstallFromSource = (
-  options: Omit<CommitSourceOptions, "verifyMutationCapability"> &
-    Partial<Pick<CommitSourceOptions, "verifyMutationCapability">>,
+  options: Omit<CommitSourceOptions, CommitDefaultedOptions> &
+    Partial<Pick<CommitSourceOptions, CommitDefaultedOptions>>,
 ) =>
   commitInstallFromSourceWithAuthority({
     ...options,
     verifyMutationCapability:
       options.verifyMutationCapability ?? testMutationVerifier,
+    onWillSwap: options.onWillSwap ?? null,
   });
 type StageSourceOptions = Parameters<typeof stageHostInstallSourceRaw>[0];
 const stageHostInstallSource = (
@@ -487,6 +493,7 @@ describe("commitInstallFromSource", () => {
         sizeBytes: 0,
         onProgress: () => {},
         lifecycle: null,
+        onWillSwap: null,
         onCommitted: () => {},
       }),
     ).rejects.toThrow();
@@ -523,6 +530,7 @@ describe("commitInstallFromSource", () => {
         sizeBytes: 0,
         onProgress: () => {},
         lifecycle: null,
+        onWillSwap: null,
         onCommitted: () => {
           committed = true;
         },
@@ -1266,6 +1274,7 @@ describe("commitHostInstallSource - reconcile runs BEFORE the commit (Finding 2)
         staged: freshStagedSource("2.0.0"),
         onProgress: () => {},
         lifecycle: null,
+        onWillSwap: null,
       }),
     ).rejects.toThrow();
 
@@ -1288,6 +1297,7 @@ describe("commitHostInstallSource - reconcile runs BEFORE the commit (Finding 2)
       staged: freshStagedSource("2.0.0"),
       onProgress: () => {},
       lifecycle: null,
+      onWillSwap: null,
     });
 
     expect(result.record.version).toBe("2.0.0");
@@ -1310,6 +1320,7 @@ describe("commitHostInstallSource - reconcile runs BEFORE the commit (Finding 2)
         staged,
         onProgress: () => {},
         lifecycle: null,
+        onWillSwap: null,
       }),
     ).rejects.toMatchObject({ code: "E_HOST_INSTALL_RECORD_INVALID" });
 

@@ -32,8 +32,10 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../../installer", () => ({
   // The two swap barriers this command observes: none. Inlined rather than
-  // re-exported from the real module so this factory keeps the installer out
-  // of the module graph entirely, which is what it exists for.
+  // re-exported from the real module so this bare factory keeps the installer
+  // out of the module graph entirely, which is what it exists for - and so
+  // that the next export production reaches for fails loudly here rather
+  // than arriving as `undefined`.
   NO_INSTALL_PHASE_HOOKS: {
     beforeSwapCommit: async () => {},
     afterSwap: async () => {},
@@ -412,7 +414,6 @@ describe("buildHostInstallCommand", () => {
     // entirely and uses the bytes-only builder instead.
     const bytesOnlyLifecycle = {
       beforeSwap: vi.fn(async () => {}),
-      beforeSwapCommit: async () => {},
       afterSwap: vi.fn(async () => {}),
       swapLockRecovery: null,
     };
@@ -503,6 +504,9 @@ describe("buildHostInstallCommand", () => {
       environment: "production",
       bootstrap: { enableLinger: false, allowSelfInvocation: true },
       force: false,
+      // A first install has no disruption boundary to report: there is no
+      // running host of this environment to stop, and no marker to stamp.
+      onWillStopHost: null,
       // `host install` is not an update: it observes neither swap barrier.
       hooks: NO_INSTALL_PHASE_HOOKS,
     });
@@ -1070,7 +1074,6 @@ describe("buildHostInstallCommand", () => {
   it("--no-service-register: skips the sign-in pre-flight entirely, reports state=not-checked", async () => {
     const bytesOnlyLifecycle = {
       beforeSwap: vi.fn(async () => {}),
-      beforeSwapCommit: async () => {},
       afterSwap: vi.fn(async () => {}),
       swapLockRecovery: null,
     };
@@ -1245,7 +1248,6 @@ describe("buildHostInstallCommand", () => {
     it("--no-service-register: never provisions a credential", async () => {
       const bytesOnlyLifecycle = {
         beforeSwap: vi.fn(async () => {}),
-        beforeSwapCommit: async () => {},
         afterSwap: vi.fn(async () => {}),
         swapLockRecovery: null,
       };
@@ -1279,7 +1281,6 @@ describe("buildHostInstallCommand", () => {
         },
         lifecycle: {
           beforeSwap: async () => {},
-          beforeSwapCommit: async () => {},
           afterSwap: async () => {},
           swapLockRecovery: null,
         },

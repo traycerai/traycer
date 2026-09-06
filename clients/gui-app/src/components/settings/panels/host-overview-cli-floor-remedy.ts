@@ -1,8 +1,10 @@
+import type { CliInstallSource } from "@traycer/protocol/config/installation-records";
 import {
   CLI_NPM_PACKAGE_NAME,
+  isPackageManagerCliSource,
   PACKAGE_MANAGER_UPGRADE_COMMAND,
-  type CliInstallSource,
-} from "@traycer/protocol/config/installation-records";
+  type PackageManagerCliSource,
+} from "@traycer-clients/shared/cli-install/package-manager-upgrade-command";
 import {
   compareHostVersions,
   isValidHostVersion,
@@ -84,6 +86,21 @@ export interface CliFloorRemedyInput {
 export function describeCliFloorRemedy(
   input: CliFloorRemedyInput,
 ): CliFloorRemedy {
+  // Decided BEFORE any route: a floor that is not a version is one no CLI
+  // upgrade can clear, on any install method. The hosts this remedy serves
+  // run the pre-repair projector, which put the repairable prefix on an
+  // unreadable floor too, and every route below would otherwise render the
+  // unparseable text verbatim and hand out an upgrade that changes nothing
+  // (`CliFloor.repairable` is the same predicate, and stops the recheck).
+  if (
+    input.requiredCliVersion !== null &&
+    !isValidHostVersion(input.requiredCliVersion)
+  ) {
+    return {
+      sentence: `Traycer couldn't verify the required command-line tools version on ${input.hostName}.`,
+      actions: [{ kind: "help", label: "Show installation help" }],
+    };
+  }
   if (input.cliSource === null) {
     return {
       sentence: `Traycer couldn't determine how its command-line tools were installed on ${input.hostName}.`,
@@ -97,7 +114,7 @@ export function describeCliFloorRemedy(
   ) {
     return describeDesktopRemedy(input.desktopUpdate, input);
   }
-  if (input.cliSource !== "desktop" && input.cliSource !== "manual") {
+  if (isPackageManagerCliSource(input.cliSource)) {
     return describePackageManagerRemedy(input, input.cliSource);
   }
   // The old Windows CLI finalizes its staged upgrade during host restart,
@@ -120,7 +137,7 @@ export function describeCliFloorRemedy(
     // named - a POSIX host has no PowerShell to open.
     return describeCopyRemedy(
       input,
-      `Run the copied commands on ${input.hostName} from a terminal outside Traycer on that machine: first the tools upgrade, then the host restart. Restarting briefly disconnects this host. When it reconnects, select Check now, then Update now.`,
+      `Run the copied commands on ${input.hostName} from a terminal outside Traycer on that machine: first the tools upgrade, then the host restart. Restarting briefly disconnects this host. When it reconnects, this page rechecks on its own, and Update now appears once the host accepts the update.`,
       "traycer cli upgrade\ntraycer host restart",
       "Copy commands",
     );
@@ -135,36 +152,38 @@ export function describeCliFloorRemedy(
 
 function describePackageManagerRemedy(
   input: CliFloorRemedyInput,
-  source: Exclude<CliInstallSource, "desktop" | "manual">,
+  source: PackageManagerCliSource,
 ): CliFloorRemedy {
+  // Validated by `describeCliFloorRemedy` before any route and not repeated
+  // here; this is the one route that interpolates the value into a shell
+  // command, so that hoisted check is load-bearing for it.
   const requiredVersion = input.requiredCliVersion;
-  // Legacy projections can mislabel a malformed floor as repairable. Never
-  // interpolate unchecked manifest text into the copied npm shell command.
-  if (requiredVersion !== null && !isValidHostVersion(requiredVersion)) {
-    return {
-      sentence: `Traycer couldn't verify the required command-line tools version on ${input.hostName}.`,
-      actions: [{ kind: "help", label: "Show installation help" }],
-    };
-  }
+  // Only npm can name a prerelease: its floor pins the exact published
+  // version (`latest` is stable-only). Every other manager's command is a
+  // rolling stable upgrade - Homebrew's formula included, which carries a
+  // prerelease only after a manual dispatch AND a merged tap PR (see the
+  // table's doc), so `brew upgrade traycer` under an RC floor usually
+  // reports nothing newer: a command that does not reach the floor is
+  // worse than help that says so. The recheck still runs behind the help
+  // (the floor is readable), which is what notices the install made
+  // another way.
   if (
     requiredVersion !== null &&
     isPreReleaseVersion(requiredVersion) &&
-    source !== "npm" &&
-    source !== "homebrew"
+    source !== "npm"
   ) {
     return {
-      sentence: `Traycer CLI prereleases aren't published through ${source}. Install Traycer CLI ${requiredVersion} another way, then select Check now.`,
+      sentence: `Traycer CLI prereleases aren't published through ${source}. Install Traycer CLI ${requiredVersion} another way; this page rechecks while it is open.`,
       actions: [{ kind: "help", label: "Show installation help" }],
     };
   }
-  // npm's `latest` is stable-only; pin the published floor, including RCs.
   const command =
     source === "npm" && requiredVersion !== null
       ? `npm install -g ${CLI_NPM_PACKAGE_NAME}@${requiredVersion}`
       : PACKAGE_MANAGER_UPGRADE_COMMAND[source];
   return describeCopyRemedy(
     input,
-    `On ${input.hostName}, run this command to prepare the host update: ${command}. Then select Check now.`,
+    `On ${input.hostName}, run this command to prepare the host update: ${command}. This page rechecks while it is open, and Update now appears once the host accepts the update.`,
     command,
     "Copy command",
   );
@@ -215,9 +234,19 @@ function describeDesktopRemedy(
     case "unavailable":
       return describeDesktopCheckFailed(snapshot);
     case "idle":
+      // The mount check is AUTOMATIC intent and publishes nothing on a
+      // failed check (see `DesktopRemedyCheck`), so the updater can stay
+      // `idle` after it; the button is what keeps that from being a dead
+      // end.
       return {
         sentence: "Check for a Traycer Desktop update.",
-        actions: [{ kind: "desktop-check", label: null, checkOnMount: true }],
+        actions: [
+          {
+            kind: "desktop-check",
+            label: "Check for updates",
+            checkOnMount: true,
+          },
+        ],
       };
     case "checking":
       return {
@@ -348,7 +377,7 @@ function describeDesktopCliUpgrade(
   }
   if (route !== "posix" || !input.cliBinaryPath.startsWith("/")) return null;
   return {
-    sentence: `Open a terminal on ${input.hostName} and run the copied command, then select Check now.`,
+    sentence: `Open a terminal on ${input.hostName} and run the copied command; this page rechecks while it is open.`,
     command: posixCliUpgradeCommand(input.cliBinaryPath),
     label: "Copy command",
   };
@@ -381,7 +410,7 @@ function describeWindowsCliUpgrade(
 ): CliUpgradeInstructions {
   const invocation = windowsCliInvocation(input.cliBinaryPath);
   return {
-    sentence: `Run the copied commands on ${input.hostName} from a PowerShell window outside Traycer on that machine (a Windows Terminal tab there, or an SSH session that opens PowerShell). Restarting briefly disconnects this host. When it reconnects, select Check now, then Update now.`,
+    sentence: `Run the copied commands on ${input.hostName} from a PowerShell window outside Traycer on that machine (a Windows Terminal tab there, or an SSH session that opens PowerShell). Restarting briefly disconnects this host. When it reconnects, this page rechecks on its own, and Update now appears once the host accepts the update.`,
     command: `${invocation} cli upgrade\n${invocation} host restart`,
     label: "Copy commands",
   };

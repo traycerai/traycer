@@ -530,6 +530,130 @@ describe("downloadAndStageHost", () => {
     expect(downloadStarted).toBe(false);
   });
 
+  it("EXPLICIT request for another build of the installed release (2.0.0+foo over 2.0.0+bar): refused as E_HOST_UPDATE_NOT_NEWER before any transfer, not 'up to date'", async () => {
+    // Codex r3945280604: the comparator calls the pair equal, so this read
+    // as installed-up-to-date and `host update --version 2.0.0+foo` exited 0
+    // with the requested artifact never delivered. Falsification: drop the
+    // string check in phase 1 and this resolves as a short-circuit.
+    await writeInstall("2.0.0+bar", {});
+    let downloadStarted = false;
+    let announced = false;
+    await expect(
+      downloadAndStageHost({
+        environment: ENV,
+        versionRequest: "2.0.0+foo",
+        automatic: false,
+        onProgress: noopProgress,
+        registryClient: fakeRegistryClient({
+          latest: "2.0.0+foo",
+          versions: [{ version: "2.0.0+foo", yanked: false }],
+          downloadGate: null,
+          onDownloadStart: () => {
+            downloadStarted = true;
+          },
+        }),
+        onWillDownload: async () => {
+          announced = true;
+        },
+        beforeExtract: async () => {},
+        ownAttempt: null,
+      }),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_UPDATE_NOT_NEWER,
+      details: { targetVersion: "2.0.0+foo", installedVersion: "2.0.0+bar" },
+    });
+    expect(downloadStarted).toBe(false);
+    expect(announced).toBe(false);
+    expect(await readHostStagedRecord(ENV)).toBeNull();
+  });
+
+  it("EXPLICIT request BELOW the installed record (1.2.0 over 2.0.0): refused as E_HOST_UPDATE_NOT_NEWER before any transfer - a request that delivered nothing does not report 'up to date'", async () => {
+    // Falsification: narrow the phase-1 check back to the comparator's
+    // "equal" and this resolves as installed-up-to-date, exit 0, with
+    // nothing delivered for 1.2.0.
+    await writeInstall("2.0.0", {});
+    let downloadStarted = false;
+    await expect(
+      downloadAndStageHost({
+        environment: ENV,
+        versionRequest: "1.2.0",
+        automatic: false,
+        onProgress: noopProgress,
+        registryClient: fakeRegistryClient({
+          latest: "2.0.0",
+          versions: [
+            { version: "1.2.0", yanked: false },
+            { version: "2.0.0", yanked: false },
+          ],
+          downloadGate: null,
+          onDownloadStart: () => {
+            downloadStarted = true;
+          },
+        }),
+        onWillDownload: null,
+        beforeExtract: async () => {},
+        ownAttempt: null,
+      }),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_UPDATE_NOT_NEWER,
+      message: expect.stringContaining("newer than the requested 1.2.0"),
+      details: { targetVersion: "1.2.0", installedVersion: "2.0.0" },
+    });
+    expect(downloadStarted).toBe(false);
+    expect(await readHostStagedRecord(ENV)).toBeNull();
+  });
+
+  it("EXPLICIT request for the installed record's own string (2.0.0+bar over 2.0.0+bar): up to date (control)", async () => {
+    await writeInstall("2.0.0+bar", {});
+    const outcome = await downloadAndStageHost({
+      environment: ENV,
+      versionRequest: "2.0.0+bar",
+      automatic: false,
+      onProgress: noopProgress,
+      registryClient: fakeRegistryClient({
+        latest: "2.0.0+bar",
+        versions: [{ version: "2.0.0+bar", yanked: false }],
+        downloadGate: null,
+        onDownloadStart: null,
+      }),
+      onWillDownload: null,
+      beforeExtract: async () => {},
+      ownAttempt: null,
+    });
+    expect(outcome).toMatchObject({
+      outcome: "short-circuit",
+      reason: "installed-up-to-date",
+      installedVersion: "2.0.0+bar",
+    });
+  });
+
+  it("IMPLICIT latest 2.0.0 over an installed 2.0.0+bar: up to date - the registry's release is installed, in a build the promote gate would not replace (control)", async () => {
+    await writeInstall("2.0.0+bar", {});
+    let downloadStarted = false;
+    const outcome = await downloadAndStageHost({
+      environment: ENV,
+      versionRequest: null,
+      automatic: false,
+      onProgress: noopProgress,
+      registryClient: fakeRegistryClient({
+        latest: "2.0.0",
+        versions: [{ version: "2.0.0", yanked: false }],
+        downloadGate: null,
+        onDownloadStart: () => {
+          downloadStarted = true;
+        },
+      }),
+      onWillDownload: null,
+      beforeExtract: async () => {},
+      ownAttempt: null,
+    });
+    expect(outcome).toMatchObject({
+      outcome: "short-circuit",
+      reason: "installed-up-to-date",
+    });
+    expect(downloadStarted).toBe(false);
+  });
+
   it("short-circuits when the target is already staged", async () => {
     await writeInstall("1.0.0", {});
     let downloadStarted = false;
@@ -842,9 +966,13 @@ describe("downloadAndStageHost", () => {
     expect((await readHostStagedRecord(ENV))?.version).toBe("2.0.0");
   });
 
-  it("--automatic refuses to stage over an incomparable (local-*) installed version", async () => {
+  it("--automatic refuses to stage over an incomparable (local-*) installed version, without announcing a download", async () => {
     await writeInstall("local-custom-build-2026", {});
     let downloadStarted = false;
+    // The third short-circuit named in `onWillDownload`'s doc: nothing is
+    // transferred, so nothing is announced. Falsification: move the hook
+    // above the promotion decision and it fires here.
+    const onWillDownload = vi.fn(async () => undefined);
     const outcome = await downloadAndStageHost({
       environment: ENV,
       versionRequest: null,
@@ -858,7 +986,7 @@ describe("downloadAndStageHost", () => {
           downloadStarted = true;
         },
       }),
-      onWillDownload: null,
+      onWillDownload,
       beforeExtract: async () => {},
       ownAttempt: null,
     });
@@ -867,6 +995,7 @@ describe("downloadAndStageHost", () => {
       reason: "automatic-refused-incomparable-installed",
     });
     expect(downloadStarted).toBe(false);
+    expect(onWillDownload).not.toHaveBeenCalled();
   });
   it("an explicit version request proceeds over an incomparable (local-*) installed version", async () => {
     await writeInstall("local-custom-build-2026", {});
@@ -2086,7 +2215,14 @@ describe("downloadAndStageHost", () => {
       }
     });
 
-    it("install: no-op when installed is at or above the target with no downgrade consent", async () => {
+    it("install: an EXPLICIT request BELOW the installed record is REFUSED, not a no-op - the request delivered nothing (#1752 round 14)", async () => {
+      // The rule this replaces read "installed is at or above the target ->
+      // no-op", which answered `host update --version 1.0.0` with exit 0 over
+      // a host at 1.5.0, having delivered nothing the caller asked for. It is
+      // the same "a request for X is never answered `already at Y`" the apply
+      // binding and the under-lock activation check enforce, applied at the
+      // first place the executor can see it. Falsification: drop the
+      // `explicitOtherArtifact` guard and this resolves `no-op` again.
       await writeInstall("1.5.0", {});
       const versions = [
         { version: "1.0.0", yanked: false },
@@ -2094,24 +2230,146 @@ describe("downloadAndStageHost", () => {
       ];
       const before = snapshotTree(hostHomeFor(ENV));
 
+      await expect(
+        resolveUpdatePlan({
+          environment: ENV,
+          request: {
+            intent: "install",
+            versionRequest: "1.0.0",
+            allowDowngrade: false,
+          },
+          onProgress: noopProgress,
+          registryClient: fakeRegistryClient({
+            latest: "1.5.0",
+            versions,
+            downloadGate: null,
+            onDownloadStart: null,
+          }),
+        }),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.HOST_UPDATE_NOT_NEWER,
+        details: { installedVersion: "1.5.0", targetVersion: "1.0.0" },
+      });
+      // Refused before anything is fetched, staged or written.
+      expect(snapshotTree(hostHomeFor(ENV))).toEqual(before);
+    });
+
+    it("install: an IMPLICIT latest at or above the installed record IS the no-op - the binding is the explicit request's alone", async () => {
+      await writeInstall("1.5.0", {});
+      const before = snapshotTree(hostHomeFor(ENV));
+
       const plan = await resolveUpdatePlan({
         environment: ENV,
         request: {
           intent: "install",
-          versionRequest: "1.0.0",
+          versionRequest: null,
           allowDowngrade: false,
         },
         onProgress: noopProgress,
         registryClient: fakeRegistryClient({
           latest: "1.5.0",
-          versions,
+          versions: [{ version: "1.5.0", yanked: false }],
           downloadGate: null,
           onDownloadStart: null,
         }),
       });
 
-      expect(plan).toMatchObject({ kind: "no-op", targetVersion: "1.0.0" });
+      expect(plan).toMatchObject({ kind: "no-op", targetVersion: "1.5.0" });
       expect(snapshotTree(hostHomeFor(ENV))).toEqual(before);
+    });
+
+    it("install: an EXPLICIT request for the installed record's OWN STRING is the no-op (control)", async () => {
+      // The separator between this and the refusal above is string equality,
+      // not the comparator: it is what makes the two `2.0.0+…` cases below
+      // land on opposite sides.
+      await writeInstall("1.5.0", {});
+
+      const plan = await resolveUpdatePlan({
+        environment: ENV,
+        request: {
+          intent: "install",
+          versionRequest: "1.5.0",
+          allowDowngrade: false,
+        },
+        onProgress: noopProgress,
+        registryClient: fakeRegistryClient({
+          latest: "1.5.0",
+          versions: [{ version: "1.5.0", yanked: false }],
+          downloadGate: null,
+          onDownloadStart: null,
+        }),
+      });
+
+      expect(plan).toMatchObject({ kind: "no-op", targetVersion: "1.5.0" });
+    });
+
+    it("install: ANOTHER BUILD of the installed release (2.0.0+foo over 2.0.0+bar) is refused without consent and takes the OWNED installer with it", async () => {
+      // The comparator orders these two EQUAL - it ignores build metadata -
+      // so the old at-or-above reading called it up to date and the requested
+      // artifact was never delivered. Identity is the STRING. With consent
+      // the owned installer takes it, because the shared monotonic stage
+      // would refuse to promote a candidate that is not strictly newer.
+      // Falsification: compare with `compareHostVersions` instead of `===`
+      // and both halves collapse into `no-op`.
+      await writeInstall("2.0.0+bar", {});
+      const registry = {
+        latest: "2.0.0+foo",
+        versions: [{ version: "2.0.0+foo", yanked: false }],
+        downloadGate: null,
+        onDownloadStart: null,
+      };
+
+      await expect(
+        resolveUpdatePlan({
+          environment: ENV,
+          request: {
+            intent: "install",
+            versionRequest: "2.0.0+foo",
+            allowDowngrade: false,
+          },
+          onProgress: noopProgress,
+          registryClient: fakeRegistryClient(registry),
+        }),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.HOST_UPDATE_NOT_NEWER,
+      });
+
+      const consented = await resolveUpdatePlan({
+        environment: ENV,
+        request: {
+          intent: "install",
+          versionRequest: "2.0.0+foo",
+          allowDowngrade: true,
+        },
+        onProgress: noopProgress,
+        registryClient: fakeRegistryClient(registry),
+      });
+      expect(consented).toMatchObject({
+        kind: "downgrade",
+        targetVersion: "2.0.0+foo",
+      });
+    });
+
+    it("install: --allow-downgrade on the record's OWN STRING stays the no-op - the installer never runs (control)", async () => {
+      await writeInstall("2.0.0+bar", {});
+
+      const plan = await resolveUpdatePlan({
+        environment: ENV,
+        request: {
+          intent: "install",
+          versionRequest: "2.0.0+bar",
+          allowDowngrade: true,
+        },
+        onProgress: noopProgress,
+        registryClient: fakeRegistryClient({
+          latest: "2.0.0+bar",
+          versions: [{ version: "2.0.0+bar", yanked: false }],
+          downloadGate: null,
+          onDownloadStart: null,
+        }),
+      });
+
+      expect(plan).toMatchObject({ kind: "no-op", targetVersion: "2.0.0+bar" });
     });
 
     it("install: already-staged when the target is already staged and promotable", async () => {

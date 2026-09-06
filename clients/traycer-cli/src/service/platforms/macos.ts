@@ -2,10 +2,19 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname } from "node:path";
-import { readHostPidMetadata } from "../../host/pid-metadata";
+import {
+  readHostPidMetadata,
+  readHostPidMetadataEvidence,
+} from "../../host/pid-metadata";
+import { hostPidMetadataPath } from "../../store/paths";
+import { probeHostHealth } from "../health-probe";
 import { createCliLogger } from "../../logger";
 import { CLI_ERROR_CODES, cliError } from "../../runner/errors";
 import { isProcessAlive } from "../../store/cli-lock";
+import {
+  getPublishedProcessIdentityVerdict,
+  readProcessStartIdentity,
+} from "../../store/process-identity";
 import type { CliInvocation } from "../cli-binary";
 import { HOST_V8_FLAGS } from "../host-node-options";
 import { escapeXml } from "../escape-xml";
@@ -29,7 +38,9 @@ import {
 // fields only, `^\t?` anchor) replaces the any-depth variant that used to
 // live here, so a nested `path` inside `endpoints = { ... }` can never
 // masquerade as the job's plist path.
+import type { ProcessStartIdentity } from "@traycer/protocol/host/lifecycle";
 import {
+  type CooperativeShutdownOutcome,
   forceStopHostProcess,
   requestCooperativeShutdown,
 } from "./desktop-agent-shutdown";
@@ -147,35 +158,180 @@ export function createMacosController(
 // register cycle (an app relaunch may re-register its agent); the info log
 // says so, because "my host went back to the app" is otherwise
 // undiagnosable from the shell.
+//
+// The whole decision, by the two labels' `launchctl print` evidence
+// (`probeLabelForTakeover`: absent | indeterminate | loaded{ownership,
+// running, pid}). Two invariants hold in every cell: no process is booted
+// out without a cooperative claim made while ITS label held the machine's
+// only process - the claim follows `pid.json`, so the residual is a host
+// run by hand outside launchd racing a label's host, itself the dual-host
+// state, and a process launchd starts between a probe and the bootout that
+// follows it, microseconds old - and no replacement is registered while a
+// process of the evicted job, or a host `pid.json` names, may be alive.
+//
+//   agent label            CLI label              action
+//   ---------------------  ---------------------  ---------------------------
+//   indeterminate          any                    refuse (unreadable)
+//   any                    indeterminate          refuse (unreadable)
+//   any                    smappservice           refuse (pre-split label)
+//   running                running                refuse (two hosts)
+//   loaded, not Desktop's  any                    refuse (foreign agent job)
+//   absent                 absent                 not-applicable
+//   absent                 idle                   unload, no claim
+//   absent                 running                claim -> busy/no-metadata/
+//                                                 no-host refuse; stopped/
+//                                                 unreachable/hung unload
+//   smappservice           running                no claim here; unload the
+//                                                 agent (idle); the CLI
+//                                                 label's stand-down asks
+//   smappservice running   absent | idle          claim (reaches only the
+//                                                 agent's host, or a hand-
+//                                                 run one) -> busy/
+//                                                 no-metadata/no-host
+//                                                 refuse; else bootout
+//   smappservice idle      absent | idle          claim (for a hand-run host
+//                                                 only) -> busy refuses;
+//                                                 else unload the agent
+//
+// Every "unload"/"bootout" is `bootout --wait`, a positive label re-probe,
+// and `processMayLiveOn` against the process's creation stamp; any of the
+// three failing refuses, naming the retired agent when there is one. After
+// the agent is gone the CLI label is read again and takes the CLI-label
+// rows above with its own claim, which by then can reach only its host.
+// Both arms end in `refuseIfPublishedHostAlive`: a host `pid.json` still
+// names alive - under neither label - refuses the registration. Only then
+// does `installService` run, reading the CLI label as `not-loaded`; its
+// bare bootout never runs on a takeover.
 async function takeoverDesktopRegistration(
   label: ServiceLabel,
   run: ProcessRunner,
 ): Promise<DesktopRegistrationTakeover> {
   const guiTarget = guiDomain();
+  // Both probes fail CLOSED here, unlike the advisory ownership probes the
+  // stop/restart paths use. Those collapse a non-zero or thrown `launchctl
+  // print` into "not loaded" because for an ownership question an unreadable
+  // label is safely "not ours". For a takeover the safe direction is the
+  // opposite: a label read as absent by a transient fault skips the
+  // cooperative stop below, and `installService`'s later probe then finds
+  // the loaded job and boots it out with no claim (Codex, traycer#1761).
+  //
+  // The agent is probed FIRST so that the CLI-label read is the freshest
+  // evidence the no-agent arm acts on: `standDownLiveCliLabelHost` decides
+  // from it, and a job that becomes loaded during an earlier probe would
+  // otherwise be missed (the took-over arm re-reads the label after the
+  // agent's bootout for the same reason).
+  const agentLabelId = smAppServiceAgentLabelId(label);
+  const agentProbe = await probeLabelForTakeover(
+    `${guiTarget}/${agentLabelId}`,
+    run,
+  );
+  if (agentProbe.kind === "indeterminate") {
+    throw takeoverProbeIndeterminate(
+      label,
+      agentLabelId,
+      agentProbe.cause,
+      null,
+    );
+  }
+  const cliProbe = await probeLabelForTakeover(`${guiTarget}/${label.id}`, run);
+  if (cliProbe.kind === "indeterminate") {
+    throw takeoverProbeIndeterminate(label, label.id, cliProbe.cause, null);
+  }
   // Pre-split machines: the CLI label itself is Desktop's SMAppService
   // registration. Booting THAT out corrupts the BTM state the app manages.
-  const cliOwnership = await inspectLaunchdOwnership(
-    `${guiTarget}/${label.id}`,
-    run,
-  ).catch((): LaunchdOwnership => ({ kind: "not-loaded" }));
-  if (cliOwnership.kind === "smappservice") {
+  if (
+    cliProbe.kind === "loaded" &&
+    cliProbe.ownership.kind === "smappservice"
+  ) {
+    throw preSplitCliLabelRefusal(label, cliProbe.ownership.path, null);
+  }
+  // The cooperative claim is machine-wide: `requestCooperativeShutdown`
+  // follows `pid.json`, and nothing in it names a launchd label. Its answer
+  // is therefore evidence about ONE process, and every arm below must know
+  // which. Three rules make that so by construction:
+  //   1. Both labels reporting a process is refused outright, whatever owns
+  //      them. That is two hosts racing over the same stores, the
+  //      dual-registration state `retireCompetingRegistration` / `host
+  //      doctor` repair; a claim made there stops one of them and says
+  //      nothing about the other, which was then booted out unasked (Codex,
+  //      traycer#1761, round 6). After this rule at most ONE label has a
+  //      process, and every claim below can reach only that label's host -
+  //      or a host run by hand outside launchd (rule 3).
+  //   2. In the took-over arm the claim before the agent's bootout is
+  //      skipped when the CLI label is the one with a process: that host is
+  //      asked by the stand-down after the agent is gone, with a claim that
+  //      reaches only it, instead of being asked here, stopped, and then
+  //      refused by a second claim that finds its metadata gone. In every
+  //      other case the claim is made even for an idle agent, because a
+  //      hand-run host may be what `pid.json` names and it must be asked.
+  //   3. Nothing is registered while `pid.json` still names a live process
+  //      (`refuseIfPublishedHostAlive`, at the end of both arms). A host the
+  //      claims could not stop and the bootouts could not reach - one run by
+  //      hand, or an unreachable one whose supervisor is not under either
+  //      label - would otherwise be the incumbent the replacement declines
+  //      to, and `KeepAlive{SuccessfulExit: false}` leaves the machine
+  //      hostless.
+  if (
+    agentProbe.kind === "loaded" &&
+    agentProbe.running &&
+    cliProbe.kind === "loaded" &&
+    cliProbe.running
+  ) {
     throw cliError({
       code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
-      message: `service install --takeover: label '${label.id}' is Desktop's own SMAppService registration (pre-label-split machine, loaded from ${cliOwnership.path}); takeover cannot bootout this label without corrupting the login-item state the app manages. Run 'traycer host service uninstall', then re-run 'traycer host service install'.`,
-      details: { label: label.id, loadedPath: cliOwnership.path },
+      message: `service install --takeover: launchd reports a running process under both '${agentLabelId}' and '${label.id}' - two hosts on one machine. A cooperative stop cannot tell which one it reached, so the takeover was stopped rather than interrupt a host it never asked. Run 'traycer host doctor' to repair the dual registration, or 'traycer host service uninstall', then re-run this command.`,
+      details: {
+        label: label.id,
+        agentLabel: agentLabelId,
+        agentPid: agentProbe.pid,
+        cliPid: cliProbe.pid,
+      },
       exitCode: 1,
     });
   }
-  const desktopAgent = await probeDesktopAgentOwnership(label, run);
-  if (desktopAgent === null) return { kind: "not-applicable" };
+  if (agentProbe.kind === "absent") {
+    const standDown = await standDownLiveCliLabelHost(
+      label,
+      cliProbe,
+      run,
+      null,
+    );
+    await refuseIfPublishedHostAlive(label, null);
+    return standDown;
+  }
+  // A job under the agent label that Desktop did not register (a raw
+  // `~/Library/LaunchAgents/<label>.agent.plist`) is nothing this command
+  // manages: idle, launchd could start it beside the CLI label it is about
+  // to register; running, its host was never asked. Refused either way.
+  if (agentProbe.ownership.kind !== "smappservice") {
+    throw cliError({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+      message: `service install --takeover: launchd has '${agentLabelId}' loaded from ${agentProbe.ownership.path ?? "an unknown path"}, which is not Traycer Desktop's registration; this command does not manage that job and will not register the CLI label beside it. Unload it (launchctl bootout gui/<uid>/${agentLabelId}) and re-run this command.`,
+      details: {
+        label: label.id,
+        agentLabel: agentLabelId,
+        loadedPath: agentProbe.ownership.path,
+        pid: agentProbe.pid,
+      },
+      exitCode: 1,
+    });
+  }
+  const desktopAgent: DesktopAgentOwnership = {
+    agentLabelId,
+    loadedPath: agentProbe.ownership.path,
+  };
   // The CLI is taking this label over; Desktop's registration is retired, not
-  // relaunched. Nothing is coming back under this identity.
-  const outcome = await requestCooperativeShutdown(
-    label.environment,
-    "takeover",
-    "shutdown",
-  );
-  if (outcome.kind === "busy") {
+  // relaunched. Nothing is coming back under this identity. Rule 2: with the
+  // CLI label holding the only process, the stand-down below makes the claim.
+  const claimHere = !(cliProbe.kind === "loaded" && cliProbe.running);
+  const outcome: CooperativeShutdownOutcome | null = claimHere
+    ? await requestCooperativeShutdown(
+        label.environment,
+        "takeover",
+        "shutdown",
+      )
+    : null;
+  if (outcome !== null && outcome.kind === "busy") {
     throw cliError({
       code: CLI_ERROR_CODES.HOST_BUSY,
       message:
@@ -184,11 +340,30 @@ async function takeoverDesktopRegistration(
       exitCode: 1,
     });
   }
+  // A running agent process that nobody could ask - no metadata yet, or
+  // metadata naming a child that has exited while the supervisor lives - is
+  // refused on the same terms the stand-down refuses it for the CLI label:
+  // a host in its first seconds, or between children; the window closes on
+  // its own and the next run asks it. With the agent IDLE the same answers
+  // mean there was nothing to ask (the claim was for a hand-run host, and
+  // none is there), and the unload below has no process to interrupt.
+  if (
+    outcome !== null &&
+    agentProbe.running &&
+    (outcome.kind === "no-metadata" || outcome.kind === "no-host")
+  ) {
+    throw unaskableHost(
+      label,
+      desktopAgent.agentLabelId,
+      agentProbe.pid,
+      outcome.kind,
+      null,
+    );
+  }
   const logger = createCliLogger(label.environment);
   if (
-    outcome.kind === "unreachable" ||
-    outcome.kind === "hung" ||
-    outcome.kind === "no-metadata"
+    outcome !== null &&
+    (outcome.kind === "unreachable" || outcome.kind === "hung")
   ) {
     logger.warn(
       "Takeover: the Desktop-managed host could not be stopped cooperatively; booting the job out underneath it.",
@@ -198,9 +373,7 @@ async function takeoverDesktopRegistration(
         cause:
           outcome.kind === "unreachable"
             ? outcome.cause
-            : outcome.kind === "hung"
-              ? `pid ${outcome.pid} outlived the shutdown grace`
-              : "pid metadata is missing or unreadable, so no endpoint could be asked",
+            : `pid ${outcome.pid} outlived the shutdown grace`,
       },
     );
   }
@@ -209,9 +382,10 @@ async function takeoverDesktopRegistration(
   // `retireCompetingRegistration` (see the note there): a bare bootout
   // returns when launchd ACCEPTS the request, not when the process is gone.
   //
-  // This line is reached precisely in the states where the old host is known
-  // to still be running - `unreachable`, `hung`, `no-metadata`; only the
-  // `stopped` arm above waited for exit - and the evicted host publishes
+  // This line is reached with the old host possibly still running -
+  // `unreachable` and `hung` never waited for exit; the claim skipped under
+  // rule 2, or answered `no-metadata`/`no-host` for an idle agent, may leave
+  // a supervisor between children - and the evicted host publishes
   // `pid.json` until the very end of its teardown. `service install` calls
   // `controller.install` immediately after this returns, and that host's
   // first act is `findLiveIncumbentHost`. Without the barrier it reads the
@@ -226,12 +400,16 @@ async function takeoverDesktopRegistration(
   // `tolerateNonZeroExit` stays `true`, unlike the retirement path, because
   // that positive probe is the gate here - a benign "no such process" exit
   // must reach it rather than abort a takeover that in fact succeeded.
-  await run("launchctl", ["bootout", "--wait", agentTarget], {
-    env: undefined,
-    cwd: undefined,
-    timeoutMs: STOP_EXIT_TIMEOUT_MS,
-    tolerateNonZeroExit: true,
-  });
+  const agentBootout = await run(
+    "launchctl",
+    ["bootout", "--wait", agentTarget],
+    {
+      env: undefined,
+      cwd: undefined,
+      timeoutMs: STOP_EXIT_TIMEOUT_MS,
+      tolerateNonZeroExit: true,
+    },
+  );
   // Verification must be POSITIVE. `inspectLaunchdOwnership` collapses every
   // non-zero exit - and its caller every thrown error - into `not-loaded`,
   // so an EPERM, a timeout, or a launchctl that could not spawn would all
@@ -258,24 +436,573 @@ async function takeoverDesktopRegistration(
       exitCode: 1,
     });
   }
+  // The label is gone; the PROCESS may not be. `bootout --wait` returns at
+  // the runner's timeout as well as at exit (`tolerateNonZeroExit` resolves
+  // the timeout as exit -1), and a `hung` host is by definition still alive
+  // at that point, still publishing `pid.json`. Registering the CLI label on
+  // the label evidence alone is the hostless bootstrap-beside-a-corpse this
+  // barrier exists to prevent, so the process launchd reported is checked
+  // too - against its own creation stamp, so neither a `stopped` answer that
+  // may have come from another host nor a recycled pid decides it (see
+  // `processMayLiveOn`).
+  if (await processMayLiveOn(agentProbe, agentBootout.exitCode)) {
+    throw cliError({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+      message: `service install --takeover: launchctl bootout unloaded '${desktopAgent.agentLabelId}', but ${agentProbe.pid !== null ? `its process (pid ${agentProbe.pid}) is still running after the wait` : "launchd had reported it running with no pid to check and the wait did not end with its exit"}, so the takeover was stopped rather than start a replacement beside it. Re-run the command once it has exited, or use the Traycer app to remove the host, or run 'traycer host service uninstall'.`,
+      details: {
+        label: label.id,
+        agentLabel: desktopAgent.agentLabelId,
+        pid: agentProbe.pid,
+        verification:
+          agentProbe.pid !== null ? "process-alive" : "process-unverified",
+      },
+      exitCode: 1,
+    });
+  }
+  // The CLI label is read AGAIN, not from `cliProbe`: that snapshot predates
+  // the whole claim and the agent's bootout wait (a minute at the limit), and
+  // a job loaded since - a throttled `KeepAlive` respawn of an idle CLI label
+  // - would otherwise be left for the install's bare bootout. The fresh read
+  // goes through the same stand-down as the no-agent arm, with its own claim:
+  // either the CLI label held the machine's only process and no claim was
+  // made above (rule 2), or it held none and a process here is new; in both
+  // cases the stand-down's claim can reach only it.
+  const cliAfterAgent = await probeLabelForTakeover(
+    `${guiTarget}/${label.id}`,
+    run,
+  );
+  if (cliAfterAgent.kind === "indeterminate") {
+    throw takeoverProbeIndeterminate(
+      label,
+      label.id,
+      cliAfterAgent.cause,
+      desktopAgent.agentLabelId,
+    );
+  }
+  if (
+    cliAfterAgent.kind === "loaded" &&
+    cliAfterAgent.ownership.kind === "smappservice"
+  ) {
+    throw preSplitCliLabelRefusal(
+      label,
+      cliAfterAgent.ownership.path,
+      desktopAgent.agentLabelId,
+    );
+  }
+  const cliStandDown = await standDownLiveCliLabelHost(
+    label,
+    cliAfterAgent,
+    run,
+    desktopAgent.agentLabelId,
+  );
+  await refuseIfPublishedHostAlive(label, desktopAgent.agentLabelId);
   logger.info(
     "Takeover: booted out Traycer Desktop's SMAppService agent; the CLI now owns host registration. Launching the Desktop app again may re-register its agent - uninstall or update the app to make the takeover permanent.",
     {
       label: label.id,
       agentLabel: desktopAgent.agentLabelId,
       loadedPath: desktopAgent.loadedPath,
+      cliLabel:
+        cliStandDown.kind === "cli-host-stopped"
+          ? `unloaded (${cliStandDown.cooperativeStop})`
+          : "not loaded",
     },
   );
   return {
     kind: "took-over",
     agentLabelId: desktopAgent.agentLabelId,
+    // With the claim deferred to the CLI label's stand-down (rule 2), that
+    // stand-down's answer is the machine's cooperative outcome.
     cooperativeStop:
-      outcome.kind === "stopped"
-        ? "stopped"
-        : outcome.kind === "no-host"
-          ? "no-host"
-          : "skipped-unreachable",
+      outcome === null
+        ? cliStandDown.kind === "cli-host-stopped"
+          ? cliStandDown.cooperativeStop
+          : "no-host"
+        : outcome.kind === "stopped"
+          ? "stopped"
+          : outcome.kind === "no-host" || outcome.kind === "no-metadata"
+            ? "no-host"
+            : "skipped-unreachable",
   };
+}
+
+// Rule 3 of `takeoverDesktopRegistration`: the positive gate before the
+// caller registers the CLI label. Every bootout above is judged against the
+// process launchd reported, but a host `pid.json` names need not be under
+// either label - started by hand, or a child whose supervisor already
+// exited - and a replacement bootstrapped beside it declines to it as the
+// incumbent, exits 0, and `KeepAlive{SuccessfulExit: false}` leaves the
+// machine hostless. A process proven gone (dead, or the pid recycled) lets
+// the registration run; an alive one refuses; one that cannot be judged
+// refuses too, except that a record with no identity to judge BY is settled
+// by dialling the endpoint it advertises (see below). The record is read
+// with absence kept apart from failure: `readHostPidMetadata` folds a torn
+// or unreadable file into `null`, and here that would let the one gate a
+// hand-run host has pass on no evidence (Codex, traycer#1761, round 7).
+async function refuseIfPublishedHostAlive(
+  label: ServiceLabel,
+  retiredAgentLabelId: string | null,
+): Promise<void> {
+  const record = await readHostPidMetadataEvidence(label.environment);
+  if (record.kind === "absent") return;
+  if (record.kind === "unreadable") {
+    throw cliError({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+      message: `service install --takeover: the published host record ${hostPidMetadataPath(label.environment)} could not be read (${record.cause}), so whether a host is still running could not be judged and the reload was stopped rather than register a replacement beside one. Re-run the command; if it persists and no Traycer host is running, remove that record first. ${takeoverRerunRouting(retiredAgentLabelId)}`,
+      details: {
+        label: label.id,
+        record: hostPidMetadataPath(label.environment),
+        cause: record.cause,
+        agentLabel: retiredAgentLabelId,
+      },
+      exitCode: 1,
+    });
+  }
+  const { metadata } = record;
+  const verdict = await getPublishedProcessIdentityVerdict(
+    metadata.pid,
+    metadata.processStartIdentity,
+  );
+  if (verdict === "dead" || verdict === "mismatch") return;
+  // `indeterminate` with a record that predates identity tracking
+  // (`processStartIdentity === null`, which every field record before the
+  // field shipped is) means a live pid the record cannot vouch for: the old
+  // host still running, or a record it left behind whose pid another process
+  // now holds. Refusing outright would strand exactly the hostless machine
+  // this command recovers (macOS `uninstall` does not remove the record), so
+  // the endpoint the record advertises is dialled once: a host that answers
+  // is a host, and refuses; nothing answering means the record is stale and
+  // the reload proceeds under a warning. With a stamp to compare, an
+  // `indeterminate` is a probe fault and refuses like `current`.
+  if (verdict === "indeterminate" && metadata.processStartIdentity === null) {
+    const health = await probeHostHealth({
+      environment: label.environment,
+      checkProcessAlive: null,
+      checkTcpReachable: null,
+      totalBudgetMs: 0,
+      retryDelayMs: 0,
+    });
+    if (!health.healthy) {
+      createCliLogger(label.environment).warn(
+        "Takeover: the published host record names a live pid with no process identity to compare and nothing answers on its endpoint; treating the record as stale and proceeding.",
+        {
+          label: label.id,
+          pid: metadata.pid,
+          record: hostPidMetadataPath(label.environment),
+          detail: health.detail,
+        },
+      );
+      return;
+    }
+  }
+  const state =
+    verdict === "current"
+      ? `a host is still running (pid ${metadata.pid}, per its published endpoint) after the takeover retired the launchd registration; it is not under a label this command booted out - most likely started by hand - so the reload was stopped rather than register a replacement that would decline to it and leave the machine hostless. Stop it with 'traycer host stop', then re-run this command.`
+      : metadata.processStartIdentity === null
+        ? `a host answered on the endpoint the published host record ${hostPidMetadataPath(label.environment)} advertises (pid ${metadata.pid}; the record carries no process identity), so the reload was stopped rather than register a replacement beside it. Stop it with 'traycer host stop', then re-run this command.`
+        : `the published host record names pid ${metadata.pid} and its process identity could not be read, so the reload was stopped rather than register a replacement beside a host that may still be running. Re-run the command; if it persists, stop the host with 'traycer host stop' first.`;
+  throw cliError({
+    code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+    message: `service install --takeover: ${state} ${takeoverRerunRouting(retiredAgentLabelId)}`,
+    details: {
+      label: label.id,
+      pid: metadata.pid,
+      verdict,
+      agentLabel: retiredAgentLabelId,
+    },
+    exitCode: 1,
+  });
+}
+
+type TakeoverLabelProbe =
+  | { readonly kind: "absent" }
+  | { readonly kind: "indeterminate"; readonly cause: string }
+  | {
+      readonly kind: "loaded";
+      readonly ownership: Exclude<LaunchdOwnership, { kind: "not-loaded" }>;
+      // launchd's pid for the job whatever its ownership (`LaunchdOwnership`
+      // carries one only for `cli-or-other`), so a bootout of either label is
+      // checked against the PROCESS afterwards, not only the label.
+      readonly pid: number | null;
+      // Whether launchd reports a process under the job: a positive pid, or
+      // `state = running` with no pid field printed - the same reading the
+      // desktop's parked-registration probe makes (Codex, traycer#1761); an
+      // exact match, like that probe, because no live bytes show a
+      // decorated form (`wedge.ts` documents the same rule for its tokens). A
+      // running job with no pid is still asked to stand down; only the
+      // liveness check after the bootout has nothing to key on, and it fails
+      // closed on the wait's timeout instead.
+      readonly running: boolean;
+      // The kernel's creation stamp for `pid` at probe time (null without a
+      // pid, or when it could not be read). Read synchronously (`ps`, 3 s
+      // cap) at most once per loaded label per takeover. After a bootout it tells a
+      // process that is STILL the one launchd reported from a recycled pid,
+      // which `isProcessAlive` alone cannot; the takeover's liveness check
+      // after every bootout keys on it.
+      readonly startIdentity: ProcessStartIdentity | null;
+    };
+
+// Three-state `launchctl print` for the takeover's two labels: `absent` only
+// on launchctl's own not-found answer, `indeterminate` for everything that
+// is not an answer (spawn failure, timeout, permission, unrecognized
+// output), `loaded` with the same ownership classification the advisory
+// probes use. A revoked mutation capability still rethrows, as everywhere.
+async function probeLabelForTakeover(
+  target: string,
+  run: ProcessRunner,
+): Promise<TakeoverLabelProbe> {
+  let result: ProbeCommandResult;
+  try {
+    const value = await run("launchctl", ["print", target], {
+      env: undefined,
+      cwd: undefined,
+      timeoutMs: 10_000,
+      tolerateNonZeroExit: true,
+    });
+    result = {
+      exitCode: value.exitCode,
+      stdout: value.stdout,
+      stderr: value.stderr,
+      timedOut: false,
+      spawnFailed: false,
+      signal: null,
+    };
+  } catch (cause) {
+    if (isServiceMutationAuthorityError(cause)) throw cause;
+    result = {
+      exitCode: -1,
+      stdout: "",
+      stderr: "",
+      timedOut: false,
+      spawnFailed: true,
+      signal: null,
+    };
+  }
+  const probe = classifyLaunchctlPrintResult(result, null, null);
+  if (probe.kind === "absent") return { kind: "absent" };
+  if (probe.kind === "indeterminate") {
+    return { kind: "indeterminate", cause: probe.cause };
+  }
+  // An exit-0 answer with no recognizable job fields (truncated output, a
+  // changed format) is `observed` with an indeterminate OWNERSHIP; the
+  // CLI-local classifier below would read it as `cli-or-other` with no pid
+  // and the stand-down would unload it with no claim (Codex, traycer#1761).
+  // Same fail-closed verdict as a non-answer, naming the cause.
+  if (probe.ownership.kind === "indeterminate") {
+    return { kind: "indeterminate", cause: probe.ownership.cause };
+  }
+  const ownership = classifyLaunchdPrintOutput(probe.raw);
+  if (ownership.kind === "not-loaded") return { kind: "absent" };
+  const { pid, jobState } = probe.runState;
+  const livePid = pid.kind === "observed" && pid.value > 0 ? pid.value : null;
+  return {
+    kind: "loaded",
+    ownership,
+    pid: livePid,
+    running:
+      livePid !== null ||
+      (jobState.kind === "observed" &&
+        jobState.value.toLowerCase() === "running"),
+    startIdentity: livePid === null ? null : readProcessStartIdentity(livePid),
+  };
+}
+
+// The process evidence a takeover bootout is checked against afterwards.
+type TakeoverJobProcess = Pick<
+  Extract<TakeoverLabelProbe, { kind: "loaded" }>,
+  "pid" | "running" | "startIdentity"
+>;
+
+// After a `bootout --wait`: may the job's process live on? The evidence is
+// what launchd reported at probe time and is never cleared by a cooperative
+// answer - the claim goes through `pid.json`, which need not name THIS
+// label's process (Codex, traycer#1761, round 6) - so the question is
+// settled against the process itself:
+//   - no process reported: no.
+//   - a pid the kernel says is dead: no.
+//   - a pid alive whose creation stamp still matches the one read at probe
+//     time: yes, whatever launchctl's exit was (`getPublishedProcessIdentity
+//     Verdict` is the tree's recycled-pid detector).
+//   - a pid alive with a DIFFERENT stamp: no - the pid was recycled after the
+//     process exited (a `stopped` host's teardown can take that long).
+//   - no stamp to compare (`indeterminate`), or `state = running` with no pid
+//     printed: launchd's own exit is the tiebreak - its 0 means it reaped
+//     the process, anything else (the runner's timeout resolves as -1) means
+//     it may still be killing it.
+async function processMayLiveOn(
+  job: TakeoverJobProcess,
+  bootoutExitCode: number,
+): Promise<boolean> {
+  if (!job.running) return false;
+  if (job.pid === null) return bootoutExitCode !== 0;
+  if (!isProcessAlive(job.pid)) return false;
+  const verdict = await getPublishedProcessIdentityVerdict(
+    job.pid,
+    job.startIdentity,
+  );
+  if (verdict === "current") return true;
+  if (verdict === "dead" || verdict === "mismatch") return false;
+  return bootoutExitCode !== 0;
+}
+
+function preSplitCliLabelRefusal(
+  label: ServiceLabel,
+  loadedPath: string,
+  retiredAgentLabelId: string | null,
+): Error {
+  return cliError({
+    code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+    message: `service install --takeover: label '${label.id}' is Desktop's own SMAppService registration (pre-label-split machine, loaded from ${loadedPath}); takeover cannot bootout this label without corrupting the login-item state the app manages.${retiredAgentLabelId === null ? "" : ` Traycer Desktop's agent '${retiredAgentLabelId}' is already deregistered.`} Run 'traycer host service uninstall', then re-run 'traycer host service install'.`,
+    details: { label: label.id, loadedPath, agentLabel: retiredAgentLabelId },
+    exitCode: 1,
+  });
+}
+
+// Routing tail for every refusal the takeover can issue AFTER it has
+// deregistered Desktop's agent: at that point the machine's only remaining
+// registration is the one being refused, and the re-run that finishes the
+// takeover has to be spelled out.
+function takeoverRerunRouting(retiredAgentLabelId: string | null): string {
+  return retiredAgentLabelId === null
+    ? "Re-run the command, or run 'traycer host service uninstall' first."
+    : `Traycer Desktop's agent '${retiredAgentLabelId}' is already deregistered; re-run the command to finish the takeover, or run 'traycer host service uninstall' first.`;
+}
+
+function takeoverProbeIndeterminate(
+  label: ServiceLabel,
+  probedLabelId: string,
+  cause: string,
+  retiredAgentLabelId: string | null,
+): Error {
+  return cliError({
+    code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+    message: `service install --takeover: could not read launchd's state for '${probedLabelId}' (${cause}), so the takeover was stopped rather than reload a job it could not see. ${takeoverRerunRouting(retiredAgentLabelId)}`,
+    details: {
+      label: label.id,
+      probedLabel: probedLabelId,
+      cause,
+      agentLabel: retiredAgentLabelId,
+    },
+    exitCode: 1,
+  });
+}
+
+// The takeover's handling of the CLI label itself, under the CLI's lock.
+// Its caller (`installService`) boots out a loaded CLI label with a plain
+// `launchctl bootout` and no cooperative claim - fine for a job with no
+// process, and exactly wrong for a host that started between the caller's
+// own probe and this lock: the Desktop's parked-registration fallback admits
+// the takeover only after it has seen no live process under the label, but
+// a throttled `KeepAlive` respawn can start in that gap (Codex,
+// traycer#1761). Under this lock, a live process is asked to stand down on
+// the same terms as a Desktop-managed host: a busy denial ABORTS, a stopped
+// host proceeds, an unreachable one is booted out underneath because it is
+// the broken part - and a host nobody can ask is refused:
+//
+// `no-metadata` and `no-host` while launchd reports a process (a positive
+// pid, or `state = running` with none printed) both REFUSE instead of
+// proceeding. launchd's pid is the supervisor; `pid.json` names its host
+// child. A supervisor that is alive while the metadata is absent, or names a
+// child that is gone, is a host in its first seconds (fresh start, or a
+// respawn after the old child exited and before the new one published) -
+// there is no endpoint to ask yet, and booting it out now is the very
+// interruption this guard exists to prevent. The window closes on its own;
+// the caller retries. Only a host that answered - stood down, or is
+// provably unreachable behind a published endpoint - lets the reload run.
+//
+// A job that is loaded with NO process is not left for the caller either.
+// It is either idle for good (a clean exit: `traycer host stop`, or a child
+// that declined to an incumbent, which `KeepAlive{SuccessfulExit: false}`
+// never respawns) or inside launchd's throttle window before a respawn, and
+// the two cannot be told apart from `launchctl print`. Left loaded, the
+// throttled one can start while `installService` writes its launcher and
+// manifest, after which the install's bare bootout interrupts a host that
+// was never asked (Codex, traycer#1761, round 3). So the job is unloaded
+// HERE, under this lock, through `unloadCliLabelJob`: once it is verified
+// gone nothing can start under the label - launchd does not spawn an
+// unloaded job, another CLI is excluded by the contender lock, and a
+// Desktop SMAppService load of this label is the pre-split refusal the
+// install re-checks - and the install's own probe then reads it as
+// `not-loaded` and skips its bootout. What remains is the gap between
+// launchd answering the probe and the `bootout --wait` reaching it,
+// normally microseconds; a process launchd starts inside it is terminated
+// by that bootout without a claim, at an age where it has no client and no
+// work to lose.
+//
+// `retiredAgentLabelId` names Desktop's agent when the took-over arm calls
+// this after deregistering it; the refusals then say so, because at that
+// point the machine's only registration is the one being refused and the
+// re-run that finishes the takeover must be spelled out. Both callers refuse
+// an SMAppService-owned CLI label before calling.
+async function standDownLiveCliLabelHost(
+  label: ServiceLabel,
+  cliProbe: Exclude<TakeoverLabelProbe, { kind: "indeterminate" }>,
+  run: ProcessRunner,
+  retiredAgentLabelId: string | null,
+): Promise<DesktopRegistrationTakeover> {
+  if (
+    cliProbe.kind !== "loaded" ||
+    cliProbe.ownership.kind !== "cli-or-other"
+  ) {
+    return { kind: "not-applicable" };
+  }
+  const { pid } = cliProbe;
+  const logger = createCliLogger(label.environment);
+  if (!cliProbe.running) {
+    logger.info(
+      "Takeover: the CLI label is loaded with no running process; unloading it before the reload so launchd cannot start it underneath the install.",
+      { label: label.id, path: cliProbe.ownership.path },
+    );
+    await unloadCliLabelJob(label, cliProbe, run, retiredAgentLabelId);
+    return { kind: "cli-host-stopped", cooperativeStop: "no-host" };
+  }
+  const outcome = await requestCooperativeShutdown(
+    label.environment,
+    "takeover",
+    "shutdown",
+  );
+  if (outcome.kind === "busy") {
+    throw cliError({
+      code: CLI_ERROR_CODES.HOST_BUSY,
+      message: `service install --takeover: the host running under the CLI label has work in progress and denied the shutdown claim; retry once the work completes.${retiredAgentLabelId === null ? "" : ` Traycer Desktop's agent '${retiredAgentLabelId}' is already deregistered; the re-run finishes the takeover.`}`,
+      details: { label: label.id, pid, agentLabel: retiredAgentLabelId },
+      exitCode: 1,
+    });
+  }
+  if (outcome.kind === "no-metadata" || outcome.kind === "no-host") {
+    throw unaskableHost(
+      label,
+      label.id,
+      pid,
+      outcome.kind,
+      retiredAgentLabelId,
+    );
+  }
+  if (outcome.kind === "unreachable" || outcome.kind === "hung") {
+    logger.warn(
+      "Takeover: the host running under the CLI label could not be stopped cooperatively; the reload will boot the job out underneath it.",
+      {
+        label: label.id,
+        pid,
+        cause:
+          outcome.kind === "unreachable"
+            ? outcome.cause
+            : `pid ${outcome.pid} outlived the shutdown grace`,
+      },
+    );
+  } else {
+    logger.info(
+      "Takeover: the host running under the CLI label stood down before the reload.",
+      { label: label.id, pid, outcome: outcome.kind },
+    );
+  }
+  await unloadCliLabelJob(label, cliProbe, run, retiredAgentLabelId);
+  return {
+    kind: "cli-host-stopped",
+    cooperativeStop:
+      outcome.kind === "stopped" ? "stopped" : "skipped-unreachable",
+  };
+}
+
+// The refusal for a process under `probedLabelId` that nobody can ask (see
+// `standDownLiveCliLabelHost` and the took-over arm): `no-metadata` is a
+// host that has not published yet; `no-host` is metadata whose endpoint
+// names a process that has already exited, while launchd still reports one
+// under the label (its supervisor between children, or a supervisor whose
+// child just stood down and has not exited itself yet). After the took-over
+// arm has deregistered Desktop's agent the message says so and names the
+// re-run.
+function unaskableHost(
+  label: ServiceLabel,
+  probedLabelId: string,
+  pid: number | null,
+  metadata: "no-metadata" | "no-host",
+  retiredAgentLabelId: string | null,
+): Error {
+  const subject = pid === null ? "a running job" : `a process (pid ${pid})`;
+  const state =
+    metadata === "no-metadata"
+      ? `launchd reports ${subject} under '${probedLabelId}' that has not published a live endpoint yet, so it could not be asked to stand down; it is most likely still starting.`
+      : `launchd reports ${subject} under '${probedLabelId}', but the endpoint it published names a host that has already exited, so nothing could be asked to stand down; it is most likely between hosts (starting the next one, or exiting after the last).`;
+  const routing =
+    retiredAgentLabelId === null
+      ? "Retry in a moment, or run 'traycer host service uninstall' first if it never comes up."
+      : `Traycer Desktop's agent '${retiredAgentLabelId}' is already deregistered; re-run the command in a moment to finish the takeover, or run 'traycer host service uninstall' first if it never comes up.`;
+  return cliError({
+    code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+    message: `service install --takeover: ${state} ${routing}`,
+    details: {
+      label: label.id,
+      probedLabel: probedLabelId,
+      pid,
+      metadata,
+      agentLabel: retiredAgentLabelId,
+    },
+    exitCode: 1,
+  });
+}
+
+// Unload the CLI label under the takeover's lock, and prove it: the same
+// `bootout --wait` barrier and positive re-probe the Desktop-agent arm uses,
+// plus a liveness check of the process launchd reported. A cooperative stop
+// waits for the host child, not the supervisor launchd runs, and an
+// unreachable host was never asked at all; `installService`'s own bootout
+// does not wait, so without the barrier it can bootstrap the replacement
+// while the incumbent is still tearing down and still publishing `pid.json`
+// - the replacement's `findLiveIncumbentHost` then reads the corpse as live,
+// declines, exits 0, and `KeepAlive{SuccessfulExit: false}` leaves the
+// machine hostless (CodeRabbit, traycer#1761). The label probe alone cannot
+// close that: `bootout --wait` also returns at the runner's timeout
+// (`tolerateNonZeroExit` resolves it as exit -1), which under `hung` is the
+// expected exit, and launchd can have dropped the label while the process
+// it is still killing lives on. So the process launchd reported is checked
+// too, against its own creation stamp (`processMayLiveOn`): the same
+// process still alive refuses whatever launchctl's exit was, a pid recycled
+// after a `stopped` host's teardown does not, and only an unreadable stamp
+// (or `state = running` with no pid printed) falls back to launchctl's exit
+// as the tiebreak - its 0 means it reaped the process.
+async function unloadCliLabelJob(
+  label: ServiceLabel,
+  job: TakeoverJobProcess,
+  run: ProcessRunner,
+  retiredAgentLabelId: string | null,
+): Promise<void> {
+  const { pid } = job;
+  const serviceTarget = `${guiDomain()}/${label.id}`;
+  const bootout = await run("launchctl", ["bootout", "--wait", serviceTarget], {
+    env: undefined,
+    cwd: undefined,
+    timeoutMs: STOP_EXIT_TIMEOUT_MS,
+    tolerateNonZeroExit: true,
+  });
+  const postBootout = await verifyAgentBootedOut(serviceTarget, run);
+  const verification =
+    postBootout === "absent" && (await processMayLiveOn(job, bootout.exitCode))
+      ? pid !== null
+        ? "process-alive"
+        : "process-unverified"
+      : postBootout;
+  if (verification === "absent") return;
+  const routing = takeoverRerunRouting(retiredAgentLabelId);
+  const what =
+    verification === "still-loaded"
+      ? `launchctl bootout of '${label.id}' did not take effect (the job is still loaded), so the reload was stopped rather than start a replacement beside the old host.`
+      : verification === "process-alive"
+        ? `launchctl bootout unloaded '${label.id}', but its process (pid ${pid}) is still running after the wait, so the reload was stopped rather than start a replacement beside it.`
+        : verification === "process-unverified"
+          ? `launchctl bootout unloaded '${label.id}', but launchd had reported the job running with no pid to check and the wait did not end with its exit, so the reload was stopped rather than start a replacement beside a process that may still be running.`
+          : `could not confirm that '${label.id}' was booted out (launchctl did not answer), so the reload was stopped rather than risk running two hosts.`;
+  throw cliError({
+    code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+    message: `service install --takeover: ${what} ${routing}`,
+    details: {
+      label: label.id,
+      pid,
+      verification,
+      agentLabel: retiredAgentLabelId,
+    },
+    exitCode: 1,
+  });
 }
 
 async function installService(
@@ -617,7 +1344,14 @@ async function reloadRegisteredService(
 type LaunchdOwnership =
   | { readonly kind: "not-loaded" }
   | { readonly kind: "smappservice"; readonly path: string }
-  | { readonly kind: "cli-or-other"; readonly path: string | null };
+  | {
+      readonly kind: "cli-or-other";
+      readonly path: string | null;
+      // launchd's `pid` for the job, or null when the job is loaded but has
+      // no running process (a clean exit under `KeepAlive{SuccessfulExit:
+      // false}`, or the throttle window between crashes).
+      readonly pid: number | null;
+    };
 
 // Probe launchd for who currently owns this label. `launchctl print`
 // exits 0 when loaded; non-zero means not loaded. Tolerate non-zero so a
@@ -686,7 +1420,14 @@ function classifyLaunchdPrintOutput(printOutput: string): LaunchdOwnership {
   if (isServiceManagement) {
     return { kind: "smappservice", path: path ?? SMAPPSERVICE_PATH_UNKNOWN };
   }
-  return { kind: "cli-or-other", path };
+  const pidField = fields.get("pid");
+  const pid =
+    pidField === undefined ? Number.NaN : Number.parseInt(pidField, 10);
+  return {
+    kind: "cli-or-other",
+    path,
+    pid: Number.isInteger(pid) && pid > 0 ? pid : null,
+  };
 }
 
 // launchctl returns "Service is already loaded" / "Bootstrap failed:

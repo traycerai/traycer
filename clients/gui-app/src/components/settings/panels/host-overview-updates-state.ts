@@ -1,13 +1,17 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import {
   compareHostVersions,
+  isValidHostVersion,
   isStrictlyNewerHostVersion,
 } from "@traycer-clients/shared/host-version/compare-host-versions";
 import {
   HOST_CLIENT_FLOOR_REASON_PREFIX,
   isHostClientFloorRefusedAsset,
+} from "@traycer-clients/shared/host-version/client-floor-reason";
+import {
   isMatchingStableRelease,
   isSameReleaseLine,
 } from "@traycer-clients/shared/host-version/release-line";
@@ -44,6 +48,14 @@ import {
 import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import type { HostRpcRegistry } from "@/lib/host";
+import { hostQueryKeys } from "@/lib/query-keys";
+
+/**
+ * How often the catalog is re-asked while a CLI-floor remedy is on screen. A
+ * fixed cadence, not a backoff: the thing being waited on is a person running
+ * the copied command, and the remedy's copy promises the page notices.
+ */
+export const CLI_FLOOR_RECHECK_MS = 30_000;
 
 /**
  * The version the catalog is compared against: the install record's under
@@ -111,7 +123,18 @@ export function useHostOverviewUpdates(input: {
    * against the running version would re-offer the version that is already
    * installed as "Update now", and pressing it would find nothing to do.
    */
-  readonly activationDebt: { readonly installedVersion: string } | null;
+  readonly activationDebt: {
+    readonly installedVersion: string;
+    /**
+     * Whether the record read this debt came from is live
+     * (`canonicalReadIsLive` over the installation leg). A retained read
+     * still sets the comparison baseline - the bytes on disk do not change
+     * because a poll failed, and dropping the baseline would re-offer the
+     * installed version as "available" - but the sentence says so, and the
+     * page withholds the Restart until the read is live again.
+     */
+    readonly live: boolean;
+  } | null;
   readonly platformKey: string | null;
   readonly cliManifest: StoredCliInstallManifest | null;
   readonly isLocalMachine: boolean;
@@ -359,6 +382,52 @@ export function useHostOverviewUpdates(input: {
       hostName,
     },
   );
+  // THE CLI-FLOOR RECHECK. While the remedy is on screen, re-ask the catalog
+  // every `CLI_FLOOR_RECHECK_MS` so a repaired CLI reveals Update now without
+  // a click - the remedy's own copy promises exactly that. Keyed on the
+  // REMEDY, not on the response: which floored catalog row the remedy names
+  // is the summary walk's answer (the matching stable and the later RCs on
+  // the installed line, strictly newer than what runs), and that walk needs
+  // the installed version, which the check's response does not carry. A
+  // classifier over the response alone - the table-owned condition lane this
+  // replaced - kept a 30 s cadence on ANY floored row of an `installed-rc`
+  // catalog, a release on another line included, with no remedy on screen to
+  // end it. Invalidating the shared key rather than holding a private query
+  // is the choice `useActiveUpdatePollAccelerator` makes, for the same
+  // reason: one key, one answer, every observer of it refreshed alike.
+  // Non-cancelling for the reason recorded there too - a round trip slower
+  // than the cadence is coalesced, never aborted by the next tick. The
+  // query's own scheduling stays table-owned; this only marks it stale.
+  //
+  // "On screen" is literal: a RETIRED region (`degrade` non-null - an
+  // externally-managed host discovered at install, an unsupported install
+  // method) renders a notice in place of the remedy, and two of those
+  // retirements leave the check query enabled, so a floor read before the
+  // retirement would otherwise keep re-asking a host with nothing on screen
+  // to end it - the defect this recheck exists to avoid, relocated.
+  //
+  // Two more things end it: a floor no upgrade can clear (`repairable`
+  // false - the remedy is help only, and re-asking cannot change the
+  // answer), and the page's own gate (`enabled`) - the region renders under
+  // it, and a timer ticking against a disabled query is a live timer for
+  // nothing.
+  const queryClient = useQueryClient();
+  const recheckFloor = floorRecheckArmed({
+    enabled: input.enabled,
+    degrade,
+    cliFloor,
+  });
+  const { hostId } = input;
+  useEffect(() => {
+    if (!recheckFloor || hostId === null) return;
+    const timer = setInterval(() => {
+      void queryClient.invalidateQueries(
+        { queryKey: hostQueryKeys.methodScope(hostId, "host.update.check") },
+        { cancelRefetch: false },
+      );
+    }, CLI_FLOOR_RECHECK_MS);
+    return () => clearInterval(timer);
+  }, [recheckFloor, hostId, queryClient]);
   // Read off the resolved target rather than `manifest.latest`, which for an
   // installed-RC catalog is the WRONG pointer: `latest` tracks the stable
   // channel, so a host on `2.0.0-rc.1` sees `1.9.0` there and would be told it
@@ -1016,6 +1085,15 @@ type PlatformAsset =
 
 interface CliFloor {
   readonly requiredCliVersion: string | null;
+  /**
+   * Whether upgrading the CLI can clear this floor: the version it names is
+   * one (`isValidHostVersion`), or none is named at all (an older payload
+   * whose authored reason still says the CLI is too old). A floor naming
+   * something that is not a version came from the pre-repair projector,
+   * which put the repairable prefix on an unreadable floor too; no upgrade
+   * clears it, so the remedy is help only and the recheck does not run.
+   */
+  readonly repairable: boolean;
 }
 
 interface ForceUpdateRefusal {
@@ -1090,8 +1168,11 @@ function readCliFloor(
   const reasonVersion = asset?.unavailableReason
     ?.slice(HOST_CLIENT_FLOOR_REASON_PREFIX.length)
     .match(/^(\S+) or newer\b/)?.[1];
+  const requiredCliVersion = entry.requiredCliVersion ?? reasonVersion ?? null;
   return {
-    requiredCliVersion: entry.requiredCliVersion ?? reasonVersion ?? null,
+    requiredCliVersion,
+    repairable:
+      requiredCliVersion === null || isValidHostVersion(requiredCliVersion),
   };
 }
 
@@ -1136,9 +1217,25 @@ function describeForceUpdateRefusal(input: {
     // unavailable here, only that this page cannot read a floor for it.
     return `Traycer couldn't verify that v${input.version} can be installed on ${input.hostName}. Select Check now and try again.`;
   }
+  // The catalog ENTRY's own floor, read apart from the asset's authored
+  // reason: staged bytes install whatever the asset's availability says
+  // (the CLI's already-staged short-circuit resolves no asset and applies no
+  // floor), so a floor that is not a version - one this page cannot
+  // establish compatibility for, the same rule the projector applies when
+  // it reads the manifest - is refused here whether or not the asset
+  // carries the repairable prefix. A READABLE floor is left to the asset's
+  // verdict below: `available` is the executing CLI's own comparison
+  // against its own version, and the stored CLI manifest is no substitute
+  // for it in either direction (the stored copy can be newer than the
+  // executing one - see the remedy's older-copy sentence - or stale behind
+  // an upgrade the record has not re-read yet).
+  const declaredFloor = entry.requiredCliVersion;
+  if (declaredFloor !== null && !isValidHostVersion(declaredFloor)) {
+    return `Traycer couldn't verify the command-line tools version v${input.version} needs on ${input.hostName}: its catalog entry declares a requirement this page cannot read.`;
+  }
   const floor = readCliFloor(entry, input.platformKey);
   if (floor !== null) {
-    return floor.requiredCliVersion !== null
+    return floor.repairable && floor.requiredCliVersion !== null
       ? `v${input.version} needs Traycer CLI ${floor.requiredCliVersion} or newer on ${input.hostName}. Update the command-line tools first.`
       : `Traycer couldn't verify that v${input.version} can be installed on ${input.hostName}. Select Check now and try again.`;
   }
@@ -1261,6 +1358,25 @@ function checkRefutesDiscoveredRefusal(input: {
 }
 
 /** Precedence over the region's four retirement sources, first one wins. */
+/**
+ * Whether the mounted CLI-floor recheck runs: a REPAIRABLE floor is on
+ * screen (the remedy names a command an upgrade can satisfy), in a region
+ * that is neither retired nor disabled. See the comment at its caller for
+ * why each of the three ends it.
+ */
+function floorRecheckArmed(input: {
+  readonly enabled: boolean;
+  readonly degrade: OverviewDegradeReason | null;
+  readonly cliFloor: CliFloor | null;
+}): boolean {
+  return (
+    input.enabled &&
+    input.degrade === null &&
+    input.cliFloor !== null &&
+    input.cliFloor.repairable
+  );
+}
+
 function resolveRegionDegrade(input: {
   readonly installDiscovered: OverviewDegradeReason | null;
   readonly checkSticky: OverviewDegradeReason | null;
@@ -1466,7 +1582,10 @@ function describeCheckState(input: {
   readonly hostName: string;
   readonly upToDate: boolean;
   /** The install record is ahead of the running host; see the hook's input. */
-  readonly activationDebt: { readonly installedVersion: string } | null;
+  readonly activationDebt: {
+    readonly installedVersion: string;
+    readonly live: boolean;
+  } | null;
   readonly remedy: CliFloorRemedy | null;
   /** `updatableVersion` resolved — the summary can actually OFFER the latest. */
   readonly offerable: boolean;
@@ -1493,7 +1612,12 @@ function describeCheckState(input: {
   // newer than the INSTALLED version, Update now stays beside this sentence
   // (see the hook's `installedVersion`); the button speaks for itself.
   if (input.activationDebt !== null) {
-    return `v${input.activationDebt.installedVersion} is installed — restart host to finish.`;
+    // Qualified when the record read behind it is not live: the debt was
+    // read, and still sets the baseline, but the page is not vouching for it
+    // right now (and withholds the Restart until it can).
+    return input.activationDebt.live
+      ? `v${input.activationDebt.installedVersion} is installed — restart host to finish.`
+      : `v${input.activationDebt.installedVersion} is installed (last known) — restart host to finish.`;
   }
   // Like debt, the remedy stays useful during the next check. The hook drops
   // it when that check fails or returns a catalog that clears the refusal.

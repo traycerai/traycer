@@ -15,10 +15,15 @@ import {
  *   did not) restart the host — Desktop's launch converge, or `traycer host
  *   update` declining to interrupt live work. The only way forward is a
  *   restart, and the Overview offers it.
- * - **Staged wait**: a newer host sits in `staged/` while the running host is
- *   busy. The updater downloaded it, found work in progress, and left it for
- *   the next idle run (or a forced one). The Overview says so and offers the
- *   force.
+ * - **Staged wait**: a host other than the installed one sits in `staged/`
+ *   while the running host is busy. The updater downloaded it, found work in
+ *   progress, and left it for the next idle run (or a forced one). The
+ *   Overview says so and offers the force. "Other than", not "newer": the
+ *   CLI's promotion rule stages a comparable-newer version, or an
+ *   INCOMPARABLE one on a non-automatic run (`decideHostDownloadPromotion`),
+ *   and applies either on the next run; a comparable-older stage never
+ *   reaches `staged/`. Requiring "newer" here would hide a wait the CLI
+ *   would honour.
  *
  * Derived CLIENT-SIDE from `host.getInstallationInfo` + `host.status`, on
  * purpose: both reads are already on the page, no host release is needed, and

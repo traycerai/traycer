@@ -61,7 +61,7 @@ import {
   readUpdateProgressMarker,
   replaceUpdateProgressMarkerIfUnchanged,
   sameProgress,
-  updateProgressRecordHasLiveWriter,
+  updateProgressRecordHasProvenLiveWriter,
   type ConditionalMarkerDelete,
   type ConditionalMarkerReplace,
   type HostUpdateProgress,
@@ -618,6 +618,34 @@ async function resolvePlan(
   const reading = await readActivationState(environment);
   selection.planActivationReading = reading;
   if (reading.kind !== "debt") return { kind: "installer", plan };
+  // An EXPLICIT request owes the activation of ITS version and no other.
+  //
+  // For an explicit request the `no-op` plan above fires only for a record
+  // that IS the request - `resolveUpdatePlan` refuses any other record at or
+  // above it before it ever returns `no-op` - so the record this debt read
+  // sees can name another version only if it MOVED between the two reads:
+  // another actor's commit in the gap. A record above the request (2.0.0
+  // after `--version 1.2.0`) is not this run's to restart onto; the caller
+  // confirmed 1.2.0, and checked ITS floor, and nothing else.
+  //
+  // Left, not refused: this run has claimed nothing, announced nothing and
+  // written nothing, so there is no failure to report - the debt is real and
+  // stays owed to an implicit `host update` or a `host restart`. Logged so
+  // the reason a debt was visibly skipped is on the record, and reported as
+  // the no-op the up-to-date plan already resolved to.
+  const requested = requestedVersion(args);
+  if (requested !== null && reading.installedVersion !== requested) {
+    args.logger.info(
+      "Host update leaves the install record's activation debt: the explicit request names another version",
+      {
+        environment,
+        requestedVersion: requested,
+        installedVersion: reading.installedVersion,
+        runningVersion: reading.runningVersion,
+      },
+    );
+    return { kind: "installer", plan };
+  }
   selection.lastSeenRunningVersion = reading.runningVersion;
   return {
     kind: "activation-debt",
@@ -787,6 +815,17 @@ async function selectDebtStart(
   const { args, selection } = input;
   const installed = await readHostInstallRecord(args.environment);
   if (installed === null) throw hostNotInstalled(args.environment);
+  // Held to the request BEFORE the activation reading, and therefore before
+  // the busy gate and the entry mirror's marker takeover - both of which live
+  // past the claim this function is deciding. A record another actor moved
+  // while this run waited for admission is refused here, with nothing claimed
+  // and nothing written: the pre-lock gate in `resolvePlan` saw the record as
+  // the request, and this read is the first that could see otherwise.
+  const mismatch = installedVersionMismatch(
+    requestedVersion(args),
+    installed.version,
+  );
+  if (mismatch !== null) throw mismatch;
   selection.installedUnderLock = installed;
   const reading = await readActivationState(args.environment);
   if (reading.kind !== "debt" && reading.kind !== "no-live-host") {
@@ -903,6 +942,93 @@ async function selectBoundResume(
 function strictlyNewer(candidate: string, floor: string): boolean {
   const comparison = compareHostVersions(candidate, floor);
   return comparison.comparable && comparison.ordering === "greater";
+}
+
+// ---------------------------------------------------------------------------
+// The explicit request's version binding (#1752 round 14)
+// ---------------------------------------------------------------------------
+
+/**
+ * The version an EXPLICIT `host update <version>` is bound to, or `null` for
+ * an implicit "latest".
+ *
+ * It is the ARGUMENT, not the claim's target, and the difference matters on
+ * exactly one arm. For every arm that delivers bytes the two are the same
+ * string - `resolveUpdatePlan` sets `targetVersion` from `versionRequest`
+ * verbatim - but the activation-debt claim's target is the INSTALL RECORD's
+ * version (`selectDebtStart`), which is precisely the value the binding must
+ * be able to disagree with. Reading the claim there would compare the record
+ * against itself and pass every time.
+ */
+function requestedVersion(args: HostUpdateRunArgs): string | null {
+  return args.versionRequest;
+}
+
+/**
+ * The refusal a reading that NAMES a record owes an explicit request, or
+ * `null` when the record is the request (or there is no request to hold it
+ * to).
+ *
+ * Identity is the STRING, the grain the apply binding uses: the request
+ * resolved to a catalog version and the record names the catalog version it
+ * committed, so the same artifact reads equal and `2.0.0+hotfix` is another
+ * artifact. A record that is not a release version (`local-*`,
+ * `host install --file`) is by construction not the requested one - it cannot
+ * be compared, and it is exactly a record another actor wrote.
+ *
+ * A record NEWER than the request is the fact the promote-time discard
+ * reports as `E_HOST_UPDATE_NOT_NEWER`, so it carries that code and the same
+ * remedies - and, like it, is a SUPERSEDED request: `writeFailure` ends the
+ * attempt `superseded` and the mirror withdraws the marker, rather than
+ * stamping a `failed` no stale rule would ever clear (D-46). Any other
+ * mismatch is `E_UNEXPECTED`, a failure before any disruption that IS stamped
+ * over this run's own record, naming the version it announced.
+ */
+function installedVersionMismatch(
+  expectedInstalledVersion: string | null,
+  installedVersion: string,
+): CliError | null {
+  if (
+    expectedInstalledVersion === null ||
+    installedVersion === expectedInstalledVersion
+  ) {
+    return null;
+  }
+  const comparison = compareHostVersions(
+    installedVersion,
+    expectedInstalledVersion,
+  );
+  const details = {
+    expectedInstalledVersion,
+    actualInstalledVersion: installedVersion,
+  };
+  if (comparison.comparable && comparison.ordering === "greater") {
+    return cliError({
+      code: CLI_ERROR_CODES.HOST_UPDATE_NOT_NEWER,
+      message: `host update: the installed host is ${installedVersion}, newer than the ${expectedInstalledVersion} this run was updating to - another actor installed it meanwhile; nothing was restarted. Run 'traycer host status' to see what is installed and running, or pass --allow-downgrade to install ${expectedInstalledVersion} over it`,
+      details,
+      exitCode: 1,
+    });
+  }
+  return cliError({
+    code: CLI_ERROR_CODES.UNEXPECTED,
+    message: `host update: the installed host is ${installedVersion}, not the ${expectedInstalledVersion} this run was updating to - another actor changed the install before it could be activated; nothing was restarted. Run the update again`,
+    details,
+    exitCode: 1,
+  });
+}
+
+/** Every reading that NAMES a record, held to the request. */
+function refuseReadingAgainstRequest(
+  reading: ActivationReading,
+  requested: string | null,
+): void {
+  if (reading.kind === "no-install") return;
+  const mismatch = installedVersionMismatch(
+    requested,
+    reading.installedVersion,
+  );
+  if (mismatch !== null) throw mismatch;
 }
 
 async function readInstalledUnderLock(
@@ -1061,6 +1187,37 @@ class AttemptRecordWriter {
     });
   }
 
+  /**
+   * The attempt's target was OUTGROWN, not lost: another actor committed (and
+   * possibly activated) a newer artifact while this run held its claim, so the
+   * request this attempt carries is superseded and nothing went wrong (D-46,
+   * #1752 round 14).
+   *
+   * A non-failure terminal, and deliberately the phase the record model
+   * already has: `superseded` is a legal successor of every active phase, it
+   * carries NO `error`, and both GUI legs already read it the way this needs -
+   * the live projection maps it to `idle`, the record leg drops it, so nothing
+   * renders a red "Update to X failed" over a host serving Y. Stamping
+   * `failed` here is exactly what round 14 removed: no stale rule clears a
+   * `failed` whose target is not the running version, so it would stand until
+   * some later update happened to do work.
+   *
+   * Carries the same `held` identity discipline as every other advance - it
+   * goes through `barrier` and the segment's own closure - so a segment whose
+   * claim was superseded underneath it is rejected here as it is anywhere
+   * else, rather than terminalizing a record it no longer owns.
+   */
+  supersede(): Promise<void> {
+    return this.barrier({
+      phase: "superseded",
+      continuation: null,
+      progress: null,
+      error: null,
+      claimRefresh: null,
+      nowIso: new Date().toISOString(),
+    });
+  }
+
   /** Settles the in-flight write through the closure and drops the queue. */
   async dispose(): Promise<void> {
     this.disposed = true;
@@ -1182,7 +1339,7 @@ async function runArm(input: RunArmInput): Promise<LegacyHostUpdateResult> {
     // re-validation's `install-changed`, the evidence loop's `verify-timeout`.
     // Stamping a second cause over it would replace the specific with the
     // generic.
-    if (!writer.settled) await writeFailure(writer, err);
+    if (!writer.settled) await writeFailure(writer, err, mirror.disturbed);
     throw err;
   } finally {
     input.writerRef.current = null;
@@ -1190,12 +1347,38 @@ async function runArm(input: RunArmInput): Promise<LegacyHostUpdateResult> {
   }
 }
 
+/**
+ * The terminal this arm's error deserves.
+ *
+ * Two terminals, one rule (#1752 round 14, D-46). A refusal because a NEWER
+ * host is installed than the version this run was asked for -
+ * `E_HOST_UPDATE_NOT_NEWER`, from the promote-time discard or from
+ * `installedVersionMismatch`'s newer arm - is a SUPERSEDED request, not a
+ * failure: another actor delivered something newer and nothing was wrong. Any
+ * other error - an OLDER or non-release record under an explicit request, a
+ * lost download, a changed stage - names something that DID go wrong and is
+ * stamped `failed` as before.
+ *
+ * Pre-disruption only. Past the stop the host's state is this run's doing:
+ * whatever it then finds installed, the run left a host mid-flight and that is
+ * a failure to report, not a request someone else fulfilled. The marker mirror
+ * applies the same cut to its own withdrawal, from the same flag.
+ */
 async function writeFailure(
   writer: AttemptRecordWriter,
   err: unknown,
+  disturbed: boolean,
 ): Promise<void> {
   const phase = writer.phase;
+  const superseded =
+    !disturbed &&
+    err instanceof CliError &&
+    err.code === CLI_ERROR_CODES.HOST_UPDATE_NOT_NEWER;
   try {
+    if (superseded) {
+      await writer.supersede();
+      return;
+    }
     await writer.fail({
       code: err instanceof CliError ? err.code : "unexpected",
       message: err instanceof Error ? err.message : String(err),
@@ -1231,6 +1414,22 @@ async function revalidateInstallIdentity(
     live.version === baseline.installedVersion &&
     installGenerationOf(live) === baseline.installGeneration;
   if (matches) return live;
+  // Held to the REQUEST before it is called a changed install (#1752 round
+  // 14). This is the site rounds 14's "the record moved while waiting for the
+  // lock" reaches on the executor: the claim's baseline named the request, and
+  // a record another actor moved ABOVE it is that request OUTGROWN, not a
+  // corrupted handoff. Thrown rather than written, so `writeFailure` ends the
+  // attempt `superseded` with the marker withdrawn - a `failed {install-
+  // changed}` naming 2.0.0 over a host at 3.0.0 is exactly the red banner no
+  // stale rule would ever clear. An implicit request has nothing to be
+  // outgrown and keeps the terminal below.
+  if (live !== null) {
+    const outgrown = installedVersionMismatch(
+      requestedVersion(input.args),
+      live.version,
+    );
+    if (outgrown !== null) throw outgrown;
+  }
   const message = `host update: the installed host changed while attempt ${input.claim.identity.attemptId} was waiting (expected ${baseline.installedVersion}, found ${live?.version ?? "none"})`;
   await writer.fail({
     code: "install-changed",
@@ -1273,15 +1472,59 @@ async function runArmBody(
     return applyArm(
       input,
       writer,
-      await bindApplyToClaimTarget(
+      await stageFingerprintForApply(
         input,
-        writer,
         input.claim.record.claim?.stageFingerprint ?? null,
-        null,
       ),
+      null,
     );
   }
   return upgradeArm(input, writer);
+}
+
+/**
+ * The refusal a DISCARDED transfer owes an explicit request (#1752 round 14).
+ *
+ * The promote-time policy is right to keep what it kept; what changed is who
+ * hears about it. A discard under an explicit request means the version the
+ * caller named was not delivered, and saying so with the discard's own reason
+ * beats letting the apply's version binding report a "replaced stage" it will
+ * name the wrong cause for.
+ */
+function discardedExplicitRequestError(
+  outcome: Extract<HostDownloadOutcome, { readonly outcome: "discarded" }>,
+): CliError {
+  const target = outcome.targetVersion;
+  switch (outcome.reason) {
+    case "not-newer-than-installed":
+      return cliError({
+        code: CLI_ERROR_CODES.HOST_UPDATE_NOT_NEWER,
+        message: `host update: ${target} was downloaded, but the installed host is no longer older than it - another update landed meanwhile; nothing was applied. Run 'traycer host status' to see what is installed, or pass --allow-downgrade to install ${target} over it`,
+        details: { targetVersion: target, reason: outcome.reason },
+        exitCode: 1,
+      });
+    case "not-strictly-newer":
+      return cliError({
+        code: CLI_ERROR_CODES.UNEXPECTED,
+        message: `host update: a newer host was staged while ${target} downloaded; nothing was applied - run the update again to install what is staged`,
+        details: { targetVersion: target, reason: outcome.reason },
+        exitCode: 1,
+      });
+    case "install-record-vanished":
+      return cliError({
+        code: CLI_ERROR_CODES.UNEXPECTED,
+        message: `host update: the install record vanished while ${target} downloaded; nothing was applied - run 'traycer host doctor'`,
+        details: { targetVersion: target, reason: outcome.reason },
+        exitCode: 1,
+      });
+    case "automatic-refused-incomparable-installed":
+      return cliError({
+        code: CLI_ERROR_CODES.UNEXPECTED,
+        message: `host update: the installed host's version cannot be compared with ${target}; nothing was applied - run 'traycer host status' to see what is installed`,
+        details: { targetVersion: target, reason: outcome.reason },
+        exitCode: 1,
+      });
+  }
 }
 
 /** Transfer, then apply. `beforeExtract` is the verified-bytes barrier. */
@@ -1289,11 +1532,41 @@ async function upgradeArm(
   input: RunArmInput,
   writer: AttemptRecordWriter,
 ): Promise<LegacyHostUpdateResult> {
-  const transfer = await transferUnderClaim(
-    input,
-    writer,
-    input.args.versionRequest,
-  );
+  const { args } = input;
+  const transfer = await transferUnderClaim(input, writer, args.versionRequest);
+  const requested = requestedVersion(args);
+  if (requested !== null && transfer.outcome === "discarded") {
+    // An EXPLICIT request whose download was DISCARDED at promote time has
+    // nothing of its own to apply. Decided HERE, before the apply, so a run
+    // that has already decided not to act does not go on to open a mutation
+    // lock and ask the installer about a stage it must not commit.
+    const installed = await readHostInstallRecord(args.environment);
+    // `not-newer-than-installed` covers EQUAL: the record can BE the request,
+    // committed by another actor during the unlocked transfer (Desktop's
+    // converge). That is the request DELIVERED, not discarded - and the
+    // executor answers it the way it answers a consumed stage, one arm below.
+    const deliveredByAnotherActor =
+      transfer.reason === "not-newer-than-installed" &&
+      installed !== null &&
+      installed.version === input.claim.record.targetVersion;
+    if (!deliveredByAnotherActor) {
+      // The DISCARD's own reason, and only it. The record is deliberately NOT
+      // put through `installedVersionMismatch` here: on this arm the record
+      // being behind the request is the ordinary state of an upgrade that has
+      // not landed yet, so holding it to the request would refuse every
+      // discard as a changed handoff. The discard already carries the right
+      // code - `not-newer-than-installed` IS the superseded request and
+      // reports `E_HOST_UPDATE_NOT_NEWER`, which `writeFailure` ends
+      // `superseded` with the marker withdrawn; every other reason is
+      // `E_UNEXPECTED` and stamped.
+      throw discardedExplicitRequestError(transfer);
+    }
+    return settleDeliveredByAnotherActor(
+      input,
+      writer,
+      `host update: ${input.claim.record.targetVersion} was committed by another actor while it downloaded`,
+    );
+  }
   // The transfer's own promote-time policy may DISCARD what it fetched and
   // leave an unrelated stage standing (a pre-existing higher version is
   // `not-strictly-newer`, and no competing writer is needed for that). The
@@ -1304,7 +1577,8 @@ async function upgradeArm(
   return applyArm(
     input,
     writer,
-    await bindApplyToClaimTarget(input, writer, null, transfer),
+    await stageFingerprintForApply(input, null),
+    transfer,
   );
 }
 
@@ -1321,12 +1595,8 @@ async function resumedApplyArm(
     return applyArm(
       input,
       writer,
-      await bindApplyToClaimTarget(
-        input,
-        writer,
-        baseline?.stageFingerprint ?? null,
-        null,
-      ),
+      await stageFingerprintForApply(input, baseline?.stageFingerprint ?? null),
+      null,
     );
   }
   if (
@@ -1367,44 +1637,39 @@ async function resumedApplyArm(
   return applyArm(
     input,
     writer,
-    await bindApplyToClaimTarget(input, writer, null, transfer),
+    await stageFingerprintForApply(input, null),
+    transfer,
   );
 }
 
 /**
- * The stage this attempt is allowed to apply, or a terminal failure.
+ * The stage FINGERPRINT this attempt pins its apply to, if any.
  *
- * An apply with a `null` expected fingerprint commits WHATEVER is staged, and
- * "whatever is staged" is not always this attempt's target: the transfer's
- * promote-time policy discards a candidate that is not strictly newer than an
- * existing stage, so a host installed at 1.0.0 with a stage for 3.0.0 and a
- * claim for 2.0.0 would install 3.0.0 and then fail verification for 2.0.0.
- * There is no race in that: the higher stage was simply already there.
+ * The VERSION half of the binding is not here: it is the installer's
+ * `expectedStagedVersion`, fed by `applyArm` with the claim's target (ticket
+ * 08 decision 2 - one binding, decided before the busy gate and before
+ * anything is announced). This function answers only the finer question the
+ * version cannot: WHICH stage of that version.
  *
  * `claimFingerprint` is the claim's own expectation and wins where it exists -
- * it detects a stage REPLACED since the claim, which a version check cannot
- * see. It is deliberately NOT used on an arm whose own transfer just ran: the
- * claim's fingerprint predates that transfer, so pinning to it would refuse
- * the bytes this run just placed.
+ * it detects a stage REPLACED since the claim at the SAME version, which a
+ * version check cannot see. It is deliberately NOT used on an arm whose own
+ * transfer just ran: the claim's fingerprint predates that transfer, so
+ * pinning to it would refuse the bytes this run just placed.
+ *
+ * A stage at any OTHER version contributes nothing: pinning its id would make
+ * the installer answer `stage-fingerprint-mismatch` for what is really a
+ * version mismatch, and the version binding says that in one sentence.
  */
-async function bindApplyToClaimTarget(
+async function stageFingerprintForApply(
   input: RunArmInput,
-  writer: AttemptRecordWriter,
   claimFingerprint: string | null,
-  transfer: HostDownloadOutcome | null,
 ): Promise<string | null> {
-  const target = input.claim.record.targetVersion;
+  if (claimFingerprint !== null) return claimFingerprint;
   const staged = await readHostStagedRecord(input.args.environment);
-  if (staged !== null && staged.version === target) {
-    return claimFingerprint ?? staged.stageId;
-  }
-  return terminalizeStageMismatch(
-    input,
-    writer,
-    staged,
-    transfer,
-    "the apply was about to run",
-  );
+  return staged !== null && staged.version === input.claim.record.targetVersion
+    ? staged.stageId
+    : null;
 }
 
 /**
@@ -1415,10 +1680,15 @@ async function bindApplyToClaimTarget(
  * refusal - a same-target park admits only a resume, so a refusal would leave
  * it for a level-triggered reconciler to re-spawn forever.
  */
+interface ObservedStage {
+  readonly version: string;
+  readonly stageId: string | null;
+}
+
 async function terminalizeStageMismatch(
   input: RunArmInput,
   writer: AttemptRecordWriter,
-  staged: HostStagedRecord | null,
+  staged: ObservedStage | null,
   transfer: HostDownloadOutcome | null,
   moment: string,
 ): Promise<never> {
@@ -1491,8 +1761,10 @@ async function applyArm(
   input: RunArmInput,
   writer: AttemptRecordWriter,
   expectedStageFingerprint: string | null,
+  transfer: HostDownloadOutcome | null,
 ): Promise<LegacyHostUpdateResult> {
   const { args } = input;
+  const target = input.claim.record.targetVersion;
   if (writer.phase !== "preparing") await writer.phaseWrite("preparing");
   const contenderOptions = mutationContenderOptions(
     args.environment,
@@ -1508,10 +1780,29 @@ async function applyArm(
           force: args.force,
           noService: false,
           expectedStageFingerprint,
+          // The ONE version binding (#1752 round 10/14, ticket 08 decision 2).
+          // The executor feeds the installer the CLAIM's target - not the
+          // argument - because the claim is this attempt's authorization: an
+          // implicit `latest` that resolved to 2.0.0 is as bound to 2.0.0 as
+          // an explicit `--version 2.0.0`, and the stage another promoter
+          // replaced in the unlocked wait must not be committed under either.
+          // The installer decides it BEFORE the busy gate and before it
+          // announces anything, and reports `stage-version-mismatch` having
+          // consumed nothing.
+          expectedStagedVersion: target,
           onProgress: input.onProgress,
           // Deliberately NO `onWillCommitStaged`: it fires BEFORE the
           // cooperative stop, so a denial there must still park from
           // `preparing`, and the coarse marker is record-driven now.
+          onWillCommitStaged: null,
+          // The disruption boundary, reported by the ACTUATORS (the
+          // lifecycle's pre-stop check and the commit's pre-swap check), never
+          // inferred from the `service-stop` / `swap` progress lines, which
+          // precede both (#1752 rounds 10/11). `onProgress` still marks the
+          // flag for the arms that have no actuator seam of their own; here
+          // the seam is the truth and the progress line is a redundant,
+          // strictly-earlier approximation of it.
+          onWillDisruptHost: () => input.mirror.markDisturbed(),
           hooks: {
             beforeSwapCommit: () => writer.phaseWrite("applying"),
             afterSwap: () => writer.phaseWrite("restarting"),
@@ -1530,23 +1821,28 @@ async function applyArm(
     },
   );
   if (outcome.outcome === "no-op") {
-    // Reachable only as a race the executor cannot itself cause: the transfer
-    // runs UNDER the claim, so nothing of this run's can discard its stage
-    // before the apply. Under the record model an apply that found nothing to
-    // commit is a failure of THIS attempt, not a no-op it may report - the
-    // next plain `host update` meets the terminal record and starts over.
-    const message = `host update: nothing was staged for ${input.claim.record.targetVersion} when the apply ran`;
-    await writer.fail({
-      code: "stage-missing",
-      message,
-      phase: writer.phase,
-    });
-    throw cliError({
-      code: CLI_ERROR_CODES.UNEXPECTED,
-      message,
-      details: { environment: args.environment },
-      exitCode: 1,
-    });
+    // The stage this attempt was going to commit was gone by the time it held
+    // the lock: another actor consumed it - Desktop's launch converge runs
+    // `host apply --no-service`, which commits the bytes and restarts nothing.
+    //
+    return settleDeliveredByAnotherActor(
+      input,
+      writer,
+      `host update: nothing was staged for ${target} when the apply ran`,
+    );
+  }
+  if (outcome.outcome === "stage-version-mismatch") {
+    // The one binding's refusal, terminalized here: the installer decided it
+    // and consumed nothing, and this is the same "the world this claim was
+    // authorized against is not the world in front of it" family as every
+    // other stage mismatch, so it takes the same terminal.
+    return terminalizeStageMismatch(
+      input,
+      writer,
+      { version: outcome.actualStagedVersion, stageId: null },
+      transfer,
+      "the apply ran",
+    );
   }
   if (outcome.outcome === "stage-fingerprint-mismatch") {
     throw cliError({
@@ -1563,6 +1859,189 @@ async function applyArm(
   return projectApplied(outcome);
 }
 
+/**
+ * The three arms that find the REQUESTED work already done by ANOTHER ACTOR -
+ * a stage consumed under the lock, a downgrade whose version is already
+ * installed, an explicit download discarded because the record reached its
+ * version during the transfer - settle here, and settle identically (#1752
+ * round 14's `activateCommittedByAnotherActor`, one closure for all three).
+ *
+ * Three answers, checked in the order that makes each impossible to mistake
+ * for the next:
+ *
+ *  1. **The record is not the request.** Every reading that NAMES a record is
+ *     held to an explicit request. A record another actor moved ABOVE it is a
+ *     SUPERSEDED request - `E_HOST_UPDATE_NOT_NEWER`, which `writeFailure`
+ *     ends `superseded` with the marker withdrawn, because nothing went
+ *     wrong. Any other version is `E_UNEXPECTED` and IS stamped. Desktop's
+ *     converge commits whatever ITS stage held, so this is the arm that keeps
+ *     `host update --version X` from restarting the host onto Y under a
+ *     confirmation, and a floor check, made for X.
+ *  2. **The request is delivered AND running.** The attempt's target is
+ *     installed and serving it: the work is done, by someone else. The
+ *     ordinary evidence loop confirms both halves independently and the
+ *     ordinary completion write ends the attempt, so the record completes,
+ *     the marker clears and the run exits 0 - never a red failure for work
+ *     that is finished, and never a success this run did not verify.
+ *  3. **Delivered but NOT running.** A restart is owed. This attempt cannot
+ *     pay it: re-entering the activation arm mid-attempt is not open to the
+ *     executor, because a `waiting-to-activate` park may be BORN only from an
+ *     `applying` write (transition core §continuation-phase-order), so a busy
+ *     gate there would have no legal park and the record would be corrupted
+ *     instead. It ends `superseded` - D-47, and D-46's logic unchanged:
+ *     another actor delivered the request, so NOTHING failed, and a record
+ *     must not carry an `error` for a state whose only remedy is a restart.
+ *     The debt is durable (it is the disagreement between `install.json` and
+ *     the live process), so the next plain `host update` meets the terminal
+ *     record, sees the debt in its plan, and runs the debt arm - which IS born
+ *     with `continuation: "activate"` - while the GUI, following the record to
+ *     idle, offers the same restart from its activation-debt leg. Only the
+ *     terminal user's exit code is non-zero, and it names the restart.
+ *
+ * Answer 3's condition is "the install record IS the target", which also
+ * catches the corner where the target is installed AND running but this
+ * segment may not write the verification (`canReachVerifying`): delivered is
+ * delivered, and a `failed` there would be the same red-over-finished-work
+ * that D-46 removed. That corner takes the same `superseded` record and
+ * **exits 0** (D-47b) - the run DID observe the live host serving the
+ * requested string under its own lock, which is the same evidence answer 2
+ * acts on; what it cannot do is WRITE `complete` from a continuation that
+ * never wrote `applying`, and a record-shape limit is not a missing
+ * verification. Answer 4 - the fallthrough - is the genuinely bad world: no
+ * install record, or a record at a version nobody asked for. That one is
+ * still `failed {stage-missing}`.
+ */
+async function settleDeliveredByAnotherActor(
+  input: RunArmInput,
+  writer: AttemptRecordWriter,
+  failureMessage: string,
+): Promise<LegacyHostUpdateResult> {
+  const { args } = input;
+  const target = input.claim.record.targetVersion;
+  const reading = await readActivationState(args.environment);
+  refuseReadingAgainstRequest(reading, requestedVersion(args));
+  if (
+    reading.kind === "activated" &&
+    reading.installedVersion === target &&
+    canReachVerifying(input, writer)
+  ) {
+    await verifyUnderClaim(input, writer);
+    const installed = await readHostInstallRecord(args.environment);
+    if (installed === null) throw hostNotInstalled(args.environment);
+    return projectNoOp(installed);
+  }
+  // The request WAS delivered - the install record names exactly the target -
+  // so nothing failed, whatever this segment is still allowed to write. The
+  // pre-disruption cut is `writeFailure`'s, for its reason: past the stop a
+  // host that is not running the target may be THIS run's doing, and a run
+  // that left a host down reports a failure rather than someone else's
+  // success.
+  if (
+    reading.kind !== "no-install" &&
+    reading.installedVersion === target &&
+    !input.mirror.disturbed
+  ) {
+    await writer.supersede();
+    if (reading.kind !== "activated") {
+      throw deliveredByAnotherActorError(input, reading, target);
+    }
+    // D-47b: the request is delivered AND RUNNING, and only the RECORD stands
+    // in the way - a `resume-apply` continuation that never wrote `applying`
+    // may not write `complete`. That is a record-shape limit, not a missing
+    // verification: this run read the live host under its own lock and saw it
+    // serving the requested string, which is the same evidence the exit-0
+    // answer above acts on. A non-zero exit for a host that runs exactly what
+    // was asked would be a lie in the other direction from the RCA's finding
+    // 3. `superseded` is the honest record - someone else finished this - and
+    // the run reports the no-op it truthfully is.
+    args.logger.info(
+      "Host update was delivered by another actor: the requested version is installed and running",
+      {
+        environment: args.environment,
+        targetVersion: target,
+        runningVersion: reading.installedVersion,
+      },
+    );
+    const delivered = await readHostInstallRecord(args.environment);
+    if (delivered === null) throw hostNotInstalled(args.environment);
+    return projectNoOp(delivered);
+  }
+  await writer.fail({
+    code: "stage-missing",
+    message: failureMessage,
+    phase: writer.phase,
+  });
+  throw cliError({
+    code: CLI_ERROR_CODES.UNEXPECTED,
+    message: failureMessage,
+    details: { environment: args.environment, targetVersion: target },
+    exitCode: 1,
+  });
+}
+
+/**
+ * What the terminal user is told when another actor delivered the request but
+ * the host is NOT running it.
+ *
+ * NON-ZERO, deliberately: exit 0 for "the host does not run what you asked
+ * for" is the RCA's finding-3 class. The RECORD is `superseded` all the same
+ * (D-47) - the exit code addresses the person who typed the command, the
+ * record addresses the GUI, and they answer different questions.
+ *
+ * `E_HOST_NOT_RUNNING`, chosen because it is what is literally true and
+ * because the remedy is a restart: the debt is durable (it is the disagreement
+ * between `install.json` and the live process), so `traycer host restart` - or
+ * the next plain `host update`, whose debt arm is born with
+ * `continuation: "activate"` - pays it. There is no restart-required /
+ * activation-owed code in the table to prefer over it.
+ *
+ * The sibling corner, where the target IS running and only the record's shape
+ * forbids the success write, exits 0 from the caller (D-47b) and never reaches
+ * this function - which is why `activated` is excluded from the parameter.
+ */
+function deliveredByAnotherActorError(
+  input: RunArmInput,
+  reading: Exclude<
+    ActivationReading,
+    { readonly kind: "no-install" | "activated" }
+  >,
+  target: string,
+): CliError {
+  const { environment } = input.args;
+  return cliError({
+    code: CLI_ERROR_CODES.HOST_NOT_RUNNING,
+    message: `host update: ${target} is installed but the host is not running it - another actor committed it while this update ran. Run \`traycer host restart\` to finish.`,
+    details: {
+      environment,
+      targetVersion: target,
+      runningVersion: reading.kind === "debt" ? reading.runningVersion : null,
+    },
+    exitCode: 1,
+  });
+}
+
+/**
+ * Whether this segment may still write `verifying`.
+ *
+ * A `resume-apply` continuation may not reach verification before it has
+ * itself committed `applying` - that is the durable "these bytes are mine"
+ * provenance, and the transition core rejects the write rather than trusting
+ * the phase label. A resumed park that reached one of the
+ * already-delivered arms without applying therefore takes the terminal, not
+ * the success: the record cannot say it verified an apply it never made.
+ */
+function canReachVerifying(
+  input: RunArmInput,
+  writer: AttemptRecordWriter,
+): boolean {
+  if (input.claim.record.continuation !== "resume-apply") return true;
+  return (
+    writer.phase === "applying" ||
+    writer.phase === "restarting" ||
+    writer.phase === "verifying"
+  );
+}
+
 async function downgradeArm(
   input: RunArmInput,
   writer: AttemptRecordWriter,
@@ -1573,7 +2052,7 @@ async function downgradeArm(
     args.environment,
     "host-update-downgrade",
   );
-  let outcome: Extract<ApplyHostOutcome, { outcome: "applied" }>;
+  let outcome: Extract<ApplyHostOutcome, { outcome: "applied" | "no-op" }>;
   try {
     outcome = await installHostDowngradeInSegment(
       {
@@ -1581,6 +2060,14 @@ async function downgradeArm(
         version: target,
         force: args.force,
         onProgress: input.onProgress,
+        // The coarse marker is record-driven here as on the apply arm, so
+        // there is nothing to take over at this hook. See the field's doc.
+        onBeforeCommit: async () => {},
+        // The actuator-reported disruption boundary, the same one the apply
+        // arm threads (#1752 rounds 10/11): the lifecycle's pre-stop check and
+        // the commit's pre-swap check, never the progress lines that precede
+        // both.
+        onWillDisruptHost: () => input.mirror.markDisturbed(),
         beforeExtract: () => writer.phaseWrite("preparing"),
         hooks: {
           beforeSwapCommit: () => writer.phaseWrite("applying"),
@@ -1595,6 +2082,27 @@ async function downgradeArm(
       throw await parkForWork(input, writer, err);
     }
     throw err;
+  }
+  if (outcome.outcome === "no-op") {
+    // Another actor installed the requested version while this run staged its
+    // private source; the installer re-derived that under its own mutation
+    // lock, before the busy gate and before any barrier, and discarded the
+    // source rather than committing identical bytes and restarting the host
+    // for nothing (#1752 round 14).
+    //
+    // What remains is the question a consumed stage asks - is the committed
+    // record RUNNING? - and the executor answers it the same way, and for the
+    // same structural reason: it cannot re-enter the activation arm
+    // mid-attempt (a `waiting-to-activate` park may be BORN only from an
+    // `applying` write, so a busy gate there would have no legal park). The
+    // record is held to the request first, so a record another actor moved
+    // ABOVE this downgrade target ends the attempt `superseded` with the
+    // marker withdrawn rather than `failed`.
+    return settleDeliveredByAnotherActor(
+      input,
+      writer,
+      `host update: ${target} was already installed by another actor when the downgrade ran`,
+    );
   }
   await verifyUnderClaim(input, writer);
   return projectApplied(outcome);
@@ -1616,12 +2124,27 @@ async function activationArm(
     "host-update-activate",
   );
   if (live === null) throw hostNotInstalled(args.environment);
-  const installed = live;
+  let installed = live;
   // ONE lock span across the gate, the stop and the relaunch, exactly as the
   // legacy arm holds one: a window between the stop and the relaunch is a
   // window in which another CLI can act on a host this run just took down.
   // The record writes inside it take no CLI lock of their own.
   await withCliAttemptMutation(input.capability, contenderOptions, async () => {
+    // The record, re-read under THIS lock and held to the request, FIRST -
+    // before the busy gate and before the stop. `live` was read under the
+    // claim lock, which this arm does not hold: another actor can commit in
+    // the gap, and a changed handoff must disturb nothing and take nothing
+    // over. Refusing here rather than after the gate is what makes "nothing
+    // was restarted" true in the message.
+    const underLock = await readHostInstallRecord(args.environment);
+    if (underLock === null) throw hostNotInstalled(args.environment);
+    const mismatch = installedVersionMismatch(
+      requestedVersion(args),
+      underLock.version,
+    );
+    if (mismatch !== null) throw mismatch;
+    installed = underLock;
+    selection.installedUnderLock = underLock;
     try {
       // A host that is GONE has no live work to protect, so the gate is not
       // asked on the `no-live-host` reading - the stop reports an absent
@@ -1713,7 +2236,19 @@ async function parkForActivation(
 ): Promise<CliError> {
   const refresh = await readClaimRefresh(input.args.environment);
   await writer.park("waiting-to-activate", refresh.refresh);
-  return busy;
+  // A stage can be waiting BESIDE the debt: the bytes for a later version are
+  // staged while this park owes the restart onto the one already installed.
+  // Named the way the apply arm's park names its own (D6), and read from the
+  // very read the PARK write recorded, under the same lock span the busy
+  // decision was made in (#1752 round 14).
+  const staged = refresh.stagedVersion;
+  if (staged === null) return busy;
+  return cliError({
+    code: CLI_ERROR_CODES.HOST_BUSY,
+    message: `${busy.message} Host ${staged} stays staged; it installs on the next update once the host is idle, or now with --force.`,
+    details: { stagedVersion: staged },
+    exitCode: busy.exitCode,
+  });
 }
 
 async function readClaimRefresh(environment: Environment): Promise<{
@@ -1857,7 +2392,11 @@ async function projectSegment(
     selection.planActivationReading !== null &&
     selection.planActivationReading.kind === "activated"
   ) {
-    await clearStaleFailedMarker(args.logger, args.environment);
+    await clearStaleFailedMarker(
+      args.logger,
+      args.environment,
+      selection.planActivationReading.installedVersion,
+    );
   }
   const installed =
     selection.installedUnderLock ??
@@ -1968,7 +2507,11 @@ interface ActivationDebt {
  *   against a record with no runtime stamp. A record WITH a runtime stamp
  *   never reads this way: the stamp is whatever the archive reported about
  *   itself (a staging host's is `staging.<epoch>.<sha>`), and equality with it
- *   is the whole test;
+ *   is the whole test. It carries `installedVersion` because it NAMES a
+ *   record: an explicit request is held to its version on every reading that
+ *   names one (`installedVersionMismatch`), and this is one of them - the
+ *   record another actor committed does not become this run's to accept just
+ *   because the process on top of it is a dev build;
  * - `activated`: the committed archive is what is running, carrying the
  *   record's catalog `version` so a caller can ask WHICH archive;
  * - `debt`: the record and the process disagree.
@@ -1976,7 +2519,7 @@ interface ActivationDebt {
 type ActivationReading =
   | { readonly kind: "no-install" }
   | { readonly kind: "no-live-host"; readonly installedVersion: string }
-  | { readonly kind: "foreign-runtime" }
+  | { readonly kind: "foreign-runtime"; readonly installedVersion: string }
   | { readonly kind: "activated"; readonly installedVersion: string }
   | ActivationDebt;
 
@@ -2031,10 +2574,32 @@ async function readActivationState(
           runningVersion: running.version,
         };
   }
-  // Catalog-version domain (a record with no runtime stamp yet).
-  if (!isValidHostVersion(running.version)) return { kind: "foreign-runtime" };
+  // Catalog-version domain (a record with no runtime stamp yet): the
+  // release-version policy applies. A running version that is not a release
+  // version is not a host this command reasons about.
+  if (!isValidHostVersion(running.version)) {
+    return { kind: "foreign-runtime", installedVersion: installed.version };
+  }
+  // A release host publishes exactly its catalog version (the build stamps
+  // `src/config.ts`'s version into the binary and into the archive's
+  // `version.json` alike), so a registry record's string IS what an activated
+  // host of that record publishes (an own-build record from `host ensure`
+  // names the CLI's version and relies on its runtime stamp, which its
+  // archive always carries): identity is the STRING here as in the
+  // runtime-stamp domain, and another build of the same release (`2.0.0+bar`
+  // running under a `2.0.0+foo` record) is DEBT - the committed artifact is
+  // not the one serving. The comparator's build-metadata-blind "equal" would
+  // read it as activated, and every consumer keyed on `activated` - the debt
+  // gate, `targetObservedRunning`'s withdrawal, the stale-failed clear -
+  // would then treat an artifact that never ran as delivered. The comparator
+  // is kept for what it is for: a record it cannot ORDER (`local-*`; the
+  // running version passed the SemVer guard above) is not this command's debt
+  // to collect and stays activated by policy.
+  if (running.version === installed.version) {
+    return { kind: "activated", installedVersion: installed.version };
+  }
   const comparison = compareHostVersions(running.version, installed.version);
-  if (!comparison.comparable || comparison.ordering === "equal") {
+  if (!comparison.comparable) {
     return { kind: "activated", installedVersion: installed.version };
   }
   return {
@@ -2045,10 +2610,24 @@ async function readActivationState(
 }
 
 /**
- * Whether the running host has been OBSERVED serving `targetVersion`. Used by
+ * Whether the running host has been OBSERVED serving `targetVersion`: the
+ * install record names it and the live process is at the record
+ * (`readActivationState` -> `activated`, with its identity verdict). Used by
  * the marker's failure arm to withhold a `failed` for a target another actor
  * has since delivered. Never throws: a reading that cannot be taken is "not
- * observed", and the stamp lands.
+ * observed", and the stamp lands - a failure that cannot be contradicted is
+ * reported, not swallowed.
+ *
+ * "Names it" is STRING identity of the record with the target, the grain the
+ * version binding uses (`installedVersionMismatch`) and the rule the host's
+ * `isStaleUpdateProgress` applies to the same marker: `2.0.0+foo` is another
+ * artifact than `2.0.0+bar`, and a run for one that finds the other running
+ * was not delivered - its failure stands, whatever the catalog comparator
+ * (build-metadata-blind, and right for ORDERING) would call equal. Another
+ * actor delivering the same registry artifact writes the same string, so a
+ * real match is never defeated. The activation reading above it keeps the
+ * comparator for its own question: running-vs-record is a runtime-stamp
+ * question, record-vs-target is an artifact one.
  */
 async function targetObservedRunning(
   environment: Environment,
@@ -2056,14 +2635,9 @@ async function targetObservedRunning(
 ): Promise<boolean> {
   try {
     const reading = await readActivationState(environment);
-    if (reading.kind !== "activated") return false;
-    // The catalog-domain comparator, not `===`: it ignores build metadata, so
-    // `1.3.0+abc` and `1.3.0` are one release to it and must be one here.
-    const comparison = compareHostVersions(
-      reading.installedVersion,
-      targetVersion,
+    return (
+      reading.kind === "activated" && reading.installedVersion === targetVersion
     );
-    return comparison.comparable && comparison.ordering === "equal";
   } catch {
     return false;
   }
@@ -2077,6 +2651,14 @@ interface MarkerMirror {
   /** Mirror one record write. Best-effort: never fails the update. */
   record(record: HostUpdateAttemptRecord): Promise<void>;
   markDisturbed(): void;
+  /**
+   * Whether this run has begun to disturb the host - the actuator-reported
+   * boundary, never inferred from a phase label. Read by `writeFailure` to
+   * choose the terminal: only a PRE-disruption refusal can be a superseded
+   * request. The mirror owns the flag because it is the same fact its own
+   * restore/withdraw rules turn on, and one owner beats two that can drift.
+   */
+  readonly disturbed: boolean;
 }
 
 /**
@@ -2112,7 +2694,7 @@ function createMarkerMirror(
   let entered = false;
 
   const liveDisplacedRecord = (): HostUpdateProgress | null =>
-    displaced !== null && updateProgressRecordHasLiveWriter(displaced)
+    displaced !== null && updateProgressRecordHasProvenLiveWriter(displaced)
       ? displaced
       : null;
 
@@ -2139,7 +2721,14 @@ function createMarkerMirror(
         if (replaced === "replaced") {
           own = fresh;
           if (!isOwn) {
-            const writerLive = updateProgressRecordHasLiveWriter(onDisk);
+            // PROVEN live, not the fail-open reading (#1752 rounds 12-14).
+            // Retention is what authorises RE-PLANTING this record over an
+            // empty path later, and the fail-open answer is wrong for that: a
+            // record with no writer id is one the host daemon renders
+            // FOREVER (its dead-writer suppression needs a pid to check), and
+            // one whose liveness probe merely failed belongs to a writer who
+            // re-asserts its own marker under the lock anyway.
+            const writerLive = updateProgressRecordHasProvenLiveWriter(onDisk);
             displaced = writerLive ? onDisk : null;
             logger.info(
               writerLive
@@ -2224,6 +2813,57 @@ function createMarkerMirror(
       gone: "Host update parked - the host has work in progress; the progress marker it took over was not restored - the path is empty",
       failed:
         "Host update parked - the host has work in progress; the progress marker it took over could not be restored and stays until the next update supersedes it",
+    });
+  }
+
+  /**
+   * The attempt's target was outgrown by another actor's newer install
+   * (D-46). The marker follows main's round-14 rule verbatim: this run's own
+   * record is WITHDRAWN by conditional delete and nothing is created. Not a
+   * `failed`: neither stale-failed rule - this file's `clearStaleFailedMarker`
+   * or the host's `isStaleUpdateProgress` - clears a `failed` whose target is
+   * not the running version, so one stamped here would render "Update to X
+   * failed" in red over a host serving Y until some later update happened to
+   * do work.
+   *
+   * A LIVE writer's record this run took over is put BACK instead, exactly as
+   * a park does and for the same reason: this run did no disruptive work, so
+   * that writer's `updating` is what the path should hold. `disturbed` is not
+   * consulted - `writeFailure` already refused to route a post-disruption
+   * error here.
+   */
+  async function supersededByAnotherActor(): Promise<void> {
+    if (own === null) return;
+    const restoreTo = liveDisplacedRecord();
+    if (restoreTo !== null) {
+      const restored = await replaceUpdateProgressMarkerIfUnchanged(
+        environment,
+        own,
+        restoreTo,
+      );
+      logConditionalMarkerOutcome(logger, environment, {
+        outcome: restored,
+        done: "Host update was superseded - a newer host than the target it announced is installed; the progress marker it took over was restored to its previous writer",
+        moved:
+          "Host update was superseded - a newer host than the target it announced is installed; the progress marker it took over was not restored - another updater owns it now",
+        gone: "Host update was superseded - a newer host than the target it announced is installed; the progress marker it took over was not restored - the path is empty",
+        failed:
+          "Host update was superseded - a newer host than the target it announced is installed; the progress marker it took over could not be restored and stays until the next update supersedes it",
+      });
+      return;
+    }
+    const withdrawn = await deleteUpdateProgressMarkerIfUnchanged(
+      environment,
+      own,
+    );
+    logConditionalMarkerOutcome(logger, environment, {
+      outcome: withdrawn,
+      done: "Host update was superseded - a newer host than the target it announced is installed; nothing was wrong and the progress marker was withdrawn",
+      moved:
+        "Host update was superseded - a newer host than the target it announced is installed; the progress marker was left in place - another updater owns it now",
+      gone: "Host update was superseded - a newer host than the target it announced is installed; found no progress marker to withdraw",
+      failed:
+        "Host update was superseded - a newer host than the target it announced is installed; its progress marker could not be withdrawn and stays until the next update supersedes it",
     });
   }
 
@@ -2341,6 +2981,9 @@ function createMarkerMirror(
   }
 
   return {
+    get disturbed(): boolean {
+      return disturbed;
+    },
     markDisturbed: (): void => {
       disturbed = true;
     },
@@ -2373,8 +3016,7 @@ function createMarkerMirror(
             await failed(record);
             return;
           case "superseded":
-            // Someone else's `start` ended this attempt; the create that
-            // follows mirrors its own `updating`.
+            await supersededByAnotherActor();
             return;
         }
       } catch (err) {
@@ -2470,13 +3112,34 @@ async function markUpdateFailed(
  * was read: another updater racing this no-op can replace it with a live
  * `updating` in between, and deleting that would erase the only progress
  * signal for the whole download → swap → restart.
+ *
+ * "Contradicts" is the rule the host's `isStaleUpdateProgress` applies to the
+ * same marker: a `failed` is stale when the version it NAMES is the one now
+ * running - STRING identity, the artifact grain (see `targetObservedRunning`).
+ * A `failed` for another target is not contradicted by this reading and is
+ * left alone; it may still be exactly true. `observedInstalledVersion` is the
+ * INSTALL RECORD the `activated` reading named, never the runtime stamp: the
+ * host compares against the runtime version it publishes, and a staging host's
+ * `staging.<epoch>.<sha>` would never match a catalog target here.
  */
 async function clearStaleFailedMarker(
   logger: ILogger,
   environment: Environment,
+  observedInstalledVersion: string,
 ): Promise<void> {
   const marker = await readUpdateProgressMarker(environment);
   if (marker === null || marker.state !== "failed") return;
+  if (marker.targetVersion !== observedInstalledVersion) {
+    logger.info(
+      "Host update left the failed progress marker alone - it names a target the running host has not been observed at",
+      {
+        environment,
+        failedTargetVersion: marker.targetVersion,
+        observedInstalledVersion,
+      },
+    );
+    return;
+  }
   const outcome = await deleteUpdateProgressMarkerIfUnchanged(
     environment,
     marker,
