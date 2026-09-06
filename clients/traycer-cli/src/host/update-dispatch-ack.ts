@@ -173,8 +173,24 @@ export function installDispatchAckStamper(
   if (!isValidUpdateDispatchAckNonce(nonce)) {
     throw new Error("update dispatch ack nonce is not a legal nonce");
   }
+  // ONCE-ONLY, and the flag lives HERE rather than in the caller because this
+  // is the single writer: a run has exactly one answer for the dispatcher, and
+  // the FIRST one it reaches is the true one. Several exits legitimately pass
+  // through two of them - a rejected segment reports the claim refusal and
+  // then throws `E_HOST_UPDATE_ATTEMPT_ACTIVE`; a release whose projection
+  // cannot read the install record reports the release and then throws
+  // `E_HOST_NOT_INSTALLED` - and in both the SECOND value is a consequence of
+  // the first, not a better description of it. Letting the second win would
+  // replace "the cohort refused this claim" with "something was already
+  // active", which is not what happened.
+  //
+  // Idempotent rather than guarded at the call sites: a caller that must
+  // remember not to stamp twice is a caller that will.
+  let settled = false;
   return {
     acknowledge: async (claim) => {
+      if (settled) return;
+      settled = true;
       await stampUpdateDispatchAck({
         hostHomeDir,
         nonce,
@@ -186,6 +202,8 @@ export function installDispatchAckStamper(
       });
     },
     noAttempt: async (reason) => {
+      if (settled) return;
+      settled = true;
       await stampUpdateDispatchAck({
         hostHomeDir,
         nonce,

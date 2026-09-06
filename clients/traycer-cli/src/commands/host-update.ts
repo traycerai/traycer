@@ -1,8 +1,6 @@
-import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import type { CommandFn, CommandResult } from "../runner/runner";
 import {
   runHostUpdate,
-  type HostUpdateBoundIntent,
   type HostUpdateRunOutcome,
   type LegacyHostUpdateResult,
 } from "../host/update-run";
@@ -39,10 +37,10 @@ export interface HostUpdateArgs {
    */
   readonly ackNonce: string | null;
   /**
-   * The bound intent, exactly as it arrived on argv (Plan D16). Raw rather
-   * than pre-narrowed so an illegal value is refused HERE, with a CLI error a
-   * caller can read, instead of being silently widened at the registration
-   * site.
+   * The bound intent, exactly as it arrived on argv (Plan D16). Raw all the
+   * way through to `runHostUpdate`, which refuses an illegal value with a CLI
+   * error a caller can read - and does so on the far side of its dispatch-ACK
+   * stamper, so the refusal still reaches the dispatching host.
    */
   readonly intent: string | null;
   /** The attempt id a bound intent is bound to. */
@@ -61,7 +59,6 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
       environment,
       force: args.force,
     });
-    const intent = parseBoundIntent(args.intent, args.expectAttempt);
     const outcome = await runHostUpdate(
       {
         environment,
@@ -71,7 +68,11 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
         allowDowngrade: args.allowDowngrade,
         force: args.force,
         ackNonce: args.ackNonce,
-        intent,
+        // RAW. The pairing rule and the legal-value check live inside the run,
+        // after its dispatch-ACK stamper exists: a run dispatched with a nonce
+        // and an unusable intent pair must still answer the host that is
+        // waiting on it, and a refusal thrown out here could not.
+        intent: args.intent,
         expectAttempt: args.expectAttempt,
         registryClient: null,
         verifyBudgetMs: null,
@@ -92,48 +93,6 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
       exitCode: 0,
     };
   };
-}
-
-/**
- * The `--intent` / `--expect-attempt` pairing, refused in the command body.
- *
- * Commander has no option pairing: its parser rejects UNKNOWN options (which
- * is the whole point of putting the intent on argv - a pre-cutover parser
- * exits before any body runs) but it has nothing to say about two options that
- * are only meaningful together. A bound intent with no attempt to bind to is
- * an authorization with no subject, and running it as a plain install would be
- * exactly the broader authorization the argv contract exists to prevent.
- */
-function parseBoundIntent(
-  intent: string | null,
-  expectAttempt: string | null,
-): HostUpdateBoundIntent | null {
-  if (intent !== null && intent !== "activate" && intent !== "continue") {
-    throw cliError({
-      code: CLI_ERROR_CODES.INVALID_ARGUMENT,
-      message: `host update: --intent must be 'activate' or 'continue' (got '${intent}')`,
-      details: { intent },
-      exitCode: 1,
-    });
-  }
-  if (intent === null && expectAttempt !== null) {
-    throw cliError({
-      code: CLI_ERROR_CODES.INVALID_ARGUMENT,
-      message:
-        "host update: --expect-attempt names the attempt a bound intent acts on; pass --intent too",
-      details: { expectAttempt },
-      exitCode: 1,
-    });
-  }
-  if (intent !== null && expectAttempt === null) {
-    throw cliError({
-      code: CLI_ERROR_CODES.INVALID_ARGUMENT,
-      message: `host update: --intent ${intent} needs the attempt it is bound to; pass --expect-attempt <id>`,
-      details: { intent },
-      exitCode: 1,
-    });
-  }
-  return intent;
 }
 
 function humanSummary(outcome: HostUpdateRunOutcome): string {
