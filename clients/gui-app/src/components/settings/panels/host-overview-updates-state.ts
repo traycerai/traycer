@@ -179,7 +179,9 @@ export function useHostOverviewUpdates(input: {
   const [installFailure, setInstallFailure] = useState<CliShellFailure | null>(
     null,
   );
-  const [forceRefusal, setForceRefusal] = useState<string | null>(null);
+  const [forceRefusal, setForceRefusal] = useState<ForceUpdateRefusal | null>(
+    null,
+  );
 
   const checkQuery = useHostUpdateCheckQuery({
     client,
@@ -220,11 +222,6 @@ export function useHostOverviewUpdates(input: {
     installDegrade: input.installDegrade,
   });
   const transientFailure = installFailure ?? check.transient;
-  const failureDescription = describeUpdateFailure(
-    forceRefusal,
-    transientFailure,
-    hostName,
-  );
   // `isFetching`, not `isPending`: a forced Check now over an answer already in
   // hand leaves `isPending` false, and the button would never show it was busy.
   const checking = checkQuery.isFetching;
@@ -291,6 +288,13 @@ export function useHostOverviewUpdates(input: {
   // versions the failed check could not confirm - under a summary that says
   // the host could not be checked.
   const actionableManifest = checkQuery.isError ? null : manifest;
+  const failureDescription = describeUpdateFailure({
+    refusal: forceRefusal,
+    manifest: actionableManifest,
+    platformKey: input.platformKey,
+    failure: transientFailure,
+    hostName,
+  });
   // The best STRICTLY NEWER version this catalog offers, before the yanked and
   // platform-asset gates - what the sentence is about, where
   // `updatableVersion` below is what the button can act on.
@@ -372,7 +376,7 @@ export function useHostOverviewUpdates(input: {
         hostName,
       });
       if (refusal !== null) {
-        setForceRefusal(refusal);
+        setForceRefusal({ version, text: refusal });
         // No mutation means no mutation settle callback. Close synchronously
         // here or the confirmation would be stranded over the inline notice.
         onSettled();
@@ -830,6 +834,11 @@ interface CliFloor {
   readonly requiredCliVersion: string | null;
 }
 
+interface ForceUpdateRefusal {
+  readonly version: string;
+  readonly text: string;
+}
+
 function deriveFloorRemedies(input: {
   readonly manifest: HostAvailableManifest | null;
   readonly targetVersion: string | null;
@@ -845,8 +854,11 @@ function deriveFloorRemedies(input: {
   readonly stagedEntryKnown: boolean;
   readonly remedy: CliFloorRemedy | null;
 } {
+  // Yanked releases stay unavailable after a CLI repair, and the recovery
+  // poll ignores them. Keep this summary-only: a staged floor must still
+  // refuse Force even when the staged release has been yanked.
   const target = input.manifest?.versions.find(
-    (entry) => entry.version === input.targetVersion,
+    (entry) => entry.version === input.targetVersion && !entry.yanked,
   );
   const staged = input.manifest?.versions.find(
     (entry) => entry.version === input.stagedVersion,
@@ -907,13 +919,30 @@ function describeForceUpdateRefusal(input: {
   return `Traycer couldn't verify that v${input.version} can be installed on ${input.hostName}. Select Check now and try again.`;
 }
 
-function describeUpdateFailure(
-  refusal: string | null,
-  failure: CliShellFailure | null,
-  hostName: string,
-): string | null {
-  if (refusal !== null) return refusal;
-  return failure === null ? null : describeCliShellFailure(failure, hostName);
+function describeUpdateFailure(input: {
+  readonly refusal: ForceUpdateRefusal | null;
+  readonly manifest: HostAvailableManifest | null;
+  readonly platformKey: string | null;
+  readonly failure: CliShellFailure | null;
+  readonly hostName: string;
+}): string | null {
+  // A successful poll can repair the exact version refused at confirmation.
+  // Derive visibility from the current catalog so both failure surfaces clear
+  // with that answer, without waiting for another click to reset local state.
+  if (
+    input.refusal !== null &&
+    describeForceUpdateRefusal({
+      manifest: input.manifest,
+      version: input.refusal.version,
+      platformKey: input.platformKey,
+      hostName: input.hostName,
+    }) !== null
+  ) {
+    return input.refusal.text;
+  }
+  return input.failure === null
+    ? null
+    : describeCliShellFailure(input.failure, input.hostName);
 }
 
 function assetUnavailableReason(asset: PlatformAsset | null): string | null {

@@ -353,6 +353,42 @@ function managedInstallationWithCli(
   };
 }
 
+function stagedRecord(version: string): HostStagedRecord {
+  return {
+    schemaVersion: 1,
+    stageId: null,
+    version,
+    runtimeVersion: null,
+    archiveSha256: "a".repeat(64),
+    sizeBytes: 1024,
+    source: { kind: "registry", value: version },
+    signatureKeyId: "key-1",
+    signatureVerifiedAt: "2026-08-10T00:00:00Z",
+    executablePath: `/tmp/traycer/${version}/host`,
+    platform: "darwin",
+    arch: "arm64",
+    executableSha256: "b".repeat(64),
+  };
+}
+
+function managedInstallationWithCliAndStage(
+  install: HostInstallRecord,
+  staged: HostStagedRecord,
+): HostGetInstallationInfoResponseV11 {
+  return {
+    status: "managed",
+    installRecord: install,
+    stagedRecord: staged,
+    cliManifest: {
+      version: "1.2.0",
+      installedAt: "2026-09-06T00:00:00Z",
+      binaryPath: "/home/u/.local/bin/traycer",
+      source: "manual",
+      pendingUpgrade: null,
+    },
+  };
+}
+
 function floorManifest(
   version: string,
   available: boolean,
@@ -1759,12 +1795,17 @@ describe("Overview updates — CLI floor remedy", () => {
     // this withdrawn-with-hash counterexample; this negative pin must turn RED
     // under that concrete structural-ablation.
     expect(screen.queryByRole("button", { name: "Copy command" })).toBeNull();
-  });
 
-  it("rechecks a repaired manifest and reveals Update now without a click", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    let checks = 0;
-    const fixture = buildOverviewHostFixture({
+    cleanup();
+    const yankedFloored = floorManifest("1.3.0", false);
+    const yankedLatestManifest = {
+      ...yankedFloored,
+      versions: yankedFloored.versions.map((entry) => ({
+        ...entry,
+        yanked: true,
+      })),
+    };
+    const yankedLatestFixture = buildOverviewHostFixture({
       hostId: "host-a",
       isLocalMachine: true,
       hostVersion: "1.2.0",
@@ -1775,23 +1816,90 @@ describe("Overview updates — CLI floor remedy", () => {
         "/home/u/.local/bin/traycer",
       ),
       overrideHandlers: {
+        "host.update.check": () =>
+          Promise.resolve({
+            outcome: "ok" as const,
+            effectiveIncludePreReleases: false,
+            includePreReleasesSource: "stable-default" as const,
+            manifest: yankedLatestManifest,
+          }),
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: yankedLatestFixture.client };
+    scopeOverrides.current = scopeFrom("host-a", yankedLatestFixture);
+    renderPanel();
+
+    await screen.findByText(
+      "v1.3.0 is available, but host-a can't install it.",
+    );
+    // Removing !entry.yanked from the summary target would expose the floor
+    // remedy for this release; these negative no-repair pins must turn RED.
+    expect(screen.queryByRole("button", { name: "Copy command" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Show installation help" }),
+    ).toBeNull();
+    expect(screen.queryByRole("button", { name: "Update now" })).toBeNull();
+  });
+
+  it("rechecks a repaired manifest and reveals Update now without a click", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let checks = 0;
+    const installCalls: Array<{ version: string; force: boolean }> = [];
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      busy: true,
+      busySessionCount: 1,
+      hostVersion: "1.2.0",
+      installation: managedInstallationWithCliAndStage(
+        installRecord("1.2.0", null),
+        stagedRecord("1.3.0"),
+      ),
+      overrideHandlers: {
         "host.update.check": () => {
           checks += 1;
           return Promise.resolve({
             outcome: "ok" as const,
             effectiveIncludePreReleases: false,
             includePreReleasesSource: "stable-default" as const,
-            manifest: floorManifest("1.3.0", checks > 1),
+            manifest:
+              checks === 1 || checks >= 3
+                ? floorManifest("1.3.0", true)
+                : floorManifest("1.3.0", false),
           });
+        },
+        "host.update.install": (request) => {
+          installCalls.push({ version: request.version, force: request.force });
+          return { outcome: "accepted" as const, attemptId: null };
         },
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
     hostBindingMock.current = { hostClient: fixture.client };
     scopeOverrides.current = scopeFrom("host-a", fixture);
-    renderPanel();
+    const { queryClient } = renderPanel();
 
-    await screen.findByRole("button", { name: "Copy command" });
+    await screen.findByTestId("host-overview-operation-force-update");
+    fireEvent.click(screen.getByTestId("host-overview-operation-force-update"));
+    await screen.findByTestId("host-busy-force-defer-dialog");
+    // The confirmation re-asks before dispatch so this rendered panel records
+    // a real refusal against the exact staged version, rather than a synthetic
+    // hook state. The repair below must come only from the condition poll.
+    await act(async () => {
+      await queryClient.invalidateQueries();
+    });
+    await waitFor(() => expect(checks).toBeGreaterThan(1));
+    fireEvent.click(screen.getByTestId("host-busy-force"));
+    await waitFor(() => {
+      expect(installCalls).toEqual([]);
+      expect(screen.getByRole("status").textContent).toContain(
+        "v1.3.0 needs Traycer CLI 1.3.0 or newer on host-a.",
+      );
+      expect(
+        screen.getByTestId("host-overview-update-attempt-failed").textContent,
+      ).toContain("v1.3.0 needs Traycer CLI 1.3.0 or newer on host-a.");
+    });
     await act(async () => {
       await vi.advanceTimersByTimeAsync(30_000);
     });
@@ -1800,6 +1908,17 @@ describe("Overview updates — CLI floor remedy", () => {
     // Removing the floor recovery lane, or changing its fixed interval above
     // 30s, would leave this refusal visible and fail the assertion above.
     expect(checksAfterRecovery).toBeGreaterThan(1);
+    // Removing describeUpdateFailure's live-descriptor condition and returning
+    // stored refusal text whenever refusal exists would keep both stale
+    // surfaces visible after repair; these negative recovery pins must RED.
+    await waitFor(() => {
+      expect(screen.getByRole("status").textContent).toBe(
+        "v1.3.0 is available.",
+      );
+      expect(
+        screen.queryByTestId("host-overview-update-attempt-failed"),
+      ).toBeNull();
+    });
     await act(async () => {
       await vi.advanceTimersByTimeAsync(31_000);
     });
@@ -1923,6 +2042,68 @@ describe("Overview updates — CLI floor remedy", () => {
     expect(rendered.result.current.summary.updatableVersion).toBeNull();
     expect(rendered.result.current.summary.remedy).not.toBeNull();
     rendered.unmount();
+
+    const yankedManifestBase = lowerRcFallbackManifest();
+    const yankedStable = { ...yankedManifestBase.versions[0], yanked: true };
+    const yankedManifest = {
+      ...yankedManifestBase,
+      versions: [yankedStable, yankedManifestBase.versions[1]],
+    };
+    const installCalls: Array<{ version: string; force: boolean }> = [];
+    const yankedFixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: false,
+      hostVersion: "1.3.0-rc.1",
+      overrideHandlers: {
+        "host.update.check": () => ({
+          outcome: "ok" as const,
+          effectiveIncludePreReleases: true,
+          includePreReleasesSource: "installed-rc" as const,
+          manifest: yankedManifest,
+        }),
+        "host.update.install": (request) => {
+          installCalls.push({ version: request.version, force: request.force });
+          return { outcome: "accepted" as const, attemptId: null };
+        },
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    const yankedRendered = renderUpdatesHook(
+      yankedFixture.client,
+      "host-a",
+      "1.3.0-rc.1",
+      "1.3.0",
+    );
+
+    await waitFor(() =>
+      expect(yankedRendered.result.current.summary.updatableVersion).toBe(
+        "1.3.0-rc.2",
+      ),
+    );
+    // Removing !entry.yanked from the summary target would misclassify this
+    // yanked stable floor and hide the available RC fallback; this negative
+    // summary pin must turn RED under that source-predicate ablation.
+    expect(yankedRendered.result.current.cliFloor).toBeNull();
+    expect(yankedRendered.result.current.summary.remedy).toBeNull();
+    expect(yankedRendered.result.current.stagedFloor).not.toBeNull();
+
+    let returned = false;
+    const onSettled = vi.fn(() => {
+      expect(returned).toBe(false);
+    });
+    // Adding entry.yanked to readCliFloor's early return would authorize this
+    // staged release; the synchronous no-mutation pin must RED under that
+    // shared-reader ablation.
+    act(() => {
+      yankedRendered.result.current.installForce("1.3.0", onSettled);
+      returned = true;
+    });
+    expect(onSettled).toHaveBeenCalledTimes(1);
+    expect(installCalls).toEqual([]);
+    expect(yankedRendered.result.current.summary.failureDescription).toContain(
+      "v1.3.0 needs Traycer CLI 1.3.0 or newer on host-a.",
+    );
+    yankedRendered.unmount();
   });
 });
 
