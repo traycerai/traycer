@@ -4009,8 +4009,8 @@ describe("platform matrix", () => {
 
   it("deregisterService streams `host service uninstall` on non-macOS rather than running it under the flat JSON timeout", async () => {
     // On Windows the uninstall stops the host through the bounded
-    // scan-then-kill loop, whose worst case is several 30 s scans plus
-    // `schtasks /End` and `taskkill` before `/Delete`. The run path's flat
+    // scan-then-kill loop, whose worst case is several 30 s scans and kill
+    // scripts plus `schtasks /End` before `/Delete`. The run path's flat
     // 45 s budget would SIGKILL the CLI mid-loop and leave the host
     // half-stopped with its task still registered; the streaming path's idle
     // timeout (re-armed by output, ten minutes) is what `host restart`

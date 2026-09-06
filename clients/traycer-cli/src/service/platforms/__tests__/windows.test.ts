@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   buildScheduledTaskXml,
+  buildWindowsHandleBoundKillScript,
   buildWindowsSlotProcessDetailScanScript,
   buildWindowsSlotProcessTableScanScript,
   computeWindowsHostKillSet,
@@ -10,20 +11,26 @@ import {
   killLingeringSlotProcesses,
   orderWindowsKillsDescendantsFirst,
   parseSchtasksLastRunResult,
+  parseWindowsKillOutcomeJson,
   parseWindowsProcessDetailJson,
   parseWindowsProcessTableJson,
   setWindowsStartEvidenceDepsForTests,
   setWindowsTaskInstallDepsForTests,
+  WINDOWS_KILL_TARGETS_PER_SCRIPT,
   type ProcessRunner,
   type WindowsControllerDeps,
   type WindowsKillMemory,
+  type WindowsKillTarget,
   type WindowsKillVictim,
   type WindowsProcessTableRow,
   type WindowsStartEvidenceDeps,
   type WindowsTaskInstallDeps,
 } from "../windows";
 import { serviceLabelFor } from "../../label";
-import { WINDOWS_KILL_CONVERGENCE_ROUNDS } from "@traycer/protocol/host/lifecycle-constants";
+import {
+  WINDOWS_KILL_CONVERGENCE_ROUNDS,
+  WINDOWS_PROCESS_KILL_TIMEOUT_MS,
+} from "@traycer/protocol/host/lifecycle-constants";
 import { ProcessRunError, type RunResult } from "../../process-runner";
 import type { SpawnEvidenceBaseline } from "../../../host/spawn-evidence";
 import { CLI_ERROR_CODES } from "../../../runner/errors";
@@ -161,16 +168,71 @@ function tableJson(rows: readonly TableRowInput[]): string {
   );
 }
 
+// Both halves of a kill round are `powershell.exe` invocations: the table scan
+// (`Get-CimInstance Win32_Process`) and the handle-bound kill
+// (`GetProcessById`). The fakes below tell them apart by the script they
+// carry, which is also the only way a fixture can know which pids a round
+// decided to kill - the kill script's target literal is the argv.
+function isScanCall(command: string, args: readonly string[]): boolean {
+  return (
+    command === "powershell.exe" &&
+    args.some((arg) => arg.includes("Get-CimInstance Win32_Process"))
+  );
+}
+
+function isKillCall(command: string, args: readonly string[]): boolean {
+  return (
+    command === "powershell.exe" &&
+    args.some((arg) => arg.includes("GetProcessById"))
+  );
+}
+
+// The targets one kill invocation carries, in the order the script walks
+// them. Read back out of the target literal `buildHandleBoundKillScript`
+// emits (`@{ ProcessId = <pid>; Created = <micros> }` per target).
+function killTargetsOf(args: readonly string[]): WindowsKillTarget[] {
+  const script = args.find((arg) => arg.includes("GetProcessById")) ?? "";
+  const targets: WindowsKillTarget[] = [];
+  for (const match of script.matchAll(/ProcessId = (\d+); Created = (\d+)/g)) {
+    targets.push({
+      processId: Number(match[1]),
+      created: Number(match[2]),
+    });
+  }
+  return targets;
+}
+
+function scanCalls(calls: readonly RecordedCall[]): RecordedCall[] {
+  return calls.filter((call) => isScanCall(call.command, call.args));
+}
+
+// One entry per kill script - one per round, unless the round carried more
+// than `WINDOWS_KILL_TARGETS_PER_SCRIPT` targets and issued several in a row -
+// holding that script's targets in issue order.
+function killRounds(calls: readonly RecordedCall[]): WindowsKillTarget[][] {
+  return calls
+    .filter((call) => isKillCall(call.command, call.args))
+    .map((call) => killTargetsOf(call.args));
+}
+
+// Every pid a stop issued a kill for, across rounds, in issue order. The
+// shape most pins in this file reason about.
+function killedPids(calls: readonly RecordedCall[]): number[] {
+  return killRounds(calls).flatMap((round) =>
+    round.map((target) => target.processId),
+  );
+}
+
 // A fake scan-then-kill runner that CONVERGES the way the real scan does. A
 // real scan verifies by exe path/command line, not by remembering what an
-// earlier round saw, so a process this round's `taskkill` actually reached is
+// earlier round saw, so a process this round's kill actually reached is
 // simply ABSENT from the next snapshot - it isn't "seen and skipped", it's
 // gone. `killHostProcessTree`'s bounded convergence loop (Codex round 2 on
 // #1755: the old single-pass scan left anything spawned after the snapshot
 // untouched) rescans after every kill, so a fixture that keeps returning one
 // constant table makes every pid look like a survivor and gets re-killed
 // `WINDOWS_KILL_CONVERGENCE_ROUNDS` times instead of once. This tracks which
-// pids a `taskkill` call has fired for and drops those rows from every later
+// pids a kill script has been handed and drops those rows from every later
 // snapshot, so a fixture built for the old one-pass code keeps its original
 // meaning under the new loop.
 function convergingTableRunner(rows: readonly TableRowInput[]): {
@@ -181,10 +243,12 @@ function convergingTableRunner(rows: readonly TableRowInput[]): {
   let live = rows;
   const runner: ProcessRunner = async (command, args) => {
     calls.push({ command, args });
-    if (command === "powershell.exe") return success(tableJson(live));
-    if (command === "taskkill") {
-      const killedPid = Number(args[2]);
-      live = live.filter((row) => row.processId !== killedPid);
+    if (isScanCall(command, args)) return success(tableJson(live));
+    if (isKillCall(command, args)) {
+      const killed = new Set(
+        killTargetsOf(args).map((target) => target.processId),
+      );
+      live = live.filter((row) => !killed.has(row.processId));
     }
     return success("");
   };
@@ -569,12 +633,10 @@ describe("Windows service stale host cleanup", () => {
       noTimingDeps,
     );
 
-    expect(
-      calls
-        .filter((call) => call.command === "taskkill")
-        .map((call) => call.args),
-    ).toEqual([["/F", "/PID", "401"]]);
-    expect(calls.every((call) => !call.args.includes("/T"))).toBe(true);
+    expect(killedPids(calls)).toEqual([401]);
+    // Never a pid-only kill: no `taskkill` at all, `/T` or otherwise. The
+    // handle-bound script is the only thing that terminates a process.
+    expect(calls.some((call) => call.command === "taskkill")).toBe(false);
   });
 
   it("kills slot-scanned processes when pid metadata is missing", async () => {
@@ -591,14 +653,7 @@ describe("Windows service stale host cleanup", () => {
       args: ["/End", "/TN", "\\Traycer\\Host-Staging"],
     });
     expect(calls.some((call) => call.command === "powershell.exe")).toBe(true);
-    expect(
-      calls
-        .filter((call) => call.command === "taskkill")
-        .map((call) => call.args),
-    ).toEqual([
-      ["/F", "/PID", "401"],
-      ["/F", "/PID", "402"],
-    ]);
+    expect(killedPids(calls)).toEqual([401, 402]);
   });
 
   it("kills exactly the scan-verified pids when the scan covers the recorded pid", async () => {
@@ -617,11 +672,7 @@ describe("Windows service stale host cleanup", () => {
 
     await controller.stop(serviceLabelFor("staging"), { force: false });
 
-    expect(
-      calls
-        .filter((call) => call.command === "taskkill")
-        .map((call) => call.args[2]),
-    ).toEqual(["401", "402"]);
+    expect(killedPids(calls)).toEqual([401, 402]);
   });
 
   it("does not kill the recorded pid when the scan verifies it no longer matches the host", async () => {
@@ -643,11 +694,7 @@ describe("Windows service stale host cleanup", () => {
 
     await controller.stop(serviceLabelFor("staging"), { force: false });
 
-    expect(
-      calls
-        .filter((call) => call.command === "taskkill")
-        .map((call) => call.args[2]),
-    ).toEqual(["402"]);
+    expect(killedPids(calls)).toEqual([402]);
   });
 
   it("purges pid metadata on uninstall like it does on stop", async () => {
@@ -730,7 +777,7 @@ describe("killHostProcessTree convergence loop", () => {
     let scanCount = 0;
     const runner: ProcessRunner = async (command, args) => {
       calls.push({ command, args });
-      if (command === "powershell.exe") {
+      if (isScanCall(command, args)) {
         const response = responses[scanCount] ?? { kind: "table", rows: [] };
         scanCount += 1;
         if (response.kind === "throw") throw new Error("spawn failed");
@@ -767,18 +814,8 @@ describe("killHostProcessTree convergence loop", () => {
     // The kill set is asserted FIRST on purpose: it is the finding's own
     // symptom, so a regression here reports "403 was never killed" rather
     // than an arithmetic complaint about how many times we scanned.
-    expect(
-      calls
-        .filter((call) => call.command === "taskkill")
-        .map((call) => call.args),
-    ).toEqual([
-      ["/F", "/PID", "401"],
-      ["/F", "/PID", "402"],
-      ["/F", "/PID", "403"],
-    ]);
-    expect(
-      calls.filter((call) => call.command === "powershell.exe"),
-    ).toHaveLength(3);
+    expect(killedPids(calls)).toEqual([401, 402, 403]);
+    expect(scanCalls(calls)).toHaveLength(3);
 
     // Ablation (§C): in `killHostProcessTree`, change the loop bound from
     // `round <= WINDOWS_KILL_CONVERGENCE_ROUNDS` to `round <= 1` (a single
@@ -798,7 +835,7 @@ describe("killHostProcessTree convergence loop", () => {
     const calls: RecordedCall[] = [];
     const runner: ProcessRunner = async (command, args) => {
       calls.push({ command, args });
-      if (command === "powershell.exe") {
+      if (isScanCall(command, args)) {
         const pid = 800 + scanCount;
         scanCount += 1;
         return success(
@@ -819,15 +856,11 @@ describe("killHostProcessTree convergence loop", () => {
       details: { survivingPids: [800 + WINDOWS_KILL_CONVERGENCE_ROUNDS] },
     });
 
-    expect(
-      calls.filter((call) => call.command === "powershell.exe"),
-    ).toHaveLength(WINDOWS_KILL_CONVERGENCE_ROUNDS + 1);
-    const taskkillPids = calls
-      .filter((call) => call.command === "taskkill")
-      .map((call) => call.args[2]);
-    expect(taskkillPids).toEqual(
-      Array.from({ length: WINDOWS_KILL_CONVERGENCE_ROUNDS }, (_, index) =>
-        String(800 + index),
+    expect(scanCalls(calls)).toHaveLength(WINDOWS_KILL_CONVERGENCE_ROUNDS + 1);
+    expect(killedPids(calls)).toEqual(
+      Array.from(
+        { length: WINDOWS_KILL_CONVERGENCE_ROUNDS },
+        (_, index) => 800 + index,
       ),
     );
 
@@ -840,16 +873,16 @@ describe("killHostProcessTree convergence loop", () => {
 
   it("a lingering already-killed pid exhausts the bound - the same never-dying pid every round, not a fresh spawn", async () => {
     // The OTHER honest-failure path the function comment's caveat names:
-    // `taskkill /F` is `TerminateProcess`, asynchronous, so a confirming scan
-    // can briefly still list a pid a previous round already killed. The
-    // bound absorbs ONE such round; this pushes that to its limit - the
-    // scan returns the exact SAME pid every round (as if `taskkill` never
-    // actually reaped it), never a fresh spawn - and the loop still refuses
-    // rather than grinding forever or quietly reporting success.
+    // `TerminateProcess` is asynchronous, so a confirming scan can briefly
+    // still list a pid a previous round already killed. The bound absorbs
+    // ONE such round; this pushes that to its limit - the scan returns the
+    // exact SAME pid every round (as if the kill never actually reaped it),
+    // never a fresh spawn - and the loop still refuses rather than grinding
+    // forever or quietly reporting success.
     const calls: RecordedCall[] = [];
     const runner: ProcessRunner = async (command, args) => {
       calls.push({ command, args });
-      if (command === "powershell.exe") {
+      if (isScanCall(command, args)) {
         return success(
           tableJson([{ processId: 900, parentProcessId: 1, slot: true }]),
         );
@@ -865,15 +898,11 @@ describe("killHostProcessTree convergence loop", () => {
       details: { survivingPids: [900] },
     });
 
-    expect(
-      calls.filter((call) => call.command === "powershell.exe"),
-    ).toHaveLength(WINDOWS_KILL_CONVERGENCE_ROUNDS + 1);
-    // taskkill fired every round, not skipped just because it is the "same"
+    expect(scanCalls(calls)).toHaveLength(WINDOWS_KILL_CONVERGENCE_ROUNDS + 1);
+    // The kill fired every round, not skipped just because it is the "same"
     // pid as last time - the loop has no way to know that without a scan
     // proving it, and a scan proving it IS what this test denies it.
-    expect(calls.filter((call) => call.command === "taskkill")).toHaveLength(
-      WINDOWS_KILL_CONVERGENCE_ROUNDS,
-    );
+    expect(killRounds(calls)).toHaveLength(WINDOWS_KILL_CONVERGENCE_ROUNDS);
   });
 
   it("refuses before killing anything when the scan is unavailable - the round-0 case of the general rule", async () => {
@@ -893,10 +922,8 @@ describe("killHostProcessTree convergence loop", () => {
       controller.stop(serviceLabelFor("staging"), { force: false }),
     ).rejects.toMatchObject({ code: "E_SERVICE_CONTROL_FAILED" });
 
-    expect(
-      calls.filter((call) => call.command === "powershell.exe"),
-    ).toHaveLength(1);
-    expect(calls.filter((call) => call.command === "taskkill")).toHaveLength(0);
+    expect(scanCalls(calls)).toHaveLength(1);
+    expect(killRounds(calls)).toHaveLength(0);
     expect(mocks.readHostPidMetadata).not.toHaveBeenCalled();
 
     // Ablation (§ablation table, row 2): in `killHostProcessTree`, change
@@ -927,16 +954,10 @@ describe("killHostProcessTree convergence loop", () => {
       controller.stop(serviceLabelFor("staging"), { force: false }),
     ).rejects.toMatchObject({ code: "E_SERVICE_CONTROL_FAILED" });
 
-    expect(
-      calls.filter((call) => call.command === "powershell.exe"),
-    ).toHaveLength(2);
+    expect(scanCalls(calls)).toHaveLength(2);
     // Round 0's kill still happened - the refusal is about round 1's scan,
     // not a reason to have skipped work already done.
-    expect(
-      calls
-        .filter((call) => call.command === "taskkill")
-        .map((call) => call.args),
-    ).toEqual([["/F", "/PID", "901"]]);
+    expect(killedPids(calls)).toEqual([901]);
     expect(mocks.readHostPidMetadata).not.toHaveBeenCalled();
 
     // Ablation (§ablation table, row 2): the same `scanned === null` `throw`
@@ -951,8 +972,8 @@ describe("killHostProcessTree convergence loop", () => {
     //   R0: host 100 (born 1000, slot) and its validated child 555 (born
     //       1500, a shell or provider binary whose own path matches nothing).
     //       Both are killed, 555 first.
-    //   R1: 100 is gone. 555 is STILL listed - `taskkill /F` is
-    //       `TerminateProcess`, asynchronous, and the loop's own comment names
+    //   R1: 100 is gone. 555 is STILL listed - `TerminateProcess` is
+    //       asynchronous, and the loop's own comment names
     //       this case - and its edge now arrives as `parentProcessId` 0: the
     //       parent that would have vouched for it is dead. Its own path
     //       matches nothing. Without `priorVictims` carrying 100's window
@@ -992,18 +1013,8 @@ describe("killHostProcessTree convergence loop", () => {
 
     await controller.stop(serviceLabelFor("staging"), { force: false });
 
-    expect(
-      calls.filter((call) => call.command === "powershell.exe"),
-    ).toHaveLength(3);
-    expect(
-      calls
-        .filter((call) => call.command === "taskkill")
-        .map((call) => call.args),
-    ).toEqual([
-      ["/F", "/PID", "555"],
-      ["/F", "/PID", "100"],
-      ["/F", "/PID", "555"],
-    ]);
+    expect(scanCalls(calls)).toHaveLength(3);
+    expect(killedPids(calls)).toEqual([555, 100, 555]);
 
     // Ablation (§ablation table): in `classifyCarryOverClaim`, replace the
     // body with `return "none";` → this test reddens alongside the direct
@@ -1117,18 +1128,8 @@ describe("killHostProcessTree convergence loop", () => {
       }
     }
 
-    expect(
-      calls.filter((call) => call.command === "powershell.exe"),
-    ).toHaveLength(4);
-    expect(
-      calls
-        .filter((call) => call.command === "taskkill")
-        .map((call) => call.args),
-    ).toEqual([
-      ["/F", "/PID", "100"],
-      ["/F", "/PID", "555"],
-      ["/F", "/PID", "888"],
-    ]);
+    expect(scanCalls(calls)).toHaveLength(4);
+    expect(killedPids(calls)).toEqual([100, 555, 888]);
 
     // Ablation: in `killHostProcessTree`, keep only the latest round's
     // victims - `priorVictims.clear()` just before the recording loop at the
@@ -1202,20 +1203,8 @@ describe("killHostProcessTree convergence loop", () => {
 
     await controller.stop(serviceLabelFor("staging"), { force: false });
 
-    expect(
-      calls.filter((call) => call.command === "powershell.exe"),
-    ).toHaveLength(4);
-    expect(
-      calls
-        .filter((call) => call.command === "taskkill")
-        .map((call) => call.args),
-    ).toEqual([
-      ["/F", "/PID", "555"],
-      ["/F", "/PID", "100"],
-      ["/F", "/PID", "100"],
-      ["/F", "/PID", "555"],
-      ["/F", "/PID", "555"],
-    ]);
+    expect(scanCalls(calls)).toHaveLength(4);
+    expect(killedPids(calls)).toEqual([555, 100, 100, 555, 555]);
 
     // Ablation: in `rememberIncarnation`, replace the push with an overwrite
     // (`memory.set(pid, [incarnation])` on both arms) → this test reddens:
@@ -1246,11 +1235,7 @@ describe("killHostProcessTree convergence loop", () => {
 
     await controller.stop(serviceLabelFor("staging"), { force: false });
 
-    expect(
-      calls
-        .filter((call) => call.command === "taskkill")
-        .map((call) => call.args[2]),
-    ).toEqual(["160", "150", "100"]);
+    expect(killedPids(calls)).toEqual([160, 150, 100]);
 
     // Ablation (§ablation table): in `orderWindowsKillsDescendantsFirst`,
     // change the body to `return pids;` (issue order unchanged) → run and
@@ -1300,11 +1285,7 @@ describe("killHostProcessTree convergence loop", () => {
       controller.stop(serviceLabelFor("staging"), { force: false }),
     ).resolves.toBeUndefined();
 
-    expect(
-      calls
-        .filter((call) => call.command === "taskkill")
-        .map((call) => call.args[2]),
-    ).toEqual(["100"]);
+    expect(killedPids(calls)).toEqual([100]);
 
     // Ablation (§ablation table): change `created < victim.created` to
     // `return "unattributed"` in `classifyAgainstVictim` → this test
@@ -1329,7 +1310,7 @@ describe("killHostProcessTree convergence loop", () => {
     let scanCount = 0;
     const runner: ProcessRunner = async (command, args) => {
       calls.push({ command, args });
-      if (command === "powershell.exe") {
+      if (isScanCall(command, args)) {
         scanCount += 1;
         if (scanCount === 1) {
           const stdout = tableJson([
@@ -1370,11 +1351,7 @@ describe("killHostProcessTree convergence loop", () => {
     // Round 0 killed 100 using the sample taken BEFORE its scan (2000): 777
     // was born at 3000, after that sample, so round 1 refuses it rather
     // than silently killing or silently sparing it.
-    expect(
-      calls
-        .filter((call) => call.command === "taskkill")
-        .map((call) => call.args[2]),
-    ).toEqual(["100"]);
+    expect(killedPids(calls)).toEqual([100]);
 
     // Ablation (§ablation table): in `killHostProcessTree`, move the
     // `deps.now()` sample to AFTER `scanSlotProcessTable` returns → this
@@ -1392,7 +1369,7 @@ describe("killHostProcessTree convergence loop", () => {
   it("a repeated victim's seenAliveAt advances across rounds, widening what a later orphan can be attributed to", async () => {
     // Chronology (samples 2000, 4000, 6000, 8000):
     //   R0 (sample 2000): 100 (born 1000, slot). Killed.
-    //   R1 (sample 4000): 100 is STILL listed (`taskkill /F` is
+    //   R1 (sample 4000): 100 is STILL listed (`TerminateProcess` is
     //       asynchronous - the loop's own comment names this exact case) and
     //       has meanwhile spawned 555 (born 3000, validated child). Both are
     //       killed, 555 first. 100's window now extends to 4000.
@@ -1448,16 +1425,7 @@ describe("killHostProcessTree convergence loop", () => {
 
     await controller.stop(serviceLabelFor("staging"), { force: false });
 
-    expect(
-      calls
-        .filter((call) => call.command === "taskkill")
-        .map((call) => call.args),
-    ).toEqual([
-      ["/F", "/PID", "100"],
-      ["/F", "/PID", "555"],
-      ["/F", "/PID", "100"],
-      ["/F", "/PID", "555"],
-    ]);
+    expect(killedPids(calls)).toEqual([100, 555, 100, 555]);
 
     // Ablation: in `rememberIncarnation`, skip the push when an entry already
     // exists (first incarnation only) → this test reddens: 100's only window
@@ -1535,14 +1503,7 @@ describe("killHostProcessTree convergence loop", () => {
 
     // 200 (an ordinary slot match) was killed even though 777 (undecided)
     // sat alongside it in the very same round's scan.
-    expect(
-      calls
-        .filter((call) => call.command === "taskkill")
-        .map((call) => call.args),
-    ).toEqual([
-      ["/F", "/PID", "100"],
-      ["/F", "/PID", "200"],
-    ]);
+    expect(killedPids(calls)).toEqual([100, 200]);
 
     // Ablation (§ablation table): in `killHostProcessTree`, return `kill`
     // only (drop the `unattributed.length > 0` throw) → this test's
@@ -1622,17 +1583,8 @@ describe("killHostProcessTree convergence loop", () => {
       details: { unattributedPids: [888] },
     });
 
-    expect(
-      calls.filter((call) => call.command === "powershell.exe"),
-    ).toHaveLength(3);
-    expect(
-      calls
-        .filter((call) => call.command === "taskkill")
-        .map((call) => call.args),
-    ).toEqual([
-      ["/F", "/PID", "100"],
-      ["/F", "/PID", "200"],
-    ]);
+    expect(scanCalls(calls)).toHaveLength(3);
+    expect(killedPids(calls)).toEqual([100, 200]);
 
     // Ablation (§ablation table): in `killHostProcessTree`, drop the
     // `priorSuspects` recording loop (record victims only) → this test
@@ -1728,15 +1680,7 @@ describe("killHostProcessTree convergence loop", () => {
       details: { unattributedPids: [888] },
     });
 
-    expect(
-      calls
-        .filter((call) => call.command === "taskkill")
-        .map((call) => call.args),
-    ).toEqual([
-      ["/F", "/PID", "100"],
-      ["/F", "/PID", "200"],
-      ["/F", "/PID", "777"],
-    ]);
+    expect(killedPids(calls)).toEqual([100, 200, 777]);
 
     // Ablation: in `classifyCarryOverClaim`, return the FIRST verdict instead
     // of the strongest (`return classifyAgainstVictim(...)` inside the
@@ -1821,17 +1765,8 @@ describe("killHostProcessTree convergence loop", () => {
 
     await controller.stop(serviceLabelFor("staging"), { force: false });
 
-    expect(
-      calls.filter((call) => call.command === "powershell.exe"),
-    ).toHaveLength(3);
-    expect(
-      calls
-        .filter((call) => call.command === "taskkill")
-        .map((call) => call.args),
-    ).toEqual([
-      ["/F", "/PID", "100"],
-      ["/F", "/PID", "200"],
-    ]);
+    expect(scanCalls(calls)).toHaveLength(3);
+    expect(killedPids(calls)).toEqual([100, 200]);
   });
 
   it("round-6 P2: a spared shell's uncertainty outlives the shell - its children still refuse the stop after it exits", async () => {
@@ -1941,17 +1876,8 @@ describe("killHostProcessTree convergence loop", () => {
       }
     }
 
-    expect(
-      calls.filter((call) => call.command === "powershell.exe"),
-    ).toHaveLength(3);
-    expect(
-      calls
-        .filter((call) => call.command === "taskkill")
-        .map((call) => call.args),
-    ).toEqual([
-      ["/F", "/PID", "100"],
-      ["/F", "/PID", "200"],
-    ]);
+    expect(scanCalls(calls)).toHaveLength(3);
+    expect(killedPids(calls)).toEqual([100, 200]);
 
     // Ablation: in `killHostProcessTree`, record suspects from `unattributed`
     // instead of `undecided` → this test reddens: round 2 remembers 888 but
@@ -2101,20 +2027,12 @@ describe("killHostProcessTree convergence loop", () => {
       }
     }
 
-    expect(
-      calls.filter((call) => call.command === "powershell.exe"),
-    ).toHaveLength(3);
-    expect(
-      calls
-        .filter((call) => call.command === "taskkill")
-        .map((call) => call.args),
-    ).toEqual([
+    expect(scanCalls(calls)).toHaveLength(3);
+    expect(killedPids(calls)).toEqual([
       // R0: both slot rows have zeroed edges (depth 0), so pid order.
-      ["/F", "/PID", "100"],
-      ["/F", "/PID", "200"],
+      100, 200,
       // R1: 888 (depth 2) before the lingering 100.
-      ["/F", "/PID", "888"],
-      ["/F", "/PID", "100"],
+      888, 100,
     ]);
 
     // Ablation: in `killHostProcessTree`, drop the `protectedAncestors`
@@ -2248,18 +2166,8 @@ describe("killHostProcessTree convergence loop", () => {
       }
     }
 
-    expect(
-      calls.filter((call) => call.command === "powershell.exe"),
-    ).toHaveLength(4);
-    expect(
-      calls
-        .filter((call) => call.command === "taskkill")
-        .map((call) => call.args),
-    ).toEqual([
-      ["/F", "/PID", "100"],
-      ["/F", "/PID", "888"],
-      ["/F", "/PID", "888"],
-    ]);
+    expect(scanCalls(calls)).toHaveLength(4);
+    expect(killedPids(calls)).toEqual([100, 888, 888]);
 
     // Ablation: in `killHostProcessTree`, drop the `protectedAncestors`
     // recording loop → this test reddens: round 2 finds three orphans
@@ -2347,17 +2255,8 @@ describe("killHostProcessTree convergence loop", () => {
       }
     }
 
-    expect(
-      calls.filter((call) => call.command === "powershell.exe"),
-    ).toHaveLength(3);
-    expect(
-      calls
-        .filter((call) => call.command === "taskkill")
-        .map((call) => call.args),
-    ).toEqual([
-      ["/F", "/PID", "100"],
-      ["/F", "/PID", "100"],
-    ]);
+    expect(scanCalls(calls)).toHaveLength(3);
+    expect(killedPids(calls)).toEqual([100, 100]);
 
     // Ablation: in `computeWindowsHostKillSet`, drop `!cliBranch.has(pid)`
     // from the `undecided` filter → this test reddens: round 1 remembers
@@ -2483,21 +2382,12 @@ describe("killHostProcessTree convergence loop", () => {
       }
     }
 
-    expect(
-      calls.filter((call) => call.command === "powershell.exe"),
-    ).toHaveLength(3);
-    expect(
-      calls
-        .filter((call) => call.command === "taskkill")
-        .map((call) => call.args),
-    ).toEqual([
-      ["/F", "/PID", "100"],
-      ["/F", "/PID", "888"],
-    ]);
+    expect(scanCalls(calls)).toHaveLength(3);
+    expect(killedPids(calls)).toEqual([100, 888]);
 
     // Ablation: in `killHostProcessTree`, drop the `priorProtected`
     // recording (or in `computeWindowsHostKillSet` the identity lookup) →
-    // this test reddens: round 1 issues `taskkill /F /PID 700` as well -
+    // this test reddens: round 1 kills 700 as well -
     // the shell this CLI is running in - after 888 (descendants first).
   });
 
@@ -2603,7 +2493,310 @@ describe("killHostProcessTree convergence loop", () => {
 // both directly and through `controller.stop`, because the direct unit tests
 // alone would not catch a wiring bug that hands the wrong pid in as `cliPid`
 // (`process.pid`, not PowerShell's own `$PID` inside the scan script).
-describe("computeWindowsHostKillSet and the taskkill self-protection it drives", () => {
+// The kill is a PowerShell script over (pid, creation time) pairs, not a
+// `taskkill` per pid (post-merge P1 on #1755): the scan proves a row is the
+// host's by pid AND creation time, but a pid-only kill re-resolves the integer
+// at kill time, so a victim that exits between the snapshot and the kill and
+// has its pid reused hands the kill to a stranger the carry-over never saw.
+// The script opens a handle (which pins the pid), reads the creation time
+// through it, and terminates through it only on a match. PowerShell itself
+// cannot run here, so these pin the script's TEXT and the loop's use of it;
+// the live Windows run is what proves the two creation-time sources agree.
+describe("handle-bound kill script", () => {
+  beforeEach(() => {
+    mocks.readHostPidMetadata.mockReset();
+    mocks.readHostPidMetadata.mockResolvedValue(null);
+    mocks.removeHostPidMetadata.mockReset();
+    mocks.removeHostPidMetadata.mockResolvedValue(undefined);
+  });
+
+  it("carries every target as (pid, creation micros) in issue order, opens the handle before reading StartTime, and kills through it only within 1 µs of the scan's creation time", () => {
+    const script = buildWindowsHandleBoundKillScript([
+      { processId: 400, created: 1_700_000_000_000_400 },
+      { processId: 100, created: 1_700_000_000_000_100 },
+    ]);
+    expect(script).toContain("$ErrorActionPreference = 'Stop'");
+    // Integers only, no exponent, no quoting - and in the caller's order.
+    const first = script.indexOf("ProcessId = 400; Created = 1700000000000400");
+    const second = script.indexOf(
+      "ProcessId = 100; Created = 1700000000000100",
+    );
+    expect(first).toBeGreaterThan(-1);
+    expect(second).toBeGreaterThan(first);
+    // The handle is opened BEFORE the identity is read, and the kill goes
+    // through the same object afterwards - that ordering is the mechanism.
+    const handleAt = script.indexOf("$null = $process.Handle");
+    const startAt = script.indexOf("$process.StartTime");
+    const killAt = script.indexOf("$process.Kill()");
+    expect(handleAt).toBeGreaterThan(-1);
+    expect(startAt).toBeGreaterThan(handleAt);
+    expect(killAt).toBeGreaterThan(startAt);
+    expect(script).toContain(
+      "if ([math]::Abs($started - [long]$target.Created) -le 1) {",
+    );
+    // Nothing in the script re-resolves a pid at kill time.
+    expect(script).not.toMatch(/taskkill|Stop-Process/i);
+    // The handle is released whatever happened.
+    expect(script).toContain("if ($null -ne $process) { $process.Dispose() }");
+  });
+
+  it("normalises StartTime like the scan normalises CreationDate (UTC, Unix epoch, microseconds) but floors with integer arithmetic, and tolerates 1 µs", () => {
+    const epoch = ".ToUniversalTime() - [datetime]'1970-01-01').Ticks";
+    const scan = buildWindowsSlotProcessTableScanScript(
+      "C:\\Users\\me\\.traycer\\host",
+    );
+    const kill = buildWindowsHandleBoundKillScript([
+      { processId: 1, created: 1 },
+    ]);
+    // Same epoch, same UTC normalisation on both sides.
+    expect(scan).toContain(`($_.CreationDate${epoch} / 10)`);
+    expect(kill).toContain(`($process.StartTime${epoch}`);
+    // But NOT the scan's `/ 10` (cold review P1 on the first draft): the
+    // scan's ticks are multiples of 10 (CIM carries microseconds) so its
+    // division is exact, while StartTime keeps the FILETIME's 100 ns digit
+    // and PowerShell's non-exact `[long]` division goes through `[double]`,
+    // which past 2^53 rounds `...9` up to `...10` and lands the floor one
+    // microsecond high. Falsification on Windows PowerShell 5.1:
+    // `[long][math]::Floor([long]17870000000000019 / 10)` prints
+    // `1787000000000002`. Integer arithmetic throughout instead:
+    expect(kill).toContain("$started = [long](($ticks - ($ticks % 10)) / 10)");
+    expect(kill).not.toContain("Ticks / 10");
+    // And a 1 µs tolerance for WMI rounding rather than truncating its last
+    // digit; no stranger is born within a microsecond of the victim's birth.
+    expect(kill).toContain(
+      "if ([math]::Abs($started - [long]$target.Created) -le 1) {",
+    );
+  });
+
+  it("a target whose age is 0 - or anything that is not a safe non-negative integer - is emitted as Created = 0, which the script never kills", () => {
+    const script = buildWindowsHandleBoundKillScript([
+      { processId: 7, created: 0 },
+      { processId: 8, created: -5 },
+      { processId: 9, created: Number.MAX_SAFE_INTEGER + 2 },
+      { processId: 10, created: 1.5 },
+    ]);
+    for (const pid of [7, 8, 9, 10]) {
+      expect(script).toContain(`ProcessId = ${pid}; Created = 0`);
+    }
+    // The guard that makes 0 mean "no identity, no kill".
+    expect(script).toContain("if ([long]$target.Created -gt 0) {");
+  });
+
+  it("one kill invocation per round, carrying that round's whole kill set with the ages from that round's scan, descendants first", async () => {
+    const calls: RecordedCall[] = [];
+    let scanCount = 0;
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (isScanCall(command, args)) {
+        scanCount += 1;
+        if (scanCount === 1) {
+          return success(
+            tableJson([
+              { processId: 100, parentProcessId: 1, created: 1000, slot: true },
+              {
+                processId: 555,
+                parentProcessId: 100,
+                created: 3000,
+                slot: false,
+              },
+            ]),
+          );
+        }
+        if (scanCount === 2) {
+          return success(
+            tableJson([
+              { processId: 777, parentProcessId: 1, created: 5000, slot: true },
+            ]),
+          );
+        }
+        return success(tableJson([]));
+      }
+      return success("");
+    };
+    const controller = createWindowsController(runner, noTimingDeps);
+
+    await controller.stop(serviceLabelFor("staging"), { force: false });
+
+    expect(killRounds(calls)).toEqual([
+      // R0: 555 (child) before 100 (host), each with the age its row had.
+      [
+        { processId: 555, created: 3000 },
+        { processId: 100, created: 1000 },
+      ],
+      // R1: the late spawn, in its own invocation.
+      [{ processId: 777, created: 5000 }],
+    ]);
+    expect(scanCalls(calls)).toHaveLength(3);
+    expect(calls.some((call) => call.command === "taskkill")).toBe(false);
+
+    // Ablation: in `killHostProcessTree`, hand `killProcessIdentities` a
+    // `created` of 0 for every target (drop the `created.get(pid)` lookup) →
+    // this test reddens: both rounds carry `Created = 0`, which the script
+    // would never kill.
+  });
+
+  it("a kill invocation that fails does not end the round: the confirming scan still runs and is what decides", async () => {
+    const calls: RecordedCall[] = [];
+    let scanCount = 0;
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (isScanCall(command, args)) {
+        scanCount += 1;
+        return success(
+          scanCount === 1
+            ? tableJson([{ processId: 100, parentProcessId: 1, slot: true }])
+            : tableJson([]),
+        );
+      }
+      if (isKillCall(command, args)) throw new Error("powershell timed out");
+      return success("");
+    };
+    const controller = createWindowsController(runner, noTimingDeps);
+
+    await expect(
+      controller.stop(serviceLabelFor("staging"), { force: false }),
+    ).resolves.toBeUndefined();
+
+    expect(killRounds(calls)).toHaveLength(1);
+    expect(scanCalls(calls)).toHaveLength(2);
+    expect(mocks.removeHostPidMetadata).toHaveBeenCalledWith("staging");
+  });
+
+  it("an authority loss during the kill is the one failure that propagates, before any further scan", async () => {
+    const authorityError = new ServiceMutationAuthorityError(
+      new Error("maintenance lease revoked"),
+    );
+    const calls: RecordedCall[] = [];
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (isScanCall(command, args)) {
+        return success(
+          tableJson([{ processId: 100, parentProcessId: 1, slot: true }]),
+        );
+      }
+      if (isKillCall(command, args)) throw authorityError;
+      return success("");
+    };
+    const controller = createWindowsController(runner, noTimingDeps);
+
+    let caught: unknown = null;
+    try {
+      await controller.stop(serviceLabelFor("staging"), { force: false });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBe(authorityError);
+    expect(scanCalls(calls)).toHaveLength(1);
+    expect(mocks.removeHostPidMetadata).not.toHaveBeenCalled();
+  });
+
+  it("a round with more targets than one script carries issues several scripts, in order, and still converges", async () => {
+    // Codex P2 on #1762: the script rides `powershell.exe`'s command line,
+    // which `CreateProcessW` caps at 32,767 characters; a single script over
+    // 500-600 targets could not start at all, and every kill pass would
+    // silently become a no-op. 600 slot processes here: three scripts of
+    // 250, 250 and 100, in the round's order (all depth 0, so by pid).
+    const rows: TableRowInput[] = Array.from({ length: 600 }, (_, index) => ({
+      processId: 1000 + index,
+      parentProcessId: 1,
+      slot: true,
+    }));
+    const { runner, calls } = convergingTableRunner(rows);
+    const controller = createWindowsController(runner, noTimingDeps);
+
+    await controller.stop(serviceLabelFor("staging"), { force: false });
+
+    const scripts = killRounds(calls);
+    expect(scripts.map((script) => script.length)).toEqual([
+      WINDOWS_KILL_TARGETS_PER_SCRIPT,
+      WINDOWS_KILL_TARGETS_PER_SCRIPT,
+      600 - 2 * WINDOWS_KILL_TARGETS_PER_SCRIPT,
+    ]);
+    expect(killedPids(calls)).toEqual(rows.map((row) => row.processId));
+    // One round: a scan, the three scripts, the confirming scan.
+    expect(scanCalls(calls)).toHaveLength(2);
+  });
+
+  it("a round that runs out of time issues no further script: the unsent targets are next round's, and the confirming scan still decides", async () => {
+    // The chunks share ONE deadline, so the restart budget's one-kill-bound
+    // per round holds however many scripts a slot needs. Every script here
+    // "takes" the whole budget, so each round sends exactly one script and
+    // the 600 targets drain across the three kill passes - convergence, not
+    // a widened round.
+    let clock = 0;
+    const monotonic = vi
+      .spyOn(performance, "now")
+      .mockImplementation(() => clock);
+    try {
+      const rows: TableRowInput[] = Array.from({ length: 600 }, (_, index) => ({
+        processId: 1000 + index,
+        parentProcessId: 1,
+        slot: true,
+      }));
+      const calls: RecordedCall[] = [];
+      let live = rows;
+      const runner: ProcessRunner = async (command, args) => {
+        calls.push({ command, args });
+        if (isScanCall(command, args)) return success(tableJson(live));
+        if (isKillCall(command, args)) {
+          const killed = new Set(
+            killTargetsOf(args).map((target) => target.processId),
+          );
+          live = live.filter((row) => !killed.has(row.processId));
+          clock += WINDOWS_PROCESS_KILL_TIMEOUT_MS + 1;
+        }
+        return success("");
+      };
+      const controller = createWindowsController(runner, noTimingDeps);
+
+      await controller.stop(serviceLabelFor("staging"), { force: false });
+
+      expect(killRounds(calls).map((script) => script.length)).toEqual([
+        WINDOWS_KILL_TARGETS_PER_SCRIPT,
+        WINDOWS_KILL_TARGETS_PER_SCRIPT,
+        600 - 2 * WINDOWS_KILL_TARGETS_PER_SCRIPT,
+      ]);
+      // Three rounds, each one script, plus the confirming scan.
+      expect(scanCalls(calls)).toHaveLength(4);
+      expect(live).toEqual([]);
+    } finally {
+      monotonic.mockRestore();
+    }
+  });
+
+  it("a script over the maximum number of worst-case targets stays under half the command-line cap", () => {
+    const script = buildWindowsHandleBoundKillScript(
+      Array.from({ length: WINDOWS_KILL_TARGETS_PER_SCRIPT }, () => ({
+        processId: 4_294_967_295,
+        created: Number.MAX_SAFE_INTEGER,
+      })),
+    );
+    expect(script.length).toBeLessThan(32_767 / 2);
+  });
+
+  it("parses the kill script's outcome report, bare single object included, and rejects any other shape", () => {
+    expect(
+      parseWindowsKillOutcomeJson(
+        '[{"ProcessId":100,"Outcome":"killed"},{"ProcessId":555,"Outcome":"reused"}]',
+      ),
+    ).toEqual([
+      { processId: 100, outcome: "killed" },
+      { processId: 555, outcome: "reused" },
+    ]);
+    expect(
+      parseWindowsKillOutcomeJson('{"ProcessId":100,"Outcome":"gone"}'),
+    ).toEqual([{ processId: 100, outcome: "gone" }]);
+    expect(parseWindowsKillOutcomeJson("")).toBeNull();
+    expect(parseWindowsKillOutcomeJson("not json")).toBeNull();
+    expect(
+      parseWindowsKillOutcomeJson('[{"ProcessId":"100","Outcome":"killed"}]'),
+    ).toBeNull();
+    expect(parseWindowsKillOutcomeJson('[{"ProcessId":100}]')).toBeNull();
+  });
+});
+
+describe("computeWindowsHostKillSet and the kill self-protection it drives", () => {
   beforeEach(() => {
     mocks.readHostPidMetadata.mockReset();
     mocks.readHostPidMetadata.mockResolvedValue(null);
@@ -2639,26 +2832,23 @@ describe("computeWindowsHostKillSet and the taskkill self-protection it drives",
       }
     }
 
-    const taskkillArgs = calls
-      .filter((call) => call.command === "taskkill")
-      .map((call) => call.args);
+    const killed = killedPids(calls);
     // Deepest-first (`orderWindowsKillsDescendantsFirst`): 400 hangs off 100,
     // so it is issued first. The KILL SET is unchanged from before that
     // ordering existed - both pids, nothing more, nothing less - only the
-    // argv order changed.
-    expect(taskkillArgs).toEqual([
-      ["/F", "/PID", "400"],
-      ["/F", "/PID", "100"],
-    ]);
-    expect(taskkillArgs.every((args) => !args.includes("/T"))).toBe(true);
-    // The scan ANSWERED, so the pid.json fallback must not be consulted at
-    // all. Before pid 0 was accepted, the idle row failed the whole parse and
-    // every stop silently degraded to that fallback.
+    // issue order changed.
+    expect(killed).toEqual([400, 100]);
+    // And never through a pid-only `taskkill`, tree or otherwise.
+    expect(calls.some((call) => call.command === "taskkill")).toBe(false);
+    // The scan ANSWERED, so pid metadata is never read as a kill source.
+    // Before pid 0 was accepted, the idle row failed the whole parse and
+    // every stop silently degraded to the pid.json fallback that existed
+    // then; the fallback is gone, and this pins that nothing reads it back.
     expect(mocks.readHostPidMetadata).not.toHaveBeenCalled();
 
     // Ablation: in `isProcessTableId`, require `value > 0` again → this test
-    // fails: the idle row rejects the table, `findSlotProcessIds` returns
-    // null, the fallback is read, and the kill set collapses to nothing.
+    // fails: the idle row rejects the table, the scan parses to null, and
+    // the stop refuses before killing anything.
   });
 
   it("terminal-run: a non-slot shell ancestor between the host and the CLI is spared", async () => {
@@ -2688,19 +2878,14 @@ describe("computeWindowsHostKillSet and the taskkill self-protection it drives",
       }
     }
 
-    const taskkillArgs = calls
-      .filter((call) => call.command === "taskkill")
-      .map((call) => call.args);
+    const killed = killedPids(calls);
     // Deepest-first, same reasoning as the host-spawned test above: 400 hangs
     // off 100, so it is issued first. The kill SET is unchanged.
-    expect(taskkillArgs).toEqual([
-      ["/F", "/PID", "400"],
-      ["/F", "/PID", "100"],
-    ]);
+    expect(killed).toEqual([400, 100]);
     // 50 (a non-slot ancestor of the CLI) is spared, and never appears.
-    expect(taskkillArgs.some((args) => args[2] === "50")).toBe(false);
+    expect(killed.includes(50)).toBe(false);
     // Nor does pid 0, which is in the table and in nobody's kill set.
-    expect(taskkillArgs.some((args) => args[2] === "0")).toBe(false);
+    expect(killed.includes(0)).toBe(false);
     expect(mocks.readHostPidMetadata).not.toHaveBeenCalled();
   });
 
@@ -2732,7 +2917,7 @@ describe("computeWindowsHostKillSet and the taskkill self-protection it drives",
     // in `killHostProcessTree`): this test calls the algebra directly and
     // would not see it. The host-spawned integration test above is the one
     // that catches a wrong pid being threaded in, because it drives
-    // `controller.stop` and asserts the taskkill argv.
+    // `controller.stop` and asserts the kill script's targets.
   });
 
   it("a stale parent id the scan could not verify (arriving as 0) does not make a stranger a victim", () => {
@@ -3270,7 +3455,7 @@ describe("computeWindowsHostKillSet and the taskkill self-protection it drives",
     // that happens to be a former victim's pid, recycled).
     describe("shapes the ordinary walk decides, not the carry-over", () => {
       it("a lingering victim (still occupying its own pid) is killed through the ordinary walk", () => {
-        // `taskkill /F` is asynchronous: the confirming scan can briefly
+        // `TerminateProcess` is asynchronous: the confirming scan can briefly
         // still list the exact pid a previous round already killed. 100 IS
         // the victim, still there, and it is ALSO a genuine slot match
         // (`slot: true`) - so it is killed as an ordinary slot-descendant

@@ -137,8 +137,8 @@ import {
 // Deliberately shared by `host service install` too, not a tighter
 // per-command bound: that command's legitimately SILENT windows stack -
 // a 30s cli-lock wait, a 32s cooperative host stop (SHUTDOWN_FORCE_EXIT_MS
-// + margin), and on win32 an install/replace sequence whose schtasks/
-// taskkill subprocess timeouts alone sum past 100s with no NDJSON between
+// + margin), and on win32 an install/replace sequence whose schtasks and
+// PowerShell scan-and-kill subprocess timeouts alone sum past 100s with no NDJSON between
 // them - so any bound tight enough to feel responsive risks SIGKILLing a
 // slow-but-live registration mid-critical-section, the torn-record class
 // the A8 comment above exists to prevent. Slow detection of a rare wedge
@@ -4030,8 +4030,8 @@ export class HostController {
         }
         // Streamed, not run: on Windows `host service uninstall` stops the
         // host through the bounded scan-then-kill loop, whose worst case is
-        // several 30 s scans plus `schtasks /End` and `taskkill` before the
-        // confirming scan and `schtasks /Delete`
+        // several 30 s scans and kill scripts plus `schtasks /End` before
+        // the confirming scan and `schtasks /Delete`
         // (`WINDOWS_RESTART_SEQUENCE_TIMEOUT_MS` in the protocol's
         // lifecycle constants). The run path's flat 45 s budget could SIGKILL
         // the CLI after a kill pass and before `/Delete`, leaving the host
