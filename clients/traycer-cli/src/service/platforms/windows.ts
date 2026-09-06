@@ -423,6 +423,14 @@ async function killHostProcessTree(
   label: ServiceLabel,
   run: ProcessRunner,
 ): Promise<void> {
+  // Two histories, deliberately apart. `attempted` is every pid a pass has
+  // aimed at, and only bounds the loop. `killed` is the subset whose taskkill
+  // REPORTED success, and is the only history the next scan may adopt
+  // orphans from: a "not found" (the process left on its own, and the pid may
+  // already be someone else's), a timeout or a runner failure prove nothing
+  // about when - or whether - that process died, and a lifetime granted on
+  // them would let a stranger's child pass as the host's orphan.
+  const attempted = new Set<number>();
   const killed = new Map<number, KilledProcess>();
   for (let pass = 0; pass < WINDOWS_KILL_TREE_MAX_PASSES; pass += 1) {
     const scanned = await findSlotProcesses(
@@ -434,20 +442,28 @@ async function killHostProcessTree(
       if (pass === 0) await killRecordedPidUnverified(label, run);
       return;
     }
-    const fresh = scanned.filter((entry) => !killed.has(entry.pid));
+    const fresh = scanned.filter((entry) => !attempted.has(entry.pid));
     if (fresh.length === 0) return;
+    for (const entry of fresh) attempted.add(entry.pid);
     await Promise.all(
       fresh.map(async (entry) => {
-        await run("taskkill", ["/F", "/PID", String(entry.pid)], {
-          env: undefined,
-          cwd: undefined,
-          timeoutMs: WINDOWS_TASKKILL_TIMEOUT_MS,
-          tolerateNonZeroExit: true,
-        }).catch((cause) => {
+        const result = await run(
+          "taskkill",
+          ["/F", "/PID", String(entry.pid)],
+          {
+            env: undefined,
+            cwd: undefined,
+            timeoutMs: WINDOWS_TASKKILL_TIMEOUT_MS,
+            tolerateNonZeroExit: true,
+          },
+        ).catch((cause) => {
           if (isServiceMutationAuthorityError(cause)) throw cause;
+          return null;
         });
-        // Stamped AFTER the kill returns: nothing this process was the parent
-        // of can have been born later than this, so it bounds its orphans.
+        if (result === null || result.exitCode !== 0) return;
+        // Stamped AFTER a successful kill returns: nothing this process was
+        // the parent of can have been born later than this, so it bounds
+        // its orphans.
         killed.set(entry.pid, {
           pid: entry.pid,
           creationMs: entry.creationMs,

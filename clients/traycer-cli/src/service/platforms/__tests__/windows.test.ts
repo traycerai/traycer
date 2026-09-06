@@ -358,6 +358,46 @@ describe("Windows service stale host cleanup", () => {
     );
   });
 
+  it("grants an adoptable lifetime only to a kill that reported success", async () => {
+    // 401's taskkill says "not found" (the process left on its own - its pid
+    // may already be a stranger's), 402's runner rejects outright, 403's
+    // succeeds. Only 403 may vouch for orphans in the next pass; all three
+    // stay off the target list so the loop still ends.
+    const calls: RecordedCall[] = [];
+    let scan = 0;
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (command === "powershell.exe") {
+        scan += 1;
+        return success(
+          '[{"ProcessId":401,"CreationMs":100},{"ProcessId":402,"CreationMs":100},{"ProcessId":403,"CreationMs":100}]',
+        );
+      }
+      if (args[2] === "401") {
+        return { stdout: "", stderr: "not found", exitCode: 128 };
+      }
+      if (args[2] === "402") throw new Error("taskkill spawn failed");
+      return success("SUCCESS");
+    };
+    const controller = createWindowsController(runner);
+
+    await controller.stop(serviceLabelFor("staging"), { force: false });
+
+    const scans = calls.filter((call) => call.command === "powershell.exe");
+    expect(scans).toHaveLength(2);
+    const second = scans[1]?.args.at(-1) ?? "";
+    expect(second).not.toContain("$killed[401]");
+    expect(second).not.toContain("$killed[402]");
+    expect(second).toMatch(
+      /\$killed\[403\] = @\{ born = \[long\]100; died = \[long\]\d+ \}/,
+    );
+    expect(
+      calls
+        .filter((call) => call.command === "taskkill")
+        .map((call) => call.args[2]),
+    ).toEqual(["401", "402", "403"]);
+  });
+
   it("bounds the follow-up passes even when every pass finds something new", async () => {
     const calls: RecordedCall[] = [];
     let scan = 0;
