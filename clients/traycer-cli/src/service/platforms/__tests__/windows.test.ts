@@ -16,6 +16,7 @@ import {
   parseWindowsProcessTableJson,
   setWindowsStartEvidenceDepsForTests,
   setWindowsTaskInstallDepsForTests,
+  WINDOWS_KILL_TARGETS_PER_SCRIPT,
   type ProcessRunner,
   type WindowsControllerDeps,
   type WindowsKillMemory,
@@ -26,7 +27,10 @@ import {
   type WindowsTaskInstallDeps,
 } from "../windows";
 import { serviceLabelFor } from "../../label";
-import { WINDOWS_KILL_CONVERGENCE_ROUNDS } from "@traycer/protocol/host/lifecycle-constants";
+import {
+  WINDOWS_KILL_CONVERGENCE_ROUNDS,
+  WINDOWS_PROCESS_KILL_TIMEOUT_MS,
+} from "@traycer/protocol/host/lifecycle-constants";
 import { ProcessRunError, type RunResult } from "../../process-runner";
 import type { SpawnEvidenceBaseline } from "../../../host/spawn-evidence";
 import { CLI_ERROR_CODES } from "../../../runner/errors";
@@ -202,8 +206,9 @@ function scanCalls(calls: readonly RecordedCall[]): RecordedCall[] {
   return calls.filter((call) => isScanCall(call.command, call.args));
 }
 
-// One entry per kill invocation - which is one per round - holding that
-// round's targets in issue order.
+// One entry per kill script - one per round, unless the round carried more
+// than `WINDOWS_KILL_TARGETS_PER_SCRIPT` targets and issued several in a row -
+// holding that script's targets in issue order.
 function killRounds(calls: readonly RecordedCall[]): WindowsKillTarget[][] {
   return calls
     .filter((call) => isKillCall(call.command, call.args))
@@ -2684,6 +2689,90 @@ describe("handle-bound kill script", () => {
     expect(caught).toBe(authorityError);
     expect(scanCalls(calls)).toHaveLength(1);
     expect(mocks.removeHostPidMetadata).not.toHaveBeenCalled();
+  });
+
+  it("a round with more targets than one script carries issues several scripts, in order, and still converges", async () => {
+    // Codex P2 on #1762: the script rides `powershell.exe`'s command line,
+    // which `CreateProcessW` caps at 32,767 characters; a single script over
+    // 500-600 targets could not start at all, and every kill pass would
+    // silently become a no-op. 600 slot processes here: three scripts of
+    // 250, 250 and 100, in the round's order (all depth 0, so by pid).
+    const rows: TableRowInput[] = Array.from({ length: 600 }, (_, index) => ({
+      processId: 1000 + index,
+      parentProcessId: 1,
+      slot: true,
+    }));
+    const { runner, calls } = convergingTableRunner(rows);
+    const controller = createWindowsController(runner, noTimingDeps);
+
+    await controller.stop(serviceLabelFor("staging"), { force: false });
+
+    const scripts = killRounds(calls);
+    expect(scripts.map((script) => script.length)).toEqual([
+      WINDOWS_KILL_TARGETS_PER_SCRIPT,
+      WINDOWS_KILL_TARGETS_PER_SCRIPT,
+      600 - 2 * WINDOWS_KILL_TARGETS_PER_SCRIPT,
+    ]);
+    expect(killedPids(calls)).toEqual(rows.map((row) => row.processId));
+    // One round: a scan, the three scripts, the confirming scan.
+    expect(scanCalls(calls)).toHaveLength(2);
+  });
+
+  it("a round that runs out of time issues no further script: the unsent targets are next round's, and the confirming scan still decides", async () => {
+    // The chunks share ONE deadline, so the restart budget's one-kill-bound
+    // per round holds however many scripts a slot needs. Every script here
+    // "takes" the whole budget, so each round sends exactly one script and
+    // the 600 targets drain across the three kill passes - convergence, not
+    // a widened round.
+    let clock = 0;
+    const monotonic = vi
+      .spyOn(performance, "now")
+      .mockImplementation(() => clock);
+    try {
+      const rows: TableRowInput[] = Array.from({ length: 600 }, (_, index) => ({
+        processId: 1000 + index,
+        parentProcessId: 1,
+        slot: true,
+      }));
+      const calls: RecordedCall[] = [];
+      let live = rows;
+      const runner: ProcessRunner = async (command, args) => {
+        calls.push({ command, args });
+        if (isScanCall(command, args)) return success(tableJson(live));
+        if (isKillCall(command, args)) {
+          const killed = new Set(
+            killTargetsOf(args).map((target) => target.processId),
+          );
+          live = live.filter((row) => !killed.has(row.processId));
+          clock += WINDOWS_PROCESS_KILL_TIMEOUT_MS + 1;
+        }
+        return success("");
+      };
+      const controller = createWindowsController(runner, noTimingDeps);
+
+      await controller.stop(serviceLabelFor("staging"), { force: false });
+
+      expect(killRounds(calls).map((script) => script.length)).toEqual([
+        WINDOWS_KILL_TARGETS_PER_SCRIPT,
+        WINDOWS_KILL_TARGETS_PER_SCRIPT,
+        600 - 2 * WINDOWS_KILL_TARGETS_PER_SCRIPT,
+      ]);
+      // Three rounds, each one script, plus the confirming scan.
+      expect(scanCalls(calls)).toHaveLength(4);
+      expect(live).toEqual([]);
+    } finally {
+      monotonic.mockRestore();
+    }
+  });
+
+  it("a script over the maximum number of worst-case targets stays under half the command-line cap", () => {
+    const script = buildWindowsHandleBoundKillScript(
+      Array.from({ length: WINDOWS_KILL_TARGETS_PER_SCRIPT }, () => ({
+        processId: 4_294_967_295,
+        created: Number.MAX_SAFE_INTEGER,
+      })),
+    );
+    expect(script.length).toBeLessThan(32_767 / 2);
   });
 
   it("parses the kill script's outcome report, bare single object included, and rejects any other shape", () => {

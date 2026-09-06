@@ -55,12 +55,14 @@ export const WINDOWS_SCHTASKS_END_TIMEOUT_MS = 30_000;
  */
 export const WINDOWS_PROCESS_SCAN_TIMEOUT_MS = 30_000;
 /**
- * Bound on ONE kill round: a single PowerShell script that terminates every
- * pid the preceding scan selected, each through a handle whose creation time
- * it first checks against the scan's. It pays the same emulated-PowerShell
- * startup the scan does - the reason it is one script per round and not one
- * per pid - and then microseconds per `TerminateProcess`, so the scan's
- * ceiling is the right one here too.
+ * Bound on ONE kill round, however many PowerShell scripts it takes: the
+ * round terminates every pid the preceding scan selected, each through a
+ * handle whose creation time it first checks against the scan's, in scripts
+ * of at most `WINDOWS_KILL_TARGETS_PER_SCRIPT` targets (one for any realistic
+ * round) that share this single deadline. A script pays the same
+ * emulated-PowerShell startup the scan does - the reason it carries the round
+ * and not one pid - and then microseconds per `TerminateProcess`, so the
+ * scan's ceiling is the right one here too.
  */
 export const WINDOWS_PROCESS_KILL_TIMEOUT_MS = 30_000;
 export const WINDOWS_SCHTASKS_RUN_TIMEOUT_MS = 30_000;

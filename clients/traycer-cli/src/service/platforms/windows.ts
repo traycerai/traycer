@@ -734,15 +734,68 @@ export interface WindowsKillOutcome {
   readonly outcome: string;
 }
 
-// One PowerShell invocation for the whole round, in the caller's order. The
-// script is what turns a pid into an identity: it never terminates a process
-// whose creation time it did not just read through the very handle it then
-// terminates through. Failures are swallowed for the same reason the outcomes
-// are diagnostic - a kill that did not land shows up in the confirming scan as
-// a survivor, and the round bound turns that into a refusal that names it. The
-// authority error is the one exception, as everywhere in this module.
+// How many targets one kill script carries. The script travels on
+// `powershell.exe`'s command line, which `CreateProcessW` caps at 32,767
+// characters, and the previous per-pid `taskkill` had no aggregate limit to
+// inherit. Measured on the script text: a target costs 59 characters with
+// its separator at a ten-digit pid and a sixteen-digit age, the fixed body
+// is 1,126, so 250 targets are 15,874 - under half the cap, with the
+// `powershell.exe -NoProfile -NonInteractive -Command` prefix and Node's
+// quoting adding some 50 more. Every realistic round is one script; a slot
+// with more processes than this issues several, in order, under the round's
+// single deadline (`killProcessIdentities`). Codex P2 on #1762.
+export const WINDOWS_KILL_TARGETS_PER_SCRIPT = 250;
+
+// The whole round's kill, in the caller's order: one PowerShell script per
+// `WINDOWS_KILL_TARGETS_PER_SCRIPT` targets, all under ONE deadline of
+// `WINDOWS_PROCESS_KILL_TIMEOUT_MS`. The restart budget models a round as one
+// kill bound, and chunking must not widen it, so a script that no longer fits
+// the remaining time is not started: its targets are simply next round's,
+// where a fresh scan re-selects whatever is still there, and the round bound
+// turns what never converges into the refusal that names it. The deadline is
+// measured on the monotonic clock, not `Date.now()`: a wall-clock step during
+// the round would either stretch the budget or starve the later scripts.
+//
+// The script is what turns a pid into an identity: it never terminates a
+// process whose creation time it did not just read through the very handle it
+// then terminates through. Failures are swallowed for the same reason the
+// outcomes are diagnostic - a kill that did not land shows up in the
+// confirming scan as a survivor, and the round bound turns that into a
+// refusal that names it. The authority error is the one exception, as
+// everywhere in this module.
 async function killProcessIdentities(
   targets: readonly WindowsKillTarget[],
+  label: ServiceLabel,
+  run: ProcessRunner,
+): Promise<void> {
+  const startedAt = performance.now();
+  for (
+    let start = 0;
+    start < targets.length;
+    start += WINDOWS_KILL_TARGETS_PER_SCRIPT
+  ) {
+    const remainingMs = Math.floor(
+      WINDOWS_PROCESS_KILL_TIMEOUT_MS - (performance.now() - startedAt),
+    );
+    if (remainingMs <= 0) {
+      createCliLogger(label.environment).warn(
+        "Windows host kill round ran out of time; the targets not yet sent wait for the next scan",
+        { targets: targets.length, unsent: targets.length - start },
+      );
+      return;
+    }
+    await runHandleBoundKillScript(
+      targets.slice(start, start + WINDOWS_KILL_TARGETS_PER_SCRIPT),
+      remainingMs,
+      label,
+      run,
+    );
+  }
+}
+
+async function runHandleBoundKillScript(
+  targets: readonly WindowsKillTarget[],
+  timeoutMs: number,
   label: ServiceLabel,
   run: ProcessRunner,
 ): Promise<void> {
@@ -758,7 +811,7 @@ async function killProcessIdentities(
       {
         env: undefined,
         cwd: undefined,
-        timeoutMs: WINDOWS_PROCESS_KILL_TIMEOUT_MS,
+        timeoutMs,
         tolerateNonZeroExit: true,
       },
     );
