@@ -1,7 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { link, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { basename } from "node:path";
-import { withLock } from "@traycer-clients/shared/host-lock/cross-process-lock";
 import {
   isProcessStartIdentity,
   type ProcessStartIdentity,
@@ -13,6 +12,7 @@ import {
   probeProcessLiveness,
   verifyProcessIdentity,
 } from "../store/process-identity";
+import { withCliScopedFileLock } from "../store/cli-lock";
 import {
   ensureHostHomeDir,
   hostUpdateProgressMarkerPath,
@@ -245,8 +245,9 @@ async function stageMarkerFile(
 // cleanup after it has started.
 //
 // So every conditional write - create, replace, delete - runs under one
-// short cross-process lock beside the marker (the shared `withLock`:
-// O_EXCL create, holder identity, a dead holder broken by liveness). The
+// short cross-process lock beside the marker (the shared lock protocol
+// through the CLI facade `withCliScopedFileLock`: O_EXCL create, holder
+// identity, a dead holder broken by liveness). The
 // hold is a handful of renames; the wait is bounded, and a holder that
 // outlives it (a live process stuck mid-swap) makes the primitive answer
 // `failed` - nothing of the intended write landed, warned by name - the
@@ -288,7 +289,7 @@ async function underMarkerLock<T>(
   const logger = createCliLogger(environment);
   try {
     await ensureHostHomeDir(environment);
-    const outcome = await withLock(
+    const outcome = await withCliScopedFileLock(
       {
         lockPath: markerLockPath(environment),
         reason: `host-update-progress-marker-${operation}`,
