@@ -428,7 +428,6 @@ async function killHostProcessTree(
   for (let round = 0; round <= WINDOWS_KILL_CONVERGENCE_ROUNDS; round += 1) {
     const scannedPids = await findSlotProcessIds(label, run, process.pid);
     if (scannedPids === null) {
-      return;
       // Before the first kill this refuses to start; after one it refuses to
       // claim the tree came down. Both are the same statement - we cannot see
       // the slot, so we cannot say what is in it - and neither may be softened
