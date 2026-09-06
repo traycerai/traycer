@@ -1027,12 +1027,17 @@ export function HostOverviewPanel(props: {
             // the transition id, the busy verdict and the force/defer dialog
             // are all the existing ones.
             onRestart={
-              (legacyFacts?.activationDebt ?? null) === null
+              !usable || (legacyFacts?.activationDebt ?? null) === null
                 ? null
                 : () => setRestartConfirmOpen(true)
             }
+            // Both controls need a route to the host they act on. `usable`
+            // is the same gate the header's Restart is withheld under: the
+            // facts are cached reads and outlive reachability, and the
+            // projection already renders them qualified ("last known") -
+            // the evidence stays, the dispatch does not.
             onForceUpdate={
-              legacyFacts === null || legacyFacts.stagedWait === null
+              !usable || legacyFacts === null || legacyFacts.stagedWait === null
                 ? null
                 : () => {
                     if (legacyFacts.stagedWait === null) return;

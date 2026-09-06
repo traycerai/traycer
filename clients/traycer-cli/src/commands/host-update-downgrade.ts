@@ -27,6 +27,13 @@ export async function installHostDowngrade(input: {
   readonly version: string;
   readonly force: boolean;
   readonly onProgress: (info: ProgressInfo) => void;
+  /**
+   * Runs under the mutation lock, before the busy gate and the commit - the
+   * first point at which this command is the only updater acting. `host
+   * update` re-establishes its progress marker here, since the one it wrote
+   * before waiting for admission may have been withdrawn by another run.
+   */
+  readonly onBeforeCommit: () => Promise<void>;
 }): Promise<Extract<ApplyHostOutcome, { outcome: "applied" }>> {
   const contenderOptions: WithCliUpdateContenderOptions = {
     environment: input.environment,
@@ -61,6 +68,7 @@ export async function installHostDowngrade(input: {
               exitCode: 1,
             });
           }
+          await input.onBeforeCommit();
           if (!input.force) await assertHostNotBusy(input.environment);
           const handle = createServiceInstallLifecycle({
             environment: input.environment,

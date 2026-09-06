@@ -15,6 +15,7 @@ import {
   replaceUpdateProgressMarkerIfUnchanged,
   writeUpdateProgressMarker,
   type HostUpdateProgress,
+  sameProgress,
 } from "../host/update-progress-marker";
 import { probeHostHealth } from "../service/health-probe";
 import {
@@ -202,6 +203,11 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
     // write landed (a failed write is warned about, not retried). The version
     // it names is the one a `failed` stamp has to name too, which is why the
     // re-point under the lock replaces the whole record rather than one field.
+    //
+    // It is a CLAIM about the disk, not a fact: the one write that is not
+    // conditional on it is `reassertMarkerUnderLock` below, which republishes
+    // only into an EMPTY path - the case where a faster updater cleared this
+    // run's marker while it waited - and erases nothing.
     const ownMarker: { current: HostUpdateProgress | null } = { current: null };
     const publishUpdating = async (targetVersion: string): Promise<void> => {
       ownMarker.current = progressRecord({
@@ -214,6 +220,61 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
         environment,
         ownMarker.current,
       );
+    };
+    // Under the contender lock, before the disruptive half, re-establish
+    // what the pre-lock marker only claimed. The marker is published BEFORE
+    // this run waits for admission (`onWillDownload`, or the no-transfer
+    // arms above), and the wait is unbounded by anything this run controls:
+    // a second `host update` can land its own `updating` over ours, do its
+    // work, and clear it while we were still downloading. Reaching the apply
+    // with `ownMarker.current` non-null then proves nothing about the disk -
+    // the swap and restart would run with no marker at all, and the `failed`
+    // stamp (CAS against a record that is long gone) could never land.
+    //
+    // Three cases, decided from the file rather than from memory:
+    //  - ours is still there → keep it, re-pointed if the target moved under
+    //    the lock (the activation arm reads the record again there);
+    //  - another updater's is there → leave it. It is that updater's only
+    //    progress signal and this run's later stamp/clear are conditional on
+    //    a record the disk no longer holds, so they degrade to no-ops rather
+    //    than erase it;
+    //  - none → republish. Nothing is erased, and this run's work is once
+    //    again visible to every remote surface.
+    const reassertMarkerUnderLock = async (
+      targetVersion: string,
+    ): Promise<void> => {
+      const own = ownMarker.current;
+      const onDisk = await readUpdateProgressMarker(environment);
+      if (own !== null && onDisk !== null && sameProgress(onDisk, own)) {
+        if (own.targetVersion === targetVersion) return;
+        const repointed = progressRecord({
+          state: "updating",
+          error: null,
+          targetVersion,
+        });
+        const outcome = await replaceUpdateProgressMarkerIfUnchanged(
+          environment,
+          own,
+          repointed,
+        );
+        if (outcome === "replaced") {
+          ownMarker.current = repointed;
+        } else {
+          ctx.runtime.logger.info(
+            "Host update did not re-point the progress marker - another updater owns it now",
+            { environment, targetVersion },
+          );
+        }
+        return;
+      }
+      if (onDisk !== null) {
+        ctx.runtime.logger.info(
+          "Host update proceeds under another updater's progress marker; this run's own marker was withdrawn while it waited",
+          { environment, targetVersion: onDisk.targetVersion },
+        );
+        return;
+      }
+      await publishUpdating(targetVersion);
     };
 
     let preparation: HostUpdatePreparation;
@@ -319,74 +380,32 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
           environment,
           args.force,
           activationDebt.runningVersion,
-          async (installedVersion) => {
-            // Re-point the marker when the activation path finds the record
-            // moved under the lock, so a `failed` stamp names the version
-            // that was actually being activated.
-            if (
-              ownMarker.current !== null &&
-              installedVersion === ownMarker.current.targetVersion
-            ) {
-              return;
-            }
-            const repointed = progressRecord({
-              state: "updating",
-              error: null,
-              targetVersion: installedVersion,
-            });
-            // Ownership-aware like every other write after the first: a newer
-            // updater's pre-lock `updating` may already sit at the path, and
-            // an unconditional re-point would replace it with a record THIS
-            // run then clears at the end - leaving that updater's whole
-            // apply/restart without its progress signal. The re-point lands
-            // only over this run's own marker, and `ownMarker.current` follows
-            // what is actually on disk: if the swap reports the marker is no
-            // longer ours, it stays pointed at the old record, so the later
-            // stamp and clear (both conditional on it) leave the newer
-            // updater's marker alone.
-            if (ownMarker.current === null) {
-              ownMarker.current = repointed;
-              await writeUpdateProgressMarkerSafely(
-                ctx.runtime.logger,
-                environment,
-                repointed,
-              );
-              return;
-            }
-            const outcome = await replaceUpdateProgressMarkerIfUnchanged(
-              environment,
-              ownMarker.current,
-              repointed,
-            );
-            if (outcome === "replaced") {
-              ownMarker.current = repointed;
-            } else {
-              ctx.runtime.logger.info(
-                "Host update did not re-point the progress marker - another updater owns it now",
-                { environment, installedVersion },
-              );
-            }
-          },
+          // The record is read again under the lock; the marker follows it
+          // (or is re-established if another updater withdrew it meanwhile).
+          (installedVersion) => reassertMarkerUnderLock(installedVersion),
         );
         legacy = activation.legacy;
         activationPerformed = activation.activated;
+      } else if (preparation.kind === "staged") {
+        const stagedTarget = downloadTargetVersion(preparation.download);
+        legacy = await applyAndProjectLegacy(
+          environment,
+          args.force,
+          needsApply,
+          (info) => ctx.progress(info),
+          () => reassertMarkerUnderLock(stagedTarget),
+        );
       } else {
-        legacy =
-          preparation.kind === "staged"
-            ? await applyAndProjectLegacy(
-                environment,
-                args.force,
-                needsApply,
-                (info) => ctx.progress(info),
-              )
-            : projectApplied(
-                await installHostDowngrade({
-                  environment,
-                  version: preparation.version,
-                  force: args.force,
-                  onProgress: (info) => ctx.progress(info),
-                }),
-              );
+        const downgradeTarget = preparation.version;
+        legacy = projectApplied(
+          await installHostDowngrade({
+            environment,
+            version: downgradeTarget,
+            force: args.force,
+            onProgress: (info) => ctx.progress(info),
+            onBeforeCommit: () => reassertMarkerUnderLock(downgradeTarget),
+          }),
+        );
       }
     } catch (err) {
       if (err instanceof CliError && err.code === CLI_ERROR_CODES.HOST_BUSY) {
@@ -885,6 +904,8 @@ async function applyAndProjectLegacy(
   force: boolean,
   needsApply: boolean,
   onProgress: (info: ProgressInfo) => void,
+  /** Runs under the contender lock, after the no-op decision, before the apply. */
+  onUnderLock: () => Promise<void>,
 ): Promise<LegacyHostUpdateResult> {
   // ONE options value for acquisition and revalidation: two literals that
   // must stay identical are how admission policies drift.
@@ -899,6 +920,7 @@ async function applyAndProjectLegacy(
     if (!needsApply) {
       return projectNoOp(await requireInstalled(environment));
     }
+    await onUnderLock();
     let outcome: ApplyHostOutcome;
     try {
       outcome = await applyHostWithAttempt(capability, contenderOptions, {

@@ -38,6 +38,7 @@ vi.mock("sonner", () => ({
   },
 }));
 
+import type { ReactNode } from "react";
 import {
   cleanup,
   fireEvent,
@@ -129,6 +130,29 @@ function renderPanel(): void {
       </RunnerHostProvider>
     </QueryClientProvider>,
   );
+}
+
+// Same `QueryClient`/tree kept alive across a `rerender` - the shape
+// `host-overview-lifecycle-gate.test.tsx`'s `renderPanelPersistent` uses -
+// so a later mutation of `scopeOverrides.current`/`hostBindingMock.current`
+// (a Settings host swap) is observed by the SAME mounted subtree rather than
+// torn down and rebuilt with it. A fresh element on every call, not a
+// captured/reused one: React bails out of re-rendering a subtree entirely
+// when the SAME element reference is passed to `rerender` twice.
+function renderPanelPersistent(): { rerender: () => void } {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: 0 } },
+  });
+  const runnerHost = makeRunnerHost();
+  const buildTree = (): ReactNode => (
+    <QueryClientProvider client={client}>
+      <RunnerHostProvider runnerHost={runnerHost}>
+        <HostSettingsPanel />
+      </RunnerHostProvider>
+    </QueryClientProvider>
+  );
+  const { rerender } = render(buildTree());
+  return { rerender: () => rerender(buildTree()) };
 }
 
 function attemptOperation(
@@ -662,5 +686,105 @@ describe("HostOverviewOperationCard — record-derived parks", () => {
     // frame.
     await screen.findByText(/1\.5\.0/);
     expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
+  });
+
+  it("activation debt + staged wait: an UNUSABLE scope keeps the sentence (qualified as retained) but withdraws Restart", async () => {
+    // Mirrors `host-overview-lifecycle-gate.test.tsx`'s (c2): the retained
+    // record-derived facts survive an unusable scope (nothing about the
+    // READ changes - same cached `host.status`/`host.getInstallationInfo`
+    // responses), but `hasLiveSource`/`connected` (both wired to `usable`)
+    // demote the projection to `unknown` with a retained `lastKnownKind`,
+    // which `describeUpdateOperation` renders as an inline "Last seen: …"
+    // qualification (`carriesQualificationInline`) rather than the separate
+    // `(last known)` marker - so the phase sentence itself is the proof of
+    // qualification here, exactly as (c2) reads it for the live attempt. The
+    // panel's own `!usable` guard on `onRestart` (`host-overview-panel.tsx`)
+    // withdraws the control entirely rather than merely disabling it - the
+    // same rule (c2) pins for the header actions.
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.3.0-rc.2",
+      installation: managedInstallation(
+        installRecord("1.3.0-rc.3", null),
+        null,
+      ),
+      overrideHandlers: {
+        "host.status": () =>
+          statusWithBusy("1.3.0-rc.2", { kind: "none" }, false, 0),
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    const panel = renderPanelPersistent();
+
+    const card = await screen.findByTestId("host-overview-operation-card");
+    expect(card.textContent).toContain(
+      "Update installed — restart host to finish",
+    );
+    expect(card.textContent).not.toContain("Last seen:");
+    await screen.findByTestId("host-overview-operation-restart");
+
+    // Nothing about the read changes - only the scope stops being usable,
+    // the way a negotiated peer going unreachable would leave it.
+    scopeOverrides.current = {
+      ...scopeFrom("host-a", fixture),
+      status: "unreachable",
+    };
+    panel.rerender();
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("host-overview-operation-phase").textContent,
+      ).toBe("Last seen: Update installed — restart host to finish");
+    });
+    expect(screen.queryByTestId("host-overview-operation-restart")).toBeNull();
+  });
+
+  it("staged wait: an UNUSABLE scope keeps the sentence (qualified as retained) but withdraws Force update…", async () => {
+    // Doubly guaranteed here, unlike the Restart case above: `offersForceRestart`
+    // (`fleet-update-view.ts`) requires `view.kind === "waiting-for-work"`,
+    // and the SAME demotion that qualifies the sentence also flips `view.kind`
+    // to `unknown` - so the button's absence is not a clean isolation of the
+    // panel's own `!usable` guard on `onForceUpdate` the way the Restart
+    // button's absence isolates its `!usable` guard (that one has no
+    // `view.kind`-based gate of its own). Both guards agree here; this pins
+    // the observable requirement (no dispatch route on an unusable scope),
+    // not which of the two guards is doing the work for THIS control.
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.3.0-rc.2",
+      installation: managedInstallation(
+        installRecord("1.3.0-rc.2", "1.3.0-rc.2"),
+        stagedRecord("1.3.0-rc.3"),
+      ),
+      overrideHandlers: {
+        "host.status": () =>
+          statusWithBusy("1.3.0-rc.2", { kind: "none" }, true, 2),
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    const panel = renderPanelPersistent();
+
+    await screen.findByTestId("host-overview-operation-force-update");
+
+    scopeOverrides.current = {
+      ...scopeFrom("host-a", fixture),
+      status: "unreachable",
+    };
+    panel.rerender();
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("host-overview-operation-phase").textContent,
+      ).toMatch(/^Last seen: Update will continue when/);
+    });
+    expect(
+      screen.queryByTestId("host-overview-operation-force-update"),
+    ).toBeNull();
   });
 });
