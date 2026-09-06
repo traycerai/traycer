@@ -787,4 +787,58 @@ describe("HostOverviewOperationCard — record-derived parks", () => {
       screen.queryByTestId("host-overview-operation-force-update"),
     ).toBeNull();
   });
+
+  it("(c4) an OPEN force-update offer CLOSES when the scope turns unusable — the withdrawal of the Force update… control, one commit late", async () => {
+    // Companion to `host-overview-lifecycle-gate.test.tsx`'s (c3), for the
+    // OTHER dialog `host-overview-panel.tsx`'s `!usable` rule closes:
+    // `if (!usable && forceUpdateOffer !== null) setForceUpdateOffer(null);`.
+    // The sibling test above ("staged wait ... withdraws Force update…")
+    // pins that the CONTROL disappears on an unusable scope; this pins the
+    // stronger claim - an offer already OPEN before the scope turned
+    // unusable does not survive either, because confirming it would dispatch
+    // `host.update.install {force: true}` over a client the scope no longer
+    // vouches for. Falsification: comment out that `if` in the panel and the
+    // final `waitFor` below goes red while the dialog stays on screen.
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.3.0-rc.2",
+      installation: managedInstallation(
+        installRecord("1.3.0-rc.2", "1.3.0-rc.2"),
+        stagedRecord("1.3.0-rc.3"),
+      ),
+      overrideHandlers: {
+        "host.status": () =>
+          statusWithBusy("1.3.0-rc.2", { kind: "none" }, true, 2),
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    const panel = renderPanelPersistent();
+
+    fireEvent.click(
+      await screen.findByTestId("host-overview-operation-force-update"),
+    );
+    await screen.findByTestId("host-busy-force-defer-dialog");
+
+    // Control: rerendering with the scope still usable keeps the dialog
+    // open — otherwise the assertion below would prove nothing about
+    // `usable` specifically.
+    panel.rerender();
+    expect(screen.getByTestId("host-busy-force-defer-dialog")).toBeTruthy();
+
+    // THE FIX: the scope turns unusable — same predicate the sibling test
+    // above demotes the phase sentence and withdraws the control on — and
+    // the already-open offer closes, one commit late.
+    scopeOverrides.current = {
+      ...scopeFrom("host-a", fixture),
+      status: "unreachable",
+    };
+    panel.rerender();
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("host-busy-force-defer-dialog")).toBeNull();
+    });
+  });
 });

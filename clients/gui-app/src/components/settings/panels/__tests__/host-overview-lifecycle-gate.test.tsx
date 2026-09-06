@@ -516,4 +516,53 @@ describe("HostOverviewPanel — lifecycle gate matrix (G1)", () => {
     expect(screen.queryByTestId("host-overview-edit-name")).toBeNull();
     expect(screen.queryByTestId("host-overview-menu")).toBeNull();
   });
+
+  it("(c3) an open restart confirmation CLOSES when the scope turns unusable — the withdrawal of the Restart control, one commit late", async () => {
+    // `host-overview-panel.tsx`: `if (!usable && restartConfirmOpen)
+    // setRestartConfirmOpen(false);`. The control that OPENS this dialog is
+    // already withdrawn on `!usable` (c2's own assertion), but a confirmation
+    // opened while the scope was still usable is not touched by that
+    // withdrawal — answered, it would dispatch `host.restart` over a client
+    // the scope no longer vouches for. Falsification: comment out that `if`
+    // in the panel and the final `waitFor` below goes red while the dialog
+    // stays on screen.
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      overrideHandlers: {
+        // No active attempt (`updateOperation: null`) and no coarse marker,
+        // so the lifecycle gate is released and Restart is enabled from the
+        // first render.
+        "host.status": () => statusWith(null, undefined),
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    const panel = renderPanelPersistent();
+
+    await screen.findByTestId("host-overview-edit-name");
+    expect(await restartMenuAriaDisabled()).not.toBe("true");
+    fireEvent.click(screen.getByTestId("host-overview-restart"));
+    await screen.findByTestId("confirm-destructive-dialog");
+
+    // Control: rerendering with the scope still usable keeps the dialog
+    // open — otherwise the assertion below would prove nothing about
+    // `usable` specifically.
+    panel.rerender();
+    expect(screen.getByTestId("confirm-destructive-dialog")).toBeTruthy();
+
+    // THE FIX: the scope turns unusable — same predicate (c2) demotes the
+    // operation card on — and the already-open confirmation closes, one
+    // commit late with the controls that open it.
+    scopeOverrides.current = {
+      ...scopeFrom("host-a", fixture),
+      status: "unreachable",
+    };
+    panel.rerender();
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull();
+    });
+  });
 });
