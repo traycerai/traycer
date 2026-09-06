@@ -98,27 +98,49 @@ export async function verifyHostUpdateAttempt(
         waitMs: 30_000,
         pollIntervalMs: 100,
       },
-      request: {
-        targetVersion: args.targetVersion,
-        // Provenance of the attempt being verified, not of this invocation.
-        // The recovery arm carries the original trigger through; this value is
-        // only consulted if the request were to mint a new attempt, which an
-        // identity-bound request cannot do.
-        trigger: "manual",
-        // The same authorization the activation segment held. Recovery never
-        // upgrades an action: `activate` can adopt only the activation
-        // continuation, so this claim cannot turn into an apply.
-        action: "activate",
-        expected: {
-          attemptId: args.attemptId,
-          generation: args.generation,
-          sequence: args.sequence,
+      // A FIXED request, wrapped as the selector the executor now takes. It
+      // ignores the record it is handed on purpose: this call is bound to one
+      // attempt identity by its arguments, and re-deciding from what the lock
+      // reveals is precisely what a verification must not do. The `async` is
+      // the signature's, not a deferred read - there is nothing here to read.
+      request: async () => ({
+        kind: "claim",
+        request: {
+          targetVersion: args.targetVersion,
+          // Provenance of the attempt being verified, not of this invocation.
+          // The recovery arm carries the original trigger through; this value
+          // is only consulted if the request were to mint a new attempt,
+          // which an identity-bound request cannot do.
+          trigger: "manual",
+          // The same authorization the activation segment held. Recovery
+          // never upgrades an action: `activate` can adopt only the
+          // activation continuation, so this claim cannot turn into an apply.
+          action: "activate",
+          expected: {
+            attemptId: args.attemptId,
+            generation: args.generation,
+            sequence: args.sequence,
+          },
+          // Unreachable for an identity-bound request — `decideAttemptClaim`
+          // resolves those before any create path — but required by the shape.
+          newAttemptId: randomUUID(),
+          initialPhase: "preparing",
+          // Both `null`, and both for the same reason: a request fixed before
+          // the lock cannot carry facts that are only true under it. The
+          // continuation belongs to a created attempt, and this request
+          // creates none; the claim baseline is refreshed by the executor's
+          // own recovery park, from the observation it made under the lock.
+          initialContinuation: null,
+          claim: null,
         },
-        // Unreachable for an identity-bound request — `decideAttemptClaim`
-        // resolves those before any create path — but required by the shape.
-        newAttemptId: randomUUID(),
-        initialPhase: "preparing",
-      },
+      }),
+      // Today's two recovery branches, now named. Activation belongs to
+      // Desktop, so a recovered `activate` is re-parked rather than executed
+      // here; and a recovery that TERMINALIZED the attempt is what this call
+      // was asked to report, so its terminal outcome is returned unchanged
+      // instead of being re-selected against.
+      recoveredActivation: "park",
+      afterRecovery: "report",
       nowIso: () => new Date().toISOString(),
       faults: NO_UPDATE_EXECUTOR_FAULTS,
     },

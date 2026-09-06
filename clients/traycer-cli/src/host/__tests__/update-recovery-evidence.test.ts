@@ -835,6 +835,191 @@ describe("observeAttemptRecoveryEvidence - running snapshot flap fails closed (f
   });
 });
 
+describe("observeAttemptRecoveryEvidence - the running leg is typed AGAINST the install record (D9)", () => {
+  /**
+   * A genuine, attested install fixture with a caller-chosen `runtimeVersion`
+   * - the field every case in this block classifies against - through the
+   * same real fs read `readInstalledObservation` performs.
+   */
+  async function writeInstalledExecutableWithRuntime(
+    version: string,
+    runtimeVersion: string | null,
+    installId: string,
+  ): Promise<void> {
+    const installDir = paths.hostInstallDir("production");
+    mkdirSync(installDir, { recursive: true });
+    const executablePath = join(installDir, "traycer-host");
+    writeFileSync(executablePath, "binary-bytes");
+    await writeHostInstallRecord("production", {
+      installId,
+      version,
+      runtimeVersion,
+      platform: "linux",
+      arch: "x64",
+      installedAt: "2026-01-01T00:00:00.000Z",
+      source: { kind: "registry", value: version },
+      archiveSha256: "a".repeat(64),
+      executableSha256: GENUINE_EXECUTABLE_SHA256,
+      signatureVerifiedAt: "2026-01-01T00:00:00.000Z",
+      signatureKeyId: "test-key",
+      sizeBytes: 1234,
+      executablePath,
+    });
+  }
+
+  function healthyRunning(reportedVersion: string): void {
+    writePidMetadata({
+      version: reportedVersion,
+      processStartIdentity: "linux:boot-a 4242",
+    });
+    identityVerdictMock.mockResolvedValue("current");
+    callHostRpcMock.mockResolvedValue(
+      hostStatusResponse({ ready: true, hostVersion: reportedVersion }),
+    );
+  }
+
+  it("C1: a staging build - the process reports the record's OWN runtimeVersion stamp, and the running leg reads the CATALOG version", async () => {
+    await writeInstalledExecutableWithRuntime(
+      "1.2.3",
+      "staging.1700000000.abc123",
+      "install-1",
+    );
+    healthyRunning("staging.1700000000.abc123");
+
+    const evidence = await readAttemptRecoveryEvidence(
+      "production",
+      paths.hostHomeDir("production"),
+    );
+    expect(evidence.running).toEqual({
+      kind: "verified",
+      version: "1.2.3",
+      owner: "host-home-bound",
+    });
+  });
+
+  it("C2: the C/R collision - the record's catalog version reported while the record names a DIFFERENT runtimeVersion - is `foreign`, never `verified`", async () => {
+    await writeInstalledExecutableWithRuntime(
+      "1.2.3",
+      "staging.1700000000.abc123",
+      "install-1",
+    );
+    healthyRunning("1.2.3");
+
+    const evidence = await readAttemptRecoveryEvidence(
+      "production",
+      paths.hostHomeDir("production"),
+    );
+    expect(evidence.running).toEqual({
+      kind: "foreign",
+      runtimeIdentity: "1.2.3",
+    });
+    // The "completes falsely" ablation, stated explicitly: dropping the C/R
+    // check reads this collision as the target being genuinely verified.
+    expect(evidence.running).not.toEqual({
+      kind: "verified",
+      version: "1.2.3",
+      owner: "host-home-bound",
+    });
+  });
+
+  it("C3: a different released build running - verified at THAT version, not the record's", async () => {
+    await writeInstalledExecutableWithRuntime("1.2.3", null, "install-1");
+    healthyRunning("2.0.0");
+
+    const evidence = await readAttemptRecoveryEvidence(
+      "production",
+      paths.hostHomeDir("production"),
+    );
+    expect(evidence.running).toEqual({
+      kind: "verified",
+      version: "2.0.0",
+      owner: "host-home-bound",
+    });
+  });
+
+  it("C4: a non-catalog identity with no record vouching for it is `foreign`", async () => {
+    await writeInstalledExecutableWithRuntime("1.2.3", null, "install-1");
+    healthyRunning("staging.1700000000.abc123");
+
+    const evidence = await readAttemptRecoveryEvidence(
+      "production",
+      paths.hostHomeDir("production"),
+    );
+    expect(evidence.running).toEqual({
+      kind: "foreign",
+      runtimeIdentity: "staging.1700000000.abc123",
+    });
+  });
+
+  it("C5: the fingerprint changes when `runtimeVersion` changes, even when the classification's OUTCOME does not", async () => {
+    // The process reports a DIFFERENT released build ("2.0.0") than the
+    // record's catalog version ("1.2.3") on both reads, so the classification
+    // takes the "plain catalog version other than the record's" branch
+    // regardless of `runtimeVersion` - the only axis this test moves.
+    await writeInstalledExecutableWithRuntime("1.2.3", null, "install-1");
+    healthyRunning("2.0.0");
+    const first = await observeAttemptRecoveryEvidence(
+      "production",
+      paths.hostHomeDir("production"),
+    );
+
+    // Same executable bytes, same installedAt, same installId, same digests -
+    // ONLY `runtimeVersion` differs.
+    await writeInstalledExecutableWithRuntime(
+      "1.2.3",
+      "runtime-1.2.3-updated",
+      "install-1",
+    );
+    const second = await observeAttemptRecoveryEvidence(
+      "production",
+      paths.hostHomeDir("production"),
+    );
+
+    expect(first.evidence.running).toEqual({
+      kind: "verified",
+      version: "2.0.0",
+      owner: "host-home-bound",
+    });
+    expect(second.evidence.running).toEqual(first.evidence.running);
+    expect(sameAttemptRecoveryEvidenceObservation(first, second)).toBe(false);
+  });
+
+  it("C6: the observation exposes the identity a park refreshes from - present with records, null with neither", async () => {
+    await writeInstalledExecutableWithRuntime("1.2.3", null, "install-1");
+    await writeStagedExecutable(
+      "2.0.0",
+      true,
+      "test-stage-id",
+      GENUINE_EXECUTABLE_SHA256,
+    );
+    identityVerdictMock.mockResolvedValue("dead");
+
+    const withRecords = await observeAttemptRecoveryEvidence(
+      "production",
+      paths.hostHomeDir("production"),
+    );
+    expect(withRecords.installIdentity).toEqual({
+      installId: "install-1",
+      installedAt: "2026-01-01T00:00:00.000Z",
+      archiveSha256: "a".repeat(64),
+      version: "1.2.3",
+    });
+    expect(withRecords.stageFingerprint).toBe("test-stage-id");
+
+    rmSync(paths.hostInstallDir("production"), {
+      recursive: true,
+      force: true,
+    });
+    rmSync(paths.hostStagedDir("production"), { recursive: true, force: true });
+    const withoutRecords = await observeAttemptRecoveryEvidence(
+      "production",
+      paths.hostHomeDir("production"),
+    );
+    expect(withoutRecords.installIdentity).toBeNull();
+    expect(withoutRecords.stageFingerprint).toBeNull();
+  });
+});
+
 // KNOWN GAP: `sameRegularFileIdentity` also fails closed when either side's
 // `dev`/`ino` reads as `0` (the Windows convention for "not a meaningful
 // identity"). That branch has no test here: forcing a zero-identity `Stats`
