@@ -755,31 +755,28 @@ describe("relocateOutOfHostCgroupIfNeeded", () => {
     // the relocation resolves `not-needed` without spawning.
   });
 
-  it("host maintenance-lease is in HOST_STOPPING_COMMANDS unconditionally: it serves host-stop and uninstall-all to the root scripts", async () => {
-    // The Desktop install/uninstall scripts hold this lease across app
-    // replacement and cloud uninstall on Linux too, and both of its actions go
-    // through the guarded stop routes. Started from a Traycer-hosted terminal
-    // the lease is spawned inside the host unit, and the guard would refuse
-    // the maintenance rather than let the lease perform it. The route is
-    // registered outside `withRunner`, so the map entry is only half of it;
-    // `cli-with-runner-relocation.test.ts` pins the action's own call.
-    expect(HOST_STOPPING_COMMANDS.get("host maintenance-lease")?.({})).toBe(
-      true,
-    );
+  it("host maintenance-lease is deliberately NOT in HOST_STOPPING_COMMANDS: its caller shares its cgroup, so the guard's refusal is the right outcome", async () => {
+    // The lease serves `host-stop` and `host-uninstall-all` to the Desktop
+    // install/uninstall script, which spawned it and therefore sits in the
+    // same cgroup. From a Traycer-hosted terminal that is the host unit, and
+    // the stop the lease would perform kills the script mid-maintenance
+    // whether or not the lease itself is moved out; a relocated lease would
+    // also hide behind a waiting wrapper, so the script's cancellation (a
+    // signal to its direct child, that child's exit as proof) would prove
+    // nothing about the holder. `withStopIntent`'s guard refuses, and the
+    // refusal reaches the script as a `refused` frame with nothing touched.
+    // `cli-with-runner-relocation.test.ts` pins that the action never calls
+    // the relocation either.
+    expect(HOST_STOPPING_COMMANDS.has("host maintenance-lease")).toBe(false);
     mocks.cgroup = V2_HOST_UNIT_CGROUP;
-    mocks.packaged = true;
-    process.argv = packagedArgv() as string[];
-    process.execPath = "/slot/traycer";
-    process.execArgv = [];
-    spawnMocks.respond = acknowledgeThenExit(0);
-
     await expect(
       relocateOutOfHostCgroupIfNeeded("host maintenance-lease", {}),
-    ).resolves.toEqual({ kind: "completed", exitCode: 0 });
-    expect(spawnMocks.recorded).toHaveLength(1);
+    ).resolves.toEqual({ kind: "not-needed" });
+    expect(spawnMocks.recorded).toHaveLength(0);
 
-    // Ablation: remove the `"host maintenance-lease"` entry → this test fails
-    // on the first assertion and the relocation resolves `not-needed`.
+    // Ablation: add `["host maintenance-lease", ALWAYS_STOPS]` to the map →
+    // this test fails on the first assertion, and the relocation spawns
+    // `systemd-run` for a lease whose caller is about to die with the host.
   });
 
   it("does nothing for a command outside HOST_STOPPING_COMMANDS, even inside a host unit", async () => {

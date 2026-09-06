@@ -268,12 +268,15 @@ describe("withRunner - cgroup relocation hook", () => {
 });
 
 // `host maintenance-lease` is the one host-stopping route registered OUTSIDE
-// `withRunner` (it keeps its locks live while serving a stdin/stdout protocol
-// to the Desktop root scripts), so it takes the hook's two first steps itself.
-// The same placement argument applies with more force: the lease's attempt
-// capability and the protocol it serves must belong to the relocated child.
-describe("host maintenance-lease (outside withRunner) - cgroup relocation hook", () => {
-  const leaseArgv = [
+// `withRunner`, and it deliberately takes NEITHER of the hook's first steps:
+// its caller (the Desktop install/uninstall script) shares its cgroup, so a
+// relocated lease would let a stop proceed that kills the caller
+// mid-maintenance, and would put a waiting wrapper between the script and
+// the lease it cancels by signalling its direct child. The guard in
+// `withStopIntent` refuses instead, and the refusal reaches the script as the
+// protocol's own `refused` frame. This pins that the action does not relocate.
+describe("host maintenance-lease (outside withRunner) - deliberately not relocated", () => {
+  const leaseArgv: readonly string[] = [
     "host",
     "maintenance-lease",
     "--admission",
@@ -282,26 +285,11 @@ describe("host maintenance-lease (outside withRunner) - cgroup relocation hook",
     "/home/alice/.traycer/host",
     "--service-uid",
     "1000",
-  ] as const;
+  ];
 
   let relocationSpy: MockInstance;
-  let ackSpy: MockInstance;
   let leaseSpy: MockInstance;
   let stdoutWriteSpy: MockInstance;
-
-  async function parseLease(argv: readonly string[]): Promise<void> {
-    const program = buildProgramWithAgentRoles(false);
-    program.exitOverride();
-    expectCommand(program, ["host", "maintenance-lease"]).exitOverride();
-    await program.parseAsync(argv as string[], { from: "user" });
-  }
-
-  function writtenStdout(): string {
-    return stdoutWriteSpy.mock.calls
-      .map((call) => call[0])
-      .filter((chunk): chunk is string => typeof chunk === "string")
-      .join("");
-  }
 
   beforeEach(() => {
     exitMocks.calls.length = 0;
@@ -309,9 +297,6 @@ describe("host maintenance-lease (outside withRunner) - cgroup relocation hook",
       cgroupRelocationModule,
       "relocateOutOfHostCgroupIfNeeded",
     );
-    ackSpy = vi
-      .spyOn(cgroupRelocationModule, "acknowledgeRelocationEntry")
-      .mockImplementation(() => undefined);
     leaseSpy = vi
       .spyOn(hostMaintenanceLeaseModule, "runHostMaintenanceLease")
       .mockResolvedValue(undefined);
@@ -323,75 +308,23 @@ describe("host maintenance-lease (outside withRunner) - cgroup relocation hook",
   afterEach(() => {
     process.exitCode = undefined;
     relocationSpy.mockRestore();
-    ackSpy.mockRestore();
     leaseSpy.mockRestore();
     stdoutWriteSpy.mockRestore();
     vi.restoreAllMocks();
   });
 
-  it("relocated (completed): never serves the lease here, exits with the child's code", async () => {
-    relocationSpy.mockResolvedValue({ kind: "completed", exitCode: 3 });
+  it("serves the lease in place and never consults the relocation", async () => {
+    const program = buildProgramWithAgentRoles(false);
+    program.exitOverride();
+    expectCommand(program, ["host", "maintenance-lease"]).exitOverride();
+    await program.parseAsync([...leaseArgv], { from: "user" });
 
-    await parseLease(leaseArgv);
-
-    expect(relocationSpy).toHaveBeenCalledWith("host maintenance-lease", {});
-    expect(leaseSpy).not.toHaveBeenCalled();
-    expect(exitMocks.calls).toEqual([3]);
-    // Nothing of the protocol comes from this process: the child owns the
-    // pipes, and a `ready` or `refused` frame from the parent would be read
-    // by the script as the lease's own.
-    expect(writtenStdout()).toBe("");
-  });
-
-  it("acknowledges relocation entry before the relocation, and both before the lease", async () => {
-    relocationSpy.mockResolvedValue({ kind: "not-needed" });
-
-    await parseLease(leaseArgv);
-
-    expect(ackSpy).toHaveBeenCalledTimes(1);
-    expect(ackSpy.mock.invocationCallOrder[0]).toBeLessThan(
-      relocationSpy.mock.invocationCallOrder[0] ?? Number.MAX_SAFE_INTEGER,
-    );
-    expect(relocationSpy.mock.invocationCallOrder[0]).toBeLessThan(
-      leaseSpy.mock.invocationCallOrder[0] ?? Number.MAX_SAFE_INTEGER,
-    );
-  });
-
-  it("not-needed: the lease is served in place", async () => {
-    relocationSpy.mockResolvedValue({ kind: "not-needed" });
-
-    await parseLease(leaseArgv);
-
+    expect(relocationSpy).not.toHaveBeenCalled();
     expect(leaseSpy).toHaveBeenCalledTimes(1);
     expect(exitMocks.calls).toEqual([]);
-  });
 
-  it("relocation failure: reported as the protocol's own `refused` frame, exit 1, lease never served", async () => {
-    relocationSpy.mockRejectedValue(
-      cliError({
-        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
-        message:
-          "refusing to relocate 'host maintenance-lease' out of the ai.traycer.host.service cgroup",
-        details: { unit: "ai.traycer.host.service" },
-        exitCode: 1,
-      }),
-    );
-
-    await parseLease(leaseArgv);
-
-    expect(leaseSpy).not.toHaveBeenCalled();
-    const frame: unknown = JSON.parse(writtenStdout().trim());
-    expect(frame).toMatchObject({
-      v: 1,
-      id: null,
-      kind: "refused",
-      message: expect.stringContaining("refusing to relocate"),
-    });
-    expect(process.exitCode).toBe(1);
-
-    // Ablation: in the `maintenance-lease` action (index.ts), delete the
-    // relocation block → the first test fails (`leaseSpy` is called and
-    // nothing reaches `finishAndExit`), and this one fails because the error
-    // is never raised at all.
+    // Ablation: route the lease through `withRunner` (or call
+    // `relocateOutOfHostCgroupIfNeeded` in its action) → `relocationSpy` is
+    // called once and this test fails.
   });
 });

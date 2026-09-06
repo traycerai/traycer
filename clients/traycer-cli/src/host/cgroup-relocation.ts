@@ -77,10 +77,18 @@ const ALWAYS_STOPS: HostStopReachable = () => true;
  * rather than at each stop site: the relocation has to happen BEFORE the
  * command body so the relocated child - not the parent that is about to die -
  * owns the CLI lock, the update contender claim, the dispatch ACK and the
- * progress marker. The one host-stopping route registered OUTSIDE `withRunner`,
- * `host maintenance-lease`, makes the same call itself, first thing in its
- * action, for the same reason: the lease's attempt capability and its
- * stdin/stdout protocol both belong to the relocated child.
+ * progress marker.
+ *
+ * `host maintenance-lease` - the one host-stopping route registered outside
+ * `withRunner` - is deliberately absent. Its caller, the Desktop
+ * install/uninstall script, is in the same cgroup it is: started from a
+ * Traycer-hosted terminal, both sit inside the host unit, and the stop the
+ * lease performs kills the script mid-maintenance whether or not the lease is
+ * moved. Relocating it would also put a waiting wrapper between the script and
+ * the lease, so the script's cancellation (a signal to its direct child, and
+ * that child's exit as proof) would no longer prove the lease holder is gone.
+ * The guard in `withStopIntent` refuses instead, and the refusal reaches the
+ * script as a protocol `refused` frame with nothing touched.
  *
  * `host start` is deliberately absent: it IS the unit's main process and never
  * stops anything. So are the `agent *-from-hook` commands, which run inside an
@@ -122,13 +130,6 @@ export const HOST_STOPPING_COMMANDS: ReadonlyMap<string, HostStopReachable> =
     // line is the guard on the install actuator in `service/index.ts`, ahead
     // of the registration transaction.
     ["host service install", ALWAYS_STOPS],
-    // The root-maintenance lease serves `host-stop` and `host-uninstall-all`
-    // actions to the Desktop install/uninstall scripts over stdin/stdout, and
-    // both go through the guarded stop routes. A script started from a
-    // Traycer-hosted terminal spawns the lease inside the host unit (`sudo`
-    // changes nothing about a cgroup), so without this the guard would refuse
-    // the very maintenance the lease exists to perform.
-    ["host maintenance-lease", ALWAYS_STOPS],
     ["host install", (options) => options.serviceRegister !== false],
     ["host ensure", (options) => options.serviceRegister !== false],
     ["host apply", (options) => options.service !== false],
