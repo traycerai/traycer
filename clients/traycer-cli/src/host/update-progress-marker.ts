@@ -1,5 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { link, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { basename } from "node:path";
+import { withLock } from "@traycer-clients/shared/host-lock/cross-process-lock";
 import {
   isProcessStartIdentity,
   type ProcessStartIdentity,
@@ -134,7 +136,7 @@ export async function deleteUpdateProgressMarker(
     logger.warn("Host update progress marker clear failed", {
       environment,
       errorName: errorFromUnknown(err).name,
-      errorMessage: errorFromUnknown(err).message,
+      errorCode: errnoCode(err),
     });
   }
 }
@@ -228,6 +230,98 @@ async function stageMarkerFile(
  * its writer's lock acquisition. See `swapMarkerIfUnchanged` for how the
  * window is closed. Never throws (same rule as the other marker I/O).
  */
+// The marker lock. Every conditional primitive takes the CURRENT marker out
+// of the live path (`rename(marker → scratch)`) to compare it, and puts it
+// back when it is not the one expected. For the instant between the take
+// and the restore the live path is EMPTY - and an empty path is exactly
+// what a create-if-absent (the pre-lock claim, the no-transfer publish)
+// lands into. Without a lock that interleaving loses a LIVE writer's
+// record: A's stale clear takes B's marker out, C's claim lands in the
+// gap, A's restore finds the path taken and drops B's record (a restore
+// that loses to a newer marker does not retain it) while B - already past
+// its own reassert - runs unannounced under C's marker, which no CAS of
+// B's can later repair or clear. The retries under the install lock
+// repair a collision during a writer's OWN reassert, not another writer's
+// cleanup after it has started.
+//
+// So every conditional write - create, replace, delete - runs under one
+// short cross-process lock beside the marker (the shared `withLock`:
+// O_EXCL create, holder identity, a dead holder broken by liveness). The
+// hold is a handful of renames; the wait is bounded, and a holder that
+// outlives it (a live process stuck mid-swap) makes the primitive answer
+// `failed` - nothing of the intended write landed, warned by name - the
+// same answer as any other marker I/O failure. This lock is NOT the
+// install/contender lock: it is never held across a download or a wait,
+// and it nests inside the install lock (the reassert) without ordering
+// hazards because nothing takes the install lock while holding it. It is
+// NOT re-entrant: a nested take from the same process polls its own live
+// pid for the whole wait and answers `failed` - the locked bodies call the
+// `...Locked` inner functions, never the outer primitives. The host daemon
+// only reads the marker; every writer OF THIS VERSION takes the lock. A
+// CLI from before the lock (a terminal `traycer` beside Desktop's bundled
+// one, or mid self-upgrade) still writes into the window, which is why
+// the swap's "empty path is not proof" arms below stay.
+//
+// Cost: the acquisition is one O_EXCL create, a metadata write and an
+// unlink - no spawn: the holder's start time and stamp are the cached
+// own-process reads. A wedged lock (a holder alive past the wait, or one
+// whose identity cannot be verified so it is never broken) degrades every
+// conditional write to `failed` after the wait; the busy warn names the
+// lock file so an operator can remove it.
+const MARKER_LOCK_WAIT_MS = 2_000;
+const MARKER_LOCK_POLL_MS = 25;
+
+function markerLockPath(environment: Environment): string {
+  return `${hostUpdateProgressMarkerPath(environment)}.lock`;
+}
+
+/**
+ * Run `fn` holding the marker lock. `null` when the lock could not be
+ * held - busy past the bounded wait, or the acquisition itself failed -
+ * after a warn naming the operation; callers answer `failed`.
+ */
+async function underMarkerLock<T>(
+  environment: Environment,
+  operation: "create" | "replace" | "clear",
+  fn: () => Promise<T>,
+): Promise<T | null> {
+  const logger = createCliLogger(environment);
+  try {
+    await ensureHostHomeDir(environment);
+    const outcome = await withLock(
+      {
+        lockPath: markerLockPath(environment),
+        reason: `host-update-progress-marker-${operation}`,
+        waitMs: MARKER_LOCK_WAIT_MS,
+        pollIntervalMs: MARKER_LOCK_POLL_MS,
+      },
+      fn,
+    );
+    if (outcome.kind === "busy") {
+      logger.warn(
+        "Host update progress marker lock is held by another process past the wait - the conditional write did not run",
+        {
+          environment,
+          operation,
+          lockFile: basename(markerLockPath(environment)),
+          holderPid: outcome.holder?.pid ?? null,
+          holderReason: outcome.holder?.reason ?? null,
+        },
+      );
+      return null;
+    }
+    return outcome.result;
+  } catch (err) {
+    logger.warn("Host update progress marker lock could not be taken", {
+      environment,
+      operation,
+      errorName: errorFromUnknown(err).name,
+      errorCode: errnoCode(err),
+    });
+    return null;
+  }
+}
+
 export async function deleteUpdateProgressMarkerIfUnchanged(
   environment: Environment,
   expected: HostUpdateProgress,
@@ -321,7 +415,7 @@ async function dropMarkerFile(
         environment,
         step,
         errorName: errorFromUnknown(err).name,
-        errorMessage: errorFromUnknown(err).message,
+        errorCode: errnoCode(err),
       },
     );
   }
@@ -382,9 +476,8 @@ async function landMarkerAtomically(
           {
             environment,
             step,
-            path: from,
             errorName: errorFromUnknown(createErr).name,
-            errorMessage: errorFromUnknown(createErr).message,
+            errorCode: errnoCode(createErr),
           },
         );
         return "failed-nothing-retained";
@@ -401,9 +494,9 @@ async function landMarkerAtomically(
         {
           environment,
           step,
-          retainedPath: from,
+          retainedFile: basename(from),
           errorName: errorFromUnknown(createErr).name,
-          errorMessage: errorFromUnknown(createErr).message,
+          errorCode: errnoCode(createErr),
         },
       );
       return "failed";
@@ -563,7 +656,8 @@ export function updateProgressRecordHasProvenLiveWriter(
  * once per record read: at most three times per claim call. Per `host
  * update` that is at most eight checks - at most sixteen bounded spawns on
  * Windows, eight on macOS, none on Linux (`/proc` reads), plus one to read
- * this process's own stamp - the claim can run twice (a claim that
+ * this process's own stamp; the marker lock adds none (its metadata is the
+ * cached own-process reads) - the claim can run twice (a claim that
  * deferred at
  * `onWillDownload` claims again before the work), the takeover under the
  * lock reads once (only on the iteration that replaces), and the restore a
@@ -638,9 +732,19 @@ export async function createUpdateProgressMarkerIfAbsent(
   environment: Environment,
   next: HostUpdateProgress,
 ): Promise<"created" | "exists" | "failed"> {
+  const held = await underMarkerLock(environment, "create", () =>
+    createUpdateProgressMarkerIfAbsentLocked(environment, next),
+  );
+  return held ?? "failed";
+}
+
+async function createUpdateProgressMarkerIfAbsentLocked(
+  environment: Environment,
+  next: HostUpdateProgress,
+): Promise<"created" | "exists" | "failed"> {
   const logger = createCliLogger(environment);
   try {
-    await ensureHostHomeDir(environment);
+    // The directory exists: `underMarkerLock` ensured it before the take.
     const target = hostUpdateProgressMarkerPath(environment);
     const staged = await stageMarkerFile(target, next);
     const landing = await landMarkerAtomically(
@@ -677,7 +781,7 @@ export async function createUpdateProgressMarkerIfAbsent(
         "Host update progress marker is not a record - replacing the malformed file",
         { environment, length: standing.raw.length },
       );
-      const swapped = await swapMarkerIfUnchanged(
+      const swapped = await swapMarkerIfUnchangedLocked(
         environment,
         { kind: "malformed", raw: standing.raw },
         next,
@@ -706,8 +810,7 @@ export async function createUpdateProgressMarkerIfAbsent(
   } catch (err) {
     logger.warn("Host update progress marker conditional create failed", {
       environment,
-      errorName: errorFromUnknown(err).name,
-      errorMessage: errorFromUnknown(err).message,
+      ...unexpectedFailureFields(err),
     });
     return "failed";
   }
@@ -723,6 +826,22 @@ type SwapExpectation =
   | { readonly kind: "malformed"; readonly raw: string };
 
 async function swapMarkerIfUnchanged(
+  environment: Environment,
+  expected: SwapExpectation,
+  next: HostUpdateProgress | null,
+): Promise<"swapped" | "changed" | "absent" | "failed"> {
+  const held = await underMarkerLock(
+    environment,
+    next === null ? "clear" : "replace",
+    () => swapMarkerIfUnchangedLocked(environment, expected, next),
+  );
+  return held ?? "failed";
+}
+
+// The swap proper, with the marker lock HELD by the caller (see
+// `underMarkerLock`): from the take to the land or restore, no other
+// conditional writer can land in the empty path.
+async function swapMarkerIfUnchangedLocked(
   environment: Environment,
   expected: SwapExpectation,
   next: HostUpdateProgress | null,
@@ -755,7 +874,7 @@ async function swapMarkerIfUnchanged(
     // drop helpers catch internally).
     let staged: string | null = null;
     if (next !== null) {
-      await ensureHostHomeDir(environment);
+      // The directory exists: `underMarkerLock` ensured it before the take.
       staged = await stageMarkerFile(target, next);
     }
     const dropStaged = (): Promise<void> =>
@@ -769,7 +888,7 @@ async function swapMarkerIfUnchanged(
           environment,
           step: "take",
           errorName: errorFromUnknown(err).name,
-          errorMessage: errorFromUnknown(err).message,
+          errorCode: errnoCode(err),
         });
         await dropStaged();
         return "failed";
@@ -799,7 +918,11 @@ async function swapMarkerIfUnchanged(
         if (restored === "failed") {
           logger.warn(
             "Host update progress marker conditional swap could not restore the record it found - the live path is empty",
-            { environment, step: "restore-other", retainedPath: scratch },
+            {
+              environment,
+              step: "restore-other",
+              retainedFile: basename(scratch),
+            },
           );
           return "failed";
         }
@@ -823,8 +946,10 @@ async function swapMarkerIfUnchanged(
       return "swapped";
     }
     if (absent || staged === null) {
-      // An empty live path is NOT proof that nobody else is in flight: another
-      // conditional swap may hold the current marker in its scratch at this
+      // An empty live path is NOT proof that nobody else is in flight: a
+      // conditional swap of a CLI from before the marker lock (see
+      // `underMarkerLock` - among lock-taking writers no swap can be
+      // mid-take here) may hold the current marker in its scratch at this
       // instant (its step 1), and a stamp landed here now would win its
       // restore's `link` with EEXIST - our stale failure standing over the
       // live marker it then drops. Absence is a changed marker as far as a
@@ -842,9 +967,9 @@ async function swapMarkerIfUnchanged(
     // holds. When the restore ALSO fails the live path is empty and the
     // record is retained in the scratch, warned about by name below. It is
     // dropped only once `next` is the live marker. A landing that finds a
-    // marker already there (another writer's create-if-absent, in the
-    // instant the path was empty) is a changed marker: the restore is
-    // attempted for symmetry and loses to it.
+    // marker already there (a create-if-absent by a CLI from before the
+    // marker lock, in the instant the path was empty) is a changed marker:
+    // the restore is attempted for symmetry and loses to it.
     const landing = await landAtomically(staged, "stamp");
     if (landing !== "landed") {
       const restored = await landAtomically(scratch, "restore");
@@ -853,7 +978,11 @@ async function swapMarkerIfUnchanged(
       if (restored === "failed") {
         logger.warn(
           "Host update progress marker conditional swap failed and could not restore the expected record - the live path is empty",
-          { environment, step: "stamp-restore", retainedPath: scratch },
+          {
+            environment,
+            step: "stamp-restore",
+            retainedFile: basename(scratch),
+          },
         );
       }
       if (restored === "failed-nothing-retained") {
@@ -877,11 +1006,30 @@ async function swapMarkerIfUnchanged(
     logger.warn("Host update progress marker conditional swap failed", {
       environment,
       step: "unexpected",
-      errorName: errorFromUnknown(err).name,
-      errorMessage: errorFromUnknown(err).message,
+      ...unexpectedFailureFields(err),
     });
     return "failed";
   }
+}
+
+/**
+ * WARN fields for a catch-all: the errno code when the error is an fs
+ * error (its message would carry the marker's absolute path - the host
+ * home directory - which stays out of WARN), and the message ONLY when it
+ * is not (a programming error's message carries no path, and is the one
+ * string that locates the bug).
+ */
+function unexpectedFailureFields(err: unknown): {
+  readonly errorName: string;
+  readonly errorCode: string | null;
+  readonly errorMessage: string | null;
+} {
+  const code = errnoCode(err);
+  return {
+    errorName: errorFromUnknown(err).name,
+    errorCode: code,
+    errorMessage: code === null ? errorFromUnknown(err).message : null,
+  };
 }
 
 // Read-only accessor for Doctor / tests. Returns `null` when absent,
@@ -945,7 +1093,7 @@ async function readMarkerState(
     logger.warn("Host update progress marker could not be read", {
       environment,
       errorName: errorFromUnknown(err).name,
-      errorMessage: errorFromUnknown(err).message,
+      errorCode: errnoCode(err),
     });
     return { kind: "unreadable" };
   }

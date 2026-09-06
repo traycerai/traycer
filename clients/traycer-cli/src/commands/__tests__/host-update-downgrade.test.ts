@@ -242,6 +242,7 @@ describe("installHostDowngrade", () => {
     });
 
     expect(outcome.outcome).toBe("applied");
+    if (outcome.outcome !== "applied") throw new Error("unreachable");
     expect(outcome.previous?.version).toBe("1.3.0-rc.1");
     expect(outcome.record.version).toBe("1.2.0");
     expect(readFileSync(join(installDir(), "traycer-host"), "utf8")).toBe(
@@ -251,6 +252,39 @@ describe("installHostDowngrade", () => {
     expect(await readHostInstallRecord(ENV)).toMatchObject({
       version: "1.2.0",
     });
+  });
+
+  it("re-derives the install record under its lock: the requested version already installed by another actor is a no-op - no commit, no busy gate, no onBeforeCommit, the owned staged tree discarded", async () => {
+    // The caller decided "requested below installed" before this lock. An
+    // explicit `host update 1.2.0` of another actor landed meanwhile.
+    // Falsification: drop the under-lock version check and identical bytes
+    // are committed over the install with a lifecycle stop/start.
+    await writeInstalled("1.2.0", "old");
+    configureRegistry("1.2.0", "new");
+    mocks.busy = true;
+    let onBeforeCommitCalls = 0;
+
+    const outcome = await installHostDowngrade({
+      environment: ENV,
+      version: "1.2.0",
+      force: false,
+      onProgress: noopProgress,
+      onBeforeCommit: async () => {
+        onBeforeCommitCalls += 1;
+      },
+      onWillDisruptHost: () => undefined,
+    });
+
+    expect(outcome).toEqual({ outcome: "no-op", installedVersion: "1.2.0" });
+    expect(onBeforeCommitCalls).toBe(0);
+    expect(mocks.lifecycleCalls).toEqual([]);
+    expect(readFileSync(join(installDir(), "traycer-host"), "utf8")).toBe(
+      "old",
+    );
+    expect(await readHostInstallRecord(ENV)).toMatchObject({
+      version: "1.2.0",
+    });
+    expect(readdirSync(stagingRoot())).toEqual([]);
   });
 
   it("hands ONE disruption boundary to both actuators - the lifecycle's onWillStopHost and the commit's onWillSwap - and it fires before the install record changes", async () => {

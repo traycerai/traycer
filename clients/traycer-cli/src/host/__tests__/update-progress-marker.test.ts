@@ -346,6 +346,90 @@ describe("update-progress-marker", () => {
       expect(scratchAndStagingFiles()).toEqual([]);
     });
 
+    // The marker lock (`underMarkerLock`): between a conditional swap's take
+    // (`rename(marker → scratch)`) and its restore the live path is EMPTY,
+    // and without the lock a create-if-absent lands there: A's stale clear
+    // takes B's live marker out, C's claim lands in the gap, A's restore
+    // loses to it and B's record ends in a scratch while B runs unannounced
+    // under C's marker. Falsification: run `fn` in `underMarkerLock` without
+    // taking the lock and C's claim answers `created`, the live path holds
+    // C's record, and B's is gone. Timing: C is BLOCKED on the lock (its
+    // poll sees a live holder and never breaks it), so the 150 ms check is
+    // deterministic; the one way this pin can flake is a runner stall of
+    // 2 s or more between C's start and the release, after which C answers
+    // `failed` on the lock's own wait - rerun, do not investigate.
+    it("holds the marker lock across the take and the restore: a create-if-absent racing a conditional clear WAITS, and the displaced live record is put back", async () => {
+      let releaseTake: () => void = () => undefined;
+      const takeHeld = new Promise<void>((resolve) => {
+        releaseTake = resolve;
+      });
+      let takeReached: () => void = () => undefined;
+      const takeStarted = new Promise<void>((resolve) => {
+        takeReached = resolve;
+      });
+      vi.doMock("node:fs/promises", async (importOriginal) => {
+        const actual =
+          await importOriginal<typeof import("node:fs/promises")>();
+        return {
+          ...actual,
+          // The take, then a pause with the live path empty and the lock
+          // held - the window the lock exists to cover.
+          rename: async (from: string, to: string) => {
+            await actual.rename(from, to);
+            if (to.includes(".reconcile-")) {
+              takeReached();
+              await takeHeld;
+            }
+          },
+        };
+      });
+      try {
+        const {
+          writeUpdateProgressMarker,
+          readUpdateProgressMarker,
+          deleteUpdateProgressMarkerIfUnchanged,
+          createUpdateProgressMarkerIfAbsent,
+        } = await import("../update-progress-marker");
+        const b = {
+          state: "updating" as const,
+          error: null,
+          targetVersion: "1.4.0",
+          updatedAt: "2026-07-03T00:00:00.000Z",
+          writerId: "writer-b",
+          writerStartIdentity: null,
+        };
+        await writeUpdateProgressMarker("production", b);
+        // A clears "its" record - stale: the path holds B's.
+        const clearByA = deleteUpdateProgressMarkerIfUnchanged("production", {
+          ...b,
+          writerId: "writer-a",
+        });
+        await takeStarted;
+        // C claims the (momentarily empty) path.
+        let cSettled = false;
+        const claimByC = createUpdateProgressMarkerIfAbsent("production", {
+          state: "updating",
+          error: null,
+          targetVersion: "1.8.0",
+          updatedAt: "2026-07-03T00:03:00.000Z",
+          writerId: "writer-c",
+          writerStartIdentity: null,
+        }).then((outcome) => {
+          cSettled = true;
+          return outcome;
+        });
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        expect(cSettled).toBe(false);
+        releaseTake();
+        expect(await clearByA).toBe("changed");
+        expect(await claimByC).toBe("exists");
+        expect(await readUpdateProgressMarker("production")).toEqual(b);
+        expect(scratchAndStagingFiles()).toEqual([]);
+      } finally {
+        vi.doUnmock("node:fs/promises");
+      }
+    });
+
     it("restores via the wx fallback when link fails for a reason other than EEXIST", async () => {
       vi.doMock("node:fs/promises", async (importOriginal) => {
         const actual =

@@ -39,7 +39,7 @@ export async function installHostDowngrade(input: {
   readonly onBeforeCommit: () => Promise<void>;
   /** See `ApplyHostOptions.onWillDisruptHost`: the same actuator-reported boundary. */
   readonly onWillDisruptHost: () => void;
-}): Promise<Extract<ApplyHostOutcome, { outcome: "applied" }>> {
+}): Promise<Extract<ApplyHostOutcome, { outcome: "applied" | "no-op" }>> {
   const contenderOptions: WithCliUpdateContenderOptions = {
     environment: input.environment,
     reason: "host-update-downgrade",
@@ -57,14 +57,16 @@ export async function installHostDowngrade(input: {
       recordVersionOverride: null,
       verifyMutationCapability: verify,
     });
+    let outcome: Extract<ApplyHostOutcome, { outcome: "applied" | "no-op" }>;
     try {
-      return await withCliAttemptMutation(
+      outcome = await withCliAttemptMutation(
         capability,
         contenderOptions,
         async () => {
           // Recheck under the mutation lock: uninstall may have won before this
           // execution segment was claimed. An update never bootstraps a host.
-          if ((await readHostInstallRecord(input.environment)) === null) {
+          const installed = await readHostInstallRecord(input.environment);
+          if (installed === null) {
             throw cliError({
               code: CLI_ERROR_CODES.HOST_NOT_INSTALLED,
               message:
@@ -72,6 +74,21 @@ export async function installHostDowngrade(input: {
               details: { environment: input.environment },
               exitCode: 1,
             });
+          }
+          // The caller decided "requested below installed" before this
+          // lock; re-derived here like every pre-lock fact. Another actor
+          // may have installed the requested version meanwhile (an explicit
+          // `host update` of its own): committing identical bytes again
+          // would restart the host for nothing. The no-op is decided before
+          // the busy gate - a host with nothing owed is not asked - and
+          // before `onBeforeCommit`, so the marker is never taken over for
+          // work that is not done. The caller re-derives the activation
+          // state, as it does for a consumed stage.
+          if (installed.version === input.version) {
+            return {
+              outcome: "no-op",
+              installedVersion: installed.version,
+            } satisfies Extract<ApplyHostOutcome, { outcome: "no-op" }>;
           }
           if (!input.force) await assertHostNotBusy(input.environment);
           await input.onBeforeCommit();
@@ -113,5 +130,10 @@ export async function installHostDowngrade(input: {
       await discardStagedHostInstallSource(input.environment, staged, verify);
       throw error;
     }
+    if (outcome.outcome === "no-op") {
+      // The private source was staged for a commit that is not needed.
+      await discardStagedHostInstallSource(input.environment, staged, verify);
+    }
+    return outcome;
   });
 }

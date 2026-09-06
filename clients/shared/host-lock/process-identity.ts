@@ -429,6 +429,21 @@ export function readProcessStartTimeMs(pid: number): number | null {
   return readProcessStartTimeMsImpl(pid);
 }
 
+// This process's own start time, read once and cached like
+// `ownProcessStartIdentity`: a process's start time never changes, and the
+// read is a `ps`/`powershell` spawn on macOS and Windows. Backs every lock
+// acquisition's metadata (`cross-process-lock.ts`), which used to pay the
+// spawn per acquisition - and the update-progress marker lock now
+// acquires several times per `host update`. Reads the raw reader, not the
+// test seam: the seam models OTHER processes' probes.
+let cachedOwnStartTimeMs: number | null | "unread" = "unread";
+export function ownProcessStartTimeMs(): number | null {
+  if (cachedOwnStartTimeMs === "unread") {
+    cachedOwnStartTimeMs = readProcessStartTimeMsImpl(process.pid);
+  }
+  return cachedOwnStartTimeMs;
+}
+
 function readProcessStartTimeMsImpl(pid: number): number | null {
   if (!Number.isInteger(pid) || pid <= 0) return null;
   return process.platform === "win32"

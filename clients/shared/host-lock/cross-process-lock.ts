@@ -10,8 +10,8 @@ import {
   type ProcessStartIdentity,
 } from "@traycer/protocol/host/lifecycle";
 import {
-  readProcessStartIdentity,
-  readProcessStartTimeMs,
+  ownProcessStartIdentity,
+  ownProcessStartTimeMs,
   verifyProcessIdentity,
   type ProcessIdentityVerdict,
 } from "./process-identity";
@@ -497,8 +497,8 @@ async function acquireBreakLock(
   const payload: BreakLockPayload = {
     pid: process.pid,
     startedAt: nowIso(),
-    processStartedAtMs: readProcessStartTimeMs(process.pid),
-    processStartIdentity: readProcessStartIdentity(process.pid),
+    processStartedAtMs: ownProcessStartTimeMs(),
+    processStartIdentity: ownProcessStartIdentity(),
     token,
   };
   if ((await createBreakLockFile(breakLockPath, payload)) === "created") {
@@ -953,8 +953,9 @@ function newAcquisitionMetadata(reason: string): LockMetadata {
     startedAt: nowIso(),
     hostname: hostnameSafe(),
     token: randomUUID(),
-    processStartedAtMs: readProcessStartTimeMs(process.pid),
-    processStartIdentity: readProcessStartIdentity(process.pid),
+    // Cached own-process reads: an acquisition must not cost a spawn.
+    processStartedAtMs: ownProcessStartTimeMs(),
+    processStartIdentity: ownProcessStartIdentity(),
   };
 }
 

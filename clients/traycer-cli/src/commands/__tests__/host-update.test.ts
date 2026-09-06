@@ -654,6 +654,95 @@ describe("buildHostUpdateCommand composite", () => {
     expect(result.human).toContain("updated host 1.3.0-rc.1 → 1.2.0");
   });
 
+  it("downgrade arm no-op (another actor installed the requested version under the lock) with the record not yet running: the same bound activation arm restarts onto it", async () => {
+    // Falsification: treat the downgrade's no-op as applied and this
+    // throws on the outcome's shape; skip the re-derivation and the debt
+    // is reported as done with the old host still serving.
+    armActivationDefaults();
+    mocks.probeHostHealthMock.mockResolvedValue({
+      healthy: true,
+      detail: "ok",
+    });
+    // Pre-lock the record is ABOVE the request (that is what routes to the
+    // downgrade arm); under the arm's lock another actor has installed
+    // 1.2.0, and the arm reports the no-op.
+    let committedByAnotherActor = false;
+    mocks.readHostInstallRecordMock.mockImplementation(async () =>
+      sampleRecord(committedByAnotherActor ? "1.2.0" : "1.3.0-rc.1"),
+    );
+    mocks.installHostDowngradeMock.mockImplementation(async () => {
+      committedByAnotherActor = true;
+      return {
+        outcome: "no-op",
+        installedVersion: "1.2.0",
+      } satisfies ApplyHostOutcome;
+    });
+    mocks.readHostPidMetadataMock.mockResolvedValue({
+      pid: 4242,
+      hostId: "host-1",
+      version: "1.3.0-rc.1",
+      websocketUrl: "ws://127.0.0.1:51820/rpc",
+      startedAt: "2026-01-01T00:00:00.000Z",
+      processStartIdentity: null,
+      layer0: null,
+      layer0Slot: null,
+    });
+    mocks.identityVerdictMock.mockResolvedValue("current");
+
+    const result = await buildHostUpdateCommand({
+      force: false,
+      allowDowngrade: true,
+      versionRequest: "1.2.0",
+      ackNonce: null,
+    })(fakeCtx());
+
+    expect(mocks.stopHostForRestartWithAttemptMock).toHaveBeenCalledTimes(1);
+    expect(mocks.probeHostHealthMock).toHaveBeenCalledTimes(1);
+    expect(result.exitCode).toBe(0);
+    expect(result.human).toContain("updated host 1.3.0-rc.1 → 1.2.0");
+  });
+
+  it("downgrade arm no-op with the requested version already running: the no-op, exit 0, no restart", async () => {
+    armActivationDefaults();
+    // Pre-lock the record is ABOVE the request (that is what routes to the
+    // downgrade arm); under the arm's lock another actor has installed
+    // 1.2.0, and the arm reports the no-op.
+    let committedByAnotherActor = false;
+    mocks.readHostInstallRecordMock.mockImplementation(async () =>
+      sampleRecord(committedByAnotherActor ? "1.2.0" : "1.3.0-rc.1"),
+    );
+    mocks.installHostDowngradeMock.mockImplementation(async () => {
+      committedByAnotherActor = true;
+      return {
+        outcome: "no-op",
+        installedVersion: "1.2.0",
+      } satisfies ApplyHostOutcome;
+    });
+    mocks.readHostPidMetadataMock.mockResolvedValue({
+      pid: 4242,
+      hostId: "host-1",
+      version: "1.2.0",
+      websocketUrl: "ws://127.0.0.1:51820/rpc",
+      startedAt: "2026-01-01T00:00:00.000Z",
+      processStartIdentity: null,
+      layer0: null,
+      layer0Slot: null,
+    });
+    mocks.identityVerdictMock.mockResolvedValue("current");
+
+    const result = await buildHostUpdateCommand({
+      force: false,
+      allowDowngrade: true,
+      versionRequest: "1.2.0",
+      ackNonce: null,
+    })(fakeCtx());
+
+    expect(mocks.stopHostForRestartWithAttemptMock).not.toHaveBeenCalled();
+    expect(mocks.probeHostHealthMock).not.toHaveBeenCalled();
+    expect(result.exitCode).toBe(0);
+    expect(result.human).toContain("no-op");
+  });
+
   it("keeps an explicit lower target on the monotonic stage path unless downgrade is explicitly enabled", async () => {
     // Without `--allow-downgrade` an explicit lower target is an ordinary
     // stage request, and the promoter short-circuits it before any
@@ -1046,6 +1135,235 @@ describe("buildHostUpdateCommand — stage consumed by another actor while waiti
       layer0Slot: null,
     };
   }
+
+  // An EXPLICIT request recovers only onto its own version. The other actor
+  // committed whatever ITS stage held (Desktop's converge), which need not
+  // be the version this run was asked for and confirmed. Falsification:
+  // drop the pre-lock `installedVersionMismatch` in the recovery arm and
+  // the "activating the committed install" line is logged (the arm's own
+  // under-lock check still refuses); drop that too and the host restarts
+  // onto 2.1.0 under a confirmation for 2.0.0.
+  it("EXPLICIT request, another actor committed a NEWER version: refused as E_HOST_UPDATE_NOT_NEWER naming both, no restart, no activation log, this run's marker withdrawn - not stamped", async () => {
+    mocks.readHostInstallRecordMock.mockResolvedValue(sampleRecord("2.1.0"));
+    mocks.applyHostMock.mockResolvedValue({
+      outcome: "no-op",
+      installedVersion: "2.1.0",
+    } satisfies ApplyHostOutcome);
+    mocks.readHostPidMetadataMock.mockResolvedValue(pidAt("1.0.0"));
+    mocks.identityVerdictMock.mockResolvedValue("current");
+
+    const ctx = fakeCtx();
+    await expect(
+      buildHostUpdateCommand({
+        force: false,
+        allowDowngrade: false,
+        versionRequest: "2.0.0",
+        ackNonce: null,
+      })(ctx),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_UPDATE_NOT_NEWER,
+      message: expect.stringContaining(
+        "the installed host is 2.1.0, newer than the 2.0.0 this run was updating to",
+      ),
+    });
+    expect(
+      vi.mocked(ctx.runtime.logger.info).mock.calls.map((call) => call[0]),
+    ).not.toContain(
+      "Host update found its stage consumed by another actor without activation; activating the committed install",
+    );
+    expect(mocks.assertHostNotBusyMock).not.toHaveBeenCalled();
+    expect(mocks.stopHostForRestartWithAttemptMock).not.toHaveBeenCalled();
+    expect(
+      mocks.relaunchHostAfterRestartWithAttemptMock,
+    ).not.toHaveBeenCalled();
+    expect(mocks.probeHostHealthMock).not.toHaveBeenCalled();
+    // A SUPERSEDED request: nothing was wrong, so this run's own record is
+    // WITHDRAWN (conditional delete), never stamped `failed` - a `failed`
+    // naming 2.0.0 would stand over a host at 2.1.0 and neither
+    // stale-failed rule (target must equal the running version) would ever
+    // clear it. Falsification: drop `superseded` from the catch and the
+    // replace below carries a `failed`.
+    expect(
+      mocks.replaceUpdateProgressMarkerIfUnchangedMock.mock.calls.filter(
+        (call) => (call[2] as HostUpdateProgress).state === "failed",
+      ),
+    ).toEqual([]);
+    expect(
+      mocks.deleteUpdateProgressMarkerIfUnchangedMock,
+    ).toHaveBeenCalledWith(
+      "production",
+      expect.objectContaining({ state: "updating", targetVersion: "2.0.0" }),
+    );
+  });
+
+  it("EXPLICIT request, the other actor committed the SAME version: recovers onto it (control)", async () => {
+    mocks.readHostPidMetadataMock.mockResolvedValue(pidAt("1.0.0"));
+    mocks.identityVerdictMock.mockResolvedValue("current");
+
+    const result = await buildHostUpdateCommand({
+      force: false,
+      allowDowngrade: false,
+      versionRequest: "2.0.0",
+      ackNonce: null,
+    })(fakeCtx());
+
+    expect(mocks.stopHostForRestartWithAttemptMock).toHaveBeenCalledTimes(1);
+    expect(result.exitCode).toBe(0);
+    expect(result.human).toContain("updated host 1.0.0 → 2.0.0");
+  });
+
+  it("EXPLICIT request, another actor committed an OLDER version with debt: refused as E_UNEXPECTED, no restart", async () => {
+    mocks.readHostInstallRecordMock.mockResolvedValue(sampleRecord("1.5.0"));
+    mocks.applyHostMock.mockResolvedValue({
+      outcome: "no-op",
+      installedVersion: "1.5.0",
+    } satisfies ApplyHostOutcome);
+    mocks.readHostPidMetadataMock.mockResolvedValue(pidAt("1.0.0"));
+    mocks.identityVerdictMock.mockResolvedValue("current");
+
+    await expect(
+      buildHostUpdateCommand({
+        force: false,
+        allowDowngrade: false,
+        versionRequest: "2.0.0",
+        ackNonce: null,
+      })(fakeCtx()),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.UNEXPECTED,
+      message: expect.stringContaining(
+        "the installed host is 1.5.0, not the 2.0.0 this run was updating to",
+      ),
+    });
+    expect(mocks.stopHostForRestartWithAttemptMock).not.toHaveBeenCalled();
+    // Not a superseded request - something did go wrong - so the failure
+    // is stamped over this run's own record, naming the announced target.
+    const calls = mocks.replaceUpdateProgressMarkerIfUnchangedMock.mock.calls;
+    expect(calls).toHaveLength(1);
+    expect(calls[0][2]).toMatchObject({
+      state: "failed",
+      targetVersion: "2.0.0",
+    });
+  });
+
+  it("EXPLICIT request, another actor committed a build that is not a release version (`host install --file`) with debt: refused - identity is the string, an incomparable record is by construction not the requested one", async () => {
+    // Falsification: let an incomparable pair pass (the comparator's
+    // "cannot say") and the host restarts onto the local build under a
+    // confirmation for 2.0.0. The record carries a runtime stamp so the
+    // activation reading is decided in the runtime domain (debt) - the
+    // reading that would ACTIVATE; the catalog comparator would read the
+    // pair as `activated`, which the binding refuses too (see the
+    // activated pin below), so the stamp only picks which reading refuses.
+    mocks.readHostInstallRecordMock.mockResolvedValue({
+      ...sampleRecord("local-dev-1"),
+      runtimeVersion: "local-dev-1",
+    });
+    mocks.applyHostMock.mockResolvedValue({
+      outcome: "no-op",
+      installedVersion: "local-dev-1",
+    } satisfies ApplyHostOutcome);
+    mocks.readHostPidMetadataMock.mockResolvedValue(pidAt("1.0.0"));
+    mocks.identityVerdictMock.mockResolvedValue("current");
+
+    await expect(
+      buildHostUpdateCommand({
+        force: false,
+        allowDowngrade: false,
+        versionRequest: "2.0.0",
+        ackNonce: null,
+      })(fakeCtx()),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.UNEXPECTED,
+      message: expect.stringContaining(
+        "the installed host is local-dev-1, not the 2.0.0 this run was updating to",
+      ),
+    });
+    expect(mocks.stopHostForRestartWithAttemptMock).not.toHaveBeenCalled();
+  });
+
+  it("EXPLICIT request, another actor committed AND activated a newer version: refused as E_HOST_UPDATE_NOT_NEWER (never 'host already at 2.1.0' under a request for 2.0.0), this run's marker withdrawn", async () => {
+    // Falsification: hold only the `debt` reading in the recovery and this
+    // reports the no-op, exit 0, at a version the caller never confirmed -
+    // while the same fact at promote time is the discard refusal.
+    mocks.readHostInstallRecordMock.mockResolvedValue(sampleRecord("2.1.0"));
+    mocks.applyHostMock.mockResolvedValue({
+      outcome: "no-op",
+      installedVersion: "2.1.0",
+    } satisfies ApplyHostOutcome);
+    mocks.readHostPidMetadataMock.mockResolvedValue(pidAt("2.1.0"));
+    mocks.identityVerdictMock.mockResolvedValue("current");
+
+    await expect(
+      buildHostUpdateCommand({
+        force: false,
+        allowDowngrade: false,
+        versionRequest: "2.0.0",
+        ackNonce: null,
+      })(fakeCtx()),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_UPDATE_NOT_NEWER,
+    });
+    expect(mocks.stopHostForRestartWithAttemptMock).not.toHaveBeenCalled();
+    // A SUPERSEDED request: nothing was wrong, so this run's own record is
+    // WITHDRAWN (conditional delete), never stamped `failed` - a `failed`
+    // naming 2.0.0 would stand over a host at 2.1.0 and neither
+    // stale-failed rule (target must equal the running version) would ever
+    // clear it. Falsification: drop `superseded` from the catch and the
+    // replace below carries a `failed`.
+    expect(
+      mocks.replaceUpdateProgressMarkerIfUnchangedMock.mock.calls.filter(
+        (call) => (call[2] as HostUpdateProgress).state === "failed",
+      ),
+    ).toEqual([]);
+    expect(
+      mocks.deleteUpdateProgressMarkerIfUnchangedMock,
+    ).toHaveBeenCalledWith(
+      "production",
+      expect.objectContaining({ state: "updating", targetVersion: "2.0.0" }),
+    );
+  });
+
+  it("EXPLICIT request, the running host is not a release version (`foreign-runtime` reading) over a record another actor moved: refused, never the no-op at that record", async () => {
+    // Falsification: leave `installedVersion` off the `foreign-runtime`
+    // reading (or skip it in the binding) and this reports "host already
+    // at 2.1.0" under a request for 2.0.0.
+    mocks.readHostInstallRecordMock.mockResolvedValue(sampleRecord("2.1.0"));
+    mocks.applyHostMock.mockResolvedValue({
+      outcome: "no-op",
+      installedVersion: "2.1.0",
+    } satisfies ApplyHostOutcome);
+    mocks.readHostPidMetadataMock.mockResolvedValue(pidAt("local-dev-1"));
+    mocks.identityVerdictMock.mockResolvedValue("current");
+
+    await expect(
+      buildHostUpdateCommand({
+        force: false,
+        allowDowngrade: false,
+        versionRequest: "2.0.0",
+        ackNonce: null,
+      })(fakeCtx()),
+    ).rejects.toMatchObject({ code: CLI_ERROR_CODES.HOST_UPDATE_NOT_NEWER });
+    expect(mocks.stopHostForRestartWithAttemptMock).not.toHaveBeenCalled();
+  });
+
+  it("IMPLICIT request, another actor committed a different version: recovers onto whatever was committed (control - the binding is the explicit request's alone)", async () => {
+    mocks.readHostInstallRecordMock.mockResolvedValue(sampleRecord("2.1.0"));
+    mocks.applyHostMock.mockResolvedValue({
+      outcome: "no-op",
+      installedVersion: "2.1.0",
+    } satisfies ApplyHostOutcome);
+    mocks.readHostPidMetadataMock.mockResolvedValue(pidAt("1.0.0"));
+    mocks.identityVerdictMock.mockResolvedValue("current");
+
+    const result = await buildHostUpdateCommand({
+      force: false,
+      allowDowngrade: false,
+      ackNonce: null,
+    })(fakeCtx());
+
+    expect(mocks.stopHostForRestartWithAttemptMock).toHaveBeenCalledTimes(1);
+    expect(result.exitCode).toBe(0);
+    expect(result.human).toContain("updated host 1.0.0 → 2.1.0");
+  });
 
   it("reading DEBT: activates the committed install instead of reporting a false no-op", async () => {
     // Falsification: gate the re-derived activation on any predicate other
@@ -2388,6 +2706,9 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
       detail: "ok",
     });
     armActivationDefaults();
+    // The activation arm names a stage waiting beside the debt in a park;
+    // none by default.
+    mocks.readHostStagedRecordMock.mockResolvedValue(null);
   });
 
   afterEach(() => {
@@ -2429,6 +2750,185 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
       layer0Slot: null,
     };
   }
+
+  it("a park with a stage waiting beside the debt names it in the error details and message (D6), read under the arm's lock", async () => {
+    // Falsification: let `assertHostNotBusy`'s own error through and the
+    // park carries `details: null` - the apply arm's D6 contract, unmet on
+    // this arm.
+    mocks.downloadAndStageHostMock.mockResolvedValue({
+      outcome: "short-circuit",
+      reason: "installed-up-to-date",
+      targetVersion: "2.0.0",
+      installedVersion: "2.0.0",
+      stagedVersion: "2.1.0",
+    } satisfies HostDownloadOutcome);
+    mocks.readHostInstallRecordMock.mockResolvedValue(sampleRecord("2.0.0"));
+    mocks.readHostPidMetadataMock.mockResolvedValue(pidRecord("1.0.0", 4242));
+    mocks.identityVerdictMock.mockResolvedValue("current");
+    mocks.readHostStagedRecordMock.mockResolvedValue({
+      version: "2.1.0",
+      stageId: "stage-2.1.0",
+    });
+    mocks.assertHostNotBusyMock.mockRejectedValue(
+      cliError({
+        code: CLI_ERROR_CODES.HOST_BUSY,
+        message: "host update: host is busy.",
+        details: null,
+        exitCode: 3,
+      }),
+    );
+
+    await expect(
+      buildHostUpdateCommand({
+        force: false,
+        allowDowngrade: false,
+        ackNonce: null,
+      })(fakeCtx()),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_BUSY,
+      details: { stagedVersion: "2.1.0" },
+      message: expect.stringContaining("Host 2.1.0 stays staged"),
+    });
+    expect(mocks.stopHostForRestartWithAttemptMock).not.toHaveBeenCalled();
+  });
+
+  // An EXPLICIT request's activation is bound to the request, re-read
+  // under the lock: a record another actor committed while this run waited
+  // is a changed handoff, refused before the busy gate and the takeover.
+  // Falsification: drop the `installedVersionMismatch` check in
+  // `activateInstalledAndProjectLegacy` and the host restarts onto 2.1.0
+  // under a confirmation for 2.0.0.
+  it("EXPLICIT request: the record moved to a NEWER version while waiting for the lock, debt still owed - refused before the busy gate, no restart, this run's marker withdrawn", async () => {
+    mocks.downloadAndStageHostMock.mockResolvedValue(upToDate("2.0.0"));
+    // Pre-lock read: the record the decision saw. Under the lock: a record
+    // another actor committed meanwhile.
+    mocks.readHostInstallRecordMock
+      .mockResolvedValueOnce(sampleRecord("2.0.0"))
+      .mockResolvedValue(sampleRecord("2.1.0"));
+    mocks.readHostPidMetadataMock.mockResolvedValue(pidRecord("1.0.0", 4242));
+    mocks.identityVerdictMock.mockResolvedValue("current");
+
+    await expect(
+      buildHostUpdateCommand({
+        force: false,
+        allowDowngrade: false,
+        versionRequest: "2.0.0",
+        ackNonce: null,
+      })(fakeCtx()),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_UPDATE_NOT_NEWER,
+      message: expect.stringContaining(
+        "the installed host is 2.1.0, newer than the 2.0.0 this run was updating to",
+      ),
+    });
+    expect(mocks.assertHostNotBusyMock).not.toHaveBeenCalled();
+    expect(mocks.stopHostForRestartWithAttemptMock).not.toHaveBeenCalled();
+    expect(mocks.probeHostHealthMock).not.toHaveBeenCalled();
+    // A SUPERSEDED request: nothing was wrong, so this run's own record is
+    // WITHDRAWN (conditional delete), never stamped `failed` - a `failed`
+    // naming 2.0.0 would stand over a host at 2.1.0 and neither
+    // stale-failed rule (target must equal the running version) would ever
+    // clear it. Falsification: drop `superseded` from the catch and the
+    // replace below carries a `failed`.
+    expect(
+      mocks.replaceUpdateProgressMarkerIfUnchangedMock.mock.calls.filter(
+        (call) => (call[2] as HostUpdateProgress).state === "failed",
+      ),
+    ).toEqual([]);
+    expect(
+      mocks.deleteUpdateProgressMarkerIfUnchangedMock,
+    ).toHaveBeenCalledWith(
+      "production",
+      expect.objectContaining({ state: "updating", targetVersion: "2.0.0" }),
+    );
+  });
+
+  it("EXPLICIT request: the record moved to a newer version AND was activated while waiting for the lock - refused as E_HOST_UPDATE_NOT_NEWER, the marker withdrawn, no failed stamp", async () => {
+    // A request that delivered nothing does not report success at a
+    // version the caller never confirmed; and a superseded request is not
+    // a failure either, so nothing is stamped (a `failed` for 2.0.0 over a
+    // healthy host at 2.1.0 is a stamp no reader clears). An ORDERING pin:
+    // the arm refuses on the record before it reads the activation state,
+    // so the second pid value (2.1.0) is never consumed; it reddens only if
+    // the check moves behind an `activated` early return.
+    mocks.downloadAndStageHostMock.mockResolvedValue(upToDate("2.0.0"));
+    mocks.readHostInstallRecordMock
+      .mockResolvedValueOnce(sampleRecord("2.0.0"))
+      .mockResolvedValue(sampleRecord("2.1.0"));
+    mocks.readHostPidMetadataMock
+      .mockResolvedValueOnce(pidRecord("1.0.0", 4242))
+      .mockResolvedValue(pidRecord("2.1.0", 4343));
+    mocks.identityVerdictMock.mockResolvedValue("current");
+
+    await expect(
+      buildHostUpdateCommand({
+        force: false,
+        allowDowngrade: false,
+        versionRequest: "2.0.0",
+        ackNonce: null,
+      })(fakeCtx()),
+    ).rejects.toMatchObject({ code: CLI_ERROR_CODES.HOST_UPDATE_NOT_NEWER });
+
+    expect(mocks.stopHostForRestartWithAttemptMock).not.toHaveBeenCalled();
+    // A SUPERSEDED request: nothing was wrong, so this run's own record is
+    // WITHDRAWN (conditional delete), never stamped `failed` - a `failed`
+    // naming 2.0.0 would stand over a host at 2.1.0 and neither
+    // stale-failed rule (target must equal the running version) would ever
+    // clear it. Falsification: drop `superseded` from the catch and the
+    // replace below carries a `failed`.
+    expect(
+      mocks.replaceUpdateProgressMarkerIfUnchangedMock.mock.calls.filter(
+        (call) => (call[2] as HostUpdateProgress).state === "failed",
+      ),
+    ).toEqual([]);
+    expect(
+      mocks.deleteUpdateProgressMarkerIfUnchangedMock,
+    ).toHaveBeenCalledWith(
+      "production",
+      expect.objectContaining({ state: "updating", targetVersion: "2.0.0" }),
+    );
+  });
+
+  it("EXPLICIT request BELOW the install record (installed-up-to-date) with debt: the record's debt is left and logged, no restart, the no-op, exit 0", async () => {
+    // `--version 1.2.0` against an installed 2.0.0 short-circuits as
+    // installed-up-to-date (at or above the request). The 2.0.0 record's
+    // debt is not this run's to pay: the caller confirmed 1.2.0 and nothing
+    // else. Falsification: gate the pre-lock debt on the record alone and
+    // the host restarts onto 2.0.0 under a confirmation for 1.2.0.
+    mocks.downloadAndStageHostMock.mockResolvedValue({
+      outcome: "short-circuit",
+      reason: "installed-up-to-date",
+      targetVersion: "1.2.0",
+      installedVersion: "2.0.0",
+      stagedVersion: null,
+    } satisfies HostDownloadOutcome);
+    mocks.readHostInstallRecordMock.mockResolvedValue(sampleRecord("2.0.0"));
+    mocks.readHostPidMetadataMock.mockResolvedValue(pidRecord("1.0.0", 4242));
+    mocks.identityVerdictMock.mockResolvedValue("current");
+
+    const ctx = fakeCtx();
+    const result = await buildHostUpdateCommand({
+      force: false,
+      allowDowngrade: false,
+      versionRequest: "1.2.0",
+      ackNonce: null,
+    })(ctx);
+
+    expect(mocks.stopHostForRestartWithAttemptMock).not.toHaveBeenCalled();
+    expect(
+      mocks.claimUpdateProgressMarkerBeforeLockMock,
+    ).not.toHaveBeenCalled();
+    expect(ctx.runtime.logger.info).toHaveBeenCalledWith(
+      "Host update leaves the install record's activation debt: the explicit request names another version",
+      expect.objectContaining({
+        requestedVersion: "1.2.0",
+        installedVersion: "2.0.0",
+        runningVersion: "1.0.0",
+      }),
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.human).toContain("no-op");
+  });
 
   it("running behind the install record: activates, writes the updating marker, restarts under the busy gate, probes health, and clears the marker", async () => {
     mocks.downloadAndStageHostMock.mockResolvedValue(upToDate("2.0.0"));
@@ -5432,6 +5932,77 @@ describe("buildHostUpdateCommand — reassertMarkerUnderLock under the lock", ()
     expect(seenExpectations).toEqual(["2.0.0", null]);
   });
 
+  it("an explicit request whose download was discarded because the record REACHED the requested version during the transfer (another actor committed it): the request is delivered, not discarded - its debt is paid through the activation arm", async () => {
+    // `not-newer-than-installed` covers EQUAL. Falsification: throw the
+    // discard for every reason and this exits 1 "no longer older than it"
+    // with the 2.0.0 record's debt unpaid - the one timing at which the
+    // same event would not activate.
+    armActivationDefaults();
+    mocks.probeHostHealthMock.mockResolvedValue({
+      healthy: true,
+      detail: "ok",
+    });
+    mocks.downloadAndStageHostMock.mockImplementation(
+      async (opts: DownloadAndStageHostOptions) => {
+        await requireHook(opts)("2.0.0");
+        return {
+          outcome: "discarded",
+          reason: "not-newer-than-installed",
+          targetVersion: "2.0.0",
+        } satisfies HostDownloadOutcome;
+      },
+    );
+    mocks.readHostInstallRecordMock.mockResolvedValue(sampleRecord("2.0.0"));
+    mocks.readHostPidMetadataMock.mockResolvedValue({
+      pid: 4242,
+      hostId: "host-1",
+      version: "1.0.0",
+      websocketUrl: "ws://127.0.0.1:51820/rpc",
+      startedAt: "2026-01-01T00:00:00.000Z",
+      processStartIdentity: null,
+      layer0: null,
+      layer0Slot: null,
+    });
+    mocks.identityVerdictMock.mockResolvedValue("current");
+
+    const result = await buildHostUpdateCommand({
+      force: false,
+      allowDowngrade: false,
+      versionRequest: "2.0.0",
+      ackNonce: null,
+    })(fakeCtx());
+
+    expect(mocks.applyHostMock).not.toHaveBeenCalled();
+    expect(mocks.stopHostForRestartWithAttemptMock).toHaveBeenCalledTimes(1);
+    expect(mocks.probeHostHealthMock).toHaveBeenCalledTimes(1);
+    expect(result.exitCode).toBe(0);
+    expect(result.human).toContain("updated host 1.0.0 → 2.0.0");
+
+    // Control: a record at ANOTHER version is the discard's answer.
+    vi.clearAllMocks();
+    armActivationDefaults();
+    mocks.downloadAndStageHostMock.mockImplementation(
+      async (opts: DownloadAndStageHostOptions) => {
+        await requireHook(opts)("2.0.0");
+        return {
+          outcome: "discarded",
+          reason: "not-newer-than-installed",
+          targetVersion: "2.0.0",
+        } satisfies HostDownloadOutcome;
+      },
+    );
+    mocks.readHostInstallRecordMock.mockResolvedValue(sampleRecord("2.1.0"));
+    await expect(
+      buildHostUpdateCommand({
+        force: false,
+        allowDowngrade: false,
+        versionRequest: "2.0.0",
+        ackNonce: null,
+      })(fakeCtx()),
+    ).rejects.toMatchObject({ code: CLI_ERROR_CODES.HOST_UPDATE_NOT_NEWER });
+    expect(mocks.stopHostForRestartWithAttemptMock).not.toHaveBeenCalled();
+  });
+
   it("an explicit request whose download was DISCARDED at promote time is refused with the discard's own reason, and never reaches the apply", async () => {
     // The race the promoter guards: the installed version moved past the
     // explicit target during the unlocked transfer (a plain older request
@@ -5467,14 +6038,26 @@ describe("buildHostUpdateCommand — reassertMarkerUnderLock under the lock", ()
       ),
     });
     expect(mocks.applyHostMock).not.toHaveBeenCalled();
-    // The pre-lock record announced 2.0.0; the refusal stamps it as the
-    // failure it is, naming the announced target.
-    const calls = mocks.replaceUpdateProgressMarkerIfUnchangedMock.mock.calls;
-    expect(calls).toHaveLength(1);
-    expect(calls[0][2]).toMatchObject({
-      state: "failed",
-      targetVersion: "2.0.0",
-    });
+    // The pre-lock record announced 2.0.0; a newer host is installed, so
+    // the request is SUPERSEDED, not failed: the record is withdrawn and
+    // nothing is stamped (see the recovery suite for the rule).
+    // A SUPERSEDED request: nothing was wrong, so this run's own record is
+    // WITHDRAWN (conditional delete), never stamped `failed` - a `failed`
+    // naming 2.0.0 would stand over a host at 2.1.0 and neither
+    // stale-failed rule (target must equal the running version) would ever
+    // clear it. Falsification: drop `superseded` from the catch and the
+    // replace below carries a `failed`.
+    expect(
+      mocks.replaceUpdateProgressMarkerIfUnchangedMock.mock.calls.filter(
+        (call) => (call[2] as HostUpdateProgress).state === "failed",
+      ),
+    ).toEqual([]);
+    expect(
+      mocks.deleteUpdateProgressMarkerIfUnchangedMock,
+    ).toHaveBeenCalledWith(
+      "production",
+      expect.objectContaining({ state: "updating", targetVersion: "2.0.0" }),
+    );
 
     // Positive control: the SAME discard under an implicit "latest"
     // still applies whatever newer stage is there.

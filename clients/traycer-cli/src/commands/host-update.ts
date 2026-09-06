@@ -61,7 +61,9 @@ import { createServiceController, serviceLabelFor } from "../service";
 // Busy (D6): the stage is kept - `applyHost`'s busy check runs before it
 // touches the stage - and this command re-throws `E_HOST_BUSY` with the
 // staged version attached to `details`, rather than the generic
-// `details: null` `assertHostNotBusy` throws on its own. A busy exit is a
+// `details: null` `assertHostNotBusy` throws on its own; the activation arm
+// names a stage waiting beside the debt the same way. The downgrade arm's
+// park carries `details: null`: its private stage is discarded by design. A busy exit is a
 // PARK, not a failure: the run withdraws its own `updating` marker (or puts
 // back the record it took over under the lock) and stamps no `failed` (see
 // the catch below), because the refusal was the policy working and the
@@ -86,7 +88,9 @@ import { createServiceController, serviceLabelFor } from "../service";
 //     and performs it - restart, marker, probe - see `readActivationState`.
 //     The same debt can appear AFTER the lock wait: a stage this run
 //     promoted and then found consumed by such an apply is re-derived and
-//     activated the same way (see the staged arm);
+//     activated the same way (see the staged arm) - for an explicit
+//     request, only when the committed record IS the requested version
+//     (`installedVersionMismatch`);
 //   - `probeHostHealth` asks "is the recorded pid alive and its port
 //     accepting?" - it does not compare versions. On the Desktop-managed macOS
 //     degraded path a surviving OLD host can answer it, so a healthy probe is
@@ -508,6 +512,46 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
     const markDisruptionStarted = (): void => {
       disruptionStarted = true;
     };
+    // Shared by the three arms that find the REQUESTED work already done by
+    // another actor - a stage consumed under the lock, a downgrade whose
+    // version is already installed, an explicit download discarded because
+    // the record reached its version during the transfer: re-derive the
+    // activation state out of lock (the debt-only rule, see
+    // `ActivationReading`), hold every reading that names a record to the
+    // request (`installedVersionMismatch`), and pay a debt through the same
+    // activation arm, which re-reads under its own lock. `null` is "nothing
+    // to activate": the caller reports the no-op.
+    const activateCommittedByAnotherActor = async (
+      requested: string | null,
+      logLine: string,
+    ): Promise<{
+      readonly legacy: LegacyHostUpdateResult;
+      readonly activated: boolean;
+    } | null> => {
+      const reading = await readActivationState(environment);
+      if (reading.kind !== "no-install") {
+        const changedHandoff = installedVersionMismatch(
+          requested,
+          reading.installedVersion,
+        );
+        if (changedHandoff !== null) throw changedHandoff;
+      }
+      if (reading.kind !== "debt") return null;
+      activationAttempted = true;
+      ctx.runtime.logger.info(logLine, {
+        environment,
+        installedVersion: reading.installedVersion,
+        runningVersion: reading.runningVersion,
+      });
+      return activateInstalledAndProjectLegacy(
+        environment,
+        args.force,
+        requested,
+        reading.runningVersion,
+        reassertMarkerUnderLock,
+        markDisruptionStarted,
+      );
+    };
     // The preparation runs INSIDE the try whose catch owns the marker. The
     // marker is published from within it - `onWillDownload`, before the first
     // byte - so a transfer that rejects has a marker to stamp `failed` onto;
@@ -524,6 +568,16 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
         onProgress: reportProgress,
         onWillDownload: publishUpdating,
       });
+      // An EXPLICIT `host update <version>` acts on the version its
+      // decision resolved to and on nothing else - see
+      // `installedVersionMismatch` for the arms this binds and what each
+      // binds to. `null` for an implicit "latest".
+      const requestedVersion =
+        args.versionRequest === undefined || args.versionRequest === null
+          ? null
+          : preparation.kind === "downgrade"
+            ? preparation.version
+            : downloadTargetVersion(preparation.download);
       const installedUpToDate =
         preparation.kind === "staged" &&
         preparation.download.outcome === "short-circuit" &&
@@ -542,13 +596,38 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
       const activationReading = installedUpToDate
         ? await readActivationState(environment)
         : null;
-      const activationDebt =
+      const debtRead =
         activationReading !== null && activationReading.kind === "debt"
           ? activationReading
           : null;
+      // An EXPLICIT request owes the activation of ITS version and no other.
+      // The installed-up-to-date short-circuit fires for a record AT OR
+      // ABOVE the request, and a record above it (`--version 1.2.0` against
+      // an installed 2.0.0) is not this run's to restart onto - the caller
+      // confirmed 1.2.0 and nothing else (`installedVersionMismatch`). That
+      // record's debt is left, logged, to an implicit `host update` or a
+      // `host restart`, and this run reports the no-op the short-circuit
+      // always reported.
+      const activationDebt =
+        debtRead !== null &&
+        (requestedVersion === null ||
+          debtRead.installedVersion === requestedVersion)
+          ? debtRead
+          : null;
+      if (debtRead !== null && activationDebt === null) {
+        ctx.runtime.logger.info(
+          "Host update leaves the install record's activation debt: the explicit request names another version",
+          {
+            environment,
+            requestedVersion,
+            installedVersion: debtRead.installedVersion,
+            runningVersion: debtRead.runningVersion,
+          },
+        );
+      }
       if (activationDebt !== null) {
         ctx.runtime.logger.info(
-          "Host update found the install record ahead of the running host; activating",
+          "Host update found the install record differing from the running host; activating",
           {
             environment,
             installedVersion: activationDebt.installedVersion,
@@ -590,6 +669,38 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
       // claim DEFERRED (another writer's live marker stood there) has no
       // record and claims again here - the other update may have finished
       // during the download - under the same conditional rule.
+      // An EXPLICIT request whose download was DISCARDED at promote time
+      // (the installed version moved past it in the unlocked transfer
+      // window, or the install record vanished) has nothing of its own to
+      // apply. Going on to `applyHost` would either commit whatever stage
+      // another promoter left - the version binding refuses that, but with
+      // a sentence about a replaced stage that names the wrong cause - or
+      // find nothing and report the "stage consumed" recovery. The discard
+      // IS the answer; say it and stop - BEFORE the publish below, which
+      // would announce work this run has already decided not to do. An
+      // implicit "latest" discarded by a newer stage still applies that
+      // stage.
+      if (
+        requestedVersion !== null &&
+        preparation.kind === "staged" &&
+        preparation.download.outcome === "discarded"
+      ) {
+        // `not-newer-than-installed` covers EQUAL: the record can BE the
+        // request, committed by another actor during the transfer
+        // (Desktop's converge). That is the request delivered, not
+        // discarded - this run owes its activation exactly as it does for a
+        // consumed stage (the staged arm below), and the same event at
+        // every other timing already activates. Only a record at ANOTHER
+        // version is the discard's answer.
+        const committedByAnotherActor =
+          preparation.download.reason === "not-newer-than-installed" &&
+          (await readHostInstallRecord(environment))?.version ===
+            requestedVersion;
+        if (!committedByAnotherActor) {
+          throw discardedExplicitRequestError(preparation.download);
+        }
+      }
+
       if (needsWork && ownMarker.current === null) {
         await publishUpdating(
           activationDebt !== null
@@ -605,6 +716,10 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
         const activation = await activateInstalledAndProjectLegacy(
           environment,
           args.force,
+          // The record equals the request at this point (the gate above);
+          // under the lock the arm holds it to the request again, so a
+          // record another actor committed during the wait is refused.
+          requestedVersion,
           activationDebt.runningVersion,
           // The record is read again under the lock; the marker is made this
           // run's there, naming the version as read, and the stop follows.
@@ -613,23 +728,23 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
         );
         legacy = activation.legacy;
         activationPerformed = activation.activated;
+      } else if (
+        preparation.kind === "staged" &&
+        preparation.download.outcome === "discarded" &&
+        requestedVersion !== null
+      ) {
+        // The explicit request the transfer found already committed (see
+        // the discard check above): nothing to apply, a debt to pay.
+        const activation = await activateCommittedByAnotherActor(
+          requestedVersion,
+          "Host update found the requested version committed by another actor during its transfer; activating it",
+        );
+        legacy =
+          activation === null
+            ? projectNoOp(await requireInstalled(environment))
+            : activation.legacy;
+        activationPerformed = activation !== null && activation.activated;
       } else if (preparation.kind === "staged") {
-        // An EXPLICIT request whose download was DISCARDED at promote time
-        // (the installed version moved past it in the unlocked transfer
-        // window, or the install record vanished) has nothing of its own
-        // to apply. Going on to `applyHost` would either commit whatever
-        // stage another promoter left - the version-binding below refuses
-        // that, but with a sentence about a replaced stage that names the
-        // wrong cause - or find nothing and report the "stage consumed"
-        // recovery. The discard IS the answer; say it and stop. An implicit
-        // "latest" discarded by a newer stage still applies that stage.
-        if (
-          args.versionRequest !== undefined &&
-          args.versionRequest !== null &&
-          preparation.download.outcome === "discarded"
-        ) {
-          throw discardedExplicitRequestError(preparation.download);
-        }
         const apply = await applyAndProjectLegacy(
           environment,
           args.force,
@@ -646,9 +761,7 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
           // and checked its floor, and a stage another promoter replaced in
           // the unlocked wait must not be committed under that confirmation.
           // An implicit "latest" takes whatever newer stage it finds.
-          args.versionRequest === undefined || args.versionRequest === null
-            ? null
-            : downloadTargetVersion(preparation.download),
+          requestedVersion,
         );
         legacy = apply.legacy;
         applyPerformed = apply.applied;
@@ -666,43 +779,51 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
           // and run the same activation arm the debt path runs: it re-reads
           // under its own lock and is the plain no-op if the debt cleared
           // meanwhile.
-          const reading = await readActivationState(environment);
-          if (reading.kind === "debt") {
-            activationAttempted = true;
-            ctx.runtime.logger.info(
-              "Host update found its stage consumed by another actor without activation; activating the committed install",
-              {
-                environment,
-                installedVersion: reading.installedVersion,
-                runningVersion: reading.runningVersion,
-              },
-            );
-            const activation = await activateInstalledAndProjectLegacy(
-              environment,
-              args.force,
-              reading.runningVersion,
-              reassertMarkerUnderLock,
-              markDisruptionStarted,
-            );
+          // The record the other actor committed is not necessarily the
+          // version this run was asked for: Desktop's converge commits
+          // whatever ITS stage held. An explicit request delivers only its
+          // own version, on EVERY reading that names a record - held in
+          // `activateCommittedByAnotherActor`, which also pays the debt.
+          const activation = await activateCommittedByAnotherActor(
+            requestedVersion,
+            "Host update found its stage consumed by another actor without activation; activating the committed install",
+          );
+          if (activation !== null) {
             legacy = activation.legacy;
             activationPerformed = activation.activated;
           }
         }
       } else {
         const downgradeTarget = preparation.version;
-        legacy = projectApplied(
-          await installHostDowngrade({
-            environment,
-            version: downgradeTarget,
-            force: args.force,
-            onProgress: reportProgress,
-            onBeforeCommit: () => reassertMarkerUnderLock(downgradeTarget),
-            onWillDisruptHost: markDisruptionStarted,
-          }),
-        );
-        // `installHostDowngrade` returns only an `applied` outcome; a park
-        // or a failure throws past this line.
-        applyPerformed = true;
+        const downgrade = await installHostDowngrade({
+          environment,
+          version: downgradeTarget,
+          force: args.force,
+          onProgress: reportProgress,
+          onBeforeCommit: () => reassertMarkerUnderLock(downgradeTarget),
+          onWillDisruptHost: markDisruptionStarted,
+        });
+        // A park or a failure throws past this line.
+        if (downgrade.outcome === "applied") {
+          legacy = projectApplied(downgrade);
+          applyPerformed = true;
+        } else {
+          // Another actor installed the requested version while this run
+          // staged its private source (re-derived under the mutation lock;
+          // the source is discarded). What remains is the question the
+          // staged arm asks of a consumed stage - is the committed record
+          // running? - held to the request on every reading that names a
+          // record, and answered by the same activation arm.
+          const activation = await activateCommittedByAnotherActor(
+            downgradeTarget,
+            "Host update found the requested version installed by another actor without activation; activating it",
+          );
+          legacy =
+            activation === null
+              ? projectNoOp(await requireInstalled(environment))
+              : activation.legacy;
+          activationPerformed = activation !== null && activation.activated;
+        }
       }
     } catch (err) {
       if (err instanceof CliError && err.code === CLI_ERROR_CODES.HOST_BUSY) {
@@ -761,6 +882,23 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
         }
         throw err;
       }
+      // A refusal because a NEWER host is installed than the version this
+      // run was asked for - `E_HOST_UPDATE_NOT_NEWER`, from the promote-time
+      // discard or from `installedVersionMismatch`'s newer arm - is a
+      // SUPERSEDED request, not a failure: another actor delivered
+      // something newer and nothing was wrong. It is treated exactly like a
+      // target observed running: this run's record is WITHDRAWN, never
+      // stamped. A `failed` naming the announced version would stand over a
+      // host that is, or is about to be, serving a newer one - and neither
+      // stale-failed rule (this command's `clearStaleFailedMarker`, the
+      // host's `isStaleUpdateProgress`) clears a `failed` whose target is
+      // not the running version, so nothing but a later update that does
+      // work would ever remove it. Any other refusal (an OLDER or
+      // non-release record under an explicit request) names something that
+      // did go wrong and is stamped as before.
+      const superseded =
+        err instanceof CliError &&
+        err.code === CLI_ERROR_CODES.HOST_UPDATE_NOT_NEWER;
       if (ownMarker.current === null) {
         // No record of this run's on disk (the pre-lock claim deferred to
         // another writer's live marker, or no conditional write ever
@@ -783,6 +921,15 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
         // suppression hides it. Same observed-state rule as
         // `clearStaleFailedMarker`.
         if (
+          intendedTarget.current !== null &&
+          superseded &&
+          !disruptionStarted
+        ) {
+          ctx.runtime.logger.info(
+            "Host update did not stamp its refusal - a newer host than the target it announced is installed; nothing was wrong",
+            { environment, targetVersion: intendedTarget.current },
+          );
+        } else if (
           intendedTarget.current !== null &&
           !(await targetObservedRunning(environment, intendedTarget.current))
         ) {
@@ -826,12 +973,13 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
           });
         } else if (
           !disruptionStarted &&
-          (await targetObservedRunning(
-            environment,
-            // `intendedTarget` is set before any record of this run's
-            // exists; the fallback is the type's null arm.
-            intendedTarget.current ?? ownMarker.current.targetVersion,
-          ))
+          (superseded ||
+            (await targetObservedRunning(
+              environment,
+              // `intendedTarget` is set before any record of this run's
+              // exists; the fallback is the type's null arm.
+              intendedTarget.current ?? ownMarker.current.targetVersion,
+            )))
         ) {
           // Same observed-state rule as the null arm above, reached with a
           // record of this run's own on disk: an actor that writes no
@@ -843,19 +991,21 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
           // stamped: "update to X failed" over a host serving X is the
           // false report the rule exists to withhold. Pre-disruption only:
           // past the stop, the host's state is this run's doing and its
-          // failure is reported whatever the host now serves.
+          // failure is reported whatever the host now serves. A SUPERSEDED
+          // request (see `superseded`) takes the same withdrawal.
           const withdrawn = await deleteUpdateProgressMarkerIfUnchanged(
             environment,
             ownMarker.current,
           );
+          const lead = superseded
+            ? "Host update stopped before disturbing the host - a newer host than the target it announced is installed"
+            : "Host update failed before disturbing the host, and the running host has been observed at the target it announced";
           logConditionalMarkerOutcome(ctx.runtime.logger, environment, {
             outcome: withdrawn,
-            done: "Host update failed before disturbing the host, and the running host has been observed at the target it announced; the progress marker was withdrawn",
-            moved:
-              "Host update failed before disturbing the host, and the running host has been observed at the target it announced; the progress marker was not withdrawn - another updater owns it now",
-            gone: "Host update failed before disturbing the host, and the running host has been observed at the target it announced; found no progress marker to withdraw",
-            failed:
-              "Host update failed before disturbing the host, and the running host has been observed at the target it announced; its progress marker could not be withdrawn - the marker log names what the path holds now",
+            done: `${lead}; the progress marker was withdrawn`,
+            moved: `${lead}; the progress marker was not withdrawn - another updater owns it now`,
+            gone: `${lead}; found no progress marker to withdraw`,
+            failed: `${lead}; its progress marker could not be withdrawn - the marker log names what the path holds now`,
           });
         } else {
           // Stamped with the target this run was working toward. The two
@@ -863,7 +1013,8 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
           // on disk still names the pre-lock target while the run went on
           // to commit the version `applyHost` reported, and "update to
           // <old> failed" would name a version this run never installed -
-          // which the host's target-running suppression then mis-handles.
+          // and the host's narrower, string-equal suppression would then
+          // never retire it.
           await markUpdateFailed(
             ctx.runtime.logger,
             environment,
@@ -982,7 +1133,10 @@ interface ActivationDebt {
  * reading is named rather than collapsed to "debt or not", because the
  * places that consult it need different things from the non-debt cases:
  * OUT of the contender lock (before it, and again after a staged apply that
- * found its stage consumed), only `debt` is a reason to act; UNDER the
+ * found its stage consumed), only `debt` is a reason to ACTIVATE (the other
+ * readings are still consulted out of lock: `activated` for the
+ * stale-failed clear and the observed-running withhold, and every reading
+ * that names a record for an explicit request's binding); UNDER the
  * activation arm's lock, `debt` and `no-live-host` both are, while
  * `activated` is the reason NOT to.
  *
@@ -1006,7 +1160,7 @@ interface ActivationDebt {
 type ActivationReading =
   | { readonly kind: "no-install" }
   | { readonly kind: "no-live-host"; readonly installedVersion: string }
-  | { readonly kind: "foreign-runtime" }
+  | { readonly kind: "foreign-runtime"; readonly installedVersion: string }
   | { readonly kind: "activated"; readonly installedVersion: string }
   | ActivationDebt;
 
@@ -1080,7 +1234,9 @@ async function readActivationState(
   // Catalog-version domain (a record with no runtime stamp yet): the
   // release-version policy applies. A running version that is not a release
   // version is not a host this command reasons about.
-  if (!isValidHostVersion(running.version)) return { kind: "foreign-runtime" };
+  if (!isValidHostVersion(running.version)) {
+    return { kind: "foreign-runtime", installedVersion: installed.version };
+  }
   const comparison = compareHostVersions(running.version, installed.version);
   if (!comparison.comparable || comparison.ordering === "equal") {
     return { kind: "activated", installedVersion: installed.version };
@@ -1133,8 +1289,12 @@ async function targetObservedRunning(
  * immediately before the unlink. Marker I/O never fails the command (same
  * rule as the writes).
  *
- * "Contradicts" is the host's own rule (`isStaleUpdateProgress`): a `failed`
- * is stale when the version it names is the one now running. A `failed`
+ * "Contradicts" is the rule the host's `isStaleUpdateProgress` applies in
+ * its narrower form (string equality of the marker's target with the
+ * runtime version it publishes, so a staging host's `staging.<epoch>.<sha>`
+ * never matches a catalog target there): a `failed` is stale when the
+ * version it names is the one now running. Here the comparison is the
+ * catalog comparator's, the domain the record and the target share. A `failed`
  * naming ANOTHER version - an attempt at 2.0.0 that failed before the swap,
  * read by a later `host update` while the registry offers only 1.9.0 - is
  * a report the observed state does not contradict, and it stays until an
@@ -1199,22 +1359,27 @@ async function clearStaleFailedMarker(
  * was serving, so the human summary and Desktop's legacy projection both say
  * `rc.1 → rc.2`, which is what actually happened from the operator's seat.
  *
- * The debt the caller detected is deliberately NOT a parameter: it was read
- * outside the contender lock, and `host restart` shares that lock. Desktop's
+ * The debt the caller detected is deliberately NOT a parameter (the
+ * BINDING is - `expectedInstalledVersion` - the decision is not): it was
+ * read outside the contender lock, and `host restart` shares that lock. Desktop's
  * parked-registration fallback runs exactly that command on exactly this
  * host, so a Settings click that arrives while it holds the lock would
  * otherwise wait its turn and then restart a host that had just come up on
  * the committed bytes - costing it its connections and reporting a
  * `rc.1 → rc.2` transition that the other actor performed. The debt is
- * re-derived under the lock and a cleared debt is the plain no-op.
+ * re-derived under the lock and a cleared debt is the plain no-op - for an
+ * explicit request too, when the record still names the request; a record
+ * another actor moved to another version is refused above, activated or
+ * not.
  *
  * `activated` tells the caller which of the two happened, because the two
  * need different aftercare (a health probe for a restart, none for a no-op).
  * `onInstalledVersionUnderLock` is called with the record's version as read
  * under the lock, after the busy gate and before anything is restarted, so
- * the caller can take ownership of the progress marker (and re-point it if
- * another actor installed a different version in between) only once this
- * arm has committed to restarting.
+ * the caller can take ownership of the progress marker (and, for an
+ * implicit request, re-point it if another actor installed a different
+ * version in between - an explicit request was refused above before this
+ * point) only once this arm has committed to restarting.
  *
  * A debt is CLEARED only by observing the running host at the installed
  * version. A host that is simply gone under the lock - it exited, crashed,
@@ -1230,6 +1395,12 @@ async function clearStaleFailedMarker(
 async function activateInstalledAndProjectLegacy(
   environment: Environment,
   force: boolean,
+  /**
+   * The install record version this activation is bound to (an explicit
+   * request), or `null` (an implicit "latest" activates whatever record the
+   * lock reveals). See `installedVersionMismatch`.
+   */
+  expectedInstalledVersion: string | null,
   lastSeenRunningVersion: string,
   onInstalledVersionUnderLock: (installedVersion: string) => Promise<void>,
   /**
@@ -1257,6 +1428,20 @@ async function activateInstalledAndProjectLegacy(
     // nothing, so its live work is no reason to fail the command (and stamp
     // a failed marker) - it is the no-op, busy or not.
     const installed = await requireInstalled(environment);
+    // Decided first, on the record as read UNDER the lock, before the
+    // activation reading, the busy gate and the marker takeover: an
+    // explicit request restarts the host onto its own version or refuses.
+    // A record another actor committed AND activated meanwhile is refused
+    // too, not reported as "host already at Y" under a request for X - the
+    // same fact at promote time is the discard refusal, and a request that
+    // delivered nothing does not report success. The refusal is a
+    // superseded request when the record is newer (`E_HOST_UPDATE_NOT_NEWER`),
+    // which the catch WITHDRAWS rather than stamps - see `superseded`.
+    const changedHandoff = installedVersionMismatch(
+      expectedInstalledVersion,
+      installed.version,
+    );
+    if (changedHandoff !== null) throw changedHandoff;
     const reading = await readActivationState(environment);
     if (reading.kind !== "debt" && reading.kind !== "no-live-host") {
       return { legacy: projectNoOp(installed), activated: false };
@@ -1267,7 +1452,30 @@ async function activateInstalledAndProjectLegacy(
     // live work is not restarted under it unless the caller said `--force`.
     // A host that is gone has no work to protect, so the gate is not asked.
     if (!force && reading.kind === "debt") {
-      await assertHostNotBusy(environment);
+      try {
+        await assertHostNotBusy(environment);
+      } catch (err) {
+        if (
+          !(err instanceof CliError) ||
+          err.code !== CLI_ERROR_CODES.HOST_BUSY
+        ) {
+          throw err;
+        }
+        // D6, as the apply arm reports it: a stage waiting beside the debt
+        // (a `host download` this run did not consume) is named in the
+        // park, read HERE under the same lock the busy decision was made
+        // under. Nothing here touches the stage.
+        const staged = await readHostStagedRecord(environment);
+        throw cliError({
+          code: CLI_ERROR_CODES.HOST_BUSY,
+          message:
+            staged === null
+              ? err.message
+              : `${err.message} Host ${staged.version} stays staged; it installs on the next update once the host is idle, or now with --force.`,
+          details: { stagedVersion: staged?.version ?? null },
+          exitCode: err.exitCode,
+        });
+      }
     }
     // After the gate (where one runs - a host that is gone is not asked),
     // not before: the caller takes the progress marker over here, and a park
@@ -1354,6 +1562,72 @@ async function prepareHostUpdate(input: {
 // replaced the stage", which is not what happened. `not-newer-than-installed`
 // carries the code the downgrade gate uses for the same fact, so a caller
 // keyed on it (Desktop's Settings click) can offer `--allow-downgrade`.
+/**
+ * An EXPLICIT `host update <version>` delivers the version it resolved to
+ * and nothing else: the caller (a Settings click, `--version X`) confirmed
+ * that version and the GUI checked the CLI floor for it, and no arm of this
+ * command restarts the host onto another version under that confirmation.
+ * An implicit "latest" is bound nowhere: it takes whatever newer state each
+ * re-derivation reveals. The arms that can deliver a version, and what each
+ * holds an explicit request to:
+ *
+ * | arm                                   | holds the request to                                              |
+ * | ------------------------------------- | ----------------------------------------------------------------- |
+ * | staged apply (`applyHost`)            | the staged record: `expectedStagedVersion` → `stage-version-mismatch` |
+ * | download discarded at promote time    | nothing - refused outright (`discardedExplicitRequestError`), before the publish; unless the record IS the request (committed by another actor during the transfer), which is the request delivered and takes the recovery below |
+ * | pre-lock debt (installed-up-to-date)  | the record the short-circuit saw: a record ABOVE the request keeps its debt, this run reports the no-op (never enters the arm) |
+ * | consumed-stage recovery (apply no-op) | the re-derived record on EVERY reading that names one (`debt`, `activated`, `no-live-host`), before the log line and the arm |
+ * | activation arm (every route)          | the record read UNDER the lock, before the activation reading, the busy gate and the takeover |
+ * | downgrade (`installHostDowngrade`)    | its own download of `preparation.version`; a record another actor moved to that version under the lock is a no-op, re-derived here like a consumed stage |
+ *
+ * Identity is the STRING, the grain the apply binding uses: the request
+ * resolved to a catalog version and the record names the catalog version
+ * it committed, so the same artifact reads equal and `2.0.0+hotfix` is
+ * another artifact. A record that is not a release version (`local-*`,
+ * `host install --file`) is by construction not the requested one - it
+ * cannot be compared, and it is exactly a record another actor wrote. A
+ * record NEWER than the request is the fact the promote-time discard
+ * reports as `E_HOST_UPDATE_NOT_NEWER`, so it carries that code and the
+ * same remedies - and, like it, is a SUPERSEDED request the catch that
+ * owns the marker withdraws rather than stamps (see `superseded` there);
+ * any other mismatch is `E_UNEXPECTED`, a failure before any disruption
+ * that the catch stamps over this run's own record, naming the version it
+ * announced.
+ */
+function installedVersionMismatch(
+  expectedInstalledVersion: string | null,
+  installedVersion: string,
+): CliError | null {
+  if (
+    expectedInstalledVersion === null ||
+    installedVersion === expectedInstalledVersion
+  ) {
+    return null;
+  }
+  const comparison = compareHostVersions(
+    installedVersion,
+    expectedInstalledVersion,
+  );
+  const details = {
+    expectedInstalledVersion,
+    actualInstalledVersion: installedVersion,
+  };
+  if (comparison.comparable && comparison.ordering === "greater") {
+    return cliError({
+      code: CLI_ERROR_CODES.HOST_UPDATE_NOT_NEWER,
+      message: `host update: the installed host is ${installedVersion}, newer than the ${expectedInstalledVersion} this run was updating to - another actor installed it meanwhile; nothing was restarted. Run 'traycer host status' to see what is installed and running, or pass --allow-downgrade to install ${expectedInstalledVersion} over it`,
+      details,
+      exitCode: 1,
+    });
+  }
+  return cliError({
+    code: CLI_ERROR_CODES.UNEXPECTED,
+    message: `host update: the installed host is ${installedVersion}, not the ${expectedInstalledVersion} this run was updating to - another actor changed the install before it could be activated; nothing was restarted. Run the update again`,
+    details,
+    exitCode: 1,
+  });
+}
+
 function discardedExplicitRequestError(
   outcome: Extract<HostDownloadOutcome, { readonly outcome: "discarded" }>,
 ): CliError {
@@ -1461,9 +1735,11 @@ function logConditionalMarkerOutcome(
  * into a path that READS empty. Against another writer's live marker that
  * is the correct no-op; against the empty path that writer's clear left
  * behind, it is the only record of what went wrong. One residual race is
- * accepted and named: create-if-absent has no record to compare against,
- * so it cannot tell an empty path from the few milliseconds in which
- * another writer's conditional swap holds ITS record in scratch (see
+ * accepted and named - closed among writers that take the marker lock
+ * (`underMarkerLock`), open only against a CLI from before it:
+ * create-if-absent has no record to compare against, so it cannot tell an
+ * empty path from the few milliseconds in which such a writer's
+ * conditional swap holds ITS record in scratch (see
  * `replaceUpdateProgressMarkerIfUnchanged`, which maps that same "absent"
  * reading to `changed` for exactly this reason). A stamp that lands in that
  * window wins the other writer's `link` with EEXIST; its swap reports
