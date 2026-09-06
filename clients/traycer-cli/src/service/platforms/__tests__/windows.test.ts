@@ -156,9 +156,9 @@ describe("Windows service stale host cleanup", () => {
     expect(script).toContain("$spared = @{ $PID = $true }");
     expect(script).toContain("& $expand @(1234)");
     expect(script).toContain("-not $spared.ContainsKey([int]$_)");
-    expect(script.trim().endsWith("@($victims) | ConvertTo-Json -Compress")).toBe(
-      true,
-    );
+    expect(
+      script.trim().endsWith("@($victims) | ConvertTo-Json -Compress"),
+    ).toBe(true);
   });
 
   it("parses PowerShell process detail JSON in both array and single-object shape", () => {
