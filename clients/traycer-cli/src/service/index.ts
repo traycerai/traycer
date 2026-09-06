@@ -7,6 +7,7 @@ import type { ServiceLabel } from "./label";
 import { createLinuxController } from "./platforms/linux";
 import { createMacosController } from "./platforms/macos";
 import { createWindowsController } from "./platforms/windows";
+import { assertNotInsideHostUnit } from "../host/cgroup-relocation";
 import { clearStopIntent, writeStopIntent } from "../host/stop-intent";
 import { findLiveIncumbentHost } from "../host/incumbent-check";
 import { hostHomeDir } from "../store/paths";
@@ -442,7 +443,18 @@ export function withStopIntent(
     // written - before it has spawned a child or published `pid.json`. Clearing
     // there hands the old supervisor a window in which it sees neither intent
     // nor an incumbent, and it relaunches. One restart, two hosts.
+    //
+    // Each route also carries the Linux self-protection guard, BEFORE its
+    // announcement so a refusal leaves no record of a stop that never happened.
+    // This is the second line behind the relocation in `withRunner`
+    // (host/cgroup-relocation.ts): it re-reads the cgroup, so a machine with no
+    // `systemd-run`, no user manager, or a scope that failed to move us is
+    // refused here instead of killing the process issuing the stop. `restart`
+    // is included because it is a real actuator - `systemctl --user restart`
+    // goes through it, not through `stop` - and leaving it out would leave one
+    // allowlisted command with no second line.
     stop: async (label, options) => {
+      await assertNotInsideHostUnit();
       await announceStop(label.environment, "stop", options.force);
       try {
         return await controller.stop(label, options);
@@ -452,6 +464,7 @@ export function withStopIntent(
       }
     },
     stopForRestart: async (label, options) => {
+      await assertNotInsideHostUnit();
       await announceStop(label.environment, "restart", options.force);
       try {
         return await controller.stopForRestart(label, options);
@@ -461,6 +474,7 @@ export function withStopIntent(
       }
     },
     uninstall: async (options) => {
+      await assertNotInsideHostUnit();
       await announceStop(options.label.environment, "uninstall", false);
       try {
         return await controller.uninstall(options);
@@ -470,6 +484,7 @@ export function withStopIntent(
       }
     },
     restart: async (label) => {
+      await assertNotInsideHostUnit();
       await announceStop(label.environment, "restart", false);
       try {
         return await controller.restart(label);

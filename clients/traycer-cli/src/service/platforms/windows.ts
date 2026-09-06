@@ -382,19 +382,34 @@ async function stopService(
 // is genuinely still the host. The raw recorded pid is used only when the scan
 // itself is unavailable: a host that died without cleanup leaves pid.json
 // behind, and Windows may have recycled that pid for an unrelated process an
-// unverified `taskkill /T /F` would take down.
+// unverified kill would take down.
+//
+// NEVER `/T`. This CLI is routinely a CHILD of the host it is stopping - a
+// maintenance RPC, the reconciler, or a person's command in a Traycer-hosted
+// terminal - and `taskkill /T` walks down from the host and kills it mid-update:
+// the host is gone, the updater is gone, and nothing finishes the swap. The
+// scan computes which pids to kill (`computeWindowsHostKillSet`) and each one is
+// killed individually. No ordering is imposed: `taskkill /F` on a parent leaves
+// its children running, the VBS launcher re-runs the host only on exit 75 (the
+// refreshed-slot signal) and never after a kill, and the CLI-side supervisor is
+// already silenced by the stop intent written before any of this.
 async function killHostProcessTree(
   label: ServiceLabel,
   run: ProcessRunner,
 ): Promise<void> {
-  const scannedPids = await findSlotProcessIds(label, run);
+  const scannedPids = await findSlotProcessIds(label, run, process.pid);
   const pidMetadata =
     scannedPids === null ? await readHostPidMetadata(label.environment) : null;
+  // The no-scan fallback: kill the recorded pid, still without `/T`. We cannot
+  // enumerate that pid's tree here, and a tree we cannot enumerate is a tree we
+  // cannot prove this process is outside of. Children that keep handles inside
+  // the install dir fail the swap loudly, naming themselves through the detail
+  // scan, which is the better failure of the two.
   const fallbackPids = pidMetadata === null ? [] : [pidMetadata.pid];
   const pids = uniqueProcessIds(scannedPids ?? fallbackPids);
   await Promise.all(
     pids.map((pid) =>
-      run("taskkill", ["/T", "/F", "/PID", String(pid)], {
+      run("taskkill", ["/F", "/PID", String(pid)], {
         env: undefined,
         cwd: undefined,
         timeoutMs: WINDOWS_TASKKILL_TIMEOUT_MS,
@@ -609,6 +624,7 @@ function describeCause(cause: unknown): string {
 async function findSlotProcessIds(
   label: ServiceLabel,
   run: ProcessRunner,
+  cliPid: number,
 ): Promise<readonly number[] | null> {
   try {
     const result = await run(
@@ -617,10 +633,7 @@ async function findSlotProcessIds(
         "-NoProfile",
         "-NonInteractive",
         "-Command",
-        buildSlotProcessScanScript({
-          hostHome: hostHomeDir(label.environment),
-          currentPid: process.pid,
-        }),
+        buildSlotProcessTableScanScript(hostHomeDir(label.environment)),
       ],
       {
         env: undefined,
@@ -629,7 +642,8 @@ async function findSlotProcessIds(
         tolerateNonZeroExit: true,
       },
     );
-    return parseProcessIdJson(result.stdout);
+    const table = parseProcessTableJson(result.stdout);
+    return table === null ? null : computeWindowsHostKillSet(table, cliPid);
   } catch (cause) {
     if (isServiceMutationAuthorityError(cause)) throw cause;
     return null;
@@ -641,28 +655,63 @@ interface SlotProcessScanOptions {
   readonly currentPid: number;
 }
 
-function buildSlotProcessScanScript(options: SlotProcessScanOptions): string {
-  return buildSlotProcessScanScriptWithProjection(
-    options,
-    "@($matches | Select-Object -ExpandProperty ProcessId) | ConvertTo-Json -Compress",
-  );
+// Sets `$hostMatch` for the pipeline row in `$_`. Shared verbatim by both
+// scans, so a change to what counts as a slot process cannot land in one and
+// miss the other.
+const SLOT_MATCH_SCRIPT_LINES: readonly string[] = [
+  "    $exe = ([string]$_.ExecutablePath).ToLowerInvariant().Replace('/', '\\')",
+  "    $cmd = ([string]$_.CommandLine).ToLowerInvariant().Replace('/', '\\')",
+  '    $text = $exe + "`n" + $cmd',
+  "    $hostMatch = $false",
+  "    foreach ($path in $hostPaths) {",
+  "      if ($text.Contains($path)) { $hostMatch = $true; break }",
+  "    }",
+];
+
+/**
+ * ONE pass over the UNFILTERED process table, projected to what the kill set is
+ * computed from: the pid, its parent, and whether the row matches this slot.
+ *
+ * Unfiltered is the point. The old scan excluded this process before the
+ * projection ran and returned bare pids, so it could not answer the only
+ * question that matters here - which of the slot's processes are ABOVE this CLI
+ * rather than beside it. Parent ids and slot matches now come from the same
+ * snapshot, which is what bounds pid reuse between the two reads.
+ *
+ * The script knows nothing about who we are: no `$excluded`, and emphatically
+ * no `$PID` - PowerShell is this CLI's own child, so its `$PID` is not the CLI
+ * and using it as "self" spares the wrong branch of the tree. Self-identity is
+ * `computeWindowsHostKillSet`'s input, applied to the table in-process.
+ *
+ * Command lines are matched inside the script and never leave it: they can name
+ * arbitrary user data, and the caller needs three fields per row, not a copy of
+ * the machine's process table.
+ */
+function buildSlotProcessTableScanScript(hostHome: string): string {
+  const hostPaths = powershellStringArray(slotHostProcessPaths(hostHome));
+  return [
+    "$ErrorActionPreference = 'SilentlyContinue'",
+    `$hostPaths = @(${hostPaths})`,
+    "$rows = Get-CimInstance Win32_Process | ForEach-Object {",
+    ...SLOT_MATCH_SCRIPT_LINES,
+    "    [pscustomobject]@{",
+    "      ProcessId = [int]$_.ProcessId",
+    "      ParentProcessId = [int]$_.ParentProcessId",
+    "      Slot = $hostMatch",
+    "    }",
+    "}",
+    "@($rows) | ConvertTo-Json -Compress",
+  ].join("\n");
 }
 
-// Same filter as the pid scan, projecting name + executable path as well so
-// the install swap's EBUSY error can NAME the processes still matching the
-// slot instead of surfacing a bare errno.
+// Same slot match as the table scan (`SLOT_MATCH_SCRIPT_LINES` is the shared
+// text - the filter must never drift between the kill and the diagnostic),
+// projecting name + executable path so the install swap's EBUSY error can NAME
+// the processes still matching the slot instead of surfacing a bare errno.
+// Unlike the table scan this one is a diagnostic, so it keeps its pre-filter:
+// naming ourselves as a lock holder would be noise, not evidence.
 function buildSlotProcessDetailScanScript(
   options: SlotProcessScanOptions,
-): string {
-  return buildSlotProcessScanScriptWithProjection(
-    options,
-    "@($matches | Select-Object ProcessId, Name, ExecutablePath) | ConvertTo-Json -Compress",
-  );
-}
-
-function buildSlotProcessScanScriptWithProjection(
-  options: SlotProcessScanOptions,
-  projection: string,
 ): string {
   const hostPaths = powershellStringArray(
     slotHostProcessPaths(options.hostHome),
@@ -676,17 +725,11 @@ function buildSlotProcessScanScriptWithProjection(
     "  if ($excluded -contains $pidValue) {",
     "    $false",
     "  } else {",
-    "    $exe = ([string]$_.ExecutablePath).ToLowerInvariant().Replace('/', '\\')",
-    "    $cmd = ([string]$_.CommandLine).ToLowerInvariant().Replace('/', '\\')",
-    '    $text = $exe + "`n" + $cmd',
-    "    $hostMatch = $false",
-    "    foreach ($path in $hostPaths) {",
-    "      if ($text.Contains($path)) { $hostMatch = $true; break }",
-    "    }",
+    ...SLOT_MATCH_SCRIPT_LINES,
     "    $hostMatch",
     "  }",
     "}",
-    projection,
+    "@($matches | Select-Object ProcessId, Name, ExecutablePath) | ConvertTo-Json -Compress",
   ].join("\n");
 }
 
@@ -715,18 +758,156 @@ function powershellStringArray(values: readonly string[]): string {
   return values.map((value) => `'${value.replace(/'/g, "''")}'`).join(", ");
 }
 
-function parseProcessIdJson(stdout: string): readonly number[] {
+// One row of the scanned process table.
+export interface WindowsProcessTableRow {
+  readonly processId: number;
+  // 0 for the rows whose parent is the system idle process, and for rows whose
+  // parent has already exited; both are ordinary and neither is an ancestor
+  // anything here can be spared through.
+  readonly parentProcessId: number;
+  // Whether the row's executable path or command line matches this slot.
+  readonly slot: boolean;
+}
+
+/**
+ * Parse the table scan's output, or `null` if ANY row is not the shape this
+ * module asked for.
+ *
+ * All-or-nothing on purpose. A partially-parsed table produces a kill set built
+ * from a partial ancestry, and a missing edge there does not read as an error -
+ * it reads as "this process has no parent", which spares nothing and kills a
+ * branch that should have been spared. `null` sends the caller to the pid.json
+ * fallback, which is weaker but honest about what it knows. Empty output is
+ * `null` for the same reason: a real Win32_Process scan is never empty, so
+ * nothing on stdout means the scan did not run.
+ */
+function parseProcessTableJson(
+  stdout: string,
+): readonly WindowsProcessTableRow[] | null {
   const trimmed = stdout.trim();
-  if (trimmed.length === 0) return [];
+  if (trimmed.length === 0) return null;
   let parsed: unknown;
   try {
     parsed = JSON.parse(trimmed);
-  } catch (cause) {
-    if (isServiceMutationAuthorityError(cause)) throw cause;
-    return [];
+  } catch {
+    return null;
   }
+  // `ConvertTo-Json` on a pipeline still emits a bare object for a single row
+  // on Windows PowerShell 5.1 - accept both shapes, like the detail parser.
   const values = Array.isArray(parsed) ? parsed : [parsed];
-  return values.filter(isKillableProcessId);
+  const rows: WindowsProcessTableRow[] = [];
+  for (const value of values) {
+    if (value === null || typeof value !== "object") return null;
+    const record = value as Record<string, unknown>;
+    const processId = record.ProcessId;
+    const parentProcessId = record.ParentProcessId;
+    const slot = record.Slot;
+    // Deliberately NOT `isKillableProcessId`: that one also rejects our own
+    // pid, and the table is unfiltered, so our row is expected in it. Whether
+    // we are killable is the algebra's answer, not the parser's.
+    if (
+      !isProcessTablePid(processId) ||
+      !isProcessTableParentId(parentProcessId) ||
+      typeof slot !== "boolean"
+    ) {
+      return null;
+    }
+    rows.push({ processId, parentProcessId, slot });
+  }
+  return rows;
+}
+
+/**
+ * Which pids a host stop may kill, given the whole process table and the pid of
+ * the CLI issuing the stop.
+ *
+ *   victims = slot ∪ descendants(slot)
+ *   spared  = cli ∪ descendants(cli) ∪ (ancestors(cli) − slot)
+ *   kill    = victims − spared
+ *
+ * The host is slot-matched AND an ancestor of a host-spawned CLI, so subtracting
+ * the slot from the spared ancestors is what keeps it in the kill set: "exclude
+ * the updater's ancestry" would spare the very process this stop exists to
+ * terminate. What the ancestor clause actually protects is a Traycer-hosted
+ * TERMINAL run, where the shell and its conpty sit between the host and this
+ * CLI and match nothing.
+ *
+ * `cliPid` is the CLI's own pid. Not PowerShell's: the scan runs as this
+ * process's child, so `$PID` inside it is a descendant of the answer, and
+ * seeding from it spares the branch above the CLI while leaving the CLI's own
+ * siblings - the detached upgrade finalizer among them - to be killed.
+ */
+export function computeWindowsHostKillSet(
+  table: readonly WindowsProcessTableRow[],
+  cliPid: number,
+): readonly number[] {
+  const children = new Map<number, number[]>();
+  const parents = new Map<number, number>();
+  const slot = new Set<number>();
+  for (const row of table) {
+    parents.set(row.processId, row.parentProcessId);
+    const siblings = children.get(row.parentProcessId);
+    if (siblings === undefined) {
+      children.set(row.parentProcessId, [row.processId]);
+    } else {
+      siblings.push(row.processId);
+    }
+    if (row.slot) slot.add(row.processId);
+  }
+  const victims = withDescendants(slot, children);
+  const spared = withDescendants(new Set([cliPid]), children);
+  for (const ancestor of ancestorsOf(cliPid, parents)) {
+    if (!slot.has(ancestor)) spared.add(ancestor);
+  }
+  return [...victims]
+    .filter((pid) => !spared.has(pid))
+    .sort((left, right) => left - right);
+}
+
+// The seeds plus everything under them, walked over the snapshot's own parent
+// edges. Traversal order is immaterial to a closure; `seen` is what matters,
+// doubling as the cycle guard a torn table would otherwise turn into a hang.
+function withDescendants(
+  seeds: ReadonlySet<number>,
+  children: ReadonlyMap<number, readonly number[]>,
+): Set<number> {
+  const seen = new Set<number>(seeds);
+  const pending: number[] = [...seeds];
+  for (;;) {
+    const current = pending.pop();
+    if (current === undefined) return seen;
+    for (const child of children.get(current) ?? []) {
+      if (seen.has(child)) continue;
+      seen.add(child);
+      pending.push(child);
+    }
+  }
+}
+
+// The chain above `pid`, nearest first. Stops at pid 0 (the idle process, and
+// what an exited parent reports) and at any pid already on the chain.
+function ancestorsOf(
+  pid: number,
+  parents: ReadonlyMap<number, number>,
+): readonly number[] {
+  const chain: number[] = [];
+  const seen = new Set<number>([pid]);
+  let cursor = pid;
+  for (;;) {
+    const parent = parents.get(cursor);
+    if (parent === undefined || parent <= 0 || seen.has(parent)) return chain;
+    seen.add(parent);
+    chain.push(parent);
+    cursor = parent;
+  }
+}
+
+function isProcessTablePid(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value > 0;
+}
+
+function isProcessTableParentId(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0;
 }
 
 function uniqueProcessIds(values: readonly number[]): readonly number[] {
@@ -755,7 +936,7 @@ function parseProcessDetailJson(
   }
   // `ConvertTo-Json` on `@(...)` still emits a bare object for a single
   // match on Windows PowerShell 5.1 - accept both shapes, like
-  // `parseProcessIdJson` above.
+  // `parseProcessTableJson` above.
   const values = Array.isArray(parsed) ? parsed : [parsed];
   const holders: WindowsSlotLockHolder[] = [];
   for (const value of values) {
@@ -1139,8 +1320,8 @@ function resolveTaskUserId(): string {
 export {
   buildTaskXml as buildScheduledTaskXml,
   buildHiddenHostLauncher as buildWindowsHiddenHostLauncher,
-  buildSlotProcessScanScript as buildWindowsSlotProcessScanScript,
+  buildSlotProcessTableScanScript as buildWindowsSlotProcessTableScanScript,
   buildSlotProcessDetailScanScript as buildWindowsSlotProcessDetailScanScript,
-  parseProcessIdJson as parseWindowsProcessIdJson,
+  parseProcessTableJson as parseWindowsProcessTableJson,
   parseProcessDetailJson as parseWindowsProcessDetailJson,
 };

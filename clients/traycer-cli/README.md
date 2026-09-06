@@ -128,6 +128,32 @@ If the service is registered but not responding, restart it:
 traycer host restart
 ```
 
+### Stopping the host from inside Traycer
+
+The commands that stop the host - `host update`, `host apply`, `host install`,
+`host ensure`, `host restart`, `host stop`, `host uninstall`,
+`host free-port-and-restart` and `host service uninstall` - are frequently run
+by the host itself, or by a person in a terminal the host opened. On those runs
+the command is a child of the host, so a naive stop kills the command that
+issued it, part-way through its own work.
+
+On Linux the CLI re-runs such a command in a transient systemd scope of its own
+(`systemd-run --user --scope`) before the command body starts. The relocated
+process is a sibling of `ai.traycer.host.service` rather than a child of it, and
+survives the stop; the CLI log records the move as `relocated host-stopping
+command into a transient scope`. The stop is also guarded: immediately before
+the host is stopped the CLI re-reads its own cgroup, and if it is still inside
+the host's unit - no `systemd-run` on `PATH`, no systemd user manager, or a
+scope that did not take - the command fails with `E_SERVICE_CONTROL_FAILED` and
+leaves the host running. Run it again from a shell outside Traycer.
+
+On Windows there is no re-exec. The host's processes are terminated
+individually, and the CLI running the command, its children, and the shell that
+launched it are excluded from that set - terminating the host's whole tree would
+take them down with it.
+
+macOS needs neither: stopping the host's launchd job does not touch the CLI.
+
 ## Links
 
 - Documentation: [docs.traycer.ai](https://docs.traycer.ai)

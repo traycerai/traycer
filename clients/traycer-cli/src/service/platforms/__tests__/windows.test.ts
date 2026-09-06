@@ -3,16 +3,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildScheduledTaskXml,
   buildWindowsSlotProcessDetailScanScript,
-  buildWindowsSlotProcessScanScript,
+  buildWindowsSlotProcessTableScanScript,
+  computeWindowsHostKillSet,
   createWindowsController,
   describeSlotLockHolders,
   killLingeringSlotProcesses,
   parseSchtasksLastRunResult,
   parseWindowsProcessDetailJson,
-  parseWindowsProcessIdJson,
+  parseWindowsProcessTableJson,
   setWindowsStartEvidenceDepsForTests,
   setWindowsTaskInstallDepsForTests,
   type ProcessRunner,
+  type WindowsProcessTableRow,
   type WindowsStartEvidenceDeps,
   type WindowsTaskInstallDeps,
 } from "../windows";
@@ -89,51 +91,106 @@ describe("Windows service stale host cleanup", () => {
     setWindowsTaskInstallDepsForTests(null);
   });
 
-  it("parses PowerShell process id JSON", () => {
-    expect(parseWindowsProcessIdJson("123")).toEqual([123]);
-    expect(parseWindowsProcessIdJson("[123,456]")).toEqual([123, 456]);
-    expect(parseWindowsProcessIdJson("")).toEqual([]);
-    expect(parseWindowsProcessIdJson('"not-a-pid"')).toEqual([]);
+  it("parses PowerShell process table JSON", () => {
+    expect(
+      parseWindowsProcessTableJson(
+        '[{"ProcessId":100,"ParentProcessId":1,"Slot":true},{"ProcessId":200,"ParentProcessId":100,"Slot":false}]',
+      ),
+    ).toEqual([
+      { processId: 100, parentProcessId: 1, slot: true },
+      { processId: 200, parentProcessId: 100, slot: false },
+    ]);
+    // Windows PowerShell 5.1 emits a bare object for a single row.
+    expect(
+      parseWindowsProcessTableJson(
+        '{"ProcessId":100,"ParentProcessId":1,"Slot":true}',
+      ),
+    ).toEqual([{ processId: 100, parentProcessId: 1, slot: true }]);
+    // A row whose ProcessId equals this test process's own pid parses fine -
+    // the table scan is deliberately unfiltered.
+    expect(
+      parseWindowsProcessTableJson(
+        `{"ProcessId":${process.pid},"ParentProcessId":1,"Slot":false}`,
+      ),
+    ).toEqual([{ processId: process.pid, parentProcessId: 1, slot: false }]);
+    expect(parseWindowsProcessTableJson("[]")).toEqual([]);
+    // Empty output means the scan never ran - `null`, not `[]`: a real
+    // Win32_Process scan is never empty.
+    expect(parseWindowsProcessTableJson("")).toBeNull();
+    expect(parseWindowsProcessTableJson("not-json")).toBeNull();
+    // Any malformed row fails the WHOLE parse (all-or-nothing).
+    expect(
+      parseWindowsProcessTableJson(
+        '[{"ProcessId":"100","ParentProcessId":1,"Slot":true}]',
+      ),
+    ).toBeNull();
+    expect(
+      parseWindowsProcessTableJson('[{"ProcessId":100,"Slot":true}]'),
+    ).toBeNull();
+    expect(
+      parseWindowsProcessTableJson(
+        '[{"ProcessId":100,"ParentProcessId":1,"Slot":"true"}]',
+      ),
+    ).toBeNull();
+    expect(parseWindowsProcessTableJson('[100, "not-a-row"]')).toBeNull();
+
+    // Ablation: in `parseProcessTableJson`, change `return null;` on a
+    // malformed row to `continue;` (skipping just that row instead of
+    // failing the whole parse) → the malformed-row assertions above fail:
+    // a partial table would come back instead of `null`.
   });
 
-  it("builds a slot-scoped process scan that excludes the current CLI process", () => {
-    const script = buildWindowsSlotProcessScanScript({
-      hostHome: "C:\\Users\\Traycer Dev\\.traycer\\host\\staging",
-      currentPid: 1234,
-    });
-    expect(script).toContain("$excluded = @(1234, $PID)");
+  it("builds a table scan with the slot's install\\ prefix, ParentProcessId, and Slot fields, and no $excluded/$PID", () => {
+    const script = buildWindowsSlotProcessTableScanScript(
+      "C:\\Users\\Traycer Dev\\.traycer\\host\\staging",
+    );
+    expect(script).toContain("ParentProcessId = [int]$_.ParentProcessId");
+    expect(script).toContain("Slot = $hostMatch");
     expect(script).toContain(".traycer\\host\\staging\\install\\");
-    expect(script).toContain("Replace('/', '\\')");
+    expect(script).not.toContain("$excluded");
+    expect(script).not.toContain("$PID");
+
+    // Ablation: in `buildSlotProcessTableScanScript`, reintroduce
+    // `$excluded = @(<pid>, $PID)` into the script → this test fails (the
+    // `not.toContain("$PID")` assertion flips).
   });
 
   it("does not use broad production roots as process-match prefixes", () => {
-    const script = buildWindowsSlotProcessScanScript({
-      hostHome: "C:\\Users\\Traycer Dev\\.traycer\\host",
-      currentPid: 1234,
-    });
+    const script = buildWindowsSlotProcessTableScanScript(
+      "C:\\Users\\Traycer Dev\\.traycer\\host",
+    );
     expect(script).toContain(
       "c:\\users\\traycer dev\\.traycer\\host\\install\\",
     );
     expect(script).not.toContain("'c:\\users\\traycer dev\\.traycer\\host'");
   });
 
-  it("builds a detail scan sharing the pid scan's filter but projecting name and executable path", () => {
-    const options = {
+  it("builds a detail scan sharing the shared slot-match block with the table scan, projecting name and executable path", () => {
+    const detail = buildWindowsSlotProcessDetailScanScript({
       hostHome: "C:\\Users\\Traycer Dev\\.traycer\\host",
       currentPid: 1234,
-    };
-    const detail = buildWindowsSlotProcessDetailScanScript(options);
+    });
     expect(detail).toContain("$excluded = @(1234, $PID)");
     expect(detail).toContain(
       "c:\\users\\traycer dev\\.traycer\\host\\install\\",
     );
     expect(detail).toContain("Select-Object ProcessId, Name, ExecutablePath");
-    // Everything but the projection line is byte-identical to the pid scan
-    // - the filter must never drift between the kill and the diagnostic.
-    const pidScan = buildWindowsSlotProcessScanScript(options);
-    expect(detail.split("\n").slice(0, -1)).toEqual(
-      pidScan.split("\n").slice(0, -1),
+    // The anti-drift invariant that survives the scan split: both scripts
+    // must contain the identical shared slot-match block, verbatim.
+    const tableScan = buildWindowsSlotProcessTableScanScript(
+      "C:\\Users\\Traycer Dev\\.traycer\\host",
     );
+    const sharedBlock = [
+      "    $exe = ([string]$_.ExecutablePath).ToLowerInvariant().Replace('/', '\\')",
+      "    $cmd = ([string]$_.CommandLine).ToLowerInvariant().Replace('/', '\\')",
+      '    $text = $exe + "`n" + $cmd',
+      "    $hostMatch = $false",
+      "    foreach ($path in $hostPaths) {",
+      "      if ($text.Contains($path)) { $hostMatch = $true; break }",
+      "    }",
+    ].join("\n");
+    expect(detail).toContain(sharedBlock);
+    expect(tableScan).toContain(sharedBlock);
   });
 
   it("parses PowerShell process detail JSON in both array and single-object shape", () => {
@@ -195,11 +252,29 @@ describe("Windows service stale host cleanup", () => {
     ).resolves.toEqual([]);
   });
 
+  // The production `killHostProcessTree` always passes `process.pid` (this
+  // test process's own pid) as the CLI identity, so every fake table below
+  // treats `process.pid` as an ordinary, unrelated process with no parent in
+  // the table - it must never appear in a kill set built from these tables.
+  function tableJson(rows: readonly WindowsProcessTableRow[]): string {
+    return JSON.stringify(
+      rows.map((row) => ({
+        ProcessId: row.processId,
+        ParentProcessId: row.parentProcessId,
+        Slot: row.slot,
+      })),
+    );
+  }
+
   it("re-kills scan-verified processes through killLingeringSlotProcesses", async () => {
     const calls: RecordedCall[] = [];
     const runner: ProcessRunner = async (command, args) => {
       calls.push({ command, args });
-      return command === "powershell.exe" ? success("[401]") : success("");
+      return command === "powershell.exe"
+        ? success(
+            tableJson([{ processId: 401, parentProcessId: 1, slot: true }]),
+          )
+        : success("");
     };
 
     await killLingeringSlotProcesses(serviceLabelFor("staging"), runner);
@@ -208,14 +283,22 @@ describe("Windows service stale host cleanup", () => {
       calls
         .filter((call) => call.command === "taskkill")
         .map((call) => call.args),
-    ).toEqual([["/T", "/F", "/PID", "401"]]);
+    ).toEqual([["/F", "/PID", "401"]]);
+    expect(calls.every((call) => !call.args.includes("/T"))).toBe(true);
   });
 
   it("kills slot-scanned processes when pid metadata is missing", async () => {
     const calls: RecordedCall[] = [];
     const runner: ProcessRunner = async (command, args) => {
       calls.push({ command, args });
-      return command === "powershell.exe" ? success("[401,402]") : success("");
+      return command === "powershell.exe"
+        ? success(
+            tableJson([
+              { processId: 401, parentProcessId: 1, slot: true },
+              { processId: 402, parentProcessId: 1, slot: true },
+            ]),
+          )
+        : success("");
     };
     const controller = createWindowsController(runner);
 
@@ -231,8 +314,8 @@ describe("Windows service stale host cleanup", () => {
         .filter((call) => call.command === "taskkill")
         .map((call) => call.args),
     ).toEqual([
-      ["/T", "/F", "/PID", "401"],
-      ["/T", "/F", "/PID", "402"],
+      ["/F", "/PID", "401"],
+      ["/F", "/PID", "402"],
     ]);
   });
 
@@ -247,7 +330,14 @@ describe("Windows service stale host cleanup", () => {
     const calls: RecordedCall[] = [];
     const runner: ProcessRunner = async (command, args) => {
       calls.push({ command, args });
-      return command === "powershell.exe" ? success("[401,402]") : success("");
+      return command === "powershell.exe"
+        ? success(
+            tableJson([
+              { processId: 401, parentProcessId: 1, slot: true },
+              { processId: 402, parentProcessId: 1, slot: true },
+            ]),
+          )
+        : success("");
     };
     const controller = createWindowsController(runner);
 
@@ -256,13 +346,14 @@ describe("Windows service stale host cleanup", () => {
     expect(
       calls
         .filter((call) => call.command === "taskkill")
-        .map((call) => call.args[3]),
+        .map((call) => call.args[2]),
     ).toEqual(["401", "402"]);
   });
 
   it("does not kill the recorded pid when the scan verifies it no longer matches the host", async () => {
-    // pid.json says 401, but the verified slot scan only finds 402 - the OS
-    // recycled 401 for an unrelated process, which must survive.
+    // pid.json says 401, but the verified slot scan only shows 402 as a slot
+    // match - the OS recycled 401 for an unrelated (non-slot) process, which
+    // must survive.
     mocks.readHostPidMetadata.mockResolvedValue({
       pid: 401,
       hostId: "host-test",
@@ -273,7 +364,14 @@ describe("Windows service stale host cleanup", () => {
     const calls: RecordedCall[] = [];
     const runner: ProcessRunner = async (command, args) => {
       calls.push({ command, args });
-      return command === "powershell.exe" ? success("[402]") : success("");
+      return command === "powershell.exe"
+        ? success(
+            tableJson([
+              { processId: 401, parentProcessId: 1, slot: false },
+              { processId: 402, parentProcessId: 1, slot: true },
+            ]),
+          )
+        : success("");
     };
     const controller = createWindowsController(runner);
 
@@ -282,7 +380,7 @@ describe("Windows service stale host cleanup", () => {
     expect(
       calls
         .filter((call) => call.command === "taskkill")
-        .map((call) => call.args[3]),
+        .map((call) => call.args[2]),
     ).toEqual(["402"]);
   });
 
@@ -307,8 +405,15 @@ describe("Windows service stale host cleanup", () => {
     expect(
       calls
         .filter((call) => call.command === "taskkill")
-        .map((call) => call.args[3]),
+        .map((call) => call.args[2]),
     ).toEqual(["401"]);
+    expect(calls.every((call) => !call.args.includes("/T"))).toBe(true);
+
+    // Ablation (for the "NEVER /T" pins in this describe block): in
+    // `killHostProcessTree`, put `"/T"` back into the `taskkill` argv (i.e.
+    // `run("taskkill", ["/T", "/F", "/PID", String(pid)], ...)`) → every
+    // `.toEqual([["/F", ...`) assertion above fails, and every
+    // `.every((call) => !call.args.includes("/T"))` check flips to false.
   });
 
   it("purges pid metadata on uninstall like it does on stop", async () => {
@@ -329,6 +434,202 @@ describe("Windows service stale host cleanup", () => {
     await controller.stop(serviceLabelFor("staging"), { force: false });
 
     expect(mocks.removeHostPidMetadata).toHaveBeenCalledWith("staging");
+  });
+});
+
+// `computeWindowsHostKillSet` is the algebra a host stop's kill set is built
+// from (victims = slot ∪ descendants(slot); spared = cli ∪ descendants(cli) ∪
+// (ancestors(cli) − slot); kill = victims − spared). These pins exercise it
+// both directly and through `controller.stop`, because the direct unit tests
+// alone would not catch a wiring bug that hands the wrong pid in as `cliPid`
+// (`process.pid`, not PowerShell's own `$PID` inside the scan script).
+describe("computeWindowsHostKillSet and the taskkill self-protection it drives", () => {
+  function table(rows: readonly WindowsProcessTableRow[]): string {
+    return JSON.stringify(
+      rows.map((row) => ({
+        ProcessId: row.processId,
+        ParentProcessId: row.parentProcessId,
+        Slot: row.slot,
+      })),
+    );
+  }
+
+  beforeEach(() => {
+    mocks.readHostPidMetadata.mockReset();
+    mocks.readHostPidMetadata.mockResolvedValue(null);
+    mocks.removeHostPidMetadata.mockReset();
+    mocks.removeHostPidMetadata.mockResolvedValue(undefined);
+  });
+
+  it("host-spawned: kills the host and its non-CLI-ancestor descendants, sparing the CLI's own subtree", async () => {
+    // host 100 (Slot) -> cli 200 -> powershell 250
+    // cli 200 -> helper 300
+    // host 100 -> agent 400
+    // self = 200 (the CLI's own pid)
+    const rows: WindowsProcessTableRow[] = [
+      { processId: 100, parentProcessId: 1, slot: true },
+      { processId: 200, parentProcessId: 100, slot: false },
+      { processId: 250, parentProcessId: 200, slot: false },
+      { processId: 300, parentProcessId: 200, slot: false },
+      { processId: 400, parentProcessId: 100, slot: false },
+    ];
+
+    const calls: RecordedCall[] = [];
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      return command === "powershell.exe" ? success(table(rows)) : success("");
+    };
+    const controller = createWindowsController(runner);
+
+    const originalPid = Object.getOwnPropertyDescriptor(process, "pid");
+    Object.defineProperty(process, "pid", { value: 200, configurable: true });
+    try {
+      await controller.stop(serviceLabelFor("staging"), { force: false });
+    } finally {
+      if (originalPid !== undefined) {
+        Object.defineProperty(process, "pid", originalPid);
+      }
+    }
+
+    const taskkillArgs = calls
+      .filter((call) => call.command === "taskkill")
+      .map((call) => call.args);
+    expect(taskkillArgs).toEqual([
+      ["/F", "/PID", "100"],
+      ["/F", "/PID", "400"],
+    ]);
+    expect(taskkillArgs.every((args) => !args.includes("/T"))).toBe(true);
+  });
+
+  it("terminal-run: a non-slot shell ancestor between the host and the CLI is spared", async () => {
+    // host 100 (Slot) -> shell 50 -> cli 200 -> powershell 250
+    // host 100 -> agent 400
+    // self = 200
+    const rows: WindowsProcessTableRow[] = [
+      { processId: 100, parentProcessId: 1, slot: true },
+      { processId: 50, parentProcessId: 100, slot: false },
+      { processId: 200, parentProcessId: 50, slot: false },
+      { processId: 250, parentProcessId: 200, slot: false },
+      { processId: 400, parentProcessId: 100, slot: false },
+    ];
+
+    const calls: RecordedCall[] = [];
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      return command === "powershell.exe" ? success(table(rows)) : success("");
+    };
+    const controller = createWindowsController(runner);
+
+    const originalPid = Object.getOwnPropertyDescriptor(process, "pid");
+    Object.defineProperty(process, "pid", { value: 200, configurable: true });
+    try {
+      await controller.stop(serviceLabelFor("staging"), { force: false });
+    } finally {
+      if (originalPid !== undefined) {
+        Object.defineProperty(process, "pid", originalPid);
+      }
+    }
+
+    const taskkillArgs = calls
+      .filter((call) => call.command === "taskkill")
+      .map((call) => call.args);
+    expect(taskkillArgs).toEqual([
+      ["/F", "/PID", "100"],
+      ["/F", "/PID", "400"],
+    ]);
+    // 50 (a non-slot ancestor of the CLI) is spared, and never appears.
+    expect(taskkillArgs.some((args) => args[2] === "50")).toBe(false);
+  });
+
+  it("wrong-self regression: self must be the CLI's pid, not PowerShell's own - putting self at the powershell node does not spare the CLI's sibling", () => {
+    // Same host-spawned shape as above, but self is (wrongly) placed at the
+    // POWERSHELL node (250) instead of the CLI (200). This is the pin for
+    // "cliPid is the CLI's own pid, not `$PID` inside the scan script" - a
+    // wiring bug that fed PowerShell's own pid in would leave the CLI's
+    // sibling process (300, the detached upgrade finalizer stand-in) spared
+    // when it should be killed.
+    const rows: WindowsProcessTableRow[] = [
+      { processId: 100, parentProcessId: 1, slot: true },
+      { processId: 200, parentProcessId: 100, slot: false },
+      { processId: 250, parentProcessId: 200, slot: false },
+      { processId: 300, parentProcessId: 200, slot: false },
+      { processId: 400, parentProcessId: 100, slot: false },
+    ];
+
+    const killSet = computeWindowsHostKillSet(rows, 250);
+
+    expect(killSet).toEqual([100, 300, 400]);
+    // Ablation: in `killHostProcessTree`, change
+    // `findSlotProcessIds(label, run, process.pid)` to pass PowerShell's own
+    // pid instead (e.g. hard-code a wrong id, or thread `$PID` from inside
+    // the script back out) → this assertion is exactly what would catch it,
+    // since seeding `spared` from the wrong pid changes which branch of the
+    // tree is protected.
+  });
+
+  it("fallback: the powershell run throws, so the recorded pid.json pid is killed exactly once, without /T", async () => {
+    mocks.readHostPidMetadata.mockResolvedValue({
+      pid: 100,
+      hostId: "host-test",
+      version: "1.0.0",
+      websocketUrl: "ws://127.0.0.1:54321/rpc",
+      startedAt: "2026-01-01T00:00:00.000Z",
+    });
+    const calls: RecordedCall[] = [];
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (command === "powershell.exe") throw new Error("spawn failed");
+      return success("");
+    };
+    const controller = createWindowsController(runner);
+
+    await controller.stop(serviceLabelFor("staging"), { force: false });
+
+    const taskkillCalls = calls.filter((call) => call.command === "taskkill");
+    expect(taskkillCalls).toHaveLength(1);
+    expect(taskkillCalls[0]?.args).toEqual(["/F", "/PID", "100"]);
+    expect(taskkillCalls[0]?.args.includes("/T")).toBe(false);
+  });
+
+  // Direct algebra pins for the three subtraction terms, each isolating one
+  // ablation.
+  describe("computeWindowsHostKillSet - algebra pins", () => {
+    const rows: WindowsProcessTableRow[] = [
+      { processId: 100, parentProcessId: 1, slot: true },
+      { processId: 50, parentProcessId: 100, slot: false },
+      { processId: 200, parentProcessId: 50, slot: false },
+      { processId: 300, parentProcessId: 200, slot: false },
+      { processId: 400, parentProcessId: 100, slot: false },
+    ];
+
+    it("kills the slot and its descendants, sparing the CLI's ancestry and subtree", () => {
+      expect(computeWindowsHostKillSet(rows, 200)).toEqual([100, 400]);
+
+      // Ablation: in `computeWindowsHostKillSet`, drop the
+      // `if (!slot.has(ancestor))` condition so every ancestor of the CLI is
+      // spared unconditionally → this test fails: 100 would be spared even
+      // though it is the slot-matched host, changing the expected kill set
+      // from [100, 400] to [400].
+    });
+
+    it("spares the CLI's own descendants (not just the CLI itself)", () => {
+      // 300 is the CLI's own child - PowerShell, or the detached upgrade
+      // finalizer - and it is a descendant of the slot-matched host too, so
+      // only the descendant closure around the CLI keeps it out of the kill
+      // set.
+      const withChild: WindowsProcessTableRow[] = [
+        { processId: 100, parentProcessId: 1, slot: true },
+        { processId: 200, parentProcessId: 100, slot: false },
+        { processId: 300, parentProcessId: 200, slot: false },
+      ];
+      expect(computeWindowsHostKillSet(withChild, 200)).toEqual([100]);
+
+      // Ablation: in `computeWindowsHostKillSet`, change
+      // `withDescendants(new Set([cliPid]), children)` to `new Set([cliPid])`
+      // (seeding `spared` with the CLI's own pid but not its subtree) → this
+      // test fails: the kill set becomes [100, 300], because 300 is a victim
+      // through the host and nothing spares it any more.
+    });
   });
 });
 

@@ -88,6 +88,10 @@ import {
 import { buildHostRestartCommand } from "./commands/host-restart";
 import { runHostStart, type RunHostStartOptions } from "./commands/host-start";
 import { readHostStartAdoptionNonce } from "./host/host-start-adoption";
+import {
+  relocateOutOfHostCgroupIfNeeded,
+  type CgroupRelocation,
+} from "./host/cgroup-relocation";
 import { buildHostStampRuntimeCommand } from "./commands/host-stamp-runtime";
 import { runHostCapabilities } from "./host/capabilities";
 import {
@@ -253,7 +257,37 @@ function withRunner(
       );
       return build(optsBag, positionals)(ctx);
     };
-    await runCommand(guarded, extractRunnerFlags(optsBag));
+    const flags = extractRunnerFlags(optsBag);
+    // Linux: a command that is about to stop the host runs in a transient
+    // scope of its own, because on this platform it would otherwise be killed
+    // by the stop it issues (see host/cgroup-relocation.ts).
+    //
+    // Here, once, for the same reason the capability check above is: BEFORE the
+    // command body, which is where every CLI lock, update-contender claim,
+    // dispatch ACK and progress marker is taken. The relocated child must own
+    // all of them, and the parent - which is about to die with the host's
+    // cgroup - must own none. Building `fn` lazily keeps argument parsing
+    // behind this point too, so nothing the command does has happened yet.
+    let relocation: CgroupRelocation;
+    try {
+      relocation = await relocateOutOfHostCgroupIfNeeded(commandPath);
+    } catch (error) {
+      // Rendered through the runner's normal error path rather than thrown from
+      // the action: an error escaping Commander lands in the entry's generic
+      // handler, which reports E_UNEXPECTED and loses the code the host and
+      // Desktop switch on.
+      await runCommand(() => Promise.reject(error), flags);
+      return;
+    }
+    if (relocation.kind === "completed") {
+      // The child ran the command and owned the output stream through inherited
+      // stdio. This process adds nothing to it - under `--json` writing a
+      // second terminal envelope would corrupt the child's NDJSON - and exits
+      // with the child's code through the runner's own terminator.
+      await finishAndExit(relocation.exitCode);
+      return;
+    }
+    await runCommand(guarded, flags);
   });
 }
 
