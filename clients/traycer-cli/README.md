@@ -140,12 +140,28 @@ issued it, part-way through its own work.
 On Linux the CLI re-runs such a command in a transient systemd scope of its own
 (`systemd-run --user --scope`) before the command body starts. The relocated
 process is a sibling of `ai.traycer.host.service` rather than a child of it, and
-survives the stop; the CLI log records the move as `relocated host-stopping
-command into a transient scope`. The stop is also guarded: immediately before
-the host is stopped the CLI re-reads its own cgroup, and if it is still inside
-the host's unit - no `systemd-run` on `PATH`, no systemd user manager, or a
-scope that did not take - the command fails with `E_SERVICE_CONTROL_FAILED` and
-leaves the host running. Run it again from a shell outside Traycer.
+survives the stop. The relocated CLI reports back to the process that launched
+it as soon as it starts, and only then is the move recorded in the CLI log as
+`relocated host-stopping command into a transient scope`.
+
+Every way that can fail leaves the host running and reports
+`E_SERVICE_CONTROL_FAILED` rather than proceeding:
+
+- `systemd-run` is missing, or starts and then exits before the command does -
+  there is no systemd user manager, or the transient scope was refused;
+- the CLI cannot read its own `/proc/self/cgroup`. An absent file (a container,
+  or WSL without systemd) means nothing can kill the command and it simply runs;
+  a file that exists but cannot be read says nothing either way, and is treated
+  as a failed check rather than permission to proceed;
+- an argument contains `$`. systemd 258 expands variables in scope arguments by
+  default, and the option to turn that off does not exist before systemd 254, so
+  a path such as `--from '/tmp/${BUILD}/host.tar.gz'` is refused instead of being
+  silently rewritten;
+- the stop is reached with the CLI still inside the host's own unit. This is
+  checked again immediately before the host is stopped, so a scope that did not
+  actually move the process is caught even if everything above appeared to work.
+
+In each case, run the command again from a shell outside Traycer.
 
 On Windows there is no re-exec. The host's processes are terminated
 individually, and the CLI running the command, its children, and the shell that

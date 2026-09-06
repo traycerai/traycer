@@ -1,5 +1,6 @@
 import type { ChildProcess, SpawnOptions } from "node:child_process";
 import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // This module is Linux's first line of defence against the host stopping the
@@ -24,10 +25,15 @@ vi.mock("../../logger", () => ({
 
 const mocks = vi.hoisted(() => ({
   platform: "linux" as NodeJS.Platform,
-  // `null` means "no /proc/self/cgroup interception" - readFile delegates to
-  // the original implementation for every path.
-  cgroup: null as string | null | { reject: true },
+  // A string is the file's contents. `null` fails the read with ENOENT (no
+  // `/proc/self/cgroup`, the supported absence case); an object names the errno
+  // to fail with instead, which is how the "unreadable, so unanswerable" cases
+  // are driven.
+  cgroup: null as string | null | { readonly errno: string },
   packaged: false,
+  // Recorded fd-3 writes from `acknowledgeRelocationEntry`.
+  ackWrites: [] as { readonly fd: number; readonly payload: string }[],
+  ackWriteError: null as Error | null,
 }));
 
 vi.mock("node:os", async (importOriginal) => {
@@ -48,7 +54,9 @@ vi.mock("node:fs/promises", async (importOriginal) => {
           throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
         }
         if (typeof mocks.cgroup === "object") {
-          throw Object.assign(new Error("EACCES"), { code: "EACCES" });
+          throw Object.assign(new Error(mocks.cgroup.errno), {
+            code: mocks.cgroup.errno,
+          });
         }
         return mocks.cgroup;
       }
@@ -63,19 +71,41 @@ vi.mock("../../store/well-known-cli", () => ({
   isPackagedRun: async () => mocks.packaged,
 }));
 
+// `acknowledgeRelocationEntry` writes to a raw fd. Stubbed so no test can write
+// down whatever fd 3 happens to be in the process hosting this suite.
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return {
+    ...actual,
+    writeSync: ((fd: number, payload: string): number => {
+      mocks.ackWrites.push({ fd, payload });
+      if (mocks.ackWriteError !== null) throw mocks.ackWriteError;
+      return payload.length;
+    }) as typeof actual.writeSync,
+  };
+});
+
 interface RecordedSpawn {
   readonly command: string;
   readonly args: readonly string[];
   readonly options: SpawnOptions;
 }
 
+// The fake child, with the fd-3 ack pipe the production code reads through
+// `child.stdio[3]`. `ack.write(...)` is the relocated CLI saying it reached
+// `withRunner`; a responder that never writes to it is a `systemd-run` that
+// died before any CLI started.
+interface FakeChild {
+  readonly child: ChildProcess;
+  readonly ack: PassThrough;
+}
+
 const spawnMocks = vi.hoisted(() => ({
   recorded: [] as RecordedSpawn[],
-  // Each queued responder decides how the fake child behaves once `spawn`
-  // hands it back. `null` means "no fake child was queued" and the call
-  // throws synchronously, matching a real `spawn` that cannot resolve
-  // `systemd-run`.
-  respond: null as ((child: EventEmitter) => void) | null,
+  // Each queued responder drives the fake child once `spawn` has returned it.
+  // A `null` responder returns a child that never emits anything, which is how
+  // the "spawn threw synchronously" case is kept separate (`throwSync`).
+  respond: null as ((fake: FakeChild) => void) | null,
   throwSync: null as Error | null,
 }));
 
@@ -90,11 +120,15 @@ vi.mock("node:child_process", async (importOriginal) => {
     ): ChildProcess => {
       spawnMocks.recorded.push({ command, args, options });
       if (spawnMocks.throwSync !== null) throw spawnMocks.throwSync;
-      const child = new EventEmitter() as ChildProcess;
+      const ack = new PassThrough();
+      const stdio: ChildProcess["stdio"] = [null, null, null, ack, null];
+      const child = Object.assign(new EventEmitter(), {
+        stdio,
+      }) as ChildProcess;
       if (spawnMocks.respond !== null) {
         // Real `spawn` never emits synchronously - the caller has always
         // attached its listeners by the time anything fires.
-        Promise.resolve().then(() => spawnMocks.respond?.(child));
+        Promise.resolve().then(() => spawnMocks.respond?.({ child, ack }));
       }
       return child;
     },
@@ -105,6 +139,7 @@ const {
   findHostUnitCgroup,
   relocationArgv,
   relocateOutOfHostCgroupIfNeeded,
+  acknowledgeRelocationEntry,
   assertNotInsideHostUnit,
   HOST_STOPPING_COMMANDS,
   TRAYCER_CLI_RELOCATED_ENV,
@@ -240,12 +275,26 @@ describe("relocateOutOfHostCgroupIfNeeded", () => {
     mocks.platform = "linux";
     mocks.cgroup = null;
     mocks.packaged = false;
+    mocks.ackWrites = [];
+    mocks.ackWriteError = null;
     spawnMocks.recorded = [];
     spawnMocks.respond = null;
     spawnMocks.throwSync = null;
     loggerMock.debug.mockClear();
     loggerMock.info.mockClear();
   });
+
+  // The relocated CLI reaching `withRunner`: one byte on fd 3, then whatever
+  // the command itself exits with.
+  function acknowledgeThenExit(code: number | null): (fake: FakeChild) => void {
+    return (fake) => {
+      fake.child.emit("spawn");
+      fake.ack.write("\n");
+      // The ack has to be observable before `close`, exactly as a real pipe
+      // delivers it - `close` fires after the stdio streams are done.
+      setImmediate(() => fake.child.emit("close", code, null));
+    };
+  }
 
   afterEach(() => {
     delete process.env[TRAYCER_CLI_RELOCATED_ENV];
@@ -272,10 +321,7 @@ describe("relocateOutOfHostCgroupIfNeeded", () => {
     process.argv = packagedArgv() as string[];
     process.execPath = "/slot/traycer";
     process.execArgv = [];
-    spawnMocks.respond = (child) => {
-      child.emit("spawn");
-      child.emit("close", 0, null);
-    };
+    spawnMocks.respond = acknowledgeThenExit(0);
 
     const result = await relocateOutOfHostCgroupIfNeeded("host update");
 
@@ -296,41 +342,51 @@ describe("relocateOutOfHostCgroupIfNeeded", () => {
       "--ack-nonce",
       "n",
     ]);
-    expect(call?.options.stdio).toBe("inherit");
+    // stdio 0-2 inherited so the child owns the output stream; fd 3 piped for
+    // the entry acknowledgement.
+    expect(call?.options.stdio).toEqual([
+      "inherit",
+      "inherit",
+      "inherit",
+      "pipe",
+    ]);
     expect(call?.options.env?.[TRAYCER_CLI_RELOCATED_ENV]).toBe("1");
-    // The line the CLI docs tell an operator to look for in cli.log.
+    // The line the CLI docs tell an operator to look for in cli.log. It is
+    // written on the ACK, not on `spawn`: `systemd-run` starting proves
+    // nothing about a CLI existing in the new scope.
     expect(loggerMock.info).toHaveBeenCalledWith(
       "relocated host-stopping command into a transient scope",
       { command: "host update", unit: "ai.traycer.host.service" },
     );
+    // Never passed, on any systemd: the flag is rejected below 254, and the
+    // `$` refusal below is what covers the versions that would expand.
+    expect(
+      call?.args.some((arg) => arg.startsWith("--expand-environment")),
+    ).toBe(false);
   });
 
-  it("forwards a non-zero exit code", async () => {
+  it("forwards a non-zero exit code from a CLI that acknowledged - one result, no second envelope", async () => {
     mocks.cgroup = V2_HOST_UNIT_CGROUP;
     mocks.packaged = true;
     process.argv = packagedArgv() as string[];
     process.execPath = "/slot/traycer";
     process.execArgv = [];
-    spawnMocks.respond = (child) => {
-      child.emit("spawn");
-      child.emit("close", 3, null);
-    };
+    spawnMocks.respond = acknowledgeThenExit(3);
 
+    // `completed`, not a rejection: the relocated CLI ran and emitted its own
+    // terminal envelope, so this process forwards the code and writes nothing.
     await expect(
       relocateOutOfHostCgroupIfNeeded("host update"),
     ).resolves.toEqual({ kind: "completed", exitCode: 3 });
   });
 
-  it("treats a signal death (close code null) as exit code 1", async () => {
+  it("treats a signal death (close code null) after an acknowledgement as exit code 1", async () => {
     mocks.cgroup = V2_HOST_UNIT_CGROUP;
     mocks.packaged = true;
     process.argv = packagedArgv() as string[];
     process.execPath = "/slot/traycer";
     process.execArgv = [];
-    spawnMocks.respond = (child) => {
-      child.emit("spawn");
-      child.emit("close", null, "SIGKILL");
-    };
+    spawnMocks.respond = acknowledgeThenExit(null);
 
     await expect(
       relocateOutOfHostCgroupIfNeeded("host update"),
@@ -340,14 +396,47 @@ describe("relocateOutOfHostCgroupIfNeeded", () => {
     // `resolve(code ?? 0)` → this test fails (expects 1, gets 0).
   });
 
+  it("rejects when systemd-run starts and exits WITHOUT the child ever acknowledging", async () => {
+    // The failure this exists for: `systemd-run` itself runs, then fails to
+    // reach a user bus or is refused its transient scope. `spawn` fires and
+    // `close` carries an ordinary non-zero code, indistinguishable from the
+    // command's own failure - except that no CLI ever wrote to fd 3. Without
+    // the ack this resolved `completed`, the parent took `finishAndExit`, and
+    // a `--json` caller got no error envelope from anyone: the relocated CLI
+    // that owed it never existed.
+    mocks.cgroup = V2_HOST_UNIT_CGROUP;
+    mocks.packaged = true;
+    process.argv = packagedArgv() as string[];
+    process.execPath = "/slot/traycer";
+    process.execArgv = [];
+    spawnMocks.respond = (fake) => {
+      fake.child.emit("spawn");
+      fake.child.emit("close", 1, null);
+    };
+
+    await expect(
+      relocateOutOfHostCgroupIfNeeded("host update"),
+    ).rejects.toMatchObject({
+      code: "E_SERVICE_CONTROL_FAILED",
+      details: { systemdRunExitCode: 1 },
+    });
+    // And it is NOT reported as a successful relocation.
+    expect(loggerMock.info).not.toHaveBeenCalled();
+
+    // Ablation: in `runInTransientScope`, drop the `if (!acknowledged)` branch
+    // from the `close` handler so it always resolves → this test fails: the
+    // call resolves `{kind:"completed", exitCode:1}` and the caller silently
+    // exits 1 with no error envelope, which is the bug this pin exists for.
+  });
+
   it("rejects with E_SERVICE_CONTROL_FAILED when the child emits a spawn error", async () => {
     mocks.cgroup = V2_HOST_UNIT_CGROUP;
     mocks.packaged = true;
     process.argv = packagedArgv() as string[];
     process.execPath = "/slot/traycer";
     process.execArgv = [];
-    spawnMocks.respond = (child) => {
-      child.emit(
+    spawnMocks.respond = (fake) => {
+      fake.child.emit(
         "error",
         Object.assign(new Error("spawn systemd-run ENOENT"), {
           code: "ENOENT",
@@ -363,10 +452,10 @@ describe("relocateOutOfHostCgroupIfNeeded", () => {
     }
     expect(caught).toMatchObject({ code: "E_SERVICE_CONTROL_FAILED" });
 
-    // Ablation: in `runInTransientScope`, change the `error` handler from
-    // `reject(relocationFailed(...))` to `resolve({kind:"not-needed"})` →
-    // this test fails: the call resolves instead of rejecting, and the
-    // caller would go on to run the stop in the doomed cgroup.
+    // Ablation: in `runInTransientScope`, change the `error` handler's
+    // `reject(relocationFailed(...))` to `resolve(0)` → this test fails: the
+    // relocation reports `{kind:"completed", exitCode:0}`, so a `systemd-run`
+    // that never existed is recorded as a command that ran and succeeded.
   });
 
   it("does nothing and never spawns for a relocated scope cgroup (run-*.scope)", async () => {
@@ -410,6 +499,126 @@ describe("relocateOutOfHostCgroupIfNeeded", () => {
     ).resolves.toEqual({ kind: "not-needed" });
     expect(spawnMocks.recorded).toHaveLength(0);
   });
+
+  it("refuses BEFORE spawning when a composed argument contains a dollar sign", async () => {
+    // `host install --from '/tmp/${BUILD}/host.tar.gz'` is a supported input,
+    // and on systemd 258 a scope expands it - silently reading a different
+    // path, or failing because the variable is unset. `--expand-environment=no`
+    // cannot be passed unconditionally (rejected below 254) and probing the
+    // version would cost a process per relocation, so a `$` is refused instead
+    // of being rewritten by something we do not control.
+    mocks.cgroup = V2_HOST_UNIT_CGROUP;
+    mocks.packaged = true;
+    process.argv = [
+      "/slot/traycer",
+      "/slot/traycer",
+      "host",
+      "install",
+      "--from",
+      "/tmp/${BUILD}/host.tar.gz",
+    ];
+    process.execPath = "/slot/traycer";
+    process.execArgv = [];
+
+    await expect(
+      relocateOutOfHostCgroupIfNeeded("host install"),
+    ).rejects.toMatchObject({
+      code: "E_SERVICE_CONTROL_FAILED",
+      details: { argument: "/tmp/${BUILD}/host.tar.gz" },
+    });
+    // The refusal happens before anything is started.
+    expect(spawnMocks.recorded).toHaveLength(0);
+
+    // Ablation: in `relocateOutOfHostCgroupIfNeeded`, delete the
+    // `assertArgvSurvivesSystemdRun(argv, commandPath, inside);` call → this
+    // test fails: the relocation spawns and hands the dollar-bearing path to
+    // systemd-run.
+  });
+
+  it("relocates normally when no composed argument contains a dollar sign", async () => {
+    // The positive half of the refusal above - it must not reject every argv.
+    mocks.cgroup = V2_HOST_UNIT_CGROUP;
+    mocks.packaged = true;
+    process.argv = [
+      "/slot/traycer",
+      "/slot/traycer",
+      "host",
+      "install",
+      "--from",
+      "/tmp/build/host.tar.gz",
+    ];
+    process.execPath = "/slot/traycer";
+    process.execArgv = [];
+    spawnMocks.respond = acknowledgeThenExit(0);
+
+    await expect(
+      relocateOutOfHostCgroupIfNeeded("host install"),
+    ).resolves.toEqual({ kind: "completed", exitCode: 0 });
+    expect(spawnMocks.recorded).toHaveLength(1);
+  });
+
+  it("refuses when the cgroup cannot be READ, rather than treating the failure as being outside the unit", async () => {
+    // EACCES says nothing about membership. Treating it as "not inside" is
+    // permission to stop: relocation is skipped, the guard passes, intent is
+    // written, and the stop kills the process issuing it.
+    mocks.cgroup = { errno: "EACCES" };
+    await expect(
+      relocateOutOfHostCgroupIfNeeded("host update"),
+    ).rejects.toMatchObject({
+      code: "E_SERVICE_CONTROL_FAILED",
+      details: { path: "/proc/self/cgroup" },
+    });
+    expect(spawnMocks.recorded).toHaveLength(0);
+
+    // Ablation: in `readHostUnitCgroup`, replace the `isMissingCgroupFile`
+    // branch with a blanket `return null` → this test fails: EACCES resolves
+    // `not-needed` and the command runs in the cgroup that is about to kill it.
+  });
+
+  it("treats an ABSENT /proc/self/cgroup (ENOENT, ENOTDIR) as not inside a host unit", async () => {
+    // Containers, WSL without systemd, a kernel with no cgroup filesystem:
+    // there is no cgroup that can kill us, which is a real answer and not a
+    // failed check.
+    for (const errno of ["ENOENT", "ENOTDIR"]) {
+      mocks.cgroup = { errno };
+      await expect(
+        relocateOutOfHostCgroupIfNeeded("host update"),
+      ).resolves.toEqual({ kind: "not-needed" });
+    }
+    expect(spawnMocks.recorded).toHaveLength(0);
+  });
+});
+
+describe("acknowledgeRelocationEntry", () => {
+  beforeEach(() => {
+    mocks.ackWrites = [];
+    mocks.ackWriteError = null;
+  });
+
+  afterEach(() => {
+    delete process.env[TRAYCER_CLI_RELOCATED_ENV];
+  });
+
+  it("writes one byte to fd 3 on a relocated run", () => {
+    process.env[TRAYCER_CLI_RELOCATED_ENV] = "1";
+    acknowledgeRelocationEntry();
+    expect(mocks.ackWrites).toEqual([{ fd: 3, payload: "\n" }]);
+  });
+
+  it("writes nothing on an ordinary run - fd 3 belongs to whoever launched us", () => {
+    acknowledgeRelocationEntry();
+    expect(mocks.ackWrites).toEqual([]);
+
+    // Ablation: in `acknowledgeRelocationEntry`, drop the
+    // `TRAYCER_CLI_RELOCATED` early return → this test fails, and the CLI
+    // would write a stray byte into whatever fd 3 is on every ordinary run.
+  });
+
+  it("swallows a failed write - an older parent leaves no pipe on fd 3 (EBADF)", () => {
+    process.env[TRAYCER_CLI_RELOCATED_ENV] = "1";
+    mocks.ackWriteError = Object.assign(new Error("EBADF"), { code: "EBADF" });
+    expect(() => acknowledgeRelocationEntry()).not.toThrow();
+  });
 });
 
 describe("assertNotInsideHostUnit", () => {
@@ -446,8 +655,16 @@ describe("assertNotInsideHostUnit", () => {
     await expect(assertNotInsideHostUnit()).resolves.toBeUndefined();
   });
 
-  it("resolves when /proc/self/cgroup cannot be read", async () => {
-    mocks.cgroup = { reject: true };
+  it("REFUSES when /proc/self/cgroup cannot be read - an unreadable cgroup is not a negative answer", async () => {
+    mocks.cgroup = { errno: "EACCES" };
+    await expect(assertNotInsideHostUnit()).rejects.toMatchObject({
+      code: "E_SERVICE_CONTROL_FAILED",
+      details: { path: "/proc/self/cgroup" },
+    });
+  });
+
+  it("resolves when /proc/self/cgroup is ABSENT (ENOENT) - nothing there can kill us", async () => {
+    mocks.cgroup = { errno: "ENOENT" };
     await expect(assertNotInsideHostUnit()).resolves.toBeUndefined();
   });
 

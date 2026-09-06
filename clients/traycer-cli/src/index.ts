@@ -89,6 +89,7 @@ import { buildHostRestartCommand } from "./commands/host-restart";
 import { runHostStart, type RunHostStartOptions } from "./commands/host-start";
 import { readHostStartAdoptionNonce } from "./host/host-start-adoption";
 import {
+  acknowledgeRelocationEntry,
   relocateOutOfHostCgroupIfNeeded,
   type CgroupRelocation,
 } from "./host/cgroup-relocation";
@@ -226,6 +227,12 @@ function withRunner(
   ) => CommandFn,
 ): CommanderCommand {
   return addRunnerFlags(cmd).action(async (...actionArgs: unknown[]) => {
+    // First, before anything else this action does. On a relocated run the
+    // parent is holding fd 3 open waiting to learn whether a CLI exists in the
+    // new scope at all; until this byte is written, every failure here is
+    // indistinguishable from `systemd-run` failing to start us. A no-op on an
+    // ordinary run. See host/cgroup-relocation.ts.
+    acknowledgeRelocationEntry();
     const command = actionArgs[actionArgs.length - 1] as CommanderCommand;
     const positionals = extractActionPositionals(actionArgs);
     const optsBag = command.optsWithGlobals() as Record<string, unknown>;

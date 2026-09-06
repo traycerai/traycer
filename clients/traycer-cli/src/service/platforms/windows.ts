@@ -406,6 +406,9 @@ async function killHostProcessTree(
   // the install dir fail the swap loudly, naming themselves through the detail
   // scan, which is the better failure of the two.
   const fallbackPids = pidMetadata === null ? [] : [pidMetadata.pid];
+  // The kill boundary, and the only place a pid has to be POSITIVE: the scan
+  // and its algebra work over an unfiltered table that includes pid 0, and
+  // `isKillableProcessId` is what keeps 0 - and our own pid - out of an argv.
   const pids = uniqueProcessIds(scannedPids ?? fallbackPids);
   await Promise.all(
     pids.map((pid) =>
@@ -686,23 +689,59 @@ const SLOT_MATCH_SCRIPT_LINES: readonly string[] = [
  * Command lines are matched inside the script and never leave it: they can name
  * arbitrary user data, and the caller needs three fields per row, not a copy of
  * the machine's process table.
+ *
+ * PARENT IDS ARE VALIDATED HERE, against `CreationDate` from this same read.
+ * Windows does not clear `ParentProcessId` when the parent exits - the row keeps
+ * the creator's id, and Windows is free to hand that id to an unrelated process
+ * afterwards. Believing such an id would attach a stranger to the host's subtree
+ * and force-kill it, or attach the CLI to a recycled ancestor and spare a
+ * process that should die. A snapshot cannot undo reuse that already happened,
+ * but it can refuse to trust it: an edge survives only when the claimed parent
+ * is still in the table AND is not younger than its claimed child. Everything
+ * else is emitted as parent 0, which the kill-set algebra reads as "no verified
+ * parent" - never as an edge.
  */
 function buildSlotProcessTableScanScript(hostHome: string): string {
   const hostPaths = powershellStringArray(slotHostProcessPaths(hostHome));
   return [
     "$ErrorActionPreference = 'SilentlyContinue'",
     `$hostPaths = @(${hostPaths})`,
-    "$rows = Get-CimInstance Win32_Process | ForEach-Object {",
+    // Materialised once: the parent lookup and the row projection must come
+    // from the same snapshot, or the ages being compared are from two reads.
+    "$table = @(Get-CimInstance Win32_Process)",
+    "$created = @{}",
+    "foreach ($row in $table) { $created[[int]$row.ProcessId] = $row.CreationDate }",
+    "$rows = $table | ForEach-Object {",
     ...SLOT_MATCH_SCRIPT_LINES,
+    ...PARENT_EDGE_VALIDATION_SCRIPT_LINES,
     "    [pscustomobject]@{",
     "      ProcessId = [int]$_.ProcessId",
-    "      ParentProcessId = [int]$_.ParentProcessId",
+    "      ParentProcessId = $parentId",
     "      Slot = $hostMatch",
     "    }",
     "}",
     "@($rows) | ConvertTo-Json -Compress",
   ].join("\n");
 }
+
+// Sets `$parentId` for the pipeline row in `$_`: the claimed parent when this
+// snapshot can still vouch for it, and 0 when it cannot. A missing
+// `CreationDate` on either end (pid 0 and System have none) is uncertainty, so
+// it fails closed to 0 like every other unverifiable edge.
+const PARENT_EDGE_VALIDATION_SCRIPT_LINES: readonly string[] = [
+  "    $parentId = [int]$_.ParentProcessId",
+  "    $childCreated = $_.CreationDate",
+  "    if ($parentId -le 0 -or -not $created.ContainsKey($parentId)) {",
+  "      $parentId = 0",
+  "    } else {",
+  "      $parentCreated = $created[$parentId]",
+  "      if ($null -eq $parentCreated -or $null -eq $childCreated) {",
+  "        $parentId = 0",
+  "      } elseif ($parentCreated -gt $childCreated) {",
+  "        $parentId = 0",
+  "      }",
+  "    }",
+];
 
 // Same slot match as the table scan (`SLOT_MATCH_SCRIPT_LINES` is the shared
 // text - the filter must never drift between the kill and the diagnostic),
@@ -760,10 +799,15 @@ function powershellStringArray(values: readonly string[]): string {
 
 // One row of the scanned process table.
 export interface WindowsProcessTableRow {
+  // 0 is a real, expected row: `Get-CimInstance Win32_Process` reports the
+  // System Idle Process, and the scan is deliberately unfiltered.
   readonly processId: number;
-  // 0 for the rows whose parent is the system idle process, and for rows whose
-  // parent has already exited; both are ordinary and neither is an ancestor
-  // anything here can be spared through.
+  // 0 means "no VERIFIED parent" - either the row genuinely hangs off the idle
+  // process, or the scan could not vouch for the id the row claims (see the
+  // parent-edge validation in the scan script). It is deliberately NOT the same
+  // thing as "the parent exited": Windows keeps the creator's id in that case,
+  // and may hand that id to somebody else, which is exactly the claim this
+  // field refuses to carry.
   readonly parentProcessId: number;
   // Whether the row's executable path or command line matches this slot.
   readonly slot: boolean;
@@ -802,12 +846,16 @@ function parseProcessTableJson(
     const processId = record.ProcessId;
     const parentProcessId = record.ParentProcessId;
     const slot = record.Slot;
-    // Deliberately NOT `isKillableProcessId`: that one also rejects our own
-    // pid, and the table is unfiltered, so our row is expected in it. Whether
-    // we are killable is the algebra's answer, not the parser's.
+    // Both ids are accepted at zero and above. The table is unfiltered, so it
+    // legitimately contains pid 0 (the System Idle Process) and rows with no
+    // verified parent; rejecting either would fail the WHOLE parse on every
+    // real machine and silently demote every stop to the pid.json fallback.
+    // Deliberately NOT `isKillableProcessId` either: that also rejects our own
+    // pid, which is expected in the table too. What may be killed is the
+    // algebra's answer and the kill boundary's, not the parser's.
     if (
-      !isProcessTablePid(processId) ||
-      !isProcessTableParentId(parentProcessId) ||
+      !isProcessTableId(processId) ||
+      !isProcessTableId(parentProcessId) ||
       typeof slot !== "boolean"
     ) {
       return null;
@@ -884,8 +932,9 @@ function withDescendants(
   }
 }
 
-// The chain above `pid`, nearest first. Stops at pid 0 (the idle process, and
-// what an exited parent reports) and at any pid already on the chain.
+// The chain above `pid`, nearest first. Stops at 0 - which the scan emits for
+// any parent it could not vouch for, so an unverified edge ends the walk rather
+// than extending it - and at any pid already on the chain.
 function ancestorsOf(
   pid: number,
   parents: ReadonlyMap<number, number>,
@@ -902,11 +951,7 @@ function ancestorsOf(
   }
 }
 
-function isProcessTablePid(value: unknown): value is number {
-  return typeof value === "number" && Number.isInteger(value) && value > 0;
-}
-
-function isProcessTableParentId(value: unknown): value is number {
+function isProcessTableId(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 0;
 }
 

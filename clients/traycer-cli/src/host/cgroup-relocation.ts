@@ -1,9 +1,16 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { writeSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { platform as osPlatform } from "node:os";
+import { Readable } from "node:stream";
 import { config } from "../config";
 import { createCliLogger, errorFromUnknown, type ILogger } from "../logger";
-import { CLI_ERROR_CODES, cliError, type CliError } from "../runner/errors";
+import {
+  CLI_ERROR_CODES,
+  cliError,
+  isErrnoException,
+  type CliError,
+} from "../runner/errors";
 import { isPackagedRun } from "../store/well-known-cli";
 
 /**
@@ -36,7 +43,10 @@ import { isPackagedRun } from "../store/well-known-cli";
  * `systemd-run` on PATH, no user manager, a scope that failed to move us, or a
  * recursion flag set without a real cgroup change all end at the refusal with
  * the host still up. Which is also why the relocation env flag is never taken
- * as evidence that the move happened - only the cgroup is.
+ * as evidence that the move happened - only the cgroup is. Nor is the child's
+ * entry acknowledgement: it proves a CLI started in the new scope, never that
+ * the scope is outside the host unit, so the guard re-reads the cgroup either
+ * way.
  */
 
 /**
@@ -86,6 +96,11 @@ const SYSTEMD_RUN_SCOPE_ARGS: readonly string[] = [
   "--",
 ];
 
+// The ack channel: fd 3 on the relocated child, `stdio[3]` on the parent. One
+// byte, whose only meaning is "a CLI reached `withRunner` in the new scope".
+const RELOCATION_ACK_FD = 3;
+const RELOCATION_ACK_BYTE = "\n";
+
 const PROC_SELF_CGROUP = "/proc/self/cgroup";
 
 const HOST_UNIT_PREFIX = "ai.traycer.host";
@@ -117,8 +132,9 @@ export type CgroupRelocation =
  * without systemd, a container, and every non-Linux platform.
  *
  * Throws `SERVICE_CONTROL_FAILED` when the move was needed and could not be
- * made. It deliberately does not fall through to running the command: doing so
- * is what kills the host-spawned updater mid-update.
+ * made - including when membership itself could not be established. It
+ * deliberately does not fall through to running the command: doing so is what
+ * kills the host-spawned updater mid-update.
  */
 export async function relocateOutOfHostCgroupIfNeeded(
   commandPath: string,
@@ -136,10 +152,58 @@ export async function relocateOutOfHostCgroupIfNeeded(
     execArgv: process.execArgv,
     argv: process.argv,
   });
+  assertArgvSurvivesSystemdRun(argv, commandPath, inside);
   return {
     kind: "completed",
     exitCode: await runInTransientScope(argv, commandPath, inside),
   };
+}
+
+/**
+ * Refuse to relocate an argv `systemd-run` may rewrite.
+ *
+ * systemd's own boundary, read off upstream rather than assumed:
+ *
+ * | version | scope behaviour with no option passed                  |
+ * | ------- | ------------------------------------------------------ |
+ * | 249     | argv goes straight to `execvpe`; no expansion option    |
+ * | 254-257 | `--expand-environment` exists, scope expansion still    |
+ * |         | defaults OFF for compatibility                          |
+ * | 258     | scope expansion defaults ON                             |
+ *
+ * So `--expand-environment=no` cannot simply be passed: it is rejected outright
+ * below 254, which is most of the field. Probing the installed version would
+ * mean a second process on every relocation to decide something this CLI never
+ * composes - SemVer versions, UUIDs and ACK nonces carry no `$`. A path can
+ * (`host install --from '/tmp/${BUILD}/host.tar.gz'`, an `execPath` or a loader
+ * script under such a directory), and there the honest answer is to refuse: on
+ * 258 the value would silently become a different path, and `$$`-escaping it
+ * instead would corrupt that same filename on every older systemd.
+ *
+ * Relocation runs before the command body validates anything, so this is the
+ * only place that sees the composed argv.
+ */
+function assertArgvSurvivesSystemdRun(
+  argv: readonly string[],
+  commandPath: string,
+  inside: HostUnitCgroup,
+): void {
+  const expandable = argv.find((token) => token.includes("$"));
+  if (expandable === undefined) return;
+  throw cliError({
+    code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+    message:
+      `refusing to relocate '${commandPath}' out of the ${inside.unit} cgroup: ` +
+      "an argument contains '$', which systemd-run can rewrite; " +
+      "run this from a shell outside the Traycer host.",
+    details: {
+      command: commandPath,
+      argument: expandable,
+      cgroup: inside.path,
+      unit: inside.unit,
+    },
+    exitCode: 1,
+  });
 }
 
 /**
@@ -213,16 +277,46 @@ export function findHostUnitCgroup(contents: string): HostUnitCgroup | null {
   return null;
 }
 
+/**
+ * Read our own cgroup membership, or refuse to answer.
+ *
+ * ABSENCE is an answer: no `/proc/self/cgroup` (ENOENT) and no `/proc` at all
+ * (ENOTDIR) mean there is no cgroup that can kill us - a container, WSL without
+ * systemd, a kernel without the filesystem mounted - and "not inside a host
+ * unit" is exactly right there.
+ *
+ * Every OTHER read failure is a FAILED CHECK, not a negative answer. EACCES,
+ * EMFILE and EIO say nothing about membership, and the earlier blanket catch
+ * turned each of them into permission to stop: relocation would be skipped, the
+ * guard would pass, intent would be written, and the stop would kill the process
+ * issuing it. So they refuse instead, with the errno recorded at DEBUG.
+ */
 async function readHostUnitCgroup(): Promise<HostUnitCgroup | null> {
   let contents: string;
   try {
     contents = await readFile(PROC_SELF_CGROUP, "utf8");
-  } catch {
-    // No `/proc/self/cgroup` at all means no cgroup that can kill us, which is
-    // the same answer as "not inside a host unit".
-    return null;
+  } catch (cause) {
+    if (isMissingCgroupFile(cause)) return null;
+    createCliLogger(config.environment).debug(
+      "Failed to read the cgroup this process belongs to",
+      { path: PROC_SELF_CGROUP, cause: errorFromUnknown(cause).message },
+    );
+    throw cliError({
+      code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+      message:
+        `could not read ${PROC_SELF_CGROUP}, so this command cannot tell whether ` +
+        "stopping the Traycer host would also kill it. " +
+        "Run it again from a shell outside the Traycer host.",
+      details: { path: PROC_SELF_CGROUP },
+      exitCode: 1,
+    });
   }
   return findHostUnitCgroup(contents);
+}
+
+function isMissingCgroupFile(cause: unknown): boolean {
+  if (!isErrnoException(cause)) return false;
+  return cause.code === "ENOENT" || cause.code === "ENOTDIR";
 }
 
 // `<hierarchy>:<controllers>:<path>`. The unified v2 line is `0::<path>`; on v1
@@ -270,10 +364,19 @@ function hostUnitSegment(path: string): string | null {
  * the child. Exiting immediately instead would lose that output and hand the
  * host's `exited` promise a false early settle.
  *
- * `systemd-run` exiting non-zero before it execs is indistinguishable from the
- * command's own failure and is forwarded as such; only a failure to spawn it at
- * all (no such binary, no permission) is reported as the relocation failure it
- * is.
+ * THE ACK IS WHAT SEPARATES the two failures that both arrive as an exit code.
+ * Node's `spawn` event proves only that `systemd-run` started; a missing user
+ * bus, a refused transient scope, or a failed exec of the target all happen
+ * afterwards and show up as an ordinary non-zero `close`. Forwarding that code
+ * would report a relocation that never delivered a CLI - no `E_SERVICE_CONTROL_FAILED`
+ * envelope for a `--json` caller, and no relocated process alive to emit one -
+ * while the log claimed the move had worked.
+ *
+ * So the relocated CLI writes one byte to fd 3 the moment it reaches
+ * `withRunner` (`acknowledgeRelocationEntry`). An exit WITHOUT that byte is a
+ * relocation that failed before the command started, and it rejects. An exit
+ * WITH it is the command's own result and is forwarded verbatim, so the child
+ * remains the only writer of a terminal envelope.
  */
 async function runInTransientScope(
   argv: readonly string[],
@@ -284,27 +387,97 @@ async function runInTransientScope(
   let child: ChildProcess;
   try {
     child = spawn(SYSTEMD_RUN, [...SYSTEMD_RUN_SCOPE_ARGS, ...argv], {
-      // Inherited, not piped: under `--json` the child owns the NDJSON stream
-      // and this process writes nothing to it.
-      stdio: "inherit",
+      // stdio 0-2 inherited, not piped: under `--json` the child owns the
+      // NDJSON stream and this process writes nothing to it. fd 3 is the ack
+      // channel and carries one byte in the other direction.
+      stdio: ["inherit", "inherit", "inherit", "pipe"],
       env: { ...process.env, [TRAYCER_CLI_RELOCATED_ENV]: "1" },
     });
   } catch (cause) {
     throw relocationFailed(logger, commandPath, inside, cause);
   }
+  logger.debug("Spawned systemd-run for a host-stopping command", {
+    command: commandPath,
+    unit: inside.unit,
+  });
   return await new Promise<number>((resolve, reject) => {
-    child.once("spawn", () => {
-      logger.info("relocated host-stopping command into a transient scope", {
-        command: commandPath,
-        unit: inside.unit,
+    let acknowledged = false;
+    const ack = child.stdio[RELOCATION_ACK_FD];
+    if (ack instanceof Readable) {
+      ack.on("data", () => {
+        if (acknowledged) return;
+        acknowledged = true;
+        logger.info("relocated host-stopping command into a transient scope", {
+          command: commandPath,
+          unit: inside.unit,
+        });
       });
-    });
+    }
     child.once("error", (cause) => {
       reject(relocationFailed(logger, commandPath, inside, cause));
     });
-    // A child killed by a signal reports `null`, which is a failure the caller
-    // has to see as one.
-    child.once("close", (code) => resolve(code ?? 1));
+    // `close` rather than `exit`: it fires once the stdio streams are done, so
+    // an ack already in the pipe has been delivered by the time we decide.
+    child.once("close", (code) => {
+      if (!acknowledged) {
+        reject(relocationNeverStarted(logger, commandPath, inside, code));
+        return;
+      }
+      // A child killed by a signal reports `null`, which is a failure the
+      // caller has to see as one.
+      resolve(code ?? 1);
+    });
+  });
+}
+
+/**
+ * The relocated CLI's half of the ack: one byte on fd 3, at entry.
+ *
+ * Called first thing in `withRunner`, before the surface check, before argument
+ * parsing, before anything the command does - the parent is waiting to learn
+ * whether a CLI exists in the new scope at all, and every step taken before the
+ * answer is a step that can fail while looking like `systemd-run` failing.
+ *
+ * Gated on the recursion flag, because fd 3 belongs to whoever launched us on
+ * an ordinary run and must not be written to. Failures are swallowed: an older
+ * parent leaves no pipe there (EBADF), and a CLI that cannot say hello must
+ * still run the command it was asked to run.
+ */
+export function acknowledgeRelocationEntry(): void {
+  if ((process.env[TRAYCER_CLI_RELOCATED_ENV] ?? "").length === 0) return;
+  try {
+    writeSync(RELOCATION_ACK_FD, RELOCATION_ACK_BYTE);
+  } catch {
+    // Nothing is listening, or the write failed. Neither changes what this
+    // process was asked to do.
+  }
+}
+
+function relocationNeverStarted(
+  logger: ILogger,
+  commandPath: string,
+  inside: HostUnitCgroup,
+  exitCode: number | null,
+): CliError {
+  logger.debug("systemd-run exited before the relocated command started", {
+    command: commandPath,
+    unit: inside.unit,
+    exitCode,
+  });
+  return cliError({
+    code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+    message:
+      `could not move '${commandPath}' out of the ${inside.unit} cgroup: ` +
+      "systemd-run exited before the command started, so there is no user " +
+      "manager or the transient scope was refused. " +
+      "Run it again from a shell outside the Traycer host.",
+    details: {
+      command: commandPath,
+      cgroup: inside.path,
+      unit: inside.unit,
+      systemdRunExitCode: exitCode,
+    },
+    exitCode: 1,
   });
 }
 

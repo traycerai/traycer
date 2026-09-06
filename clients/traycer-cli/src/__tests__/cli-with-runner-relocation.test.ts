@@ -8,7 +8,7 @@ import {
   type MockInstance,
 } from "vitest";
 import { Command } from "commander";
-import { buildProgram } from "../index";
+import { buildProgramWithAgentRoles } from "../index";
 import * as cgroupRelocationModule from "../host/cgroup-relocation";
 import * as hostStopModule from "../commands/host-stop";
 import * as cliLockModule from "../store/cli-lock";
@@ -75,7 +75,10 @@ function expectCommand(program: Command, path: readonly string[]): Command {
 }
 
 async function parseHostStop(argv: readonly string[]): Promise<void> {
-  const program = buildProgram();
+  // `buildProgramWithAgentRoles` rather than `buildProgram`: the latter calls
+  // `readFeatureSettingsSync()`, which synchronously reads the developer's real
+  // `~/.traycer/cli/config.json`. Agent roles are irrelevant to `host stop`.
+  const program = buildProgramWithAgentRoles(false);
   program.exitOverride();
   const stop = expectCommand(program, ["host", "stop"]);
   stop.exitOverride();
@@ -85,6 +88,7 @@ async function parseHostStop(argv: readonly string[]): Promise<void> {
 describe("withRunner - cgroup relocation hook", () => {
   let exitSpy: MockInstance;
   let relocationSpy: MockInstance;
+  let ackSpy: MockInstance;
   let hostStopSpy: MockInstance;
   let cliLockSpy: MockInstance;
   let updateContenderSpy: MockInstance;
@@ -101,6 +105,11 @@ describe("withRunner - cgroup relocation hook", () => {
       cgroupRelocationModule,
       "relocateOutOfHostCgroupIfNeeded",
     );
+    // Stubbed rather than observed only: the real one writes to raw fd 3, and
+    // nothing here should touch whatever that is in the test runner.
+    ackSpy = vi
+      .spyOn(cgroupRelocationModule, "acknowledgeRelocationEntry")
+      .mockImplementation(() => undefined);
     hostStopSpy = vi
       .spyOn(hostStopModule, "buildHostStopCommand")
       .mockImplementation(() => async () => ({
@@ -122,6 +131,7 @@ describe("withRunner - cgroup relocation hook", () => {
     process.exitCode = undefined;
     exitSpy.mockRestore();
     relocationSpy.mockRestore();
+    ackSpy.mockRestore();
     hostStopSpy.mockRestore();
     cliLockSpy.mockRestore();
     updateContenderSpy.mockRestore();
@@ -136,6 +146,27 @@ describe("withRunner - cgroup relocation hook", () => {
 
     expect(hostStopSpy).not.toHaveBeenCalled();
     expect(exitMocks.calls).toEqual([0]);
+  });
+
+  it("acknowledges relocation entry before anything else the action does", async () => {
+    // The relocated CLI's half of the parent's fd-3 handshake. It has to be
+    // first: until it is written, every failure in this action looks to the
+    // waiting parent like `systemd-run` failing to start a CLI at all.
+    relocationSpy.mockResolvedValue({ kind: "not-needed" });
+
+    await parseHostStop(["host", "stop"]);
+
+    expect(ackSpy).toHaveBeenCalledTimes(1);
+    expect(ackSpy.mock.invocationCallOrder[0]).toBeLessThan(
+      relocationSpy.mock.invocationCallOrder[0] ?? Number.MAX_SAFE_INTEGER,
+    );
+    expect(ackSpy.mock.invocationCallOrder[0]).toBeLessThan(
+      hostStopSpy.mock.invocationCallOrder[0] ?? Number.MAX_SAFE_INTEGER,
+    );
+
+    // Ablation: in `withRunner`, move `acknowledgeRelocationEntry();` below the
+    // relocation block → this test fails on the ordering assertion, and a
+    // relocated CLI would only say hello after the work that can fail first.
   });
 
   it("relocated (completed, non-zero exit): forwards the child's exact exit code", async () => {

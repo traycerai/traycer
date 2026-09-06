@@ -15,7 +15,9 @@ const mocks = vi.hoisted(() => ({
   writes: [] as string[],
   clears: [] as string[],
   persisted: true,
-  cgroup: null as string | null,
+  // A string is the cgroup file's contents; an object is the errno the read
+  // fails with instead.
+  cgroup: null as string | null | { readonly errno: string },
 }));
 
 vi.mock("../../logger", () => ({
@@ -64,6 +66,11 @@ vi.mock("node:fs/promises", async (importOriginal) => {
       if (path === "/proc/self/cgroup") {
         if (mocks.cgroup === null) {
           throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+        }
+        if (typeof mocks.cgroup === "object") {
+          throw Object.assign(new Error(mocks.cgroup.errno), {
+            code: mocks.cgroup.errno,
+          });
         }
         return mocks.cgroup;
       }
@@ -243,6 +250,75 @@ describe("withStopIntent - Linux cgroup self-protection guard", () => {
     expect(stopForRestartRan).toBe(true);
     expect(uninstallRan).toBe(true);
     expect(restartRan).toBe(true);
+    expect(mocks.writes).toEqual(["stop", "restart", "uninstall", "restart"]);
+  });
+
+  // An unreadable cgroup is a FAILED membership check, not a negative answer,
+  // and it has to refuse on every route for the same reason the host-unit case
+  // does: EACCES leaves us just as likely to be inside the unit, and proceeding
+  // writes intent and then kills the process issuing the stop.
+  it("refuses on all four routes when the cgroup cannot be read (EACCES)", async () => {
+    mocks.cgroup = { errno: "EACCES" };
+    let ran = false;
+    const controller = withStopIntent(
+      baseController({
+        stop: async () => {
+          ran = true;
+        },
+        stopForRestart: async () => {
+          ran = true;
+          return { forcedRecycle: false };
+        },
+        uninstall: async () => {
+          ran = true;
+        },
+        restart: async () => {
+          ran = true;
+        },
+      }),
+    );
+
+    await expect(
+      controller.stop(label, { force: false }),
+    ).rejects.toMatchObject({ code: "E_SERVICE_CONTROL_FAILED" });
+    await expect(
+      controller.stopForRestart(label, { force: false }),
+    ).rejects.toMatchObject({ code: "E_SERVICE_CONTROL_FAILED" });
+    await expect(controller.uninstall({ label })).rejects.toMatchObject({
+      code: "E_SERVICE_CONTROL_FAILED",
+    });
+    await expect(controller.restart(label)).rejects.toMatchObject({
+      code: "E_SERVICE_CONTROL_FAILED",
+    });
+
+    expect(mocks.writes).toEqual([]);
+    expect(mocks.clears).toEqual([]);
+    expect(ran).toBe(false);
+
+    // Ablation: in `readHostUnitCgroup` (host/cgroup-relocation.ts), replace
+    // the `isMissingCgroupFile` branch with a blanket `return null` → this
+    // test fails on the first route: the guard resolves, intent is written,
+    // and the stop proceeds from inside a cgroup nobody could rule out.
+  });
+
+  // An ABSENT cgroup file is a different machine and a real answer: no cgroup
+  // exists that could kill us, so all four proceed.
+  it("proceeds on all four routes when /proc/self/cgroup is absent (ENOENT)", async () => {
+    mocks.cgroup = { errno: "ENOENT" };
+    const controller = withStopIntent(
+      baseController({
+        stop: async () => undefined,
+        stopForRestart: async () => ({ forcedRecycle: false }),
+        uninstall: async () => undefined,
+        restart: async () => undefined,
+      }),
+    );
+
+    await controller.stop(label, { force: false });
+    await controller.stopForRestart(label, { force: false });
+    await controller.uninstall({ label });
+    await controller.restart(label);
+
     expect(mocks.writes).toEqual(["stop", "restart", "uninstall", "restart"]);
   });
 
