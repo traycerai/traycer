@@ -1961,6 +1961,161 @@ describe("killHostProcessTree convergence loop", () => {
     // parent's.
   });
 
+  it("round-6 P2, overlap: a spared shell that is BOTH a victim's validated child and an undecided root is still remembered", async () => {
+    // The kill set is the victim closure minus the CLI's branch, and the
+    // memory feed must subtract THAT, not the closure: a spared shell can
+    // sit in both closures at once and is then neither killed (so never a
+    // victim) nor - if the closure were subtracted - undecided. Chronology
+    // (samples 5000, 7000, 9000; CLI is pid 9999):
+    //   R0 (sample 5000): slot 200 (age unreadable) and slot 100 (born
+    //       1000) claiming 200 with a zeroed edge; shell 700 (born 2000) is
+    //       100's validated child, the CLI (born 2500) is 700's. Kill 200
+    //       and 100; 700 and the CLI are spared. Victims 200 = [0, 5000],
+    //       100 = [1000, 5000].
+    //   R1 (sample 7000): 200 is gone; 100 lingers in its TerminateProcess,
+    //       700 and the CLI remain, and a side worker 888 (born 6000) sits
+    //       under 700. 100 is a slot seed AND, against the unreadable victim
+    //       200, undecided - so both closures are {100, 700, CLI, 888}. The
+    //       actual kill is [888, 100]; 700 and the CLI are what remains of
+    //       the undecided closure once the KILL is subtracted, and 700 must
+    //       reach the memory. (Subtracting the victim closure instead leaves
+    //       nothing, and 700 is remembered as nothing at all.)
+    //   R2 (sample 9000): 100 and 888 are gone, 700 spawned 889 (born 8000)
+    //       and exited. The CLI and 889 claim absent 700; suspect 700 (born
+    //       2000) keeps both undecided, the CLI is spared, and the stop
+    //       refuses naming 889.
+    const samples = [5000, 7000, 9000];
+    let sample = 0;
+    const { runner, calls } = roundedRunner([
+      {
+        kind: "table",
+        rows: [
+          { processId: 200, parentProcessId: 1, created: 0, slot: true },
+          {
+            processId: 100,
+            parentProcessId: 0,
+            claimedParentProcessId: 200,
+            created: 1000,
+            slot: true,
+          },
+          {
+            processId: 700,
+            parentProcessId: 100,
+            claimedParentProcessId: 100,
+            created: 2000,
+            slot: false,
+          },
+          {
+            processId: 9999,
+            parentProcessId: 700,
+            claimedParentProcessId: 700,
+            created: 2500,
+            slot: false,
+          },
+        ],
+      },
+      {
+        kind: "table",
+        rows: [
+          {
+            processId: 100,
+            parentProcessId: 0,
+            claimedParentProcessId: 200,
+            created: 1000,
+            slot: true,
+          },
+          {
+            processId: 700,
+            parentProcessId: 100,
+            claimedParentProcessId: 100,
+            created: 2000,
+            slot: false,
+          },
+          {
+            processId: 9999,
+            parentProcessId: 700,
+            claimedParentProcessId: 700,
+            created: 2500,
+            slot: false,
+          },
+          {
+            processId: 888,
+            parentProcessId: 700,
+            claimedParentProcessId: 700,
+            created: 6000,
+            slot: false,
+          },
+        ],
+      },
+      {
+        kind: "table",
+        rows: [
+          {
+            processId: 9999,
+            parentProcessId: 0,
+            claimedParentProcessId: 700,
+            created: 2500,
+            slot: false,
+          },
+          {
+            processId: 889,
+            parentProcessId: 0,
+            claimedParentProcessId: 700,
+            created: 8000,
+            slot: false,
+          },
+        ],
+      },
+    ]);
+    const controller = createWindowsController(runner, {
+      now: () => {
+        const value = samples[sample] ?? 9000;
+        sample += 1;
+        return value;
+      },
+    });
+
+    const originalPid = Object.getOwnPropertyDescriptor(process, "pid");
+    Object.defineProperty(process, "pid", { value: 9999, configurable: true });
+    try {
+      await expect(
+        controller.stop(serviceLabelFor("staging"), { force: false }),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        details: { unattributedPids: [889] },
+      });
+    } finally {
+      if (originalPid !== undefined) {
+        Object.defineProperty(process, "pid", originalPid);
+      }
+    }
+
+    expect(
+      calls.filter((call) => call.command === "powershell.exe"),
+    ).toHaveLength(3);
+    expect(
+      calls
+        .filter((call) => call.command === "taskkill")
+        .map((call) => call.args),
+    ).toEqual([
+      // R0: 200 is issued first - its edge to pid 1 counts as depth 1 in
+      // `orderWindowsKillsDescendantsFirst`, while 100's zeroed edge is
+      // depth 0.
+      ["/F", "/PID", "200"],
+      ["/F", "/PID", "100"],
+      // R1: 888 (depth 2) before the lingering 100.
+      ["/F", "/PID", "888"],
+      ["/F", "/PID", "100"],
+    ]);
+
+    // Ablation: in `computeWindowsHostKillSet`, subtract `victims` (the
+    // closure) instead of `killed` (the actual kill set) when building
+    // `undecided` → this test reddens: round 1 remembers no suspect, round
+    // 2 finds nothing that remembers 700, and the stop RESOLVES with 889
+    // alive. The pure overlap pin below reddens on `undecided` for the same
+    // mutation.
+  });
+
   // The unattributed refusal exercised through all four callers that run
   // `killHostProcessTree`: none of them may treat it as anything softer than
   // the scan-unavailable refusal already covered above. The fourth is the
@@ -2511,6 +2666,35 @@ describe("computeWindowsHostKillSet and the taskkill self-protection it drives",
       // `!spared.has(pid)` filter too (make it equal to `unattributed`) →
       // this assertion and the one above redden on `undecided`, and the
       // loop-level "round-6 P2" test reddens into a resolved stop.
+    });
+
+    it("overlap: a spared shell in BOTH closures - the killed host's validated child and an undecided root's descendant - stays in the memory feed", () => {
+      // Round 1 of the loop-level overlap test: lingering host 100 is a slot
+      // seed and, against the unreadable victim 200 it claims, undecided at
+      // once. Shell 700 (the CLI's parent) and side worker 888 are its
+      // validated descendants. The kill is the victim closure minus the
+      // spared branch; `undecided` is the suspect closure minus THAT kill,
+      // so 700 and the CLI survive into it even though both are in the
+      // victim closure.
+      const unreadableSlot = victimMemory(
+        new Map<number, readonly WindowsKillVictim[]>([
+          [200, [{ created: 0, seenAliveAt: 5000 }]],
+          [100, [{ created: 1000, seenAliveAt: 5000 }]],
+        ]),
+      );
+      const table = rowsOf([
+        victimRow(100, 0, 200, 1000, true),
+        victimRow(700, 100, 100, 2000, false),
+        victimRow(cliPid, 700, 700, 2500, false),
+        victimRow(888, 700, 700, 6000, false),
+      ]);
+      expect(computeWindowsHostKillSet(table, cliPid, unreadableSlot)).toEqual({
+        kill: [100, 888],
+        undecided: [700, cliPid],
+        unattributed: [],
+      });
+
+      // Ablation: subtract `victims` instead of `killed` → `undecided: []`.
     });
 
     it("both non-empty: a killable seed and an unattributed row coexist in the same verdict", () => {

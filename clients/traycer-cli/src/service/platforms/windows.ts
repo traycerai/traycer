@@ -1272,19 +1272,28 @@ export function computeWindowsHostKillSet(
   for (const ancestor of ancestorsOf(cliPid, parents)) {
     if (!slot.has(ancestor)) spared.add(ancestor);
   }
-  // Rows already in `kill` drop out of both undecided lists: a subtree can hang
-  // off an undecided root and still be slot-matched in its own right, and a pid
-  // this scan has decided to kill is not an open question - it is remembered as
-  // a victim, with a window, which is the stronger fact. Reporting it in both
+  const kill = [...victims]
+    .filter((pid) => !spared.has(pid))
+    .sort((left, right) => left - right);
+  const killed = new Set(kill);
+  // Rows in `kill` drop out of both undecided lists: a subtree can hang off an
+  // undecided root and still be slot-matched in its own right, and a pid this
+  // scan has decided to kill is not an open question - it is remembered as a
+  // victim, with a window, which is the stronger fact. Reporting it in both
   // lists would put the same pid in front of the user twice, in two
   // contradictory roles.
+  //
+  // What is subtracted is the ACTUAL kill set, not the victim closure it was
+  // cut from. The two differ by the spared branch, and a spared row can sit in
+  // both closures at once - a shell that is the killed host's validated child
+  // AND the CLI's ancestor. It is never killed, so it is never remembered as a
+  // victim; subtracting the closure would drop it from `undecided` too, and it
+  // would be remembered as nothing at all.
   const undecidedClosure = [...suspects]
-    .filter((pid) => !victims.has(pid))
+    .filter((pid) => !killed.has(pid))
     .sort((left, right) => left - right);
   return {
-    kill: [...victims]
-      .filter((pid) => !spared.has(pid))
-      .sort((left, right) => left - right),
+    kill,
     undecided: undecidedClosure,
     // The CLI's own branch is spared from the REPORT. A protected row that
     // happens to claim a victim pid is not an open question about the host - it
