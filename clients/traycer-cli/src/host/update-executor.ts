@@ -211,6 +211,27 @@ function unwrapExecutorContenderOutcome<T>(
  */
 export type CompleteExecutorSegment = () => Promise<AttemptCommitOutcome>;
 
+/**
+ * The execution callback's NON-terminal write, and its only one.
+ *
+ * A sibling of `complete` for the same structural reason: `contender.ts` is a
+ * two-importer module by construction - the shared barrel and this file - and
+ * every other write inside a segment has to arrive through a closure this file
+ * builds. An executing caller (`host update`'s record writer) advances a phase,
+ * a progress tick, a park or a terminal by calling this; it never reaches the
+ * contender module itself, and the architecture suite in `clients/shared` pins
+ * that it cannot.
+ *
+ * Not session-guarded the way `complete` is, and deliberately: a terminal write
+ * escaping its session would be unrecoverable, whereas an advance carries the
+ * `held` identity the caller was handed and the record's own held-identity
+ * check refuses it once anything has superseded that claim. It fails closed on
+ * the durable state rather than on a flag.
+ */
+export type AdvanceExecutorSegment = (
+  intent: Extract<AttemptMutationIntent, { readonly kind: "advance" }>,
+) => Promise<AttemptCommitOutcome>;
+
 export interface RunAttemptExecutorClaimOptions {
   /**
    * The CLI derives the rollout decision itself from this installed platform.
@@ -414,6 +435,7 @@ export async function runAttemptExecutorSegment<T>(
     capability: UpdateMutationCapability,
     claim: Extract<ExecutorClaimOutcome, { readonly kind: "claimed" }>,
     complete: CompleteExecutorSegment,
+    advance: AdvanceExecutorSegment,
   ) => Promise<T>,
 ): Promise<ExecutorSegmentOutcome<T>> {
   // Ticket 07 Finding 2 (CLI half). This gate is production-reachable today
@@ -475,11 +497,20 @@ export async function runAttemptExecutorSegment<T>(
           },
         );
       };
+      // Built HERE for the same reason `complete` is: it is the only way an
+      // executing caller can write, and building it anywhere else would put a
+      // second production importer on `contender.ts`.
+      // `commitCliExecutorAttemptMutation` recomputes the host home from these
+      // options rather than forwarding a caller's, which is also what keeps it
+      // out of the shared suite's verbatim-forwarder ("transparent
+      // laundering") detector.
+      const advance: AdvanceExecutorSegment = (intent) =>
+        commitCliExecutorAttemptMutation(capability, options.contender, intent);
       try {
         return {
           kind: "executed",
           claim,
-          result: await execute(capability, claim, complete),
+          result: await execute(capability, claim, complete, advance),
         };
       } finally {
         active = false;
@@ -577,6 +608,7 @@ export async function runLocalAttemptExecutorSegment<T>(
     capability: UpdateMutationCapability,
     claim: Extract<ExecutorClaimOutcome, { readonly kind: "claimed" }>,
     complete: CompleteExecutorSegment,
+    advance: AdvanceExecutorSegment,
   ) => Promise<T>,
 ): Promise<ExecutorSegmentOutcome<T>> {
   const home =

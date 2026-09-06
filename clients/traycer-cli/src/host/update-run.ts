@@ -22,7 +22,6 @@ import {
   type HostUpdateTrigger,
   type UpdateMutationCapability,
 } from "@traycer-clients/shared/host-update";
-import { commitExecutorAttemptMutation } from "@traycer-clients/shared/host-update/contender";
 import { installHostDowngradeInSegment } from "../commands/host-update-downgrade";
 import type { ApplyHostOutcome } from "../installer/apply";
 import {
@@ -69,6 +68,7 @@ import {
 } from "./update-progress-marker";
 import {
   runLocalAttemptExecutorSegment,
+  type AdvanceExecutorSegment,
   NO_UPDATE_EXECUTOR_FAULTS,
   type ExecutorClaimOutcome,
   type ExecutorClaimSelection,
@@ -308,7 +308,7 @@ export async function runHostUpdate(
       async (claim) => {
         await settlement.claimed(claim);
       },
-      async (capability, claim, complete) =>
+      async (capability, claim, complete, advance) =>
         runArm({
           args,
           plan,
@@ -319,6 +319,7 @@ export async function runHostUpdate(
           capability,
           claim,
           complete,
+          advance,
         }),
     );
     return await projectSegment({ args, settlement, selection, segment });
@@ -969,8 +970,15 @@ class AttemptRecordWriter {
   private lastTickPercent: number | null = null;
 
   constructor(
-    private readonly capability: UpdateMutationCapability,
-    private readonly home: string,
+    /**
+     * The segment's own write, built by `update-executor.ts` next to
+     * `complete`. This class holds no capability and no host home: the
+     * contender module is a two-importer module by construction (the shared
+     * barrel and the executor), so an executing caller writes through the
+     * closure it was handed or not at all - and `clients/shared`'s
+     * architecture suite pins exactly that.
+     */
+    private readonly advance: AdvanceExecutorSegment,
     private readonly mirror: MarkerMirror,
     record: HostUpdateAttemptRecord,
   ) {
@@ -1053,7 +1061,7 @@ class AttemptRecordWriter {
     });
   }
 
-  /** Settles the in-flight write under the capability and drops the queue. */
+  /** Settles the in-flight write through the closure and drops the queue. */
   async dispose(): Promise<void> {
     this.disposed = true;
     this.queuedTick = null;
@@ -1078,11 +1086,11 @@ class AttemptRecordWriter {
   }
 
   private async commit(advance: AttemptAdvance): Promise<void> {
-    const outcome = await commitExecutorAttemptMutation(
-      this.capability,
-      this.home,
-      { kind: "advance", held: this.held, advance },
-    );
+    const outcome = await this.advance({
+      kind: "advance",
+      held: this.held,
+      advance,
+    });
     if (outcome.kind !== "committed") {
       throw cliError({
         code: CLI_ERROR_CODES.HOST_INSTALL_RECORD_INVALID,
@@ -1143,21 +1151,22 @@ interface RunArmInput {
   readonly capability: UpdateMutationCapability;
   readonly claim: Extract<ExecutorClaimOutcome, { readonly kind: "claimed" }>;
   readonly complete: () => Promise<AttemptCommitOutcome>;
+  /**
+   * The segment's own non-terminal write. `capability` stays alongside it
+   * because the ACTUATORS still take it directly - the apply, the stop, the
+   * downgrade installer and `withCliAttemptMutation` all do - but no writer in
+   * this file holds it any more.
+   */
+  readonly advance: AdvanceExecutorSegment;
 }
 
 async function runArm(input: RunArmInput): Promise<LegacyHostUpdateResult> {
-  const { args, claim, mirror } = input;
-  const home = hostHomeDir(args.environment);
+  const { claim, mirror } = input;
   // The ENTRY mirror, before the first actuator: the lock holder owns the
   // marker, so whatever the path holds is taken over here. The claim write
   // itself was made by the executor core, which the writer never sees.
   await mirror.record(claim.record);
-  const writer = new AttemptRecordWriter(
-    input.capability,
-    home,
-    mirror,
-    claim.record,
-  );
+  const writer = new AttemptRecordWriter(input.advance, mirror, claim.record);
   input.writerRef.current = writer;
   try {
     const live = await revalidateInstallIdentity(input, writer);
@@ -1329,8 +1338,12 @@ async function resumedApplyArm(
     // private source on any throw, so the resume re-downloads (Plan D14).
     // Safe to reach with a foreign stage present, and the reason is
     // structural: the downgrade installer stages into an owner-tokened temp
-    // dir and commits from there, so it never writes the shared stage and
-    // cannot destroy whatever is in it.
+    // dir and commits from there, so its private download never PROMOTES
+    // into the shared stage and an eligible newer stage survives it (review
+    // B probe: 2.0.0 over 3.0.0 with 4.0.0 staged keeps the stage id,
+    // sidecar and bytes). The ordinary commit-time reconciliation still runs
+    // (`reconcileHostStageWithAttempt`) and may remove a stale or invalid
+    // stage - that is the reconcile rule's decision, not a transfer over it.
     await writer.phaseWrite("downloading");
     return downgradeArm(input, writer);
   }
