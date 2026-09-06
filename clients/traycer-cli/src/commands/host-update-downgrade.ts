@@ -1,6 +1,7 @@
 import type { ApplyHostOutcome } from "../installer/apply";
 import {
   discardStagedHostInstallSource,
+  NO_INSTALL_PHASE_HOOKS,
   stageHostInstallSource,
 } from "../installer/install";
 import { readHostInstallRecord } from "../manifest/host-install";
@@ -54,6 +55,9 @@ export async function installHostDowngrade(input: {
       onProgress: input.onProgress,
       recordVersionOverride: null,
       verifyMutationCapability: verify,
+      // The legacy downgrade arm writes no attempt record (ticket 04's
+      // downgrade arm is what supplies a real barrier here).
+      beforeExtract: async () => {},
     });
     try {
       return await withCliAttemptMutation(
@@ -77,6 +81,7 @@ export async function installHostDowngrade(input: {
             environment: input.environment,
             bootstrap: null,
             force: input.force,
+            hooks: NO_INSTALL_PHASE_HOOKS,
           });
           const result = await commitHostInstallSourceWithAttempt(
             capability,

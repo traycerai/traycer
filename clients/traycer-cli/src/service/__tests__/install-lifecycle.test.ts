@@ -11,7 +11,7 @@ import {
   type ServiceInstallLifecycleState,
 } from "../install-lifecycle";
 import { CLI_ERROR_CODES, CliError } from "../../runner/errors";
-import type { SwapLockRecovery } from "../../installer";
+import { NO_INSTALL_PHASE_HOOKS, type SwapLockRecovery } from "../../installer";
 import { epochMicrosNow } from "../platforms/windows";
 
 const mocks = vi.hoisted(() => ({
@@ -176,6 +176,7 @@ async function runLifecycle(
     environment: "production",
     bootstrap: options,
     force,
+    hooks: NO_INSTALL_PHASE_HOOKS,
   });
   await handle.lifecycle.beforeSwap();
   await handle.lifecycle.afterSwap();
@@ -286,6 +287,7 @@ describe("service install lifecycle re-registration", () => {
       environment: "production",
       bootstrap,
       force: false,
+      hooks: NO_INSTALL_PHASE_HOOKS,
     });
     runningHandle.lifecycle.setMutationVerifier?.(async () => {
       throw lost;
@@ -304,6 +306,7 @@ describe("service install lifecycle re-registration", () => {
       environment: "production",
       bootstrap,
       force: false,
+      hooks: NO_INSTALL_PHASE_HOOKS,
     });
     let verifierCalls = 0;
     externalHandle.lifecycle.setMutationVerifier?.(async () => {
@@ -328,6 +331,7 @@ describe("service install lifecycle re-registration", () => {
       environment: "production",
       bootstrap,
       force: false,
+      hooks: NO_INSTALL_PHASE_HOOKS,
     });
     bootstrapHandle.lifecycle.setMutationVerifier?.(async () => {
       throw lost;
@@ -478,6 +482,7 @@ describe("service install lifecycle re-registration", () => {
         environment: "production",
         bootstrap,
         force: false,
+        hooks: NO_INSTALL_PHASE_HOOKS,
       });
 
       await expect(handle.lifecycle.beforeSwap()).rejects.toMatchObject({
@@ -513,6 +518,7 @@ describe("service install lifecycle re-registration", () => {
         environment: "production",
         bootstrap,
         force: false,
+        hooks: NO_INSTALL_PHASE_HOOKS,
       });
 
       await expect(handle.lifecycle.beforeSwap()).resolves.toBeUndefined();
@@ -552,6 +558,7 @@ describe("service install lifecycle re-registration", () => {
         environment: "production",
         bootstrap,
         force: false,
+        hooks: NO_INSTALL_PHASE_HOOKS,
       });
 
       await expect(handle.lifecycle.beforeSwap()).resolves.toBeUndefined();
@@ -579,6 +586,7 @@ describe("service install lifecycle re-registration", () => {
         environment: "production",
         bootstrap,
         force: false,
+        hooks: NO_INSTALL_PHASE_HOOKS,
       });
       await handle.lifecycle.beforeSwap();
 
@@ -615,6 +623,7 @@ describe("service install lifecycle re-registration", () => {
       environment: "production",
       bootstrap,
       force: false,
+      hooks: NO_INSTALL_PHASE_HOOKS,
     });
     await handle.lifecycle.beforeSwap();
 
@@ -794,6 +803,7 @@ describe("runWithPublishedHostStartAdoption (via registerService's install)", ()
       environment: "production",
       bootstrap,
       force: false,
+      hooks: NO_INSTALL_PHASE_HOOKS,
     });
     const setPublisher = handle.lifecycle.setHostStartAdoptionPublisher;
     if (setPublisher === undefined) {
@@ -827,6 +837,7 @@ describe("runWithPublishedHostStartAdoption (via registerService's install)", ()
       environment: "production",
       bootstrap,
       force: false,
+      hooks: NO_INSTALL_PHASE_HOOKS,
     });
     const setPublisher = handle.lifecycle.setHostStartAdoptionPublisher;
     if (setPublisher === undefined) {
@@ -867,6 +878,7 @@ describe("runWithPublishedHostStartAdoption (via registerService's install)", ()
       environment: "production",
       bootstrap,
       force: false,
+      hooks: NO_INSTALL_PHASE_HOOKS,
     });
     const setPublisher = handle.lifecycle.setHostStartAdoptionPublisher;
     if (setPublisher === undefined) {
@@ -897,6 +909,7 @@ describe("runWithPublishedHostStartAdoption (via registerService's install)", ()
       environment: "production",
       bootstrap,
       force: false,
+      hooks: NO_INSTALL_PHASE_HOOKS,
     });
     const setPublisher = handle.lifecycle.setHostStartAdoptionPublisher;
     if (setPublisher === undefined) {
@@ -938,6 +951,7 @@ describe("runWithPublishedHostStartAdoption (via registerService's install)", ()
       environment: "production",
       bootstrap,
       force: false,
+      hooks: NO_INSTALL_PHASE_HOOKS,
     });
     const setPublisher = handle.lifecycle.setHostStartAdoptionPublisher;
     if (setPublisher === undefined) {
@@ -988,10 +1002,12 @@ describe("swap-lock recovery wiring", () => {
         environment: "production",
         bootstrap: null,
         force: false,
+        hooks: NO_INSTALL_PHASE_HOOKS,
       });
       const bytesOnly = createBytesOnlyInstallLifecycle(
         harness.controller,
         label,
+        NO_INSTALL_PHASE_HOOKS,
       );
       recoveries = [
         serviceHandle.lifecycle.swapLockRecovery,
@@ -1042,10 +1058,12 @@ describe("swap-lock recovery wiring", () => {
         environment: "production",
         bootstrap: null,
         force: false,
+        hooks: NO_INSTALL_PHASE_HOOKS,
       });
       const bytesOnly = createBytesOnlyInstallLifecycle(
         harness.controller,
         label,
+        NO_INSTALL_PHASE_HOOKS,
       );
       expect(serviceHandle.lifecycle.swapLockRecovery).toBeNull();
       expect(bytesOnly.swapLockRecovery).toBeNull();

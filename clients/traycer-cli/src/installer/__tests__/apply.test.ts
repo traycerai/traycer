@@ -80,6 +80,10 @@ vi.mock("../../service/install-lifecycle", () => ({
   createServiceInstallLifecycle: (options: {
     bootstrap: unknown;
     force: boolean;
+    hooks: {
+      beforeSwapCommit: () => Promise<void>;
+      afterSwap: () => Promise<void>;
+    };
   }) => {
     mocks.callOrder.push("lifecycle-created");
     mocks.lifecycleCalls.push({
@@ -101,7 +105,13 @@ vi.mock("../../service/install-lifecycle", () => ({
           }
           state.stoppedBeforeSwap = true;
         },
+        // Forwarded exactly as the real `createServiceInstallLifecycle`
+        // does, so the barrier pins observe the production call sites in
+        // `commitInstallFromSource` rather than this stub's own bookkeeping.
+        beforeSwapCommit: () => options.hooks.beforeSwapCommit(),
         afterSwap: async () => {
+          // At the TOP, as the real lifecycle runs it.
+          await options.hooks.afterSwap();
           state.postSwapAction = mocks.lifecyclePostSwapAction;
           state.postSwapError = mocks.lifecyclePostSwapError;
         },
@@ -137,7 +147,11 @@ vi.mock("../../store/paths", async () => {
 });
 
 import { applyHost as applyHostWithAuthority } from "../apply";
-import { currentInstallArch, currentInstallPlatform } from "../install";
+import {
+  currentInstallArch,
+  currentInstallPlatform,
+  NO_INSTALL_PHASE_HOOKS,
+} from "../install";
 import { readHostInstallRecord } from "../../manifest/host-install";
 import {
   HOST_STAGED_RECORD_SCHEMA_VERSION,
@@ -150,13 +164,14 @@ import type { HostInstallRecord } from "../../manifest/host-install";
 const testMutationVerifier = async (): Promise<void> => undefined;
 type ApplyOptions = Parameters<typeof applyHostWithAuthority>[0];
 const applyHost = (
-  options: Omit<ApplyOptions, "verifyMutationCapability"> &
-    Partial<Pick<ApplyOptions, "verifyMutationCapability">>,
+  options: Omit<ApplyOptions, "verifyMutationCapability" | "hooks"> &
+    Partial<Pick<ApplyOptions, "verifyMutationCapability" | "hooks">>,
 ) =>
   applyHostWithAuthority({
     ...options,
     verifyMutationCapability:
       options.verifyMutationCapability ?? testMutationVerifier,
+    hooks: options.hooks ?? NO_INSTALL_PHASE_HOOKS,
   });
 
 const ENV: Environment = "production";

@@ -452,6 +452,7 @@ describe("atomicSwap - swap-lock recovery", () => {
       onProgress: () => {},
       lifecycle: {
         beforeSwap: async () => {},
+        beforeSwapCommit: async () => {},
         afterSwap: async () => {},
         swapLockRecovery: {
           killLingeringProcesses: kill,
@@ -484,6 +485,7 @@ describe("atomicSwap - swap-lock recovery", () => {
         onProgress: () => {},
         lifecycle: {
           beforeSwap: async () => {},
+          beforeSwapCommit: async () => {},
           afterSwap: async () => {},
           swapLockRecovery: {
             killLingeringProcesses: async () => {},
@@ -539,6 +541,7 @@ describe("atomicSwap - swap-lock recovery", () => {
         onProgress: () => {},
         lifecycle: {
           beforeSwap: async () => {},
+          beforeSwapCommit: async () => {},
           afterSwap: async () => {},
           swapLockRecovery: {
             killLingeringProcesses: async () => {},
@@ -605,6 +608,7 @@ describe("atomicSwap - swap-lock recovery", () => {
         onProgress: () => {},
         lifecycle: {
           beforeSwap: async () => {},
+          beforeSwapCommit: async () => {},
           afterSwap: async () => {},
           swapLockRecovery: {
             killLingeringProcesses: kill,
@@ -662,6 +666,7 @@ describe("atomicSwap - swap-lock recovery", () => {
         onProgress: () => {},
         lifecycle: {
           beforeSwap: async () => {},
+          beforeSwapCommit: async () => {},
           afterSwap: async () => {},
           swapLockRecovery: {
             killLingeringProcesses: kill,
@@ -706,6 +711,7 @@ describe("atomicSwap - swap-lock recovery", () => {
         onProgress: () => {},
         lifecycle: {
           beforeSwap: async () => {},
+          beforeSwapCommit: async () => {},
           afterSwap: async () => {},
           swapLockRecovery: {
             killLingeringProcesses: async () => {},

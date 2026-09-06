@@ -414,6 +414,8 @@ describe("downloadAndStageHost", () => {
         onProgress: noopProgress,
         registryClient: client,
         onWillDownload: null,
+        beforeExtract: async () => {},
+        ownAttempt: null,
       }),
     ).rejects.toMatchObject({ code: CLI_ERROR_CODES.HOST_NOT_INSTALLED });
   });
@@ -438,6 +440,8 @@ describe("downloadAndStageHost", () => {
         onProgress: noopProgress,
         registryClient: client,
         onWillDownload: null,
+        beforeExtract: async () => {},
+        ownAttempt: null,
       }),
     ).rejects.toMatchObject({ code: CLI_ERROR_CODES.REGISTRY_UNAVAILABLE });
     expect(downloadStarted).toBe(false);
@@ -461,6 +465,8 @@ describe("downloadAndStageHost", () => {
       onProgress: noopProgress,
       registryClient: client,
       onWillDownload: null,
+      beforeExtract: async () => {},
+      ownAttempt: null,
     });
     expect(outcome).toMatchObject({
       outcome: "short-circuit",
@@ -489,6 +495,8 @@ describe("downloadAndStageHost", () => {
         onDownloadStart: null,
       }),
       onWillDownload: null,
+      beforeExtract: async () => {},
+      ownAttempt: null,
     });
     expect((await readHostStagedRecord(ENV))?.version).toBe("1.5.0");
 
@@ -506,6 +514,8 @@ describe("downloadAndStageHost", () => {
         },
       }),
       onWillDownload: null,
+      beforeExtract: async () => {},
+      ownAttempt: null,
     });
     expect(outcome).toMatchObject({
       outcome: "short-circuit",
@@ -532,6 +542,8 @@ describe("downloadAndStageHost", () => {
         onDownloadStart: null,
       }),
       onWillDownload: null,
+      beforeExtract: async () => {},
+      ownAttempt: null,
     });
     const recordPath = join(stagedDirFor(ENV), "staged.json");
     const legacy = JSON.parse(readFileSync(recordPath, "utf8")) as {
@@ -555,6 +567,8 @@ describe("downloadAndStageHost", () => {
         },
       }),
       onWillDownload: null,
+      beforeExtract: async () => {},
+      ownAttempt: null,
     });
 
     expect(outcome).toMatchObject({
@@ -583,6 +597,8 @@ describe("downloadAndStageHost", () => {
       onProgress: noopProgress,
       registryClient: client,
       onWillDownload: null,
+      beforeExtract: async () => {},
+      ownAttempt: null,
     });
     expect(outcome).toMatchObject({
       outcome: "promoted",
@@ -614,6 +630,8 @@ describe("downloadAndStageHost", () => {
       onProgress: noopProgress,
       registryClient: client,
       onWillDownload: null,
+      beforeExtract: async () => {},
+      ownAttempt: null,
     });
     // The archive now lives in the SHARED download cache keyed by
     // version+sha (registry/download-cache.ts), so the consumer must drop
@@ -653,6 +671,8 @@ describe("downloadAndStageHost", () => {
         onProgress: noopProgress,
         registryClient: client,
         onWillDownload: null,
+        beforeExtract: async () => {},
+        ownAttempt: null,
       }),
     ).rejects.toThrow(/expected executable/);
     // These bytes already cleared sha256 AND minisign. Whatever failed
@@ -682,6 +702,8 @@ describe("downloadAndStageHost", () => {
         onDownloadStart: null,
       }),
       onWillDownload: null,
+      beforeExtract: async () => {},
+      ownAttempt: null,
     });
     expect((await readHostStagedRecord(ENV))?.version).toBe("1.5.0");
 
@@ -705,6 +727,8 @@ describe("downloadAndStageHost", () => {
         },
       }),
       onWillDownload: null,
+      beforeExtract: async () => {},
+      ownAttempt: null,
     });
     expect(downloadStarted).toBe(false);
     expect(outcome).toMatchObject({
@@ -731,6 +755,8 @@ describe("downloadAndStageHost", () => {
         onDownloadStart: null,
       }),
       onWillDownload: null,
+      beforeExtract: async () => {},
+      ownAttempt: null,
     });
     expect((await readHostStagedRecord(ENV))?.version).toBe("1.5.0");
 
@@ -751,6 +777,8 @@ describe("downloadAndStageHost", () => {
         onDownloadStart: null,
       }),
       onWillDownload: null,
+      beforeExtract: async () => {},
+      ownAttempt: null,
     });
     expect(outcome).toMatchObject({
       outcome: "promoted",
@@ -776,6 +804,8 @@ describe("downloadAndStageHost", () => {
         },
       }),
       onWillDownload: null,
+      beforeExtract: async () => {},
+      ownAttempt: null,
     });
     expect(outcome).toMatchObject({
       outcome: "short-circuit",
@@ -797,6 +827,8 @@ describe("downloadAndStageHost", () => {
         onDownloadStart: null,
       }),
       onWillDownload: null,
+      beforeExtract: async () => {},
+      ownAttempt: null,
     });
     expect(outcome).toMatchObject({
       outcome: "promoted",
@@ -825,6 +857,8 @@ describe("downloadAndStageHost", () => {
       onProgress: noopProgress,
       registryClient: client,
       onWillDownload: null,
+      beforeExtract: async () => {},
+      ownAttempt: null,
     });
     await started.promise;
     // Simulate a concurrent, faster `host install 2.0.0` completing while
@@ -861,6 +895,8 @@ describe("downloadAndStageHost", () => {
       onProgress: noopProgress,
       registryClient: client,
       onWillDownload: null,
+      beforeExtract: async () => {},
+      ownAttempt: null,
     });
     await started.promise;
     // Simulate a concurrent local-file install swapping in an
@@ -896,6 +932,8 @@ describe("downloadAndStageHost", () => {
         onDownloadStart: null,
       }),
       onWillDownload: null,
+      beforeExtract: async () => {},
+      ownAttempt: null,
     });
     expect((await readHostStagedRecord(ENV))?.version).toBe("1.5.0");
 
@@ -911,6 +949,8 @@ describe("downloadAndStageHost", () => {
         onDownloadStart: null,
       }),
       onWillDownload: null,
+      beforeExtract: async () => {},
+      ownAttempt: null,
     });
     expect(outcome).toMatchObject({
       outcome: "promoted",
@@ -952,6 +992,8 @@ describe("downloadAndStageHost", () => {
       onProgress: noopProgress,
       registryClient: slowClient,
       onWillDownload: null,
+      beforeExtract: async () => {},
+      ownAttempt: null,
     });
     await slowStarted.promise;
     const firstFastAttempt = downloadAndStageHost({
@@ -961,6 +1003,8 @@ describe("downloadAndStageHost", () => {
       onProgress: noopProgress,
       registryClient: fastClient,
       onWillDownload: null,
+      beforeExtract: async () => {},
+      ownAttempt: null,
     });
     const firstFastResult = firstFastAttempt.then(
       (outcome) => ({ kind: "outcome" as const, outcome }),
@@ -996,6 +1040,8 @@ describe("downloadAndStageHost", () => {
       onProgress: noopProgress,
       registryClient: fastClient,
       onWillDownload: null,
+      beforeExtract: async () => {},
+      ownAttempt: null,
     });
     expect(fastOutcome).toMatchObject({
       outcome: "promoted",
@@ -1055,6 +1101,8 @@ describe("downloadAndStageHost", () => {
       onProgress: noopProgress,
       registryClient: client,
       onWillDownload: null,
+      beforeExtract: async () => {},
+      ownAttempt: null,
     });
     await started.promise;
     // Simulate a concurrent `host uninstall` completing while the download
@@ -1106,6 +1154,8 @@ describe("downloadAndStageHost", () => {
       onProgress: noopProgress,
       registryClient: client,
       onWillDownload: null,
+      beforeExtract: async () => {},
+      ownAttempt: null,
     });
     expect(lockAcquiredDuringTransfer).toBe(true);
   });
@@ -1129,6 +1179,8 @@ describe("downloadAndStageHost", () => {
         onProgress: noopProgress,
         registryClient: throwingRegistryClient(base),
         onWillDownload: null,
+        beforeExtract: async () => {},
+        ownAttempt: null,
       }),
     ).rejects.toThrow(/simulated download failure/);
 
@@ -1175,6 +1227,8 @@ describe("downloadAndStageHost", () => {
           onDownloadStart: null,
         }),
         onWillDownload: null,
+        beforeExtract: async () => {},
+        ownAttempt: null,
       });
       const stagedBefore = await readHostStagedRecord(ENV);
       expect(stagedBefore?.version).toBe("1.2.0");
@@ -1196,6 +1250,8 @@ describe("downloadAndStageHost", () => {
         onProgress: noopProgress,
         registryClient: client,
         onWillDownload: null,
+        beforeExtract: async () => {},
+        ownAttempt: null,
       });
       await started.promise;
       // Promote-time STATE INJECTION after the outer admission snapshot and
@@ -1256,6 +1312,8 @@ describe("downloadAndStageHost", () => {
           onDownloadStart: null,
         }),
         onWillDownload: null,
+        beforeExtract: async () => {},
+        ownAttempt: null,
       });
       const stagedBefore = await readHostStagedRecord(ENV);
       const executablePath = join(stagedDirFor(ENV), executableBasename());
@@ -1275,6 +1333,8 @@ describe("downloadAndStageHost", () => {
           onDownloadStart: () => started.release(),
         }),
         onWillDownload: null,
+        beforeExtract: async () => {},
+        ownAttempt: null,
       });
       await started.promise;
       writeFileSync(
@@ -1321,6 +1381,8 @@ describe("downloadAndStageHost", () => {
           onDownloadStart: null,
         }),
         onWillDownload: null,
+        beforeExtract: async () => {},
+        ownAttempt: null,
       });
 
       const gate = makeGate();
@@ -1338,6 +1400,8 @@ describe("downloadAndStageHost", () => {
         onProgress: noopProgress,
         registryClient: client,
         onWillDownload: null,
+        beforeExtract: async () => {},
+        ownAttempt: null,
       });
       await started.promise;
       // Same timing as the positive case above - only `phase`/`execution`
@@ -1380,6 +1444,8 @@ describe("downloadAndStageHost", () => {
           onDownloadStart: null,
         }),
         onWillDownload: null,
+        beforeExtract: async () => {},
+        ownAttempt: null,
       });
       const stagedBefore = await readHostStagedRecord(ENV);
       const executablePath = join(stagedDirFor(ENV), executableBasename());
@@ -1404,6 +1470,8 @@ describe("downloadAndStageHost", () => {
         onProgress: noopProgress,
         registryClient: client,
         onWillDownload: null,
+        beforeExtract: async () => {},
+        ownAttempt: null,
       });
       await started.promise;
       writeAttemptRecord({
@@ -1457,6 +1525,8 @@ describe("downloadAndStageHost", () => {
           onDownloadStart: null,
         }),
         onWillDownload: null,
+        beforeExtract: async () => {},
+        ownAttempt: null,
       });
 
       const gate = makeGate();
@@ -1474,6 +1544,8 @@ describe("downloadAndStageHost", () => {
         onProgress: noopProgress,
         registryClient: client,
         onWillDownload: null,
+        beforeExtract: async () => {},
+        ownAttempt: null,
       });
       await started.promise;
       writeAttemptRecord({
@@ -1538,6 +1610,8 @@ describe("downloadAndStageHost", () => {
           expect(targetVersion).toBe("1.5.0");
           order.push("will-download");
         },
+        beforeExtract: async () => {},
+        ownAttempt: null,
       });
       expect(willDownloadCalls).toBe(1);
       expect(order).toEqual([
@@ -1568,6 +1642,8 @@ describe("downloadAndStageHost", () => {
         onWillDownload: async () => {
           called = true;
         },
+        beforeExtract: async () => {},
+        ownAttempt: null,
       });
       expect(outcome).toMatchObject({
         outcome: "short-circuit",
@@ -1596,6 +1672,8 @@ describe("downloadAndStageHost", () => {
           onDownloadStart: null,
         }),
         onWillDownload: null,
+        beforeExtract: async () => {},
+        ownAttempt: null,
       });
       let called = false;
       const outcome = await downloadAndStageHost({
@@ -1612,6 +1690,8 @@ describe("downloadAndStageHost", () => {
         onWillDownload: async () => {
           called = true;
         },
+        beforeExtract: async () => {},
+        ownAttempt: null,
       });
       expect(outcome).toMatchObject({
         outcome: "short-circuit",
@@ -1640,6 +1720,8 @@ describe("downloadAndStageHost", () => {
           onWillDownload: async () => {
             called = true;
           },
+          beforeExtract: async () => {},
+          ownAttempt: null,
         }),
       ).rejects.toMatchObject({ code: CLI_ERROR_CODES.REGISTRY_UNAVAILABLE });
       // Falsification: move the manifest-validity check below the hook call
@@ -1670,6 +1752,8 @@ describe("downloadAndStageHost", () => {
           onWillDownload: async () => {
             throw new Error("hook failed");
           },
+          beforeExtract: async () => {},
+          ownAttempt: null,
         }),
       ).rejects.toThrow("hook failed");
       // Falsification: swallow the hook's rejection (e.g. wrap the `await

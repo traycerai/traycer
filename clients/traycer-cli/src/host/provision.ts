@@ -2,6 +2,7 @@ import type { UpdateMutationCapabilityAdoption } from "@traycer-clients/shared/h
 import { encodeInstallGeneration } from "@traycer-clients/shared/host-version/install-generation";
 import {
   discardStagedHostInstallSource,
+  NO_INSTALL_PHASE_HOOKS,
   stageHostInstallSource,
   type InstallSourceArg,
   type StagedHostInstallSource,
@@ -544,6 +545,8 @@ async function prepareInstallStage(
     recordVersionOverride: opts.recordVersionOverride,
     verifyMutationCapability: () =>
       requireCliUpdateMutationCapability(capability, contenderOptions),
+    // Provisioning advances no attempt record; see `hooks` at the commit.
+    beforeExtract: async () => {},
   });
 }
 
@@ -577,12 +580,19 @@ async function commitInstall(
         // denied the cooperative shutdown claim and `--force` aborted
         // anyway.
         force: opts.force,
+        // `host ensure` provisions bytes; it drives no attempt record, so
+        // it observes neither swap barrier.
+        hooks: NO_INSTALL_PHASE_HOOKS,
       })
     : null;
   const lifecycle =
     handle !== null
       ? handle.lifecycle
-      : createBytesOnlyInstallLifecycle(controller, label);
+      : createBytesOnlyInstallLifecycle(
+          controller,
+          label,
+          NO_INSTALL_PHASE_HOOKS,
+        );
   opts.runtime.logger.debug("Host provisioning install lifecycle prepared", {
     environment: opts.runtime.environment,
     lifecycleEnabled: handle !== null,

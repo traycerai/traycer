@@ -1,7 +1,6 @@
 import { access, rm } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
-import { dirname, relative } from "node:path";
-import { platform as osPlatform } from "node:os";
+import { relative } from "node:path";
 import {
   compareHostVersions,
   isStrictlyNewerHostVersion,
@@ -16,6 +15,8 @@ import {
   currentHostPlatformKey,
   releaseDownloadSlot,
   releaseDownloadSlotOwnership,
+  type HostPlatformAsset,
+  type HostVersionEntry,
   type HostVersionsManifest,
   type RegistryClient,
 } from "../registry";
@@ -39,15 +40,15 @@ import {
 } from "../host/update-contender";
 import {
   readUpdateAttemptRecord,
+  type HostUpdateAttemptIdentity,
   type UpdateMutationCapability,
 } from "@traycer-clients/shared/host-update";
+import { encodeInstallGeneration } from "@traycer-clients/shared/host-version/install-generation";
 import {
   currentInstallArch,
   currentInstallPlatform,
-  readExtractedRuntimeVersion,
+  stageVerifiedSource,
 } from "./install";
-import { extractHostSource, resolveHostExecutable } from "./extract";
-import { createExtractHeartbeat } from "./extract-heartbeat";
 import { hashFileSha256 } from "./sha256";
 import { invalidateAsideDir } from "./aside-dirs";
 import { renameWithRetry } from "./rename-retry";
@@ -91,6 +92,28 @@ export interface DownloadAndStageHostOptions {
    * invite the next reader to wonder what it was for.
    */
   readonly onWillDownload: ((targetVersion: string) => Promise<void>) | null;
+  /**
+   * See `StageVerifiedSourceOptions.beforeExtract` - the same barrier, on
+   * the other staging path. Awaited after `downloadAndVerify` has RESOLVED
+   * (sha256 in the transport, minisign in the registry client) and before
+   * the first archive entry is written, so a caller marking "the bytes are
+   * verified, the tree is not built yet" marks it once whichever path ran.
+   *
+   * Unlike `onWillDownload` this is not nullable: it fires on exactly one
+   * path (a transfer that reached extraction), and every caller that tracks
+   * no attempt passes a no-op.
+   */
+  readonly beforeExtract: () => Promise<void>;
+  /**
+   * The attempt this run is itself executing, or `null` when it executes
+   * none. The promote-time guard below yields to ANY nonterminal attempt
+   * record; a run that IS that attempt would otherwise refuse to promote its
+   * own staged bytes. A record whose `attemptId` matches AND whose target is
+   * the candidate version is this run's own work and is not a yield;
+   * anything else - another attempt, or the same id pointed at a different
+   * version - yields exactly as it does today (Plan D6).
+   */
+  readonly ownAttempt: HostUpdateAttemptIdentity | null;
 }
 
 export type HostDownloadShortCircuitReason =
@@ -258,12 +281,20 @@ async function replaceStagedDir(
 // The one shape every stage-maintenance leg shares. Named once so a changed
 // admission literal or wait policy cannot drift between the three copies the
 // inline types used to be.
-interface StageMaintenanceContenderOptions {
+//
+// `admission` is the ONE widened field: `host download` and the legacy
+// `host update` stage under `stage-maintenance`, while the attempt executor
+// stages the very bytes of the attempt it holds and passes its own
+// `attempt-executor` admission down (Plan D6, CLI wiring "Installer entry").
+// Nothing else about the leg differs - same reasons, same wait policy - so
+// widening the literal rather than forking the shape keeps the two callers
+// provably on one code path.
+export interface StageMaintenanceContenderOptions {
   readonly environment: Environment;
   readonly reason: string;
   readonly waitMs: number;
   readonly pollIntervalMs: number;
-  readonly admission: "stage-maintenance";
+  readonly admission: "stage-maintenance" | "attempt-executor";
 }
 
 /** The stage-promotion actuator; capability is checked at the rename edge. */
@@ -327,7 +358,18 @@ export async function downloadAndStageHost(
   );
 }
 
-async function downloadAndStageHostInSegment(
+// The whole stage under a capability the CALLER already holds. Exported for
+// the attempt executor, which owns its segment for the length of the run and
+// cannot let this function open a second one: `downloadAndStageHost` above is
+// the same body with the segment wrapped around it, and is what every caller
+// that owns no capability of its own uses.
+//
+// Kept BELOW that wrapper on purpose - the source-order fence in
+// `clients/shared/__tests__/host-update-contender-architecture.test.ts`
+// reads this file as text and requires `withCliUpdateExecutionSegment(` to
+// precede both this function's name and `downloadAndVerify(`. Hoisting the
+// definition above the wrapper reddens it.
+export async function downloadAndStageHostInSegment(
   opts: DownloadAndStageHostOptions,
   capability: UpdateMutationCapability,
   contenderOptions: StageMaintenanceContenderOptions,
@@ -500,36 +542,31 @@ async function downloadAndStageHostInSegment(
   // retry can reuse as-is. See the `finally`.
   let archiveConsumed = false;
   try {
-    progressStage(
-      opts.onProgress,
-      "extract",
-      `extracting host ${entry.version}`,
-    );
     const owned = await createOwnedTempDir(opts.environment, "dl-");
     ownedPath = owned.path;
     // `const` alias so the closures below (captured by `withCliLock`)
     // keep the narrowed `string` type instead of the outer `let`'s
     // `string | null`.
     const tempPath = owned.path;
-    await extractHostSource({
-      source: verified.archivePath,
+    // The verified-bytes barrier and the extraction itself, shared with
+    // `stageHostInstallSource`'s private-source path so the two cannot
+    // drift. The temp dir is created HERE and not inside it: the two paths
+    // own their temps in different cleanup scopes (this one's `finally`
+    // below, the other one's `catch`).
+    const { executablePath, runtimeVersion } = await stageVerifiedSource({
+      environment: opts.environment,
+      archivePath: verified.archivePath,
       targetDir: tempPath,
-      onEntry: createExtractHeartbeat({
-        environment: opts.environment,
-        archivePath: verified.archivePath,
-        version: entry.version,
-        onProgress: opts.onProgress,
-      }),
+      version: entry.version,
+      extractMessage: `extracting host ${entry.version}`,
+      onProgress: opts.onProgress,
+      beforeExtract: opts.beforeExtract,
     });
-    const executablePath = await resolveHostExecutable(tempPath, osPlatform());
     // The archive digest proves the fetched source.  Recovery also needs the
     // digest of the exact executable extracted from that verified archive,
     // so a stable but replaced staged file cannot be mistaken for a resumable
     // target generation.
     const executableSha256 = await hashFileSha256(executablePath, null);
-    const runtimeVersion = await readExtractedRuntimeVersion(
-      dirname(executablePath),
-    );
     const stagedRecord: HostStagedRecord = {
       schemaVersion: HOST_STAGED_RECORD_SCHEMA_VERSION,
       stageId: randomUUID(),
@@ -568,9 +605,25 @@ async function downloadAndStageHostInSegment(
         const attempt = await readUpdateAttemptRecord(
           hostHomeDir(opts.environment),
         );
+        // This run's OWN attempt is not a competitor to yield to: the guard
+        // exists to stop a background/explicit download replacing bytes
+        // another attempt is bound to, and the executor promoting the stage
+        // it is itself downloading is precisely the case that is not that.
+        // The target must match too - the same attempt pointed at a
+        // different version has moved on from these bytes, and the record's
+        // generation/sequence deliberately do NOT participate: the record
+        // advances (downloading ticks, phase writes) throughout the very
+        // transfer that leads here, so a positional match would fail on
+        // every real run. Identity is the attempt id.
+        const attemptIsOwn =
+          opts.ownAttempt !== null &&
+          attempt.kind === "valid" &&
+          attempt.value.attemptId === opts.ownAttempt.attemptId &&
+          attempt.value.targetVersion === stagedRecord.version;
         if (
           attempt.kind === "valid" &&
-          attempt.value.execution !== "terminal"
+          attempt.value.execution !== "terminal" &&
+          !attemptIsOwn
         ) {
           logger.info(
             "Host download yielded before promotion to an active update attempt",
@@ -768,4 +821,263 @@ async function downloadAndStageHostInSegment(
       ).catch(() => undefined);
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// The advisory plan (Plan D1, CLI wiring "The advisory plan, by intent")
+// ---------------------------------------------------------------------------
+//
+// Everything the transfer above decides from READS, split out as a function
+// that only reads. It takes no lock, writes nothing, reconciles nothing and
+// promotes nothing: it exists so a caller can shape its work BEFORE it
+// contends for the attempt lock, and so the facts it saw can be compared
+// with a re-read under that lock. The authority for every decision remains
+// the locked re-read inside the transfer (and, for the executor, inside its
+// selector) - a plan is a proposal, and a plan that disagrees with the
+// locked reading loses.
+//
+// It is intent-shaped because the intents differ in what they are ALLOWED to
+// touch, not merely in what they need: an `activate` run must complete with
+// the registry unreachable (there is nothing to fetch - the bytes are already
+// installed), so its request variant carries no version to resolve and this
+// function structurally cannot reach the network on it.
+
+export type HostUpdatePlanRequest =
+  | {
+      // Fresh work: resolve the registry and decide what kind of arm this is.
+      readonly intent: "install";
+      // `null` requests the manifest's `latest` pointer.
+      readonly versionRequest: string | null;
+      // `--allow-downgrade`. Only ever consulted here, on an EXPLICIT version
+      // request below the installed one - exactly the legacy command's rule
+      // (`prepareHostUpdate`'s guard). A resumed park's downgrade consent is
+      // the record's own claim, decided under the lock, never re-derived
+      // from these arguments.
+      readonly allowDowngrade: boolean;
+    }
+  | {
+      // Local evidence only. No version, therefore no registry, therefore no
+      // way for an unreachable registry to fail an activation.
+      readonly intent: "activate";
+    }
+  | {
+      // Resuming a park at a target the record already fixed.
+      readonly intent: "continue";
+      readonly targetVersion: string;
+      // True only for a `resume-apply` park with no stage - the downgrade
+      // re-download (Plan D14). Every other park resumes from bytes that are
+      // already on disk and needs no registry at all.
+      readonly needsTransfer: boolean;
+    };
+
+/**
+ * What the plan observed about the local install and stage. Carried by every
+ * variant so the caller can hand the same facts to a claim baseline and then
+ * compare them with a re-read under the lock.
+ */
+export interface HostUpdatePlanIdentity {
+  readonly installedVersion: string;
+  /**
+   * `encodeInstallGeneration` over the install record - the SAME encoder
+   * `commitHostInstallSource` and `applyHost` stamp their results with, so a
+   * baseline taken from a plan and a generation attested by a commit are
+   * byte-comparable strings rather than two spellings of one idea.
+   */
+  readonly installGeneration: string;
+  /** The install record's own runtime stamp, the installed half of a debt. */
+  readonly installedRuntimeVersion: string | null;
+  readonly stagedVersion: string | null;
+  /** The staged record's `stageId`; `null` when nothing is staged. */
+  readonly stageFingerprint: string | null;
+}
+
+/**
+ * The advisory outcome. Every variant but `not-installed` carries the
+ * identity facts.
+ *
+ * The RUNNING half of an activation debt is deliberately absent: reading the
+ * live host is the activation reading's job, and it belongs to the caller
+ * that owns the run (it pairs `activate` - or an `install` plan that turned
+ * out to have nothing to fetch - with that reading to decide a debt). This
+ * function stays on the installer side of that line, where the registry and
+ * the two on-disk records are, and never reaches into the running host.
+ */
+export type HostUpdatePlan =
+  | {
+      // No install record at all. Reported, not thrown: the plan decides
+      // nothing, and the caller's own locked read is what refuses.
+      readonly kind: "not-installed";
+    }
+  | {
+      // Installed at or above the target with no downgrade consent - the
+      // legacy `installed-up-to-date` short-circuit, made explicit.
+      readonly kind: "no-op";
+      readonly targetVersion: string;
+      readonly identity: HostUpdatePlanIdentity;
+    }
+  | {
+      readonly kind: "upgrade";
+      readonly targetVersion: string;
+      readonly entry: HostVersionEntry;
+      readonly asset: HostPlatformAsset;
+      readonly identity: HostUpdatePlanIdentity;
+    }
+  | {
+      // The target is already staged and promotable - no transfer needed.
+      readonly kind: "already-staged";
+      readonly targetVersion: string;
+      readonly identity: HostUpdatePlanIdentity;
+    }
+  | {
+      // An explicit `--allow-downgrade` below the installed version. Staged
+      // privately by `stageHostInstallSource`, never through the shared
+      // stage, which reconcile would sweep as stale.
+      readonly kind: "downgrade";
+      readonly targetVersion: string;
+      readonly identity: HostUpdatePlanIdentity;
+    }
+  | {
+      // The `activate` intent: nothing to fetch, nothing to stage.
+      readonly kind: "activate";
+      readonly identity: HostUpdatePlanIdentity;
+    }
+  | {
+      // A resumed park. `entry`/`asset` are non-null only for the downgrade
+      // re-download.
+      readonly kind: "resume";
+      readonly targetVersion: string;
+      readonly entry: HostVersionEntry | null;
+      readonly asset: HostPlatformAsset | null;
+      readonly identity: HostUpdatePlanIdentity;
+    };
+
+export interface ResolveUpdatePlanOptions {
+  readonly environment: Environment;
+  readonly request: HostUpdatePlanRequest;
+  readonly onProgress: (info: ProgressInfo) => void;
+  /** Same test seam as `DownloadAndStageHostOptions.registryClient`. */
+  readonly registryClient: RegistryClient | null;
+}
+
+export async function resolveUpdatePlan(
+  opts: ResolveUpdatePlanOptions,
+): Promise<HostUpdatePlan> {
+  const installed = await readHostInstallRecord(opts.environment);
+  if (installed === null) return { kind: "not-installed" };
+  const staged = await readHostStagedRecord(opts.environment);
+  const identity: HostUpdatePlanIdentity = {
+    installedVersion: installed.version,
+    installGeneration: encodeInstallGeneration({
+      installId: installed.installId,
+      installedAt: installed.installedAt,
+      archiveSha256: installed.archiveSha256,
+      version: installed.version,
+    }),
+    installedRuntimeVersion: installed.runtimeVersion,
+    stagedVersion: staged?.version ?? null,
+    stageFingerprint: staged?.stageId ?? null,
+  };
+
+  const request = opts.request;
+  if (request.intent === "activate") return { kind: "activate", identity };
+
+  if (request.intent === "continue") {
+    if (!request.needsTransfer) {
+      return {
+        kind: "resume",
+        targetVersion: request.targetVersion,
+        entry: null,
+        asset: null,
+        identity,
+      };
+    }
+    const resolved = await resolvePlanAsset(opts, request.targetVersion);
+    return {
+      kind: "resume",
+      targetVersion: resolved.entry.version,
+      entry: resolved.entry,
+      asset: resolved.asset,
+      identity,
+    };
+  }
+
+  const client = await planRegistryClient(opts);
+  progressStage(opts.onProgress, "resolve", "resolving host manifest");
+  const manifest = await client.fetchManifest();
+  const targetVersion = request.versionRequest ?? manifest.latest;
+  // Same fail-closed rule as the transfer's: the registry side of the version
+  // domain must be valid SemVer, or every comparison against the installed
+  // version silently reads as "incomparable".
+  if (!isValidHostVersion(targetVersion)) {
+    throw cliError({
+      code: CLI_ERROR_CODES.REGISTRY_UNAVAILABLE,
+      message: `host update: registry target version '${targetVersion}' is not valid SemVer`,
+      details: { environment: opts.environment, targetVersion },
+      exitCode: 1,
+    });
+  }
+
+  const installedVsTarget = compareHostVersions(
+    installed.version,
+    targetVersion,
+  );
+  const installedAtOrAboveTarget =
+    installedVsTarget.comparable && installedVsTarget.ordering !== "less";
+  if (installedAtOrAboveTarget) {
+    // The downgrade exception is `install`-intent only and needs BOTH an
+    // explicit version request and the flag - a bare `host update
+    // --allow-downgrade` resolving `latest` below the installed version is
+    // still up to date, exactly as the legacy command reads it.
+    if (
+      request.allowDowngrade &&
+      request.versionRequest !== null &&
+      installedVsTarget.ordering === "greater"
+    ) {
+      return { kind: "downgrade", targetVersion, identity };
+    }
+    return { kind: "no-op", targetVersion, identity };
+  }
+  if (
+    identity.stageFingerprint !== null &&
+    identity.stagedVersion === targetVersion
+  ) {
+    return { kind: "already-staged", targetVersion, identity };
+  }
+  const resolved = await resolvePlanAsset(opts, targetVersion);
+  return {
+    kind: "upgrade",
+    targetVersion: resolved.entry.version,
+    entry: resolved.entry,
+    asset: resolved.asset,
+    identity,
+  };
+}
+
+// Asset resolution is also where the client floor is enforced
+// (`registry/client.ts`'s `resolveAsset`), so "manifest, asset, floor" is one
+// call, not three.
+async function resolvePlanAsset(
+  opts: ResolveUpdatePlanOptions,
+  versionRequest: string,
+): Promise<{
+  readonly entry: HostVersionEntry;
+  readonly asset: HostPlatformAsset;
+}> {
+  const client = await planRegistryClient(opts);
+  const platformKey = currentHostPlatformKey();
+  progressStage(
+    opts.onProgress,
+    "resolve",
+    `resolving host ${versionRequest} for ${platformKey}`,
+  );
+  return client.resolveAsset(versionRequest, platformKey);
+}
+
+async function planRegistryClient(
+  opts: ResolveUpdatePlanOptions,
+): Promise<RegistryClient> {
+  return (
+    opts.registryClient ??
+    (await createDefaultRegistryClient(opts.environment, opts.onProgress))
+  );
 }

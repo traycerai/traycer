@@ -1,4 +1,8 @@
-import type { InstallHostLifecycle, SwapLockRecovery } from "../installer";
+import type {
+  InstallHostLifecycle,
+  InstallPhaseHooks,
+  SwapLockRecovery,
+} from "../installer";
 import { createCliLogger } from "../logger";
 import { CLI_ERROR_CODES, CliError } from "../runner/errors";
 import { resolveServiceCliInvocation, type CliInvocation } from "./cli-binary";
@@ -119,6 +123,13 @@ export interface CreateServiceInstallLifecycleOptions {
   // ensure/update/apply only skipped the busy PRE-check and the
   // cooperative stop's own busy denial still aborted the install.
   readonly force: boolean;
+  // The caller's two swap barriers (`installer/install.ts`'s
+  // `InstallPhaseHooks`). `beforeSwapCommit` becomes the lifecycle member of
+  // the same name verbatim; `afterSwap` runs at the TOP of this lifecycle's
+  // own `afterSwap`, before any retire/kickstart/register work, so a
+  // caller's write always precedes the start request. Callers driving no
+  // attempt record pass `NO_INSTALL_PHASE_HOOKS`.
+  readonly hooks: InstallPhaseHooks;
 }
 
 // Build the lifecycle hooks `installHost` needs to keep the OS
@@ -146,6 +157,8 @@ export function createServiceInstallLifecycle(
     setHostStartAdoptionPublisher: (publish) => {
       publishHostStartAdoption = publish;
     },
+    // The stop below either resolved or threw; a denial never reaches this.
+    beforeSwapCommit: () => options.hooks.beforeSwapCommit(),
     beforeSwap: async () => {
       const status = await controller.status(label);
       state.priorState = status.state;
@@ -205,6 +218,13 @@ export function createServiceInstallLifecycle(
       }
     },
     afterSwap: async () => {
+      // At the TOP, before every branch below: the bytes are committed and
+      // nothing has been asked to start yet. On `externally-managed` darwin
+      // the branch below performs no CLI-driven start at all (it kickstarts
+      // Desktop's agent label, or leaves the machine to Desktop's next
+      // register cycle), so a caller marking "restarting" from here is
+      // naming that relaunch, whoever performs it.
+      await options.hooks.afterSwap();
       if (state.priorState === "externally-managed") {
         // Traycer Desktop's SMAppService owns registration here. Any
         // launchctl bootstrap/bootout (or manifest rewrite) against ITS
@@ -424,6 +444,10 @@ export function createServiceInstallLifecycle(
 export function createBytesOnlyInstallLifecycle(
   controller: ServiceController,
   label: ServiceLabel,
+  // Same contract as `CreateServiceInstallLifecycleOptions.hooks`. This
+  // lifecycle starts nothing, so its `afterSwap` is the caller's barrier and
+  // nothing else - the swap is committed and no relaunch follows from here.
+  hooks: InstallPhaseHooks,
 ): InstallHostLifecycle {
   let verifyMutationCapability = async (): Promise<void> => {};
   return {
@@ -437,7 +461,8 @@ export function createBytesOnlyInstallLifecycle(
         controller.stop(label, { force: false }),
       );
     },
-    afterSwap: (): Promise<void> => Promise.resolve(),
+    beforeSwapCommit: () => hooks.beforeSwapCommit(),
+    afterSwap: () => hooks.afterSwap(),
   };
 }
 
