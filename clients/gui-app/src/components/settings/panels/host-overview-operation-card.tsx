@@ -69,7 +69,7 @@ export function HostOverviewOperationCard(props: {
    * the ellipsis on the button is a promise, and the confirmation is what
    * re-reads live work before anything happens.
    */
-  readonly onForceRestart: () => void;
+  readonly onForceRestart: (() => void) | null;
   /**
    * The RECORDS say the install is ahead of the running host (activation
    * debt, `legacy-update-facts.ts`), and this is the page's cooperative
@@ -190,7 +190,7 @@ export function HostOverviewOperationCard(props: {
  */
 function ForceControl(props: {
   readonly onForceUpdate: (() => void) | null;
-  readonly onForceRestart: () => void;
+  readonly onForceRestart: (() => void) | null;
 }): ReactNode {
   if (props.onForceUpdate !== null) {
     return (
@@ -206,6 +206,7 @@ function ForceControl(props: {
       </Button>
     );
   }
+  if (props.onForceRestart === null) return null;
   return (
     <Button
       type="button"

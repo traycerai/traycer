@@ -28,6 +28,7 @@ import {
 import { HostOverviewOperationCard } from "@/components/settings/panels/host-overview-operation-card";
 import { HostOverviewUpdatesRegion } from "@/components/settings/panels/host-overview-updates";
 import { useHostOverviewUpdates } from "@/components/settings/panels/host-overview-updates-state";
+import { useDesktopAppUpdates } from "@/hooks/runner/use-desktop-app-updates";
 import { useOverviewOsService } from "@/components/settings/panels/host-overview-os-service";
 import { HostOverviewAdvancedDisclosure } from "@/components/settings/panels/host-overview-advanced";
 import {
@@ -726,6 +727,7 @@ export function HostOverviewPanel(props: {
   // drain gate and the auto-update switch write through. Two instances would
   // each track their own `isPending`, so one control would stay live while the
   // other's write was still going.
+  const desktopUpdates = useDesktopAppUpdates();
   const updates = useHostOverviewUpdates({
     client,
     hostName: displayName,
@@ -736,6 +738,12 @@ export function HostOverviewPanel(props: {
     runningVersion: view.hostVersion,
     activationDebt: legacyFacts?.activationDebt ?? null,
     platformKey: host?.platform ?? null,
+    cliManifest:
+      managedInstallation(installationQuery.data)?.cliManifest ?? null,
+    isLocalMachine: host?.isLocalMachine ?? false,
+    desktopUpdate:
+      desktopUpdates.bridge === null ? null : desktopUpdates.snapshot,
+    stagedVersion: legacyFacts?.stagedWait?.stagedVersion ?? null,
     // The check reads on its own now, so this gate is load-bearing rather than
     // cosmetic: without it the page would spawn a CLI process on the host from
     // a scope that has not resolved, and cache the answer under this page's key.
@@ -1015,12 +1023,17 @@ export function HostOverviewPanel(props: {
           <HostOverviewOperationCard
             view={operationView}
             hostName={displayName}
-            onForceRestart={() => {
-              // Same route as the overflow Restart: re-ask the host about live
-              // work, then the EXISTING confirmation. This never restarts on
-              // the first click and never consumes update-force authorization.
-              setRestartConfirmOpen(true);
-            }}
+            // Restart cannot activate a stage. A floor gate must not turn a
+            // staged wait's Force update into a different, ineffective force.
+            onForceRestart={
+              (legacyFacts?.stagedWait ?? null) !== null
+                ? null
+                : () => {
+                    // Attempt parks keep the existing cooperative restart
+                    // confirmation and its fresh live-work check.
+                    setRestartConfirmOpen(true);
+                  }
+            }
             // Keyed on the FACT, not the view kind: a retained `failed`
             // marker beside real debt keeps its failure text and still gets
             // the way forward. Same confirm the header's Restart opens, so
@@ -1032,7 +1045,10 @@ export function HostOverviewPanel(props: {
                 : () => setRestartConfirmOpen(true)
             }
             onForceUpdate={
-              legacyFacts === null || legacyFacts.stagedWait === null
+              legacyFacts === null ||
+              legacyFacts.stagedWait === null ||
+              updates.stagedFloor !== null ||
+              !updates.stagedEntryKnown
                 ? null
                 : () => {
                     if (legacyFacts.stagedWait === null) return;
@@ -1055,6 +1071,8 @@ export function HostOverviewPanel(props: {
           <HostOverviewUpdatesRegion
             summary={updates.summary}
             degrade={updates.degrade}
+            desktopBridge={desktopUpdates.bridge}
+            onInstallationHelp={() => setDoctorOpen(true)}
           />
         )}
         {/* Stays OUT of Advanced, deliberately. This is the only control on the

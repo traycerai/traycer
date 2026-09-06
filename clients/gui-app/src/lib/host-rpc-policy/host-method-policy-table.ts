@@ -7,6 +7,8 @@ import type {
   RpcSchedulingPolicy,
 } from "@traycer-clients/shared/host-client/rpc-scheduling-policy";
 import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
+import { isHostClientFloorRefusedAsset } from "@traycer-clients/shared/host-version/release-line";
+import type { HostUpdateCheckResponseV11 } from "@traycer/protocol/host/maintenance/index";
 import type {
   ProviderManagedInstallState,
   ProviderManagedVersions,
@@ -312,6 +314,27 @@ export const UPDATE_CHECK_CLI_RECOVERY_POLL_LANE: ConditionPollLane = {
   initialDelayMs: 5 * SECOND_MS,
   maxDelayMs: 60 * SECOND_MS,
 };
+/** Fixed cadence while the Overview is mounted; the repaired answer ends it. */
+export const UPDATE_CHECK_FLOOR_RECOVERY_POLL_LANE: ConditionPollLane = {
+  id: "host-update-check.floor-recovery",
+  initialDelayMs: 30 * SECOND_MS,
+  maxDelayMs: 30 * SECOND_MS,
+};
+
+export function responseHasFloorRefusedCandidate(
+  response: HostUpdateCheckResponseV11,
+): boolean {
+  if (response.outcome !== "ok") return false;
+  return response.manifest.versions.some(
+    (entry) =>
+      !entry.yanked &&
+      // A response carries no installed version. Conservatively inspect all
+      // RC candidates rather than reconstructing the Overview's same-line walk.
+      (entry.version === response.manifest.latest ||
+        response.includePreReleasesSource === "installed-rc") &&
+      Object.values(entry.platforms).some(isHostClientFloorRefusedAsset),
+  );
+}
 /**
  * The check itself failed — a transport fault, not an answer. Same recovery
  * reasoning as the lane above ("Couldn't ask …" has no retry button either),
@@ -385,8 +408,11 @@ export const HOST_METHOD_POLL_TABLE = {
     poll: defineConditionPolicy("host.update.check", {
       classify: (data) => {
         if (data === undefined) return false;
-        return data.outcome === "cli-unavailable"
-          ? UPDATE_CHECK_CLI_RECOVERY_POLL_LANE
+        if (data.outcome === "cli-unavailable") {
+          return UPDATE_CHECK_CLI_RECOVERY_POLL_LANE;
+        }
+        return responseHasFloorRefusedCandidate(data)
+          ? UPDATE_CHECK_FLOOR_RECOVERY_POLL_LANE
           : false;
       },
       initialErrorLane: UPDATE_CHECK_ERROR_POLL_LANE,

@@ -176,6 +176,19 @@ export const cliInstallSourceSchema = z.enum([
 ]);
 export type CliInstallSource = z.infer<typeof cliInstallSourceSchema>;
 
+/** One command vocabulary for CLI refusals, Desktop reconciliation and the GUI remedy. */
+export const PACKAGE_MANAGER_UPGRADE_COMMAND: Record<
+  Exclude<CliInstallSource, "desktop" | "manual">,
+  string
+> = {
+  homebrew: "brew upgrade traycer",
+  npm: "npm install -g @traycerai/cli@latest",
+  winget: "winget upgrade Traycer.CLI",
+  scoop: "scoop update traycer-cli",
+  apt: "sudo apt update && sudo apt install --only-upgrade traycer-cli",
+  rpm: "sudo dnf upgrade traycer-cli",
+};
+
 export const cliPendingUpgradeSchema = z.object({
   version: z.string(),
   stagedBinaryPath: z.string(),

@@ -57,6 +57,7 @@ import {
 } from "../host-available";
 import type { HostInstallRecord } from "../../manifest/host-install";
 import type { CommandContext } from "../../runner/runner";
+import { HOST_CLIENT_FLOOR_REASON_PREFIX } from "@traycer-clients/shared/host-version/release-line";
 
 const AVAILABLE_ASSET: HostPlatformAsset = {
   available: true,
@@ -127,6 +128,32 @@ describe("buildHostAvailableListing", () => {
     expect(
       listing.manifest.versions[1].platforms["darwin-arm64"]?.available,
     ).toBe(true);
+  });
+
+  it("authors the floor reason with the shared literal prefix", () => {
+    const listing = buildHostAvailableListing({
+      manifest: {
+        schemaVersion: 1,
+        generatedAt: "2026-06-22T01:00:00.000Z",
+        latest: "1.2.0",
+        versions: [
+          {
+            ...createEntry("1.2.0"),
+            requiredCliVersion: "10.0.0",
+            minimumEpoch: null,
+          },
+        ],
+      },
+      manifestUrl: "https://example.com/versions.json",
+      platformKey: "darwin-arm64",
+      includePreReleases: false,
+      includePreReleasesSource: "explicit-exclude",
+      cliVersion: "9.9.9",
+    });
+    const reason =
+      listing.manifest.versions[0].platforms["darwin-arm64"]?.unavailableReason;
+    expect(reason?.startsWith(HOST_CLIENT_FLOOR_REASON_PREFIX)).toBe(true);
+    expect(HOST_CLIENT_FLOOR_REASON_PREFIX).toBe("Needs Traycer CLI ");
   });
 
   it("hides prerelease host versions by default", () => {

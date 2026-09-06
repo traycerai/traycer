@@ -35,6 +35,28 @@
 import { isValidHostVersion } from "./compare-host-versions";
 
 /**
+ * The released CLI's projected refusal is the executing CLI's verdict. A
+ * stored version can be newer after a best-effort copy into the host's tools
+ * failed, and a withdrawn platform build can retain its hash. Neither is a
+ * substitute for this authored reason on the legacy wire contract.
+ */
+export const HOST_CLIENT_FLOOR_REASON_PREFIX = "Needs Traycer CLI ";
+
+export function isHostClientFloorRefusedAsset(
+  asset: {
+    readonly available: boolean;
+    readonly unavailableReason: string | null;
+  } | null,
+): boolean {
+  return (
+    asset !== null &&
+    !asset.available &&
+    asset.unavailableReason?.startsWith(HOST_CLIENT_FLOOR_REASON_PREFIX) ===
+      true
+  );
+}
+
+/**
  * A version's `X.Y.Z` core — the identity an implicit follow is scoped to.
  *
  * Module-private, like {@link hostReleaseLine} below: no caller outside this

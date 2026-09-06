@@ -1,4 +1,5 @@
 import {
+  HOST_CLIENT_FLOOR_REASON_PREFIX,
   isCanonicalReleaseCandidate,
   isPreReleaseVersion,
 } from "@traycer-clients/shared/host-version/release-line";
@@ -305,7 +306,7 @@ function projectClientFloor(
       [platformKey]: {
         ...asset,
         available: false,
-        unavailableReason: `Needs Traycer CLI ${floor.requiredCliVersion} or newer (this host's CLI is ${cliVersion}).`,
+        unavailableReason: `${HOST_CLIENT_FLOOR_REASON_PREFIX}${floor.requiredCliVersion} or newer (this host's CLI is ${cliVersion}).`,
       },
     },
   };
