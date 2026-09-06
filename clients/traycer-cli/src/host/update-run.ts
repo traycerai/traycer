@@ -38,7 +38,10 @@ import {
   readHostInstallRecord,
   type HostInstallRecord,
 } from "../manifest/host-install";
-import { readHostStagedRecord } from "../manifest/host-staged";
+import {
+  readHostStagedRecord,
+  type HostStagedRecord,
+} from "../manifest/host-staged";
 import type { RegistryClient } from "../registry";
 import type { Environment } from "../runner/environment";
 import { CLI_ERROR_CODES, CliError, cliError } from "../runner/errors";
@@ -117,7 +120,7 @@ import { currentInstallPlatform } from "../installer/install";
 export type HostUpdateBoundIntent = "activate" | "continue";
 
 // EVERY EXIT OF THIS FILE AND ITS SHELL, and what each stamps (Plan D7).
-// Thirteen in total; eleven are `runHostUpdate`'s. All of them funnel through
+// Fourteen in total; twelve are `runHostUpdate`'s. All of them funnel through
 // ONE once-only settlement (`createDispatchSettlement`), so where two are
 // reached in sequence the FIRST wins and the second is not even called.
 //
@@ -125,24 +128,30 @@ export type HostUpdateBoundIntent = "activate" | "continue";
 //                                         is already lost, and a nonce this
 //                                         build rejects cannot be one the
 //                                         resolver minted.
-//  2. throw, illegal bound-intent pair  - `refused-e-invalid-argument`
-//  3. throw from the advisory plan      - `refused-<code>` / `refused-unexpected`
-//  4. throw from the selector           - `refused-e-host-not-installed`
-//  5. throw from an arm after the claim - `claimed` (stamped at the boundary)
-//  6. `E_HOST_BUSY` park after a claim  - `claimed`
-//  7. return, executed                  - `claimed`
-//  8. return, released                  - `no-attempt {reason}`
-//  9. throw, rejected segment           - `no-attempt {segment's own reason}`,
+//  2. throw, explicitly empty target    - `refused-e-invalid-argument`
+//  3. throw, illegal bound-intent pair  - `refused-e-invalid-argument`
+//  4. throw from the advisory plan      - `refused-<code>` / `refused-unexpected`
+//  5. throw from the selector           - `refused-e-host-not-installed`, and
+//                                         `refused-unexpected` for its I/O
+//  6. throw from an arm after the claim - `claimed` (stamped at the boundary)
+//  7. `E_HOST_BUSY` park after a claim  - `claimed`
+//  8. return, executed                  - `claimed`
+//  9. return, released                  - `no-attempt {reason}`
+// 10. throw, rejected segment           - `no-attempt {segment's own reason}`,
 //                                         then `E_HOST_UPDATE_ATTEMPT_ACTIVE`
-// 10. throw, projection cannot backfill - the release's reason, already stamped
-// 11. throw/return, terminalized        - `recovered-complete` / `-failed`
+// 11. throw, projection cannot backfill - the release's reason, already stamped
+// 12. throw/return, terminalized        - `recovered-complete` / `-failed`
 //                                         (unreachable under `reselect`)
-// 12. shell returns the legacy payload  - whatever this file stamped
-// 13. shell rethrows                    - whatever this file stamped
+// 13. shell returns the legacy payload  - whatever this file stamped
+// 14. shell rethrows                    - whatever this file stamped
 //
-// Exit 2 is why the bound-intent parse lives HERE and not in the command body:
-// a run dispatched with a nonce and an unusable intent pair must still answer
-// its dispatcher, and only a parse that happens after the stamper exists can.
+// Exits 2 and 3 are why BOTH argument checks live here rather than at the
+// registration site or in the command body. Commander ACCEPTS these arguments
+// - an empty `--release=` and a `--intent` with no `--expect-attempt` are both
+// well-formed argv, not the unknown-option exit an old parser takes - so a
+// refusal thrown before the stamper exists leaves a dispatching host waiting
+// to its deadline and reporting `dispatch-indeterminate`, for a refusal this
+// CLI knew instantly.
 
 /** Everything the run decides from, all of it from ARGV or the process env. */
 export interface HostUpdateRunArgs {
@@ -272,11 +281,12 @@ export async function runHostUpdate(
   // The stamper is idempotent too, but that only makes the second WRITE a
   // no-op; this makes the second CALL one, which is what "exactly once" has to
   // mean for an exit that decides its reason from what the first one already
-  // answered (exits 9→10 are precisely that sequence).
+  // answered (exits 10→11 are precisely that sequence).
   const settlement = createDispatchSettlement(ack, logger);
   try {
-    // Inside the try, so exit 2 answers its dispatcher like every other
-    // refusal. Nothing has been read or written at this point.
+    // Inside the try, so exits 2 and 3 answer their dispatcher like every
+    // other refusal. Nothing has been read or written at this point.
+    refuseEmptyVersionRequest(args.versionRequest);
     const intent: "install" | HostUpdateBoundIntent =
       parseBoundIntent(args.intent, args.expectAttempt) ?? "install";
     const plan = await resolvePlan(args, intent, selection);
@@ -331,6 +341,35 @@ function triggerFromEnvironment(
   // interpret, and inventing one would put a wrong `trigger` on a durable
   // record; `manual` is the honest floor.
   return "manual";
+}
+
+/**
+ * An EXPLICIT empty target is a mistake, not a request for latest.
+ *
+ * `--version=`, `--release=` and an unset shell variable (`--release "$PIN"`)
+ * all arrive as `""`, and treating that as "resolve latest" would silently
+ * update a machine the caller meant to pin.
+ *
+ * It lives HERE, and not at the registration site where it used to, for the
+ * same reason the bound-intent parse does: Commander ACCEPTS these arguments -
+ * this is not the unknown-option exit an old parser takes - so a refusal
+ * thrown before the dispatch-ACK settlement exists leaves a host that passed a
+ * nonce waiting to its deadline and reporting `dispatch-indeterminate`, for a
+ * refusal the CLI knew instantly. The error and its message are unchanged;
+ * only the side of the settlement it is thrown on has moved.
+ *
+ * Returns nothing: on the far side of it `versionRequest` is either `null` or
+ * a non-empty string, which is what every reader downstream assumes.
+ */
+function refuseEmptyVersionRequest(versionRequest: string | null): void {
+  if (versionRequest === null || versionRequest.length > 0) return;
+  throw cliError({
+    code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+    message:
+      "host update: --release (or its --version alias) needs a version; pass one, or omit the flag entirely to update to the latest release",
+    details: { release: versionRequest },
+    exitCode: 1,
+  });
 }
 
 /**
@@ -1288,8 +1327,28 @@ async function resumedApplyArm(
   ) {
     // A busy downgrade keeps no bytes: `installHostDowngrade` discards its
     // private source on any throw, so the resume re-downloads (Plan D14).
+    // Safe to reach with a foreign stage present, and the reason is
+    // structural: the downgrade installer stages into an owner-tokened temp
+    // dir and commits from there, so it never writes the shared stage and
+    // cannot destroy whatever is in it.
     await writer.phaseWrite("downloading");
     return downgradeArm(input, writer);
+  }
+  if (staged !== null) {
+    // A stage IS here and it is NOT this park's. An ABSENT stage is a
+    // legitimate re-download; this is a changed world, and re-downloading
+    // over it would DESTROY it - the transfer below passes an explicit
+    // version, and the settled promote-time policy for an explicit request is
+    // replace-any-STAGE (D6), so it does not defend the bytes for us. The
+    // park's authorization covered its own target and nothing else, so this
+    // terminalizes before anything is fetched, let alone promoted.
+    return terminalizeStageMismatch(
+      input,
+      writer,
+      staged,
+      null,
+      "the resume was about to re-download",
+    );
   }
   const transfer = await transferUnderClaim(input, writer, target);
   return applyArm(
@@ -1326,11 +1385,32 @@ async function bindApplyToClaimTarget(
   if (staged !== null && staged.version === target) {
     return claimFingerprint ?? staged.stageId;
   }
-  // Terminal, and the same family as the identity re-validation above: the
-  // world this claim was authorized against is not the world in front of it.
-  // Never a refusal - a same-target park admits only a resume, so a refusal
-  // would leave it for a level-triggered reconciler to re-spawn forever.
-  const message = `host update: no stage for ${target} was present when the apply was about to run (found ${staged?.version ?? "none"})`;
+  return terminalizeStageMismatch(
+    input,
+    writer,
+    staged,
+    transfer,
+    "the apply was about to run",
+  );
+}
+
+/**
+ * The stage in front of this attempt is not the one it was authorized for.
+ *
+ * Terminal, and the same family as the identity re-validation above: the world
+ * this claim was authorized against is not the world in front of it. Never a
+ * refusal - a same-target park admits only a resume, so a refusal would leave
+ * it for a level-triggered reconciler to re-spawn forever.
+ */
+async function terminalizeStageMismatch(
+  input: RunArmInput,
+  writer: AttemptRecordWriter,
+  staged: HostStagedRecord | null,
+  transfer: HostDownloadOutcome | null,
+  moment: string,
+): Promise<never> {
+  const target = input.claim.record.targetVersion;
+  const message = `host update: no stage for ${target} was present when ${moment} (found ${staged?.version ?? "none"})`;
   await writer.fail({ code: "install-changed", message, phase: "preparing" });
   throw cliError({
     code: CLI_ERROR_CODES.HOST_INSTALL_RECORD_INVALID,
@@ -1340,10 +1420,13 @@ async function bindApplyToClaimTarget(
       attemptId: input.claim.identity.attemptId,
       targetVersion: target,
       stagedVersion: staged?.version ?? null,
+      stagedFingerprint: staged?.stageId ?? null,
       // The transfer's own account of what it did, when there was one. A
-      // `discarded` outcome is the common cause and is not an error: the
-      // policy was right to keep the newer stage, and wrong only if this
-      // attempt then applied it.
+      // `discarded` outcome is one cause and is not an error: the policy was
+      // right to keep the newer stage, and wrong only if this attempt then
+      // applied it. `null` means no transfer ran - which is the point of the
+      // pre-transfer refusal, since a transfer here would have replaced the
+      // very stage the mismatch is about.
       transferOutcome: transfer?.outcome ?? null,
       transferReason:
         transfer !== null && transfer.outcome !== "promoted"
