@@ -1342,21 +1342,28 @@ export interface WindowsHostKillSet {
 type CarryOverClaim = "seed" | "unattributed" | "none";
 
 // Whether this row was created BY a process an earlier round killed, or by one
-// it could not place - or IS one it could not place.
+// it could not place.
 //
-// A process this loop already failed to place stays undecided for as long as
-// that same incarnation (pid AND creation time) is alive, whatever its edge says
-// now. That check comes before the gate on purpose: the row's edge can change
-// under it between rounds - its parent exits and the claimed pid is reused by
-// something the scan validates - and a verdict that could be cleared by a
-// stranger taking a pid is not a verdict.
+// The gate is the row's own validated edge, and it comes first because a
+// validated edge is real lineage. The scan validates an edge only when the
+// claimed parent is live and NOT younger than the row; a pid reused after its
+// holder died always goes to a process younger than any child of the old
+// holder, so a stranger wearing the parent's pid can never validate. What CAN
+// change between rounds is the scan's ability to read an age: a live parent
+// whose creation time was unreadable in one round zeroes its child's edge (and
+// the child, claiming a remembered pid, is reported undecided), and a later
+// round that reads the age validates the same edge. That later reading is new
+// evidence and outranks the earlier suspicion, which is why nothing here keeps a
+// row undecided by its own identity once its edge validates. Uncertainty about
+// a child whose LIVE parent is itself undecided is preserved by the descendant
+// closure in `computeWindowsHostKillSet`, not here.
 //
-// The gate is the row's own validated edge, and it is NOT redundant with the
-// rules below. The case it decides is a live, validated parent wearing a pid
-// this loop killed earlier: an unrelated process that took the pid after the
-// victim died and then forked. Its child is born after the victim's window and
-// would read as undecided on the window alone; the scan has already tied it to
-// a living parent, which is the better fact, so it is not a carry-over question.
+// The gate is NOT redundant with the rules below. The case it decides is a
+// live, validated parent wearing a pid this loop killed earlier: an unrelated
+// process that took the pid after the victim died and then forked. Its child is
+// born after the victim's window and would read as undecided on the window
+// alone; the scan has already tied it to a living parent, which is the better
+// fact, so it is not a carry-over question.
 //
 // Every remembered incarnation of the claimed pid is consulted, and the
 // STRONGEST verdict wins. A pid can have been a suspect in one round and a
@@ -1370,7 +1377,6 @@ function classifyCarryOverClaim(
   row: WindowsProcessTableRow,
   memory: WindowsKillMemory,
 ): CarryOverClaim {
-  if (isRememberedSuspect(row, memory)) return "unattributed";
   if (row.parentProcessId !== 0) return "none";
   let claim: CarryOverClaim = "none";
   for (const victim of memory.victims.get(row.claimedParentProcessId) ?? []) {
@@ -1385,20 +1391,6 @@ function classifyCarryOverClaim(
     );
   }
   return claim;
-}
-
-// The same process (pid and creation time) an earlier round reported as
-// undecided. Identity by creation time, not pid alone: a different process
-// wearing a suspect's pid is a different question, decided by its own edge and
-// claim. An unreadable age (0) on a remembered suspect matches a row of
-// unreadable age, which is the undecided answer either way.
-function isRememberedSuspect(
-  row: WindowsProcessTableRow,
-  memory: WindowsKillMemory,
-): boolean {
-  const incarnations = memory.suspects.get(row.processId);
-  if (incarnations === undefined) return false;
-  return incarnations.includes(row.created);
 }
 
 const CLAIM_STRENGTH: Readonly<Record<CarryOverClaim, number>> = {

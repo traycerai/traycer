@@ -1563,9 +1563,8 @@ describe("killHostProcessTree convergence loop", () => {
     //       match and becomes victim 777 = [8000, 9000].
     //   R3 (sample 11000): only 888. Against victim 777 (born 8000) it is
     //       "older than the victim" - decided, and wrongly, if that were the
-    //       only memory consulted. The suspect incarnation (6000) and 888's
-    //       own remembered identity both keep it undecided: refused, naming
-    //       888.
+    //       only memory consulted. The remembered suspect incarnation of 777
+    //       (born 6000) keeps it undecided: refused, naming 888.
     const samples = [5000, 7000, 9000, 11000];
     let sample = 0;
     const { runner, calls } = roundedRunner([
@@ -1651,6 +1650,91 @@ describe("killHostProcessTree convergence loop", () => {
     // return the first incarnation's verdict → this test reddens: round 3
     // decides 888 is older than victim 777 and the stop RESOLVES with it
     // alive. Either half alone is caught by the pure incarnation pins.
+  });
+
+  it("a suspicion earned while a live parent's age was unreadable is cleared once the age reads and the edge validates", async () => {
+    // Chronology (samples 5000, 7000, 9000):
+    //   R0 (sample 5000): host 100 (born 1000, slot). Killed.
+    //   R1 (sample 7000): slot 200 (born 6200); an unrelated replacement
+    //       wearing pid 100, whose creation time Windows would not report
+    //       this time (`created` 0); its child 888 (born 6500), whose edge
+    //       the scan therefore zeroes. 888 claims remembered 100 and is
+    //       born after the window: undecided. kill=[200],
+    //       unattributed=[888]; 888 is remembered as a suspect.
+    //   R2 (sample 9000): the replacement's age reads (6000, older than
+    //       888) and the scan validates 888's edge to it. That is lineage
+    //       the scan has proven; the earlier suspicion must not refuse the
+    //       stop over a stranger's child. Converged.
+    const samples = [5000, 7000, 9000];
+    let sample = 0;
+    const { runner, calls } = roundedRunner([
+      {
+        kind: "table",
+        rows: [
+          { processId: 100, parentProcessId: 1, created: 1000, slot: true },
+        ],
+      },
+      {
+        kind: "table",
+        rows: [
+          { processId: 200, parentProcessId: 1, created: 6200, slot: true },
+          {
+            processId: 100,
+            parentProcessId: 0,
+            claimedParentProcessId: 1,
+            created: 0,
+            slot: false,
+          },
+          {
+            processId: 888,
+            parentProcessId: 0,
+            claimedParentProcessId: 100,
+            created: 6500,
+            slot: false,
+          },
+        ],
+      },
+      {
+        kind: "table",
+        rows: [
+          {
+            processId: 100,
+            parentProcessId: 0,
+            claimedParentProcessId: 1,
+            created: 6000,
+            slot: false,
+          },
+          {
+            processId: 888,
+            parentProcessId: 100,
+            claimedParentProcessId: 100,
+            created: 6500,
+            slot: false,
+          },
+        ],
+      },
+    ]);
+    const controller = createWindowsController(runner, {
+      now: () => {
+        const value = samples[sample] ?? 9000;
+        sample += 1;
+        return value;
+      },
+    });
+
+    await controller.stop(serviceLabelFor("staging"), { force: false });
+
+    expect(
+      calls.filter((call) => call.command === "powershell.exe"),
+    ).toHaveLength(3);
+    expect(
+      calls
+        .filter((call) => call.command === "taskkill")
+        .map((call) => call.args),
+    ).toEqual([
+      ["/F", "/PID", "100"],
+      ["/F", "/PID", "200"],
+    ]);
   });
 
   // The unattributed refusal exercised through all four callers that run
@@ -2374,41 +2458,51 @@ describe("computeWindowsHostKillSet and the taskkill self-protection it drives",
         });
       });
 
-      it("a remembered suspect stays undecided by its own identity, even once its edge validates against a newer holder of its parent's pid", () => {
-        // 888 (born 6500) was reported undecided in an earlier round. Now its
-        // dead parent's pid 777 is worn by a process born 5000 - OLDER than
-        // 888, so the scan validates the edge. The edge is a coincidence of
-        // pid reuse, not lineage; 888 is the same process it was, and the
-        // question about it has not been answered.
-        const suspected = suspectMemory(
-          new Map<number, readonly number[]>([[888, [6500]]]),
-        );
+      it("a later validated edge outranks an earlier suspicion about the same process: an unreadable parent age that becomes readable clears the row", () => {
+        // 888 (born 6500) was reported undecided in an earlier round because
+        // its live parent - an unrelated process wearing dead victim 100's
+        // pid, born 6000 - had an unreadable creation time then, so the scan
+        // zeroed the edge and 888's claim on remembered 100 fell after the
+        // window. This round the age is readable (6000, older than 888), the
+        // scan validates the edge, and that is real lineage: a reused pid
+        // always goes to a process younger than the old holder's children,
+        // so a validated edge can never be a coincidence of reuse. The
+        // remembered suspicion about 888 must not override it, or the stop
+        // would be refused over a stranger's child the scan has already
+        // placed.
+        const suspected: WindowsKillMemory = {
+          victims: new Map<number, readonly WindowsKillVictim[]>([
+            [100, [{ created: 1000, seenAliveAt: 5000 }]],
+          ]),
+          suspects: new Map<number, readonly number[]>([[888, [6500]]]),
+        };
         const table = rowsOf([
-          victimRow(777, 0, 0, 5000, false),
-          victimRow(888, 777, 777, 6500, false),
+          victimRow(100, 0, 0, 6000, false),
+          victimRow(888, 100, 100, 6500, false),
           cliRow,
         ]);
         expect(computeWindowsHostKillSet(table, cliPid, suspected)).toEqual({
           kill: [],
-          unattributed: [888],
-        });
-
-        // A DIFFERENT process wearing 888's pid (born 9000) is not the
-        // remembered suspect and is decided on its own terms.
-        const newcomer = rowsOf([
-          victimRow(777, 0, 0, 5000, false),
-          victimRow(888, 777, 777, 9000, false),
-          cliRow,
-        ]);
-        expect(computeWindowsHostKillSet(newcomer, cliPid, suspected)).toEqual({
-          kill: [],
           unattributed: [],
         });
 
-        // Ablation: remove the `isRememberedSuspect` check from
-        // `classifyCarryOverClaim` → the first assertion reddens
-        // (`unattributed: []`): the validated edge clears a question a pid
-        // reuse had no business answering.
+        // The descendant closure, not a self-identity rule, is what keeps a
+        // child undecided when its LIVE parent is itself undecided: the same
+        // 888 under a parent 777 that claims dead 100 and was born after the
+        // window is reported with it.
+        const underSuspectParent = rowsOf([
+          victimRow(777, 0, 100, 6000, false),
+          victimRow(888, 777, 777, 6500, false),
+          cliRow,
+        ]);
+        expect(
+          computeWindowsHostKillSet(underSuspectParent, cliPid, suspected),
+        ).toEqual({ kill: [], unattributed: [777, 888] });
+
+        // Ablation: in `classifyCarryOverClaim`, before the gate, return
+        // "unattributed" when `memory.suspects.get(row.processId)` contains
+        // `row.created` (the self-identity rule an earlier draft had) → the
+        // first assertion reddens (`unattributed: [888]`).
       });
     });
 
