@@ -483,7 +483,12 @@ describe("describeCliFloorRemedy", () => {
       ]);
     }
 
-    const unknownPlatform = describeCliFloorRemedy(
+    // Unknown platform: the RECORDED PATH is the evidence. A POSIX-rooted path
+    // means a POSIX host, which has no PowerShell to open and DOES need the
+    // absolute path (a manual/private-slot install is exactly what is not on
+    // PATH). Falsification: restoring `platform === null` to the Windows arm
+    // turns this into "& '/home/u/bin/traycer'" under a PowerShell sentence.
+    const unknownPlatformPosixPath = describeCliFloorRemedy(
       input({
         source: "manual",
         platform: null,
@@ -492,15 +497,57 @@ describe("describeCliFloorRemedy", () => {
         overrides: { cliBinaryPath: "/home/u/bin/traycer" },
       }),
     );
-    // Unknown platforms retain the safe outside-Traycer route and do not
-    // guess a PowerShell path from a POSIX-shaped recording.
-    expect(unknownPlatform.actions).toEqual([
+    expect(unknownPlatformPosixPath.actions).toEqual([
+      {
+        kind: "copy-command",
+        label: "Copy command",
+        command: "'/home/u/bin/traycer' cli upgrade",
+      },
+    ]);
+    expect(unknownPlatformPosixPath.sentence).not.toContain("PowerShell");
+
+    // ...and a drive-rooted path means Windows, with the full Windows route.
+    const unknownPlatformWindowsPath = describeCliFloorRemedy(
+      input({
+        source: "manual",
+        platform: null,
+        isLocalMachine: false,
+        desktopUpdate: null,
+        overrides: { cliBinaryPath: "C:\\Traycer\\cli\\traycer.exe" },
+      }),
+    );
+    expect(unknownPlatformWindowsPath.actions).toEqual([
       {
         kind: "copy-command",
         label: "Copy commands",
-        command: "traycer cli upgrade\ntraycer host restart",
+        command:
+          "& 'C:\\Traycer\\cli\\traycer.exe' cli upgrade\n& 'C:\\Traycer\\cli\\traycer.exe' host restart",
       },
     ]);
+    expect(unknownPlatformWindowsPath.sentence).toContain("PowerShell");
+
+    // Neither platform nor a path shaped like either: bare commands, outside
+    // Traycer, and no shell named.
+    for (const binaryPath of [null, "traycer"] as const) {
+      const unknownEverything = describeCliFloorRemedy(
+        input({
+          source: "manual",
+          platform: null,
+          isLocalMachine: false,
+          desktopUpdate: null,
+          overrides: { cliBinaryPath: binaryPath },
+        }),
+      );
+      expect(unknownEverything.actions).toEqual([
+        {
+          kind: "copy-command",
+          label: "Copy commands",
+          command: "traycer cli upgrade\ntraycer host restart",
+        },
+      ]);
+      expect(unknownEverything.sentence).toContain("terminal outside Traycer");
+      expect(unknownEverything.sentence).not.toContain("PowerShell");
+    }
   });
 
   it("falls back to copy-only guidance for a local Desktop host without a bridge", () => {

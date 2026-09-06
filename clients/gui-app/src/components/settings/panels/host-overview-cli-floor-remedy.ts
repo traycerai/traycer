@@ -100,16 +100,29 @@ export function describeCliFloorRemedy(
   if (input.cliSource !== "desktop" && input.cliSource !== "manual") {
     return describePackageManagerRemedy(input, input.cliSource);
   }
-  // Unknown platforms take the Windows-safe route too. The old Windows CLI
-  // finalizes its staged upgrade during host restart, whose taskkill /T would
-  // kill that very CLI if the command ran in a Traycer-hosted terminal.
-  if (input.platform === null || input.platform.startsWith("win32")) {
+  // The old Windows CLI finalizes its staged upgrade during host restart,
+  // whose taskkill /T would kill that very CLI if the command ran in a
+  // Traycer-hosted terminal - so Windows gets both commands, outside Traycer.
+  const route = cliUpgradeRoute(input.platform, input.cliBinaryPath);
+  if (route === "windows") {
     const instructions = describeWindowsCliUpgrade(input);
     return describeCopyRemedy(
       input,
       instructions.sentence,
       instructions.command,
       instructions.label,
+    );
+  }
+  if (route === "unknown") {
+    // Nothing on the record says what kind of machine this is: no platform,
+    // and no recorded path shaped like either. Bare commands, outside
+    // Traycer (the Windows caution costs nothing elsewhere), with no shell
+    // named - a POSIX host has no PowerShell to open.
+    return describeCopyRemedy(
+      input,
+      `Run the copied commands on ${input.hostName} from a terminal outside Traycer on that machine: first the tools upgrade, then the host restart. Restarting briefly disconnects this host. When it reconnects, select Check now, then Update now.`,
+      "traycer cli upgrade\ntraycer host restart",
+      "Copy commands",
     );
   }
   return describeCopyRemedy(
@@ -336,6 +349,28 @@ function describeDesktopCliUpgrade(
     command: posixCliUpgradeCommand(input.cliBinaryPath),
     label: "Copy command",
   };
+}
+
+/**
+ * Which command shape to hand out. The platform decides when the record has
+ * one; when it does not (a legacy registry record with `platform: null`),
+ * the RECORDED BINARY PATH is the next best evidence - a drive-rooted or UNC
+ * path only exists on Windows, a `/`-rooted one only elsewhere. Reading
+ * `null` as Windows sent a Linux or macOS host to "open PowerShell" with a
+ * bare `traycer` in place of the absolute path it had recorded, which on a
+ * manual or private-slot install is exactly the path that is not on PATH.
+ */
+function cliUpgradeRoute(
+  platform: string | null,
+  binaryPath: string | null,
+): "windows" | "posix" | "unknown" {
+  if (platform !== null) {
+    return platform.startsWith("win32") ? "windows" : "posix";
+  }
+  if (binaryPath === null) return "unknown";
+  if (isAbsoluteWindowsPath(binaryPath)) return "windows";
+  if (binaryPath.startsWith("/")) return "posix";
+  return "unknown";
 }
 
 function describeWindowsCliUpgrade(
