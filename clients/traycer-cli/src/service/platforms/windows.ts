@@ -1725,7 +1725,15 @@ function buildHiddenHostLauncher(
     "      Do While nonceProbe.Status = 0",
     "        WScript.Sleep 10",
     "      Loop",
-    "      If nonceProbe.ExitCode = 0 Then adoptionNonce = Trim(nonceProbe.StdOut.ReadAll)",
+    // The CLI prints the nonce with a trailing newline. VBScript `Trim`
+    // strips SPACES only, and a VBScript RegExp `$` (no Multiline) does not
+    // match before a trailing LF, so `Trim(...)` alone left a 37-char string
+    // the pattern below rejected: every task-managed start ran `host start`
+    // WITHOUT `--adoption-nonce`, the supervisor refused the still-valid
+    // grant until it expired (~60 s), and install / restart / update all
+    // reported failure while the host came up a minute later. Strip CR and
+    // LF explicitly; `$(...)` does this for free on the POSIX launchers.
+    '      If nonceProbe.ExitCode = 0 Then adoptionNonce = Trim(Replace(Replace(nonceProbe.StdOut.ReadAll, vbCr, ""), vbLf, ""))',
     "    End If",
     "  End If",
     "  Err.Clear",

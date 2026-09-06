@@ -42,7 +42,18 @@ export const STOP_EXIT_GRACE_MARGIN_MS = 2_000;
  * of duplicating these numbers as a second, driftable magic number.
  */
 export const WINDOWS_SCHTASKS_END_TIMEOUT_MS = 30_000;
-export const WINDOWS_PROCESS_SCAN_TIMEOUT_MS = 10_000;
+/**
+ * Bound on ONE `Get-CimInstance Win32_Process` scan. Sized from what the CLI
+ * actually spawns, not from an interactive shell: Traycer ships x64 only, so
+ * on Windows-on-ARM the child is the EMULATED x64 `powershell.exe`, whose bare
+ * startup measured 4.2–5.1 s and the scan 7.3–8.5 s on an idle 4-vCPU Windows
+ * 11 ARM64 VM (native ARM64 PowerShell: 1.4–1.7 s). At 10 s any load pushed
+ * the scan over the bound and `host stop` was refused fail-closed - 3 of 5
+ * loaded attempts on 2026-09-06 - before anything was killed. 30 s is the
+ * same ceiling the schtasks steps already carry; the loop's round bound, not
+ * this timeout, is what keeps a non-converging host from grinding.
+ */
+export const WINDOWS_PROCESS_SCAN_TIMEOUT_MS = 30_000;
 export const WINDOWS_TASKKILL_TIMEOUT_MS = 30_000;
 export const WINDOWS_SCHTASKS_RUN_TIMEOUT_MS = 30_000;
 export const WINDOWS_SCHTASKS_QUERY_TIMEOUT_MS = 10_000;
