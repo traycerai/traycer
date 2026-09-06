@@ -461,7 +461,8 @@ async function killHostProcessTree(
   run: ProcessRunner,
   deps: WindowsControllerDeps,
 ): Promise<void> {
-  // What earlier rounds killed, with the age each had when it was killed. The
+  // What earlier rounds placed in the host's tree - killed, or spared as one of
+  // this CLI's own ancestors - with the age each had when it was seen. The
   // loop's memory: once a parent is dead the table can no longer prove its
   // children belong to the slot, and this is the only thing that still can.
   //
@@ -527,6 +528,7 @@ async function killHostProcessTree(
     const pids = uniqueProcessIds(killSet.kill);
     const unattributed = uniqueProcessIds(killSet.unattributed);
     const undecided = uniqueProcessIds(killSet.undecided);
+    const protectedAncestors = uniqueProcessIds(killSet.protectedAncestors);
     if (pids.length === 0) {
       // Nothing left to kill - but that is only convergence if nothing is
       // UNDECIDED. A row claiming a killed host process as its parent, born
@@ -553,7 +555,7 @@ async function killHostProcessTree(
           code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
           message:
             `refusing to report the ${label.id} host stopped: ${unattributed.length} process(es) could be neither tied to this slot nor ruled out of it ` +
-            "(each claims a process this stop killed - or one it could not place - as its parent, or descends from one, " +
+            "(each claims a process this stop killed, spared as its own ancestor, or could not place, as its parent, or descends from one, " +
             "and was created after that parent was last seen alive or carries an unreadable creation time): " +
             `pids ${unattributed.join(", ")}. End them from Task Manager, then retry.`,
           details: { label: label.id, unattributedPids: unattributed },
@@ -609,6 +611,20 @@ async function killHostProcessTree(
     // entry stays; nothing it proved has become false.
     const created = new Map(table.map((row) => [row.processId, row.created]));
     for (const pid of pids) {
+      rememberIncarnation(priorVictims, pid, {
+        created: created.get(pid) ?? 0,
+        seenAliveAt,
+      });
+    }
+    // The CLI's own placed ancestors go into the same map, with the same
+    // window, though nothing was done to them: the shell the host spawned to
+    // run this CLI is a host descendant, its other children are the host's, and
+    // it can exit between rounds like anything else. A child it spawns after
+    // this scan then claims its pid as an orphan, and the window is what says
+    // whether that child was born while the shell was demonstrably the host's
+    // (seed) or after the last time this loop saw it (undecided). Without the
+    // entry the claim matches nothing and the child reads as convergence.
+    for (const pid of protectedAncestors) {
       rememberIncarnation(priorVictims, pid, {
         created: created.get(pid) ?? 0,
         seenAliveAt,
@@ -1269,31 +1285,44 @@ export function computeWindowsHostKillSet(
   const victims = withDescendants(seeds, children);
   const suspects = withDescendants(undecided, children);
   const spared = withDescendants(new Set([cliPid]), children);
+  // The CLI's non-slot ancestors are spared from the kill, and the ones the
+  // scan has placed in the host's tree are ALSO reported as lineage to
+  // remember. A shell the host spawned to run the CLI is a host descendant
+  // whose other children are the host's; it is never killed, so the kill
+  // bookkeeping never records it, and it is under no obligation to outlive the
+  // loop - a child it spawns after this scan arrives, once it has exited,
+  // claiming a pid nothing else remembers. Ancestors only: the CLI's own
+  // descendants are its scan and kill subprocesses, and nothing below them is
+  // ever the host's.
+  const protectedAncestors: number[] = [];
   for (const ancestor of ancestorsOf(cliPid, parents)) {
-    if (!slot.has(ancestor)) spared.add(ancestor);
+    if (slot.has(ancestor)) continue;
+    spared.add(ancestor);
+    if (victims.has(ancestor)) protectedAncestors.push(ancestor);
   }
+  protectedAncestors.sort((left, right) => left - right);
   const kill = [...victims]
     .filter((pid) => !spared.has(pid))
     .sort((left, right) => left - right);
-  const killed = new Set(kill);
-  // Rows in `kill` drop out of both undecided lists: a subtree can hang off an
-  // undecided root and still be slot-matched in its own right, and a pid this
-  // scan has decided to kill is not an open question - it is remembered as a
-  // victim, with a window, which is the stronger fact. Reporting it in both
-  // lists would put the same pid in front of the user twice, in two
-  // contradictory roles.
+  // What is remembered with a lifetime window: the kills, and the placed
+  // ancestors. Both drop out of the undecided lists - a subtree can hang off an
+  // undecided root and still be slot-matched in its own right, and a pid the
+  // scan has PLACED is not an open question; the window is the stronger fact.
+  // Reporting a pid in two lists would put it in front of the user twice, in
+  // two contradictory roles.
   //
-  // What is subtracted is the ACTUAL kill set, not the victim closure it was
-  // cut from. The two differ by the spared branch, and a spared row can sit in
-  // both closures at once - a shell that is the killed host's validated child
-  // AND the CLI's ancestor. It is never killed, so it is never remembered as a
-  // victim; subtracting the closure would drop it from `undecided` too, and it
-  // would be remembered as nothing at all.
+  // What is subtracted is what will actually be remembered that way, not the
+  // victim closure it was cut from. The two differ by the CLI's own branch,
+  // and a spared row can sit in both closures at once; if it is not going to
+  // be remembered with a window it has to stay undecided, or it is remembered
+  // as nothing at all.
+  const remembered = new Set([...kill, ...protectedAncestors]);
   const undecidedClosure = [...suspects]
-    .filter((pid) => !killed.has(pid))
+    .filter((pid) => !remembered.has(pid))
     .sort((left, right) => left - right);
   return {
     kill,
+    protectedAncestors,
     undecided: undecidedClosure,
     // The CLI's own branch is spared from the REPORT. A protected row that
     // happens to claim a victim pid is not an open question about the host - it
@@ -1308,8 +1337,40 @@ export function computeWindowsHostKillSet(
 }
 
 /**
- * A pid this loop has killed, and the interval in which that pid demonstrably
- * belonged to the victim.
+ * What a round's scan says to do, split by what it can PROVE.
+ *
+ * `kill` is the ordinary answer.
+ *
+ * `protectedAncestors` is the CLI's own non-slot ancestors that this scan has
+ * placed in the host's tree - a shell the host spawned to run the CLI. They are
+ * never killed, and they are remembered with the same lifetime window as a
+ * kill, because their children outside the CLI's branch are the host's and the
+ * shell can exit between rounds.
+ *
+ * `undecided` is the rows that claim a remembered process as their parent but
+ * cannot be tied to it - born after the victim was last seen alive, or carrying
+ * an unreadable creation time - plus everything that hangs off those rows,
+ * minus what is being remembered with a window. They are neither killed (they
+ * may be strangers) nor ignored (they may be the host's children).
+ *
+ * `unattributed` is the subset of `undecided` the loop REPORTS - it refuses to
+ * claim a stop rather than pick silently - and it leaves out the CLI's own
+ * protected branch, which is never killed and never a reason to refuse. The
+ * loop's suspect memory is fed from `undecided`, not from the report: a
+ * protected root's uncertainty is inherited by its children whether or not the
+ * root itself is ever named, and it has to outlive the root.
+ */
+export interface WindowsHostKillSet {
+  readonly kill: readonly number[];
+  readonly protectedAncestors: readonly number[];
+  readonly undecided: readonly number[];
+  readonly unattributed: readonly number[];
+}
+
+/**
+ * A pid this loop has placed in the host's tree - killed, or spared as one of
+ * the CLI's own ancestors - and the interval in which that pid demonstrably
+ * belonged to that process.
  *
  * `seenAliveAt` is the clock sampled once per round, in epoch microseconds,
  * BEFORE the scan that selects the round's victims runs. Before the scan, not
@@ -1330,8 +1391,11 @@ export interface WindowsKillVictim {
  * What earlier rounds of the kill loop remember, and the only thing carrying
  * either kind of knowledge across a scan boundary.
  *
- * `victims` is what the loop killed, by pid, one entry per incarnation it
- * killed. `suspects` is what it could place neither in the slot nor out of it,
+ * `victims` is what the loop has placed in the host's tree, by pid, one entry
+ * per incarnation: every pid it killed, and every ancestor of the CLI it placed
+ * and declined to kill (`WindowsHostKillSet.protectedAncestors`) - the name is
+ * the kill's, the evidence is the same lifetime window either way. `suspects`
+ * is what it could place neither in the slot nor out of it,
  * by pid, one creation time per incarnation it saw - the age is all a suspect
  * needs, because `classifyAgainstSuspect` has no upper bound to compare
  * against. Neither list is ever shortened: a newer holder of a pid is new
@@ -1344,29 +1408,6 @@ export interface WindowsKillVictim {
 export interface WindowsKillMemory {
   readonly victims: ReadonlyMap<number, readonly WindowsKillVictim[]>;
   readonly suspects: ReadonlyMap<number, readonly number[]>;
-}
-
-/**
- * What a round's scan says to do, split by what it can PROVE.
- *
- * `kill` is the ordinary answer. `undecided` is the rows that claim a killed or
- * already-undecided process as their parent but cannot be tied to it - born
- * after the victim was last seen alive, or carrying an unreadable creation time
- * - plus everything that hangs off those rows, minus what is being killed. They
- * are neither killed (they may be strangers) nor ignored (they may be the
- * host's children).
- *
- * `unattributed` is the subset of `undecided` the loop REPORTS - it refuses to
- * claim a stop rather than pick silently - and it leaves out the CLI's own
- * protected branch, which is never killed and never a reason to refuse. The
- * loop's suspect memory is fed from `undecided`, not from the report: a
- * protected root's uncertainty is inherited by its children whether or not the
- * root itself is ever named, and it has to outlive the root.
- */
-export interface WindowsHostKillSet {
-  readonly kill: readonly number[];
-  readonly undecided: readonly number[];
-  readonly unattributed: readonly number[];
 }
 
 // How a row that claims a remembered pid as its parent is classified.

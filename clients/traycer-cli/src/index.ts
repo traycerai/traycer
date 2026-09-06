@@ -1106,6 +1106,39 @@ function registerHostCommands(program: Command): void {
     )
     .requiredOption("--service-uid <uid>", "Internal: target GUI service uid")
     .action(async (opts) => {
+      // The same two steps `withRunner` takes first, taken here because this
+      // route is registered outside it: the fd-3 hello on a relocated run,
+      // then the Linux relocation out of the host's cgroup. The lease serves
+      // `host-stop` and `host-uninstall-all` actions, and a script started
+      // from a Traycer-hosted terminal spawns it inside the host unit, where
+      // the stop it performs would kill it - so the relocated child must be
+      // the process that acquires the attempt capability and serves the
+      // protocol, and this parent, which inherits nothing but the pipes,
+      // exits with the child's code. A relocation failure is reported in
+      // the protocol's own `refused` frame, which is what the script reads.
+      acknowledgeRelocationEntry();
+      let relocation: CgroupRelocation;
+      try {
+        relocation = await relocateOutOfHostCgroupIfNeeded(
+          "host maintenance-lease",
+          {},
+        );
+      } catch (err) {
+        writeStdout(
+          `${JSON.stringify({
+            v: 1,
+            id: null,
+            kind: "refused",
+            message: err instanceof Error ? err.message : String(err),
+          })}\n`,
+        );
+        process.exitCode = 1;
+        return;
+      }
+      if (relocation.kind === "completed") {
+        await finishAndExit(relocation.exitCode);
+        return;
+      }
       const admission =
         opts.admission === "desktop-activation-maintenance" ||
         opts.admission === "uninstall-maintenance"

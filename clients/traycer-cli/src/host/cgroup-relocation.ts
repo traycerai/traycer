@@ -53,7 +53,7 @@ import { isPackagedRun } from "../store/well-known-cli";
  * Whether THIS invocation of an allowlisted command can reach a host stop,
  * given the options Commander parsed for it.
  *
- * Command path alone is too coarse. Four of the nine have a documented
+ * Command path alone is too coarse. Four of the ten have a documented
  * bytes-only or leave-it-running form whose body provably never reaches
  * `withStopIntent` or `killHostProcessTree`, and relocating those buys nothing
  * while exposing them to two refusals they cannot deserve: a `$` in a `--from`
@@ -77,7 +77,10 @@ const ALWAYS_STOPS: HostStopReachable = () => true;
  * rather than at each stop site: the relocation has to happen BEFORE the
  * command body so the relocated child - not the parent that is about to die -
  * owns the CLI lock, the update contender claim, the dispatch ACK and the
- * progress marker.
+ * progress marker. The one host-stopping route registered OUTSIDE `withRunner`,
+ * `host maintenance-lease`, makes the same call itself, first thing in its
+ * action, for the same reason: the lease's attempt capability and its
+ * stdin/stdout protocol both belong to the relocated child.
  *
  * `host start` is deliberately absent: it IS the unit's main process and never
  * stops anything. So are the `agent *-from-hook` commands, which run inside an
@@ -119,6 +122,13 @@ export const HOST_STOPPING_COMMANDS: ReadonlyMap<string, HostStopReachable> =
     // line is the guard on the install actuator in `service/index.ts`, ahead
     // of the registration transaction.
     ["host service install", ALWAYS_STOPS],
+    // The root-maintenance lease serves `host-stop` and `host-uninstall-all`
+    // actions to the Desktop install/uninstall scripts over stdin/stdout, and
+    // both go through the guarded stop routes. A script started from a
+    // Traycer-hosted terminal spawns the lease inside the host unit (`sudo`
+    // changes nothing about a cgroup), so without this the guard would refuse
+    // the very maintenance the lease exists to perform.
+    ["host maintenance-lease", ALWAYS_STOPS],
     ["host install", (options) => options.serviceRegister !== false],
     ["host ensure", (options) => options.serviceRegister !== false],
     ["host apply", (options) => options.service !== false],
