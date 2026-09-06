@@ -487,11 +487,23 @@ async function killHostProcessTree(
   // that also cannot be placed must not narrow what an earlier holder's child
   // can be suspected of.
   const priorSuspects = new Map<number, number[]>();
-  // The pair, by reference: the maps below are mutated in place at the end of
-  // every round, so this is built once and always reflects the latest round.
+  // The third: this CLI's own ancestors, by IDENTITY (pid and creation time),
+  // for every incarnation a round saw them as ancestors. Their windows go into
+  // `priorVictims` like a kill's, which is what places their other children;
+  // this is what keeps THEM protected. The live ancestor walk proves ancestry
+  // only through live edges, and a wrapper between the shell and the CLI can
+  // exit between rounds - the shell then sits in the table as an orphan
+  // claiming a remembered pid, inside a remembered window, and would be seeded
+  // and killed as an ordinary host descendant. The identity says it is the
+  // same process the loop already decided never to kill; a reused pid with a
+  // different birth matches nothing.
+  const priorProtected = new Map<number, number[]>();
+  // The triple, by reference: the maps below are mutated in place at the end
+  // of every round, so this is built once and always reflects the latest round.
   const memory: WindowsKillMemory = {
     victims: priorVictims,
     suspects: priorSuspects,
+    protectedAncestors: priorProtected,
   };
   for (let round = 0; round <= WINDOWS_KILL_CONVERGENCE_ROUNDS; round += 1) {
     // BEFORE the scan, and that ordering is the soundness argument for the
@@ -629,6 +641,11 @@ async function killHostProcessTree(
         created: created.get(pid) ?? 0,
         seenAliveAt,
       });
+      // And by identity, so the next round still spares it when the edges
+      // that proved its ancestry are gone. An unreadable age is no identity:
+      // nothing can match it, so nothing is recorded.
+      const age = created.get(pid) ?? 0;
+      if (age !== 0) rememberIncarnation(priorProtected, pid, age);
     }
     // Recorded from the same snapshot, and only ever added to. What is kept is
     // evidence about CLAIMS: a later row that names this pid as its parent, born
@@ -1298,8 +1315,25 @@ export function computeWindowsHostKillSet(
   // claiming a pid nothing else remembers. Ancestors only: the CLI's own
   // descendants are its scan and kill subprocesses, and nothing below them is
   // ever the host's.
+  //
+  // Two ways to be an ancestor: the live edge walk from the CLI, and a
+  // remembered IDENTITY - the same pid with the same creation time an earlier
+  // round saw as an ancestor, now orphaned because a wrapper between it and the
+  // CLI has exited. The second is what keeps a shell protected after its
+  // ancestry can no longer be walked; without it the shell, claiming a
+  // remembered pid inside a remembered window, is seeded and killed as an
+  // ordinary host descendant. A row that is slot-matched THIS round is killed
+  // either way, and a reused pid with a different birth matches nothing.
+  const ancestors = new Set<number>(ancestorsOf(cliPid, parents));
+  for (const row of table) {
+    if (row.created === 0 || cliBranch.has(row.processId)) continue;
+    const incarnations = memory.protectedAncestors.get(row.processId);
+    if (incarnations !== undefined && incarnations.includes(row.created)) {
+      ancestors.add(row.processId);
+    }
+  }
   const protectedAncestors: number[] = [];
-  for (const ancestor of ancestorsOf(cliPid, parents)) {
+  for (const ancestor of ancestors) {
     if (slot.has(ancestor)) continue;
     spared.add(ancestor);
     if (victims.has(ancestor)) protectedAncestors.push(ancestor);
@@ -1416,13 +1450,22 @@ export interface WindowsKillVictim {
  * against. Neither list is ever shortened: a newer holder of a pid is new
  * evidence beside the old, never a replacement for it.
  *
- * One value rather than two parameters because the two halves are never
- * meaningful apart: every round records into both from the same snapshot, and
- * every classification consults both.
+ * `protectedAncestors` is the CLI's own ancestors by identity, so that a
+ * shell whose wrapper to the CLI has exited is still recognised as the process
+ * the loop decided never to kill (see `WindowsHostKillSet.protectedAncestors`).
+ *
+ * One value rather than three parameters because the halves are never
+ * meaningful apart: every round records into all of them from the same
+ * snapshot, and every classification consults them together.
  */
 export interface WindowsKillMemory {
   readonly victims: ReadonlyMap<number, readonly WindowsKillVictim[]>;
   readonly suspects: ReadonlyMap<number, readonly number[]>;
+  // This CLI's own ancestors by identity - pid to the creation time of each
+  // incarnation an earlier round saw as an ancestor. A later row with that pid
+  // AND that creation time is the same process, and stays spared even when the
+  // live edges that proved its ancestry are gone.
+  readonly protectedAncestors: ReadonlyMap<number, readonly number[]>;
 }
 
 // How a row that claims a remembered pid as its parent is classified.

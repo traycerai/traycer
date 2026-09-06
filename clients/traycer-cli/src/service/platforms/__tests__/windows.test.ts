@@ -125,6 +125,7 @@ function rowsOf(rows: readonly TableRowInput[]): WindowsProcessTableRow[] {
 const nothingRemembered: WindowsKillMemory = {
   victims: new Map(),
   suspects: new Map(),
+  protectedAncestors: new Map(),
 };
 
 // A memory that remembers kills but nothing undecided - the shape the window
@@ -133,7 +134,7 @@ const nothingRemembered: WindowsKillMemory = {
 function victimMemory(
   victims: ReadonlyMap<number, readonly WindowsKillVictim[]>,
 ): WindowsKillMemory {
-  return { victims, suspects: new Map() };
+  return { victims, suspects: new Map(), protectedAncestors: new Map() };
 }
 
 // A memory that remembers something undecided but no kill - the shape the
@@ -142,7 +143,7 @@ function victimMemory(
 function suspectMemory(
   suspects: ReadonlyMap<number, readonly number[]>,
 ): WindowsKillMemory {
-  return { victims: new Map(), suspects };
+  return { victims: new Map(), suspects, protectedAncestors: new Map() };
 }
 
 // Rows as the table scan's JSON, in the shape `parseWindowsProcessTableJson`
@@ -1962,11 +1963,13 @@ describe("killHostProcessTree convergence loop", () => {
   });
 
   it("round-6 P2, overlap: a spared shell that is BOTH a victim's validated child and an undecided root is still remembered", async () => {
-    // The kill set is the victim closure minus the CLI's branch, and the
-    // memory feed must subtract THAT, not the closure: a spared shell can
-    // sit in both closures at once and is then neither killed (so never a
-    // victim) nor - if the closure were subtracted - undecided. Chronology
-    // (samples 5000, 7000, 9000; CLI is pid 9999):
+    // A spared shell can sit in both closures at once - the killed host's
+    // validated child AND a descendant of an undecided root - and it is
+    // never killed, so the kill bookkeeping alone would remember nothing
+    // about it. It is a PLACED ancestor of the CLI: reported as lineage,
+    // remembered with a window like a kill, and its later child is placed
+    // through that window. Chronology (samples 5000, 7000, 9000; CLI is
+    // pid 9999):
     //   R0 (sample 5000): slot 200 (age unreadable) and slot 100 (born
     //       1000) claiming 200 with a zeroed edge; shell 700 (born 2000) is
     //       100's validated child, the CLI (born 2500) is 700's. Kill 200
@@ -1976,21 +1979,29 @@ describe("killHostProcessTree convergence loop", () => {
     //       700 and the CLI remain, and a side worker 888 (born 6000) sits
     //       under 700. 100 is a slot seed AND, against the unreadable victim
     //       200, undecided - so both closures are {100, 700, CLI, 888}. The
-    //       actual kill is [888, 100]; 700 and the CLI are what remains of
-    //       the undecided closure once the KILL is subtracted, and 700 must
-    //       reach the memory. (Subtracting the victim closure instead leaves
-    //       nothing, and 700 is remembered as nothing at all.)
+    //       actual kill is [888, 100]; 700 is a placed ancestor, remembered
+    //       as 700 = [2000, 7000] (and by identity); the CLI is its own
+    //       branch. Nothing is left undecided.
     //   R2 (sample 9000): 100 and 888 are gone, 700 spawned 889 (born 8000)
-    //       and exited. The CLI and 889 claim absent 700; suspect 700 (born
-    //       2000) keeps both undecided, the CLI is spared, and the stop
-    //       refuses naming 889.
+    //       and exited. The CLI and 889 claim absent 700: the CLI (born 2500)
+    //       falls inside 700's window and is spared as itself; 889 falls
+    //       after it and is undecided. The stop refuses naming 889.
     const samples = [5000, 7000, 9000];
     let sample = 0;
     const { runner, calls } = roundedRunner([
       {
         kind: "table",
         rows: [
-          { processId: 200, parentProcessId: 1, created: 0, slot: true },
+          // An unreadable age zeroes the row's own edge too - the scan
+          // cannot validate a parent for a row whose birth it cannot read -
+          // so 200 carries its claim on pid 1 with `parentProcessId` 0.
+          {
+            processId: 200,
+            parentProcessId: 0,
+            claimedParentProcessId: 1,
+            created: 0,
+            slot: true,
+          },
           {
             processId: 100,
             parentProcessId: 0,
@@ -2098,25 +2109,19 @@ describe("killHostProcessTree convergence loop", () => {
         .filter((call) => call.command === "taskkill")
         .map((call) => call.args),
     ).toEqual([
-      // R0: 200 is issued first - its edge to pid 1 counts as depth 1 in
-      // `orderWindowsKillsDescendantsFirst`, while 100's zeroed edge is
-      // depth 0.
-      ["/F", "/PID", "200"],
+      // R0: both slot rows have zeroed edges (depth 0), so pid order.
       ["/F", "/PID", "100"],
+      ["/F", "/PID", "200"],
       // R1: 888 (depth 2) before the lingering 100.
       ["/F", "/PID", "888"],
       ["/F", "/PID", "100"],
     ]);
 
-    // 700 is remembered here as a PLACED ancestor (a validated child of the
-    // lingering host), with a window, which is what decides 889 in round 2.
     // Ablation: in `killHostProcessTree`, drop the `protectedAncestors`
     // recording loop → this test reddens: 700 is neither killed nor - being
     // subtracted from `undecided` as something the loop was about to
     // remember - a suspect, round 2 finds nothing that remembers it, and the
-    // stop RESOLVES with 889 alive. Subtracting the victim closure instead
-    // of `remembered` no longer reddens this fixture on its own (700's
-    // window carries it); the pure overlap pin below pins that subtraction.
+    // stop RESOLVES with 889 alive.
   });
 
   it("a placed CLI ancestor is remembered with a window though it is never killed: its later children are placed after it exits", async () => {
@@ -2354,6 +2359,142 @@ describe("killHostProcessTree convergence loop", () => {
     // from the `undecided` filter → this test reddens: round 1 remembers
     // scan 777 (born 7500) as a suspect, round 2 finds 888 (born 8500)
     // claiming it, and the stop REFUSES naming 888 - a stranger's child.
+  });
+
+  it("two missing wrappers: the shell above the CLI stays protected by identity after the edges that proved its ancestry are gone", async () => {
+    // Remembering a placed ancestor's WINDOW is what places its children;
+    // remembering its IDENTITY is what keeps the ancestor itself protected.
+    // Chronology (samples 5000, 7000, 9000; CLI is pid 9999):
+    //   R0 (sample 5000): slot 100 (born 1000) -> wrapper 600 (born 1500)
+    //       -> shell 700 (born 2000) -> wrapper 800 (born 2250) -> CLI (born
+    //       2500), every age readable. kill=[100]; 600, 700 and 800 are the
+    //       CLI's placed ancestors, remembered by window and by identity.
+    //   R1 (sample 7000): both wrappers have exited on their own. 700
+    //       claims absent 600 (inside 600's window: a seed) and the CLI
+    //       claims absent 800; a side worker 888 (born 6000) sits under 700.
+    //       The live walk from the CLI ends at its zeroed edge, so on the
+    //       window alone 700 is an ordinary host descendant to kill. Its
+    //       identity (700, born 2000) says it is the shell this CLI runs in:
+    //       spared, placed again, and only 888 is killed.
+    //   R2 (sample 9000): 700 and the CLI. Nothing to kill, nothing
+    //       undecided. Converged - with the shell alive.
+    const samples = [5000, 7000, 9000];
+    let sample = 0;
+    const { runner, calls } = roundedRunner([
+      {
+        kind: "table",
+        rows: [
+          { processId: 100, parentProcessId: 1, created: 1000, slot: true },
+          {
+            processId: 600,
+            parentProcessId: 100,
+            claimedParentProcessId: 100,
+            created: 1500,
+            slot: false,
+          },
+          {
+            processId: 700,
+            parentProcessId: 600,
+            claimedParentProcessId: 600,
+            created: 2000,
+            slot: false,
+          },
+          {
+            processId: 800,
+            parentProcessId: 700,
+            claimedParentProcessId: 700,
+            created: 2250,
+            slot: false,
+          },
+          {
+            processId: 9999,
+            parentProcessId: 800,
+            claimedParentProcessId: 800,
+            created: 2500,
+            slot: false,
+          },
+        ],
+      },
+      {
+        kind: "table",
+        rows: [
+          {
+            processId: 700,
+            parentProcessId: 0,
+            claimedParentProcessId: 600,
+            created: 2000,
+            slot: false,
+          },
+          {
+            processId: 9999,
+            parentProcessId: 0,
+            claimedParentProcessId: 800,
+            created: 2500,
+            slot: false,
+          },
+          {
+            processId: 888,
+            parentProcessId: 700,
+            claimedParentProcessId: 700,
+            created: 6000,
+            slot: false,
+          },
+        ],
+      },
+      {
+        kind: "table",
+        rows: [
+          {
+            processId: 700,
+            parentProcessId: 0,
+            claimedParentProcessId: 600,
+            created: 2000,
+            slot: false,
+          },
+          {
+            processId: 9999,
+            parentProcessId: 0,
+            claimedParentProcessId: 800,
+            created: 2500,
+            slot: false,
+          },
+        ],
+      },
+    ]);
+    const controller = createWindowsController(runner, {
+      now: () => {
+        const value = samples[sample] ?? 9000;
+        sample += 1;
+        return value;
+      },
+    });
+
+    const originalPid = Object.getOwnPropertyDescriptor(process, "pid");
+    Object.defineProperty(process, "pid", { value: 9999, configurable: true });
+    try {
+      await controller.stop(serviceLabelFor("staging"), { force: false });
+    } finally {
+      if (originalPid !== undefined) {
+        Object.defineProperty(process, "pid", originalPid);
+      }
+    }
+
+    expect(
+      calls.filter((call) => call.command === "powershell.exe"),
+    ).toHaveLength(3);
+    expect(
+      calls
+        .filter((call) => call.command === "taskkill")
+        .map((call) => call.args),
+    ).toEqual([
+      ["/F", "/PID", "100"],
+      ["/F", "/PID", "888"],
+    ]);
+
+    // Ablation: in `killHostProcessTree`, drop the `priorProtected`
+    // recording (or in `computeWindowsHostKillSet` the identity lookup) →
+    // this test reddens: round 1 issues `taskkill /F /PID 700` as well -
+    // the shell this CLI is running in - before 888.
   });
 
   // The unattributed refusal exercised through all four callers that run
@@ -2941,9 +3082,10 @@ describe("computeWindowsHostKillSet and the taskkill self-protection it drives",
       // seed and, against the unreadable victim 200 it claims, undecided at
       // once. Shell 700 (the CLI's parent) and side worker 888 are its
       // validated descendants. The kill is the victim closure minus the
-      // spared branch; `undecided` is the suspect closure minus THAT kill,
-      // so 700 and the CLI survive into it even though both are in the
-      // victim closure.
+      // spared branch; 700 is a placed ancestor and is remembered with a
+      // window instead of being killed; `undecided` is the suspect closure
+      // minus everything that will be remembered that way and minus the
+      // CLI's own branch - here, nothing.
       const unreadableSlot = victimMemory(
         new Map<number, readonly WindowsKillVictim[]>([
           [200, [{ created: 0, seenAliveAt: 5000 }]],
@@ -3000,6 +3142,67 @@ describe("computeWindowsHostKillSet and the taskkill self-protection it drives",
       // Ablation: in `computeWindowsHostKillSet`, drop `!cliBranch.has(pid)`
       // from the `undecided` filter → `undecided: [777, 9999]`, and the
       // loop-level "round-7 P2" test refuses a stop over a stranger's child.
+    });
+
+    it("a remembered ancestor is spared by IDENTITY once the wrappers between it and the CLI have exited; a reused pid with a different birth is not", () => {
+      // Round 1 of the loop-level "two missing wrappers" test. Round 0 saw
+      // slot 100 -> wrapper 600 -> shell 700 -> wrapper 800 -> CLI, killed
+      // 100 and remembered 600, 700 and 800 as placed ancestors, by window
+      // and by identity. Both wrappers have since exited: 700 (born 2000)
+      // claims absent 600 inside 600's window - a seed, an ordinary host
+      // descendant on the window alone - and the CLI claims absent 800. The
+      // live walk from the CLI stops at its zeroed edge, so nothing but the
+      // remembered identity says 700 is the shell this CLI runs in. Its
+      // other child 888 is still the host's and is killed.
+      const chainRemembered: WindowsKillMemory = {
+        victims: new Map<number, readonly WindowsKillVictim[]>([
+          [100, [{ created: 1000, seenAliveAt: 5000 }]],
+          [600, [{ created: 1500, seenAliveAt: 5000 }]],
+          [700, [{ created: 2000, seenAliveAt: 5000 }]],
+          [800, [{ created: 2250, seenAliveAt: 5000 }]],
+        ]),
+        suspects: new Map(),
+        protectedAncestors: new Map<number, readonly number[]>([
+          [600, [1500]],
+          [700, [2000]],
+          [800, [2250]],
+        ]),
+      };
+      const sameShell = rowsOf([
+        victimRow(700, 0, 600, 2000, false),
+        victimRow(cliPid, 0, 800, 2500, false),
+        victimRow(888, 700, 700, 6000, false),
+      ]);
+      expect(
+        computeWindowsHostKillSet(sameShell, cliPid, chainRemembered),
+      ).toEqual({
+        kill: [888],
+        protectedAncestors: [700],
+        undecided: [],
+        unattributed: [],
+      });
+
+      // A stranger wearing pid 700, born 9000: no identity match, and its
+      // claim on 600 falls after 600's window - undecided, reported, and
+      // certainly not spared as anybody's ancestor.
+      const reusedPid = rowsOf([
+        victimRow(700, 0, 600, 9000, false),
+        victimRow(cliPid, 0, 800, 2500, false),
+        victimRow(888, 700, 700, 9500, false),
+      ]);
+      expect(
+        computeWindowsHostKillSet(reusedPid, cliPid, chainRemembered),
+      ).toEqual({
+        kill: [],
+        protectedAncestors: [],
+        undecided: [700, 888],
+        unattributed: [700, 888],
+      });
+
+      // Ablation: in `computeWindowsHostKillSet`, drop the identity lookup
+      // (build `ancestors` from the live walk only) → the first assertion
+      // reddens with `kill: [700, 888]` and `protectedAncestors: []`: the
+      // shell this CLI runs in is killed as an ordinary host descendant.
     });
 
     it("both non-empty: a killable seed and an unattributed row coexist in the same verdict", () => {
@@ -3217,6 +3420,7 @@ describe("computeWindowsHostKillSet and the taskkill self-protection it drives",
             [777, [{ created: 8000, seenAliveAt: 9000 }]],
           ]),
           suspects: new Map<number, readonly number[]>([[777, [6000]]]),
+          protectedAncestors: new Map(),
         };
         const table = rowsOf([victimRow(888, 0, 777, 6500, false), cliRow]);
         expect(computeWindowsHostKillSet(table, cliPid, mixed)).toEqual({
@@ -3257,6 +3461,7 @@ describe("computeWindowsHostKillSet and the taskkill self-protection it drives",
             [100, [{ created: 1000, seenAliveAt: 5000 }]],
           ]),
           suspects: new Map<number, readonly number[]>([[888, [6500]]]),
+          protectedAncestors: new Map(),
         };
         const table = rowsOf([
           victimRow(100, 0, 0, 6000, false),
