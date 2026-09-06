@@ -3849,8 +3849,18 @@ export class HostController {
           }
           return { kind: "ok", value: { registered: false } };
         }
+        // Streamed, not run: on Windows `host service uninstall` stops the
+        // host through the bounded scan-then-kill loop, whose worst case is
+        // several 30 s scans plus `schtasks /End` and `taskkill` before the
+        // confirming scan and `schtasks /Delete`
+        // (`WINDOWS_RESTART_SEQUENCE_TIMEOUT_MS` in the protocol's
+        // lifecycle constants). The run path's flat 45 s budget could SIGKILL
+        // the CLI after a kill pass and before `/Delete`, leaving the host
+        // half-stopped with its task still registered. The streaming path's
+        // idle timeout is what `host restart` already relies on for the same
+        // loop.
         try {
-          await this.runBundled<unknown>(["host", "service", "uninstall"]);
+          await this.streamBundled<unknown>(["host", "service", "uninstall"]);
         } catch (err) {
           return this.classifyMutationSubprocessError(err, "retry-with-force");
         }
@@ -4582,7 +4592,13 @@ export class HostController {
         }
         let raw: unknown;
         try {
-          raw = await this.runBundled<unknown>(
+          // Streamed for the same reason as `deregisterService`: `host
+          // uninstall --all` deregisters the service and then stops the host,
+          // and on Windows both steps run the bounded scan-then-kill loop,
+          // whose worst case is well past the run path's flat 45 s budget.
+          // The bare form leaves the service and a running host alone (the
+          // CLI gates both on `--all`) and merely shares the wrapper.
+          raw = await this.streamBundled<unknown>(
             all ? ["host", "uninstall", "--all"] : ["host", "uninstall"],
           );
         } catch (err) {
@@ -4644,7 +4660,13 @@ export class HostController {
         }
         let raw: unknown;
         try {
-          raw = await this.runBundled<unknown>(["host", "uninstall", "--all"]);
+          // Streamed: see `deregisterService` and `uninstallHost`. This is
+          // the third Desktop route that stops a host through the CLI.
+          raw = await this.streamBundled<unknown>([
+            "host",
+            "uninstall",
+            "--all",
+          ]);
         } catch (err) {
           return this.classifyMutationSubprocessError(err, "retry-with-force");
         }

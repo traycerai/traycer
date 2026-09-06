@@ -35,6 +35,14 @@ import {
   useSidebarNodeRevealStore,
 } from "@/stores/epics/sidebar-node-reveal-store";
 
+const writeText = vi.hoisted(() =>
+  vi.fn((_value: string) => Promise.resolve()),
+);
+Object.defineProperty(globalThis.navigator, "clipboard", {
+  value: { writeText },
+  configurable: true,
+});
+
 interface TestTreeNode {
   readonly id: string;
   readonly parentId: string | null;
@@ -4264,7 +4272,7 @@ describe("chat row archive", () => {
 
   // --- B7: viewer role ----------------------------------------------------
 
-  it("gives a viewer no archive affordance and still shows the read-only lock (B7)", () => {
+  it("gives a viewer no archive shortcut, a disabled Archive/Rename menu, working Copy ID, and the read-only lock (B7)", () => {
     seedChatTree();
     testState.permissionRole = "viewer";
 
@@ -4272,14 +4280,24 @@ describe("chat row archive", () => {
 
     // Hover button absent for viewers (requires canMutate).
     expect(screen.queryByTestId("epic-sidebar-archive-chat-child")).toBeNull();
-    // Chat row ⋯ menu is gated on canEdit, so Archive and Rename are both
-    // absent for viewers - not present-but-disabled.
+    // Chat row ⋯ menu is open to a viewer - only its mutating entries
+    // (Archive, Rename) are hard-disabled; the read-only Copy ID entry works.
+    expect(screen.getByTestId("epic-sidebar-more-chat-child")).toBeTruthy();
     expect(
-      screen.queryByTestId("epic-sidebar-archive-item-chat-child"),
-    ).toBeNull();
-    expect(screen.queryByTestId("epic-sidebar-rename-chat-child")).toBeNull();
-    expect(screen.queryByTestId("epic-sidebar-more-chat-child")).toBeNull();
-    // The read-only lock must still render - do not let "no archive" become
+      isMenuItemUnavailable(
+        screen.getByTestId("epic-sidebar-archive-item-chat-child"),
+      ),
+    ).toBe(true);
+    expect(
+      isMenuItemUnavailable(
+        screen.getByTestId("epic-sidebar-rename-chat-child"),
+      ),
+    ).toBe(true);
+
+    fireEvent.click(screen.getByTestId("epic-sidebar-copy-id-chat-child"));
+    expect(writeText).toHaveBeenCalledWith("chat-child");
+
+    // The read-only lock must still render - do not let the menu change become
     // "no status". Scoped to the row, since several rows carry the same label.
     const lock = readOnlyLock("chat-child");
     expect(lock).toBeTruthy();

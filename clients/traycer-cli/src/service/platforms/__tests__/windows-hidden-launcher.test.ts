@@ -129,6 +129,84 @@ function assignmentLiteral(script: string, statement: string): string {
   return line.slice(line.indexOf("=") + 1).trim();
 }
 
+/**
+ * Evaluates the nonce-read expression the launcher emits, with VBScript's
+ * semantics for the pieces it uses: nested `Trim(...)` / `Replace(s, a, b)`
+ * calls over string literals, the `vbCr` / `vbLf` constants, and the probe's
+ * `nonceProbe.StdOut.ReadAll`, which is bound to `probeStdout`. The one
+ * semantic that matters is pinned rather than assumed: VBScript `Trim`
+ * strips SPACES only - not CR, not LF - which is exactly why `Trim` alone
+ * never yielded a nonce the pattern accepted.
+ */
+function evaluateVbsStringExpression(
+  expression: string,
+  probeStdout: string,
+): string {
+  let index = 0;
+  const peek = (): string => expression[index] ?? "";
+  const skipSpaces = (): void => {
+    while (peek() === " ") index += 1;
+  };
+  const parse = (): string => {
+    skipSpaces();
+    if (peek() === '"') {
+      const start = index;
+      index += 1;
+      while (index < expression.length) {
+        if (expression[index] === '"') {
+          if (expression[index + 1] === '"') {
+            index += 2;
+            continue;
+          }
+          index += 1;
+          break;
+        }
+        index += 1;
+      }
+      return decodeVbsStringLiteral(expression.slice(start, index));
+    }
+    const start = index;
+    while (/[A-Za-z0-9_.]/.test(peek())) index += 1;
+    const name = expression.slice(start, index);
+    skipSpaces();
+    if (peek() !== "(") {
+      if (name === "vbCr") return "\r";
+      if (name === "vbLf") return "\n";
+      if (name === "nonceProbe.StdOut.ReadAll") return probeStdout;
+      throw new Error(`unknown VBScript identifier: ${name}`);
+    }
+    index += 1;
+    const args: string[] = [];
+    for (;;) {
+      args.push(parse());
+      skipSpaces();
+      if (peek() === ",") {
+        index += 1;
+        continue;
+      }
+      if (peek() === ")") {
+        index += 1;
+        break;
+      }
+      throw new Error(`unterminated call in: ${expression}`);
+    }
+    if (name === "Trim" && args.length === 1) {
+      return (args[0] ?? "").replace(/^ +/, "").replace(/ +$/, "");
+    }
+    if (name === "Replace" && args.length === 3) {
+      const [subject, find, replacement] = args;
+      return (subject ?? "").split(find ?? "").join(replacement ?? "");
+    }
+    throw new Error(`unsupported VBScript call: ${name}/${args.length}`);
+  };
+  const value = parse();
+  skipSpaces();
+  if (index !== expression.length) {
+    throw new Error(`trailing input in: ${expression}`);
+  }
+  return value;
+}
+
 /** The single argument of the `shell.Run(<literal>, 0, True)` call in `line`. */
 function shellRunLiteral(script: string, marker: string): string {
   const line = script
@@ -234,6 +312,66 @@ describe("Windows hidden host launcher — decoded as Windows decodes it", () =>
     ]);
     expect(script).toContain("adoption-nonce");
     expect(script).toContain("noncePattern.Pattern");
+  });
+
+  it("still passes the nonce to the pattern when the probe's stdout ends in LF or CRLF", () => {
+    // `traycer host adoption-nonce` writes `${nonce}\n`. VBScript `Trim`
+    // removes spaces only, and `noncePattern` is anchored with `$` on a
+    // single-line RegExp, which does not match before a trailing LF - so a
+    // `Trim(...)`-only read failed the pattern on EVERY launch and the task
+    // started the host without `--adoption-nonce`; the supervisor then
+    // refused the pending grant until it aged out (~60 s) and every
+    // task-managed start reported failure while the host came up late.
+    // Falsification recipe (this file cannot run cscript): on Windows,
+    // `cscript //nologo t.vbs` with
+    //   s = "0f6c1b2e-8a44-4d19-9c3e-5b7a0d21f8ac" & vbLf
+    //   Set r = New RegExp : r.Pattern = "^[0-9A-Fa-f-]{36}$"
+    //   WScript.Echo Len(Trim(s)) & " " & r.Test(Trim(s))
+    // prints `37 False`; with the Replace pair it prints `36 True`
+    // (observed 2026-09-06 on Windows 11 26200).
+    const script = buildWindowsHiddenHostLauncher(cli, serviceLabel);
+    const readLine = script
+      .split("\r\n")
+      .map((line) => line.trim())
+      .find((line) => line.includes("nonceProbe.StdOut.ReadAll"));
+    const prefix = "If nonceProbe.ExitCode = 0 Then adoptionNonce = ";
+    expect(readLine?.startsWith(prefix)).toBe(true);
+    const expression = (readLine ?? "").slice(prefix.length);
+    // A JS RegExp without the `m` flag and a VBScript RegExp without
+    // `Multiline` agree on `$`: only the very end of the string, never before
+    // a trailing LF. The pattern is taken from the script, not restated.
+    const pattern = new RegExp(
+      decodeVbsStringLiteral(
+        assignmentLiteral(script, "noncePattern.Pattern ="),
+      ),
+    );
+    expect(script).not.toContain("noncePattern.Multiline");
+    const nonce = "0f6c1b2e-8a44-4d19-9c3e-5b7a0d21f8ac";
+    for (const stdout of [
+      `${nonce}\n`,
+      `${nonce}\r\n`,
+      `${nonce} \r\n`,
+      nonce,
+    ]) {
+      expect(
+        pattern.test(evaluateVbsStringExpression(expression, stdout)),
+      ).toBe(true);
+    }
+    // Control for the evaluator: with the pre-fix expression the same input
+    // must FAIL the same pattern, or `Trim` above would be stripping the
+    // newline and this test would be passing for the wrong reason.
+    expect(
+      pattern.test(
+        evaluateVbsStringExpression(
+          "Trim(nonceProbe.StdOut.ReadAll)",
+          `${nonce}\n`,
+        ),
+      ),
+    ).toBe(false);
+    // The strip must not widen what the pattern accepts.
+    expect(
+      pattern.test(evaluateVbsStringExpression(expression, "not a nonce\n")),
+    ).toBe(false);
   });
 
   it("degrades to the unlabelled start when the probe cannot even be launched", () => {

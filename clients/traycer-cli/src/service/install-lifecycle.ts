@@ -14,6 +14,7 @@ import {
 import { readRegisteredCliInvocation } from "./platforms/macos";
 import {
   describeSlotLockHolders,
+  epochMicrosNow,
   killLingeringSlotProcesses,
 } from "./platforms/windows";
 import type { Environment } from "../runner/environment";
@@ -33,7 +34,8 @@ import type { HostStartAdoptionPublisher } from "../host/host-start-adoption";
 function swapLockRecoveryFor(label: ServiceLabel): SwapLockRecovery | null {
   if (process.platform !== "win32") return null;
   return {
-    killLingeringProcesses: () => killLingeringSlotProcesses(label, null),
+    killLingeringProcesses: () =>
+      killLingeringSlotProcesses(label, null, { now: epochMicrosNow }),
     describeLockHolders: () => describeSlotLockHolders(label, null),
   };
 }
