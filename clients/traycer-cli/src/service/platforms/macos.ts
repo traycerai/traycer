@@ -2,7 +2,10 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname } from "node:path";
-import { readHostPidMetadata } from "../../host/pid-metadata";
+import {
+  readHostPidMetadata,
+  readHostPidMetadataEvidence,
+} from "../../host/pid-metadata";
 import { hostPidMetadataPath } from "../../store/paths";
 import { probeHostHealth } from "../health-probe";
 import { createCliLogger } from "../../logger";
@@ -532,13 +535,30 @@ async function takeoverDesktopRegistration(
 // machine hostless. A process proven gone (dead, or the pid recycled) lets
 // the registration run; an alive one refuses; one that cannot be judged
 // refuses too, except that a record with no identity to judge BY is settled
-// by dialling the endpoint it advertises (see below).
+// by dialling the endpoint it advertises (see below). The record is read
+// with absence kept apart from failure: `readHostPidMetadata` folds a torn
+// or unreadable file into `null`, and here that would let the one gate a
+// hand-run host has pass on no evidence (Codex, traycer#1761, round 7).
 async function refuseIfPublishedHostAlive(
   label: ServiceLabel,
   retiredAgentLabelId: string | null,
 ): Promise<void> {
-  const metadata = await readHostPidMetadata(label.environment);
-  if (metadata === null) return;
+  const record = await readHostPidMetadataEvidence(label.environment);
+  if (record.kind === "absent") return;
+  if (record.kind === "unreadable") {
+    throw cliError({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+      message: `service install --takeover: the published host record ${hostPidMetadataPath(label.environment)} could not be read (${record.cause}), so whether a host is still running could not be judged and the reload was stopped rather than register a replacement beside one. Re-run the command; if it persists and no Traycer host is running, remove that record first. ${takeoverRerunRouting(retiredAgentLabelId)}`,
+      details: {
+        label: label.id,
+        record: hostPidMetadataPath(label.environment),
+        cause: record.cause,
+        agentLabel: retiredAgentLabelId,
+      },
+      exitCode: 1,
+    });
+  }
+  const { metadata } = record;
   const verdict = await getPublishedProcessIdentityVerdict(
     metadata.pid,
     metadata.processStartIdentity,

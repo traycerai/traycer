@@ -73,23 +73,41 @@ export type HostLayer0Record =
     }
   | { readonly status: "unrecognized"; readonly raw: string };
 
+/**
+ * The pid.json read with absence kept apart from failure. `readHostPidMetadata`
+ * folds both into `null`, which is right for discovery ("no host to talk to
+ * either way") and wrong for a gate that must fail closed: a torn or
+ * momentarily unreadable record is not evidence that no host is running.
+ */
+export type HostPidMetadataEvidence =
+  | { readonly kind: "absent" }
+  | { readonly kind: "unreadable"; readonly cause: string }
+  | { readonly kind: "read"; readonly metadata: HostPidMetadata };
+
 export async function readHostPidMetadata(
   environment: Environment | undefined,
 ): Promise<HostPidMetadata | null> {
+  const evidence = await readHostPidMetadataEvidence(environment);
+  return evidence.kind === "read" ? evidence.metadata : null;
+}
+
+export async function readHostPidMetadataEvidence(
+  environment: Environment | undefined,
+): Promise<HostPidMetadataEvidence> {
   const logEnvironment = environment ?? config.environment;
   const logger = createCliLogger(logEnvironment);
   let raw: string;
   try {
     raw = await readFile(hostPidMetadataPath(environment), "utf8");
   } catch (err) {
-    if (readErrorCode(err) !== "ENOENT") {
-      logger.debug("Host pid metadata read failed", {
-        environment: logEnvironment,
-        errorName: errorFromUnknown(err).name,
-        errorCode: readErrorCode(err),
-      });
-    }
-    return null;
+    const code = readErrorCode(err);
+    if (code === "ENOENT") return { kind: "absent" };
+    logger.debug("Host pid metadata read failed", {
+      environment: logEnvironment,
+      errorName: errorFromUnknown(err).name,
+      errorCode: code,
+    });
+    return { kind: "unreadable", cause: `read failed (${code ?? "unknown"})` };
   }
   let parsed: unknown;
   try {
@@ -100,13 +118,13 @@ export async function readHostPidMetadata(
       errorName: errorFromUnknown(err).name,
       errorMessage: errorFromUnknown(err).message,
     });
-    return null;
+    return { kind: "unreadable", cause: "not valid JSON" };
   }
   if (parsed === null || typeof parsed !== "object") {
     logger.warn("Host pid metadata rejected non-object payload", {
       environment: logEnvironment,
     });
-    return null;
+    return { kind: "unreadable", cause: "not a JSON object" };
   }
   const obj = parsed as Record<string, unknown>;
   if (
@@ -124,7 +142,10 @@ export async function readHostPidMetadata(
       hasWebsocketUrl: typeof obj.websocketUrl === "string",
       hasStartedAt: typeof obj.startedAt === "string",
     });
-    return null;
+    return {
+      kind: "unreadable",
+      cause: "malformed record (required fields missing)",
+    };
   }
   logger.debug("Host pid metadata read completed", {
     environment: logEnvironment,
@@ -133,18 +154,21 @@ export async function readHostPidMetadata(
     version: obj.version,
   });
   return {
-    pid: obj.pid,
-    hostId: obj.hostId,
-    version: obj.version,
-    websocketUrl: obj.websocketUrl,
-    startedAt: obj.startedAt,
-    processStartIdentity: isProcessStartIdentity(obj.processStartIdentity)
-      ? obj.processStartIdentity
-      : null,
-    layer0: decodeLayer0Record(obj.layer0),
-    // Same decoder, same fail-open-on-shape contract. An old record simply
-    // has no such key and decodes to `null`.
-    layer0Slot: decodeLayer0Record(obj.layer0Slot),
+    kind: "read",
+    metadata: {
+      pid: obj.pid,
+      hostId: obj.hostId,
+      version: obj.version,
+      websocketUrl: obj.websocketUrl,
+      startedAt: obj.startedAt,
+      processStartIdentity: isProcessStartIdentity(obj.processStartIdentity)
+        ? obj.processStartIdentity
+        : null,
+      layer0: decodeLayer0Record(obj.layer0),
+      // Same decoder, same fail-open-on-shape contract. An old record simply
+      // has no such key and decodes to `null`.
+      layer0Slot: decodeLayer0Record(obj.layer0Slot),
+    },
   };
 }
 

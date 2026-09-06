@@ -52,6 +52,7 @@ const execFileAsync = promisify(execFile);
 
 const MOCKS = vi.hoisted(() => ({
   readHostPidMetadata: vi.fn(),
+  readHostPidMetadataEvidence: vi.fn(),
   isProcessAlive: vi.fn(),
   cliLoggerWarn: vi.fn(),
   cliLoggerInfo: vi.fn(),
@@ -105,6 +106,7 @@ const HOST_PID_METADATA = {
 
 vi.mock("../../../host/pid-metadata", () => ({
   readHostPidMetadata: MOCKS.readHostPidMetadata,
+  readHostPidMetadataEvidence: MOCKS.readHostPidMetadataEvidence,
 }));
 
 vi.mock("../../../store/cli-lock", async (importOriginal) => {
@@ -463,6 +465,8 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
     createdPlistPath = null;
     MOCKS.readHostPidMetadata.mockReset();
     MOCKS.readHostPidMetadata.mockResolvedValue(null);
+    MOCKS.readHostPidMetadataEvidence.mockReset();
+    MOCKS.readHostPidMetadataEvidence.mockResolvedValue({ kind: "absent" });
     MOCKS.isProcessAlive.mockReset();
     MOCKS.isProcessAlive.mockReturnValue(false);
     MOCKS.readProcessStartIdentity.mockReset();
@@ -2476,13 +2480,16 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
           exitCode: 113,
         };
       };
-      MOCKS.readHostPidMetadata.mockResolvedValue({
-        pid: 9001,
-        hostId: "hand-run-host",
-        version: "1.2.3",
-        websocketUrl: "ws://127.0.0.1:9001/rpc",
-        startedAt: "2026-07-12T00:00:00.000Z",
-        processStartIdentity: null,
+      MOCKS.readHostPidMetadataEvidence.mockResolvedValue({
+        kind: "read",
+        metadata: {
+          pid: 9001,
+          hostId: "hand-run-host",
+          version: "1.2.3",
+          websocketUrl: "ws://127.0.0.1:9001/rpc",
+          startedAt: "2026-07-12T00:00:00.000Z",
+          processStartIdentity: null,
+        },
       });
       MOCKS.getPublishedProcessIdentityVerdict.mockResolvedValue("current");
 
@@ -2506,13 +2513,16 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         stderr: "Could not find specified service\n",
         exitCode: 113,
       });
-      MOCKS.readHostPidMetadata.mockResolvedValue({
-        pid: 9001,
-        hostId: "hand-run-host",
-        version: "1.2.3",
-        websocketUrl: "ws://127.0.0.1:9001/rpc",
-        startedAt: "2026-07-12T00:00:00.000Z",
-        processStartIdentity: null,
+      MOCKS.readHostPidMetadataEvidence.mockResolvedValue({
+        kind: "read",
+        metadata: {
+          pid: 9001,
+          hostId: "hand-run-host",
+          version: "1.2.3",
+          websocketUrl: "ws://127.0.0.1:9001/rpc",
+          startedAt: "2026-07-12T00:00:00.000Z",
+          processStartIdentity: null,
+        },
       });
       MOCKS.getPublishedProcessIdentityVerdict.mockResolvedValue("mismatch");
 
@@ -2535,13 +2545,16 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         stderr: "Could not find specified service\n",
         exitCode: 113,
       });
-      MOCKS.readHostPidMetadata.mockResolvedValue({
-        pid: 9001,
-        hostId: "hand-run-host",
-        version: "1.2.3",
-        websocketUrl: "ws://127.0.0.1:9001/rpc",
-        startedAt: "2026-07-12T00:00:00.000Z",
-        processStartIdentity: null,
+      MOCKS.readHostPidMetadataEvidence.mockResolvedValue({
+        kind: "read",
+        metadata: {
+          pid: 9001,
+          hostId: "hand-run-host",
+          version: "1.2.3",
+          websocketUrl: "ws://127.0.0.1:9001/rpc",
+          startedAt: "2026-07-12T00:00:00.000Z",
+          processStartIdentity: null,
+        },
       });
       MOCKS.getPublishedProcessIdentityVerdict.mockResolvedValue(
         "indeterminate",
@@ -2573,13 +2586,16 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         stderr: "Could not find specified service\n",
         exitCode: 113,
       });
-      MOCKS.readHostPidMetadata.mockResolvedValue({
-        pid: 9001,
-        hostId: "hand-run-host",
-        version: "1.2.3",
-        websocketUrl: "ws://127.0.0.1:9001/rpc",
-        startedAt: "2026-07-12T00:00:00.000Z",
-        processStartIdentity: null,
+      MOCKS.readHostPidMetadataEvidence.mockResolvedValue({
+        kind: "read",
+        metadata: {
+          pid: 9001,
+          hostId: "hand-run-host",
+          version: "1.2.3",
+          websocketUrl: "ws://127.0.0.1:9001/rpc",
+          startedAt: "2026-07-12T00:00:00.000Z",
+          processStartIdentity: null,
+        },
       });
       MOCKS.getPublishedProcessIdentityVerdict.mockResolvedValue(
         "indeterminate",
@@ -2615,13 +2631,16 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         stderr: "Could not find specified service\n",
         exitCode: 113,
       });
-      MOCKS.readHostPidMetadata.mockResolvedValue({
-        pid: 9001,
-        hostId: "hand-run-host",
-        version: "1.2.3",
-        websocketUrl: "ws://127.0.0.1:9001/rpc",
-        startedAt: "2026-07-12T00:00:00.000Z",
-        processStartIdentity: "darwin:1699999999.123456",
+      MOCKS.readHostPidMetadataEvidence.mockResolvedValue({
+        kind: "read",
+        metadata: {
+          pid: 9001,
+          hostId: "hand-run-host",
+          version: "1.2.3",
+          websocketUrl: "ws://127.0.0.1:9001/rpc",
+          startedAt: "2026-07-12T00:00:00.000Z",
+          processStartIdentity: "darwin:1699999999.123456",
+        },
       });
       MOCKS.getPublishedProcessIdentityVerdict.mockResolvedValue(
         "indeterminate",
@@ -2642,6 +2661,39 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         }),
       });
       expect(MOCKS.probeHostHealth).not.toHaveBeenCalled();
+    });
+
+    // A torn or momentarily unreadable pid.json must fail CLOSED, not be
+    // folded into "no host" the way `readHostPidMetadata` folds it for
+    // discovery callers - the record's absence and its unreadability read
+    // identically through that API, and letting the gate pass on "no
+    // evidence" is exactly the hostless-bootstrap-beside-a-corpse this
+    // command exists to prevent.
+    it("rejects with SERVICE_INSTALL_FAILED ('could not be read') when the published record is unreadable (no-agent arm)", async () => {
+      const calls: RecordedCall[] = [];
+      const notLoadedRunner: ProcessRunner = async (command, args) => {
+        calls.push({ command, args });
+        return {
+          stdout: "",
+          stderr: "Could not find specified service\n",
+          exitCode: 113,
+        };
+      };
+      MOCKS.readHostPidMetadataEvidence.mockResolvedValue({
+        kind: "unreadable",
+        cause: "not valid JSON",
+      });
+
+      await expect(
+        createMacosController(notLoadedRunner).takeoverDesktopRegistration(
+          label,
+        ),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+        message: expect.stringContaining("could not be read (not valid JSON)"),
+        details: expect.objectContaining({ cause: "not valid JSON" }),
+      });
+      expect(calls.some((c) => c.args[0] === "bootout")).toBe(false);
     });
 
     it("fails closed when the bootout does not take effect", async () => {
@@ -3275,13 +3327,16 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         agentRunning: true,
       });
       MOCKS.requestCooperativeShutdown.mockResolvedValue({ kind: "stopped" });
-      MOCKS.readHostPidMetadata.mockResolvedValue({
-        pid: 9001,
-        hostId: "hand-run-host",
-        version: "1.2.3",
-        websocketUrl: "ws://127.0.0.1:9001/rpc",
-        startedAt: "2026-07-12T00:00:00.000Z",
-        processStartIdentity: null,
+      MOCKS.readHostPidMetadataEvidence.mockResolvedValue({
+        kind: "read",
+        metadata: {
+          pid: 9001,
+          hostId: "hand-run-host",
+          version: "1.2.3",
+          websocketUrl: "ws://127.0.0.1:9001/rpc",
+          startedAt: "2026-07-12T00:00:00.000Z",
+          processStartIdentity: null,
+        },
       });
       MOCKS.getPublishedProcessIdentityVerdict.mockResolvedValue("dead");
 
@@ -3306,13 +3361,16 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         agentRunning: true,
       });
       MOCKS.requestCooperativeShutdown.mockResolvedValue({ kind: "stopped" });
-      MOCKS.readHostPidMetadata.mockResolvedValue({
-        pid: 9001,
-        hostId: "hand-run-host",
-        version: "1.2.3",
-        websocketUrl: "ws://127.0.0.1:9001/rpc",
-        startedAt: "2026-07-12T00:00:00.000Z",
-        processStartIdentity: null,
+      MOCKS.readHostPidMetadataEvidence.mockResolvedValue({
+        kind: "read",
+        metadata: {
+          pid: 9001,
+          hostId: "hand-run-host",
+          version: "1.2.3",
+          websocketUrl: "ws://127.0.0.1:9001/rpc",
+          startedAt: "2026-07-12T00:00:00.000Z",
+          processStartIdentity: null,
+        },
       });
       MOCKS.getPublishedProcessIdentityVerdict.mockResolvedValue("current");
 
@@ -3321,6 +3379,36 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       ).rejects.toMatchObject({
         code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
         message: expect.stringContaining("a host is still running (pid 9001"),
+      });
+      expect(MOCKS.cliLoggerInfo).not.toHaveBeenCalledWith(
+        expect.stringContaining("the CLI now owns host registration"),
+        expect.anything(),
+      );
+    });
+
+    // The took-over variant: the gate fires AFTER the agent is retired, so
+    // the routing tail must name it, exactly like every other refusal this
+    // arm can issue post-retirement.
+    it("rejects with SERVICE_INSTALL_FAILED ('could not be read') when the published record is unreadable (took-over arm), naming the retired agent", async () => {
+      const { controller } = stageTakeoverRunner({
+        cliLabelOwned: false,
+        agentLoadedAfterBootout: false,
+        agentRunning: true,
+      });
+      MOCKS.requestCooperativeShutdown.mockResolvedValue({ kind: "stopped" });
+      MOCKS.readHostPidMetadataEvidence.mockResolvedValue({
+        kind: "unreadable",
+        cause: "not valid JSON",
+      });
+
+      const takeover = controller.takeoverDesktopRegistration(label);
+      await expect(takeover).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+        message: expect.stringContaining("could not be read (not valid JSON)"),
+        details: expect.objectContaining({ cause: "not valid JSON" }),
+      });
+      await expect(takeover).rejects.toMatchObject({
+        message: expect.stringContaining("is already deregistered"),
       });
       expect(MOCKS.cliLoggerInfo).not.toHaveBeenCalledWith(
         expect.stringContaining("the CLI now owns host registration"),
