@@ -107,6 +107,13 @@ const spawnMocks = vi.hoisted(() => ({
   // the "spawn threw synchronously" case is kept separate (`throwSync`).
   respond: null as ((fake: FakeChild) => void) | null,
   throwSync: null as Error | null,
+  // `undefined` mimics the spawn-failure shape where Node hands back a child
+  // with no pid at all - the case `relayTerminationSignals` refuses to
+  // install a relay for.
+  childPid: undefined as number | undefined,
+  // The most recently created fake, for tests that drive the child by hand
+  // (no `respond` queued) rather than through a scripted responder.
+  lastFake: null as FakeChild | null,
 }));
 
 vi.mock("node:child_process", async (importOriginal) => {
@@ -124,11 +131,14 @@ vi.mock("node:child_process", async (importOriginal) => {
       const stdio: ChildProcess["stdio"] = [null, null, null, ack, null];
       const child = Object.assign(new EventEmitter(), {
         stdio,
+        pid: spawnMocks.childPid,
       }) as ChildProcess;
+      const fake: FakeChild = { child, ack };
+      spawnMocks.lastFake = fake;
       if (spawnMocks.respond !== null) {
         // Real `spawn` never emits synchronously - the caller has always
         // attached its listeners by the time anything fires.
-        Promise.resolve().then(() => spawnMocks.respond?.({ child, ack }));
+        Promise.resolve().then(() => spawnMocks.respond?.(fake));
       }
       return child;
     },
@@ -280,6 +290,8 @@ describe("relocateOutOfHostCgroupIfNeeded", () => {
     spawnMocks.recorded = [];
     spawnMocks.respond = null;
     spawnMocks.throwSync = null;
+    spawnMocks.childPid = undefined;
+    spawnMocks.lastFake = null;
     loggerMock.debug.mockClear();
     loggerMock.info.mockClear();
   });
@@ -301,6 +313,10 @@ describe("relocateOutOfHostCgroupIfNeeded", () => {
     process.argv = originalArgv;
     process.execPath = originalExecPath;
     process.execArgv = originalExecArgv;
+    // A safety net for the relay tests below: each restores its own
+    // `process.kill` spy in a `finally`, but this catches one left standing
+    // by a test that throws before reaching it.
+    vi.restoreAllMocks();
   });
 
   function packagedArgv(): readonly string[] {
@@ -350,6 +366,13 @@ describe("relocateOutOfHostCgroupIfNeeded", () => {
       "inherit",
       "pipe",
     ]);
+    // The scope moves the CGROUP, not the SESSION: without `detached`
+    // (setsid at spawn), the child stays in a Traycer-hosted terminal's
+    // session, and the moment the stop closes that PTY master the kernel
+    // SIGHUPs the relocated updater along with it. Asserted alongside
+    // `stdio` so a future change cannot quietly pipe stdio (losing visible
+    // progress) or drop `detached` (losing survival) without failing here.
+    expect(call?.options.detached).toBe(true);
     expect(call?.options.env?.[TRAYCER_CLI_RELOCATED_ENV]).toBe("1");
     // The line the CLI docs tell an operator to look for in cli.log. It is
     // written on the ACK, not on `spawn`: `systemd-run` starting proves
@@ -363,6 +386,10 @@ describe("relocateOutOfHostCgroupIfNeeded", () => {
     expect(
       call?.args.some((arg) => arg.startsWith("--expand-environment")),
     ).toBe(false);
+
+    // Ablation: in `runInTransientScope`, drop `detached: true` from the
+    // spawn options → this test fails: `call?.options.detached` is
+    // `undefined` instead of `true`.
   });
 
   it("forwards a non-zero exit code from a CLI that acknowledged - one result, no second envelope", async () => {
@@ -469,6 +496,109 @@ describe("relocateOutOfHostCgroupIfNeeded", () => {
     // `close` in place of `exit` - → this test fails: the ack has not been
     // delivered yet at that point, so a completed command is rejected as one
     // that never started.
+  });
+
+  it("forwards SIGINT/SIGTERM to the relocated child's PROCESS GROUP (-pid), and disposes both listeners once settled", async () => {
+    // Only needed because of `detached`: while the child shared this
+    // process's group, a terminal's Ctrl-C reached both at once. Detached,
+    // it does not - so without this relay Ctrl-C would kill the waiting
+    // parent and leave the update running unattended.
+    mocks.cgroup = V2_HOST_UNIT_CGROUP;
+    mocks.packaged = true;
+    process.argv = packagedArgv() as string[];
+    process.execPath = "/slot/traycer";
+    process.execArgv = [];
+    spawnMocks.childPid = 4242;
+    // No `respond` queued: this test drives the fake child by hand so it can
+    // emit the signals BEFORE the child ever exits.
+    spawnMocks.respond = null;
+    // Captured BEFORE the relay installs its own pair, so the "disposed"
+    // assertion below proves the count returns to what it actually was
+    // rather than to a baseline that already included the relay itself.
+    const sigintBefore = process.listenerCount("SIGINT");
+    const sigtermBefore = process.listenerCount("SIGTERM");
+
+    const promise = relocateOutOfHostCgroupIfNeeded("host update", {});
+    // Let the async chain (cgroup read, isPackagedRun, spawn) run far enough
+    // to reach `relayTerminationSignals` before this test drives any signal.
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Spied BEFORE emitting: an unspied call would signal this test runner's
+    // own process group.
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    try {
+      process.emit("SIGINT");
+      process.emit("SIGTERM");
+      expect(killSpy).toHaveBeenNthCalledWith(1, -4242, "SIGINT");
+      expect(killSpy).toHaveBeenNthCalledWith(2, -4242, "SIGTERM");
+
+      const fake = spawnMocks.lastFake;
+      if (fake === null) throw new Error("spawn was never called");
+      fake.child.emit("spawn");
+      fake.ack.end("\n");
+      await new Promise((resolve) => setImmediate(resolve));
+      fake.child.emit("exit", 0, null);
+
+      await expect(promise).resolves.toEqual({
+        kind: "completed",
+        exitCode: 0,
+      });
+      // The disposer removed both listeners once the promise settled - a
+      // leaked pair would still fire (and still try to signal a dead pid) on
+      // every SIGINT/SIGTERM this test worker receives afterwards.
+      expect(process.listenerCount("SIGINT")).toBe(sigintBefore);
+      expect(process.listenerCount("SIGTERM")).toBe(sigtermBefore);
+    } finally {
+      killSpy.mockRestore();
+    }
+
+    // Ablation: in `relayTerminationSignals`, change `process.kill(-pid,
+    // signal)` to `process.kill(pid, signal)` → this test fails: `killSpy` is
+    // called with the positive pid instead of `-pid`.
+  });
+
+  it("a child with no pid installs no relay - process.kill is never called", async () => {
+    // The spawn-failure shape: Node can hand back a `ChildProcess` with no
+    // pid at all. `relayTerminationSignals` refuses to install anything for
+    // it rather than signalling a pid that does not exist.
+    mocks.cgroup = V2_HOST_UNIT_CGROUP;
+    mocks.packaged = true;
+    process.argv = packagedArgv() as string[];
+    process.execPath = "/slot/traycer";
+    process.execArgv = [];
+    spawnMocks.childPid = undefined;
+    spawnMocks.respond = null;
+    const sigintBefore = process.listenerCount("SIGINT");
+
+    const promise = relocateOutOfHostCgroupIfNeeded("host update", {});
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    try {
+      process.emit("SIGINT");
+      expect(killSpy).not.toHaveBeenCalled();
+      // No listener was installed at all - not merely one that chose to do
+      // nothing.
+      expect(process.listenerCount("SIGINT")).toBe(sigintBefore);
+
+      const fake = spawnMocks.lastFake;
+      if (fake === null) throw new Error("spawn was never called");
+      fake.child.emit("spawn");
+      fake.ack.end("\n");
+      await new Promise((resolve) => setImmediate(resolve));
+      fake.child.emit("exit", 0, null);
+
+      await expect(promise).resolves.toEqual({
+        kind: "completed",
+        exitCode: 0,
+      });
+    } finally {
+      killSpy.mockRestore();
+    }
   });
 
   it("rejects with E_SERVICE_CONTROL_FAILED when the child emits a spawn error", async () => {
@@ -809,6 +939,13 @@ describe("acknowledgeRelocationEntry", () => {
 
   afterEach(() => {
     delete process.env[TRAYCER_CLI_RELOCATED_ENV];
+    // The function adds one 'error' listener to stdout/stderr per call and
+    // never removes it (there is nowhere left to report a later failure to,
+    // since the place we would report it to is what vanished) - a test file
+    // calling it repeatedly would otherwise accumulate listeners and trip
+    // Node's max-listeners warning.
+    process.stdout.removeAllListeners("error");
+    process.stderr.removeAllListeners("error");
   });
 
   it("writes one byte to fd 3 on a relocated run", () => {
@@ -830,6 +967,29 @@ describe("acknowledgeRelocationEntry", () => {
     process.env[TRAYCER_CLI_RELOCATED_ENV] = "1";
     mocks.ackWriteError = Object.assign(new Error("EBADF"), { code: "EBADF" });
     expect(() => acknowledgeRelocationEntry()).not.toThrow();
+  });
+
+  it("swallows an EIO write on stdout without throwing - the PTY master closed underneath a relocated child", () => {
+    process.env[TRAYCER_CLI_RELOCATED_ENV] = "1";
+    acknowledgeRelocationEntry();
+    const eio = Object.assign(new Error("write EIO"), { code: "EIO" });
+    expect(() => process.stdout.emit("error", eio)).not.toThrow();
+
+    // Ablation: in `acknowledgeRelocationEntry`, remove the
+    // `process.stdout.on("error", ignore);` line → this test fails: an
+    // unhandled 'error' event on a stream throws, which would kill the
+    // update at exactly the moment relocation exists to survive.
+  });
+
+  it("swallows an EIO write on stderr without throwing", () => {
+    process.env[TRAYCER_CLI_RELOCATED_ENV] = "1";
+    acknowledgeRelocationEntry();
+    const eio = Object.assign(new Error("write EIO"), { code: "EIO" });
+    expect(() => process.stderr.emit("error", eio)).not.toThrow();
+
+    // Ablation: in `acknowledgeRelocationEntry`, remove the
+    // `process.stderr.on("error", ignore);` line → this test fails the same
+    // way as its stdout twin above.
   });
 });
 

@@ -401,11 +401,12 @@ function hostUnitSegment(path: string): string | null {
 /**
  * Run the command in a transient scope and forward its exit code.
  *
- * The parent WAITS, attached, and installs no signal forwarding. A person in a
- * Traycer-hosted terminal keeps seeing output through the inherited stdio until
- * the stop kills their terminal; a host-spawned parent dies with the cgroup,
- * which is the expected end for it and is why nothing here tries to shepherd
- * the child. Exiting immediately instead would lose that output and hand the
+ * The parent WAITS. A person in a Traycer-hosted terminal keeps seeing output
+ * through the inherited stdio until the stop kills their terminal; a
+ * host-spawned parent dies with the cgroup, which is the expected end for it
+ * and is why nothing here tries to shepherd the child beyond relaying
+ * termination signals (`relayTerminationSignals`, which the detach makes
+ * necessary). Exiting immediately instead would lose that output and hand the
  * host's `exited` promise a false early settle.
  *
  * THE ACK IS WHAT SEPARATES the two failures that both arrive as an exit code.
@@ -435,6 +436,17 @@ async function runInTransientScope(
       // NDJSON stream and this process writes nothing to it. fd 3 is the ack
       // channel and carries one byte in the other direction.
       stdio: ["inherit", "inherit", "inherit", "pipe"],
+      // The scope moves the child's CGROUP; it does not move its SESSION. In a
+      // Traycer-hosted terminal the child would still be in the session whose
+      // PTY the host owns, so the moment the stop closes that master the kernel
+      // SIGHUPs the terminal's foreground group and takes the relocated updater
+      // with it - the cgroup escape wasted. `detached` is setsid AT SPAWN, so
+      // there is no window in which a handler has to be installed first, and
+      // `systemd-run` stays waiting on the command inside the new session.
+      // The inherited fds come along, which is deliberate: progress stays
+      // visible while the terminal lives, and the child tolerates it going away
+      // (`acknowledgeRelocationEntry`).
+      detached: true,
       env: { ...process.env, [TRAYCER_CLI_RELOCATED_ENV]: "1" },
     });
   } catch (cause) {
@@ -444,6 +456,58 @@ async function runInTransientScope(
     command: commandPath,
     unit: inside.unit,
   });
+  const stopRelay = relayTerminationSignals(child);
+  try {
+    return await waitForRelocatedExit(child, logger, commandPath, inside);
+  } finally {
+    stopRelay();
+  }
+}
+
+/**
+ * Forward this process's SIGINT/SIGTERM to the relocated child's process group.
+ *
+ * Only needed BECAUSE of the detach. While the child shared our process group,
+ * a terminal's Ctrl-C went to both of us at once and no forwarding was called
+ * for - which is why there never was any. `setsid` takes the child out of that
+ * group, so without this relay Ctrl-C would kill the waiting parent and leave
+ * the update running unattended: the opposite of the semantics it had.
+ *
+ * The group (`-pid`), not the pid: `systemd-run --scope` runs the command as
+ * its own child, so signalling only `systemd-run` can leave the command itself
+ * untouched. The child is a group leader by virtue of the detach, so its pgid
+ * is its pid.
+ *
+ * Deliberately no `process.exit` here: the parent keeps waiting so the child
+ * stays the only writer of a terminal envelope, and reports its code as always.
+ */
+function relayTerminationSignals(child: ChildProcess): () => void {
+  const pid = child.pid;
+  if (pid === undefined) return () => undefined;
+  const forward = (signal: NodeJS.Signals): void => {
+    try {
+      process.kill(-pid, signal);
+    } catch {
+      // Already gone, or never became a group leader. Neither is actionable:
+      // the exit we are waiting on is what reports the outcome.
+    }
+  };
+  const onInt = (): void => forward("SIGINT");
+  const onTerm = (): void => forward("SIGTERM");
+  process.on("SIGINT", onInt);
+  process.on("SIGTERM", onTerm);
+  return () => {
+    process.removeListener("SIGINT", onInt);
+    process.removeListener("SIGTERM", onTerm);
+  };
+}
+
+async function waitForRelocatedExit(
+  child: ChildProcess,
+  logger: ILogger,
+  commandPath: string,
+  inside: HostUnitCgroup,
+): Promise<number> {
   return await new Promise<number>((resolve, reject) => {
     // TWO INDEPENDENT FACTS, and neither implies the other:
     //
@@ -523,7 +587,9 @@ async function runInTransientScope(
 }
 
 /**
- * The relocated CLI's half of the ack: one byte on fd 3, at entry.
+ * The relocated CLI's entry duties: say hello on fd 3, and stop depending on a
+ * terminal that is about to be closed underneath it. Both belong at entry and
+ * both are no-ops on an ordinary run, which is why they share the gate.
  *
  * Called first thing in `withRunner`, before the surface check, before argument
  * parsing, before anything the command does - the parent is waiting to learn
@@ -543,6 +609,16 @@ export function acknowledgeRelocationEntry(): void {
     // Nothing is listening, or the write failed. Neither changes what this
     // process was asked to do.
   }
+  // The other half of surviving the stop. This process kept the terminal's fds
+  // 0-2 but left its session, so when the stop closes the PTY master the writes
+  // start failing with EIO instead of the process being SIGHUPed. An unhandled
+  // `error` on `process.stdout` throws, which would kill the update at exactly
+  // the moment the relocation exists to survive. There is nowhere left to
+  // report a write failure to - the place we would report it to is what
+  // vanished - so the only thing to do with it is nothing.
+  const ignore = (): void => undefined;
+  process.stdout.on("error", ignore);
+  process.stderr.on("error", ignore);
 }
 
 function relocationNeverStarted(

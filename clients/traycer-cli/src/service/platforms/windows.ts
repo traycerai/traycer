@@ -397,10 +397,14 @@ async function stopService(
 // terminal - and `taskkill /T` walks down from the host and kills it mid-update:
 // the host is gone, the updater is gone, and nothing finishes the swap. The
 // scan computes which pids to kill (`computeWindowsHostKillSet`) and each one is
-// killed individually. No ordering is imposed: `taskkill /F` on a parent leaves
-// its children running, the VBS launcher re-runs the host only on exit 75 (the
-// refreshed-slot signal) and never after a kill, and the CLI-side supervisor is
-// already silenced by the stop intent written before any of this.
+// killed individually, deepest first (`orderWindowsKillsDescendantsFirst`) so a
+// child is issued its kill before the parent whose death would orphan it. That
+// ordering is a courtesy, not a mechanism - the kills are issued concurrently,
+// and what actually catches a process spawned mid-kill is the victim carry-over
+// below. `taskkill /F` on a parent leaves its children running, the VBS launcher
+// re-runs the host only on exit 75 (the refreshed-slot signal) and never after a
+// kill, and the CLI-side supervisor is already silenced by the stop intent
+// written before any of this.
 //
 // Not `/T` also means nothing sweeps up what is spawned DURING the kill. The
 // scan is a snapshot, so a child the host or one of its agents starts after
@@ -425,9 +429,13 @@ async function killHostProcessTree(
   label: ServiceLabel,
   run: ProcessRunner,
 ): Promise<void> {
+  // What earlier rounds killed, with the age each had when it was killed. The
+  // loop's memory: once a parent is dead the table can no longer prove its
+  // children belong to the slot, and this is the only thing that still can.
+  const priorVictims = new Map<number, number>();
   for (let round = 0; round <= WINDOWS_KILL_CONVERGENCE_ROUNDS; round += 1) {
-    const scannedPids = await findSlotProcessIds(label, run, process.pid);
-    if (scannedPids === null) {
+    const table = await scanSlotProcessTable(label, run);
+    if (table === null) {
       // Before the first kill this refuses to start; after one it refuses to
       // claim the tree came down. Both are the same statement - we cannot see
       // the slot, so we cannot say what is in it - and neither may be softened
@@ -444,7 +452,9 @@ async function killHostProcessTree(
     // The kill boundary, and the only place a pid has to be POSITIVE: the scan
     // and its algebra work over an unfiltered table that includes pid 0, and
     // `isKillableProcessId` is what keeps 0 - and our own pid - out of an argv.
-    const pids = uniqueProcessIds(scannedPids);
+    const pids = uniqueProcessIds(
+      computeWindowsHostKillSet(table, process.pid, priorVictims),
+    );
     // Converged, and the only success: a scan taken AFTER the previous round's
     // kills found nothing left in this slot. Round 0 reaches here whenever
     // there was never anything to kill, which is the ordinary stop of a host
@@ -468,7 +478,14 @@ async function killHostProcessTree(
         exitCode: 1,
       });
     }
-    await killProcessIds(pids, run);
+    await killProcessIds(orderWindowsKillsDescendantsFirst(pids, table), run);
+    // Remembered AFTER the kill, from the snapshot the kill was computed from,
+    // so each victim's age is the one it had while it was alive. A row is
+    // always in the table it was selected from, so the fallback age is
+    // unreachable; 0 is the value the next round refuses to link anything to,
+    // which is the right way for it to be wrong.
+    const created = new Map(table.map((row) => [row.processId, row.created]));
+    for (const pid of pids) priorVictims.set(pid, created.get(pid) ?? 0);
   }
 }
 
@@ -690,11 +707,10 @@ function describeCause(cause: unknown): string {
 // Returns null (rather than an empty list) when the scan could not run at
 // all, so the caller can distinguish "verified: nothing to kill" from
 // "unknown: PowerShell unavailable".
-async function findSlotProcessIds(
+async function scanSlotProcessTable(
   label: ServiceLabel,
   run: ProcessRunner,
-  cliPid: number,
-): Promise<readonly number[] | null> {
+): Promise<readonly WindowsProcessTableRow[] | null> {
   try {
     const result = await run(
       "powershell.exe",
@@ -711,8 +727,7 @@ async function findSlotProcessIds(
         tolerateNonZeroExit: true,
       },
     );
-    const table = parseProcessTableJson(result.stdout);
-    return table === null ? null : computeWindowsHostKillSet(table, cliPid);
+    return parseProcessTableJson(result.stdout);
   } catch (cause) {
     if (isServiceMutationAuthorityError(cause)) throw cause;
     return null;
@@ -780,15 +795,36 @@ function buildSlotProcessTableScanScript(hostHome: string): string {
     "$rows = $table | ForEach-Object {",
     ...SLOT_MATCH_SCRIPT_LINES,
     ...PARENT_EDGE_VALIDATION_SCRIPT_LINES,
+    ...ROW_CREATION_SCRIPT_LINES,
     "    [pscustomobject]@{",
     "      ProcessId = [int]$_.ProcessId",
     "      ParentProcessId = $parentId",
+    // The id the row CLAIMS, unvalidated, alongside the validated one. A
+    // process whose parent this loop killed in an earlier round has a claimed
+    // parent that is in no live table, so the validation above zeroes it - and
+    // that is precisely the row the victim carry-over has to recognise.
+    "      ClaimedParentProcessId = [int]$_.ParentProcessId",
+    "      Created = $createdMs",
     "      Slot = $hostMatch",
     "    }",
     "}",
     "@($rows) | ConvertTo-Json -Compress",
   ].join("\n");
 }
+
+// Sets `$createdMs` for the pipeline row in `$_`: how old the process is, as
+// milliseconds since the Unix epoch, and 0 when Windows reports no creation
+// time at all (pid 0 and System have none). Milliseconds rather than the native
+// FILETIME because a FILETIME is ~1.3e17 - past the point where JSON numbers
+// stay exact - while epoch milliseconds is ~1.7e12 and survives the round trip
+// intact. The unit only ever gets COMPARED, never displayed, so its precision
+// just has to beat the gap between a parent and the child it forks.
+const ROW_CREATION_SCRIPT_LINES: readonly string[] = [
+  "    $createdMs = 0",
+  "    if ($null -ne $_.CreationDate) {",
+  "      $createdMs = [long]($_.CreationDate.ToUniversalTime() - [datetime]'1970-01-01').TotalMilliseconds",
+  "    }",
+];
 
 // Sets `$parentId` for the pipeline row in `$_`: the claimed parent when this
 // snapshot can still vouch for it, and 0 when it cannot. A missing
@@ -875,6 +911,18 @@ export interface WindowsProcessTableRow {
   // and may hand that id to somebody else, which is exactly the claim this
   // field refuses to carry.
   readonly parentProcessId: number;
+  // The parent id the row CLAIMS, with no validation applied. Its only use is
+  // the cross-round victim carry-over: a process whose parent this loop killed
+  // has a claimed parent that no longer appears in any table, so
+  // `parentProcessId` above is 0 and the claim is the only thing left linking
+  // the two. Never treat it as an edge on its own - `created` is what makes it
+  // safe (see `computeWindowsHostKillSet`).
+  readonly claimedParentProcessId: number;
+  // Milliseconds since the Unix epoch, or 0 when Windows reports no creation
+  // time. What turns a claimed parent id into evidence: a process cannot
+  // predate its own parent, so an id whose claimed parent is YOUNGER than it is
+  // a recycled id rather than an ancestry.
+  readonly created: number;
   // Whether the row's executable path or command line matches this slot.
   readonly slot: boolean;
 }
@@ -911,22 +959,34 @@ function parseProcessTableJson(
     const record = value as Record<string, unknown>;
     const processId = record.ProcessId;
     const parentProcessId = record.ParentProcessId;
+    const claimedParentProcessId = record.ClaimedParentProcessId;
+    const created = record.Created;
     const slot = record.Slot;
-    // Both ids are accepted at zero and above. The table is unfiltered, so it
+    // Every id is accepted at zero and above. The table is unfiltered, so it
     // legitimately contains pid 0 (the System Idle Process) and rows with no
     // verified parent; rejecting either would fail the WHOLE parse on every
-    // real machine and silently demote every stop to the pid.json fallback.
+    // real machine and silently refuse every stop on the machine.
     // Deliberately NOT `isKillableProcessId` either: that also rejects our own
     // pid, which is expected in the table too. What may be killed is the
-    // algebra's answer and the kill boundary's, not the parser's.
+    // algebra's answer and the kill boundary's, not the parser's. `Created` is
+    // held to the same shape and reads 0 for "Windows reported no creation
+    // time", which the algebra treats as unusable rather than as age zero.
     if (
       !isProcessTableId(processId) ||
       !isProcessTableId(parentProcessId) ||
+      !isProcessTableId(claimedParentProcessId) ||
+      !isProcessTableId(created) ||
       typeof slot !== "boolean"
     ) {
       return null;
     }
-    rows.push({ processId, parentProcessId, slot });
+    rows.push({
+      processId,
+      parentProcessId,
+      claimedParentProcessId,
+      created,
+      slot,
+    });
   }
   return rows;
 }
@@ -950,10 +1010,27 @@ function parseProcessTableJson(
  * process's child, so `$PID` inside it is a descendant of the answer, and
  * seeding from it spares the branch above the CLI while leaving the CLI's own
  * siblings - the detached upgrade finalizer among them - to be killed.
+ *
+ * `priorVictims` (pid -> creation time) is what the kill loop remembers from
+ * its earlier rounds, and it exists because killing a parent DESTROYS the
+ * evidence linking its children to the slot. A process the host spawned after
+ * round 0's snapshot shows up in round 1 with its parent already dead: the
+ * table cannot vouch for that edge, so the row arrives with `parentProcessId`
+ * 0, and if the child is a shell or a provider binary its own path matches
+ * nothing. It would be an orphan the loop calls convergence on. A row whose
+ * CLAIMED parent is a remembered victim is therefore treated as a descendant of
+ * a verified slot process - seeded, not merely walked to.
+ *
+ * Creation time is what keeps that safe against pid reuse: a child cannot
+ * predate its own parent, so a row claiming a recycled victim id is rejected
+ * the moment it turns out to be OLDER than the victim was. An unknown creation
+ * time on either end (0) is refused rather than assumed, which is the same way
+ * the scan script treats an age it cannot read.
  */
 export function computeWindowsHostKillSet(
   table: readonly WindowsProcessTableRow[],
   cliPid: number,
+  priorVictims: ReadonlyMap<number, number>,
 ): readonly number[] {
   const children = new Map<number, number[]>();
   const parents = new Map<number, number>();
@@ -968,7 +1045,15 @@ export function computeWindowsHostKillSet(
     }
     if (row.slot) slot.add(row.processId);
   }
-  const victims = withDescendants(slot, children);
+  const seeds = new Set<number>(slot);
+  for (const row of table) {
+    if (isChildOfVictim(row, priorVictims)) seeds.add(row.processId);
+  }
+  // Seeded from LIVE rows only. A victim's own pid is deliberately never seeded:
+  // it is dead, so a row bearing it again is a different process wearing a
+  // recycled id, and killing it is the exact mistake this whole scan exists to
+  // avoid.
+  const victims = withDescendants(seeds, children);
   const spared = withDescendants(new Set([cliPid]), children);
   for (const ancestor of ancestorsOf(cliPid, parents)) {
     if (!slot.has(ancestor)) spared.add(ancestor);
@@ -976,6 +1061,58 @@ export function computeWindowsHostKillSet(
   return [...victims]
     .filter((pid) => !spared.has(pid))
     .sort((left, right) => left - right);
+}
+
+// Whether this row is a child of a process an earlier kill round destroyed.
+// Both ages have to be known and the parent's must not be later than the
+// child's: an id whose claimed parent is YOUNGER than it cannot be its parent,
+// which is what a reused pid looks like from here.
+function isChildOfVictim(
+  row: WindowsProcessTableRow,
+  priorVictims: ReadonlyMap<number, number>,
+): boolean {
+  const victimCreated = priorVictims.get(row.claimedParentProcessId);
+  if (victimCreated === undefined) return false;
+  if (victimCreated === 0 || row.created === 0) return false;
+  return victimCreated <= row.created;
+}
+
+/**
+ * The same kill set, ordered so a process is issued its `taskkill` before its
+ * ancestors are. Cheap, and it shrinks the window in which a parent is already
+ * gone while its child is not yet reaped.
+ *
+ * It does NOT replace the victim carry-over, and must not be mistaken for it:
+ * the kills are issued concurrently, so this orders their ISSUE and nothing
+ * more, and a process spawned after the snapshot is not in this list at all at
+ * any ordering. The carry-over is what actually catches that one, a round later.
+ */
+export function orderWindowsKillsDescendantsFirst(
+  pids: readonly number[],
+  table: readonly WindowsProcessTableRow[],
+): readonly number[] {
+  const parents = new Map<number, number>();
+  for (const row of table) parents.set(row.processId, row.parentProcessId);
+  const depthOf = (pid: number): number => {
+    let depth = 0;
+    const seen = new Set<number>([pid]);
+    let cursor = pid;
+    for (;;) {
+      const parent = parents.get(cursor);
+      if (parent === undefined || parent <= 0 || seen.has(parent)) return depth;
+      seen.add(parent);
+      depth += 1;
+      cursor = parent;
+    }
+  };
+  const depths = new Map<number, number>();
+  for (const pid of pids) depths.set(pid, depthOf(pid));
+  // Ties broken by pid so the order is total: a partially-ordered kill list
+  // would make the argv pins below flake on Map iteration order.
+  return [...pids].sort(
+    (left, right) =>
+      (depths.get(right) ?? 0) - (depths.get(left) ?? 0) || left - right,
+  );
 }
 
 // The seeds plus everything under them, walked over the snapshot's own parent
