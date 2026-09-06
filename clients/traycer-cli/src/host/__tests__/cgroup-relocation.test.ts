@@ -26,9 +26,9 @@ vi.mock("../../logger", () => ({
 const mocks = vi.hoisted(() => ({
   platform: "linux" as NodeJS.Platform,
   // A string is the file's contents. `null` fails the read with ENOENT (no
-  // `/proc/self/cgroup`, the supported absence case); an object names the errno
-  // to fail with instead, which is how the "unreadable, so unanswerable" cases
-  // are driven.
+  // `/proc/self/cgroup`); an object names the errno to fail with instead.
+  // Both are "unreadable, so unanswerable": absence refuses like any other
+  // failure.
   cgroup: null as string | null | { readonly errno: string },
   packaged: false,
   // Recorded fd-3 writes from `acknowledgeRelocationEntry`.
@@ -883,22 +883,33 @@ describe("relocateOutOfHostCgroupIfNeeded", () => {
     });
     expect(spawnMocks.recorded).toHaveLength(0);
 
-    // Ablation: in `readHostUnitCgroup`, replace the `isMissingCgroupFile`
-    // branch with a blanket `return null` → this test fails: EACCES resolves
+    // Ablation: in `readHostUnitCgroup`, replace the `throw cliError(...)` in
+    // the catch with `return null` → this test fails: EACCES resolves
     // `not-needed` and the command runs in the cgroup that is about to kill it.
   });
 
-  it("treats an ABSENT /proc/self/cgroup (ENOENT, ENOTDIR) as not inside a host unit", async () => {
-    // Containers, WSL without systemd, a kernel with no cgroup filesystem:
-    // there is no cgroup that can kill us, which is a real answer and not a
-    // failed check.
+  it("REFUSES an ABSENT /proc/self/cgroup (ENOENT, ENOTDIR) - absence says where we cannot look, not where we are", async () => {
+    // Codex on #1755 (post-merge): a mount namespace may hide procfs, or just
+    // this file, while the process is still in the cgroup it was born in and
+    // still reaches the user manager through `$XDG_RUNTIME_DIR`. "Not inside"
+    // there is the stop that kills its issuer. Membership is unknown; refuse.
     for (const errno of ["ENOENT", "ENOTDIR"]) {
       mocks.cgroup = { errno };
       await expect(
         relocateOutOfHostCgroupIfNeeded("host update", {}),
-      ).resolves.toEqual({ kind: "not-needed" });
+      ).rejects.toMatchObject({
+        code: "E_SERVICE_CONTROL_FAILED",
+        message: expect.stringContaining("/proc/self/cgroup is absent"),
+        details: { path: "/proc/self/cgroup", absent: true },
+      });
     }
     expect(spawnMocks.recorded).toHaveLength(0);
+
+    // Ablation: in `readHostUnitCgroup`, add `if (absent) return null;` right
+    // after `const absent = isAbsentPath(cause);` (the pre-#1755-follow-up
+    // behaviour) → this test fails: both errnos resolve `not-needed` and the
+    // command runs inside the cgroup its own stop is about to kill, while the
+    // EACCES test above stays green.
   });
 
   // The four commands whose reachability now depends on the parsed options,
@@ -1152,9 +1163,16 @@ describe("assertNotInsideHostUnit", () => {
     });
   });
 
-  it("resolves when /proc/self/cgroup is ABSENT (ENOENT) - nothing there can kill us", async () => {
+  it("REFUSES when /proc/self/cgroup is ABSENT (ENOENT) - the second line closes the hidden-procfs hole too", async () => {
+    // The guard shares `readHostUnitCgroup` with relocation, so a hidden
+    // cgroup file that slipped past relocation (or a CLI that never ran
+    // through `withRunner`, like `host maintenance-lease`) is refused here
+    // as well.
     mocks.cgroup = { errno: "ENOENT" };
-    await expect(assertNotInsideHostUnit()).resolves.toBeUndefined();
+    await expect(assertNotInsideHostUnit()).rejects.toMatchObject({
+      code: "E_SERVICE_CONTROL_FAILED",
+      details: { path: "/proc/self/cgroup", absent: true },
+    });
   });
 
   it("resolves on darwin even inside a host unit cgroup", async () => {
