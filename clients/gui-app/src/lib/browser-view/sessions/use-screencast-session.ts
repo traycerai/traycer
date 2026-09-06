@@ -218,6 +218,13 @@ export interface ScreencastSessionOptions {
     video: HTMLVideoElement,
     wasActivePlane: boolean,
   ) => void;
+  /**
+   * What `mod+t` means on the surface hosting this tile, or `null` where it
+   * means nothing and the chord belongs to the remote page. See
+   * `readRequestNewTab` in `createScreencastController` for why a streamed
+   * tile has to claim it itself.
+   */
+  readonly onRequestNewTab: (() => void) | null;
 }
 
 /**
@@ -339,6 +346,12 @@ export function useScreencastSession(
    */
   const clientRef = useRef(client);
   const captureDormantSnapshotRef = useRef(options.captureDormantSnapshot);
+  /**
+   * The surface's `mod+t` answer, read by the controller's key handler rather
+   * than captured, so a re-render that hands over a fresh closure reaches a
+   * controller built once for the life of the tile.
+   */
+  const requestNewTabRef = useRef(options.onRequestNewTab);
   const tileRef = useRef<HTMLDivElement | null>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const overlayButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -441,6 +454,7 @@ export function useScreencastSession(
       // The same latest-value ref the dormant snapshot reads, synced by the
       // passive effect below: pointer events always land after that commit.
       readVideoPainting: () => videoActiveRef.current,
+      readRequestNewTab: () => requestNewTabRef.current,
       listeners: {
         // Control, not the arm epoch, is what a render shows: a hover pre-arm
         // holds the epoch at the host but drives nothing.
@@ -798,6 +812,7 @@ export function useScreencastSession(
     clientRef.current = client;
     presentedImageRef.current = planeView.image;
     captureDormantSnapshotRef.current = options.captureDormantSnapshot;
+    requestNewTabRef.current = options.onRequestNewTab;
     videoStatsRef.current = videoStats;
   });
 

@@ -97,6 +97,15 @@ interface BrowserPeekTileProps {
    * starts it.
    */
   readonly onConvertToPip: (() => void) | null;
+  /**
+   * What `mod+t` means here, or `null` where the chord belongs to the page.
+   *
+   * Unlike `onRequestClose` above this one is NOT withheld: it does not retire
+   * the tile, it asks the surface hosting it to open a tab - the streamed twin
+   * of the `newTab` row a native tile gets from main's reserved-chord table.
+   * The canvas passes `null` all the way down, so a canvas tile claims nothing.
+   */
+  readonly onRequestNewTab: (() => void) | null;
   readonly completeMeans: BrowserPeekCompleteMeaning;
 }
 
@@ -125,6 +134,7 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
   const session = useScreencastSession({
     client,
     scope: props.scope,
+    onRequestNewTab: props.onRequestNewTab,
     hostId: node.hostId,
     sessionId: node.sessionId,
     tabId: node.tabId,

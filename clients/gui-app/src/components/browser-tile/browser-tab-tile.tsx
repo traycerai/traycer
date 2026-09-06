@@ -259,6 +259,7 @@ function BrowserTabTileSurface(props: BrowserTabTileSurfaceProps) {
         node={peek}
         visible={props.visible}
         onConvertToPip={props.onConvertToPip}
+        onRequestNewTab={props.onRequestNewTab}
         completeMeans={browserPeekCompleteMeaning(
           props.session.runtime.kind,
           props.canMaterializeElectron,

@@ -33,6 +33,18 @@ import { ignoreError } from "./ignore-error";
  * rebinding UI can warn about a chord a focused browser tile would swallow -
  * the two sides cannot drift.
  *
+ * NATIVE ONLY, and there is a second half. A tile whose pixels are STREAMED
+ * (`BrowserPeekTile`) has no main process in its input path: the app's own
+ * keybinding registry is skipped for every action while a tile is armed
+ * (`keybinding-provider.tsx`), and everything the screencast controller does
+ * not claim is forwarded to the remote page. That controller is where the
+ * browser-scoped rows have to be honoured for a streamed tile, and today it
+ * claims `focusAddressBar` (`mod+l`), reload (`mod+r`) and `newTab`
+ * (`mod+t`, through the surface's own handler). `closeTab` is deliberately
+ * absent there - the streamed viewer owns no close path - and the
+ * APP-FORWARDED rows below have no streamed equivalent at all, because
+ * nothing replays a key into a renderer that is already holding it.
+ *
  * The BROWSER-SCOPED rows are literal tokens, because they are not app
  * bindings at all: they are what a browser does with those keys, and the
  * rebinding UI warns (through `browserScopedChordLabel`) that a focused tile

@@ -73,6 +73,7 @@ function renderTile(): void {
       scope={{ kind: "epic", epicId: "epic-1" }}
       visible={hookState.visible}
       onConvertToPip={() => {}}
+      onRequestNewTab={null}
       node={PEEK_NODE}
       completeMeans="ended"
     />,

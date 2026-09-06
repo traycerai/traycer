@@ -162,6 +162,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
         scope={{ kind: "epic", epicId: "epic-1" }}
         visible={hookState.visible}
         onConvertToPip={() => {}}
+        onRequestNewTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -194,6 +195,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
         scope={{ kind: "epic", epicId: "epic-1" }}
         visible={hookState.visible}
         onConvertToPip={() => {}}
+        onRequestNewTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -212,6 +214,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
         scope={{ kind: "epic", epicId: "epic-1" }}
         visible={hookState.visible}
         onConvertToPip={() => {}}
+        onRequestNewTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -226,6 +229,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
         scope={{ kind: "epic", epicId: "epic-1" }}
         visible={hookState.visible}
         onConvertToPip={() => {}}
+        onRequestNewTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -244,6 +248,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
         scope={{ kind: "epic", epicId: "epic-1" }}
         visible={hookState.visible}
         onConvertToPip={() => {}}
+        onRequestNewTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -264,12 +269,65 @@ describe("BrowserPeekTile shortcuts and paste", () => {
     expect(keyboardFramesFor(stream, "l", "KeyL")).toEqual([]);
   });
 
+  // The streamed twin of the `newTab` row in `reserved-chords-registration.ts`.
+  // A native tile gets that chord from main; a streamed one has no main in its
+  // path, and while a tile is armed the app's own keybinding registry skips
+  // every action (`keybinding-provider.tsx`) - so unclaimed here, Cmd+T is
+  // forwarded to the remote page and the surface's chooser never opens.
+  it("asks the hosting surface for a new tab on Cmd+T without forwarding T", async () => {
+    const onRequestNewTab = vi.fn<() => void>();
+    renderPeekTile(
+      <BrowserPeekTile
+        scope={{ kind: "independent" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
+        onRequestNewTab={onRequestNewTab}
+        node={PEEK_NODE}
+        completeMeans="ended"
+      />,
+    );
+    const stream = liveStream();
+    armPeekTile(stream);
+    await flushMacrotask();
+
+    firePlatformModKey(imeInput(), "keydown", "t", "KeyT");
+    firePlatformModKey(imeInput(), "keyup", "t", "KeyT");
+
+    expect(onRequestNewTab).toHaveBeenCalledOnce();
+    expect(keyboardFramesFor(stream, "t", "KeyT")).toEqual([]);
+  });
+
+  // The canvas passes `null` the whole way down and must NOT gain the panel's
+  // chooser. A surface with no answer claims nothing, so the page keeps its
+  // own Cmd+T - the same split the native tile makes when `onRequestNewTab` is
+  // null.
+  it("forwards Cmd+T to the page when the surface has no new-tab answer", async () => {
+    renderPeekTile(
+      <BrowserPeekTile
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
+        onRequestNewTab={null}
+        node={PEEK_NODE}
+        completeMeans="ended"
+      />,
+    );
+    const stream = liveStream();
+    armPeekTile(stream);
+    await flushMacrotask();
+
+    firePlatformModKey(imeInput(), "keydown", "t", "KeyT");
+
+    expect(keyboardFramesFor(stream, "t", "KeyT")).not.toEqual([]);
+  });
+
   it("reloads on Cmd+R without forwarding R", async () => {
     renderPeekTile(
       <BrowserPeekTile
         scope={{ kind: "epic", epicId: "epic-1" }}
         visible={hookState.visible}
         onConvertToPip={() => {}}
+        onRequestNewTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -298,6 +356,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
         scope={{ kind: "epic", epicId: "epic-1" }}
         visible={hookState.visible}
         onConvertToPip={() => {}}
+        onRequestNewTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -325,6 +384,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
         scope={{ kind: "epic", epicId: "epic-1" }}
         visible={hookState.visible}
         onConvertToPip={() => {}}
+        onRequestNewTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -345,6 +405,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
         scope={{ kind: "epic", epicId: "epic-1" }}
         visible={hookState.visible}
         onConvertToPip={() => {}}
+        onRequestNewTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -376,6 +437,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
         scope={{ kind: "epic", epicId: "epic-1" }}
         visible={hookState.visible}
         onConvertToPip={() => {}}
+        onRequestNewTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -391,6 +453,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
         scope={{ kind: "epic", epicId: "epic-1" }}
         visible={hookState.visible}
         onConvertToPip={() => {}}
+        onRequestNewTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -406,6 +469,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
         scope={{ kind: "epic", epicId: "epic-1" }}
         visible={hookState.visible}
         onConvertToPip={() => {}}
+        onRequestNewTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -427,6 +491,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
         scope={{ kind: "epic", epicId: "epic-1" }}
         visible={hookState.visible}
         onConvertToPip={() => {}}
+        onRequestNewTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -453,6 +518,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
         scope={{ kind: "epic", epicId: "epic-1" }}
         visible={hookState.visible}
         onConvertToPip={() => {}}
+        onRequestNewTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -472,6 +538,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
         scope={{ kind: "epic", epicId: "epic-1" }}
         visible={hookState.visible}
         onConvertToPip={() => {}}
+        onRequestNewTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -492,6 +559,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
         scope={{ kind: "epic", epicId: "epic-1" }}
         visible={hookState.visible}
         onConvertToPip={() => {}}
+        onRequestNewTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -531,6 +599,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
         scope={{ kind: "epic", epicId: "epic-1" }}
         visible={hookState.visible}
         onConvertToPip={() => {}}
+        onRequestNewTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -557,6 +626,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
         scope={{ kind: "epic", epicId: "epic-1" }}
         visible={hookState.visible}
         onConvertToPip={() => {}}
+        onRequestNewTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -588,6 +658,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
         scope={{ kind: "epic", epicId: "epic-1" }}
         visible={hookState.visible}
         onConvertToPip={() => {}}
+        onRequestNewTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -618,6 +689,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
           scope={{ kind: "epic", epicId: "epic-1" }}
           visible={hookState.visible}
           onConvertToPip={() => {}}
+          onRequestNewTab={null}
           node={PEEK_NODE}
           completeMeans="ended"
         />
@@ -650,6 +722,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
           scope={{ kind: "epic", epicId: "epic-1" }}
           visible={hookState.visible}
           onConvertToPip={() => {}}
+          onRequestNewTab={null}
           node={PEEK_NODE}
           completeMeans="ended"
         />
@@ -657,6 +730,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
           scope={{ kind: "epic", epicId: "epic-1" }}
           visible={hookState.visible}
           onConvertToPip={() => {}}
+          onRequestNewTab={null}
           node={sibling}
           completeMeans="ended"
         />
@@ -671,6 +745,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
           scope={{ kind: "epic", epicId: "epic-1" }}
           visible={hookState.visible}
           onConvertToPip={() => {}}
+          onRequestNewTab={null}
           node={PEEK_NODE}
           completeMeans="ended"
         />

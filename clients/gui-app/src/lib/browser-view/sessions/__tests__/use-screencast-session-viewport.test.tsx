@@ -108,6 +108,7 @@ function Harness(props: {
     sessionId: "session-1",
     tabId: "tab-1",
     visible: true,
+    onRequestNewTab: null,
     captureDormantSnapshot: () => {},
   });
   // Destructured to locals before any JSX use: `react-hooks/refs` rejects a

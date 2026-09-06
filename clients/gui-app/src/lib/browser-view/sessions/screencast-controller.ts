@@ -269,10 +269,28 @@ export function createScreencastController(options: {
    * would be aimed at pixels nobody can see.
    */
   readonly readVideoPainting: () => boolean;
+  /**
+   * What the surface hosting this tile does with `mod+t`, or `null` where it
+   * has no answer and the key belongs to the page.
+   *
+   * The streamed half of the `newTab` row in
+   * `reserved-chords-registration.ts`. A native tile gets that chord from
+   * main, which claims the keystroke and names the command back to the tile;
+   * a streamed tile has no main in its path at all - the app's own keybinding
+   * registry is out of the chain while a tile is armed
+   * (`keybinding-provider.tsx` skips every app action then), and everything
+   * this handler does not claim is forwarded to the remote page as input. So
+   * the chord has to be claimed HERE or it is not claimed anywhere.
+   *
+   * Read rather than captured, for the reason every other changing value here
+   * is: the controller outlives the renders that supply it.
+   */
+  readonly readRequestNewTab: () => (() => void) | null;
 }): ScreencastController {
   const {
     listeners,
     readControlPlaneRttMs,
+    readRequestNewTab,
     readVideoPainting,
     refs,
     sendFrame,
@@ -1196,6 +1214,27 @@ export function createScreencastController(options: {
         event.stopPropagation();
         claimedLocalCodes.add(event.code);
         requestNav({ kind: "reload" });
+        return;
+      }
+      if (isScreencastModChord(event, "t")) {
+        // Only when the hosting surface has an answer. A tile whose surface
+        // does not open tabs (the canvas) leaves the chord to the page rather
+        // than swallowing it into nothing - the same split
+        // `agent-browser-tile.tsx` makes on the native side, where a null
+        // handler falls through instead of claiming.
+        const requestNewTab = readRequestNewTab();
+        if (requestNewTab === null) return;
+        event.preventDefault();
+        event.stopPropagation();
+        claimedLocalCodes.add(event.code);
+        // Focus is about to leave for the surface's own chooser, exactly as it
+        // does for the address bar above - so the page has to be told about
+        // the keys it still believes are down, or the modifier this chord was
+        // typed with stays stuck there.
+        if (document.activeElement === refs.imeInputRef.current) {
+          releaseForwardedPageKeys();
+        }
+        requestNewTab();
       }
     },
     handleTileKeyUp: (event) => {

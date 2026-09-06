@@ -154,6 +154,7 @@ describe("BrowserPeekTile", () => {
         scope={{ kind: "epic", epicId: "epic-1" }}
         visible={hookState.visible}
         onConvertToPip={() => {}}
+        onRequestNewTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -173,6 +174,7 @@ describe("BrowserPeekTile", () => {
         scope={{ kind: "epic", epicId: "epic-1" }}
         visible={hookState.visible}
         onConvertToPip={() => {}}
+        onRequestNewTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -237,6 +239,7 @@ describe("BrowserPeekTile", () => {
         scope={{ kind: "epic", epicId: "epic-1" }}
         visible={hookState.visible}
         onConvertToPip={() => {}}
+        onRequestNewTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -268,6 +271,7 @@ describe("BrowserPeekTile", () => {
         scope={{ kind: "epic", epicId: "epic-1" }}
         visible={hookState.visible}
         onConvertToPip={() => {}}
+        onRequestNewTab={null}
         node={PEEK_NODE}
         completeMeans="native-handoff"
       />,
@@ -301,6 +305,7 @@ describe("BrowserPeekTile", () => {
         scope={{ kind: "epic", epicId: "epic-1" }}
         visible={hookState.visible}
         onConvertToPip={() => {}}
+        onRequestNewTab={null}
         node={PEEK_NODE}
         completeMeans="native-elsewhere"
       />,
@@ -333,6 +338,7 @@ describe("BrowserPeekTile", () => {
         scope={{ kind: "epic", epicId: "epic-1" }}
         visible={hookState.visible}
         onConvertToPip={() => {}}
+        onRequestNewTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -344,6 +350,7 @@ describe("BrowserPeekTile", () => {
         scope={{ kind: "epic", epicId: "epic-1" }}
         visible={hookState.visible}
         onConvertToPip={() => {}}
+        onRequestNewTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -354,6 +361,7 @@ describe("BrowserPeekTile", () => {
         scope={{ kind: "epic", epicId: "epic-1" }}
         visible={hookState.visible}
         onConvertToPip={() => {}}
+        onRequestNewTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -385,6 +393,7 @@ describe("BrowserPeekTile", () => {
         scope={{ kind: "epic", epicId: "epic-1" }}
         visible={hookState.visible}
         onConvertToPip={() => {}}
+        onRequestNewTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -429,6 +438,7 @@ describe("BrowserPeekTile", () => {
         scope={{ kind: "epic", epicId: "epic-1" }}
         visible={hookState.visible}
         onConvertToPip={() => {}}
+        onRequestNewTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -472,6 +482,7 @@ describe("BrowserPeekTile", () => {
         scope={{ kind: "epic", epicId: "epic-1" }}
         visible={hookState.visible}
         onConvertToPip={() => {}}
+        onRequestNewTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -519,6 +530,7 @@ describe("BrowserPeekTile", () => {
         scope={{ kind: "epic", epicId: "epic-1" }}
         visible={hookState.visible}
         onConvertToPip={() => {}}
+        onRequestNewTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -560,6 +572,7 @@ describe("BrowserPeekTile", () => {
         scope={{ kind: "epic", epicId: "epic-1" }}
         visible={hookState.visible}
         onConvertToPip={() => {}}
+        onRequestNewTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -626,6 +639,7 @@ describe("BrowserPeekTile", () => {
         scope={{ kind: "epic", epicId: "epic-1" }}
         visible={hookState.visible}
         onConvertToPip={() => {}}
+        onRequestNewTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -680,6 +694,7 @@ describe("BrowserPeekTile", () => {
         scope={{ kind: "epic", epicId: "epic-1" }}
         visible={hookState.visible}
         onConvertToPip={() => {}}
+        onRequestNewTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -728,6 +743,7 @@ describe("BrowserPeekTile", () => {
         scope={{ kind: "epic", epicId: "epic-1" }}
         visible={hookState.visible}
         onConvertToPip={() => {}}
+        onRequestNewTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -841,6 +857,7 @@ describe("BrowserPeekTile", () => {
         scope={{ kind: "epic", epicId: "epic-1" }}
         visible={hookState.visible}
         onConvertToPip={() => {}}
+        onRequestNewTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -883,6 +900,7 @@ describe("BrowserPeekTile", () => {
         scope={{ kind: "epic", epicId: "epic-1" }}
         visible={hookState.visible}
         onConvertToPip={() => {}}
+        onRequestNewTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -895,6 +913,7 @@ describe("BrowserPeekTile", () => {
         scope={{ kind: "epic", epicId: "epic-1" }}
         visible={hookState.visible}
         onConvertToPip={() => {}}
+        onRequestNewTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -912,6 +931,7 @@ describe("BrowserPeekTile", () => {
           scope={{ kind: "epic", epicId: "epic-1" }}
           visible={hookState.visible}
           onConvertToPip={() => {}}
+          onRequestNewTab={null}
           node={PEEK_NODE}
           completeMeans="ended"
         />,
@@ -966,6 +986,7 @@ describe("BrowserPeekTile", () => {
           scope={{ kind: "epic", epicId: "epic-1" }}
           visible={hookState.visible}
           onConvertToPip={() => {}}
+          onRequestNewTab={null}
           node={PEEK_NODE}
           completeMeans="ended"
         />,
@@ -1027,6 +1048,7 @@ describe("BrowserPeekTile rttProbe handling", () => {
         scope={{ kind: "epic", epicId: "epic-1" }}
         visible={hookState.visible}
         onConvertToPip={() => {}}
+        onRequestNewTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -1056,6 +1078,7 @@ describe("BrowserPeekTile rttProbe handling", () => {
         scope={{ kind: "epic", epicId: "epic-1" }}
         visible={hookState.visible}
         onConvertToPip={() => {}}
+        onRequestNewTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,

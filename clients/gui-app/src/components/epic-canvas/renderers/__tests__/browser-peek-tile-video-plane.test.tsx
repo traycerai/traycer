@@ -125,6 +125,7 @@ function renderTile(): void {
       scope={{ kind: "epic", epicId: "epic-1" }}
       visible={hookState.visible}
       onConvertToPip={() => {}}
+      onRequestNewTab={null}
       node={peekNode}
       completeMeans="ended"
     />,
@@ -841,6 +842,7 @@ describe("BrowserPeekTile input ack", () => {
         scope={{ kind: "epic", epicId: "epic-1" }}
         visible={hookState.visible}
         onConvertToPip={() => {}}
+        onRequestNewTab={null}
         node={peekNode}
         completeMeans="ended"
       />,
