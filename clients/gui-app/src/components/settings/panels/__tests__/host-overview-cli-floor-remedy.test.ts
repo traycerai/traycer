@@ -790,7 +790,16 @@ describe("describeCliFloorRemedy", () => {
         cliBinaryPath: "/home/u/bin/traycer",
         copy: false,
       },
-      { platform: null, cliBinaryPath: "/home/u/bin/traycer", copy: false },
+      // A null platform routes by the recorded path's shape, as the manual
+      // arm does; only a path shaped like neither stays copy-less.
+      { platform: null, cliBinaryPath: "/home/u/bin/traycer", copy: true },
+      {
+        platform: null,
+        cliBinaryPath: "C:\\Traycer\\cli\\traycer.exe",
+        copy: true,
+      },
+      { platform: null, cliBinaryPath: "traycer", copy: false },
+      { platform: null, cliBinaryPath: null, copy: false },
     ] as const;
     for (const pathCase of pathCases) {
       const result = describeCliFloorRemedy(

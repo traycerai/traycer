@@ -337,13 +337,16 @@ function describeDesktopCliUpgrade(
 ): CliUpgradeInstructions | null {
   // Never guess PATH for a Desktop-owned CLI: its private slot or a manually
   // re-anchored binary may not be registered there, or may name another copy.
-  if (input.platform === null || input.cliBinaryPath === null) return null;
-  if (input.platform.startsWith("win32")) {
+  // Same route decision as the manual arm - a null platform is answered by
+  // the recorded path's shape, never read as "no route".
+  if (input.cliBinaryPath === null) return null;
+  const route = cliUpgradeRoute(input.platform, input.cliBinaryPath);
+  if (route === "windows") {
     return isAbsoluteWindowsPath(input.cliBinaryPath)
       ? describeWindowsCliUpgrade(input)
       : null;
   }
-  if (!input.cliBinaryPath.startsWith("/")) return null;
+  if (route !== "posix" || !input.cliBinaryPath.startsWith("/")) return null;
   return {
     sentence: `Open a terminal on ${input.hostName} and run the copied command, then select Check now.`,
     command: posixCliUpgradeCommand(input.cliBinaryPath),
