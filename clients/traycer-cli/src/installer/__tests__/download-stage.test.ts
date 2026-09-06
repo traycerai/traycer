@@ -112,6 +112,10 @@ import {
   type HostUpdateAttemptRecord,
 } from "@traycer-clients/shared/host-update";
 import { encodeInstallGeneration } from "@traycer-clients/shared/host-version/install-generation";
+import {
+  expectReached,
+  expectStillGated,
+} from "../../__tests__/support/barrier-gate";
 
 const ENV: Environment = "production";
 let archiveTmpDir = "";
@@ -1854,69 +1858,131 @@ describe("downloadAndStageHost", () => {
   });
 
   describe("beforeExtract barrier (shared with stageHostInstallSource)", () => {
-    it("is awaited after downloadAndVerify resolves and before extraction begins", async () => {
+    it("blocks extraction until the hook RESOLVES, after downloadAndVerify has returned", async () => {
       await writeInstall("1.0.0", {});
       const versions = [
         { version: "1.0.0", yanked: false },
         { version: "1.5.0", yanked: false },
       ];
       const order: string[] = [];
-      const gate = makeGate();
-      const started = makeGate();
+      const downloadGate = makeGate();
+      const downloadStarted = makeGate();
+      // Released by the FIRST `extract` progress event, which
+      // `stageVerifiedSource` emits immediately before `extractHostSource`.
+      // While the hook is pending this must never fire.
+      const extractionStarted = makeGate();
+      const hookEntered = makeGate();
+      const hookGate = makeGate();
       const client = fakeRegistryClient({
         latest: "1.5.0",
         versions,
-        downloadGate: gate.promise,
+        downloadGate: downloadGate.promise,
         onDownloadStart: () => {
           order.push("download-start");
-          started.release();
+          downloadStarted.release();
         },
       });
+
       const downloadPromise = downloadAndStageHost({
         environment: ENV,
         versionRequest: null,
         automatic: true,
         onProgress: (info) => {
-          // `createExtractHeartbeat` emits its own "extract" progress ticks
-          // per entry on top of `stageVerifiedSource`'s single boundary
-          // event, so only the FIRST one marks the edge this test cares
-          // about - dedupe consecutive repeats rather than counting them.
+          // `createExtractHeartbeat` emits its own "extract" ticks per entry
+          // on top of that single boundary event, so only the FIRST one
+          // marks the edge - dedupe consecutive repeats.
           if (
             info.stage === "extract" &&
             order[order.length - 1] !== "progress-extract"
           ) {
             order.push("progress-extract");
+            extractionStarted.release();
           }
         },
         registryClient: client,
         onWillDownload: null,
         beforeExtract: async () => {
           order.push("before-extract");
-          // The AFTER-download edge: `downloadAndVerify` has already
-          // returned by the time `beforeExtract` runs, so the verified
-          // archive it handed back is on disk (sha256/minisign happen
-          // inside that call, before it resolves).
+          // The AFTER-verification edge: `downloadAndVerify` has already
+          // RETURNED (sha256 in the transport, minisign in the registry
+          // client both happen inside it), so its verified archive is on
+          // disk by the time this runs.
           expect(existsSync(lastFakeArchivePath)).toBe(true);
+          hookEntered.release();
+          await hookGate.promise;
         },
         ownAttempt: null,
       });
-      await started.promise;
-      gate.release();
-      await downloadPromise;
 
-      // The BEFORE-extraction edge: `before-extract` precedes the FIRST
-      // `extract` progress event `stageVerifiedSource` emits immediately
-      // before its `extractHostSource` call - the two await in strict
-      // sequence, so this ordering is exact, not merely "eventually".
+      await downloadStarted.promise;
+      downloadGate.release();
+      await expectReached(hookEntered.promise, "beforeExtract");
+      // The BEFORE-extraction edge, and the one an ordering array cannot
+      // prove on its own: while this hook is pending, extraction has not
+      // begun. An unawaited call would have raced ahead by now.
+      await expectStillGated(extractionStarted.promise, "extraction started");
+      expect(order).toEqual(["download-start", "before-extract"]);
+
+      hookGate.release();
+      const outcome = await downloadPromise;
+
+      expect(outcome).toMatchObject({
+        outcome: "promoted",
+        stagedVersion: "1.5.0",
+      });
       expect(order).toEqual([
         "download-start",
         "before-extract",
         "progress-extract",
       ]);
-      // Falsification: move `beforeExtract` before the `await
-      // client.downloadAndVerify(...)` call, or drop its `await`, and
-      // either the archive-exists assertion inside the hook fails or
-      // "before-extract" moves ahead of "download-start" in `order`.
+      // Falsification: change `await opts.beforeExtract()` in
+      // `stageVerifiedSource` to `void opts.beforeExtract()` and extraction
+      // runs while this hook is still pending - `expectStillGated` above
+      // sees "fired" and the interim `order` assertion also reddens.
+    });
+
+    it("propagates a rejecting hook, extracts nothing, and leaves no owned temp behind", async () => {
+      await writeInstall("1.0.0", {});
+      const versions = [
+        { version: "1.0.0", yanked: false },
+        { version: "1.5.0", yanked: false },
+      ];
+      let extractProgressSeen = false;
+      const client = fakeRegistryClient({
+        latest: "1.5.0",
+        versions,
+        downloadGate: null,
+        onDownloadStart: null,
+      });
+
+      await expect(
+        downloadAndStageHost({
+          environment: ENV,
+          versionRequest: null,
+          automatic: true,
+          onProgress: (info) => {
+            if (info.stage === "extract") extractProgressSeen = true;
+          },
+          registryClient: client,
+          onWillDownload: null,
+          beforeExtract: async () => {
+            throw new Error("the writer refused the preparing phase");
+          },
+          ownAttempt: null,
+        }),
+      ).rejects.toThrow("the writer refused the preparing phase");
+
+      // Nothing was extracted and nothing was promoted: the barrier is
+      // upstream of both.
+      expect(extractProgressSeen).toBe(false);
+      expect(await readHostStagedRecord(ENV)).toBeNull();
+      // The `finally` cleanup owns the owner-tokened temp on every throw
+      // path, this new one included - a hook that refuses must not leak a
+      // staging tree.
+      expect(readdirSync(stagingRootFor(ENV))).toEqual([]);
+      // Falsification: swallow the hook's rejection in `stageVerifiedSource`
+      // (call it inside a `try {} catch {}`) and this resolves `promoted`
+      // with `extractProgressSeen` true.
     });
   });
 
