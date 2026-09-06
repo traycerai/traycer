@@ -329,8 +329,8 @@ export function useHostOverviewUpdates(input: {
     platformKey: input.platformKey,
     source: check.source,
   });
-  const { cliFloor, stagedFloor, stagedEntryKnown, remedy } =
-    deriveFloorRemedies({
+  const { cliFloor, stagedEntryOfferable, remedy } = deriveCliFloorAndForceGate(
+    {
       manifest: actionableManifest,
       summaryCandidate,
       stagedVersion: input.stagedVersion,
@@ -339,7 +339,8 @@ export function useHostOverviewUpdates(input: {
       isLocalMachine: input.isLocalMachine,
       desktopUpdate: input.desktopUpdate,
       hostName,
-    });
+    },
+  );
   // Read off the resolved target rather than `manifest.latest`, which for an
   // installed-RC catalog is the WRONG pointer: `latest` tracks the stable
   // channel, so a host on `2.0.0-rc.1` sees `1.9.0` there and would be told it
@@ -370,8 +371,7 @@ export function useHostOverviewUpdates(input: {
   return {
     degrade,
     cliFloor,
-    stagedFloor,
-    stagedEntryKnown,
+    stagedEntryOfferable,
     // The staged-wait force: the SAME dispatch as a row's Install, with
     // `force: true`, so the accepted latch, the invalidations and the
     // outcome toasts are the ones every other install on this page gets.
@@ -495,8 +495,7 @@ export interface HostOverviewUpdatesState {
   readonly summary: HostOverviewUpdatesSummary;
   readonly picker: VersionPickerProps;
   readonly cliFloor: CliFloor | null;
-  readonly stagedFloor: CliFloor | null;
-  readonly stagedEntryKnown: boolean;
+  readonly stagedEntryOfferable: boolean;
   /**
    * `host.update.install {version, force: true}` — the staged-wait force.
    * `onSettled` runs once the request answers or fails, so the confirmation
@@ -877,7 +876,7 @@ interface ForceUpdateRefusal {
   readonly checkDataUpdatedAt: number;
 }
 
-function deriveFloorRemedies(input: {
+function deriveCliFloorAndForceGate(input: {
   readonly manifest: HostAvailableManifest | null;
   readonly summaryCandidate: SummaryUpdateCandidate | null;
   readonly stagedVersion: string | null;
@@ -888,20 +887,33 @@ function deriveFloorRemedies(input: {
   readonly hostName: string;
 }): {
   readonly cliFloor: CliFloor | null;
-  readonly stagedFloor: CliFloor | null;
-  readonly stagedEntryKnown: boolean;
+  readonly stagedEntryOfferable: boolean;
   readonly remedy: CliFloorRemedy | null;
 } {
-  // The shared summary walk skips yanked releases, but a staged floor must
-  // still refuse Force even when the staged release has been yanked.
-  const staged = input.manifest?.versions.find(
-    (entry) => entry.version === input.stagedVersion,
-  );
+  // The staged release is not part of the summary walk (it was chosen
+  // earlier, by a catalog that may since have withdrawn it); its gates live
+  // in `describeForceUpdateRefusal`, which the Force offer and the Force
+  // dispatch both read. A withdrawn stage has no floor to remedy - no CLI
+  // version installs a yanked release - so the refusal names the withdrawal
+  // rather than a CLI requirement.
   const cliFloor = input.summaryCandidate?.cliFloor ?? null;
   return {
     cliFloor,
-    stagedFloor: readCliFloor(staged, input.platformKey),
-    stagedEntryKnown: staged !== undefined,
+    // ONE predicate for "may Force be offered" and "may Force dispatch": the
+    // same refusal the dispatch revalidates at confirmation. A stage the
+    // catalog has dropped or withdrawn is not offered - the CLI would purge
+    // the stage (`discardIneligibleStagedVersion`) and then refuse the
+    // version, so the offer could only ever destroy the parked stage. See
+    // `describeForceUpdateRefusal` for why an unavailable asset is NOT in
+    // that set.
+    stagedEntryOfferable:
+      input.stagedVersion !== null &&
+      describeForceUpdateRefusal({
+        manifest: input.manifest,
+        version: input.stagedVersion,
+        platformKey: input.platformKey,
+        hostName: input.hostName,
+      }) === null,
     remedy:
       cliFloor === null
         ? null
@@ -944,13 +956,45 @@ function describeForceUpdateRefusal(input: {
   const entry = input.manifest?.versions.find(
     (candidate) => candidate.version === input.version,
   );
-  const floor = readCliFloor(entry, input.platformKey);
-  if (entry !== undefined && floor === null) return null;
-  if (floor !== null && floor.requiredCliVersion !== null) {
-    return `v${input.version} needs Traycer CLI ${floor.requiredCliVersion} or newer on ${input.hostName}. Update the command-line tools first.`;
+  // The gates that matter for the one version Force names - a version whose
+  // bytes are ALREADY staged, downloaded and verified. That is narrower than
+  // the summary walk's: the CLI's stage reconcile purges a stage only when
+  // the catalog no longer lists the version or has yanked it
+  // (`discardIneligibleStagedVersion`), and an already-staged target
+  // short-circuits before any asset is resolved again, so a platform build
+  // the catalog has since marked unavailable still installs from the stage.
+  // Refusing that would strand a downloaded update behind a control that
+  // vanished. What does refuse: an entry the catalog dropped or withdrew
+  // (the confirmation could only destroy the stage); an asset this page
+  // cannot RESOLVE (nothing about the floor can be read - a deliberate
+  // narrowing for a host whose record carries no platform against a
+  // multi-platform entry; the CLI's own `host update --force` still works
+  // there); and a CLI floor. The floor is a PRODUCT gate, not a CLI one:
+  // the CLI would install the staged bytes, and the resulting host would
+  // then refuse the client that installed it, which is not a state this
+  // page offers to enter. The staged version is normally also the best
+  // target, whose floor renders the remedy card.
+  if (entry === undefined) {
+    // An absent entry, failed check, or incomplete refusal cannot name a
+    // floor.
+    return `Traycer couldn't verify that v${input.version} can be installed on ${input.hostName}. Select Check now and try again.`;
   }
-  // An absent entry, failed check, or incomplete refusal cannot name a floor.
-  return `Traycer couldn't verify that v${input.version} can be installed on ${input.hostName}. Select Check now and try again.`;
+  if (entry.yanked) {
+    return `v${input.version} has been withdrawn and can't be installed on ${input.hostName}. Select Check now for the current catalog.`;
+  }
+  if (platformAssetFor(entry.platforms, input.platformKey) === null) {
+    // No asset RESOLVED - an unknown platform key against a multi-platform
+    // entry, or a key the entry does not carry. Not proof the release is
+    // unavailable here, only that this page cannot read a floor for it.
+    return `Traycer couldn't verify that v${input.version} can be installed on ${input.hostName}. Select Check now and try again.`;
+  }
+  const floor = readCliFloor(entry, input.platformKey);
+  if (floor !== null) {
+    return floor.requiredCliVersion !== null
+      ? `v${input.version} needs Traycer CLI ${floor.requiredCliVersion} or newer on ${input.hostName}. Update the command-line tools first.`
+      : `Traycer couldn't verify that v${input.version} can be installed on ${input.hostName}. Select Check now and try again.`;
+  }
+  return null;
 }
 
 interface ForceRefusalEvidence {

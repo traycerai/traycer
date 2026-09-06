@@ -177,6 +177,41 @@ vi.mock("../../installer/apply", () => ({
   },
 }));
 
+// SAFETY: `buildHostUpdateCommand` reads the REAL `~/.traycer/host/pid.json`
+// for activation debt and re-derives it after a no-op apply, and it writes
+// the REAL update-progress marker. Left unmocked on a developer machine, the
+// `applyHost` no-op above reads the developer's live host as debt against the
+// mocked 1.0.0 record, asks the live host whether it is busy, and tries to
+// restart it - and leaves a `failed` marker in the real host home when the
+// service mock cannot. Every test here that runs `host update` sees "no
+// running host" and an in-memory marker.
+vi.mock("../../host/pid-metadata", () => ({
+  readHostPidMetadata: vi.fn(async () => null),
+}));
+
+vi.mock("../../host/update-progress-marker", () => ({
+  claimUpdateProgressMarkerBeforeLock: vi.fn(async () => ({
+    outcome: "published",
+    displaced: null,
+  })),
+  createUpdateProgressMarkerIfAbsent: vi.fn(async () => "created"),
+  readUpdateProgressMarker: vi.fn(async () => null),
+  replaceUpdateProgressMarkerIfUnchanged: vi.fn(async () => "replaced"),
+  deleteUpdateProgressMarkerIfUnchanged: vi.fn(async () => "cleared"),
+  deleteUpdateProgressMarker: vi.fn(async () => {}),
+  writeUpdateProgressMarker: vi.fn(async () => {}),
+  progressRecord: (fields: {
+    state: "updating" | "failed";
+    error: string | null;
+    targetVersion: string;
+  }) => ({
+    ...fields,
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    writerId: "test-writer",
+  }),
+  sameProgress: () => true,
+}));
+
 vi.mock("../../host/free-port-kill", () => ({
   killConflictingPortOwner: async (opts: {
     readonly pid: number;

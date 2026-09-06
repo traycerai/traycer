@@ -48,6 +48,7 @@ import {
   screen,
   waitFor,
   within,
+  type RenderHookResult,
   type RenderResult,
 } from "@testing-library/react";
 import { toast } from "sonner";
@@ -81,7 +82,10 @@ import {
   openHostOverviewMenu,
   type OverviewHostFixture,
 } from "@/components/settings/panels/__tests__/host-overview-test-support";
-import { useHostOverviewUpdates } from "@/components/settings/panels/host-overview-updates-state";
+import {
+  useHostOverviewUpdates,
+  type HostOverviewUpdatesState,
+} from "@/components/settings/panels/host-overview-updates-state";
 
 /**
  * The version PICKER that replaced the single "Update to v<latest>" button
@@ -497,7 +501,10 @@ function renderUpdatesHook(
   hostId: string,
   runningVersion: string,
   stagedVersion: string | null,
-) {
+): RenderHookResult<
+  HostOverviewUpdatesState,
+  { readonly children: ReactNode }
+> {
   const queryClient = newQueryClient();
   return renderHook(
     () =>
@@ -2220,7 +2227,14 @@ describe("Overview updates — CLI floor remedy", () => {
     // negative summary pin must turn RED under that source-predicate ablation.
     expect(yankedRendered.result.current.cliFloor).toBeNull();
     expect(yankedRendered.result.current.summary.remedy).toBeNull();
-    expect(yankedRendered.result.current.stagedFloor).not.toBeNull();
+    // `describeForceUpdateRefusal` checks `entry.yanked` BEFORE it ever reads
+    // a CLI floor - a withdrawn release has no floor to remedy (no CLI
+    // version installs a yanked release), so the withdrawal text wins over
+    // the "needs Traycer CLI X" text this same staged version would
+    // otherwise carry. `stagedFloor` no longer exists as a separate field;
+    // `stagedEntryOfferable` is the one predicate both the offer and the
+    // dispatch read, and it is false here.
+    expect(yankedRendered.result.current.stagedEntryOfferable).toBe(false);
 
     let returned = false;
     const onSettled = vi.fn(() => {
@@ -2235,8 +2249,9 @@ describe("Overview updates — CLI floor remedy", () => {
     });
     expect(onSettled).toHaveBeenCalledTimes(1);
     expect(installCalls).toEqual([]);
+    // The withdrawal text, not the floor text: yanked is checked first.
     expect(yankedRendered.result.current.summary.failureDescription).toContain(
-      "v1.3.0 needs Traycer CLI 1.3.0 or newer on host-a.",
+      "v1.3.0 has been withdrawn and can't be installed on host-a.",
     );
     yankedRendered.unmount();
   });
@@ -2366,6 +2381,352 @@ describe("Overview updates — CLI floor remedy", () => {
     // not expose Update now. This visible npm-floor pin must turn RED.
     expect(screen.getByRole("button", { name: "Copy command" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Update now" })).toBeNull();
+  });
+});
+
+// `stagedEntryOfferable` (host-overview-updates-state.ts): the ONE predicate
+// that gates both whether the panel OFFERS Force for a staged-wait version
+// and whether `installForce` actually DISPATCHES it - both read
+// `describeForceUpdateRefusal` for the staged version. A withdrawn or
+// asset-unavailable stage is never offered; the CLI would purge the parked
+// stage and then refuse the version anyway, so offering it could only ever
+// destroy the stage for nothing.
+describe("Overview updates — stagedEntryOfferable", () => {
+  it("a yanked staged entry is not offerable, and installForce refuses with the withdrawal text without dispatching", async () => {
+    const base = multiVersionManifest(["1.3.0"]);
+    const yankedEntry = { ...base.versions[0], yanked: true };
+    const manifest = { ...base, versions: [yankedEntry] };
+    const installCalls: Array<{ version: string; force: boolean }> = [];
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: false,
+      hostVersion: "1.2.0",
+      overrideHandlers: {
+        "host.update.check": () => ({
+          outcome: "ok" as const,
+          effectiveIncludePreReleases: false,
+          includePreReleasesSource: "stable-default" as const,
+          manifest,
+        }),
+        "host.update.install": (request) => {
+          installCalls.push({ version: request.version, force: request.force });
+          return { outcome: "accepted" as const, attemptId: null };
+        },
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    const rendered = renderUpdatesHook(
+      fixture.client,
+      "host-a",
+      "1.2.0",
+      "1.3.0",
+    );
+    await waitFor(() =>
+      expect(rendered.result.current.picker.awaitingFirstCheck).toBe(false),
+    );
+    // Falsification: check `entry.yanked` after the floor read instead of
+    // before in `describeForceUpdateRefusal`, and `stagedEntryOfferable`
+    // would still read false here (no floor either), but the failure text
+    // asserted below would be the "couldn't verify" catch-all instead of
+    // naming the withdrawal specifically.
+    expect(rendered.result.current.stagedEntryOfferable).toBe(false);
+
+    let returned = false;
+    const onSettled = vi.fn(() => {
+      expect(returned).toBe(false);
+    });
+    act(() => {
+      rendered.result.current.installForce("1.3.0", onSettled);
+      returned = true;
+    });
+    expect(onSettled).toHaveBeenCalledTimes(1);
+    expect(installCalls).toEqual([]);
+    expect(rendered.result.current.summary.failureDescription).toContain(
+      "v1.3.0 has been withdrawn and can't be installed on host-a.",
+    );
+    rendered.unmount();
+  });
+
+  it("a staged entry whose asset RESOLVED but is unavailable for this platform (not a floor) IS offerable - an already-staged version installs from the stage regardless", async () => {
+    // `describeForceUpdateRefusal` checks the CATALOG's disposition of the
+    // version (absent, yanked, unresolvable asset, CLI floor) - it never
+    // reads `asset.available` on its own. The CLI's own
+    // `discardIneligibleStagedVersion` purges a parked stage only when the
+    // catalog no longer lists the version or has yanked it; an already-
+    // staged target then short-circuits before any asset is resolved again,
+    // so a platform build the catalog has since marked unavailable still
+    // installs from the stage. Refusing the offer here would strand a
+    // downloaded update behind a control that has already vanished.
+    const base = multiVersionManifest(["1.3.0"]);
+    const unavailableEntry = {
+      ...base.versions[0],
+      platforms: {
+        "darwin-arm64": {
+          ...base.versions[0].platforms["darwin-arm64"],
+          available: false,
+          unavailableReason: "platform build withdrawn",
+        },
+      },
+    };
+    const manifest = { ...base, versions: [unavailableEntry] };
+    const installCalls: Array<{ version: string; force: boolean }> = [];
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: false,
+      hostVersion: "1.2.0",
+      overrideHandlers: {
+        "host.update.check": () => ({
+          outcome: "ok" as const,
+          effectiveIncludePreReleases: false,
+          includePreReleasesSource: "stable-default" as const,
+          manifest,
+        }),
+        "host.update.install": (request) => {
+          installCalls.push({ version: request.version, force: request.force });
+          return { outcome: "accepted" as const, attemptId: null };
+        },
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    const rendered = renderUpdatesHook(
+      fixture.client,
+      "host-a",
+      "1.2.0",
+      "1.3.0",
+    );
+    await waitFor(() =>
+      expect(rendered.result.current.picker.awaitingFirstCheck).toBe(false),
+    );
+    // Not a floor: `requiredCliVersion` is null on this entry, so a bug that
+    // gated `stagedEntryOfferable` on the floor alone would wrongly read
+    // false here.
+    expect(rendered.result.current.cliFloor).toBeNull();
+    expect(rendered.result.current.stagedEntryOfferable).toBe(true);
+
+    // Falsification: add an `assetUnavailableReason` refusal back to
+    // `describeForceUpdateRefusal` and `installCalls` below stays empty.
+    act(() => {
+      rendered.result.current.installForce("1.3.0", () => {});
+    });
+    await waitFor(() => {
+      expect(installCalls).toEqual([{ version: "1.3.0", force: true }]);
+    });
+    rendered.unmount();
+  });
+
+  it("a staged entry that is known, not yanked, with a usable asset and no floor is offerable (positive control)", async () => {
+    const manifest = multiVersionManifest(["1.3.0"]);
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: false,
+      hostVersion: "1.2.0",
+      overrideHandlers: {
+        "host.update.check": () => ({
+          outcome: "ok" as const,
+          effectiveIncludePreReleases: false,
+          includePreReleasesSource: "stable-default" as const,
+          manifest,
+        }),
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    const rendered = renderUpdatesHook(
+      fixture.client,
+      "host-a",
+      "1.2.0",
+      "1.3.0",
+    );
+    await waitFor(() =>
+      expect(rendered.result.current.picker.awaitingFirstCheck).toBe(false),
+    );
+    expect(rendered.result.current.stagedEntryOfferable).toBe(true);
+    rendered.unmount();
+  });
+
+  it("an unresolved platform asset (null platformKey against a multi-platform entry) is not offerable, and reads as 'couldn't verify'", async () => {
+    // CodeRabbit r3944197329: a `platformKey` this page cannot resolve is
+    // NOT the same claim as "the release can't install here" - it is a
+    // claim this page cannot make at all, so the refusal text has to be the
+    // generic "couldn't verify" catch-all, never the asset-unavailable text
+    // (which would assert a fact the code does not actually know).
+    //
+    // A null `platformKey` is not reachable through the panel itself - the
+    // Force offer is gated by this same `describeForceUpdateRefusal`
+    // predicate, so a person never sees an offer this dispatch would then
+    // refuse. This test pins the dispatch guard as a contract in its own
+    // right, independent of whatever gates the offer above it.
+    const base = multiVersionManifest(["1.3.0"]);
+    const multiPlatformEntry = {
+      ...base.versions[0],
+      platforms: {
+        ...base.versions[0].platforms,
+        "linux-x64": {
+          ...base.versions[0].platforms["darwin-arm64"],
+        },
+      },
+    };
+    const manifest = { ...base, versions: [multiPlatformEntry] };
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: false,
+      hostVersion: "1.2.0",
+      overrideHandlers: {
+        "host.update.check": () => ({
+          outcome: "ok" as const,
+          effectiveIncludePreReleases: false,
+          includePreReleasesSource: "stable-default" as const,
+          manifest,
+        }),
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    const queryClient = newQueryClient();
+    const rendered = renderHook(
+      () =>
+        useHostOverviewUpdates({
+          client: fixture.client,
+          hostName: "host-a",
+          hostId: "host-a",
+          runningVersion: "1.2.0",
+          activationDebt: null,
+          platformKey: null,
+          cliManifest: null,
+          isLocalMachine: false,
+          desktopUpdate: null,
+          stagedVersion: "1.3.0",
+          enabled: true,
+          checkDegrade: null,
+          installDegrade: null,
+          busy: false,
+        }),
+      {
+        wrapper: (props: { readonly children: ReactNode }) => (
+          <QueryClientProvider client={queryClient}>
+            {props.children}
+          </QueryClientProvider>
+        ),
+      },
+    );
+    await waitFor(() =>
+      expect(rendered.result.current.picker.awaitingFirstCheck).toBe(false),
+    );
+    expect(rendered.result.current.stagedEntryOfferable).toBe(false);
+
+    let returned = false;
+    const onSettled = vi.fn(() => {
+      expect(returned).toBe(false);
+    });
+    act(() => {
+      rendered.result.current.installForce("1.3.0", onSettled);
+      returned = true;
+    });
+    expect(onSettled).toHaveBeenCalledTimes(1);
+    expect(rendered.result.current.summary.failureDescription).toContain(
+      "Traycer couldn't verify that v1.3.0 can be installed on host-a.",
+    );
+    rendered.unmount();
+  });
+
+  it("a force refusal for a yanked staged version is retired only once a later check lists it un-yanked", async () => {
+    // Exercised through the hook directly (not the panel/dialog chrome) so
+    // this pins `retireForceRefusalIfRefuted`'s own predicate - a strictly
+    // NEWER successful check whose manifest no longer refuses the exact
+    // refused version - rather than incidental dialog wiring. Fake timers
+    // (as the sibling "rechecks a repaired manifest" panel test above also
+    // needs) guarantee `checkQuery.dataUpdatedAt` strictly increases between
+    // the refusal and each recheck; without that, the retire predicate's
+    // strict `>` comparison could tie and never fire.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const base = multiVersionManifest(["1.3.0"]);
+      let manifest: HostAvailableManifest = {
+        ...base,
+        versions: [{ ...base.versions[0], yanked: true }],
+      };
+      const fixture = buildOverviewHostFixture({
+        hostId: "host-a",
+        isLocalMachine: false,
+        hostVersion: "1.2.0",
+        overrideHandlers: {
+          "host.update.check": () =>
+            Promise.resolve({
+              outcome: "ok" as const,
+              effectiveIncludePreReleases: false,
+              includePreReleasesSource: "stable-default" as const,
+              manifest,
+            }),
+        },
+      });
+      recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+      const queryClient = newQueryClient();
+      const rendered = renderHook(
+        () =>
+          useHostOverviewUpdates({
+            client: fixture.client,
+            hostName: "host-a",
+            hostId: "host-a",
+            runningVersion: "1.2.0",
+            activationDebt: null,
+            platformKey: "darwin-arm64",
+            cliManifest: null,
+            isLocalMachine: false,
+            desktopUpdate: null,
+            stagedVersion: "1.3.0",
+            enabled: true,
+            checkDegrade: null,
+            installDegrade: null,
+            busy: false,
+          }),
+        {
+          wrapper: (props: { readonly children: ReactNode }) => (
+            <QueryClientProvider client={queryClient}>
+              {props.children}
+            </QueryClientProvider>
+          ),
+        },
+      );
+      await waitFor(() =>
+        expect(rendered.result.current.picker.awaitingFirstCheck).toBe(false),
+      );
+
+      act(() => {
+        rendered.result.current.installForce("1.3.0", () => {});
+      });
+      await waitFor(() =>
+        expect(rendered.result.current.summary.failureDescription).toContain(
+          "v1.3.0 has been withdrawn and can't be installed on host-a.",
+        ),
+      );
+
+      // A later successful check that STILL lists the version as yanked must
+      // NOT retire the refusal - the fact it was refused for has not changed.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000);
+        await queryClient.invalidateQueries();
+      });
+      await waitFor(() =>
+        expect(rendered.result.current.summary.failureDescription).toContain(
+          "v1.3.0 has been withdrawn and can't be installed on host-a.",
+        ),
+      );
+
+      // A later check that lists the SAME version un-yanked retires it - the
+      // fact the refusal named is no longer true.
+      manifest = {
+        ...base,
+        versions: [{ ...base.versions[0], yanked: false }],
+      };
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000);
+        await queryClient.invalidateQueries();
+      });
+      await waitFor(() =>
+        expect(rendered.result.current.summary.failureDescription).toBeNull(),
+      );
+      rendered.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

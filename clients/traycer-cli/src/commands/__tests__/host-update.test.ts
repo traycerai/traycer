@@ -37,7 +37,11 @@ const mocks = vi.hoisted(() => ({
   // daemon can fold in-flight/failed update state into `host.status@1.1`.
   // Mocked so this suite never touches the real marker file or opens a real
   // TCP probe against a host that isn't running.
-  writeUpdateProgressMarkerMock: vi.fn(),
+  //
+  // The pre-lock publish primitive (`host-update.ts`'s `publishUpdating`
+  // calls this, never `writeUpdateProgressMarker` - that unconditional write
+  // has no production caller left).
+  claimUpdateProgressMarkerBeforeLockMock: vi.fn(),
   deleteUpdateProgressMarkerMock: vi.fn(),
   readUpdateProgressMarkerMock: vi.fn(),
   deleteUpdateProgressMarkerIfUnchangedMock: vi.fn(),
@@ -63,7 +67,8 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../host/update-progress-marker", () => ({
-  writeUpdateProgressMarker: mocks.writeUpdateProgressMarkerMock,
+  claimUpdateProgressMarkerBeforeLock:
+    mocks.claimUpdateProgressMarkerBeforeLockMock,
   deleteUpdateProgressMarker: mocks.deleteUpdateProgressMarkerMock,
   readUpdateProgressMarker: mocks.readUpdateProgressMarkerMock,
   deleteUpdateProgressMarkerIfUnchanged:
@@ -201,7 +206,10 @@ import type {
   HostDownloadOutcome,
 } from "../../installer/download-stage";
 import type { ApplyHostOptions, ApplyHostOutcome } from "../../installer/apply";
-import type { HostUpdateProgress } from "../../host/update-progress-marker";
+import type {
+  HostUpdateProgress,
+  UpdateProgressMarkerClaim,
+} from "../../host/update-progress-marker";
 // Value import (not type-only): the module is mocked above, and that mock
 // factory defines `sameProgress` as the REAL comparator (not a `vi.fn()`), so
 // this import gets production comparison logic - the same test double the
@@ -369,9 +377,23 @@ function armActivationDefaults(): void {
   mocks.readUpdateProgressMarkerMock.mockImplementation(
     async () => mocks.disk.current,
   );
-  mocks.writeUpdateProgressMarkerMock.mockImplementation(
-    async (_environment: string, record: HostUpdateProgress) => {
-      mocks.disk.current = record;
+  // Pre-lock claim: models the SAME rule `claimUpdateProgressMarkerBeforeLock`
+  // applies against a real disk (see its production doc comment) - published
+  // into an empty path, deferred (nothing written) otherwise. `displaced` is
+  // null on both of these outcomes: a stale-record replace never happens
+  // against an initially-empty disk. A test that needs "replaced-stale" or
+  // "failed" overrides this mock directly; that override wins for its call
+  // and does not touch `mocks.disk`.
+  mocks.claimUpdateProgressMarkerBeforeLockMock.mockImplementation(
+    async (
+      _environment: string,
+      next: HostUpdateProgress,
+    ): Promise<UpdateProgressMarkerClaim> => {
+      if (mocks.disk.current === null) {
+        mocks.disk.current = next;
+        return { outcome: "published", displaced: null };
+      }
+      return { outcome: "deferred", displaced: null };
     },
   );
   mocks.replaceUpdateProgressMarkerIfUnchangedMock.mockImplementation(
@@ -575,7 +597,7 @@ describe("buildHostUpdateCommand composite", () => {
       onProgress: expect.any(Function),
       onBeforeCommit: expect.any(Function),
     });
-    expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenCalledWith(
+    expect(mocks.claimUpdateProgressMarkerBeforeLockMock).toHaveBeenCalledWith(
       "production",
       expect.objectContaining({ state: "updating", targetVersion: "1.2.0" }),
     );
@@ -1031,7 +1053,7 @@ describe("buildHostUpdateCommand — stage consumed by another actor while waiti
       mocks.relaunchHostAfterRestartWithAttemptMock,
     ).not.toHaveBeenCalled();
     expect(mocks.probeHostHealthMock).not.toHaveBeenCalled();
-    const written = mocks.writeUpdateProgressMarkerMock.mock
+    const written = mocks.claimUpdateProgressMarkerBeforeLockMock.mock
       .calls[0][1] as HostUpdateProgress;
     expect(
       mocks.deleteUpdateProgressMarkerIfUnchangedMock,
@@ -1133,7 +1155,7 @@ describe("buildHostUpdateCommand update-progress marker (T16)", () => {
     })(fakeCtx());
 
     expect(result.exitCode).toBe(0);
-    expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenCalledWith(
+    expect(mocks.claimUpdateProgressMarkerBeforeLockMock).toHaveBeenCalledWith(
       "production",
       expect.objectContaining({ state: "updating", targetVersion: "2.0.0" }),
     );
@@ -1146,6 +1168,30 @@ describe("buildHostUpdateCommand update-progress marker (T16)", () => {
     ).toHaveBeenCalledWith(
       "production",
       expect.objectContaining({ state: "updating" }),
+    );
+  });
+
+  it("the final clear could not be written: the update still succeeds, and the CLI logs why an `updating` outlives it", async () => {
+    // Falsification: collapse "failed" into "changed" in the final-clear
+    // branch and this log assertion goes red - "failed" is an I/O failure
+    // on the delete itself, not a race with a third updater's marker.
+    mocks.downloadAndStageHostMock.mockResolvedValue(promoted("2.0.0"));
+    mocks.applyHostMock.mockResolvedValue(
+      appliedOutcome("1.0.0", "2.0.0", null),
+    );
+    mocks.deleteUpdateProgressMarkerIfUnchangedMock.mockResolvedValue("failed");
+
+    const ctx = fakeCtx();
+    const result = await buildHostUpdateCommand({
+      force: false,
+      allowDowngrade: false,
+      ackNonce: null,
+    })(ctx);
+
+    expect(result.exitCode).toBe(0);
+    expect(ctx.runtime.logger.info).toHaveBeenCalledWith(
+      "Host update could not clear its progress marker; it stays until the next update supersedes it",
+      { environment: "production" },
     );
   });
 
@@ -1169,8 +1215,10 @@ describe("buildHostUpdateCommand update-progress marker (T16)", () => {
       code: CLI_ERROR_CODES.HOST_UPDATE_HEALTH_CHECK_FAILED,
     });
 
-    expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenCalledTimes(1);
-    const written = mocks.writeUpdateProgressMarkerMock.mock
+    expect(mocks.claimUpdateProgressMarkerBeforeLockMock).toHaveBeenCalledTimes(
+      1,
+    );
+    const written = mocks.claimUpdateProgressMarkerBeforeLockMock.mock
       .calls[0][1] as HostUpdateProgress;
     expect(written.state).toBe("updating");
     expect(
@@ -1200,8 +1248,10 @@ describe("buildHostUpdateCommand update-progress marker (T16)", () => {
       })(fakeCtx()),
     ).rejects.toThrow("commit failed");
 
-    expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenCalledTimes(1);
-    const written = mocks.writeUpdateProgressMarkerMock.mock
+    expect(mocks.claimUpdateProgressMarkerBeforeLockMock).toHaveBeenCalledTimes(
+      1,
+    );
+    const written = mocks.claimUpdateProgressMarkerBeforeLockMock.mock
       .calls[0][1] as HostUpdateProgress;
     expect(
       mocks.replaceUpdateProgressMarkerIfUnchangedMock,
@@ -1230,20 +1280,34 @@ describe("buildHostUpdateCommand update-progress marker (T16)", () => {
     })(fakeCtx());
 
     expect(result.exitCode).toBe(0);
-    expect(mocks.writeUpdateProgressMarkerMock).not.toHaveBeenCalled();
+    expect(
+      mocks.claimUpdateProgressMarkerBeforeLockMock,
+    ).not.toHaveBeenCalled();
     expect(mocks.deleteUpdateProgressMarkerMock).not.toHaveBeenCalled();
     // No install was touched, so there is nothing to health-check either.
     expect(mocks.probeHostHealthMock).not.toHaveBeenCalled();
   });
 
   it("keeps the update working when the marker write itself fails", async () => {
+    // Falsification: read `ownMarker.current` as non-null after a "failed"
+    // claim (`publishUpdating`'s `claim === "failed"` arm in host-update.ts
+    // sets `ownMarker.current = null` silently) and the final clear below
+    // would fire against a marker this run never actually landed.
     mocks.downloadAndStageHostMock.mockResolvedValue(promoted("2.0.0"));
     mocks.applyHostMock.mockResolvedValue(
       appliedOutcome("1.0.0", "2.0.0", null),
     );
-    mocks.writeUpdateProgressMarkerMock.mockRejectedValue(
-      new Error("EACCES: read-only home"),
-    );
+    // `downloadAndStageHostMock` here is `mockResolvedValue`, not a
+    // `mockImplementation` that invokes `onWillDownload` - so the pre-lock
+    // claim this run actually makes is the post-prepare guard's
+    // (`needsWork && ownMarker.current === null`), exactly once. It fails,
+    // and `applyHostMock`'s default resolved value never invokes
+    // `onWillCommitStaged`, so `reassertMarkerUnderLock` is never reached
+    // under the lock either - `ownMarker.current` stays `null` end to end.
+    mocks.claimUpdateProgressMarkerBeforeLockMock.mockResolvedValue({
+      outcome: "failed",
+      displaced: null,
+    });
 
     const result = await buildHostUpdateCommand({
       force: false,
@@ -1253,6 +1317,427 @@ describe("buildHostUpdateCommand update-progress marker (T16)", () => {
 
     // Degraded remote progress reporting must not fail a local update.
     expect(result.exitCode).toBe(0);
+    expect(mocks.claimUpdateProgressMarkerBeforeLockMock).toHaveBeenCalledTimes(
+      1,
+    );
+    // Never a fact about the disk - a `failed` claim writes nothing - so the
+    // final clear (gated on `ownMarker.current !== null`) never fires.
+    expect(
+      mocks.deleteUpdateProgressMarkerIfUnchangedMock,
+    ).not.toHaveBeenCalled();
+    expect(mocks.deleteUpdateProgressMarkerMock).not.toHaveBeenCalled();
+    expect(
+      mocks.replaceUpdateProgressMarkerIfUnchangedMock,
+    ).not.toHaveBeenCalled();
+  });
+
+  it("pre-lock claim defers to a live writer's marker", async () => {
+    // Falsification: treat "deferred" like "published" in `publishUpdating`
+    // (set `ownMarker.current = fresh` regardless of the claim result) and
+    // the pre-lock write assertions below would see a record this run never
+    // actually landed.
+    const foreignRecord: HostUpdateProgress = {
+      state: "updating",
+      error: null,
+      targetVersion: "9.9.9",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      writerId: "999999-abc",
+    };
+    mocks.disk.current = foreignRecord;
+    mocks.downloadAndStageHostMock.mockImplementation(
+      async (opts: DownloadAndStageHostOptions) => {
+        if (opts.onWillDownload === null) {
+          throw new Error("expected onWillDownload to be provided");
+        }
+        await opts.onWillDownload("2.0.0");
+        return promoted("2.0.0");
+      },
+    );
+    mocks.applyHostMock.mockImplementation(async (opts: ApplyHostOptions) => {
+      await opts.onWillCommitStaged?.("2.0.0");
+      return appliedOutcome("1.0.0", "2.0.0", null);
+    });
+
+    const ctx = fakeCtx();
+    const result = await buildHostUpdateCommand({
+      force: false,
+      allowDowngrade: false,
+      ackNonce: null,
+    })(ctx);
+
+    // The claim is asked for a fresh `updating` record naming the download
+    // target - the disk fixture's default wiring (`armActivationDefaults`)
+    // answers "deferred" whenever it is non-null, exactly the fail-open rule
+    // `claimUpdateProgressMarkerBeforeLock` applies to a live foreign writer.
+    expect(mocks.claimUpdateProgressMarkerBeforeLockMock).toHaveBeenCalledWith(
+      "production",
+      expect.objectContaining({ state: "updating", targetVersion: "2.0.0" }),
+    );
+    expect(ctx.runtime.logger.info).toHaveBeenCalledWith(
+      "Host update left another updater's live progress marker in place; this run publishes its own once it holds the lock",
+      expect.objectContaining({
+        environment: "production",
+        targetVersion: "2.0.0",
+      }),
+    );
+    // Nothing was written pre-lock: the create-if-absent primitive is only
+    // reached on an EMPTY disk, and the disk was never empty here.
+    expect(mocks.createUpdateProgressMarkerIfAbsentMock).not.toHaveBeenCalled();
+    // Under the lock, `own` is still null (the claim never landed anything),
+    // so `reassertMarkerUnderLock` takes the foreign record over rather than
+    // treating it as this run's own.
+    expect(
+      mocks.replaceUpdateProgressMarkerIfUnchangedMock,
+    ).toHaveBeenCalledWith(
+      "production",
+      foreignRecord,
+      expect.objectContaining({ state: "updating", targetVersion: "2.0.0" }),
+    );
+    const adopted = mocks.replaceUpdateProgressMarkerIfUnchangedMock.mock
+      .calls[0][2] as HostUpdateProgress;
+    // The final clear is CAS'd against the record adopted under the lock,
+    // not against anything the pre-lock claim believed it held (it held
+    // nothing).
+    expect(
+      mocks.deleteUpdateProgressMarkerIfUnchangedMock,
+    ).toHaveBeenCalledWith("production", adopted);
+    expect(result.exitCode).toBe(0);
+  });
+
+  it("a lost download after a deferred claim stamps nothing - the host was never disturbed", async () => {
+    // A download rejection that follows a deferred pre-lock claim never
+    // reaches `markUpdateFailed`: the catch's `ownMarker.current === null`
+    // branch (host-update.ts) only stamps when `disruptionStarted` is true,
+    // and a download failure happens strictly before any disruptive work -
+    // `reportProgress` never saw `service-stop` or `swap`. The failure is
+    // reported by exit code and log alone, with zero marker mutation.
+    //
+    // Falsification: drop the `disruptionStarted` guard (call
+    // `markUpdateFailed` whenever `ownMarker.current === null`, regardless of
+    // whether the host was touched) and the "not called" assertions below go
+    // red - the catch would attempt a create-if-absent for a failure that
+    // never actually happened to the host.
+    mocks.claimUpdateProgressMarkerBeforeLockMock.mockResolvedValue({
+      outcome: "deferred",
+      displaced: null,
+    });
+    mocks.downloadAndStageHostMock.mockImplementation(
+      async (opts: DownloadAndStageHostOptions) => {
+        if (opts.onWillDownload === null) {
+          throw new Error("expected onWillDownload to be provided");
+        }
+        await opts.onWillDownload("2.0.0");
+        throw new Error("download failed: ECONNRESET");
+      },
+    );
+
+    await expect(
+      buildHostUpdateCommand({
+        force: false,
+        allowDowngrade: false,
+        ackNonce: null,
+      })(fakeCtx()),
+    ).rejects.toThrow("download failed: ECONNRESET");
+
+    // No marker write of any kind: `ownMarker.current` was `null` (the claim
+    // deferred) and the host was never disturbed, so the catch never calls
+    // `markUpdateFailed` at all.
+    expect(
+      mocks.replaceUpdateProgressMarkerIfUnchangedMock,
+    ).not.toHaveBeenCalled();
+    expect(mocks.createUpdateProgressMarkerIfAbsentMock).not.toHaveBeenCalled();
+    expect(
+      mocks.deleteUpdateProgressMarkerIfUnchangedMock,
+    ).not.toHaveBeenCalled();
+    expect(mocks.deleteUpdateProgressMarkerMock).not.toHaveBeenCalled();
+  });
+
+  it("a deferred run that disturbed the host and failed lands its failure into an empty path", async () => {
+    // The other half of `markUpdateFailed`'s `ours === null` arm: a run that
+    // never landed a marker of its own but DID disturb the host (the apply
+    // reported `service-stop` before it failed) must still surface the
+    // failure remotely - by creating a fresh `failed` record into whatever
+    // empty path it finds, never by overwriting a live one.
+    //
+    // Falsification: gate the stamp on `ownMarker.current !== null` only
+    // (drop the `disruptionStarted` branch) and `createUpdateProgressMarkerIfAbsentMock`
+    // below is never called.
+    const foreignRecord: HostUpdateProgress = {
+      state: "updating",
+      error: null,
+      targetVersion: "2.0.0",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      writerId: "foreign-writer",
+    };
+    mocks.disk.current = foreignRecord;
+    mocks.downloadAndStageHostMock.mockImplementation(
+      async (opts: DownloadAndStageHostOptions) => {
+        if (opts.onWillDownload === null) {
+          throw new Error("expected onWillDownload to be provided");
+        }
+        await opts.onWillDownload("2.0.0");
+        return promoted("2.0.0");
+      },
+    );
+    // The takeover under the lock itself fails (I/O) - `own` stays null.
+    mocks.replaceUpdateProgressMarkerIfUnchangedMock.mockResolvedValue(
+      "failed",
+    );
+    mocks.applyHostMock.mockImplementation(async (opts: ApplyHostOptions) => {
+      await opts.onWillCommitStaged?.("2.0.0");
+      opts.onProgress({
+        stage: "service-stop",
+        message: null,
+        percent: null,
+        bytes: null,
+        totalBytes: null,
+        workUnits: null,
+      });
+      throw new Error("commit failed");
+    });
+
+    await expect(
+      buildHostUpdateCommand({
+        force: false,
+        allowDowngrade: false,
+        ackNonce: null,
+      })(fakeCtx()),
+    ).rejects.toThrow("commit failed");
+
+    expect(mocks.createUpdateProgressMarkerIfAbsentMock).toHaveBeenCalledWith(
+      "production",
+      expect.objectContaining({
+        state: "failed",
+        targetVersion: "2.0.0",
+        error: "commit failed",
+      }),
+    );
+    // Never a CAS against the foreign record - this run holds no marker of
+    // its own to compare against.
+    expect(
+      mocks.replaceUpdateProgressMarkerIfUnchangedMock,
+    ).not.toHaveBeenCalledWith(
+      "production",
+      foreignRecord,
+      expect.objectContaining({ state: "failed" }),
+    );
+  });
+
+  it("a marker-less run whose apply succeeds but whose host never becomes healthy lands its failure into an empty path - `markUpdateFailed`'s `ours === null` arm, the health-probe call site", async () => {
+    // The OTHER call site that can pass `markUpdateFailed` a `null` `ours`
+    // (alongside the generic catch's `disruptionStarted` arm): the post-apply
+    // health-probe failure passes `ownMarker.current` unconditionally.
+    // Reached here by making BOTH pre-lock claims defer (a live foreign
+    // writer never let go of the marker) while the apply itself is mocked to
+    // succeed WITHOUT ever calling `onWillCommitStaged`, so
+    // `reassertMarkerUnderLock` never runs and `ownMarker.current` is still
+    // `null` when the probe fails.
+    //
+    // Falsification: revert `markUpdateFailed`'s `ours === null` arm to a
+    // log-only no-op and `createUpdateProgressMarkerIfAbsentMock` below is
+    // never called.
+    mocks.claimUpdateProgressMarkerBeforeLockMock.mockResolvedValue({
+      outcome: "deferred",
+      displaced: null,
+    });
+    mocks.downloadAndStageHostMock.mockImplementation(
+      async (opts: DownloadAndStageHostOptions) => {
+        if (opts.onWillDownload === null) {
+          throw new Error("expected onWillDownload to be provided");
+        }
+        await opts.onWillDownload("2.0.0");
+        return promoted("2.0.0");
+      },
+    );
+    mocks.applyHostMock.mockResolvedValue(
+      appliedOutcome("1.0.0", "2.0.0", null),
+    );
+    mocks.probeHostHealthMock.mockResolvedValue({
+      healthy: false,
+      detail: "port 8765 never accepted a connection",
+    });
+
+    await expect(
+      buildHostUpdateCommand({
+        force: false,
+        allowDowngrade: false,
+        ackNonce: null,
+      })(fakeCtx()),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_UPDATE_HEALTH_CHECK_FAILED,
+    });
+
+    // `ours` was null, so the stamp lands by create-if-absent - never a CAS
+    // against a record this run never held.
+    expect(
+      mocks.replaceUpdateProgressMarkerIfUnchangedMock,
+    ).not.toHaveBeenCalled();
+    expect(mocks.createUpdateProgressMarkerIfAbsentMock).toHaveBeenCalledWith(
+      "production",
+      expect.objectContaining({
+        state: "failed",
+        targetVersion: "2.0.0",
+        error: "port 8765 never accepted a connection",
+      }),
+    );
+    expect(
+      mocks.deleteUpdateProgressMarkerIfUnchangedMock,
+    ).not.toHaveBeenCalled();
+    expect(mocks.deleteUpdateProgressMarkerMock).not.toHaveBeenCalled();
+  });
+
+  it("a deferred claim is retried after the download", async () => {
+    // Falsification: gate the post-prepare guard on anything other than
+    // `ownMarker.current === null` (e.g. on the download outcome alone) and
+    // the second claim call below never happens - a run whose pre-lock claim
+    // deferred would then reach the lock with no marker of its own even
+    // though the other updater cleared meanwhile.
+    mocks.claimUpdateProgressMarkerBeforeLockMock
+      .mockResolvedValueOnce({ outcome: "deferred", displaced: null })
+      .mockImplementationOnce(
+        async (
+          _environment: string,
+          next: HostUpdateProgress,
+        ): Promise<UpdateProgressMarkerClaim> => {
+          mocks.disk.current = next;
+          return { outcome: "published", displaced: null };
+        },
+      );
+    mocks.downloadAndStageHostMock.mockImplementation(
+      async (opts: DownloadAndStageHostOptions) => {
+        if (opts.onWillDownload === null) {
+          throw new Error("expected onWillDownload to be provided");
+        }
+        await opts.onWillDownload("2.0.0");
+        return promoted("2.0.0");
+      },
+    );
+    // No `onWillCommitStaged` invocation: `ownMarker.current` is left exactly
+    // as the second claim set it, so the final clear targets that record
+    // directly rather than something re-pointed under the lock.
+    mocks.applyHostMock.mockResolvedValue(
+      appliedOutcome("1.0.0", "2.0.0", null),
+    );
+
+    const result = await buildHostUpdateCommand({
+      force: false,
+      allowDowngrade: false,
+      ackNonce: null,
+    })(fakeCtx());
+
+    expect(mocks.claimUpdateProgressMarkerBeforeLockMock).toHaveBeenCalledTimes(
+      2,
+    );
+    expect(
+      mocks.claimUpdateProgressMarkerBeforeLockMock.mock.calls[0][1],
+    ).toEqual(
+      expect.objectContaining({ state: "updating", targetVersion: "2.0.0" }),
+    );
+    const second = mocks.claimUpdateProgressMarkerBeforeLockMock.mock
+      .calls[1][1] as HostUpdateProgress;
+    expect(second).toEqual(
+      expect.objectContaining({ state: "updating", targetVersion: "2.0.0" }),
+    );
+    expect(
+      mocks.deleteUpdateProgressMarkerIfUnchangedMock,
+    ).toHaveBeenCalledWith("production", second);
+    expect(result.exitCode).toBe(0);
+  });
+
+  it("a stale record is replaced by the pre-lock claim", async () => {
+    // Falsification: treat "replaced-stale" like "deferred" in
+    // `publishUpdating` (set `ownMarker.current = null`) and the final clear
+    // assertion below would never fire - the run would believe it holds no
+    // marker despite having just landed one by CAS.
+    mocks.claimUpdateProgressMarkerBeforeLockMock.mockImplementation(
+      async (
+        _environment: string,
+        next: HostUpdateProgress,
+      ): Promise<UpdateProgressMarkerClaim> => {
+        mocks.disk.current = next;
+        return { outcome: "replaced-stale", displaced: null };
+      },
+    );
+    mocks.downloadAndStageHostMock.mockResolvedValue(promoted("2.0.0"));
+    mocks.applyHostMock.mockResolvedValue(
+      appliedOutcome("1.0.0", "2.0.0", null),
+    );
+
+    const result = await buildHostUpdateCommand({
+      force: false,
+      allowDowngrade: false,
+      ackNonce: null,
+    })(fakeCtx());
+
+    // `downloadAndStageHostMock` here is `mockResolvedValue`, so the only
+    // claim this run makes is the post-prepare guard's, exactly once.
+    expect(mocks.claimUpdateProgressMarkerBeforeLockMock).toHaveBeenCalledTimes(
+      1,
+    );
+    const written = mocks.claimUpdateProgressMarkerBeforeLockMock.mock
+      .calls[0][1] as HostUpdateProgress;
+    expect(written.state).toBe("updating");
+    expect(written.targetVersion).toBe("2.0.0");
+    expect(
+      mocks.deleteUpdateProgressMarkerIfUnchangedMock,
+    ).toHaveBeenCalledWith("production", written);
+    expect(result.exitCode).toBe(0);
+  });
+
+  it("a stale `failed` replaced by the pre-lock claim is put back when the run parks", async () => {
+    // Falsification: drop `displacedMarker.current = claim.displaced` in
+    // `publishUpdating` and the restore call below never happens - a park
+    // after a "replaced-stale" claim would instead withdraw (delete) this
+    // run's own record, erasing the still-possibly-true `failed` stamp the
+    // claim replaced.
+    const staleFailed: HostUpdateProgress = {
+      state: "failed",
+      error: "host did not become healthy: tcp refused",
+      targetVersion: "1.9.0",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      writerId: "dead-writer",
+    };
+    mocks.claimUpdateProgressMarkerBeforeLockMock.mockImplementation(
+      async (
+        _environment: string,
+        next: HostUpdateProgress,
+      ): Promise<UpdateProgressMarkerClaim> => {
+        mocks.disk.current = next;
+        return { outcome: "replaced-stale", displaced: staleFailed };
+      },
+    );
+    mocks.downloadAndStageHostMock.mockResolvedValue(promoted("2.0.0"));
+    // Rejects busy WITHOUT ever calling `onWillCommitStaged` - the host is
+    // never disturbed, so the takeover restore (not a `failed` stamp) is
+    // what has to happen.
+    mocks.applyHostMock.mockRejectedValue(
+      cliError({
+        code: CLI_ERROR_CODES.HOST_BUSY,
+        message: "The running host has work in progress",
+        details: null,
+        exitCode: 1,
+      }),
+    );
+    mocks.readHostStagedRecordMock.mockResolvedValue(null);
+
+    await expect(
+      buildHostUpdateCommand({
+        force: false,
+        allowDowngrade: false,
+        ackNonce: null,
+      })(fakeCtx()),
+    ).rejects.toMatchObject({ code: CLI_ERROR_CODES.HOST_BUSY });
+
+    const written = mocks.claimUpdateProgressMarkerBeforeLockMock.mock
+      .calls[0][1] as HostUpdateProgress;
+    // The park restores the STALE FAILED record the claim replaced, not a
+    // withdrawal (delete) of this run's own record.
+    expect(
+      mocks.replaceUpdateProgressMarkerIfUnchangedMock,
+    ).toHaveBeenCalledWith("production", written, staleFailed);
+    expect(
+      mocks.deleteUpdateProgressMarkerIfUnchangedMock,
+    ).not.toHaveBeenCalled();
   });
 });
 
@@ -1323,7 +1808,7 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
       ackNonce: null,
     })(fakeCtx());
 
-    expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenCalledWith(
+    expect(mocks.claimUpdateProgressMarkerBeforeLockMock).toHaveBeenCalledWith(
       "production",
       expect.objectContaining({ state: "updating", targetVersion: "2.0.0" }),
     );
@@ -1428,8 +1913,10 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
     })(fakeCtx());
 
     expect(mocks.probeHostHealthMock).not.toHaveBeenCalled();
-    expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenCalledTimes(1);
-    expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenCalledWith(
+    expect(mocks.claimUpdateProgressMarkerBeforeLockMock).toHaveBeenCalledTimes(
+      1,
+    );
+    expect(mocks.claimUpdateProgressMarkerBeforeLockMock).toHaveBeenCalledWith(
       "production",
       expect.objectContaining({ state: "updating" }),
     );
@@ -1464,8 +1951,11 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
       ackNonce: null,
     })(fakeCtx());
 
-    expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenCalledTimes(1);
-    const written = mocks.writeUpdateProgressMarkerMock.mock.calls[0][1];
+    expect(mocks.claimUpdateProgressMarkerBeforeLockMock).toHaveBeenCalledTimes(
+      1,
+    );
+    const written =
+      mocks.claimUpdateProgressMarkerBeforeLockMock.mock.calls[0][1];
     expect(
       mocks.deleteUpdateProgressMarkerIfUnchangedMock,
     ).toHaveBeenCalledTimes(1);
@@ -1505,8 +1995,10 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
     // Our own `updating` was written once; no unconditional `failed` write
     // ever happens - the failure goes through the compare-and-swap instead,
     // and a "changed" answer means it never landed.
-    expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenCalledTimes(1);
-    const written = mocks.writeUpdateProgressMarkerMock.mock
+    expect(mocks.claimUpdateProgressMarkerBeforeLockMock).toHaveBeenCalledTimes(
+      1,
+    );
+    const written = mocks.claimUpdateProgressMarkerBeforeLockMock.mock
       .calls[0][1] as HostUpdateProgress;
     expect(written.state).toBe("updating");
     expect(
@@ -1535,12 +2027,17 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
       ackNonce: null,
     })(fakeCtx());
 
-    // The pre-lock `updating:2.0.0` is written once, unconditionally. The
-    // re-point under the lock is ownership-aware: it goes through the
-    // compare-and-swap against that same pre-lock marker, never a second
-    // unconditional write.
-    expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenCalledTimes(1);
-    const written = mocks.writeUpdateProgressMarkerMock.mock
+    // The pre-lock `updating:2.0.0` is published once, as a CLAIM: the
+    // path was empty here, so the claim lands unconditionally against
+    // nothing, but it still goes through the conditional
+    // `claimUpdateProgressMarkerBeforeLock` primitive, never a blind write.
+    // The re-point under the lock is ownership-aware too: it goes through
+    // the compare-and-swap against that same pre-lock marker, never a
+    // second unconditional write.
+    expect(mocks.claimUpdateProgressMarkerBeforeLockMock).toHaveBeenCalledTimes(
+      1,
+    );
+    const written = mocks.claimUpdateProgressMarkerBeforeLockMock.mock
       .calls[0][1] as HostUpdateProgress;
     expect(written.state).toBe("updating");
     expect(written.targetVersion).toBe("2.0.0");
@@ -1569,17 +2066,14 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
 
   it("the record moved under the lock but the marker is no longer ours: the re-point is refused, and the final clear still targets the ORIGINAL marker", async () => {
     // Same setup as the re-point test above, but the compare-and-swap always
-    // reports "changed" - the pre-lock marker no longer matches what is on
-    // disk (a newer updater owns it now). Under the new retry loop this
-    // means: the FIRST replace attempt reports "changed", the loop re-reads
-    // the disk to tell a moved record from a merely-failed write apart, and
-    // the re-read shows the SAME record it just tried to replace (this
-    // fixture's disk never actually changes) - so the loop concludes the
-    // write itself failed, warns, and stops trying rather than retrying
-    // forever. The activation still proceeds - the debt clears either way -
-    // but the progress marker this run tracks must stay pinned to the
-    // ORIGINAL pre-lock record rather than following a re-point that never
-    // actually landed.
+    // reports "failed" - an I/O failure landing the re-point, not a race
+    // with another writer. `reassertMarkerUnderLock`'s retry loop only
+    // re-reads on "changed" (a record that moved); a "failed" answer is
+    // never retried - it warns and stops immediately, on the FIRST attempt.
+    // The activation still proceeds - the debt clears either way - but the
+    // progress marker this run tracks must stay pinned to the ORIGINAL
+    // pre-lock record rather than following a re-point that never actually
+    // landed.
     mocks.downloadAndStageHostMock.mockResolvedValue(upToDate("2.0.0"));
     mocks.readHostInstallRecordMock
       .mockResolvedValueOnce(sampleRecord("2.0.0"))
@@ -1587,7 +2081,7 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
     mocks.readHostPidMetadataMock.mockResolvedValue(pidRecord("1.0.0", 4242));
     mocks.identityVerdictMock.mockResolvedValue("current");
     mocks.replaceUpdateProgressMarkerIfUnchangedMock.mockResolvedValue(
-      "changed",
+      "failed",
     );
 
     const ctx = fakeCtx();
@@ -1597,8 +2091,10 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
       ackNonce: null,
     })(ctx);
 
-    expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenCalledTimes(1);
-    const written = mocks.writeUpdateProgressMarkerMock.mock
+    expect(mocks.claimUpdateProgressMarkerBeforeLockMock).toHaveBeenCalledTimes(
+      1,
+    );
+    const written = mocks.claimUpdateProgressMarkerBeforeLockMock.mock
       .calls[0][1] as HostUpdateProgress;
     expect(written.targetVersion).toBe("2.0.0");
     // Exactly ONE replace attempt - the loop stops after the re-read shows
@@ -1703,7 +2199,9 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
     })(fakeCtx());
 
     expect(mocks.stopHostForRestartWithAttemptMock).not.toHaveBeenCalled();
-    expect(mocks.writeUpdateProgressMarkerMock).not.toHaveBeenCalled();
+    expect(
+      mocks.claimUpdateProgressMarkerBeforeLockMock,
+    ).not.toHaveBeenCalled();
     // CONDITIONAL on the marker still being the `failed` record that was
     // read - never the unconditional delete, which would erase a live
     // `updating` another updater wrote in between.
@@ -1713,6 +2211,41 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
     ).toHaveBeenCalledWith(
       "production",
       expect.objectContaining({ state: "failed", targetVersion: "2.0.0" }),
+    );
+    expect(result.human).toContain("no-op");
+  });
+
+  it("the stale-failure clear could not be written: left alone, logged, no throw", async () => {
+    // Falsification: collapse "failed" into "changed" in
+    // `clearStaleFailedMarker` and this log assertion goes red - the
+    // "failed" arm names why a `failed` marker outlived an observed match
+    // (an I/O failure on the clear, not a race with another writer).
+    mocks.downloadAndStageHostMock.mockResolvedValue(upToDate("2.0.0"));
+    mocks.readHostInstallRecordMock.mockResolvedValue(sampleRecord("2.0.0"));
+    mocks.readHostPidMetadataMock.mockResolvedValue(pidRecord("2.0.0", 4242));
+    mocks.identityVerdictMock.mockResolvedValue("current");
+    mocks.readUpdateProgressMarkerMock.mockResolvedValue({
+      state: "failed",
+      error: "host did not become healthy: tcp refused",
+      targetVersion: "2.0.0",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      writerId: null,
+    });
+    mocks.deleteUpdateProgressMarkerIfUnchangedMock.mockResolvedValue("failed");
+
+    const ctx = fakeCtx();
+    const result = await buildHostUpdateCommand({
+      force: false,
+      allowDowngrade: false,
+      ackNonce: null,
+    })(ctx);
+
+    expect(ctx.runtime.logger.info).toHaveBeenCalledWith(
+      "Host update left the progress marker alone - the stale-failure clear could not be written",
+      expect.objectContaining({
+        environment: "production",
+        outcome: "failed",
+      }),
     );
     expect(result.human).toContain("no-op");
   });
@@ -1744,7 +2277,9 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
     expect(mocks.identityVerdictMock).toHaveBeenCalledWith(4242, null);
     expect(mocks.stopHostForRestartWithAttemptMock).not.toHaveBeenCalled();
     expect(mocks.assertHostNotBusyMock).not.toHaveBeenCalled();
-    expect(mocks.writeUpdateProgressMarkerMock).not.toHaveBeenCalled();
+    expect(
+      mocks.claimUpdateProgressMarkerBeforeLockMock,
+    ).not.toHaveBeenCalled();
     expect(
       mocks.deleteUpdateProgressMarkerIfUnchangedMock,
     ).not.toHaveBeenCalled();
@@ -1839,7 +2374,9 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
 
     expect(mocks.assertHostNotBusyMock).not.toHaveBeenCalled();
     expect(mocks.stopHostForRestartWithAttemptMock).not.toHaveBeenCalled();
-    expect(mocks.writeUpdateProgressMarkerMock).not.toHaveBeenCalledWith(
+    expect(
+      mocks.claimUpdateProgressMarkerBeforeLockMock,
+    ).not.toHaveBeenCalledWith(
       "production",
       expect.objectContaining({ state: "failed" }),
     );
@@ -1860,7 +2397,9 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
     })(fakeCtx());
 
     expect(mocks.stopHostForRestartWithAttemptMock).not.toHaveBeenCalled();
-    expect(mocks.writeUpdateProgressMarkerMock).not.toHaveBeenCalled();
+    expect(
+      mocks.claimUpdateProgressMarkerBeforeLockMock,
+    ).not.toHaveBeenCalled();
     expect(mocks.deleteUpdateProgressMarkerMock).not.toHaveBeenCalled();
     expect(result.human).toContain("no-op");
   });
@@ -1878,7 +2417,9 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
     })(fakeCtx());
 
     expect(mocks.stopHostForRestartWithAttemptMock).not.toHaveBeenCalled();
-    expect(mocks.writeUpdateProgressMarkerMock).not.toHaveBeenCalled();
+    expect(
+      mocks.claimUpdateProgressMarkerBeforeLockMock,
+    ).not.toHaveBeenCalled();
     expect(result.human).toContain("no-op");
   });
 
@@ -1897,7 +2438,9 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
     })(fakeCtx());
 
     expect(mocks.stopHostForRestartWithAttemptMock).not.toHaveBeenCalled();
-    expect(mocks.writeUpdateProgressMarkerMock).not.toHaveBeenCalled();
+    expect(
+      mocks.claimUpdateProgressMarkerBeforeLockMock,
+    ).not.toHaveBeenCalled();
     expect(result.human).toContain("no-op");
   });
 
@@ -1966,7 +2509,9 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
     })(fakeCtx());
 
     expect(mocks.stopHostForRestartWithAttemptMock).not.toHaveBeenCalled();
-    expect(mocks.writeUpdateProgressMarkerMock).not.toHaveBeenCalled();
+    expect(
+      mocks.claimUpdateProgressMarkerBeforeLockMock,
+    ).not.toHaveBeenCalled();
     expect(result.human).toContain("no-op");
   });
 
@@ -2024,7 +2569,9 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
     })(fakeCtx());
 
     expect(mocks.stopHostForRestartWithAttemptMock).not.toHaveBeenCalled();
-    expect(mocks.writeUpdateProgressMarkerMock).not.toHaveBeenCalled();
+    expect(
+      mocks.claimUpdateProgressMarkerBeforeLockMock,
+    ).not.toHaveBeenCalled();
     // CONDITIONAL on the marker still being the `failed` record that was
     // read - never the unconditional delete, which would erase a live
     // `updating` another updater wrote in between.
@@ -2096,8 +2643,10 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
     ).rejects.toMatchObject({ code: CLI_ERROR_CODES.HOST_BUSY });
 
     expect(mocks.stopHostForRestartWithAttemptMock).not.toHaveBeenCalled();
-    expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenCalledTimes(1);
-    const written = mocks.writeUpdateProgressMarkerMock.mock
+    expect(mocks.claimUpdateProgressMarkerBeforeLockMock).toHaveBeenCalledTimes(
+      1,
+    );
+    const written = mocks.claimUpdateProgressMarkerBeforeLockMock.mock
       .calls[0][1] as HostUpdateProgress;
     expect(written).toEqual(
       expect.objectContaining({ state: "updating", targetVersion: "2.0.0" }),
@@ -2134,8 +2683,10 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
     });
 
     expect(mocks.stopHostForRestartWithAttemptMock).toHaveBeenCalledTimes(1);
-    expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenCalledTimes(1);
-    const written = mocks.writeUpdateProgressMarkerMock.mock
+    expect(mocks.claimUpdateProgressMarkerBeforeLockMock).toHaveBeenCalledTimes(
+      1,
+    );
+    const written = mocks.claimUpdateProgressMarkerBeforeLockMock.mock
       .calls[0][1] as HostUpdateProgress;
     expect(
       mocks.replaceUpdateProgressMarkerIfUnchangedMock,
@@ -2190,10 +2741,18 @@ describe("buildHostUpdateCommand busy park + early marker", () => {
         } satisfies HostDownloadOutcome;
       },
     );
-    mocks.writeUpdateProgressMarkerMock.mockImplementation(
-      async (_environment: string, record: HostUpdateProgress) => {
+    // Falsification: leave the claim mock's `armActivationDefaults` default
+    // wiring in place (it does not push into `callOrder`) and this test could
+    // not tell "claimed" from "claimed strictly before the download
+    // resolved" apart.
+    mocks.claimUpdateProgressMarkerBeforeLockMock.mockImplementation(
+      async (
+        _environment: string,
+        next: HostUpdateProgress,
+      ): Promise<UpdateProgressMarkerClaim> => {
         mocks.callOrder.push("marker-written");
-        mocks.disk.current = record;
+        mocks.disk.current = next;
+        return { outcome: "published", displaced: null };
       },
     );
     mocks.applyHostMock.mockResolvedValue(
@@ -2206,8 +2765,10 @@ describe("buildHostUpdateCommand busy park + early marker", () => {
       ackNonce: null,
     })(fakeCtx());
 
-    expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenCalledTimes(1);
-    expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenCalledWith(
+    expect(mocks.claimUpdateProgressMarkerBeforeLockMock).toHaveBeenCalledTimes(
+      1,
+    );
+    expect(mocks.claimUpdateProgressMarkerBeforeLockMock).toHaveBeenCalledWith(
       "production",
       expect.objectContaining({ state: "updating", targetVersion: "2.0.0" }),
     );
@@ -2218,7 +2779,7 @@ describe("buildHostUpdateCommand busy park + early marker", () => {
     // The load-bearing ordering: the marker is on disk before the download
     // promise this command awaits ever resolves, not merely before `apply`.
     expect(markerIndex).toBeLessThan(resolvedIndex);
-    const written = mocks.writeUpdateProgressMarkerMock.mock
+    const written = mocks.claimUpdateProgressMarkerBeforeLockMock.mock
       .calls[0][1] as HostUpdateProgress;
     expect(
       mocks.deleteUpdateProgressMarkerIfUnchangedMock,
@@ -2242,8 +2803,10 @@ describe("buildHostUpdateCommand busy park + early marker", () => {
       })(fakeCtx()),
     ).rejects.toThrow("download failed: ECONNRESET");
 
-    expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenCalledTimes(1);
-    const written = mocks.writeUpdateProgressMarkerMock.mock
+    expect(mocks.claimUpdateProgressMarkerBeforeLockMock).toHaveBeenCalledTimes(
+      1,
+    );
+    const written = mocks.claimUpdateProgressMarkerBeforeLockMock.mock
       .calls[0][1] as HostUpdateProgress;
     expect(written.state).toBe("updating");
     expect(written.targetVersion).toBe("2.0.0");
@@ -2283,7 +2846,9 @@ describe("buildHostUpdateCommand busy park + early marker", () => {
     // `prepareHostUpdate` runs (outside the try that owns `onWillDownload`)
     // and this goes red - a marker would appear for a run that never
     // reached the hook.
-    expect(mocks.writeUpdateProgressMarkerMock).not.toHaveBeenCalled();
+    expect(
+      mocks.claimUpdateProgressMarkerBeforeLockMock,
+    ).not.toHaveBeenCalled();
     expect(
       mocks.replaceUpdateProgressMarkerIfUnchangedMock,
     ).not.toHaveBeenCalled();
@@ -2345,8 +2910,10 @@ describe("buildHostUpdateCommand busy park + early marker", () => {
     expect(message).toContain("stays staged");
     expect(message).toContain("--force");
 
-    expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenCalledTimes(1);
-    const written = mocks.writeUpdateProgressMarkerMock.mock
+    expect(mocks.claimUpdateProgressMarkerBeforeLockMock).toHaveBeenCalledTimes(
+      1,
+    );
+    const written = mocks.claimUpdateProgressMarkerBeforeLockMock.mock
       .calls[0][1] as HostUpdateProgress;
     expect(written.state).toBe("updating");
     expect(
@@ -2383,12 +2950,14 @@ describe("buildHostUpdateCommand busy park + early marker", () => {
       ackNonce: null,
     })(fakeCtx());
 
-    expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenCalledTimes(1);
-    expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenCalledWith(
+    expect(mocks.claimUpdateProgressMarkerBeforeLockMock).toHaveBeenCalledTimes(
+      1,
+    );
+    expect(mocks.claimUpdateProgressMarkerBeforeLockMock).toHaveBeenCalledWith(
       "production",
       expect.objectContaining({ state: "updating", targetVersion: "2.0.0" }),
     );
-    const written = mocks.writeUpdateProgressMarkerMock.mock
+    const written = mocks.claimUpdateProgressMarkerBeforeLockMock.mock
       .calls[0][1] as HostUpdateProgress;
     expect(
       mocks.deleteUpdateProgressMarkerIfUnchangedMock,
@@ -2480,11 +3049,14 @@ describe("buildHostUpdateCommand — reassertMarkerUnderLock under the lock", ()
       ackNonce: null,
     })(fakeCtx());
 
-    // The pre-lock publish is the only unconditional write; the empty-path
-    // republish under the lock goes through the create-if-absent primitive
-    // instead, never through `writeUpdateProgressMarker` again.
-    expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenCalledTimes(1);
-    const firstWrite = mocks.writeUpdateProgressMarkerMock.mock
+    // The pre-lock publish is the only conditional CLAIM (no unconditional
+    // write exists any more); the empty-path republish under the lock goes
+    // through the create-if-absent primitive instead, never through a
+    // second `claimUpdateProgressMarkerBeforeLock` call.
+    expect(mocks.claimUpdateProgressMarkerBeforeLockMock).toHaveBeenCalledTimes(
+      1,
+    );
+    const firstWrite = mocks.claimUpdateProgressMarkerBeforeLockMock.mock
       .calls[0][1] as HostUpdateProgress;
     expect(mocks.createUpdateProgressMarkerIfAbsentMock).toHaveBeenCalledTimes(
       1,
@@ -2534,8 +3106,10 @@ describe("buildHostUpdateCommand — reassertMarkerUnderLock under the lock", ()
       ackNonce: null,
     })(fakeCtx());
 
-    expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenCalledTimes(1);
-    const preLock = mocks.writeUpdateProgressMarkerMock.mock
+    expect(mocks.claimUpdateProgressMarkerBeforeLockMock).toHaveBeenCalledTimes(
+      1,
+    );
+    const preLock = mocks.claimUpdateProgressMarkerBeforeLockMock.mock
       .calls[0][1] as HostUpdateProgress;
     expect(preLock.targetVersion).toBe("2.0.0");
     // The re-point happens INSIDE `applyHost` (via `onWillCommitStaged`),
@@ -2603,9 +3177,11 @@ describe("buildHostUpdateCommand — reassertMarkerUnderLock under the lock", ()
     })(ctx);
 
     expect(result.exitCode).toBe(0);
-    // The pre-lock publish is the only `writeUpdateProgressMarker` call -
-    // the takeover itself goes through the CAS replace primitive.
-    expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenCalledTimes(1);
+    // The pre-lock publish is the only `claimUpdateProgressMarkerBeforeLock`
+    // call - the takeover itself goes through the CAS replace primitive.
+    expect(mocks.claimUpdateProgressMarkerBeforeLockMock).toHaveBeenCalledTimes(
+      1,
+    );
     // The takeover replaces the FOREIGN record with a fresh `updating`
     // record naming the target this run is working toward.
     expect(
@@ -2974,10 +3550,12 @@ describe("buildHostUpdateCommand — reassertMarkerUnderLock under the lock", ()
     expect(mocks.installHostDowngradeMock).toHaveBeenCalledWith(
       expect.objectContaining({ onBeforeCommit: expect.any(Function) }),
     );
-    // The pre-lock publish is the only `writeUpdateProgressMarker` call; the
-    // empty-path republish under the lock lands through the create-if-absent
-    // primitive instead.
-    expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenCalledTimes(1);
+    // The pre-lock publish is the only `claimUpdateProgressMarkerBeforeLock`
+    // call; the empty-path republish under the lock lands through the
+    // create-if-absent primitive instead.
+    expect(mocks.claimUpdateProgressMarkerBeforeLockMock).toHaveBeenCalledTimes(
+      1,
+    );
     expect(mocks.createUpdateProgressMarkerIfAbsentMock).toHaveBeenCalledTimes(
       1,
     );
@@ -3032,9 +3610,11 @@ describe("buildHostUpdateCommand — reassertMarkerUnderLock under the lock", ()
       ackNonce: null,
     })(fakeCtx());
 
-    // No second unconditional write - the refusal is the create call
-    // itself, never a `writeUpdateProgressMarker`.
-    expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenCalledTimes(1);
+    // No second pre-lock claim - the refusal is the create call itself,
+    // never a second `claimUpdateProgressMarkerBeforeLock`.
+    expect(mocks.claimUpdateProgressMarkerBeforeLockMock).toHaveBeenCalledTimes(
+      1,
+    );
     expect(mocks.createUpdateProgressMarkerIfAbsentMock).toHaveBeenCalledTimes(
       1,
     );
@@ -3081,19 +3661,32 @@ describe("buildHostUpdateCommand — reassertMarkerUnderLock under the lock", ()
       async () => "failed",
     );
 
+    const ctx = fakeCtx();
     const result = await buildHostUpdateCommand({
       force: false,
       allowDowngrade: false,
       ackNonce: null,
-    })(fakeCtx());
+    })(ctx);
 
     // The apply still runs to completion - a failed create is advisory
     // state, never a reason to abort or throw.
     expect(mocks.applyHostMock).toHaveBeenCalled();
     expect(result.exitCode).toBe(0);
-    expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenCalledTimes(1);
-    const firstWrite = mocks.writeUpdateProgressMarkerMock.mock
+    expect(mocks.claimUpdateProgressMarkerBeforeLockMock).toHaveBeenCalledTimes(
+      1,
+    );
+    const firstWrite = mocks.claimUpdateProgressMarkerBeforeLockMock.mock
       .calls[0][1] as HostUpdateProgress;
+    // A "failed" create now warns exactly like a "failed" replace - the
+    // retry loop's I/O-failure arms report the same way regardless of which
+    // primitive hit it.
+    expect(ctx.runtime.logger.warn).toHaveBeenCalledWith(
+      "Host update could not write the progress marker under the lock; proceeding without re-asserting it",
+      expect.objectContaining({
+        environment: "production",
+        targetVersion: "2.0.0",
+      }),
+    );
     // `ownMarker` was never adopted from a failed create - the final clear
     // is still CAS'd against this run's ORIGINAL pre-lock record.
     expect(
@@ -3101,10 +3694,12 @@ describe("buildHostUpdateCommand — reassertMarkerUnderLock under the lock", ()
     ).toHaveBeenCalledWith("production", firstWrite);
   });
 
-  it('an I/O-failed CAS is not retried: the CAS reports "changed" but the re-read shows the same record, so the run stops trying', async () => {
-    // Falsification: retry against the same expected record on every
-    // "changed" answer instead of comparing the re-read against
-    // `lastExpected`, and this test would see more than one replace call.
+  it('an I/O-failed CAS is not retried: the replace reports "failed", so the run stops trying on the FIRST attempt', async () => {
+    // Falsification: retry on a "failed" answer the same way the loop
+    // retries on "changed" and this test would see more than one replace
+    // call - `reassertMarkerUnderLock` only re-reads on "changed" (a record
+    // that moved); "failed" (an I/O failure, already warned about by the
+    // marker layer) is never retried.
     mocks.downloadAndStageHostMock.mockImplementation(
       async (opts: DownloadAndStageHostOptions) => {
         await requireHook(opts)("2.0.0");
@@ -3116,15 +3711,14 @@ describe("buildHostUpdateCommand — reassertMarkerUnderLock under the lock", ()
       },
     );
     // The hook reports a MOVED target ("2.1.0"), so the loop must re-point
-    // the record it already owns - and the CAS resolves "changed" while the
-    // disk fixture underneath it never actually moves (an I/O failure on
-    // the write itself, not a race with another writer).
+    // the record it already owns - and the CAS resolves "failed": an I/O
+    // failure on the write itself, not a race with another writer.
     mocks.applyHostMock.mockImplementation(async (opts: ApplyHostOptions) => {
       await opts.onWillCommitStaged?.("2.1.0");
       return appliedOutcome("1.0.0", "2.1.0", null);
     });
     mocks.replaceUpdateProgressMarkerIfUnchangedMock.mockResolvedValue(
-      "changed",
+      "failed",
     );
 
     const ctx = fakeCtx();
@@ -3134,9 +3728,7 @@ describe("buildHostUpdateCommand — reassertMarkerUnderLock under the lock", ()
       ackNonce: null,
     })(ctx);
 
-    // Exactly ONE replace call - the re-read on the next iteration shows the
-    // SAME record it just tried to replace, so the loop concludes the write
-    // failed rather than retrying against an unmoving disk.
+    // Exactly ONE replace call - a "failed" answer is never retried.
     expect(
       mocks.replaceUpdateProgressMarkerIfUnchangedMock,
     ).toHaveBeenCalledTimes(1);
@@ -3149,13 +3741,101 @@ describe("buildHostUpdateCommand — reassertMarkerUnderLock under the lock", ()
     );
     // The update continues regardless - marker I/O never fails the command.
     expect(result.exitCode).toBe(0);
-    // The final clear is CAS'd against the ORIGINAL pre-lock record - it
-    // was never adopted from the refused re-point.
-    const written = mocks.writeUpdateProgressMarkerMock.mock
+    // This is now CORRECT behavior, not merely tolerated: a "failed" replace
+    // RESTORES the expected record it held in scratch (see the production
+    // comment on `swapMarkerIfUnchanged`'s stamp/restore branch), so the
+    // pre-lock record is still exactly what is on disk - which is why the
+    // final clear targeting it, rather than the refused re-point, is right.
+    const written = mocks.claimUpdateProgressMarkerBeforeLockMock.mock
       .calls[0][1] as HostUpdateProgress;
     expect(
       mocks.deleteUpdateProgressMarkerIfUnchangedMock,
     ).toHaveBeenCalledWith("production", written);
+  });
+
+  it('a "changed" replace re-reads and takes over the record a newer updater actually landed', async () => {
+    // Falsification: treat "changed" like "failed" (stop after one attempt)
+    // and the takeover below never happens - the loop would warn and leave
+    // the marker pointed at the stale record even though a fresh one is
+    // sitting right there to adopt.
+    //
+    // The pre-lock claim must defer (own stays null) for `reassertMarkerUnderLock`
+    // to ever reach the replace path at all - an ESTABLISHED own record whose
+    // target already matches returns immediately without a single replace
+    // call. Seed the disk with a live foreign record BEFORE the download
+    // hook fires so the claim defers.
+    const foreignRecord: HostUpdateProgress = {
+      state: "updating",
+      error: null,
+      targetVersion: "2.0.0",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      writerId: "foreign-writer",
+    };
+    mocks.disk.current = foreignRecord;
+    mocks.downloadAndStageHostMock.mockImplementation(
+      async (opts: DownloadAndStageHostOptions) => {
+        await requireHook(opts)("2.0.0");
+        return {
+          outcome: "promoted",
+          stagedVersion: "2.0.0",
+          installedVersion: "1.0.0",
+        } satisfies HostDownloadOutcome;
+      },
+    );
+    const newerRecord: HostUpdateProgress = {
+      state: "updating",
+      error: null,
+      targetVersion: "2.0.0",
+      updatedAt: "2026-01-01T00:00:01.000Z",
+      writerId: "newer-writer",
+    };
+    // The FIRST replace attempt (against `foreignRecord`) reports "changed"
+    // AND lands a DIFFERENT, even newer updater's record on the disk fixture
+    // at the same time - modeling a real race, not a static disk. The loop
+    // re-reads, sees the newer record, and its SECOND replace attempt takes
+    // it over via the default `armActivationDefaults` wiring.
+    mocks.replaceUpdateProgressMarkerIfUnchangedMock.mockImplementationOnce(
+      async () => {
+        mocks.disk.current = newerRecord;
+        return "changed";
+      },
+    );
+    mocks.applyHostMock.mockImplementation(async (opts: ApplyHostOptions) => {
+      await opts.onWillCommitStaged?.("2.0.0");
+      return appliedOutcome("1.0.0", "2.0.0", null);
+    });
+
+    const result = await buildHostUpdateCommand({
+      force: false,
+      allowDowngrade: false,
+      ackNonce: null,
+    })(fakeCtx());
+
+    expect(
+      mocks.replaceUpdateProgressMarkerIfUnchangedMock,
+    ).toHaveBeenCalledTimes(2);
+    expect(
+      mocks.replaceUpdateProgressMarkerIfUnchangedMock,
+    ).toHaveBeenNthCalledWith(
+      1,
+      "production",
+      foreignRecord,
+      expect.objectContaining({ state: "updating", targetVersion: "2.0.0" }),
+    );
+    expect(
+      mocks.replaceUpdateProgressMarkerIfUnchangedMock,
+    ).toHaveBeenNthCalledWith(
+      2,
+      "production",
+      newerRecord,
+      expect.objectContaining({ state: "updating", targetVersion: "2.0.0" }),
+    );
+    const adopted = mocks.replaceUpdateProgressMarkerIfUnchangedMock.mock
+      .calls[1][2] as HostUpdateProgress;
+    expect(
+      mocks.deleteUpdateProgressMarkerIfUnchangedMock,
+    ).toHaveBeenCalledWith("production", adopted);
+    expect(result.exitCode).toBe(0);
   });
 
   it("a park before the hook never touches the marker beyond this run's own record", async () => {
@@ -3215,7 +3895,7 @@ describe("buildHostUpdateCommand — reassertMarkerUnderLock under the lock", ()
     // The withdrawal is asked for against this run's OWN pre-lock record
     // only - the foreign marker on disk means the CAS reports "changed"
     // and leaves it alone, untouched.
-    const written = mocks.writeUpdateProgressMarkerMock.mock
+    const written = mocks.claimUpdateProgressMarkerBeforeLockMock.mock
       .calls[0][1] as HostUpdateProgress;
     expect(
       mocks.deleteUpdateProgressMarkerIfUnchangedMock,

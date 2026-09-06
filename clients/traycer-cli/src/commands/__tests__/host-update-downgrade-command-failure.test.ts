@@ -7,7 +7,8 @@ import { CLI_ERROR_CODES, cliError } from "../../runner/errors";
 const mocks = vi.hoisted(() => ({
   installHostDowngradeMock: vi.fn(),
   readHostInstallRecordMock: vi.fn(),
-  writeUpdateProgressMarkerMock: vi.fn(),
+  claimUpdateProgressMarkerBeforeLockMock: vi.fn(),
+  createUpdateProgressMarkerIfAbsentMock: vi.fn(),
   deleteUpdateProgressMarkerMock: vi.fn(),
   deleteUpdateProgressMarkerIfUnchangedMock: vi.fn(),
   replaceUpdateProgressMarkerMock: vi.fn(),
@@ -24,7 +25,10 @@ vi.mock("../../manifest/host-install", () => ({
 }));
 
 vi.mock("../../host/update-progress-marker", () => ({
-  writeUpdateProgressMarker: mocks.writeUpdateProgressMarkerMock,
+  claimUpdateProgressMarkerBeforeLock:
+    mocks.claimUpdateProgressMarkerBeforeLockMock,
+  createUpdateProgressMarkerIfAbsent:
+    mocks.createUpdateProgressMarkerIfAbsentMock,
   deleteUpdateProgressMarker: mocks.deleteUpdateProgressMarkerMock,
   readUpdateProgressMarker: async () => null,
   deleteUpdateProgressMarkerIfUnchanged:
@@ -118,6 +122,10 @@ describe("host update explicit downgrade failure", () => {
     mocks.installHostDowngradeMock.mockRejectedValue(
       new Error("downgrade commit failed"),
     );
+    mocks.claimUpdateProgressMarkerBeforeLockMock.mockResolvedValue({
+      outcome: "published",
+      displaced: null,
+    });
     mocks.replaceUpdateProgressMarkerMock.mockResolvedValue("replaced");
 
     await expect(
@@ -129,10 +137,14 @@ describe("host update explicit downgrade failure", () => {
       })(fakeCtx()),
     ).rejects.toThrow("downgrade commit failed");
 
-    // Only the initial `updating` write happens unconditionally; the
+    // The initial `updating` is the pre-lock CLAIM (conditional, once); the
     // `failed` stamp goes through the compare-and-swap against it.
-    expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenCalledTimes(1);
-    expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenNthCalledWith(
+    expect(mocks.claimUpdateProgressMarkerBeforeLockMock).toHaveBeenCalledTimes(
+      1,
+    );
+    expect(
+      mocks.claimUpdateProgressMarkerBeforeLockMock,
+    ).toHaveBeenNthCalledWith(
       1,
       "production",
       expect.objectContaining({
@@ -167,6 +179,10 @@ describe("host update explicit downgrade failure", () => {
         exitCode: 1,
       }),
     );
+    mocks.claimUpdateProgressMarkerBeforeLockMock.mockResolvedValue({
+      outcome: "published",
+      displaced: null,
+    });
     mocks.deleteUpdateProgressMarkerIfUnchangedMock.mockResolvedValue(
       "cleared",
     );
@@ -180,10 +196,12 @@ describe("host update explicit downgrade failure", () => {
       })(fakeCtx()),
     ).rejects.toMatchObject({ code: CLI_ERROR_CODES.HOST_BUSY });
 
-    // Only the initial `updating` write happens - the park withdraws it
+    // Only the initial `updating` claim happens - the park withdraws it
     // rather than stamping a second, `failed` one.
-    expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenCalledTimes(1);
-    const written = mocks.writeUpdateProgressMarkerMock.mock
+    expect(mocks.claimUpdateProgressMarkerBeforeLockMock).toHaveBeenCalledTimes(
+      1,
+    );
+    const written = mocks.claimUpdateProgressMarkerBeforeLockMock.mock
       .calls[0][1] as HostUpdateProgress;
     expect(written.state).toBe("updating");
     expect(written.targetVersion).toBe("1.2.0");

@@ -2371,7 +2371,19 @@ aria-live="polite"` carrying the equivalent text for
       the way forward, and **Force update…** on a staged wait with a positive
       count, which confirms through `HostBusyForceDeferDialog` and dispatches
       `host.update.install {version: staged, force: true}` through the page's
-      one install mutation. Under debt the updates sentence reads "v{installed}
+      one install mutation. The offer and the dispatch share ONE predicate
+      (`stagedEntryOfferable`, the refusal `describeForceUpdateRefusal`
+      derives for the staged version): the catalog must still list it, not
+      withdrawn, with an asset this page can resolve (a host whose record
+      carries no platform is not offered Force against a multi-platform
+      entry - a deliberate narrowing; the CLI's own `host update --force`
+      still works there) and no CLI floor. A
+      withdrawn stage is neither offered nor dispatched (the CLI would purge
+      the parked stage and then refuse the version) and carries no floor
+      remedy, since no CLI version installs a yanked release; an asset the
+      catalog has since marked unavailable does NOT refuse, because the
+      bytes are already staged and the CLI installs them without resolving
+      the asset again. Under debt the updates sentence reads "v{installed}
       is installed — restart host to finish." and the catalog is compared
       against the INSTALLED version, so Update now stays only for something
       newer than what is already on disk. Because the facts live in records

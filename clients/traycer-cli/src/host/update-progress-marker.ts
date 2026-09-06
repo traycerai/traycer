@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { link, readFile, rename, rm, writeFile } from "node:fs/promises";
 import type { Environment } from "../runner/environment";
 import { createCliLogger, errorFromUnknown } from "../logger";
+import { isProcessAlive } from "../store/cli-lock";
 import {
   ensureHostHomeDir,
   hostUpdateProgressMarkerPath,
@@ -65,6 +66,14 @@ export function progressRecord(fields: {
   };
 }
 
+/**
+ * The one UNCONDITIONAL write in this module: `rename` over whatever the
+ * live path holds. No production path calls it any more - `host update`'s
+ * pre-lock publish goes through `claimUpdateProgressMarkerBeforeLock` and
+ * everything after it through the conditional primitives - and none should:
+ * a blind write here is exactly what lets one updater bury another's live
+ * marker. Kept for test fixtures that need to seed a marker file.
+ */
 export async function writeUpdateProgressMarker(
   environment: Environment,
   progress: HostUpdateProgress,
@@ -102,8 +111,17 @@ export async function deleteUpdateProgressMarker(
   }
 }
 
-export type ConditionalMarkerDelete = "cleared" | "changed" | "absent";
-export type ConditionalMarkerReplace = "replaced" | "changed";
+// `failed` is an I/O failure after which the live path still holds what it
+// held (the expected record is restored when a stamp cannot land; the one
+// exception - neither the stamp nor the restore could land - is warned
+// about by name). Callers never retry it - only `changed` (a record that
+// moved) is worth a re-read.
+export type ConditionalMarkerDelete =
+  | "cleared"
+  | "changed"
+  | "absent"
+  | "failed";
+export type ConditionalMarkerReplace = "replaced" | "changed" | "failed";
 
 /**
  * Identity of two marker records: every field, `writerId` included. Content
@@ -202,7 +220,9 @@ export async function replaceUpdateProgressMarkerIfUnchanged(
   next: HostUpdateProgress,
 ): Promise<ConditionalMarkerReplace> {
   const outcome = await swapMarkerIfUnchanged(environment, expected, next);
-  return outcome === "changed" ? "changed" : "replaced";
+  if (outcome === "swapped") return "replaced";
+  if (outcome === "failed") return "failed";
+  return "changed";
 }
 
 /**
@@ -265,31 +285,36 @@ async function dropMarkerFile(
 // that marker and reopen exactly the race the conditional operations exist
 // to close. The cost of the `wx` path is a non-atomic content write - a
 // reader polling in that instant may see a partial file, which it parses as
-// "no marker" for one poll. Returns whether `from` is now the live marker.
+// "no marker" for one poll. `landed` means `from` is now the live marker;
+// `exists` means a marker was already there and won; `failed` means neither
+// route could land it - two answers callers act on differently (a race is
+// re-read, an I/O failure is not retried), so they are never collapsed.
+type MarkerLanding = "landed" | "exists" | "failed";
+
 async function landMarkerAtomically(
   environment: Environment,
   target: string,
   from: string,
   step: string,
-): Promise<boolean> {
+): Promise<MarkerLanding> {
   try {
     await link(from, target);
     await dropMarkerFile(environment, from, `${step}-unlink-source`);
-    return true;
+    return "landed";
   } catch (err) {
     if (errnoCode(err) === "EEXIST") {
       await dropMarkerFile(environment, from, `${step}-newer-exists`);
-      return false;
+      return "exists";
     }
     try {
       const bytes = await readFile(from);
       await writeFile(target, bytes, { flag: "wx", mode: 0o600 });
       await dropMarkerFile(environment, from, `${step}-unlink-source`);
-      return true;
+      return "landed";
     } catch (createErr) {
       if (errnoCode(createErr) === "EEXIST") {
         await dropMarkerFile(environment, from, `${step}-newer-exists`);
-        return false;
+        return "exists";
       }
       // Neither route could land `from` (no hard links AND the create
       // failed - ENOSPC, EIO). `from` may be the only complete copy of
@@ -308,9 +333,109 @@ async function landMarkerAtomically(
           errorMessage: errorFromUnknown(createErr).message,
         },
       );
-      return false;
+      return "failed";
     }
   }
+}
+
+// `writerId` is `<pid>-<hex>`; the pid half is what a reader on the same
+// machine can check for liveness. The host daemon applies the same rule
+// (`isStaleUpdateProgress`) when it decides whether an `updating` marker
+// still describes a live update.
+const WRITER_ID_PID = /^(\d+)-[0-9a-f]+$/;
+
+/**
+ * Whether the record's writer is a process that may still be acting on it.
+ * Fail-open: a record with no writer id (an older CLI) or an unparseable
+ * one is treated as live, the same reading the host daemon takes - a marker
+ * that cannot be proven abandoned is not this reader's to replace.
+ */
+function progressWriterMayBeLive(record: HostUpdateProgress): boolean {
+  if (record.writerId === null) return true;
+  const match = WRITER_ID_PID.exec(record.writerId);
+  if (match === null) return true;
+  const pid = Number.parseInt(match[1], 10);
+  if (!Number.isSafeInteger(pid) || pid <= 0) return true;
+  return isProcessAlive(pid);
+}
+
+/**
+ * The pre-lock publish: claim the live path for `next` WITHOUT overwriting
+ * an update that may be in progress.
+ *
+ * `host update` publishes its `updating` before it waits for the contender
+ * lock, so the transfer is visible remotely from its first byte. That write
+ * used to be the one unconditional write on the path, and it could land over
+ * the marker of the updater currently HOLDING the lock - mid-swap, mid-
+ * restart - after which that updater's stamp and clear (CAS against its own
+ * record) could never land, and this run's `failed` on a lost download
+ * would stand over a live mutation as a terminal outcome. The rule is the
+ * same one the lock-holder applies under the lock: nothing is overwritten
+ * blind.
+ *
+ * - `published`: the path was empty and `next` is now there;
+ * - `replaced-stale`: the path held a record no writer is acting on - a
+ *   `failed` (its writer stamped and exited) or an `updating` whose writer
+ *   process is gone - and `next` replaced it by compare-and-swap;
+ * - `deferred`: the path holds another writer's live `updating`. Nothing
+ *   was written; the caller runs without a marker of its own until it
+ *   takes the marker over under the lock. Also the answer when concurrent
+ *   writers kept winning the bounded retry - someone live is writing;
+ * - `failed`: an I/O failure that landed nothing, reported by log.
+ *
+ * `displaced` is the record a `replaced-stale` claim replaced, returned so
+ * the caller can put it back if it then does no disruptive work (a busy
+ * park, a failure before the host is touched): a `failed` that was still
+ * exactly true is not this run's to remove. Null for every other outcome.
+ *
+ * The liveness check is synchronous (`isProcessAlive`; on Windows a
+ * `tasklist` spawn with a bounded timeout) and runs once per record read,
+ * at most three times per claim. Never throws.
+ */
+export interface UpdateProgressMarkerClaim {
+  readonly outcome: "published" | "replaced-stale" | "deferred" | "failed";
+  readonly displaced: HostUpdateProgress | null;
+}
+
+export async function claimUpdateProgressMarkerBeforeLock(
+  environment: Environment,
+  next: HostUpdateProgress,
+): Promise<UpdateProgressMarkerClaim> {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const onDisk = await readUpdateProgressMarker(environment);
+    if (onDisk === null) {
+      const created = await createUpdateProgressMarkerIfAbsent(
+        environment,
+        next,
+      );
+      if (created === "created")
+        return { outcome: "published", displaced: null };
+      if (created === "failed") return { outcome: "failed", displaced: null };
+      continue;
+    }
+    if (onDisk.state !== "failed" && progressWriterMayBeLive(onDisk)) {
+      return { outcome: "deferred", displaced: null };
+    }
+    const replaced = await replaceUpdateProgressMarkerIfUnchanged(
+      environment,
+      onDisk,
+      next,
+    );
+    if (replaced === "failed") return { outcome: "failed", displaced: null };
+    if (replaced === "replaced") {
+      createCliLogger(environment).info(
+        "Host update progress marker replaced a record no writer is acting on",
+        {
+          environment,
+          previousState: onDisk.state,
+          previousTarget: onDisk.targetVersion,
+          targetVersion: next.targetVersion,
+        },
+      );
+      return { outcome: "replaced-stale", displaced: onDisk };
+    }
+  }
+  return { outcome: "deferred", displaced: null };
 }
 
 /**
@@ -330,9 +455,13 @@ export async function createUpdateProgressMarkerIfAbsent(
     await ensureHostHomeDir(environment);
     const target = hostUpdateProgressMarkerPath(environment);
     const staged = await stageMarkerFile(target, next);
-    if (!(await landMarkerAtomically(environment, target, staged, "create"))) {
-      return "exists";
-    }
+    const landing = await landMarkerAtomically(
+      environment,
+      target,
+      staged,
+      "create",
+    );
+    if (landing !== "landed") return landing;
     logger.info("Host update progress marker created (conditional)", {
       environment,
       state: next.state,
@@ -354,13 +483,13 @@ async function swapMarkerIfUnchanged(
   environment: Environment,
   expected: HostUpdateProgress,
   next: HostUpdateProgress | null,
-): Promise<"swapped" | "changed" | "absent"> {
+): Promise<"swapped" | "changed" | "absent" | "failed"> {
   const logger = createCliLogger(environment);
   const target = hostUpdateProgressMarkerPath(environment);
   const scratch = `${target}.reconcile-${process.pid}-${Date.now()}`;
   const dropFile = (path: string, step: string): Promise<void> =>
     dropMarkerFile(environment, path, step);
-  const landAtomically = (from: string, step: string): Promise<boolean> =>
+  const landAtomically = (from: string, step: string): Promise<MarkerLanding> =>
     landMarkerAtomically(environment, target, from, step);
   const changed = (currentState: HostUpdateProgressState | null): "changed" => {
     logger.info(
@@ -375,6 +504,18 @@ async function swapMarkerIfUnchanged(
     return "changed";
   };
   try {
+    // Everything that can THROW happens before the live record is taken:
+    // once `target` is in the scratch, a throw would leave the live path
+    // empty under a `failed` that promises the opposite. From the take on,
+    // every call below reports through its return value (the landing and
+    // drop helpers catch internally).
+    let staged: string | null = null;
+    if (next !== null) {
+      await ensureHostHomeDir(environment);
+      staged = await stageMarkerFile(target, next);
+    }
+    const dropStaged = (): Promise<void> =>
+      staged === null ? Promise.resolve() : dropFile(staged, "stamp-unused");
     let absent = false;
     try {
       await rename(target, scratch);
@@ -386,7 +527,8 @@ async function swapMarkerIfUnchanged(
           errorName: errorFromUnknown(err).name,
           errorMessage: errorFromUnknown(err).message,
         });
-        return "changed";
+        await dropStaged();
+        return "failed";
       }
       absent = true;
     }
@@ -395,19 +537,20 @@ async function swapMarkerIfUnchanged(
       if (current === null || !sameProgress(current, expected)) {
         // Not ours: give it back unless a newer marker has since landed.
         await landAtomically(scratch, "restore");
+        await dropStaged();
         return changed(current?.state ?? null);
       }
-      await dropFile(scratch, "expected");
     }
     if (next === null) {
       if (absent) return "absent";
+      await dropFile(scratch, "expected");
       logger.info("Host update progress marker cleared (conditional)", {
         environment,
         state: expected.state,
       });
       return "swapped";
     }
-    if (absent) {
+    if (absent || staged === null) {
       // An empty live path is NOT proof that nobody else is in flight: another
       // conditional swap may hold the current marker in its scratch at this
       // instant (its step 1), and a stamp landed here now would win its
@@ -415,13 +558,32 @@ async function swapMarkerIfUnchanged(
       // live marker it then drops. Absence is a changed marker as far as a
       // replace is concerned; the failure is still reported by exit code and
       // log, and the only marker it can lose is one that was already gone.
+      // (`staged === null` cannot co-occur with `next !== null`; it is the
+      // narrowing the type needs.)
+      await dropStaged();
       return changed(null);
     }
-    await ensureHostHomeDir(environment);
-    const staged = await stageMarkerFile(target, next);
-    if (!(await landAtomically(staged, "stamp"))) {
-      return changed(null);
+    // The expected record is still held in the scratch while `next` lands,
+    // so a landing that FAILS can put it back: `failed` then means "nothing
+    // on the live path changed", which is what lets a caller keep trusting
+    // the record it holds. It is dropped only once `next` is the live
+    // marker. A landing that finds a marker already there (another writer's
+    // create-if-absent, in the instant the path was empty) is a changed
+    // marker: the restore is attempted for symmetry and loses to it.
+    const landing = await landAtomically(staged, "stamp");
+    if (landing !== "landed") {
+      const restored = await landAtomically(scratch, "restore");
+      if (landing === "exists") return changed(null);
+      if (restored === "exists") return changed(null);
+      if (restored === "failed") {
+        logger.warn(
+          "Host update progress marker conditional swap failed and could not restore the expected record - the live path is empty",
+          { environment, step: "stamp-restore" },
+        );
+      }
+      return "failed";
     }
+    await dropFile(scratch, "expected");
     logger.info("Host update progress marker replaced (conditional)", {
       environment,
       state: next.state,
@@ -437,7 +599,7 @@ async function swapMarkerIfUnchanged(
       errorName: errorFromUnknown(err).name,
       errorMessage: errorFromUnknown(err).message,
     });
-    return "changed";
+    return "failed";
   }
 }
 

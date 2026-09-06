@@ -1080,8 +1080,10 @@ export function HostOverviewPanel(props: {
               !usable ||
               legacyFacts === null ||
               legacyFacts.stagedWait === null ||
-              updates.stagedFloor !== null ||
-              !updates.stagedEntryKnown
+              // ONE gate, shared with the dispatch's revalidation: the
+              // catalog still lists the staged version, not withdrawn, no
+              // CLI floor, a usable asset for this platform.
+              !updates.stagedEntryOfferable
                 ? null
                 : () => {
                     if (legacyFacts.stagedWait === null) return;

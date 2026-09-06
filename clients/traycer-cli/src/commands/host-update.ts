@@ -9,12 +9,12 @@ import {
   type HostDownloadOutcome,
 } from "../installer/download-stage";
 import {
+  claimUpdateProgressMarkerBeforeLock,
   createUpdateProgressMarkerIfAbsent,
   deleteUpdateProgressMarkerIfUnchanged,
   progressRecord,
   readUpdateProgressMarker,
   replaceUpdateProgressMarkerIfUnchanged,
-  writeUpdateProgressMarker,
   type HostUpdateProgress,
   sameProgress,
 } from "../host/update-progress-marker";
@@ -204,18 +204,20 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
     // their writer takes the contender lock, so by the time this command
     // reaches its stamp or clear another updater may have landed its own
     // `updating` at the same path, and an unconditional write would erase
-    // that updater's only progress signal. Non-null from the first write
-    // attempt on, whether or not the write landed (a failed write is warned
-    // about, not retried). The version it names is the one a `failed` stamp
-    // has to name too, which is why the re-point under the lock replaces the
-    // whole record rather than one field.
+    // that updater's only progress signal. Non-null only once a record of
+    // this run's has actually landed - published before the lock, or taken
+    // over / created under it - and null while the pre-lock claim deferred
+    // to another writer's live marker or failed to land (warned about, not
+    // retried). The version it names is the one a `failed` stamp has to
+    // name too, which is why the re-point under the lock replaces the whole
+    // record rather than one field.
     //
-    // It is a CLAIM about the disk, not a fact: every write after the
-    // pre-lock publish is conditional on it. The one place the claim is
-    // turned into a fact is `reassertMarkerUnderLock` below, which runs
-    // under the contender lock and makes the path this run's whatever it
-    // holds by then - by conditional replace or conditional create, never
-    // by a blind write.
+    // It is a CLAIM about the disk, not a fact: every write, the pre-lock
+    // publish included, is conditional on what the path held. The one place
+    // the claim is turned into a fact is `reassertMarkerUnderLock` below,
+    // which runs under the contender lock and makes the path this run's
+    // whatever it holds by then - by conditional replace or conditional
+    // create, never by a blind write.
     const ownMarker: { current: HostUpdateProgress | null } = { current: null };
     // The record `reassertMarkerUnderLock` displaced when it took the marker
     // over, kept for one purpose: an exit that follows the takeover WITHOUT
@@ -233,17 +235,51 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
     const displacedMarker: { current: HostUpdateProgress | null } = {
       current: null,
     };
+    // The version this run is working toward, as last announced to the
+    // marker (pre-lock claim, or the re-point under the lock). Kept apart
+    // from `ownMarker` because a run whose claim DEFERRED holds no record
+    // and still has a target to name if it fails after disturbing the host.
+    const intendedTarget: { current: string | null } = { current: null };
+    // The pre-lock publish. NOT a blind write: the path may hold the marker
+    // of the updater currently holding the contender lock, mid-swap, and a
+    // write over it would leave that updater's stamp and clear (CAS against
+    // its own record) unable to land while this run's later `failed` on a
+    // lost download stood over a live mutation as a terminal outcome. The
+    // claim lands only into an empty path or over a record no writer is
+    // acting on; a live writer's `updating` is left as it is and this run
+    // proceeds with no marker of its own until it takes the marker over
+    // under the lock (`reassertMarkerUnderLock`).
     const publishUpdating = async (targetVersion: string): Promise<void> => {
-      ownMarker.current = progressRecord({
+      intendedTarget.current = targetVersion;
+      // Idempotent: a second call while this run's record is on disk would
+      // read its own live `updating`, defer to itself and orphan the record.
+      if (ownMarker.current !== null) return;
+      const fresh = progressRecord({
         state: "updating",
         error: null,
         targetVersion,
       });
-      await writeUpdateProgressMarkerSafely(
-        ctx.runtime.logger,
+      const claim = await claimUpdateProgressMarkerBeforeLock(
         environment,
-        ownMarker.current,
+        fresh,
       );
+      if (claim.outcome === "published" || claim.outcome === "replaced-stale") {
+        ownMarker.current = fresh;
+        // What a stale-record replace displaced is kept for the same reason
+        // a takeover under the lock keeps it: a park or a pre-disruption
+        // failure puts it back.
+        displacedMarker.current = claim.displaced;
+        return;
+      }
+      ownMarker.current = null;
+      if (claim.outcome === "deferred") {
+        ctx.runtime.logger.info(
+          "Host update left another updater's live progress marker in place; this run publishes its own once it holds the lock",
+          { environment, targetVersion },
+        );
+      }
+      // "failed" was warned about by the marker layer; the update itself
+      // must not fail on its progress signal.
     };
     // Under the contender lock, before the disruptive half, make the marker
     // THIS run's. The marker is published BEFORE this run waits for admission
@@ -281,30 +317,16 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
     const reassertMarkerUnderLock = async (
       targetVersion: string,
     ): Promise<void> => {
-      // What the previous iteration's conditional write was compared
-      // against. `replaceUpdateProgressMarkerIfUnchanged` answers "changed"
-      // for a record that moved AND for a write that failed (the marker
-      // layer has warned about the latter); reading the same record back
-      // tells the two apart, and a failed write is not retried - the update
-      // must not fail, or spin, on its progress signal.
-      let lastExpected: HostUpdateProgress | null = null;
+      intendedTarget.current = targetVersion;
       // Bounded: each iteration either settles or observed a concurrent
       // write, and concurrent marker writers are the handful of updaters
-      // racing one lock, not an unbounded stream.
+      // racing one lock, not an unbounded stream. Only `changed` (a record
+      // that moved) is re-read; a `failed` write (I/O, warned about by the
+      // marker layer) is not retried - the update must not fail, or spin,
+      // on its progress signal.
       for (let attempt = 0; attempt < 3; attempt += 1) {
         const own = ownMarker.current;
         const onDisk = await readUpdateProgressMarker(environment);
-        if (
-          lastExpected !== null &&
-          onDisk !== null &&
-          sameProgress(onDisk, lastExpected)
-        ) {
-          ctx.runtime.logger.warn(
-            "Host update could not write the progress marker under the lock; proceeding without re-asserting it",
-            { environment, targetVersion },
-          );
-          return;
-        }
         const fresh = progressRecord({
           state: "updating",
           error: null,
@@ -334,7 +356,13 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
             }
             return;
           }
-          lastExpected = onDisk;
+          if (replaced === "failed") {
+            ctx.runtime.logger.warn(
+              "Host update could not write the progress marker under the lock; proceeding without re-asserting it",
+              { environment, targetVersion },
+            );
+            return;
+          }
           continue;
         }
         const created = await createUpdateProgressMarkerIfAbsent(
@@ -346,13 +374,14 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
           return;
         }
         if (created === "failed") {
-          // Already warned by the marker layer; the update itself must not
-          // fail on its progress signal.
+          ctx.runtime.logger.warn(
+            "Host update could not write the progress marker under the lock; proceeding without re-asserting it",
+            { environment, targetVersion },
+          );
           return;
         }
         // "exists": a marker landed between the read and the create; the
         // next iteration reads it and takes it over.
-        lastExpected = null;
       }
       ctx.runtime.logger.warn(
         "Host update could not establish ownership of the progress marker under the lock; proceeding without re-asserting it",
@@ -395,7 +424,7 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
     // the boundary through the progress stream - `commitInstallFromSource`
     // emits `service-stop` immediately before the stop and `swap` before
     // the rename - and the activation arm's hook runs immediately before
-    // its stop, with nothing that can fail in between.
+    // its stop (see `reassertMarkerThenDisrupt` for the one check between).
     let disruptionStarted = false;
     const reportProgress = (info: ProgressInfo): void => {
       if (info.stage === "service-stop" || info.stage === "swap") {
@@ -403,6 +432,11 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
       }
       ctx.progress(info);
     };
+    // The activation arm's hook runs after its busy gate and immediately
+    // before its stop; the only thing between is the mutation-capability
+    // check the stop performs, and a failure there lands a `failed` into an
+    // EMPTY path at most (a taken-over record is stamped, which is the
+    // outcome the next updater takes over anyway).
     const reassertMarkerThenDisrupt = async (
       targetVersion: string,
     ): Promise<void> => {
@@ -481,9 +515,12 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
       // target, an activation debt, an explicit downgrade - publish now,
       // before the apply half touches the install. A transfer already
       // published from `onWillDownload`, and the version it named is the one
-      // that was staged; a second write here would replace this run's own
+      // that was staged; a second claim here would replace this run's own
       // record with an identical-looking one and cost nothing but the
-      // certainty of what `ownMarker.current` refers to.
+      // certainty of what `ownMarker.current` refers to. A transfer whose
+      // claim DEFERRED (another writer's live marker stood there) has no
+      // record and claims again here - the other update may have finished
+      // during the download - under the same conditional rule.
       if (needsWork && ownMarker.current === null) {
         await publishUpdating(
           activationDebt !== null
@@ -610,7 +647,26 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
         }
         throw err;
       }
-      if (ownMarker.current !== null) {
+      if (ownMarker.current === null) {
+        // No record of this run's on disk (the pre-lock claim deferred, or
+        // no conditional write ever landed). A failure BEFORE the host was
+        // disturbed then has nothing to report on the marker - the update
+        // it deferred to is the one in progress. A failure AFTER is this
+        // run's doing and must be visible remotely: `markUpdateFailed`
+        // lands it into an EMPTY path only, never over a live record.
+        if (disruptionStarted) {
+          await markUpdateFailed(
+            ctx.runtime.logger,
+            environment,
+            // Every arm announces its target before it can disturb the host,
+            // so this is set whenever `disruptionStarted` is; the fallback
+            // is a type-level courtesy, not a reachable branch.
+            intendedTarget.current ?? "unknown",
+            err instanceof Error ? err.message : String(err),
+            null,
+          );
+        }
+      } else {
         const displaced = displacedMarker.current;
         if (displaced !== null && !disruptionStarted) {
           // Failed after taking the marker over but before touching the
@@ -694,6 +750,13 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
         // something else removed it; nothing is left to report on.
         ctx.runtime.logger.info(
           "Host update found no progress marker to clear",
+          { environment },
+        );
+      } else if (cleared === "failed") {
+        // Warned about by the marker layer; named here so the CLI's own
+        // log shows why an `updating` outlived a successful update.
+        ctx.runtime.logger.info(
+          "Host update could not clear its progress marker; it stays until the next update supersedes it",
           { environment },
         );
       }
@@ -871,6 +934,11 @@ async function clearStaleFailedMarker(
       "Host update cleared a stale failed progress marker - the running host is at the installed version",
       { environment, staleTargetVersion: marker.targetVersion },
     );
+  } else if (outcome === "failed") {
+    logger.info(
+      "Host update left the progress marker alone - the stale-failure clear could not be written",
+      { environment, outcome },
+    );
   } else {
     logger.info(
       "Host update left the progress marker alone - it changed under the stale-failure check",
@@ -1042,22 +1110,6 @@ function downloadTargetVersion(outcome: HostDownloadOutcome): string {
     : outcome.targetVersion;
 }
 
-async function writeUpdateProgressMarkerSafely(
-  logger: ILogger,
-  environment: Environment,
-  progress: Parameters<typeof writeUpdateProgressMarker>[1],
-): Promise<void> {
-  try {
-    await writeUpdateProgressMarker(environment, progress);
-  } catch (err) {
-    logger.warn("Host update failed to persist progress marker", {
-      environment,
-      state: progress.state,
-      errorMessage: err instanceof Error ? err.message : String(err),
-    });
-  }
-}
-
 // Terminates the "updating" marker with the real cause so the daemon reports
 // a failed update instead of an update that appears to still be running.
 /**
@@ -1070,13 +1122,16 @@ async function writeUpdateProgressMarkerSafely(
  * whole update and report a failure that is not about it. An absent marker
  * does not get the stamp either (see `replaceUpdateProgressMarkerIfUnchanged`
  * for why an empty live path is not proof of an idle peer); the failure is
- * still reported by exit code and log. `ours` is `null` only when this run
- * never wrote a marker, in which case there is nothing to compare against and
- * the stamp lands unconditionally - every caller today passes the marker it
- * wrote or took over under the lock, so that arm is a contract for the
- * signature rather than a live path. A stamp over a TAKEN-OVER record is
- * right: this run did the disruptive work, so its failure is the host's
- * current state, and the next updater takes the `failed` over in turn.
+ * still reported by exit code and log. `ours` is `null` when this run has no
+ * record of its own on disk - the pre-lock claim deferred to another
+ * writer's live marker, or no conditional write ever landed - and the
+ * caller asks for a stamp anyway only when it DID disturb the host: the
+ * failure is then real and must reach the remote surfaces, so it lands by
+ * create-if-absent - into an empty path only, never over a live record,
+ * which is the one blind write the conditional primitives exist to refuse.
+ * A stamp over a TAKEN-OVER record is right when it happens: this run did
+ * the disruptive work, so its failure is the host's current state, and the
+ * next updater takes the `failed` over in turn.
  */
 async function markUpdateFailed(
   logger: ILogger,
@@ -1087,7 +1142,18 @@ async function markUpdateFailed(
 ): Promise<void> {
   const failed = progressRecord({ state: "failed", error, targetVersion });
   if (ours === null) {
-    await writeUpdateProgressMarkerSafely(logger, environment, failed);
+    const created = await createUpdateProgressMarkerIfAbsent(
+      environment,
+      failed,
+    );
+    if (created !== "created") {
+      logger.info(
+        created === "exists"
+          ? "Host update did not stamp its failure - the progress marker holds another record"
+          : "Host update did not stamp its failure - the progress marker could not be written",
+        { environment, targetVersion, outcome: created },
+      );
+    }
     return;
   }
   // One atomic compare-and-swap, not a read followed by a write: the other
@@ -1100,7 +1166,9 @@ async function markUpdateFailed(
   );
   if (outcome !== "replaced") {
     logger.info(
-      "Host update did not stamp its failure - another updater owns the progress marker now",
+      outcome === "failed"
+        ? "Host update did not stamp its failure - the progress marker could not be written"
+        : "Host update did not stamp its failure - another updater owns the progress marker now",
       { environment, outcome },
     );
   }

@@ -754,8 +754,10 @@ describe("HostOverviewOperationCard — record-derived parks", () => {
     expect(
       screen.getByTestId("host-overview-operation-phase").textContent,
     ).toBe("Update will continue when 2 sessions finish");
-    // Removing the stagedFloor gate would expose Force update for a CLI-floor
-    // refusal; this negative affordance pin must turn RED under that ablation.
+    // Removing `!updates.stagedEntryOfferable` from the panel's Force gate
+    // would expose Force update for this CLI-floor refusal (the floored
+    // staged version is not offerable); this negative affordance pin must
+    // turn RED under that ablation.
     expect(
       screen.queryByTestId("host-overview-operation-force-update"),
     ).toBeNull();
@@ -1038,7 +1040,7 @@ describe("HostOverviewOperationCard — record-derived parks", () => {
         "host.status": () =>
           statusWithBusy("1.3.0-rc.2", { kind: "none" }, true, 2),
         // Force update renders only once the check proves the staged entry
-        // clear of the CLI floor (`stagedEntryKnown`), same as the positive
+        // clear of the CLI floor (`stagedEntryOfferable`), same as the positive
         // Force fixture above; without it the button never appears.
         "host.update.check": () => ({
           outcome: "ok" as const,
@@ -1094,7 +1096,7 @@ describe("HostOverviewOperationCard — record-derived parks", () => {
         "host.status": () =>
           statusWithBusy("1.3.0-rc.2", { kind: "none" }, true, 2),
         // Force update renders only once the check proves the staged entry
-        // clear of the CLI floor (`stagedEntryKnown`), same as the positive
+        // clear of the CLI floor (`stagedEntryOfferable`), same as the positive
         // Force fixture above; without it the button never appears.
         "host.update.check": () => ({
           outcome: "ok" as const,
