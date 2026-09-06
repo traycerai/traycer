@@ -1193,10 +1193,12 @@ export const SWAP_RENAME_DELAYS_MS: readonly number[] = [
 ];
 
 // Wall-clock ceiling for one swap rename INCLUDING its re-kill hooks. The
-// schedule above sums to ~24s of sleeps, but each Windows re-kill pass can
-// legitimately spend a 10s WMI scan plus a 30s taskkill on a degraded
-// machine - seven such passes would keep the service down and the
-// environment cli-lock held for ~5 minutes. Healthy re-kills run in a
+// schedule above sums to ~24s of sleeps, but each Windows re-kill pass is a
+// bounded scan-then-kill loop whose every PowerShell step carries a 30s
+// ceiling (`WINDOWS_RESTART_SEQUENCE_TIMEOUT_MS` derives the worst case), so
+// one pass can legitimately spend minutes on a degraded machine - seven
+// such passes would keep the service down and the environment cli-lock
+// held far longer than that. Healthy re-kills run in a
 // couple of seconds, so this ceiling never truncates the schedule where
 // the retries can actually work; it only stops the pathological machines
 // from wedging every other host mutation while they fail.

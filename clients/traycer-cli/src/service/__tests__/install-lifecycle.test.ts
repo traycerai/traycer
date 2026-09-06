@@ -58,8 +58,8 @@ vi.mock("../platforms/macos", () => ({
   readRegisteredCliInvocation: mocks.readRegisteredCliInvocationMock,
 }));
 
-// The Windows swap-lock recovery functions shell out to schtasks /
-// powershell / taskkill - stub the module so the wiring tests can assert
+// The Windows swap-lock recovery functions shell out to schtasks and
+// powershell - stub the module so the wiring tests can assert
 // the lifecycle hands the label through without touching the OS.
 vi.mock("../platforms/windows", async () => {
   // The REAL clock helper, re-exported through the mock: the wiring test

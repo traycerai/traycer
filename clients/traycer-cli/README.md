@@ -168,7 +168,10 @@ In each case, run the command again from a shell outside Traycer.
 On Windows there is no re-exec. The host's processes are terminated
 individually, and the CLI running the command, its children, and the shell that
 launched it are excluded from that set - terminating the host's whole tree would
-take them down with it.
+take them down with it. Each process is terminated through a handle whose
+creation time is first checked against the scan that selected it, so a process
+id that Windows has since handed to something unrelated is skipped rather than
+killed.
 
 macOS needs neither: stopping the host's launchd job does not touch the CLI.
 

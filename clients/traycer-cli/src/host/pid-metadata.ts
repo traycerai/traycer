@@ -209,8 +209,8 @@ export function decodeLayer0Record(value: unknown): HostLayer0Record | null {
  * Purge the published pid metadata on the host's behalf.
  *
  * The writer contract says the HOST removes pid.json on graceful shutdown -
- * but a Windows stop is a `taskkill /T /F`, which never lets the host's
- * shutdown handler run, so the file survives every deliberate stop there.
+ * but a Windows stop is a forced `TerminateProcess`, which never lets the
+ * host's shutdown handler run, so the file survives every deliberate stop there.
  * That matters because "pid.json present but endpoint dead" is the signal
  * clients read as *the host died unexpectedly* (the desktop's health
  * watchdog auto-respawns on it); a deliberately stopped host must leave no

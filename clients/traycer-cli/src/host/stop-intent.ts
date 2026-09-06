@@ -26,9 +26,9 @@ export type { StopIntent, StopIntentReason };
  *
  * ### Why intent has to be STATED, not inferred
  *
- * Exit shape cannot answer this. On Windows `taskkill /T /F` gives the killed
- * process exit code 1, which is byte-identical to a host that genuinely crashed
- * with exit 1. On POSIX the supervisor forwards SIGTERM itself, so the child's
+ * Exit shape cannot answer this. On Windows a forced `TerminateProcess` gives
+ * the killed process a nonzero exit code that is byte-identical to a host that
+ * genuinely crashed with it. On POSIX the supervisor forwards SIGTERM itself, so the child's
  * death during a stop wears the same signal as any other signal death. Every
  * heuristic here is a coin flip on whether we fight the user.
  *
@@ -65,7 +65,7 @@ export const STOP_INTENT_STALE_MS = 300_000;
  * because "the worst case is one unwanted relaunch, which the supervisor's own
  * budget and incumbent re-check then contain". That is false, and the
  * containment argument is what made it sound safe. If the write fails on
- * win32, `/End` and `taskkill` still run, the orphaned supervisor is never
+ * win32, `/End` and the kill still run, the orphaned supervisor is never
  * signalled and sees no intent, so it reads the killed child's nonzero exit as
  * a crash and relaunches. A replacement that then stays healthy resets the
  * budget and IS the incumbent - so neither mechanism stops it, and `host stop`
