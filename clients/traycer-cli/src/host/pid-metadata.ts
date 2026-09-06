@@ -1,12 +1,15 @@
 import { readFile, rm } from "node:fs/promises";
 import {
+  compareProcessStartIdentity,
   isProcessStartIdentity,
   type ProcessStartIdentity,
 } from "@traycer/protocol/host/lifecycle";
 import type { Environment } from "../runner/environment";
 import { config } from "../config";
 import { createCliLogger, errorFromUnknown } from "../logger";
+import { isProcessAlive } from "../store/cli-lock";
 import { hostPidMetadataPath } from "../store/paths";
+import { readProcessStartIdentity } from "../store/process-identity";
 
 // Mirror of the writer contract owned by the host (the external
 // Traycer Host). Read by string path so
@@ -89,6 +92,39 @@ export async function readHostPidMetadata(
 ): Promise<HostPidMetadata | null> {
   const evidence = await readHostPidMetadataEvidence(environment);
   return evidence.kind === "read" ? evidence.metadata : null;
+}
+
+/**
+ * Whether the process `pid.json` names is PROVABLY not the host that
+ * published it: the pid no longer runs, or it runs another process than the
+ * one whose creation stamp the record carries (a crashed host's pid recycled
+ * onto an unrelated process). The plain liveness check alone answered
+ * "running" for that impostor at every reader - `host status`, doctor's
+ * stale-pid verdict, every platform's `service status`, the restart busy
+ * check, RPC endpoint resolution, the cooperative shutdown and the log
+ * rotation guard - and each then acted on a dead host's endpoint as if it
+ * were live.
+ *
+ * Positive evidence only, the same reading `readActivationState` takes:
+ * a record without a stamp (written before the field), a stamp this
+ * platform cannot read back, and a probe that could not answer all keep the
+ * record - `false` here means "not proven gone", never "proven alive".
+ * `EPERM` is alive (only an existing process refuses a signal). The stamp is
+ * compared only for a live pid with a stamp on record, so an old record
+ * costs exactly the liveness syscall it always did; a stamped one adds the
+ * platform's creation-stamp read (a `ps` / PowerShell spawn on macOS and
+ * Windows), synchronous like the liveness check it extends - every caller is
+ * a one-shot CLI command or a start-path guard, not a polled status loop.
+ */
+export function publishedHostProcessGone(metadata: HostPidMetadata): boolean {
+  if (!isProcessAlive(metadata.pid)) return true;
+  if (!isProcessStartIdentity(metadata.processStartIdentity)) return false;
+  return (
+    compareProcessStartIdentity(
+      metadata.processStartIdentity,
+      readProcessStartIdentity(metadata.pid),
+    ) === "different"
+  );
 }
 
 export async function readHostPidMetadataEvidence(

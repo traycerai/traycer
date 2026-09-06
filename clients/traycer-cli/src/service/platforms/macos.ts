@@ -3,6 +3,7 @@ import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname } from "node:path";
 import {
+  publishedHostProcessGone,
   readHostPidMetadata,
   readHostPidMetadataEvidence,
 } from "../../host/pid-metadata";
@@ -907,11 +908,11 @@ async function standDownLiveCliLabelHost(
 // The refusal for a process under `probedLabelId` that nobody can ask (see
 // `standDownLiveCliLabelHost` and the took-over arm): `no-metadata` is a
 // host that has not published yet; `no-host` is metadata whose endpoint
-// names a process that has already exited, while launchd still reports one
-// under the label (its supervisor between children, or a supervisor whose
-// child just stood down and has not exited itself yet). After the took-over
-// arm has deregistered Desktop's agent the message says so and names the
-// re-run.
+// names a process that is gone - exited, or a pid the OS has since handed to
+// an unrelated process - while launchd still reports one under the label
+// (its supervisor between children, or a supervisor whose child just stood
+// down and has not exited itself yet). After the took-over arm has
+// deregistered Desktop's agent the message says so and names the re-run.
 function unaskableHost(
   label: ServiceLabel,
   probedLabelId: string,
@@ -923,7 +924,7 @@ function unaskableHost(
   const state =
     metadata === "no-metadata"
       ? `launchd reports ${subject} under '${probedLabelId}' that has not published a live endpoint yet, so it could not be asked to stand down; it is most likely still starting.`
-      : `launchd reports ${subject} under '${probedLabelId}', but the endpoint it published names a host that has already exited, so nothing could be asked to stand down; it is most likely between hosts (starting the next one, or exiting after the last).`;
+      : `launchd reports ${subject} under '${probedLabelId}', but the endpoint it published names a host that is gone - exited, or a pid that now belongs to an unrelated process - so nothing could be asked to stand down; it is most likely between hosts (starting the next one, or exiting after the last).`;
   const routing =
     retiredAgentLabelId === null
       ? "Retry in a moment, or run 'traycer host service uninstall' first if it never comes up."
@@ -1607,7 +1608,7 @@ async function statusService(
     return statusNotInstalled();
   }
   const pidMetadata = await readHostPidMetadata(label.environment);
-  if (pidMetadata !== null && isProcessAlive(pidMetadata.pid)) {
+  if (pidMetadata !== null && !publishedHostProcessGone(pidMetadata)) {
     return {
       state: "running",
       version: pidMetadata.version,
@@ -1847,12 +1848,18 @@ async function standDownDesktopManagedHost(
     forcedRecycle:
       outcome.kind === "unreachable" ||
       outcome.kind === "hung" ||
-      // Unreadable metadata is not proof the host is gone, and a plain
-      // kickstart of a job launchd still considers running is a no-op - the
-      // restart would silently not happen. Recycling is correct in both
-      // readings: it replaces a quietly-live host, and it starts one that
-      // really had exited.
-      outcome.kind === "no-metadata",
+      // Neither of the next two says anything about the JOB, and the job is
+      // what gets kickstarted. Unreadable metadata is not proof the host is
+      // gone; `no-host` proves only that the CHILD pid.json named is gone -
+      // exited, or its pid recycled onto an unrelated process - while
+      // launchd may still be running the supervisor that spawned it. A
+      // plain kickstart of a job launchd considers running is a no-op, so
+      // the restart would silently not happen and the command would report
+      // success. Recycling is correct in every one of those readings: it
+      // replaces a quietly-live host, and it starts one that really had
+      // exited.
+      outcome.kind === "no-metadata" ||
+      outcome.kind === "no-host",
   };
 }
 

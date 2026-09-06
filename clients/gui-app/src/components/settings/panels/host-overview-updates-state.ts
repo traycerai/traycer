@@ -862,7 +862,17 @@ function versionUnavailableReason(
   if (installedVersion === null || installedVersion === rowVersion) return null;
   const comparison = compareHostVersions(installedVersion, rowVersion);
   if (!comparison.comparable) return null;
-  if (comparison.ordering === "equal") return `Already on v${installedVersion}`;
+  if (comparison.ordering === "equal") {
+    // Comparable-equal but a different string: another BUILD of the installed
+    // release (`1.2.0+build.2` beside an installed `1.2.0+build.1`). The
+    // comparator is build-metadata-blind and reserved for ordering; the
+    // artifact's identity is the string, and this host is NOT on the row's
+    // version. The CLI installs such a target only as an explicit sideways
+    // move (`--allow-downgrade`), which `host.update.install` passes only on a
+    // host that knows the sideways rule - and this page cannot tell which
+    // host it has - so the row stays disabled and says how to get the build.
+    return `Another build of v${installedVersion} is installed. To install v${rowVersion} over it, run: traycer host update --version ${rowVersion} --allow-downgrade`;
+  }
   if (comparison.ordering === "greater" && !supportsDowngrade) {
     return "Update this host to a release that supports downgrades from Settings.";
   }

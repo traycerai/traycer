@@ -397,6 +397,15 @@ export function hostInstallRecordPath(environment: Environment): string {
 export function hostUpdateProgressMarkerPath(environment: Environment): string {
   return join(hostHomeDir(environment), HOST_UPDATE_PROGRESS_FILENAME);
 }
+// The short cross-process lock `host update` holds around each conditional
+// write of the marker above (`host/update-progress-marker.ts`), beside the
+// file it guards. Named here so `host doctor` reads the same path the writer
+// locks.
+export function hostUpdateProgressMarkerLockPath(
+  environment: Environment,
+): string {
+  return `${hostUpdateProgressMarkerPath(environment)}.lock`;
+}
 
 export function hostDownloadCacheDir(environment: Environment): string {
   return join(hostHomeDir(environment), HOST_DOWNLOAD_CACHE_SUBDIR);
