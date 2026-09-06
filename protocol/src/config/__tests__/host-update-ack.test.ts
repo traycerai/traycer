@@ -3,6 +3,7 @@ import {
   UPDATE_DISPATCH_ACK_VERSION,
   decodeUpdateDispatchAck,
   isValidUpdateDispatchAckNonce,
+  isValidUpdateDispatchAckReason,
   updateDispatchAckPath,
 } from "../host-update-ack";
 
@@ -115,6 +116,61 @@ describe("decodeUpdateDispatchAck", () => {
     // Total by contract: the caller is a bounded wait that must keep its own
     // deadline rather than unwind on a hostile file.
     expect(decodeUpdateDispatchAck(text).kind).toBe("invalid");
+  });
+
+  it("decodes a well-formed v1 ACK, upgrading its top-level claimed fields into a v2 result", () => {
+    // v1 is still ACCEPTED: the file is written by whichever CLI image the
+    // slot holds and read by a host that may have been updated first, so the
+    // reader has to know both shapes losslessly.
+    const decoded = decodeUpdateDispatchAck(JSON.stringify(VALID_V1));
+    expect(decoded).toEqual({
+      kind: "valid",
+      ack: { v: 1, nonce: VALID_V1.nonce, result: CLAIMED },
+    });
+  });
+
+  it("decodes a no-attempt result carrying a reason inside the grammar", () => {
+    const noAttempt = {
+      ...VALID,
+      result: { kind: "no-attempt", reason: "refused-e-host-not-installed" },
+    };
+    expect(decodeUpdateDispatchAck(JSON.stringify(noAttempt))).toEqual({
+      kind: "valid",
+      ack: noAttempt,
+    });
+  });
+
+  it.each([
+    ["an underscore", "refused_bad"],
+    ["uppercase", "Refused"],
+    ["65 characters", "a".repeat(65)],
+  ])(
+    "rejects a no-attempt reason outside the grammar as malformed-fields: %s",
+    (_label, reason) => {
+      const noAttempt = { ...VALID, result: { kind: "no-attempt", reason } };
+      expect(decodeUpdateDispatchAck(JSON.stringify(noAttempt))).toEqual({
+        kind: "invalid",
+        reason: "malformed-fields",
+      });
+    },
+  );
+});
+
+describe("isValidUpdateDispatchAckReason", () => {
+  it("accepts the lowercase-kebab grammar", () => {
+    expect(isValidUpdateDispatchAckReason("refused-e-host-not-installed")).toBe(
+      true,
+    );
+    expect(isValidUpdateDispatchAckReason("a")).toBe(true);
+    expect(isValidUpdateDispatchAckReason("a".repeat(64))).toBe(true);
+  });
+
+  it.each([
+    ["an underscore", "a_b"],
+    ["uppercase", "Abc"],
+    ["65 characters", "a".repeat(65)],
+  ])("rejects %s", (_label, value) => {
+    expect(isValidUpdateDispatchAckReason(value)).toBe(false);
   });
 });
 
