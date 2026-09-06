@@ -1237,16 +1237,9 @@ panel visibility` is enabled there - and reachable only from the rail.
     a tile combines (`moveLeftPanelToGroup`), and dragging a tile out of a pill
     un-nests it. Bands are the rail's own 30/40/30 fractions, read along the
     strip's axis through `getLeftPanelRailDropPositionOnAxis(point, rect, "x")`;
-    the rail's `getLeftPanelRailDropPositionFromPoint` is that same function at
-    `"y"`. The FRACTIONS are what the two surfaces share - the axis is not.
-    `getEpicCanvasDropPreview` has no orientation in hand for a
-    `left-panel-rail-item`, so the rail resolves on `"y"` in both orientations,
-    which is right for the vertical one and means a HORIZONTAL rail drag turns
-    on pointer height rather than which side of an icon it is on. Fixing that
-    widens the rail's drop-target data and changes its live drag behaviour, so
-    it is its own change; this page is the surface that is already correct. The
-    pointer is read
-    from the collision pass rather than the event delta for the reason
+    the rail calls the same function, at the axis its own orientation lays its
+    slots out on, so one set of fractions serves every surface. The pointer is
+    read from the collision pass rather than the event delta for the reason
     `queued-message-reorder-dnd.ts` documents. The row menu (Move up / Move
     down / Group with panel above / Move out of group) is the pointer-free path
     to the same four outcomes, composed from the same helpers, and each item is
