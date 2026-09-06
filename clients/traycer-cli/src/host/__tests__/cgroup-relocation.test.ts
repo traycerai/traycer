@@ -284,15 +284,14 @@ describe("relocateOutOfHostCgroupIfNeeded", () => {
     loggerMock.info.mockClear();
   });
 
-  // The relocated CLI reaching `withRunner`: one byte on fd 3, then whatever
-  // the command itself exits with.
+  // The relocated CLI reaching `withRunner`: one byte on fd 3, the channel
+  // closing behind it, and then whatever the command itself exits with. This
+  // is the NODE ordering - the ack is delivered before the process is reaped.
   function acknowledgeThenExit(code: number | null): (fake: FakeChild) => void {
     return (fake) => {
       fake.child.emit("spawn");
-      fake.ack.write("\n");
-      // The ack has to be observable before `close`, exactly as a real pipe
-      // delivers it - `close` fires after the stdio streams are done.
-      setImmediate(() => fake.child.emit("close", code, null));
+      fake.ack.end("\n");
+      setImmediate(() => fake.child.emit("exit", code, null));
     };
   }
 
@@ -409,9 +408,13 @@ describe("relocateOutOfHostCgroupIfNeeded", () => {
     process.argv = packagedArgv() as string[];
     process.execPath = "/slot/traycer";
     process.execArgv = [];
+    // Exit first, then the ack channel ends carrying nothing. Only an ENDED
+    // channel makes "no ack" final, so this is the ordering that proves the
+    // refusal rather than merely reaching it.
     spawnMocks.respond = (fake) => {
       fake.child.emit("spawn");
-      fake.child.emit("close", 1, null);
+      fake.child.emit("exit", 1, null);
+      fake.ack.end();
     };
 
     await expect(
@@ -424,9 +427,46 @@ describe("relocateOutOfHostCgroupIfNeeded", () => {
     expect(loggerMock.info).not.toHaveBeenCalled();
 
     // Ablation: in `runInTransientScope`, drop the `if (!acknowledged)` branch
-    // from the `close` handler so it always resolves → this test fails: the
-    // call resolves `{kind:"completed", exitCode:1}` and the caller silently
-    // exits 1 with no error envelope, which is the bug this pin exists for.
+    // from `settle` so it always resolves → this test fails: the call resolves
+    // `{kind:"completed", exitCode:1}` and the caller silently exits 1 with no
+    // error envelope, which is the bug this pin exists for.
+  });
+
+  it("resolves when the ack arrives AFTER the process exit - Bun does not drain fd 3 before it reports the child gone", async () => {
+    // Bun 1.3.12 counts stdout/stderr toward its child close accounting but
+    // returns the extra descriptor from `net.connect({fd})` without adding it,
+    // so with stdio 0-2 inherited the process can be reported gone while fd 3
+    // still holds the ack. Deciding on that report alone rejects a relocation
+    // that had already acknowledged AND completed: a false "never started", a
+    // second terminal envelope over the child's own, and the real exit code
+    // lost. The tree and dev paths of this CLI run under Bun.
+    mocks.cgroup = V2_HOST_UNIT_CGROUP;
+    mocks.packaged = true;
+    process.argv = packagedArgv() as string[];
+    process.execPath = "/slot/traycer";
+    process.execArgv = [];
+    spawnMocks.respond = (fake) => {
+      fake.child.emit("spawn");
+      fake.child.emit("exit", 7, null);
+      // The bytes were written before the child died; they are only delivered
+      // to this process afterwards.
+      setImmediate(() => fake.ack.end("\n"));
+    };
+
+    await expect(
+      relocateOutOfHostCgroupIfNeeded("host update"),
+    ).resolves.toEqual({ kind: "completed", exitCode: 7 });
+    expect(loggerMock.info).toHaveBeenCalledWith(
+      "relocated host-stopping command into a transient scope",
+      { command: "host update", unit: "ai.traycer.host.service" },
+    );
+
+    // Ablation: in `runInTransientScope`, decide on the child's `close` event
+    // alone again - `child.once("close", (code) => acknowledged ? resolve(code
+    // ?? 1) : reject(relocationNeverStarted(...)))`, with the fake emitting
+    // `close` in place of `exit` - → this test fails: the ack has not been
+    // delivered yet at that point, so a completed command is rejected as one
+    // that never started.
   });
 
   it("rejects with E_SERVICE_CONTROL_FAILED when the child emits a spawn error", async () => {
@@ -456,6 +496,30 @@ describe("relocateOutOfHostCgroupIfNeeded", () => {
     // `reject(relocationFailed(...))` to `resolve(0)` → this test fails: the
     // relocation reports `{kind:"completed", exitCode:0}`, so a `systemd-run`
     // that never existed is recorded as a command that ran and succeeded.
+  });
+
+  it("resolves on a late ack without waiting for the ack channel to end", async () => {
+    // Liveness, not correctness: once the byte is in hand the answer is known,
+    // so nothing here depends on the channel ever ending. Both runtimes mark
+    // descriptors above the explicit stdio set close-on-exec, so the child is
+    // the only writer and `end` does follow its exit - but a future leak of fd
+    // 3 into a long-lived grandchild would stall a decision this code can
+    // already make.
+    mocks.cgroup = V2_HOST_UNIT_CGROUP;
+    mocks.packaged = true;
+    process.argv = packagedArgv() as string[];
+    process.execPath = "/slot/traycer";
+    process.execArgv = [];
+    spawnMocks.respond = (fake) => {
+      fake.child.emit("spawn");
+      fake.child.emit("exit", 0, null);
+      // Written, never ended: the write end stays open.
+      setImmediate(() => fake.ack.write("\n"));
+    };
+
+    await expect(
+      relocateOutOfHostCgroupIfNeeded("host update"),
+    ).resolves.toEqual({ kind: "completed", exitCode: 0 });
   });
 
   it("does nothing and never spawns for a relocated scope cgroup (run-*.scope)", async () => {

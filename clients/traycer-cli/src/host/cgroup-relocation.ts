@@ -401,7 +401,38 @@ async function runInTransientScope(
     unit: inside.unit,
   });
   return await new Promise<number>((resolve, reject) => {
+    // TWO INDEPENDENT FACTS, and neither implies the other:
+    //
+    //   - the process ENDED, and with what code (`exit`);
+    //   - the ack channel is DONE, so no byte can still arrive (`end`).
+    //
+    // The obvious spelling - decide on `close`, which Node fires only once the
+    // stdio streams are finished - is wrong on the runtime half of this
+    // workspace. Bun counts stdout and stderr toward its close accounting but
+    // returns the extra descriptor from `net.connect({fd})` without adding it,
+    // so with stdio 0-2 inherited its `close` can fire while fd 3 still holds
+    // unread bytes. Deciding there would reject a relocation that had already
+    // acknowledged and completed - a false "never started", a second terminal
+    // envelope, and the child's real exit code lost.
     let acknowledged = false;
+    let exited = false;
+    let exitCode: number | null = null;
+    let ackFinished = false;
+    const settle = (): void => {
+      if (!exited) return;
+      // An ack already in hand answers the question; waiting for the stream to
+      // end as well would only add a way to hang.
+      if (acknowledged) {
+        // A child killed by a signal reports `null`, which is a failure the
+        // caller has to see as one.
+        resolve(exitCode ?? 1);
+        return;
+      }
+      // No ack YET. Only an ended channel makes that final: until then a byte
+      // may still be in flight behind the process's own exit.
+      if (!ackFinished) return;
+      reject(relocationNeverStarted(logger, commandPath, inside, exitCode));
+    };
     const ack = child.stdio[RELOCATION_ACK_FD];
     if (ack instanceof Readable) {
       ack.on("data", () => {
@@ -411,21 +442,36 @@ async function runInTransientScope(
           command: commandPath,
           unit: inside.unit,
         });
+        settle();
       });
+      // `end` is the ordinary finish; `close` covers a stream destroyed without
+      // ending, and `error` a channel that broke. Any of the three means no
+      // further byte is coming, which is all this flag claims.
+      const finishAck = (): void => {
+        if (ackFinished) return;
+        ackFinished = true;
+        settle();
+      };
+      ack.once("end", finishAck);
+      ack.once("close", finishAck);
+      ack.once("error", finishAck);
+    } else {
+      // No readable channel at all. Both supported runtimes hand back a
+      // `net.Socket` here, so this is a runtime that cannot answer the
+      // question - and an unanswerable ack is treated as a missing one, which
+      // refuses the stop rather than performing it blind.
+      ackFinished = true;
     }
     child.once("error", (cause) => {
       reject(relocationFailed(logger, commandPath, inside, cause));
     });
-    // `close` rather than `exit`: it fires once the stdio streams are done, so
-    // an ack already in the pipe has been delivered by the time we decide.
-    child.once("close", (code) => {
-      if (!acknowledged) {
-        reject(relocationNeverStarted(logger, commandPath, inside, code));
-        return;
-      }
-      // A child killed by a signal reports `null`, which is a failure the
-      // caller has to see as one.
-      resolve(code ?? 1);
+    // `exit`, not `close`: this listener is about the process ending, and
+    // nothing else. Whether the ack channel has drained is the other half,
+    // tracked above.
+    child.once("exit", (code) => {
+      exited = true;
+      exitCode = code;
+      settle();
     });
   });
 }
