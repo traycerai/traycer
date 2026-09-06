@@ -175,6 +175,15 @@ interface LandingTerminalDirectoryRequest {
   readonly mode: LandingTerminalDirectoryRequestMode;
   readonly capturedTarget: LandingTerminalTarget;
   readonly selectedTarget: LandingTerminalTarget | null;
+  /**
+   * The chooser row the terminal was picked from, or `null` for an ask that
+   * had none (a chord). Carried with the request because the picker is a
+   * window: that row can be dismissed and a NEW chooser opened while the
+   * reader is choosing a folder, and the settlement must land on the row it
+   * was asked from - or quietly beside the newer one - exactly as the
+   * browser's asynchronous open does.
+   */
+  readonly placeholderInstanceId: string | null;
 }
 
 /**
@@ -388,6 +397,8 @@ function directoryRequestFor(
     closePanelOnCancel,
     capturedTarget: target,
     selectedTarget: null,
+    placeholderInstanceId:
+      useLandingPanelStore.getState().placeholder?.instanceId ?? null,
     workspacePaths: target.workspacePaths,
     primaryWorkspacePath:
       target.primaryWorkspacePath ?? target.workspacePaths[0],
@@ -415,7 +426,11 @@ function settleDirectoryRequest(args: {
   readonly request: LandingTerminalDirectoryRequest | null;
   readonly generation: number;
   readonly context: LandingTerminalHostContext;
-  readonly addTerminalTab: (hostId: string, cwd: string) => string | null;
+  readonly addTerminalTab: (
+    hostId: string,
+    cwd: string,
+    forPlaceholderInstanceId: string | null,
+  ) => string | null;
   readonly replaceDirectoryRequest: (
     request: LandingTerminalDirectoryRequest | null,
   ) => void;
@@ -453,7 +468,11 @@ function settleDirectoryRequest(args: {
   const state = useLandingPanelStore.getState();
   let instanceId: string | null;
   if (request.mode === "always-create") {
-    instanceId = args.addTerminalTab(hostId, launchCwd);
+    instanceId = args.addTerminalTab(
+      hostId,
+      launchCwd,
+      request.placeholderInstanceId,
+    );
   } else {
     const existing = terminalForTarget(
       landingTerminalTabs(state.tabs),
@@ -462,7 +481,11 @@ function settleDirectoryRequest(args: {
       launchCwd,
     );
     if (existing === undefined) {
-      instanceId = args.addTerminalTab(hostId, launchCwd);
+      instanceId = args.addTerminalTab(
+        hostId,
+        launchCwd,
+        request.placeholderInstanceId,
+      );
     } else {
       instanceId = existing.instanceId;
       if (existing.instanceId !== state.activeInstanceId) {
@@ -731,15 +754,19 @@ export function LandingTerminalPanel(): ReactNode {
   // authority is not ready, and a tab written now would be indistinguishable
   // from legacy evidence.
   const addTerminalTab = useCallback(
-    (hostId: string, cwd: string): string | null => {
+    (
+      hostId: string,
+      cwd: string,
+      forPlaceholderInstanceId: string | null,
+    ): string | null => {
       const authority = authorityEntries[hostId];
       if (!landingTerminalAuthorityReady(authority)) return null;
       const instanceId = `landing-terminal-${uuidv4()}`;
-      // Through the placeholder, always. `fulfillPlaceholder` replaces an open
-      // one in its own strip position and plain-appends when there is none -
-      // which is the case a create routed through the directory picker lands
-      // in, since the placeholder can legitimately be dismissed while that
-      // picker is up.
+      // Through the placeholder, always. `fulfillPlaceholder` replaces the row
+      // the create was asked from in its own strip position, and appends
+      // quietly when that row is gone - which is the case a create routed
+      // through the directory picker can land in, since the chooser can be
+      // dismissed, and a new one opened, while that picker is up.
       fulfillPlaceholder(
         {
           kind: "terminal",
@@ -756,10 +783,10 @@ export function LandingTerminalPanel(): ReactNode {
           hostAuthorityAcknowledged: false,
           pendingCreate: authority.authority.capability.status === "capable",
         },
-        // No particular row: a terminal create answers immediately, so there is
-        // no window in which the placeholder it was picked from could be taken
-        // by something else.
-        null,
+        // The row the ask was made from. A synchronous create names the row on
+        // screen right now; a picker-backed one names the row that was on
+        // screen when the picker opened, which by now may be someone else's.
+        forPlaceholderInstanceId,
       );
       return instanceId;
     },
@@ -804,7 +831,12 @@ export function LandingTerminalPanel(): ReactNode {
         currentHostId,
       );
       if (launchCwd === null) return null;
-      return addTerminalTab(currentHostId, launchCwd);
+      // Synchronous: the row on screen is the row this was asked from.
+      return addTerminalTab(
+        currentHostId,
+        launchCwd,
+        useLandingPanelStore.getState().placeholder?.instanceId ?? null,
+      );
     },
     [addTerminalTab, reconciledContext],
   );
@@ -1129,7 +1161,9 @@ export function LandingTerminalPanel(): ReactNode {
         // Creation can be refused (the host's authority went unready between
         // this generation's reconciliation and its settlement), so the focus
         // hand-off is conditional on a tab actually existing.
-        const created = addTerminalTab(context.hostId, launchCwd);
+        // Nobody asked from a row: the auto-spawn answers the open gesture
+        // itself, so it takes whatever the strip shows.
+        const created = addTerminalTab(context.hostId, launchCwd, null);
         if (created !== null) focusTerminalInstance(created);
         clearIfPending();
         return;

@@ -21,6 +21,20 @@ import { appLogger, describeLogErrorSummary } from "@/lib/logger";
  */
 export type LandingBrowserTombstoneAction = "wait" | "close" | "clear";
 
+/**
+ * How long a device's stream that FAILED to open waits before the drain asks
+ * for it again. The case this exists for is the desktop's per-window stream
+ * cap: a window already holding its allowance of `browser.sessions` streams
+ * is refused a new one outright, and the refusal is a terminal `failed` that
+ * nothing revisits on its own - the provider stays mounted under a stable key,
+ * so freeing a slot later restarts nothing. Without a retry the tab the reader
+ * closed stays alive on its device until the bridge is remounted.
+ *
+ * A retry ladder is not needed: a slot frees when the reader closes a tile or
+ * a panel tab, which is seconds to minutes, and each attempt is one invoke.
+ */
+export const LANDING_BROWSER_TOMBSTONE_STREAM_RETRY_MS = 15_000;
+
 export function landingBrowserTombstoneDecision(args: {
   readonly pending: LandingBrowserPendingKill;
   readonly sessions: BrowserSessionsState | null;
@@ -77,6 +91,7 @@ export function useLandingBrowserTombstoneDrain(args: {
   const inFlightRef = useRef<Set<string>>(new Set());
   const [retryGeneration, setRetryGeneration] = useState(0);
   useLandingBrowserSessionsPublication(browserSessions);
+  useFailedStreamRetry({ pendingKills, browserSessions });
 
   useEffect(() => {
     for (const pending of pendingKills) {
@@ -221,4 +236,63 @@ function advanceReadyGeneration(args: {
     }
   }
   return args.generations.get(args.hostId) ?? 0;
+}
+
+/**
+ * Re-asks for a device's stream that failed to open, for as long as a
+ * tombstone still names that device. See
+ * {@link LANDING_BROWSER_TOMBSTONE_STREAM_RETRY_MS} for the case: the desktop's
+ * per-window cap answers a refused stream with a terminal `failed`, and
+ * nothing else revisits it. One timer per failed device, re-armed each time the
+ * stream reports `failed` again, dropped the moment it stops being failed or no
+ * tombstone names the device.
+ */
+function useFailedStreamRetry(args: {
+  readonly pendingKills: ReadonlyArray<LandingBrowserPendingKill>;
+  readonly browserSessions: LandingBrowserSessionEntries;
+}): void {
+  const { pendingKills, browserSessions } = args;
+  const timersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(
+    new Map(),
+  );
+  const sessionsRef = useRef(browserSessions);
+  useEffect(() => {
+    sessionsRef.current = browserSessions;
+  }, [browserSessions]);
+
+  useEffect(() => {
+    const timers = timersRef.current;
+    const failed = new Set<string>();
+    for (const pending of pendingKills) {
+      if (browserSessions[pending.hostId]?.lifecycle === "failed") {
+        failed.add(pending.hostId);
+      }
+    }
+    for (const [hostId, timer] of timers) {
+      if (failed.has(hostId)) continue;
+      clearTimeout(timer);
+      timers.delete(hostId);
+    }
+    for (const hostId of failed) {
+      if (timers.has(hostId)) continue;
+      timers.set(
+        hostId,
+        setTimeout(() => {
+          timers.delete(hostId);
+          // Re-read at fire time: the stream may have come back on its own,
+          // and a retry then would drop a live one.
+          const latest = sessionsRef.current[hostId];
+          if (latest?.lifecycle === "failed") latest.retry();
+        }, LANDING_BROWSER_TOMBSTONE_STREAM_RETRY_MS),
+      );
+    }
+  }, [browserSessions, pendingKills]);
+
+  useEffect(() => {
+    const timers = timersRef.current;
+    return () => {
+      for (const timer of timers.values()) clearTimeout(timer);
+      timers.clear();
+    };
+  }, []);
 }

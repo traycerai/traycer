@@ -5160,6 +5160,56 @@ describe("<LandingTerminalPanel />", () => {
     ).toBeNull();
   });
 
+  // The picker is a window. The chooser row the terminal was picked from can
+  // be dismissed, and a NEW chooser opened, while the reader is still choosing
+  // a folder - and the settlement must not take that newer row, which belongs
+  // to whatever the reader picks next. The terminal still lands (a device
+  // opened nothing here, but the folder was chosen), quietly, beside it.
+  it("lands a picker-backed terminal beside a chooser opened after its own row was dismissed", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.workspacePaths = ["/workspace/project", "/workspace/other"];
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    // A tab already on the strip, so dismissing the chooser leaves the panel
+    // open rather than collapsing it.
+    addBrowserTab("host-a", "browser-instance");
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+    await screen.findByTestId("landing-browser-tile-browser-instance");
+
+    act(() => {
+      useLandingPanelStore.getState().openPlaceholder("chooser-1", 1);
+    });
+    await pickTerminalFromChooser();
+    await screen.findByTestId("landing-terminal-directory-picker");
+    expect(useLandingPanelStore.getState().placeholder?.instanceId).toBe(
+      "chooser-1",
+    );
+
+    // Meanwhile: that row goes, and a fresh chooser is opened in its place.
+    act(() => {
+      useLandingPanelStore.getState().dismissPlaceholder();
+      useLandingPanelStore.getState().openPlaceholder("chooser-2", 1);
+    });
+    expect(useLandingPanelStore.getState().activeInstanceId).toBe("chooser-2");
+
+    fireEvent.click(screen.getByText("/workspace/other"));
+    await waitFor(() => {
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(1);
+    });
+
+    // The newer chooser is untouched and still the reader's row; the terminal
+    // sits on the strip without having taken the keyboard.
+    const state = useLandingPanelStore.getState();
+    expect(state.placeholder?.instanceId).toBe("chooser-2");
+    expect(state.activeInstanceId).toBe("chooser-2");
+    expect(landingTerminalTabs(state.tabs)[0]?.cwd).toBe("/workspace/other");
+  });
+
   it("focuses the terminal after a mouse directory selection", async () => {
     mocks.activeHostId = "host-a";
     mocks.primaryWorkspacePath = "/workspace/project";

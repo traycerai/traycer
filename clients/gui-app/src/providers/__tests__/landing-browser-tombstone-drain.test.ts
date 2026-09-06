@@ -12,6 +12,7 @@ import {
   tabInfo,
 } from "@/lib/browser-view/sessions/__tests__/browser-session-test-kit";
 import {
+  LANDING_BROWSER_TOMBSTONE_STREAM_RETRY_MS,
   landingBrowserTombstoneDecision,
   useLandingBrowserTombstoneDrain,
 } from "../landing-browser-tombstone-drain";
@@ -220,6 +221,61 @@ describe("useLandingBrowserTombstoneDrain", () => {
       ],
     });
   }
+
+  // A window at its stream cap is refused a new `browser.sessions` stream with
+  // a terminal `failed`, and the provider it came from stays mounted under a
+  // stable key - so nothing but this asks again when a slot frees. The retry
+  // is on a timer, re-armed while the device keeps answering `failed`, and
+  // dropped the moment the stream is anything else.
+  it("retries a device's failed stream on a timer while a tombstone names it", () => {
+    vi.useFakeTimers();
+    try {
+      const retry = vi.fn();
+      const pending = pendingKill({});
+      const failed = (): BrowserSessionsState =>
+        sessionsState({
+          lifecycle: "failed",
+          inventoryReady: false,
+          errorMessage: "This window has too many browser sessions open.",
+          retry,
+        });
+      const view = renderHook(
+        (sessions: BrowserSessionsState) =>
+          useLandingBrowserTombstoneDrain({
+            pendingKills: [pending],
+            browserSessions: { [HOST_ID]: sessions },
+          }),
+        { initialProps: failed() },
+      );
+
+      vi.advanceTimersByTime(LANDING_BROWSER_TOMBSTONE_STREAM_RETRY_MS - 1);
+      expect(retry).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      expect(retry).toHaveBeenCalledTimes(1);
+
+      // Still failed on the next report (the slot has not freed): re-armed,
+      // once, not once per render.
+      view.rerender(failed());
+      view.rerender(failed());
+      vi.advanceTimersByTime(LANDING_BROWSER_TOMBSTONE_STREAM_RETRY_MS);
+      expect(retry).toHaveBeenCalledTimes(2);
+
+      // Connecting now: the pending timer is dropped, and a live stream is
+      // never restarted from here.
+      view.rerender(failed());
+      view.rerender(
+        sessionsState({
+          lifecycle: "connecting",
+          inventoryReady: false,
+          retry,
+        }),
+      );
+      vi.advanceTimersByTime(LANDING_BROWSER_TOMBSTONE_STREAM_RETRY_MS * 2);
+      expect(retry).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
   it("sends nothing while the device's inventory is not ready", async () => {
     const closeTab = vi.fn(() => Promise.resolve());
