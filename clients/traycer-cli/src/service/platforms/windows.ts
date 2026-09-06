@@ -24,13 +24,13 @@ import {
 } from "../../host/spawn-evidence";
 import {
   WINDOWS_KILL_CONVERGENCE_ROUNDS,
+  WINDOWS_PROCESS_KILL_TIMEOUT_MS,
   WINDOWS_PROCESS_SCAN_TIMEOUT_MS,
   WINDOWS_SCHTASKS_END_TIMEOUT_MS,
   WINDOWS_SCHTASKS_QUERY_TIMEOUT_MS,
   WINDOWS_SCHTASKS_RUN_TIMEOUT_MS,
   WINDOWS_START_SPAWN_POLL_MS,
   WINDOWS_START_SPAWN_VERIFY_MS,
-  WINDOWS_TASKKILL_TIMEOUT_MS,
 } from "@traycer/protocol/host/lifecycle-constants";
 import { CLI_ERROR_CODES, cliError } from "../../runner/errors";
 import { isProcessAlive } from "../../store/cli-lock";
@@ -52,7 +52,7 @@ import type {
 // prompting for UAC.
 
 // Pluggable runner shape kept consistent with macOS so tests can exercise the
-// controller without touching schtasks/taskkill.
+// controller without touching schtasks or the PowerShell scan and kill.
 export type ProcessRunner = typeof runCommand;
 
 /**
@@ -103,8 +103,8 @@ export function createWindowsController(
     // No Desktop/SMAppService split on Windows, so the restart halves are the
     // stop and start `host restart` already performed - the named seam exists
     // so the command has one shape on every platform. `forcedRecycle` is
-    // never set: `stopService` taskkills and waits, so nothing survives to
-    // need a recycle.
+    // never set: `stopService` kills the tree and waits, so nothing survives
+    // to need a recycle.
     stopForRestart: async (label) => {
       await stopService(label, run, deps);
       return { forcedRecycle: false };
@@ -423,39 +423,59 @@ async function stopService(
 // trade: a stop that cannot be verified leaves the tree whole for the next
 // attempt instead of half torn down.
 //
-// NEVER `/T`. This CLI is routinely a CHILD of the host it is stopping - a
-// maintenance RPC, the reconciler, or a person's command in a Traycer-hosted
-// terminal - and `taskkill /T` walks down from the host and kills it mid-update:
-// the host is gone, the updater is gone, and nothing finishes the swap. The
-// scan computes which pids to kill (`computeWindowsHostKillSet`) and each one is
-// killed individually, deepest first (`orderWindowsKillsDescendantsFirst`) so a
-// child is issued its kill before the parent whose death would orphan it. That
-// ordering is a courtesy, not a mechanism - the kills are issued concurrently,
-// and what actually catches a process spawned mid-kill is the victim carry-over
-// below. `taskkill /F` on a parent leaves its children running, the VBS launcher
+// NEVER a tree kill (`taskkill /T`). This CLI is routinely a CHILD of the host
+// it is stopping - a maintenance RPC, the reconciler, or a person's command in
+// a Traycer-hosted terminal - and a tree kill walks down from the host and
+// kills it mid-update: the host is gone, the updater is gone, and nothing
+// finishes the swap. The scan computes which pids to kill
+// (`computeWindowsHostKillSet`) and each one is killed individually, deepest
+// first (`orderWindowsKillsDescendantsFirst`) so a child is issued its kill
+// before the parent whose death would orphan it. That ordering is a courtesy,
+// not a mechanism - a process spawned after the snapshot is in no ordering of
+// this list, and what actually catches it is the victim carry-over below.
+// `TerminateProcess` on a parent leaves its children running, the VBS launcher
 // re-runs the host only on exit 75 (the refreshed-slot signal) and never after a
 // kill, and the CLI-side supervisor is already silenced by the stop intent
 // written before any of this.
 //
-// Not `/T` also means nothing sweeps up what is spawned DURING the kill. The
-// scan is a snapshot, so a child the host or one of its agents starts after
-// `Get-CimInstance` materializes the table is in no round's kill set; killing
-// its parent orphans it, and the caller goes on to delete the pid metadata
-// while it still holds the install dir open. So this rescans and kills again
-// until a scan comes back empty. Each round kills exactly what THAT round's
-// scan returned - the scan verifies by exe path/command line, so a pid Windows
-// recycled between rounds is simply not in it.
+// Killed by IDENTITY, not by pid. The scan proves a row is the host's by its
+// pid AND its creation time, but a pid is only a name: a victim can exit on its
+// own between the snapshot and the kill - an agent does the moment the pipe to
+// its just-killed host closes - and Windows hands pids out again eagerly.
+// `taskkill /F /PID` re-resolves the integer at kill time,
+// so in that window it terminates whatever now wears the number: a process the
+// scan never saw, which the carry-over cannot protect because it only reasons
+// about rows that were in a snapshot. `killProcessIdentities` therefore hands
+// each round's victims to ONE PowerShell script that opens a handle to the pid,
+// checks the creation time through that handle against the one the scan
+// recorded, and terminates through the same handle. An open handle keeps the
+// process object - and with it the pid - alive, so the process the check
+// passed is the process the kill reaches. A mismatch is a reused pid and is
+// skipped; the next scan lists whatever is really there. A victim whose
+// creation time the scan could not read (0) is skipped for the same reason -
+// there is no identity to check - and surfaces as a survivor if it persists;
+// no live slot process is known to lack one (pid 0 and System have none, and
+// neither is ever in a kill set).
+//
+// Not a tree kill also means nothing sweeps up what is spawned DURING the
+// kill. The scan is a snapshot, so a child the host or one of its agents
+// starts after `Get-CimInstance` materializes the table is in no round's kill
+// set; killing its parent orphans it, and the caller goes on to delete the pid
+// metadata while it still holds the install dir open. So this rescans and
+// kills again until a scan comes back empty. Each round kills exactly what
+// THAT round's scan returned - the scan verifies by exe path/command line, so
+// a pid Windows recycled between rounds is simply not in it.
 //
 // `WINDOWS_KILL_CONVERGENCE_ROUNDS` counts KILL passes, so the loop scans one
 // more time than it kills: the last scan is always a confirming one, and an
 // empty scan is the ONLY way out that reports success.
 //
-// Known and deliberately not mechanised: `taskkill /F` is `TerminateProcess`,
-// which is asynchronous - the confirming scan can briefly still list a pid the
-// previous round killed. The bound absorbs one such round (that pid is gone by
-// the next scan and the loop converges normally). If the live Windows run shows
-// this flaking, the lever is a short settle before the re-scan, NOT a wider
-// bound: more rounds would only spend more time re-killing the same pids.
+// Known and deliberately not mechanised: `TerminateProcess` is asynchronous -
+// the confirming scan can briefly still list a pid the previous round killed.
+// The bound absorbs one such round (that pid is gone by the next scan and the
+// loop converges normally). If the live Windows run shows this flaking, the
+// lever is a short settle before the re-scan, NOT a wider bound: more rounds
+// would only spend more time re-killing the same pids.
 async function killHostProcessTree(
   label: ServiceLabel,
   run: ProcessRunner,
@@ -609,19 +629,33 @@ async function killHostProcessTree(
         exitCode: 1,
       });
     }
-    await killProcessIds(orderWindowsKillsDescendantsFirst(pids, table), run);
+    // The ages from the snapshot the kill set was computed from. They serve
+    // twice: as the identity each kill is checked against, and as what the
+    // memory below records. A row is always in the table it was selected
+    // from, so the fallback age is unreachable; 0 is the value the kill
+    // refuses to act on and the next round refuses to link anything to, which
+    // is the right way for it to be wrong.
+    const created = new Map(table.map((row) => [row.processId, row.created]));
+    await killProcessIdentities(
+      orderWindowsKillsDescendantsFirst(pids, table).map((pid) => ({
+        processId: pid,
+        created: created.get(pid) ?? 0,
+      })),
+      label,
+      run,
+    );
     // Remembered AFTER the kill, from the snapshot the kill was computed from,
-    // so each victim's age is the one it had while it was alive. A row is
-    // always in the table it was selected from, so the fallback age is
-    // unreachable; 0 is the value the next round refuses to link anything to,
-    // which is the right way for it to be wrong.
+    // so each victim's age is the one it had while it was alive. Remembered
+    // whether or not the kill reached it: a victim that exited on its own
+    // before its kill, or whose pid a stranger had already taken, was still
+    // placed in the host's tree by the scan that saw it alive at
+    // `seenAliveAt`, and the children born inside that window are the host's.
     //
     // A pid killed again in a later round gets a second entry with that
     // round's `seenAliveAt`, and the wider window is the honest bound: its
     // scan saw the pid alive too, so the interval in which the pid was
     // demonstrably still the victim's genuinely extends to there. The earlier
     // entry stays; nothing it proved has become false.
-    const created = new Map(table.map((row) => [row.processId, row.created]));
     for (const pid of pids) {
       rememberIncarnation(priorVictims, pid, {
         created: created.get(pid) ?? 0,
@@ -681,22 +715,243 @@ function rememberIncarnation<T>(
   }
 }
 
-async function killProcessIds(
-  pids: readonly number[],
+// One process the round decided to kill: the pid the scan listed and the
+// creation time it listed beside it, in the scan's epoch microseconds. The pair
+// is the identity; the pid alone is not (see the header of
+// `killHostProcessTree`).
+export interface WindowsKillTarget {
+  readonly processId: number;
+  readonly created: number;
+}
+
+// The kill script's report on one target. Diagnostic only: the loop never acts
+// on it, because the next scan is the only evidence of what is still running.
+// `reused` is the case this mechanism exists for - the pid the scan selected
+// now belongs to a process born at a different time - and `unverifiable` is a
+// target whose creation time the scan could not read, which is never killed.
+export interface WindowsKillOutcome {
+  readonly processId: number;
+  readonly outcome: string;
+}
+
+// One PowerShell invocation for the whole round, in the caller's order. The
+// script is what turns a pid into an identity: it never terminates a process
+// whose creation time it did not just read through the very handle it then
+// terminates through. Failures are swallowed for the same reason the outcomes
+// are diagnostic - a kill that did not land shows up in the confirming scan as
+// a survivor, and the round bound turns that into a refusal that names it. The
+// authority error is the one exception, as everywhere in this module.
+async function killProcessIdentities(
+  targets: readonly WindowsKillTarget[],
+  label: ServiceLabel,
   run: ProcessRunner,
 ): Promise<void> {
-  await Promise.all(
-    pids.map((pid) =>
-      run("taskkill", ["/F", "/PID", String(pid)], {
+  try {
+    const result = await run(
+      "powershell.exe",
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        buildHandleBoundKillScript(targets),
+      ],
+      {
         env: undefined,
         cwd: undefined,
-        timeoutMs: WINDOWS_TASKKILL_TIMEOUT_MS,
+        timeoutMs: WINDOWS_PROCESS_KILL_TIMEOUT_MS,
         tolerateNonZeroExit: true,
-      }).catch((cause) => {
-        if (isServiceMutationAuthorityError(cause)) throw cause;
-      }),
-    ),
-  );
+      },
+    );
+    const outcomes = parseKillOutcomeJson(result.stdout);
+    const logger = createCliLogger(label.environment);
+    if (outcomes === null) {
+      // The script did not report, so nothing is known about what it did.
+      // The confirming scan still decides, but the exit code and stderr
+      // belong in a support report, which DEBUG does not reach: our own
+      // script's stderr is PowerShell's wording plus pids, no user data. (A
+      // timeout, a missing `powershell.exe` and a signal all resolve as
+      // exit -1 with empty stderr under `tolerateNonZeroExit`, the runner's
+      // contract; the scan shares that blind spot.)
+      logger.warn("Windows host kill round produced no readable report", {
+        targets: targets.length,
+        exitCode: result.exitCode,
+        stderr: result.stderr.trim().slice(0, 500),
+      });
+      return;
+    }
+    const rendered = outcomes.map(
+      (outcome) => `${outcome.processId}=${outcome.outcome}`,
+    );
+    const unreached = outcomes.filter(
+      (outcome) => outcome.outcome !== "killed" && outcome.outcome !== "gone",
+    );
+    if (unreached.length > 0) {
+      // A target the kill did not reach and that may still be alive: a
+      // reused pid (the case this exists for, and rare), no identity to
+      // check, or a refused handle. EVERY target `reused` is the signature
+      // of the two creation-time sources disagreeing, which the live Windows
+      // run exists to rule out - and the one thing the survivor refusal the
+      // user sees cannot tell them.
+      logger.warn("Windows host kill round left targets unreached", {
+        targets: targets.length,
+        outcomes: rendered,
+      });
+    } else {
+      logger.debug("Windows host kill round completed", {
+        targets: targets.length,
+        outcomes: rendered,
+      });
+    }
+  } catch (cause) {
+    if (isServiceMutationAuthorityError(cause)) throw cause;
+    createCliLogger(label.environment).debug(
+      "Windows host kill round did not complete; the next scan decides",
+      { targets: targets.length, cause: describeCause(cause) },
+    );
+  }
+}
+
+/**
+ * The handle-bound kill, as a Windows PowerShell 5.1 script over `targets`.
+ *
+ * Per target, in order: `GetProcessById` (throws when nothing wears the pid),
+ * then `.Handle`, which opens a process handle and caches it on the object.
+ * From that line on the kernel keeps the process object alive for as long as
+ * the handle is open, so the pid cannot be reused underneath us, and every
+ * later member call on the object - `StartTime`, `Kill` - goes through that
+ * same cached handle rather than re-resolving the pid. `StartTime` is then
+ * normalised the way the table scan normalises `CreationDate`
+ * (`ROW_CREATION_SCRIPT_LINES`): UTC, ticks since the Unix epoch, truncated to
+ * microseconds. Both come from the kernel's creation FILETIME, so for one and
+ * the same process they agree to the microsecond. A match is the scan's
+ * process and is killed; anything else is skipped and reported, and the
+ * confirming scan says what that pid really is now.
+ *
+ * NOT the scan's `Ticks / 10` though. The scan's ticks are multiples of 10 by
+ * construction - CIM carries `CreationDate` as a DMTF datetime with six
+ * fractional digits - so its division is exact and PowerShell keeps it a
+ * `[long]`. `StartTime` keeps the FILETIME's 100 ns digit, and PowerShell's
+ * `/` on a non-exact `[long]` quotient goes through `[double]`, whose
+ * precision past 2^53 (ticks since 1970 passed that in 1998, and pass 2^54
+ * in January 2027, where it halves again) is 2 ticks: a `...9` rounds up to
+ * `...10`, the floor lands one microsecond high, and an
+ * exact comparison refuses to kill the host - every stop, for as long as that
+ * host lives, with nothing above DEBUG to say why. Falsification, on Windows
+ * PowerShell 5.1: `[long][math]::Floor([long]17870000000000019 / 10)` prints
+ * `1787000000000002`. `($t - ($t % 10)) / 10` is integer arithmetic
+ * throughout. The comparison then allows a difference of 1 µs, which absorbs
+ * WMI rounding rather than truncating its last digit; it admits no stranger,
+ * because a reused pid is born after the victim exited, which is after the
+ * scan that saw the victim alive - never within a microsecond of the
+ * victim's own birth.
+ *
+ * `.Handle` asks for full access to the process. Same-user processes at the
+ * same integrity level grant it, which is every process the host and its
+ * agents are; the case that refuses it - an elevated host from an unelevated
+ * CLI - refuses `PROCESS_TERMINATE` too, so nothing `taskkill /F` could have
+ * ended is out of reach here. A refusal is reported as `failed`, and the
+ * survivor shows up in the confirming scan like any other.
+ *
+ * Every statement inside the `try` is a .NET member access, and those throw
+ * terminating errors whatever `$ErrorActionPreference` says; the setting is
+ * there so nothing outside the `try` can half-succeed silently either.
+ * PowerShell wraps a member's exception - `MethodInvocationException` for a
+ * method, `GetValueInvocationException` for a property getter such as
+ * `.Handle` - and both derive from `RuntimeException`, which is what the
+ * catch unwraps so the report names the real cause (`ArgumentException` is
+ * "not running").
+ *
+ * The literal holds only integers this module produced (`WindowsKillTarget`
+ * from the scan's own JSON), never text, so there is nothing to quote and no
+ * argument-injection surface.
+ */
+function buildHandleBoundKillScript(
+  targets: readonly WindowsKillTarget[],
+): string {
+  const literal = targets
+    .map(
+      (target) =>
+        `  @{ ProcessId = ${killTargetInteger(target.processId)}; Created = ${killTargetInteger(target.created)} }`,
+    )
+    .join(",\n");
+  return [
+    "$ErrorActionPreference = 'Stop'",
+    "$targets = @(",
+    literal,
+    ")",
+    "$results = foreach ($target in $targets) {",
+    "  $process = $null",
+    "  $outcome = 'unverifiable'",
+    "  try {",
+    "    if ([long]$target.Created -gt 0) {",
+    "      $process = [System.Diagnostics.Process]::GetProcessById([int]$target.ProcessId)",
+    "      $null = $process.Handle",
+    "      $ticks = ($process.StartTime.ToUniversalTime() - [datetime]'1970-01-01').Ticks",
+    "      $started = [long](($ticks - ($ticks % 10)) / 10)",
+    "      if ([math]::Abs($started - [long]$target.Created) -le 1) {",
+    "        $process.Kill()",
+    "        $outcome = 'killed'",
+    "      } else {",
+    "        $outcome = 'reused'",
+    "      }",
+    "    }",
+    "  } catch {",
+    "    $reason = $_.Exception",
+    "    if ($reason -is [System.Management.Automation.RuntimeException] -and $null -ne $reason.InnerException) {",
+    "      $reason = $reason.InnerException",
+    "    }",
+    "    if ($reason -is [System.ArgumentException]) { $outcome = 'gone' }",
+    "    else { $outcome = 'failed: ' + $reason.GetType().Name }",
+    "  } finally {",
+    "    if ($null -ne $process) { $process.Dispose() }",
+    "  }",
+    "  [pscustomobject]@{ ProcessId = [int]$target.ProcessId; Outcome = $outcome }",
+    "}",
+    "@($results) | ConvertTo-Json -Compress",
+  ].join("\n");
+}
+
+// A value that is not a safe non-negative integer is emitted as 0, which the
+// script treats as "no identity" and never kills. Unreachable from the scan
+// parser, which only admits such integers; this is the script's own guarantee
+// that its literal is integers whatever it is handed.
+function killTargetInteger(value: number): string {
+  return Number.isSafeInteger(value) && value >= 0 ? String(value) : "0";
+}
+
+/**
+ * Parse the kill script's report, or `null` if it is not the shape this module
+ * asked for. Same single-row leniency as the table parser: Windows PowerShell
+ * 5.1 emits a bare object for one target.
+ */
+function parseKillOutcomeJson(
+  stdout: string,
+): readonly WindowsKillOutcome[] | null {
+  const trimmed = stdout.trim();
+  if (trimmed.length === 0) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return null;
+  }
+  const entries = Array.isArray(parsed) ? parsed : [parsed];
+  const outcomes: WindowsKillOutcome[] = [];
+  for (const entry of entries) {
+    if (entry === null || typeof entry !== "object") return null;
+    const record = entry as Record<string, unknown>;
+    const processId = record.ProcessId;
+    const outcome = record.Outcome;
+    if (
+      typeof processId !== "number" ||
+      !Number.isSafeInteger(processId) ||
+      typeof outcome !== "string"
+    ) {
+      return null;
+    }
+    outcomes.push({ processId, outcome });
+  }
+  return outcomes;
 }
 
 async function startService(
@@ -1155,10 +1410,12 @@ export interface WindowsProcessTableRow {
  * All-or-nothing on purpose. A partially-parsed table produces a kill set built
  * from a partial ancestry, and a missing edge there does not read as an error -
  * it reads as "this process has no parent", which spares nothing and kills a
- * branch that should have been spared. `null` sends the caller to the pid.json
- * fallback, which is weaker but honest about what it knows. Empty output is
- * `null` for the same reason: a real Win32_Process scan is never empty, so
- * nothing on stdout means the scan did not run.
+ * branch that should have been spared. `null` makes `killHostProcessTree`
+ * refuse: before its first kill it refuses to start, after one it refuses to
+ * report the tree down. There is no weaker path to fall back to - the
+ * pid.json `taskkill` that used to be one was removed for being unverified.
+ * Empty output is `null` for the same reason: a real Win32_Process scan is
+ * never empty, so nothing on stdout means the scan did not run.
  */
 function parseProcessTableJson(
   stdout: string,
@@ -1626,14 +1883,15 @@ function classifyAgainstSuspect(
 }
 
 /**
- * The same kill set, ordered so a process is issued its `taskkill` before its
+ * The same kill set, ordered so a process is issued its kill before its
  * ancestors are. Cheap, and it shrinks the window in which a parent is already
- * gone while its child is not yet reaped.
+ * gone while its child is not yet reaped: the kill script walks the list in
+ * this order, one `TerminateProcess` after another.
  *
  * It does NOT replace the victim carry-over, and must not be mistaken for it:
- * the kills are issued concurrently, so this orders their ISSUE and nothing
- * more, and a process spawned after the snapshot is not in this list at all at
- * any ordering. The carry-over is what actually catches that one, a round later.
+ * this orders the ISSUE of the kills and nothing more, and a process spawned
+ * after the snapshot is not in this list at all at any ordering. The
+ * carry-over is what actually catches that one, a round later.
  */
 export function orderWindowsKillsDescendantsFirst(
   pids: readonly number[],
@@ -2133,6 +2391,8 @@ export {
   buildHiddenHostLauncher as buildWindowsHiddenHostLauncher,
   buildSlotProcessTableScanScript as buildWindowsSlotProcessTableScanScript,
   buildSlotProcessDetailScanScript as buildWindowsSlotProcessDetailScanScript,
+  buildHandleBoundKillScript as buildWindowsHandleBoundKillScript,
   parseProcessTableJson as parseWindowsProcessTableJson,
   parseProcessDetailJson as parseWindowsProcessDetailJson,
+  parseKillOutcomeJson as parseWindowsKillOutcomeJson,
 };

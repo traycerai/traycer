@@ -36,10 +36,11 @@ const DEFAULT_DELAYS_MS: readonly number[] = [50, 100, 200, 400, 800, 1000];
 //
 // `maxTotalMs` is a wall-clock ceiling across ALL attempts, hooks, and
 // backoff sleeps. The schedule alone does not bound the retry when the
-// hook is slow - the Windows re-kill can spend a 10s WMI scan plus a 30s
-// taskkill per pass on a degraded machine, stretching a ~24s schedule
-// into minutes while the caller holds the cli-lock with the service
-// stopped. Once the ceiling is exceeded, the next retryable failure is
+// hook is slow - the Windows re-kill is a bounded scan-then-kill loop
+// whose every PowerShell step carries a 30s ceiling, so one pass on a
+// degraded machine can stretch a ~24s schedule into minutes while the
+// caller holds the cli-lock with the service stopped. Once the ceiling is
+// exceeded, the next retryable failure is
 // thrown as final. Null bounds the retry by the schedule alone.
 export interface RenameRetryPlan {
   readonly delaysMs: readonly number[];
