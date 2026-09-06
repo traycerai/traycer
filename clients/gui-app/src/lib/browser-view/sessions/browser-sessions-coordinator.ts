@@ -342,7 +342,33 @@ export function acquireBrowserSessionsCoordinator(args: {
     browserSessionsCoordinators.delete(args.key);
     acquired.dispose();
     notifyBrowserSessionsCoordinator(args.key);
+    retryFailedCoordinators();
   };
+}
+
+/**
+ * Re-asks every coordinator in this renderer whose stream FAILED, on the edge
+ * that can have made room for it: another coordinator's stream just closed.
+ *
+ * The case is the desktop's per-window stream cap. A window already holding
+ * its allowance of `browser.sessions` streams is refused a new one with a
+ * terminal `failed`, and nothing revisits that on its own - the coordinator
+ * stays mounted under its key, so a slot freeing later restarts nothing.
+ * The Start Page's recovery streams can be what fill the window (one per
+ * device a tombstone still names), and the coordinator refused is then a
+ * visible one: the panel's, or a canvas tile's. A release is the one edge this
+ * renderer sees a slot free on, so it is where the refused are asked again.
+ * A stream that failed for another reason is re-asked too; that costs one
+ * open per release, and only while it stays failed.
+ *
+ * Ordering: the released coordinator's close went to main before these opens
+ * (`stop()` inside `dispose()` sends it), and main handles a renderer's
+ * invokes in order, so the count the cap reads no longer includes it.
+ */
+function retryFailedCoordinators(): void {
+  for (const coordinator of browserSessionsCoordinators.values()) {
+    if (coordinator.state.lifecycle === "failed") coordinator.state.retry();
+  }
 }
 
 export function subscribeToBrowserSessionsCoordinator(

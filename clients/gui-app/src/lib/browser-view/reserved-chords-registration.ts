@@ -63,19 +63,36 @@ const APP_FORWARDED_ACTIONS: readonly ActionId[] = [
   "tab.prev",
   "epic.next",
   "epic.prev",
-  // The Start Page panel's own three, forwarded for the surface that created
-  // the problem: a panel browser tab is a native guest, so `terminalPolicy:
-  // "app"` - which is about an xterm swallowing a chord - does nothing here and
-  // the app renderer never sees the key. Without these, a reader inside a
-  // focused panel browser cannot open a tab of either kind or collapse the
-  // panel, while the browser-scoped rows all still work.
+];
+
+/**
+ * The Start Page panel's own three, forwarded for the surface that created the
+ * problem: a panel browser tab is a native guest, so `terminalPolicy: "app"` -
+ * which is about an xterm swallowing a chord - does nothing here and the app
+ * renderer never sees the key. Without these, a reader inside a focused panel
+ * browser cannot open a tab of either kind or collapse the panel, while the
+ * browser-scoped rows all still work.
+ *
+ * Forwarded only WHILE the Start Page surface is active, which is the same gate
+ * the panel registers their handlers under (`useLandingTerminalSurfaceActive`).
+ * Main's table is per window, not per tile: with an epic canvas on screen the
+ * replayed key would reach a renderer with no handler for it, so the chord
+ * would be taken from the page - a canvas guest's ⌘J, say - for nothing.
+ */
+const LANDING_FORWARDED_ACTIONS: readonly ActionId[] = [
   "app.browser.new",
   "app.terminal.new",
   "app.terminal.toggle",
 ];
 
+/** Which surfaces are on screen, as far as the reserved set depends on them. */
+export interface ReservedChordSurfaces {
+  /** `selectLandingTerminalSurfaceActive`: the Start Page owns the screen. */
+  readonly landingSurfaceActive: boolean;
+}
+
 /**
- * The policy for one set of bindings.
+ * The policy for one set of bindings on the surfaces currently on screen.
  *
  * An action the reader has UNBOUND reserves nothing - there is no chord to
  * claim, and reserving its old default would take a key away from the page for
@@ -85,21 +102,23 @@ const APP_FORWARDED_ACTIONS: readonly ActionId[] = [
  */
 export function reservedBrowserChordsFor(
   bindings: Readonly<Record<ActionId, ChordString | null>>,
+  surfaces: ReservedChordSurfaces,
 ): readonly BrowserViewReservedChord[] {
   const browserScoped = new Set(
     BROWSER_SCOPED_CHORDS.map((reserved) => reserved.token),
   );
   const seen = new Set<string>();
-  const forwarded = APP_FORWARDED_ACTIONS.flatMap(
-    (action): BrowserViewReservedChord[] => {
-      const chord = bindings[action];
-      if (chord === null || browserScoped.has(chord) || seen.has(chord)) {
-        return [];
-      }
-      seen.add(chord);
-      return [{ token: chord, command: null }];
-    },
-  );
+  const actions = surfaces.landingSurfaceActive
+    ? [...APP_FORWARDED_ACTIONS, ...LANDING_FORWARDED_ACTIONS]
+    : APP_FORWARDED_ACTIONS;
+  const forwarded = actions.flatMap((action): BrowserViewReservedChord[] => {
+    const chord = bindings[action];
+    if (chord === null || browserScoped.has(chord) || seen.has(chord)) {
+      return [];
+    }
+    seen.add(chord);
+    return [{ token: chord, command: null }];
+  });
   return [...BROWSER_SCOPED_CHORDS, ...forwarded];
 }
 
@@ -131,16 +150,17 @@ const BROWSER_SCOPED_CHORD_LABELS = {
  *
  * Idempotent and HMR-safe: main REPLACES its whole table on every call, so a
  * re-registration after hot reload can never duplicate or drift - which is also
- * what makes it safe to call again on every rebind, and why the caller
- * subscribes rather than diffing.
+ * what makes it safe to call again on every rebind and every surface change,
+ * and why the caller subscribes rather than diffing.
  */
 export function registerReservedBrowserChords(
   runnerHost: IRunnerHost,
   bindings: Readonly<Record<ActionId, ChordString | null>>,
+  surfaces: ReservedChordSurfaces,
 ): void {
   const browserView = runnerHost.browserView;
   if (browserView === null) return;
   void browserView
-    .setReservedChords(reservedBrowserChordsFor(bindings))
+    .setReservedChords(reservedBrowserChordsFor(bindings, surfaces))
     .catch(ignoreError);
 }

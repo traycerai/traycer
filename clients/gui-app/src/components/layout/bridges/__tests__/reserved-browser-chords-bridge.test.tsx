@@ -7,12 +7,27 @@ import { reservedBrowserChordsFor } from "@/lib/browser-view/reserved-chords-reg
 import { getDefaultBindings } from "@/lib/keybindings/actions";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
+import type { TabStripItem } from "@/stores/tabs/layout";
+import { useTabsStore } from "@/stores/tabs/store";
 import { createFakeRunnerHost } from "../../../../../__tests__/create-fake-runner-host";
+
+// The default layout is a Start Page owning the screen, which every case here
+// assumes unless it puts an epic there itself.
+const INITIAL_TABS_LAYOUT = {
+  items: useTabsStore.getState().items,
+  activeItemId: useTabsStore.getState().activeItemId,
+};
+const EPIC_TAB: TabStripItem = {
+  kind: "tab",
+  id: "item-epic-a",
+  ref: { kind: "epic", id: "epic-a" },
+};
 
 afterEach(() => {
   cleanup();
   act(() => {
     useKeybindingStore.setState({ bindings: getDefaultBindings() });
+    useTabsStore.setState(INITIAL_TABS_LAYOUT);
   });
 });
 
@@ -38,7 +53,9 @@ describe("<ReservedBrowserChordsBridge />", () => {
     renderBridge(bridge);
 
     expect(bridge.reservedChordsCalls).toEqual([
-      reservedBrowserChordsFor(useKeybindingStore.getState().bindings),
+      reservedBrowserChordsFor(useKeybindingStore.getState().bindings, {
+        landingSurfaceActive: true,
+      }),
     ]);
   });
 });
@@ -93,5 +110,47 @@ describe("<ReservedBrowserChordsBridge /> rebinds", () => {
     expect(latest).not.toContain("mod+j");
     // The browser's own rows are not bindings and never move.
     expect(latest).toContain("mod+w");
+  });
+});
+
+/**
+ * The Start Page panel's three are forwarded only while the panel has a
+ * handler for them, which is while the Start Page owns the screen. Main's
+ * table is per window: an epic canvas's guest would otherwise lose those keys
+ * to a replay no handler answers.
+ */
+describe("<ReservedBrowserChordsBridge /> surfaces", () => {
+  it("stops forwarding the panel's chords when an epic takes the screen, and resumes when it leaves", async () => {
+    const bridge = new FakeBrowserViewBridge();
+    renderBridge(bridge);
+
+    await waitFor(() => {
+      expect(bridge.reservedChordsCalls).toHaveLength(1);
+    });
+    expect(tokensOf(bridge.reservedChordsCalls[0])).toContain("mod+alt+b");
+
+    act(() => {
+      useTabsStore.setState({ items: [EPIC_TAB], activeItemId: EPIC_TAB.id });
+    });
+
+    await waitFor(() => {
+      expect(bridge.reservedChordsCalls).toHaveLength(2);
+    });
+    const onEpic = tokensOf(bridge.reservedChordsCalls[1]);
+    for (const token of ["mod+alt+b", "mod+shift+j", "mod+j"]) {
+      expect(onEpic).not.toContain(token);
+    }
+    // App-level forwarding and the browser's own rows are unchanged.
+    expect(onEpic).toContain("mod+shift+w");
+    expect(onEpic).toContain("mod+w");
+
+    act(() => {
+      useTabsStore.setState(INITIAL_TABS_LAYOUT);
+    });
+
+    await waitFor(() => {
+      expect(bridge.reservedChordsCalls).toHaveLength(3);
+    });
+    expect(tokensOf(bridge.reservedChordsCalls[2])).toContain("mod+alt+b");
   });
 });

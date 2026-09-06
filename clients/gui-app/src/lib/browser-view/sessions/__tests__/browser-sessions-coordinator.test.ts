@@ -261,6 +261,49 @@ describe("browser sessions coordinator registry", () => {
     ).toBeNull();
   });
 
+  // The desktop refuses a stream over its per-window cap with a terminal
+  // `failed`, and the refused coordinator stays mounted under its key with
+  // nothing revisiting it. The one edge this renderer sees a slot free on is a
+  // coordinator releasing its stream, so that is when the failed are re-asked.
+  it("re-asks a failed coordinator when another coordinator releases its stream", () => {
+    const harness = createTransportHarness();
+    const first = acquire({
+      scope: epicScope("epic-1"),
+      openTransport: harness.openTransport,
+    });
+    const refused = acquire({
+      scope: epicScope("epic-2"),
+      openTransport: harness.openTransport,
+    });
+    expect(harness.clients).toHaveLength(2);
+    const firstSession = soleSession(soleClient(harness.clients));
+    firstSession.emitStatus("open");
+    const refusedClient = harness.clients.at(1);
+    if (refusedClient === undefined) {
+      throw new Error("expected a second client");
+    }
+    soleSession(refusedClient).emitFatal("This window has too many streams.");
+    expect(browserSessionsCoordinatorState(refused.key)?.lifecycle).toBe(
+      "failed",
+    );
+
+    first.release();
+
+    // Re-asked exactly once, on a fresh transport - which this harness opens
+    // on subscribe, so the coordinator is live again rather than failed.
+    expect(harness.clients).toHaveLength(3);
+    expect(browserSessionsCoordinatorState(refused.key)?.lifecycle).toBe(
+      "live",
+    );
+    // A coordinator that is not failed is left alone by the same edge.
+    const bystander = acquire({
+      scope: epicScope("epic-3"),
+      openTransport: harness.openTransport,
+    });
+    bystander.release();
+    expect(harness.clients).toHaveLength(4);
+  });
+
   it("keys two scopes on the same host and identity into two coordinators, independent of scope field order", () => {
     const sameOwner = owner({});
     const epicKey = browserSessionsCoordinatorKey(

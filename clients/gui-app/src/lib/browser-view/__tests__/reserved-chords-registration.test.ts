@@ -15,12 +15,17 @@ function bindingsWith(
   return { ...getDefaultBindings(), ...overrides };
 }
 
+/** The Start Page on screen, which is where every case below stands unless it says otherwise. */
+const ON_LANDING = { landingSurfaceActive: true } as const;
+const ON_EPIC = { landingSurfaceActive: false } as const;
+
 function commandFor(
   bindings: Bindings,
   token: string,
 ): string | null | undefined {
-  return reservedBrowserChordsFor(bindings).find((row) => row.token === token)
-    ?.command;
+  return reservedBrowserChordsFor(bindings, ON_LANDING).find(
+    (row) => row.token === token,
+  )?.command;
 }
 
 function defaultCommandFor(token: string): string | null | undefined {
@@ -67,6 +72,21 @@ describe("reserved browser chords", () => {
     }
   });
 
+  // Main's table is per WINDOW. With an epic canvas on screen the panel has no
+  // handler registered for these (it gates on the same surface signal), so a
+  // replayed key would go nowhere - and the canvas guest's page would have
+  // lost it for nothing.
+  it("leaves the panel's chords to the page while the Start Page is not on screen", () => {
+    const rows = reservedBrowserChordsFor(getDefaultBindings(), ON_EPIC);
+    const tokens = rows.map((row) => row.token);
+    for (const token of ["mod+alt+b", "mod+shift+j", "mod+j"]) {
+      expect(tokens).not.toContain(token);
+    }
+    // The app-level rows and the browser's own do not depend on the surface.
+    expect(tokens).toContain("mod+shift+w");
+    expect(tokens).toContain("mod+w");
+  });
+
   it("leaves everything else to the page", () => {
     // `epic.new` (mod+n) and the close-others family stay menu-/page-owned.
     expect(defaultCommandFor("mod+n")).toBeUndefined();
@@ -108,7 +128,7 @@ describe("reserved browser chords", () => {
    */
   it("does not duplicate a token the browser already scopes", () => {
     const collided = bindingsWith({ "epic.close": "mod+w" });
-    const rows = reservedBrowserChordsFor(collided).filter(
+    const rows = reservedBrowserChordsFor(collided, ON_LANDING).filter(
       (row) => row.token === "mod+w",
     );
     expect(rows).toHaveLength(1);
@@ -129,7 +149,7 @@ describe("reserved browser chords", () => {
       "epic.next": "mod+k",
       "epic.prev": "mod+k",
     });
-    const rows = reservedBrowserChordsFor(collided).filter(
+    const rows = reservedBrowserChordsFor(collided, ON_LANDING).filter(
       (row) => row.token === "mod+k",
     );
     expect(rows).toHaveLength(1);
