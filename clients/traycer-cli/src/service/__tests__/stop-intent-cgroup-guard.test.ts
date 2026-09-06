@@ -481,36 +481,66 @@ describe("withStopIntent - Linux cgroup self-protection guard", () => {
     expect(ran).toBe(false);
 
     // Ablation: in `readHostUnitCgroup` (host/cgroup-relocation.ts), replace
-    // the `isMissingCgroupFile` branch with a blanket `return null` → this
-    // test fails on the first route: the guard resolves, intent is written,
-    // and the stop proceeds from inside a cgroup nobody could rule out.
+    // the `throw cliError(...)` in the catch with `return null` → this test
+    // fails on the first route: the guard resolves, intent is written, and
+    // the stop proceeds from inside a cgroup nobody could rule out.
   });
 
-  // An ABSENT cgroup file is a different machine and a real answer: no cgroup
-  // exists that could kill us, so all five proceed.
-  it("proceeds on all five routes when /proc/self/cgroup is absent (ENOENT)", async () => {
+  // An ABSENT cgroup file says where the process cannot look, not where it is
+  // (Codex on #1755, post-merge: a namespace may hide procfs while the process
+  // is still in whatever cgroup it was born in). Membership is unknown, so
+  // every route refuses before announcing anything - exactly like EACCES
+  // above, with `absent: true` distinguishing the case.
+  it("refuses on all five routes when /proc/self/cgroup is absent (ENOENT)", async () => {
     mocks.cgroup = { errno: "ENOENT" };
-    let installRan = false;
+    let ran = false;
     const controller = withStopIntent(
       baseController({
         install: async () => {
-          installRan = true;
+          ran = true;
         },
-        stop: async () => undefined,
-        stopForRestart: async () => ({ forcedRecycle: false }),
-        uninstall: async () => undefined,
-        restart: async () => undefined,
+        stop: async () => {
+          ran = true;
+        },
+        stopForRestart: async () => {
+          ran = true;
+          return { forcedRecycle: false };
+        },
+        uninstall: async () => {
+          ran = true;
+        },
+        restart: async () => {
+          ran = true;
+        },
       }),
     );
 
-    await controller.stop(label, { force: false });
-    await controller.stopForRestart(label, { force: false });
-    await controller.uninstall({ label });
-    await controller.restart(label);
-    await controller.install(installOptions);
+    await expect(
+      controller.stop(label, { force: false }),
+    ).rejects.toMatchObject({
+      code: "E_SERVICE_CONTROL_FAILED",
+      details: { path: "/proc/self/cgroup", absent: true },
+    });
+    await expect(
+      controller.stopForRestart(label, { force: false }),
+    ).rejects.toMatchObject({ code: "E_SERVICE_CONTROL_FAILED" });
+    await expect(controller.uninstall({ label })).rejects.toMatchObject({
+      code: "E_SERVICE_CONTROL_FAILED",
+    });
+    await expect(controller.restart(label)).rejects.toMatchObject({
+      code: "E_SERVICE_CONTROL_FAILED",
+    });
+    await expect(controller.install(installOptions)).rejects.toMatchObject({
+      code: "E_SERVICE_CONTROL_FAILED",
+    });
 
-    expect(mocks.writes).toEqual(["stop", "restart", "uninstall", "restart"]);
-    expect(installRan).toBe(true);
+    expect(mocks.writes).toEqual([]);
+    expect(mocks.clears).toEqual([]);
+    expect(ran).toBe(false);
+
+    // Ablation: in `readHostUnitCgroup`, add `if (absent) return null;` after
+    // `const absent = isAbsentPath(cause);` → this test fails on the first
+    // route exactly like the EACCES test above, which stays green.
   });
 
   // Ablation (run once per method, one at a time - five separate ablations):
