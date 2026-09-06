@@ -1,6 +1,7 @@
 import type { ChordString } from "@traycer-clients/shared/keybindings/chord-core";
 import type { BrowserViewReservedChord } from "@traycer-clients/shared/platform/browser-view";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
+import type { ActionId } from "@/lib/keybindings/actions";
 import { ignoreError } from "./ignore-error";
 
 /**
@@ -28,32 +29,127 @@ import { ignoreError } from "./ignore-error";
  * (reload, cut/copy/paste, select-all), which already act on the focused
  * web contents and are therefore correct as they are.
  *
- * `@/lib/keybindings/conflicts.ts` reads this table so the rebinding UI can
- * warn about a chord a focused browser tile would swallow - the two sides
- * cannot drift.
+ * `@/lib/keybindings/conflicts.ts` reads the browser-scoped rows so the
+ * rebinding UI can warn about a chord a focused browser tile would swallow -
+ * the two sides cannot drift.
  *
- * ponytail: the app-forwarded tokens are the DEFAULT chords for their actions,
- * not the user's live bindings, so a rebound `epic.close` stops being
- * forwarded. Registration happens outside the bindings store today; wire it to
- * the store if anyone actually rebinds these.
+ * NATIVE ONLY, and there is a second half. A tile whose pixels are STREAMED
+ * (`BrowserPeekTile`) has no main process in its input path: the app's own
+ * keybinding registry is skipped for every action while a tile is armed
+ * (`keybinding-provider.tsx`), and everything the screencast controller does
+ * not claim is forwarded to the remote page. That controller is where the
+ * browser-scoped rows have to be honoured for a streamed tile, and it now
+ * claims every one of them: `focusAddressBar` (`mod+l`), reload (`mod+r`),
+ * `newTab` (`mod+t`) and `closeTab` (`mod+w`), the last two through the
+ * hosting surface's own handler and only where it has one. That gate is what
+ * keeps a canvas viewer out of both: it opens no tabs and retires no row, so
+ * it hands the controller nothing and those chords stay the page's.
+ *
+ * The APP-FORWARDED rows below still have no streamed equivalent, and it is
+ * not an omission of the same kind: forwarding means main replays the key into
+ * the renderer, and there is nothing to replay into a renderer that is already
+ * holding it. A streamed tile drops them because the app's registry is skipped
+ * wholesale while a tile is armed.
+ *
+ * The BROWSER-SCOPED rows are literal tokens, because they are not app
+ * bindings at all: they are what a browser does with those keys, and the
+ * rebinding UI warns (through `browserScopedChordLabel`) that a focused tile
+ * swallows them. The APP-FORWARDED rows are derived from the reader's LIVE
+ * bindings instead - see {@link reservedBrowserChordsFor}.
  */
-export const RESERVED_BROWSER_CHORDS: readonly BrowserViewReservedChord[] = [
-  // Browser-scoped: the focused tile's own tab.
+const BROWSER_SCOPED_CHORDS: readonly BrowserViewReservedChord[] = [
   { token: "mod+w", command: "closeTab" },
   { token: "mod+t", command: "newTab" },
   { token: "mod+l", command: "focusAddressBar" },
-  // App-forwarded: app-level navigation that stays meaningful over a page.
-  { token: "mod+k", command: null }, // app.palette.open
-  { token: "mod+shift+w", command: null }, // epic.close
-  { token: "mod+]", command: null }, // tab.next
-  { token: "mod+[", command: null }, // tab.prev
-  { token: "mod+shift+]", command: null }, // epic.next
-  { token: "mod+shift+[", command: null }, // epic.prev
 ];
 
-/** Chords a focused browser tile claims for the browser rather than the app. */
+/**
+ * The app actions main replays into the host renderer, by ACTION rather than by
+ * chord.
+ *
+ * A token here would be the action's DEFAULT chord, and a reader who rebinds or
+ * unbinds one of these gets the worst of both: the renderer's live registry is
+ * out of the input path while a guest has focus, so their configured
+ * replacement reaches the page while the stale default still fires the action.
+ * Naming the action and resolving it at registration is what keeps the reserved
+ * set and the bindings the same fact.
+ */
+const APP_FORWARDED_ACTIONS: readonly ActionId[] = [
+  "app.palette.open",
+  "epic.close",
+  "tab.next",
+  "tab.prev",
+  "epic.next",
+  "epic.prev",
+];
+
+/**
+ * The Start Page panel's own three, forwarded for the surface that created the
+ * problem: a panel browser tab is a native guest, so `terminalPolicy: "app"` -
+ * which is about an xterm swallowing a chord - does nothing here and the app
+ * renderer never sees the key. Without these, a reader inside a focused panel
+ * browser cannot open a tab of either kind or collapse the panel, while the
+ * browser-scoped rows all still work.
+ *
+ * Forwarded only WHILE the Start Page surface is active, which is the same gate
+ * the panel registers their handlers under (`useLandingTerminalSurfaceActive`).
+ * Main's table is per window, not per tile: with an epic canvas on screen the
+ * replayed key would reach a renderer with no handler for it, so the chord
+ * would be taken from the page - a canvas guest's ⌘J, say - for nothing.
+ */
+const LANDING_FORWARDED_ACTIONS: readonly ActionId[] = [
+  "app.browser.new",
+  "app.terminal.new",
+  "app.terminal.toggle",
+];
+
+/** Which surfaces are on screen, as far as the reserved set depends on them. */
+export interface ReservedChordSurfaces {
+  /** `selectLandingTerminalSurfaceActive`: the Start Page owns the screen. */
+  readonly landingSurfaceActive: boolean;
+}
+
+/**
+ * The policy for one set of bindings on the surfaces currently on screen.
+ *
+ * An action the reader has UNBOUND reserves nothing - there is no chord to
+ * claim, and reserving its old default would take a key away from the page for
+ * an action that can no longer run. An app-forwarded binding that collides with
+ * a browser-scoped row is dropped rather than duplicated: the browser row wins,
+ * which is what the rebinding UI already warns will happen.
+ */
+export function reservedBrowserChordsFor(
+  bindings: Readonly<Record<ActionId, ChordString | null>>,
+  surfaces: ReservedChordSurfaces,
+): readonly BrowserViewReservedChord[] {
+  const browserScoped = new Set(
+    BROWSER_SCOPED_CHORDS.map((reserved) => reserved.token),
+  );
+  const seen = new Set<string>();
+  const actions = surfaces.landingSurfaceActive
+    ? [...APP_FORWARDED_ACTIONS, ...LANDING_FORWARDED_ACTIONS]
+    : APP_FORWARDED_ACTIONS;
+  const forwarded = actions.flatMap((action): BrowserViewReservedChord[] => {
+    const chord = bindings[action];
+    if (chord === null || browserScoped.has(chord) || seen.has(chord)) {
+      return [];
+    }
+    seen.add(chord);
+    return [{ token: chord, command: null }];
+  });
+  return [...BROWSER_SCOPED_CHORDS, ...forwarded];
+}
+
+/**
+ * Chords a focused browser tile claims for the browser rather than the app.
+ *
+ * Reads the BROWSER-SCOPED rows only, which is the whole of what this answers:
+ * an app-forwarded chord is not swallowed, it is replayed, so the rebinding UI
+ * has nothing to warn about there. That is also why this needs no bindings
+ * argument even though the reserved set now depends on them.
+ */
 export function browserScopedChordLabel(chord: ChordString): string | null {
-  const row = RESERVED_BROWSER_CHORDS.find(
+  const row = BROWSER_SCOPED_CHORDS.find(
     (reserved) => reserved.token === chord,
   );
   if (row === undefined || row.command === null) return null;
@@ -67,14 +163,22 @@ const BROWSER_SCOPED_CHORD_LABELS = {
 } as const;
 
 /**
- * Push the policy into the complete desktop preload bridge when present.
+ * Push the policy for these bindings into the complete desktop preload bridge
+ * when present.
+ *
  * Idempotent and HMR-safe: main REPLACES its whole table on every call, so a
- * re-registration after hot reload can never duplicate or drift.
+ * re-registration after hot reload can never duplicate or drift - which is also
+ * what makes it safe to call again on every rebind and every surface change,
+ * and why the caller subscribes rather than diffing.
  */
-export function registerReservedBrowserChords(runnerHost: IRunnerHost): void {
+export function registerReservedBrowserChords(
+  runnerHost: IRunnerHost,
+  bindings: Readonly<Record<ActionId, ChordString | null>>,
+  surfaces: ReservedChordSurfaces,
+): void {
   const browserView = runnerHost.browserView;
   if (browserView === null) return;
   void browserView
-    .setReservedChords(RESERVED_BROWSER_CHORDS)
+    .setReservedChords(reservedBrowserChordsFor(bindings, surfaces))
     .catch(ignoreError);
 }

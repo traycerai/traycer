@@ -39,6 +39,7 @@ import type {
   BrowserViewGuestAttachRequest,
   BrowserViewGuestAttachResult,
   BrowserViewDevToolsWindow,
+  BrowserViewNativeTabTransfer,
   BrowserViewNavigationHistory,
   BrowserViewPopupCreateWindowOptions,
   BrowserViewPopupWebContents,
@@ -140,6 +141,12 @@ interface BrowserViewManagerOptions {
    * Drops an isolated session's partition once its last native tab is gone.
    * Only ever called with `profile: "isolated"`; the shared jars outlive
    * every guest.
+   *
+   * `void` rather than a promise, and that is not an oversight: the clear only
+   * STARTS here, and the step that must not run before it finishes is a later
+   * guest birth into the same partition, which is nowhere near this call.
+   * `browser-session.ts` publishes the in-flight clear per partition and
+   * provisioning waits on it there - see `pendingBrowserViewPartitionRelease`.
    */
   readonly releaseSessionStorage: (
     request: BrowserSessionProfileRequest,
@@ -167,6 +174,13 @@ export class BrowserViewManager {
   private readonly releaseSessionStorage: (
     request: BrowserSessionProfileRequest,
   ) => void;
+  /**
+   * Isolated sessions whose partition has been released and that have had no
+   * guest born since. Two paths can decide "the last guest is gone" for one
+   * session - a guest's own failed birth, and the replacement that guest was
+   * meant to succeed - and the partition is released once, not once each.
+   */
+  private readonly releasedIsolatedSessionKeys = new Set<string>();
   private readonly localHostId: () => string | null;
   private readonly offWindowChange: () => void;
   private readonly offDownloadChange: () => void;
@@ -174,6 +188,9 @@ export class BrowserViewManager {
   private readonly entries = new BrowserViewEntryRegistry<BrowserViewEntry>();
   private readonly nativeTabStatusListeners = new Set<
     (change: BrowserViewNativeTabStatusChange) => void
+  >();
+  private readonly nativeTabTransferListeners = new Set<
+    (transfer: BrowserViewNativeTabTransfer) => void
   >();
   private readonly popups: BrowserViewPopups;
   private readonly debugSessions: BrowserViewDebugSessions;
@@ -269,20 +286,32 @@ export class BrowserViewManager {
         identity,
         profile,
         webContents,
-      ) =>
-        this.entryFactory.createFromWebContents(
+      ) => {
+        // A new guest of a released isolated session starts that session's
+        // partition over, so its own last close must release it again.
+        this.releasedIsolatedSessionKeys.delete(nativeSessionKey(identity.key));
+        return this.entryFactory.createFromWebContents(
           requestedUrl,
           identity,
           profile,
           webContents,
-        ),
+        );
+      },
       attachRendererGuest: options.attachRendererGuest,
       releaseRendererGuest: options.releaseRendererGuest,
       seedStorageState: options.seedStorageState,
       closeEntry: (entry) => this.closeEntry(entry),
+      releaseIsolatedSessionStorage: (entry) => {
+        this.releaseIsolatedSessionStorage(entry);
+      },
       navigate: (entry, url) => this.navigate(entry, url),
       emitStatus: (entry) => {
         this.emitStatus(entry);
+      },
+      notifyNativeTabTransferred: (transfer) => {
+        for (const listener of this.nativeTabTransferListeners) {
+          listener(transfer);
+        }
       },
     });
     this.offWindowChange = options.onWindowChange(() => {
@@ -613,21 +642,24 @@ export class BrowserViewManager {
     );
   }
 
+  /**
+   * Closes the native guests the closing window OWNS, and only those.
+   *
+   * It used to widen: one guest in this window pulled in every guest of that
+   * guest's whole session, in every window. That was safe while a session's
+   * native tabs could only ever live in one window. They cannot now - the host
+   * elects a native route per scope AND window, so one session's tabs are
+   * split across windows by design - and the widened close would destroy the
+   * other window's live tabs, while the host is rebinding onto them.
+   *
+   * Ownership is per guest, and `lifecycleWindowId` is precisely who owns one.
+   */
   async closeNativeSessionsForWindow(windowId: string): Promise<void> {
-    const entries = Array.from(this.entries.guestValues());
-    const sessionKeys = new Set(
-      entries
-        .filter((entry) => entry.identity.lifecycleWindowId === windowId)
-        .map((entry) => nativeSessionKey(entry.identity.key)),
+    const owned = Array.from(this.entries.guestValues()).filter(
+      (entry) => entry.identity.lifecycleWindowId === windowId,
     );
-    if (sessionKeys.size === 0) return;
-    await Promise.all(
-      entries
-        .filter((entry) =>
-          sessionKeys.has(nativeSessionKey(entry.identity.key)),
-        )
-        .map((entry) => this.closeEntry(entry)),
-    );
+    if (owned.length === 0) return;
+    await Promise.all(owned.map((entry) => this.closeEntry(entry)));
   }
 
   private findExactNativeEntry(
@@ -934,6 +966,27 @@ export class BrowserViewManager {
     };
   }
 
+  /**
+   * Main-side subscription to guests moving between windows. Every window's
+   * lifecycle object hears every transfer and matches on
+   * `previousRegistrationId`, because the window that LOST a guest is the one
+   * with bookkeeping to drop and the manager does not know which one that is -
+   * `lifecycleWindowId` has already been read by then, and a birth's id is the
+   * only thing that identifies its holder.
+   *
+   * Its own disposer, for the reason `onNativeTabStatusChange` has one: a
+   * stream that closes stops hearing without touching another stream's
+   * subscription.
+   */
+  onNativeTabTransferred(
+    listener: (transfer: BrowserViewNativeTabTransfer) => void,
+  ): () => void {
+    this.nativeTabTransferListeners.add(listener);
+    return () => {
+      this.nativeTabTransferListeners.delete(listener);
+    };
+  }
+
   private readLiveWebContents(
     entry: BrowserViewEntry,
   ): BrowserViewWebContents | null {
@@ -1008,14 +1061,28 @@ export class BrowserViewManager {
   /**
    * An isolated session's partition is throwaway by construction, so it dies
    * with the session's last native tab - not with each tab, because siblings
-   * of the same session share the one partition.
+   * of the same session share the one partition. A guest closed to be re-born
+   * in another window is not the last tab either, even though its successor
+   * is not in the registry yet; see `succeededByReplacement`.
    */
   private releaseIsolatedSessionStorage(entry: BrowserViewEntry): void {
-    if (entry.profile !== "isolated") return;
+    if (entry.profile !== "isolated" || entry.succeededByReplacement) return;
     const sessionKey = nativeSessionKey(entry.identity.key);
+    if (this.releasedIsolatedSessionKeys.has(sessionKey)) return;
     for (const remaining of this.entries.guestValues()) {
       if (nativeSessionKey(remaining.identity.key) === sessionKey) return;
     }
+    // The scan above only sees REGISTERED guests, and a sibling tab whose
+    // birth has minted its `<webview>` but not yet run `onAttached` has no
+    // entry - so a close that is not the session's last still reads as one,
+    // and the jar is emptied under a guest that is already living in it. The
+    // debt is handed to provisioning, which re-asks when that birth ends.
+    if (
+      this.provisioning.deferIsolatedReleaseWhileEnsuring(entry, sessionKey)
+    ) {
+      return;
+    }
+    this.releasedIsolatedSessionKeys.add(sessionKey);
     this.releaseSessionStorage({
       profile: entry.profile,
       sessionId: entry.identity.key.sessionId,

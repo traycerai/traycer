@@ -12,6 +12,7 @@ import type {
   BrowserViewDebugger,
   BrowserViewGuestAttachRequest,
   BrowserViewGuestAttachResult,
+  BrowserViewNativeTabTransfer,
   BrowserViewPopupWebContents,
   BrowserViewWebContents,
   BrowserViewWindow,
@@ -50,6 +51,30 @@ const launchExternalFromGuestMock = vi.hoisted(() =>
 const confirmAndLaunchExternalSchemeMock = vi.hoisted(() =>
   vi.fn((_url: string) => Promise.resolve(true)),
 );
+/**
+ * The clear of an isolated partition that is still running, as provisioning
+ * sees it.
+ *
+ * Only `pendingBrowserViewPartitionRelease` is stubbed; `partitionForProfile`
+ * and the rest of the module stay real, so the partition NAMES these tests
+ * assert on are the production ones. A gate here stands for a
+ * `clearStorageData()` that has started and not finished - the state the real
+ * module publishes for exactly as long as the jar is being emptied, and which
+ * Electron otherwise hides behind a `fromPartition` that happily returns the
+ * partition being cleared.
+ */
+const partitionReleaseGates = vi.hoisted(
+  () => new Map<string, Promise<void>>(),
+);
+vi.mock("../browser-session", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../browser-session")>();
+  return {
+    ...actual,
+    pendingBrowserViewPartitionRelease: (
+      partition: string,
+    ): Promise<void> | null => partitionReleaseGates.get(partition) ?? null,
+  };
+});
 vi.mock("../../app/security", () => ({
   safelyOpenExternal: safelyOpenExternalMock,
   launchExternalFromGuest: launchExternalFromGuestMock,
@@ -680,6 +705,7 @@ const createdManagers: BrowserViewManager[] = [];
 afterEach(() => {
   for (const manager of createdManagers) manager.pip.stop();
   createdManagers.length = 0;
+  partitionReleaseGates.clear();
 });
 
 function createHarnessWithOptions(
@@ -1763,7 +1789,12 @@ describe("BrowserViewManager native tab lifecycle", () => {
     ).toBe(true);
   });
 
-  it("transfers the lifecycle notification lease on authoritative ensure", async () => {
+  // The cross-window ensure (OSS ticket 11, "Show here") RE-HOMES the tab: a
+  // renderer-owned guest cannot leave the window whose DOM mounted it, so the
+  // old window's guest is closed and a fresh one is born in the new window
+  // under a new registrationId. The status emission names window-2 from then
+  // on, and the replacement guest is the one `dispose()` closes.
+  it("re-homes the lifecycle notification lease on authoritative ensure by replacing the guest", async () => {
     const harness = createHarness();
     const nativeKey = {
       hostId: "host-1",
@@ -1782,13 +1813,21 @@ describe("BrowserViewManager native tab lifecycle", () => {
     if (view === undefined) throw new Error("expected native guest");
     await harness.manager.acceptTab(ready);
 
-    await harness.manager.ensureTab("window-2", ensureInput);
+    const transferred = await harness.manager.ensureTab(
+      "window-2",
+      ensureInput,
+    );
+    expect(transferred.registrationId).not.toBe(ready.registrationId);
+    expect(view.closeCalls).toBe(1);
+    const replacement = harness.guests[1];
+    if (replacement === undefined) throw new Error("expected replacement");
+    expect(replacement.closeCalls).toBe(0);
     harness.nativeTabStatusWindowIds.length = 0;
 
     expect(
       harness.manager.attachSurface("window-2", {
         ...nativeKey,
-        registrationId: ready.registrationId,
+        registrationId: transferred.registrationId,
         bindingId: "binding-2",
         surface: {
           ...BASE_KEY,
@@ -1801,9 +1840,15 @@ describe("BrowserViewManager native tab lifecycle", () => {
     harness.manager.dispose();
     await flushCloseEntry();
     expect(view.closeCalls).toBe(1);
+    expect(replacement.closeCalls).toBe(1);
   });
 
-  it("transfers a provisioning tab's lifecycle lease before awaiting readiness", async () => {
+  // A cross-window ensure that lands while the first window's guest is still
+  // provisioning (attached, entry created, CDP commands outstanding) is the
+  // same supersede a competing window's ensure performs on a cold mint: the
+  // first window's ensure settles with the supersede error rather than waiting
+  // on a guest that is being closed, and the second window gets its own birth.
+  it("supersedes a provisioning tab's birth from another window once its entry exists", async () => {
     const harness = createHarness();
     const ensureInput = {
       hostId: "host-1",
@@ -1819,31 +1864,29 @@ describe("BrowserViewManager native tab lifecycle", () => {
     if (view === undefined) throw new Error("expected native guest");
     view.debugger.deferCommands = true;
     await flushCloseEntry();
+    expect(harness.manager.hasNativeTabsForWindow("window-1")).toBe(true);
 
     const reclaimedEnsure = harness.manager.ensureTab("window-2", ensureInput);
-    const previousOwner = harness.windows.get("window-1")?.webContents;
-    if (previousOwner === undefined) throw new Error("expected host window");
-    previousOwner.emit(
-      "did-start-navigation",
-      {},
-      "http://localhost:31873/",
-      false,
-      true,
-      1,
-      1,
-    );
 
+    await expect(firstEnsure).rejects.toThrow(
+      "native tab ensure superseded by another window",
+    );
+    expect(view.closeCalls).toBe(1);
     for (const resolve of view.debugger.commandResolvers.splice(0)) {
       resolve(null);
     }
-    const [firstReady, reclaimedReady] = await Promise.all([
-      firstEnsure,
-      reclaimedEnsure,
-    ]);
+    const reclaimedReady = await reclaimedEnsure;
 
-    expect(reclaimedReady).toEqual(firstReady);
-    expect(view.closeCalls).toBe(0);
-    expect(harness.guests).toHaveLength(1);
+    expect(harness.guests).toHaveLength(2);
+    expect(harness.attachMints.map((mint) => mint.windowId)).toEqual([
+      "window-1",
+      "window-2",
+    ]);
+    expect(reclaimedReady.registrationId).toBe(
+      harness.attachMints[1]?.registrationId,
+    );
+    expect(harness.manager.hasNativeTabsForWindow("window-1")).toBe(false);
+    expect(harness.manager.hasNativeTabsForWindow("window-2")).toBe(true);
   });
 
   it("supersedes a pending in-flight mint from another window before the entry exists", async () => {
@@ -2195,8 +2238,32 @@ describe("BrowserViewManager native tab lifecycle", () => {
       seedStorageState: null,
       connectionId: null,
     });
+    // One SHARED session with a tab bound to each window - the regression
+    // this method exists to fix. The old code widened from one matching guest
+    // to that guest's whole session across every window, so closing window-1
+    // would have destroyed window-2's live tab of the same session too.
+    const sharedInWindow1 = await harness.manager.ensureTab("window-1", {
+      hostId: "host-1",
+      sessionId: "session-shared",
+      tabId: "tab-shared-window-1",
+      requestedUrl: "https://example.com/shared-1",
+      profile: "primary",
+      seedStorageState: null,
+      connectionId: null,
+    });
+    const sharedInWindow2 = await harness.manager.ensureTab("window-2", {
+      hostId: "host-1",
+      sessionId: "session-shared",
+      tabId: "tab-shared-window-2",
+      requestedUrl: "https://example.com/shared-2",
+      profile: "primary",
+      seedStorageState: null,
+      connectionId: null,
+    });
     await harness.manager.acceptTab(closing);
     await harness.manager.acceptTab(remaining);
+    await harness.manager.acceptTab(sharedInWindow1);
+    await harness.manager.acceptTab(sharedInWindow2);
 
     expect(harness.manager.hasNativeTabsForWindow("window-1")).toBe(true);
     expect(harness.manager.hasNativeTabsForWindow("window-2")).toBe(true);
@@ -2204,6 +2271,11 @@ describe("BrowserViewManager native tab lifecycle", () => {
     await harness.manager.closeNativeSessionsForWindow("window-1");
     expect(harness.guests[0]?.closeCalls).toBe(1);
     expect(harness.guests[1]?.closeCalls).toBe(0);
+    // The shared session's window-1 guest closes with the rest of window-1's
+    // guests; its window-2 sibling - same sessionId, different tabId and
+    // window - must survive untouched.
+    expect(harness.guests[2]?.closeCalls).toBe(1);
+    expect(harness.guests[3]?.closeCalls).toBe(0);
     expect(harness.manager.hasNativeTabsForWindow("window-1")).toBe(false);
     expect(harness.manager.hasNativeTabsForWindow("window-2")).toBe(true);
     harness.manager.dispose();
@@ -3811,6 +3883,401 @@ describe("BrowserViewManager renderer guest capability", () => {
     expect(harness.manager.hasNativeTabsForWindow("window-1")).toBe(false);
   });
 
+  // "Show here" replaces the guest: the old window's is closed before the new
+  // window's exists. For an isolated session that close used to be the last
+  // guest, so it cleared the partition the replacement was then born into -
+  // a move signed the tab out. The partition has to outlive the handover.
+  it("keeps an isolated session's partition when its only guest is re-homed to another window", async () => {
+    const harness = createHarness();
+    const isolatedSession = "session-private";
+    const ensureInput = {
+      hostId: "host-1",
+      sessionId: isolatedSession,
+      tabId: "tab-1",
+      requestedUrl: "https://example.com/private",
+      profile: "isolated",
+      seedStorageState: null,
+      connectionId: null,
+    } as const;
+    const ready = await harness.manager.ensureTab("window-1", ensureInput);
+    await harness.manager.acceptTab(ready);
+
+    const transferred = await harness.manager.ensureTab(
+      "window-2",
+      ensureInput,
+    );
+    await flushCloseEntry();
+    expect(transferred.registrationId).not.toBe(ready.registrationId);
+    expect(harness.attachMints.map((mint) => mint.partition)).toEqual([
+      `traycer-isolated-${isolatedSession}`,
+      `traycer-isolated-${isolatedSession}`,
+    ]);
+    // The old guest is gone, the partition is not.
+    expect(harness.releasedRendererGuests).toEqual([ready.registrationId]);
+    expect(harness.releasedIsolatedSessions).toEqual([]);
+
+    // The replacement is the session's last guest now; its close releases.
+    await harness.manager.releaseTab(transferred);
+    await flushCloseEntry();
+    expect(harness.releasedIsolatedSessions).toEqual([
+      { profile: "isolated", sessionId: isolatedSession },
+    ]);
+  });
+
+  // The other side of the same rule: a partition kept for a successor that
+  // never arrives is released after all - exactly once, although both the
+  // failed birth's own cleanup and the replacement it was meant to complete
+  // reach the decision.
+  it("releases an isolated session's partition once when the re-homed guest's birth fails", async () => {
+    const harness = createHarness();
+    const isolatedSession = "session-private";
+    const ensureInput = {
+      hostId: "host-1",
+      sessionId: isolatedSession,
+      tabId: "tab-1",
+      requestedUrl: "https://example.com/private",
+      profile: "isolated",
+      seedStorageState: null,
+      connectionId: null,
+    } as const;
+    const ready = await harness.manager.ensureTab("window-1", ensureInput);
+    await harness.manager.acceptTab(ready);
+
+    const seedHold = harness.holdNextGuestSeed();
+    const move = harness.manager.ensureTab("window-2", ensureInput);
+    await flushCloseEntry();
+    expect(harness.releasedIsolatedSessions).toEqual([]);
+
+    harness.rejectPendingGuestReady(new Error("webview guest birth failed"));
+    await expect(move).rejects.toThrow("webview guest birth failed");
+    seedHold.resolve();
+    await flushCloseEntry();
+    expect(harness.manager.hasNativeTabsForWindow("window-1")).toBe(false);
+    expect(harness.manager.hasNativeTabsForWindow("window-2")).toBe(false);
+    expect(harness.releasedIsolatedSessions).toEqual([
+      { profile: "isolated", sessionId: isolatedSession },
+    ]);
+  });
+
+  // The same failure, and then what the host actually does next: it retries
+  // the tab. The release that failure triggered has only STARTED - the IPC
+  // fires `releaseBrowserViewSession` and forgets it, and `clearStorageData()`
+  // is async - while Electron hands the retry the very same in-memory
+  // partition for the same name. A guest minted now is born into the jar that
+  // clear is emptying and loses its cookies and localStorage seconds after it
+  // loads, which reads as "the private session signed itself out".
+  it("holds a retry of a failed re-home until the isolated clear has finished", async () => {
+    const harness = createHarness();
+    const isolatedSession = "session-private";
+    const partition = `traycer-isolated-${isolatedSession}`;
+    const ensureInput = {
+      hostId: "host-1",
+      sessionId: isolatedSession,
+      tabId: "tab-1",
+      requestedUrl: "https://example.com/private",
+      profile: "isolated",
+      seedStorageState: null,
+      connectionId: null,
+    } as const;
+    const ready = await harness.manager.ensureTab("window-1", ensureInput);
+    await harness.manager.acceptTab(ready);
+
+    const seedHold = harness.holdNextGuestSeed();
+    const move = harness.manager.ensureTab("window-2", ensureInput);
+    await flushCloseEntry();
+    harness.rejectPendingGuestReady(new Error("webview guest birth failed"));
+    await expect(move).rejects.toThrow("webview guest birth failed");
+    seedHold.resolve();
+    await flushCloseEntry();
+    expect(harness.releasedIsolatedSessions).toEqual([
+      { profile: "isolated", sessionId: isolatedSession },
+    ]);
+
+    // That release is in flight: the jar is being emptied right now.
+    const clearing = Promise.withResolvers<void>();
+    partitionReleaseGates.set(partition, clearing.promise);
+    const mintsBeforeRetry = harness.attachMints.length;
+
+    const retry = harness.manager.ensureTab("window-2", ensureInput);
+    await flushCloseEntry();
+    // Reddens without the barrier: `ensureTab` mints the guest on the spot, so
+    // this has already grown by one and the new guest is holding the partition
+    // the clear is about to empty.
+    expect(harness.attachMints).toHaveLength(mintsBeforeRetry);
+
+    // The gate is deliberately left in the map after it settles: the real
+    // release lifts its own barrier, and a birth must not spin waiting for
+    // that to happen.
+    clearing.resolve();
+    const retried = await retry;
+    await harness.manager.acceptTab(retried);
+    expect(harness.attachMints).toHaveLength(mintsBeforeRetry + 1);
+    expect(harness.attachMints.at(-1)?.partition).toBe(partition);
+    expect(retried.registrationId).not.toBe(ready.registrationId);
+    // One release, not two: the retry is a fresh birth into a jar that has
+    // finished being cleared, and owes nothing of its own.
+    expect(harness.releasedIsolatedSessions).toHaveLength(1);
+  });
+
+  // A sibling tab reaches the same jar by another door: its ensure is an
+  // ordinary cold mint with no knowledge of the close that started the clear.
+  // The barrier is per PARTITION for that reason - a guard on the retry path
+  // alone would leave this one exactly as broken as it was.
+  it("holds a sibling tab's cold ensure while the session's jar is being cleared", async () => {
+    const harness = createHarness();
+    const isolatedSession = "session-private";
+    const partition = `traycer-isolated-${isolatedSession}`;
+    const clearing = Promise.withResolvers<void>();
+    partitionReleaseGates.set(partition, clearing.promise);
+
+    const sibling = harness.manager.ensureTab("window-1", {
+      hostId: "host-1",
+      sessionId: isolatedSession,
+      tabId: "tab-2",
+      requestedUrl: "https://example.com/private/second",
+      profile: "isolated",
+      seedStorageState: null,
+      connectionId: null,
+    });
+    await flushCloseEntry();
+    expect(harness.attachMints).toEqual([]);
+
+    clearing.resolve();
+    const born = await sibling;
+    await harness.manager.acceptTab(born);
+    expect(harness.attachMints.map((mint) => mint.partition)).toEqual([
+      partition,
+    ]);
+  });
+
+  // The mirror of the two above, and the half a barrier cannot answer: here the
+  // BIRTH is already under way and the CLEAR has not started. A sibling tab
+  // whose `<webview>` is minted but whose `onAttached` has not run has no
+  // registry entry, so the closing tab's release scan reads it as the
+  // session's last guest and empties the jar the minted guest already lives in.
+  it("keeps an isolated session's partition while a sibling tab is minted but unattached", async () => {
+    const harness = createHarness();
+    const isolatedSession = "session-private";
+    const base = {
+      hostId: "host-1",
+      sessionId: isolatedSession,
+      requestedUrl: "https://example.com/private",
+      profile: "isolated",
+      seedStorageState: null,
+      connectionId: null,
+    } as const;
+    const first = await harness.manager.ensureTab("window-1", {
+      ...base,
+      tabId: "tab-1",
+    });
+    await harness.manager.acceptTab(first);
+
+    const attachHold = harness.holdNextGuestAttach();
+    const sibling = harness.manager.ensureTab("window-1", {
+      ...base,
+      tabId: "tab-2",
+    });
+    await flushCloseEntry();
+    expect(harness.attachMints).toHaveLength(2);
+
+    await harness.manager.releaseTab(first);
+    await flushCloseEntry();
+    // Reddens without the deferral: the scan finds no surviving sibling and
+    // releases the partition the second guest is being born into.
+    expect(harness.releasedIsolatedSessions).toEqual([]);
+
+    attachHold.resolve();
+    const born = await sibling;
+    await harness.manager.acceptTab(born);
+    await flushCloseEntry();
+    // The debt is re-asked when that birth ends, and the now-registered
+    // sibling answers it: still no release.
+    expect(harness.releasedIsolatedSessions).toEqual([]);
+
+    await harness.manager.releaseTab(born);
+    await flushCloseEntry();
+    expect(harness.releasedIsolatedSessions).toEqual([
+      { profile: "isolated", sessionId: isolatedSession },
+    ]);
+  });
+
+  // A third window takes the move over while the replacement is still being
+  // born. The replacement rejects with the supersede error, and the third
+  // window's ensure is an ordinary COLD mint that carries no reference to the
+  // entry whose close skipped the partition release - so if it fails before it
+  // has an entry of its own, nothing is left to carry the partition out and an
+  // isolated session's cookies outlive every guest that ever held them.
+  it("releases an isolated session's partition when a third window takes the move over and then fails", async () => {
+    const harness = createHarness();
+    const isolatedSession = "session-private";
+    const ensureInput = {
+      hostId: "host-1",
+      sessionId: isolatedSession,
+      tabId: "tab-1",
+      requestedUrl: "https://example.com/private",
+      profile: "isolated",
+      seedStorageState: null,
+      connectionId: null,
+    } as const;
+    const ready = await harness.manager.ensureTab("window-1", ensureInput);
+    await harness.manager.acceptTab(ready);
+
+    // The replacement's guest never attaches, so it holds no entry when it is
+    // superseded - the shape in which the supersede has nothing to close.
+    harness.holdNextGuestAttach();
+    const move = harness.manager.ensureTab("window-2", ensureInput);
+    await flushCloseEntry();
+    expect(harness.releasedIsolatedSessions).toEqual([]);
+
+    harness.rejectNextGuestReady(new Error("third window guest birth failed"));
+    const third = harness.manager.ensureTab("window-1", ensureInput);
+
+    await expect(move).rejects.toThrow(
+      "native tab ensure superseded by another window",
+    );
+    await expect(third).rejects.toThrow("third window guest birth failed");
+    await flushCloseEntry();
+
+    // Redden: with the obligation living in the replacement's own rejection
+    // handler, the third window's in-flight record made it return, and the
+    // partition was never released.
+    expect(harness.releasedIsolatedSessions).toEqual([
+      { profile: "isolated", sessionId: isolatedSession },
+    ]);
+  });
+
+  // Two tabs of ONE isolated session re-homed together, which is how the host
+  // restores or rebinds a session: both replacements are in flight, and the
+  // first one's failure must not clear the partition the second is on its way
+  // into. Neither tab has a registry entry while its guest is held before
+  // `onAttached`, so `releaseIsolatedSessionStorage`'s own sibling check -
+  // which reads REGISTERED guests - cannot see the one still coming. The debt
+  // has to be owed per session and settled by the LAST birth to end.
+  it("keeps an isolated session's partition while a sibling tab's re-home is still in flight", async () => {
+    const harness = createHarness();
+    const isolatedSession = "session-private";
+    const tabInput = (tabId: string) =>
+      ({
+        hostId: "host-1",
+        sessionId: isolatedSession,
+        tabId,
+        requestedUrl: `https://example.com/private/${tabId}`,
+        profile: "isolated",
+        seedStorageState: null,
+        connectionId: null,
+      }) as const;
+    const firstTab = await harness.manager.ensureTab(
+      "window-1",
+      tabInput("tab-1"),
+    );
+    await harness.manager.acceptTab(firstTab);
+    const secondTab = await harness.manager.ensureTab(
+      "window-1",
+      tabInput("tab-2"),
+    );
+    await harness.manager.acceptTab(secondTab);
+
+    // Both siblings move to window-2, and both replacements are held before
+    // their guests attach - so neither is registered.
+    harness.holdNextGuestAttach();
+    const moveFirst = harness.manager.ensureTab("window-2", tabInput("tab-1"));
+    await flushCloseEntry();
+    const secondHold = harness.holdNextGuestAttach();
+    const moveSecond = harness.manager.ensureTab("window-2", tabInput("tab-2"));
+    await flushCloseEntry();
+    expect(harness.releasedIsolatedSessions).toEqual([]);
+
+    // Tab 1's replacement is taken over by a third window whose own cold mint
+    // then fails: tab 1 has nothing coming any more, but tab 2 still does.
+    harness.rejectNextGuestReady(new Error("third window guest birth failed"));
+    const thirdForFirst = harness.manager.ensureTab(
+      "window-1",
+      tabInput("tab-1"),
+    );
+    await expect(moveFirst).rejects.toThrow(
+      "native tab ensure superseded by another window",
+    );
+    await expect(thirdForFirst).rejects.toThrow(
+      "third window guest birth failed",
+    );
+    await flushCloseEntry();
+
+    // Redden: a debt owed per GUEST KEY asks only whether anything is still
+    // coming for tab 1, answers no, and clears the jar tab 2 is about to be
+    // born into - signing the session out mid-move.
+    expect(harness.releasedIsolatedSessions).toEqual([]);
+
+    // Tab 2 arrives into the partition its predecessors held, and the session
+    // is released only when that last survivor goes.
+    secondHold.resolve();
+    const movedSecond = await moveSecond;
+    await flushCloseEntry();
+    expect(harness.releasedIsolatedSessions).toEqual([]);
+    expect(harness.attachMints.map((mint) => mint.partition)).toEqual(
+      new Array(5).fill(`traycer-isolated-${isolatedSession}`),
+    );
+
+    await harness.manager.releaseTab(movedSecond);
+    await flushCloseEntry();
+    expect(harness.releasedIsolatedSessions).toEqual([
+      { profile: "isolated", sessionId: isolatedSession },
+    ]);
+  });
+
+  // The same ownership question one step earlier, and a PIN rather than a
+  // regression: a replacement that got as far as an entry and is then taken
+  // over by a third window keeps the partition today, because an entry exists
+  // under the guest key and the third ensure therefore re-homes it rather than
+  // superseding a cold mint. That is a property of `ensureTab`'s routing, not
+  // of the close, so it is worth holding still - the whole point of the move
+  // is that the session survives the handover however many windows join it.
+  it("keeps an isolated session's partition when a replacement is taken over mid-birth", async () => {
+    const harness = createHarness();
+    const isolatedSession = "session-private";
+    const ensureInput = {
+      hostId: "host-1",
+      sessionId: isolatedSession,
+      tabId: "tab-1",
+      requestedUrl: "https://example.com/private",
+      profile: "isolated",
+      seedStorageState: null,
+      connectionId: null,
+    } as const;
+    const ready = await harness.manager.ensureTab("window-1", ensureInput);
+    await harness.manager.acceptTab(ready);
+
+    // Held at the SEED, which is after the entry exists - so this superseded
+    // record has one to close.
+    const seedHold = harness.holdNextGuestSeed();
+    const move = harness.manager.ensureTab("window-2", ensureInput);
+    await flushCloseEntry();
+
+    const third = harness.manager.ensureTab("window-1", ensureInput);
+    await expect(move).rejects.toThrow(
+      "native tab ensure superseded by another window",
+    );
+    seedHold.resolve();
+    const provisioned = await third;
+    await harness.manager.acceptTab(provisioned);
+    await flushCloseEntry();
+
+    // Neither close was the session's last guest, so the partition the third
+    // window's guest was born into is the one the first two held.
+    expect(harness.releasedIsolatedSessions).toEqual([]);
+    expect(harness.attachMints.map((mint) => mint.partition)).toEqual([
+      `traycer-isolated-${isolatedSession}`,
+      `traycer-isolated-${isolatedSession}`,
+      `traycer-isolated-${isolatedSession}`,
+    ]);
+
+    // And the survivor still owns the release when it is the last one.
+    await harness.manager.releaseTab(provisioned);
+    await flushCloseEntry();
+    expect(harness.releasedIsolatedSessions).toEqual([
+      { profile: "isolated", sessionId: isolatedSession },
+    ]);
+  });
+
   it("buffers accept until post-gate ready, and does not navigate while onAttached is held", async () => {
     const harness = createHarness();
     const latch = harness.holdNextGuestAttach();
@@ -3958,5 +4425,267 @@ describe("BrowserViewManager renderer guest capability", () => {
     expect(guest.closeCalls).toBe(1);
     expect(harness.manager.hasNativeTabsForWindow("window-1")).toBe(false);
     expectRendererGuestMint(harness);
+  });
+});
+
+/**
+ * The desktop half of "Show here" (OSS ticket 11). A renderer-owned guest is a
+ * `<webview>` in ONE window's DOM, so a move cannot hand the WebContents over;
+ * it closes the old window's guest and births a replacement in the new window
+ * at the same tab identity, which the host's `"move"` create then navigates to
+ * the tab's current URL. What these pin is the identity contract around that:
+ * a fresh registration, the old id inert everywhere, the old window told, and
+ * ownership (who closes the guest) following the tab.
+ */
+describe("BrowserViewManager cross-window tab move (re-homed by replacement)", () => {
+  const NATIVE_KEY = {
+    hostId: "host-1",
+    sessionId: "session-1",
+    tabId: "tab-1",
+  } as const;
+
+  function ensureInput(): {
+    readonly hostId: string;
+    readonly sessionId: string;
+    readonly tabId: string;
+    readonly requestedUrl: string;
+    readonly profile: "primary";
+    readonly seedStorageState: null;
+    readonly connectionId: null;
+  } {
+    return {
+      ...NATIVE_KEY,
+      requestedUrl: "https://example.com/",
+      profile: "primary",
+      seedStorageState: null,
+      connectionId: null,
+    };
+  }
+
+  async function moved(harness: Harness): Promise<{
+    readonly original: BrowserViewNativeTabCapability;
+    readonly moved: BrowserViewNativeTabCapability;
+    readonly oldGuest: FakeWebContents;
+    readonly newGuest: FakeWebContents;
+  }> {
+    const input = ensureInput();
+    const original = await harness.manager.ensureTab("window-1", input);
+    await harness.manager.acceptTab(original);
+    const oldGuest = harness.guests[0];
+    if (oldGuest === undefined) throw new Error("expected renderer guest");
+    const movedTab = await harness.manager.ensureTab("window-2", input);
+    const newGuest = harness.guests[1];
+    if (newGuest === undefined) throw new Error("expected replacement guest");
+    return { original, moved: movedTab, oldGuest, newGuest };
+  }
+
+  it("mints a new registration for a replacement guest in the new window, closing the old window's guest", async () => {
+    const harness = createHarness();
+    const {
+      original,
+      moved: movedTab,
+      oldGuest,
+      newGuest,
+    } = await moved(harness);
+
+    expect(movedTab.registrationId).not.toBe(original.registrationId);
+    expect(movedTab).toMatchObject(NATIVE_KEY);
+    expect(harness.attachMints.map((mint) => mint.windowId)).toEqual([
+      "window-1",
+      "window-2",
+    ]);
+    expect(movedTab.registrationId).toBe(
+      harness.attachMints[1]?.registrationId,
+    );
+    // The old window is asked to unmount ITS guest, under the id it mounted.
+    expect(harness.releasedRendererGuests).toEqual([original.registrationId]);
+    expect(oldGuest.closeCalls).toBe(1);
+    expect(newGuest.closeCalls).toBe(0);
+    expect(harness.guests).toHaveLength(2);
+  });
+
+  it("makes every old-id call inert without touching the replacement", async () => {
+    const harness = createHarness();
+    const input = ensureInput();
+    const original = await harness.manager.ensureTab("window-1", input);
+    await harness.manager.acceptTab(original);
+    // Attached first, so the detach below is a call that WOULD have worked a
+    // moment earlier - the scenario the inertness is for.
+    expect(
+      harness.manager.attachSurface("window-1", {
+        ...original,
+        bindingId: "binding-1",
+        surface: BASE_KEY,
+      }),
+    ).toBe(true);
+
+    await harness.manager.ensureTab("window-2", input);
+    const newGuest = harness.guests[1];
+    if (newGuest === undefined) throw new Error("expected replacement guest");
+
+    await expect(harness.manager.releaseTab(original)).resolves.toBe(false);
+    expect(
+      harness.manager.detachSurface("window-1", {
+        ...original,
+        bindingId: "binding-1",
+      }),
+    ).toBe(false);
+    await expect(
+      harness.manager.controlElectronTab("window-1", {
+        ...original,
+        action: { kind: "reload" },
+      }),
+    ).resolves.toBe(false);
+    await expect(
+      harness.manager.startPipCapture(
+        "window-1",
+        {
+          ...original,
+          maxWidth: 640,
+          maxHeight: 360,
+          quality: 75,
+        },
+        () => undefined,
+      ),
+    ).resolves.toBe(false);
+
+    expect(newGuest.closeCalls).toBe(0);
+    // The old window's release under the old id was the ONE close of the old
+    // guest; the inert calls above added nothing.
+    expect(harness.releasedRendererGuests).toEqual([original.registrationId]);
+  });
+
+  it("fires the transferred listener exactly once with the old id, and stops once its disposer runs", async () => {
+    const harness = createHarness();
+    const input = ensureInput();
+    const original = await harness.manager.ensureTab("window-1", input);
+    await harness.manager.acceptTab(original);
+
+    const transfers: BrowserViewNativeTabTransfer[] = [];
+    const unsubscribe = harness.manager.onNativeTabTransferred((transfer) => {
+      transfers.push(transfer);
+    });
+
+    await harness.manager.ensureTab("window-2", input);
+
+    expect(transfers).toEqual([
+      {
+        key: NATIVE_KEY,
+        previousRegistrationId: original.registrationId,
+        toWindowId: "window-2",
+      },
+    ]);
+
+    unsubscribe();
+    await harness.manager.ensureTab("window-1", input);
+    expect(transfers).toHaveLength(1);
+  });
+
+  it("frees the old surface so the new window's attachSurface succeeds, where an un-moved attach is refused", async () => {
+    const harness = createHarness();
+    const input = ensureInput();
+    const original = await harness.manager.ensureTab("window-1", input);
+    await harness.manager.acceptTab(original);
+    expect(
+      harness.manager.attachSurface("window-1", {
+        ...original,
+        bindingId: "binding-1",
+        surface: BASE_KEY,
+      }),
+    ).toBe(true);
+
+    const movedTab = await harness.manager.ensureTab("window-2", input);
+
+    // Counter-proof, pinned elsewhere too: the OLD id is refused everywhere,
+    // including a same-window attach that never moved.
+    expect(
+      harness.manager.attachSurface("window-1", {
+        ...original,
+        bindingId: "binding-1b",
+        surface: { ...BASE_KEY, tileInstanceId: "native-tile-retry" },
+      }),
+    ).toBe(false);
+
+    expect(
+      harness.manager.attachSurface("window-2", {
+        ...movedTab,
+        bindingId: "binding-2",
+        surface: { ...BASE_KEY, tileInstanceId: "native-tile-window-2" },
+      }),
+    ).toBe(true);
+  });
+
+  it("ends a PiP lease with the guest it was on, without a manual pip.stop()", async () => {
+    const harness = createHarness();
+    const input = ensureInput();
+    const original = await harness.manager.ensureTab("window-1", input);
+    await harness.manager.acceptTab(original);
+    const oldGuest = harness.guests[0];
+    if (oldGuest === undefined) throw new Error("expected renderer guest");
+
+    await expect(
+      harness.manager.startPipCapture(
+        "window-1",
+        {
+          ...original,
+          maxWidth: 640,
+          maxHeight: 360,
+          quality: 75,
+        },
+        () => undefined,
+      ),
+    ).resolves.toBe(true);
+    expect(oldGuest.backgroundThrottlingStates.at(-1)).toBe(false);
+
+    await harness.manager.ensureTab("window-2", input);
+
+    // The lease went with the guest it was on; nothing is left to stop, and
+    // stopping anyway must not reach the replacement.
+    expect(oldGuest.closeCalls).toBe(1);
+    harness.manager.pip.stop();
+    expect(harness.guests[1]?.backgroundThrottlingStates).toEqual([]);
+  });
+
+  it("leaves the replacement alive when the old window closes, and closes it when the new window closes", async () => {
+    const harness = createHarness();
+    const { newGuest } = await moved(harness);
+
+    expect(harness.manager.hasNativeTabsForWindow("window-1")).toBe(false);
+    expect(harness.manager.hasNativeTabsForWindow("window-2")).toBe(true);
+
+    await harness.manager.closeNativeSessionsForWindow("window-1");
+    expect(newGuest.closeCalls).toBe(0);
+
+    await harness.manager.closeNativeSessionsForWindow("window-2");
+    expect(newGuest.closeCalls).toBe(1);
+  });
+
+  it("survives a renderer reset of either window after the move", async () => {
+    const harness = createHarness();
+    const { moved: movedTab, newGuest } = await moved(harness);
+    await harness.manager.acceptTab(movedTab);
+
+    for (const windowId of ["window-1", "window-2"]) {
+      const hostWebContents = harness.windows.get(windowId)?.webContents;
+      if (hostWebContents === undefined) throw new Error("expected window");
+      hostWebContents.emit(
+        "did-start-navigation",
+        {},
+        "http://localhost:31873/",
+        false,
+        true,
+        1,
+        1,
+      );
+    }
+
+    expect(newGuest.closeCalls).toBe(0);
+    expect(
+      harness.manager.attachSurface("window-2", {
+        ...movedTab,
+        bindingId: "binding-2",
+        surface: BASE_KEY,
+      }),
+    ).toBe(true);
   });
 });

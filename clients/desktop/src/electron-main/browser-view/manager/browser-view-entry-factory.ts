@@ -163,6 +163,7 @@ export class BrowserViewEntryFactory {
       rendererResetPending: false,
       closePromise: null,
       internalNavigation: false,
+      succeededByReplacement: false,
     };
     this.popups.installGuestGesture(webContents);
     // The tile's opener context is a live view of the entry: read at open time,

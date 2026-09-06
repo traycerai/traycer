@@ -9,10 +9,6 @@ import type {
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import { openPipHeadlessStream } from "../pip-headless-stream";
 
-function unusedClientMethod(): never {
-  throw new Error("not exercised by this test");
-}
-
 function createScreencastClientHarness(): {
   readonly client: IHostStreamClient<HostStreamRpcRegistry>;
   readonly subscribeCalls: Array<{
@@ -60,7 +56,18 @@ function createScreencastClientHarness(): {
       subscribeCalls.push({ method, params });
       return session;
     },
-    subscribeWithParamsProvider: unusedClientMethod,
+    // These three are one seam, and the doubles must answer all three: the
+    // browser wrappers open through `subscribeWithParamsProvider` (the open
+    // request is shaped for the negotiated major) and through
+    // `subscribeAtVersion` for the `independent` scope, which pins `@2`. A
+    // double that answers only `subscribe` sends this test down a path
+    // production never takes.
+    subscribeWithParamsProvider(method, paramsProvider) {
+      return this.subscribe(method, paramsProvider(null));
+    },
+    subscribeAtVersion(method, _schemaVersion, params) {
+      return this.subscribe(method, params);
+    },
     close() {},
     isClosed: () => false,
     isReady: () => true,
@@ -114,7 +121,9 @@ describe("openPipHeadlessStream", () => {
       {
         method: "browser.screencast",
         params: {
-          epicId: "epic-1",
+          // The hook still takes a bare `epicId`; the scope is built at the
+          // wire edge, so this assertion is what pins the translation.
+          scope: { kind: "epic", epicId: "epic-1" },
           sessionId: "session-1",
           tabId: "tab-1",
           maxWidth: 480,
@@ -122,6 +131,7 @@ describe("openPipHeadlessStream", () => {
           quality: 50,
           format: "jpeg",
           role: "pip",
+          handoffToken: null,
         },
       },
     ]);

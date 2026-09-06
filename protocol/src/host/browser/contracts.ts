@@ -1,11 +1,15 @@
 /**
- * `browser.sessions@1.0` and `browser.screencast@1.0` - browser V1 stream
+ * `browser.sessions@2.0` and `browser.screencast@2.0` - browser stream
  * contracts between the GUI and host-owned headless browser sessions.
  *
- * These are intentionally stream-only additions. Until their first release,
- * the browser contracts extend the 1.0 baseline in place. After release,
- * additive changes use negotiated minors with version-gated emission;
- * breaking semantics require a separately served major.
+ * These are intentionally stream-only additions. `@1.0` shipped in the
+ * v1.3.0 release and is frozen in `contracts-v1.ts`; this file is the live
+ * `@2.0` line, opened because the Start Page addresses the device's epic-less
+ * `independent` inventory - a breaking change to every open request - and
+ * carrying the placement handoff token, window-bound tabs and the `attachTab`
+ * / `moveTab` frames with it. From here, additive changes use negotiated
+ * minors with version-gated emission; breaking semantics require another
+ * separately served major.
  */
 import { z } from "zod";
 import { defineRpcContract } from "@traycer/protocol/framework/index";
@@ -15,6 +19,7 @@ import {
   browserCdpResultSchema,
   browserCdpTargetSchema,
 } from "@traycer/protocol/host/browser/cdp-contracts";
+import { hostResourceScopeSchema } from "@traycer/protocol/host/resource-scope";
 
 // The curated CDP vocabulary lives in its own module (it is addressed
 // independently of either stream contract) but stays part of this module's
@@ -91,15 +96,33 @@ const browserTabInfoSchema = z
     // active headless screencast peek. It grants no control capability.
     viewed: z.boolean(),
     drivenBy: z.array(browserTabDriverSchema),
+    /**
+     * Which desktop window's native route currently holds this tab's binding,
+     * or `null` for a tab no route holds (headless, dormant, or bound nowhere
+     * yet). Native routes are elected per scope AND window, so a tab of a
+     * shared session can be live in one window while another window shows it
+     * as elsewhere - which is a fact the client must be TOLD, not one it can
+     * infer from how long a binding has taken to arrive.
+     *
+     * `.default(null)` rather than required, and the reason is mechanical: the
+     * schema is `.strict()` and the GUI's stream client DROPS any frame that
+     * fails to parse, so a host that does not emit this field yet would blank
+     * every tile in the panel rather than degrade one branch of one tile.
+     */
+    boundWindowId: z.string().nullable().default(null),
   })
   .strict();
 export type BrowserTabInfo = z.infer<typeof browserTabInfoSchema>;
 
-/** An epic-scoped group of tabs sharing one browser profile. */
+/**
+ * A group of tabs sharing one browser profile, addressed under the owner's
+ * scope: one epic's tabs, or the epic-less `independent` inventory a device's
+ * Start Page owns.
+ */
 const browserSessionInfoSchema = z
   .object({
     sessionId: z.string(),
-    epicId: z.string(),
+    scope: hostResourceScopeSchema,
     hostId: z.string(),
     profile: browserSessionProfileKindSchema,
     lastActivityAt: z.number(),
@@ -123,10 +146,40 @@ export const browserTabIdentitySchema = z
   .strict();
 export type BrowserTabIdentity = z.infer<typeof browserTabIdentitySchema>;
 
-/** `epicId` is the stream's sole authorization and routing scope. */
+/**
+ * What a successful `openTab` answers with: the tab, and - when serving the
+ * open took a shared session off the desktop's native runtime so that THIS
+ * client could see it - a token naming the open to the host.
+ *
+ * The host keeps that session where the opener can receive pixels until a
+ * `browser.screencast` presenting the token is served. Session updates are
+ * broadcast to every subscriber in the scope, so another client can start
+ * watching the new tab before its opener does; without the token its pixels
+ * say nothing about whether the opener has seen any, and only a viewer
+ * presenting it counts. `null` when the open owed nobody a placement - a
+ * client on the host's own machine watches the native runtime directly - so
+ * there is nothing to hand off.
+ */
+export const browserOpenedTabSchema = z
+  .object({
+    ...browserTabIdentitySchema.shape,
+    handoffToken: z.string().nullable(),
+  })
+  .strict();
+export type BrowserOpenedTab = z.infer<typeof browserOpenedTabSchema>;
+
+/**
+ * `scope` is the stream's sole authorization and routing scope: one
+ * subscription speaks for one epic's browser inventory, or for the device's
+ * epic-less `independent` one, and never for both.
+ *
+ * The client supplies only the discriminant (and an epic id when there is
+ * one). The authenticated user is re-derived host-side on every access check,
+ * so nothing about ownership travels on this request.
+ */
 export const browserSessionsOpenRequestSchema = z
   .object({
-    epicId: z.string(),
+    scope: hostResourceScopeSchema,
   })
   .strict();
 export type BrowserSessionsOpenRequest = z.infer<
@@ -462,6 +515,12 @@ const electronTabCreateReasonSchema = z.enum([
   "session-bootstrap",
   "agent-open",
   "restore",
+  // A `moveTab`: the guest already exists under ANOTHER window of the same
+  // desktop, and this create asks main to transfer it to the sender's window
+  // without touching its WebContents. Like `restore`, it may replace a birth
+  // the window already holds for the tab - a window that moved a tab away
+  // still remembers it, and the move back must not be refused for that.
+  "move",
 ]);
 export type ElectronTabCreateReason = z.infer<
   typeof electronTabCreateReasonSchema
@@ -544,6 +603,15 @@ export const browserSessionsServerFrameSchema = z.discriminatedUnion("kind", [
       ...browserSessionReferenceFields,
       tabId: z.string(),
       source: browserTabOpenedSourceSchema,
+      /**
+       * The tab whose page opened this one, when the runtime can name it;
+       * `null` for an agent open, a `noopener` popup, or an opener already
+       * gone. A `page` open is a gesture the reader made IN the opener, so a
+       * surface deciding whether to follow the new tab asks where the opener
+       * is on screen - which matters once the same device is watched from
+       * more than one window, since this frame reaches all of them.
+       */
+      openerTabId: z.string().nullable(),
     })
     .strict(),
   z
@@ -562,7 +630,7 @@ export const browserSessionsServerFrameSchema = z.discriminatedUnion("kind", [
         z
           .object({
             ok: z.literal(true),
-            ...browserTabIdentitySchema.shape,
+            ...browserOpenedTabSchema.shape,
           })
           .strict(),
         z
@@ -828,9 +896,44 @@ export const browserSessionsClientFrameSchema = z.discriminatedUnion("kind", [
     .object({
       // Snapshot-only preview of one tab, for a chat pinned to ANOTHER host
       // that can never drive it. No `sessionId`: the tab
-      // is resolved by the owning host inside this stream's epic scope, which
-      // is the only authorization there is.
+      // is resolved by the owning host inside this stream's scope, which is
+      // the only authorization there is.
       kind: z.literal("captureTabPreview"),
+      ...requestFrameFields,
+      tabId: z.string(),
+    })
+    .strict(),
+  z
+    .object({
+      // "Attach this tab on MY route": the electron-capable tile asking that a
+      // dormant or unbound tab be woken into the window that asked, rather
+      // than into whichever window the scope's default route happens to be.
+      //
+      // No `sessionId` - the tab is resolved inside this stream's scope, the
+      // same way `captureTabPreview` is. Answered with the existing
+      // `actionAck`; a rejection (the tab is bound in another window, the
+      // session is closing) is an ordinary answer with a reason, not an
+      // error, because the sender's fallback is to render what it renders
+      // today and the screencast path is what actually wakes the tab.
+      kind: z.literal("attachTab"),
+      ...requestFrameFields,
+      tabId: z.string(),
+    })
+    .strict(),
+  z
+    .object({
+      // "Show this tab HERE": the electron-capable tile asking that a tab
+      // currently bound in another window of the same desktop be moved into
+      // the window that asked, page state intact. A distinct kind rather than
+      // a flag on `attachTab`, because the tile sends `attachTab` on every
+      // activation and that frame must stay reject-never-relocate by
+      // construction; only this one may displace a live guest.
+      //
+      // Resolved inside this stream's scope like `attachTab`, answered with
+      // the same `actionAck`. Every rejection (an agent is driving the tab,
+      // a birth is in flight, the session is closing) is an ordinary answer
+      // whose reason the sender shows and then puts its button back.
+      kind: z.literal("moveTab"),
       ...requestFrameFields,
       tabId: z.string(),
     })
@@ -878,11 +981,28 @@ export const browserSessionsClientFrameSchema = z.discriminatedUnion("kind", [
       // Electron placement is a same-machine optimization, and this field is
       // the sole locality signal it is gated on.
       coLocatedHostId: z.string().nullable(),
-      // There was a `desktopWindowId` here. It is gone: the host's last
-      // reader was retired (lifecycle hand-over now happens only through
-      // `detachBrowserSessionsSubscriber`), and with the jar plane in the
-      // desktop's main process the window a stream belongs to is a fact that
-      // process already holds - it never needed to travel.
+      // The desktop window this stream belongs to, or null off Electron.
+      //
+      // Native routes are elected per scope AND window: a scope holds one
+      // route per window rather than a single route with the other windows
+      // standing by, so a user-initiated open or `attachTab` lands in the
+      // window that asked. This is the window the host names a route by, and
+      // it is what comes back on `BrowserTabInfo.boundWindowId` as the route
+      // holding a tab's binding - which is how a tile in the other window
+      // renders "open in your other window" from a fact instead of from how
+      // long a binding has taken to arrive.
+      //
+      // `.default(null)` for an older GUI, and null is not a missing value
+      // here: every null-window subscriber shares ONE route bucket, which is
+      // exactly the single-route behavior that predates per-window election.
+      //
+      // This field existed before, and was removed in #1667 once its last
+      // reader (the same-window lifecycle hand-over, now done through
+      // `detachBrowserSessionsSubscriber`) was retired. Per-window route
+      // election is a NEW reader, decided after that removal, and the window
+      // a stream belongs to has to travel again for it: main holds that fact
+      // for its own bookkeeping, but the host is the one electing routes.
+      desktopWindowId: z.string().nullable().default(null),
     })
     .strict(),
   z
@@ -1113,7 +1233,7 @@ const noJarMaterialReachesARenderer: BrowserSessionsUxFrameCarryingJarMaterial e
 void noJarMaterialReachesARenderer;
 
 /**
- * The client frames a renderer may ASK for: the three user-initiated tab
+ * The client frames a renderer may ASK for: the four user-initiated tab
  * requests, and nothing else.
  *
  * `forgetLogins` and `clearSite` are deliberately NOT here even though a
@@ -1129,6 +1249,15 @@ export const BROWSER_SESSIONS_UX_CLIENT_FRAME_KINDS = [
   "openTab",
   "closeTab",
   "captureTabPreview",
+  // A tile asking for a tab on its own window's route. It is a renderer frame
+  // by construction: which window a user activated a tile in is a fact only
+  // that renderer holds, and it carries no jar material and no capability -
+  // the host authorizes it against the stream's scope like every other one.
+  "attachTab",
+  // Its sibling for a tab bound in ANOTHER window of this desktop. Renderer
+  // frame for the same reason: the target window is the fact only the
+  // renderer holds, and the host authorizes it against the stream's scope.
+  "moveTab",
 ] as const;
 
 export type BrowserSessionsUxClientFrame = Extract<
@@ -1138,10 +1267,14 @@ export type BrowserSessionsUxClientFrame = Extract<
   }
 >;
 
-/** Unreleased browser stream baseline. */
-export const browserSessionsV1 = defineStreamRpcContract({
+/**
+ * The live browser sessions line. `@1.0` is frozen in `contracts-v1.ts` and
+ * served beside it; the host projects these frames down to that shape for a
+ * v1.3.0 peer, and the client lifts that peer's frames up to this one.
+ */
+export const browserSessionsV20 = defineStreamRpcContract({
   method: "browser.sessions",
-  schemaVersion: { major: 1, minor: 0 } as const,
+  schemaVersion: { major: 2, minor: 0 } as const,
   openRequestSchema: browserSessionsOpenRequestSchema,
   serverFrameSchema: browserSessionsServerFrameSchema,
   clientFrameSchema: browserSessionsClientFrameSchema,
@@ -1242,10 +1375,10 @@ export type BrowserScreencastViewerRole = z.infer<
   typeof browserScreencastViewerRoleSchema
 >;
 
-/** Epic-authorized, tab-addressed screencast subscription. */
+/** Scope-authorized, tab-addressed screencast subscription. */
 export const browserScreencastOpenRequestSchema = z
   .object({
-    epicId: z.string(),
+    scope: hostResourceScopeSchema,
     sessionId: z.string(),
     tabId: z.string(),
     maxWidth: z.number().int().positive(),
@@ -1253,6 +1386,12 @@ export const browserScreencastOpenRequestSchema = z
     quality: z.number().int().min(0).max(100),
     format: browserScreencastFormatSchema,
     role: browserScreencastViewerRoleSchema,
+    // The `handoffToken` a successful `openTab` answered this client with, when
+    // this viewer is watching the tab that open produced; `null` for any other
+    // viewer. The host holds the tab's session where the opener can see it
+    // until pixels reach a viewer presenting the token, so a bystander that
+    // picked the tab up from a session update does not release it.
+    handoffToken: z.string().nullable(),
   })
   .strict();
 export type BrowserScreencastOpenRequest = z.infer<
@@ -1856,9 +1995,10 @@ export type BrowserScreencastClientFrame = z.infer<
   typeof browserScreencastClientFrameSchema
 >;
 
-export const browserScreencastV1 = defineStreamRpcContract({
+/** The live screencast line; `@1.0` is frozen in `contracts-v1.ts`. */
+export const browserScreencastV20 = defineStreamRpcContract({
   method: "browser.screencast",
-  schemaVersion: { major: 1, minor: 0 } as const,
+  schemaVersion: { major: 2, minor: 0 } as const,
   openRequestSchema: browserScreencastOpenRequestSchema,
   serverFrameSchema: browserScreencastServerFrameSchema,
   clientFrameSchema: browserScreencastClientFrameSchema,

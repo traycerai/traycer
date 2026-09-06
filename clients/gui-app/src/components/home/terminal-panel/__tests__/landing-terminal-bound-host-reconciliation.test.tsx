@@ -14,9 +14,9 @@ import {
   type PlainTerminalCollection,
 } from "@/lib/terminals/plain-terminal-authority";
 import {
-  landingTerminalLayoutFor,
-  useLandingTerminalStore,
-} from "@/stores/home/landing-terminal-store";
+  landingPanelLayoutFor,
+  useLandingPanelStore,
+} from "@/stores/home/landing-panel-store";
 import {
   recordProviderLoginTerminal,
   useProviderLoginTerminalsStore,
@@ -105,7 +105,7 @@ describe("<LandingTerminalBoundHostReconciliationFleet />", () => {
   beforeEach(() => {
     queryClient = new QueryClient();
     window.localStorage.clear();
-    useLandingTerminalStore.getState().resetForTests();
+    useLandingPanelStore.getState().resetForTests();
     useProviderLoginTerminalsStore.setState(
       useProviderLoginTerminalsStore.getInitialState(),
       true,
@@ -115,7 +115,7 @@ describe("<LandingTerminalBoundHostReconciliationFleet />", () => {
   afterEach(() => {
     cleanup();
     queryClient.clear();
-    useLandingTerminalStore.getState().resetForTests();
+    useLandingPanelStore.getState().resetForTests();
   });
 
   it("re-runs the pass when sign-in provenance arrives AFTER it ran, reclassifying the tab it had left plain", async () => {
@@ -123,7 +123,8 @@ describe("<LandingTerminalBoundHostReconciliationFleet />", () => {
     // told what it is: unmarked, unacknowledged, and - on a capable host -
     // unprojected, which is exactly the shape the pass treats as legacy
     // evidence.
-    useLandingTerminalStore.getState().addTab({
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
       instanceId: "plain-instance",
       sessionId: "signin-session",
       hostId: "host-b",
@@ -171,7 +172,7 @@ describe("<LandingTerminalBoundHostReconciliationFleet />", () => {
 
     await waitFor(() => {
       expect(
-        useLandingTerminalStore
+        useLandingPanelStore
           .getState()
           .tabs.find((tab) => tab.instanceId === "plain-instance"),
       ).toMatchObject({
@@ -203,8 +204,9 @@ describe("<LandingTerminalBoundHostReconciliationFleet />", () => {
       title: "Discovered B",
       revision: 1,
     });
-    const store = useLandingTerminalStore.getState();
+    const store = useLandingPanelStore.getState();
     store.addTab({
+      kind: "terminal",
       instanceId: "instance-a",
       sessionId: "terminal-a",
       hostId: "host-a",
@@ -214,6 +216,7 @@ describe("<LandingTerminalBoundHostReconciliationFleet />", () => {
       hostAuthorityAcknowledged: true,
     });
     store.addTab({
+      kind: "terminal",
       instanceId: "legacy-instance-b",
       sessionId: "legacy-b",
       hostId: "host-b",
@@ -283,7 +286,7 @@ describe("<LandingTerminalBoundHostReconciliationFleet />", () => {
     await waitFor(() => {
       expect(importB).toHaveBeenCalledTimes(1);
       expect(
-        useLandingTerminalStore.getState().tabs.map((tab) => tab.sessionId),
+        useLandingPanelStore.getState().tabs.map((tab) => tab.sessionId),
       ).toEqual(["terminal-a", "legacy-b", "discovered-b"]);
     });
     expect(importBRequests[0]).toMatchObject({
@@ -292,14 +295,14 @@ describe("<LandingTerminalBoundHostReconciliationFleet />", () => {
       cwd: "/legacy/b",
       name: "Local B",
     });
-    let state = useLandingTerminalStore.getState();
+    let state = useLandingPanelStore.getState();
     expect(state.tabs[1]).toMatchObject({
       hostId: "host-b",
       name: "Host B winner",
       hostAuthorityAcknowledged: true,
     });
     expect(state.activeInstanceId).toBe("instance-a");
-    expect(landingTerminalLayoutFor(state, "landing-a")).toMatchObject({
+    expect(landingPanelLayoutFor(state, "landing-a")).toMatchObject({
       panelOpen: true,
       panelWidthFraction: 0.43,
     });
@@ -328,7 +331,7 @@ describe("<LandingTerminalBoundHostReconciliationFleet />", () => {
     view.rerender(ui("host-a"));
     await waitFor(() => {
       expect(
-        useLandingTerminalStore
+        useLandingPanelStore
           .getState()
           .tabs.find((tab) => tab.sessionId === "legacy-b")?.name,
       ).toBe("Renamed on client B");
@@ -350,15 +353,15 @@ describe("<LandingTerminalBoundHostReconciliationFleet />", () => {
     view.rerender(ui("host-a"));
     await waitFor(() => {
       expect(
-        useLandingTerminalStore.getState().tabs.map((tab) => tab.sessionId),
+        useLandingPanelStore.getState().tabs.map((tab) => tab.sessionId),
       ).toEqual(["terminal-a", "discovered-b"]);
     });
 
     act(() => view.rerender(ui("host-b")));
-    state = useLandingTerminalStore.getState();
+    state = useLandingPanelStore.getState();
     expect(state.tabs.map((tab) => tab.hostId)).toEqual(["host-a", "host-b"]);
     expect(state.activeInstanceId).toBe("instance-a");
-    expect(landingTerminalLayoutFor(state, "landing-a")).toMatchObject({
+    expect(landingPanelLayoutFor(state, "landing-a")).toMatchObject({
       panelOpen: true,
       panelWidthFraction: 0.43,
     });

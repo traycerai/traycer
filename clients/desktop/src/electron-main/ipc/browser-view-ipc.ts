@@ -461,6 +461,12 @@ export function registerBrowserViewIpc(
       if (profile !== "primary") return;
       primaryProfileSnapshots.observe(url, webContents);
     },
+    // Fire-and-forget on purpose, and safe to be: the clear's completion is
+    // owed to whoever next materializes that partition, not to this caller,
+    // and `releaseBrowserViewSession` publishes it as a per-partition barrier
+    // that the guest birth awaits. Threading a promise back through here
+    // instead would give the manager an await it has nothing to do with, and
+    // would still not cover the release the ROUND-9 owed-debt path starts.
     releaseSessionStorage: (request) => {
       void releaseBrowserViewSession(
         partitionForProfile(request.profile, request.sessionId),

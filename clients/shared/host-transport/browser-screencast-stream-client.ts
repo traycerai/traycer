@@ -5,6 +5,10 @@ import {
   type BrowserScreencastServerFrame,
 } from "@traycer/protocol/host/browser/contracts";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
+import {
+  projectBrowserScreencastOpenRequestToV10,
+  subscribeAtScopeAddressedBrowserVersion,
+} from "./browser-contracts-v1-bridge";
 import type {
   IStreamSession,
   StreamCloseReason,
@@ -40,15 +44,29 @@ export type BrowserScreencastStreamClientOptions =
   };
 
 /**
- * Typed wrapper over one `browser.screencast` subscription - an
- * epic-authorized, tab-addressed media stream for a single viewer.
+ * Typed wrapper over one `browser.screencast` subscription - a
+ * scope-authorized, tab-addressed media stream for a single viewer.
  *
- * `browser.screencast` serves a single minor (`@1.0`) - when the first
- * additive minor lands, the per-session schema selection belongs in
- * `handleServerFrame`, keyed off `session.getNegotiatedSchemaVersion()` the
- * way `TerminalStreamClient` does it. Every viewer opens its own session, so
- * parsing at a sibling viewer's minor is exactly the skew that placing the
- * parse here exists to prevent.
+ * ## Two majors, and only the OPEN differs
+ *
+ * `browser.screencast` is served on `@1.0` (the v1.3.0 release: addressed by
+ * `epicId`, no placement handoff) and `@2.0` (the live line). Unlike its
+ * sibling `browser.sessions`, the two lines' server and client FRAME unions are
+ * identical - the whole divergence is the open request - so there is nothing to
+ * lift here and every frame parses against the live schema on both. That is a
+ * fact about the frozen contract, not an assumption: `contracts-v1.ts` names
+ * exactly what the two lines differ on, and the protocol's own
+ * `browser-contracts-v1-line` suite pins it.
+ *
+ * The open request is projected per session rather than per client, off the
+ * version this session negotiated. Every viewer opens its own session (a tile,
+ * a PiP mirror, a headless peek) and a reconnect may renegotiate one against a
+ * new host incarnation, so a client-wide answer would describe some other
+ * viewer's stream.
+ *
+ * The `independent` scope is pinned to `@2` instead of projected: `@1` can only
+ * address an epic, and there is no honest epic to name for the device's
+ * epic-less inventory - see {@link subscribeAtScopeAddressedBrowserVersion}.
  */
 export class BrowserScreencastStreamClient {
   private readonly session: IStreamSession;
@@ -59,7 +77,7 @@ export class BrowserScreencastStreamClient {
     const { wsStreamClient, callbacks, ...openRequest } = options;
     this.callbacks = callbacks;
     this.closed = false;
-    this.session = wsStreamClient.subscribe("browser.screencast", openRequest);
+    this.session = openScreencastSubscription(wsStreamClient, openRequest);
     this.session.onServerFrame((envelope, binaryPayload) => {
       this.handleServerFrame(envelope, binaryPayload);
     });
@@ -99,4 +117,28 @@ export class BrowserScreencastStreamClient {
     }
     this.callbacks.onServerFrame(parsed.data, binaryPayload);
   }
+}
+
+function openScreencastSubscription(
+  wsStreamClient: IHostStreamClient<HostStreamRpcRegistry>,
+  request: BrowserScreencastOpenRequest,
+): IStreamSession {
+  const scope = request.scope;
+  if (scope.kind === "independent") {
+    return subscribeAtScopeAddressedBrowserVersion(
+      wsStreamClient,
+      "browser.screencast",
+      request,
+    );
+  }
+  const epicId = scope.epicId;
+  // Re-read at every wire subscribe: the major belongs to the CONNECTION, and a
+  // reconnect can land on a host incarnation that serves the other one.
+  return wsStreamClient.subscribeWithParamsProvider(
+    "browser.screencast",
+    (onWireVersion) =>
+      onWireVersion?.major === 1
+        ? projectBrowserScreencastOpenRequestToV10(request, epicId)
+        : request,
+  );
 }

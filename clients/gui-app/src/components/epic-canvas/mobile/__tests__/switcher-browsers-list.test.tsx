@@ -21,6 +21,10 @@ import { SwitcherBrowsersList } from "@/components/epic-canvas/mobile/switcher-b
 import type { BrowserSessionsState } from "@/components/epic-canvas/renderers/browser-sessions-context";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { BROWSER_TAB_AGENT_ACTIVITY_MS } from "@/lib/browser-view/browser-tab-display";
+import {
+  sessionInfo,
+  tabInfo,
+} from "@/lib/browser-view/sessions/__tests__/browser-session-test-kit";
 import { BROWSERS_UNSUPPORTED_MESSAGE } from "@traycer-clients/shared/platform/browser-view";
 import { toast } from "sonner";
 
@@ -88,7 +92,7 @@ function forwardCloseTab(sessionId: string, tabId: string): Promise<void> {
 function forwardOpenTab(
   sessionId: string | null,
   url: string,
-): Promise<{ sessionId: string; tabId: string }> {
+): Promise<{ sessionId: string; tabId: string; handoffToken: string | null }> {
   return openTab(sessionId, url);
 }
 
@@ -103,6 +107,8 @@ const sessionsState = vi.hoisted<{ value: BrowserSessionsState }>(() => ({
     retry: vi.fn(),
     openTab: forwardOpenTab,
     closeTab: forwardCloseTab,
+    attachTab: vi.fn(() => Promise.reject(new Error("not used"))),
+    moveTab: vi.fn(() => Promise.reject(new Error("not used"))),
   },
 }));
 
@@ -123,27 +129,18 @@ const TAB_ID = "view-tab-1";
 function tab(
   overrides: Partial<BrowserTabInfo> & Pick<BrowserTabInfo, "tabId" | "url">,
 ): BrowserTabInfo {
-  return {
-    originTier: "dev",
-    status: "ready",
-    title: null,
-    viewed: false,
-    drivenBy: [],
-    ...overrides,
-  };
+  return tabInfo(overrides);
 }
 
 function session(
   overrides: Partial<BrowserSessionInfo> &
     Pick<BrowserSessionInfo, "sessionId" | "profile" | "tabs">,
 ): BrowserSessionInfo {
-  return {
-    epicId: "epic-1",
-    hostId: "host-1",
+  return sessionInfo({
     lastActivityAt: 2,
+    runtime: { kind: "headless", revision: 0 },
     ...overrides,
-    runtime: overrides.runtime ?? { kind: "headless", revision: 0 },
-  };
+  });
 }
 
 function replaceSessions(
@@ -285,7 +282,11 @@ describe("SwitcherBrowsersList", () => {
   it("offers Add browser on a list that already has rows, and closes on the tile", async () => {
     const user = userEvent.setup();
     const onClose = vi.fn();
-    openTab.mockResolvedValue({ sessionId: "sess-2", tabId: "tab-9" });
+    openTab.mockResolvedValue({
+      sessionId: "sess-2",
+      tabId: "tab-9",
+      handoffToken: null,
+    });
     renderList(onClose);
 
     // A list with rows renders no empty state, so the header "+" is the only

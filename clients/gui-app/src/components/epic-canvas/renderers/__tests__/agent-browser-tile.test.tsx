@@ -1,11 +1,12 @@
 import "../../../../../__tests__/test-browser-apis";
-import type { ComponentProps } from "react";
+import type { ComponentProps, ReactElement } from "react";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ElectronTabSurface,
   settleMatchesLatch,
-} from "@/components/epic-canvas/renderers/agent-browser-tile";
+} from "@/components/browser-tile/agent-browser-tile";
+import type { BrowserTilePlacement } from "@/components/browser-tile/browser-tile-placement";
 import { startPersistentBrowserGuestHost } from "@/lib/browser-view/guest/persistent-browser-guest-host";
 import { FakeBrowserViewBridge } from "@/lib/browser-view/__tests__/fake-browser-view-bridge";
 import type {
@@ -14,25 +15,30 @@ import type {
 } from "@/lib/browser-view/sessions/electron-tab-directory";
 import type { TileController } from "@/components/epic-canvas/renderers/tile-controller";
 import type { BrowserSessionsState } from "@/components/epic-canvas/renderers/browser-sessions-context";
-import type { TileOpenIntent } from "@/lib/canvas/tile-open/intent";
 import type {
+  BrowserViewViewportPresetId,
   BrowserViewTileCommand,
   BrowserViewTileCommandEvent,
   BrowserViewTileKey,
 } from "@traycer-clients/shared/platform/browser-view";
-import { registerHostedPaneActivationClaim } from "@/components/epic-canvas/pane-activation";
 
 const state = vi.hoisted(() => ({
   visible: true,
   bridge: null as TestBridge | null,
   chromeInputs: [] as Array<Record<string, unknown>>,
   sessions: null as BrowserSessionsState | null,
-  openTile: vi.fn<(intent: TileOpenIntent) => void>(),
+  onOpenLinkInNewTile:
+    vi.fn<(url: string, disposition: "foreground" | "background") => void>(),
+  onNativeTileFocused: vi.fn<() => void>(),
   /** Attach/detach in the order they actually happened. */
   events: [] as string[],
   closeTab: vi.fn((_sessionId: string, _tabId: string) => Promise.resolve()),
   openTab: vi.fn((sessionId: string | null, _url: string) =>
-    Promise.resolve({ sessionId: sessionId ?? "session-1", tabId: "tab-2" }),
+    Promise.resolve({
+      sessionId: sessionId ?? "session-1",
+      tabId: "tab-2",
+      handoffToken: null,
+    }),
   ),
   closeCanvasTile: vi.fn(),
   focusAddress: vi.fn(),
@@ -40,19 +46,19 @@ const state = vi.hoisted(() => ({
   navigateToUrl: vi.fn<(url: string) => void>(),
   /** The tile's latch callback, captured from the chrome hook's inputs. */
   latchAttemptedUrl: null as ((url: string) => void) | null,
+  /** Every `useBrowserAnnotationSession` call, newest last. */
+  annotationInputs: [] as Array<{ readonly browserView: unknown }>,
+  persistViewportPreset: vi.fn<(preset: BrowserViewViewportPresetId) => void>(),
 }));
 
-vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
-  useTabHostId: () => "host-1",
-}));
-vi.mock("@/components/epic-canvas/hooks/use-tile-body-visible", () => ({
-  useTileBodyVisible: () => state.visible,
-}));
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHost: () => ({ browserView: state.bridge }),
 }));
 vi.mock("@/hooks/browser/use-browser-annotation-session", () => ({
-  useBrowserAnnotationSession: () => null,
+  useBrowserAnnotationSession: (input: { readonly browserView: unknown }) => {
+    state.annotationInputs.push(input);
+    return null;
+  },
 }));
 vi.mock("@/lib/browser-view/tiles/visible-tile-registry", async (load) => {
   const actual =
@@ -64,30 +70,8 @@ vi.mock("@/lib/browser-view/tiles/visible-tile-registry", async (load) => {
 vi.mock("@/components/epic-canvas/renderers/browser-sessions-context", () => ({
   useMaybeBrowserSessionsContext: () => state.sessions,
 }));
-vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
-  useEpicTileNavigation: () => ({ openTile: state.openTile }),
-}));
-vi.mock("@/components/epic-canvas/renderers/browser-start-page", () => ({
+vi.mock("@/components/browser-tile/browser-start-page", () => ({
   BrowserStartPage: () => <div>Local servers</div>,
-}));
-vi.mock(
-  "@/components/epic-canvas/renderers/use-close-canvas-tile-with-nested-focus",
-  () => ({
-    useCloseCanvasTileWithNestedFocus: () => state.closeCanvasTile,
-  }),
-);
-const canvasState = vi.hoisted(() => ({
-  tabsById: {} as Record<string, unknown>,
-  updateBrowserTileViewportPresetInTab: vi.fn(),
-}));
-// `getState` too, not just the hook: the popup path reads the live tab set at
-// open time to see whether its own view tab is still there.
-vi.mock("@/stores/epics/canvas/store", () => ({
-  useEpicCanvasStore: Object.assign(
-    (selector: (value: Record<string, unknown>) => unknown) =>
-      selector(canvasState),
-    { getState: () => canvasState },
-  ),
 }));
 interface ChromeMockInput extends Record<string, unknown> {
   readonly onAttemptedUrl: (url: string) => void;
@@ -182,13 +166,28 @@ class TestBridge {
     return { dispose: () => (this.tileFocusedHandler = null) };
   }
 
+  /** This suite's canvas `PLACEMENT`, which is the tile the surface matches. */
   emitTileFocused(): void {
-    this.tileFocusedHandler?.({
+    this.emitTileFocusedForTile({
       viewTabId: "view-1",
       paneId: "pane-1",
       tileInstanceId: "tile-1",
       pageSessionId: "browser-session:session-1:tab-1",
     });
+  }
+
+  /**
+   * The identity is an ARGUMENT here, because the surface filters every tile
+   * report by its OWN key - so a helper that only ever emits this tile's
+   * identity cannot show that the filter does anything.
+   */
+  emitTileFocusedForTile(tile: {
+    readonly viewTabId: string;
+    readonly paneId: string;
+    readonly tileInstanceId: string;
+    readonly pageSessionId: string;
+  }): void {
+    this.tileFocusedHandler?.(tile);
   }
 
   private statusHandler: ((change: NativeStatusChange) => void) | null = null;
@@ -226,9 +225,26 @@ class TestBridge {
 
   /** A browser-scoped chord main claimed from the focused guest page. */
   emitTileCommand(command: BrowserViewTileCommand): void {
+    this.emitTileCommandForTile(
+      { viewTabId: "view-1", paneId: "pane-1" },
+      command,
+    );
+  }
+
+  /**
+   * The same chord addressed to a tile at other coordinates. The surface
+   * filters every event on its own tile key, and a Start Page tile's key is
+   * `{landingPageId, "landing-panel"}` rather than `{viewTabId, paneId}` - so a
+   * canvas-shaped event would be discarded before any arm saw it, and a test
+   * that emitted one would pass by never reaching the code it names.
+   */
+  emitTileCommandForTile(
+    tile: { readonly viewTabId: string; readonly paneId: string },
+    command: BrowserViewTileCommand,
+  ): void {
     this.tileCommandHandler?.({
-      viewTabId: "view-1",
-      paneId: "pane-1",
+      viewTabId: tile.viewTabId,
+      paneId: tile.paneId,
       tileInstanceId: "tile-1",
       pageSessionId: "browser-session:session-1:tab-1",
       command,
@@ -244,10 +260,16 @@ class TestBridge {
   }
 }
 
+const PLACEMENT: BrowserTilePlacement = {
+  kind: "canvas",
+  epicId: "epic-1",
+  viewTabId: "view-1",
+  paneId: "pane-1",
+};
+const PAGE_SESSION_ID = "browser-session:session-1:tab-1";
+
 const NODE = {
-  id: "browser-session:session-1:tab-1",
   instanceId: "tile-1",
-  name: "Example",
   hostId: "host-1",
   sessionId: "session-1",
   url: "https://example.com/",
@@ -269,6 +291,7 @@ function createBinding(
 
 beforeEach(() => {
   state.events = [];
+  state.annotationInputs = [];
 });
 
 afterEach(() => {
@@ -288,15 +311,29 @@ function createRecordingBinding(): ElectronTabBinding {
   });
 }
 
-function renderTile(binding: ElectronTabBinding) {
-  return render(
+function surfaceElement(
+  node: typeof NODE,
+  binding: ElectronTabBinding,
+): ReactElement {
+  return (
     <ElectronTabSurface
-      node={NODE}
+      node={node}
       binding={binding}
-      viewTabId="view-1"
-      paneId="pane-1"
-    />,
+      placement={PLACEMENT}
+      visible={state.visible}
+      pageSessionId={PAGE_SESSION_ID}
+      onRequestClose={state.closeCanvasTile}
+      persistViewportPreset={state.persistViewportPreset}
+      onOpenLinkInNewTile={state.onOpenLinkInNewTile}
+      onRequestNewTab={null}
+      onConvertToPip={() => undefined}
+      onNativeTileFocused={state.onNativeTileFocused}
+    />
   );
+}
+
+function renderTile(binding: ElectronTabBinding) {
+  return render(surfaceElement(NODE, binding));
 }
 
 function liveSessions(): BrowserSessionsState {
@@ -310,6 +347,8 @@ function liveSessions(): BrowserSessionsState {
     retry: () => {},
     openTab: state.openTab,
     closeTab: state.closeTab,
+    attachTab: () => Promise.reject(new Error("not used")),
+    moveTab: () => Promise.reject(new Error("not used")),
   };
 }
 
@@ -337,26 +376,12 @@ function queryTileGuestWrapper(): HTMLElement {
   return wrapper;
 }
 
-function popupRequest(
-  disposition: "foreground" | "background",
-): OpenTileRequest {
-  return {
-    viewTabId: "view-1",
-    paneId: "pane-1",
-    tileInstanceId: "tile-1",
-    pageSessionId: "browser-session:session-1:tab-1",
-    url: "https://popup.example/",
-    disposition,
-  };
-}
-
 describe("ElectronTabSurface", () => {
   beforeEach(() => {
     state.visible = true;
     state.bridge = new TestBridge();
     state.chromeInputs = [];
     state.sessions = liveSessions();
-    canvasState.tabsById = { "view-1": { epicId: "epic-1" } };
     vi.clearAllMocks();
   });
 
@@ -379,7 +404,7 @@ describe("ElectronTabSurface", () => {
     ).not.toBe("presented");
     await waitFor(() => {
       expect(bindSurface).toHaveBeenCalledExactlyOnceWith({
-        bindingId: "canvas\u001fview-1\u001fpane-1\u001ftile-1",
+        bindingId: "canvasview-1pane-1tile-1",
         surface: {
           viewTabId: "view-1",
           paneId: "pane-1",
@@ -398,38 +423,89 @@ describe("ElectronTabSurface", () => {
   it("shows the start page without attaching an opaque native surface", () => {
     const bindSurface = vi.fn();
     render(
-      <ElectronTabSurface
-        node={{ ...NODE, url: "about:blank" }}
-        binding={createBinding(bindSurface)}
-        viewTabId="view-1"
-        paneId="pane-1"
-      />,
+      surfaceElement(
+        { ...NODE, url: "about:blank" },
+        createBinding(bindSurface),
+      ),
     );
 
     expect(screen.getByText("Local servers")).toBeTruthy();
     expect(bindSurface).not.toHaveBeenCalled();
   });
 
-  it("activates its pane when the native browser guest receives focus", () => {
-    const claimFocus = vi.fn();
-    const claimPointerDown = vi.fn();
-    const unregister = registerHostedPaneActivationClaim("view-1", "pane-1", {
-      claimFocus,
-      claimPointerDown,
-    });
+  /**
+   * An annotation is captured into a chat in an epic, so a placement that names
+   * no epic has nowhere to put one. Pinned rather than left to the epic id
+   * being empty: with a live browser view the toolbar's Annotate button is
+   * enabled (`canStart` reads `browserView !== null && status === "ready"`), so
+   * the reader would get a working overlay whose capture resolves no targets.
+   * This is the rule the Start Page tile inherits.
+   */
+  it("keeps the annotation session inert under a placement with no epic", () => {
+    state.bridge = new TestBridge();
+    render(
+      <ElectronTabSurface
+        node={NODE}
+        binding={createRecordingBinding()}
+        placement={{ kind: "landing", landingPageId: "landing-1" }}
+        visible
+        pageSessionId={PAGE_SESSION_ID}
+        onRequestClose={state.closeCanvasTile}
+        persistViewportPreset={null}
+        onOpenLinkInNewTile={state.onOpenLinkInNewTile}
+        onRequestNewTab={null}
+        onConvertToPip={null}
+        onNativeTileFocused={null}
+      />,
+    );
+
+    expect(state.annotationInputs.length).toBeGreaterThan(0);
+    for (const input of state.annotationInputs) {
+      expect(input.browserView).toBeNull();
+    }
+  });
+
+  it("gives the annotation session a live browser view on a canvas placement", () => {
+    // The other arm, so the assertion above cannot pass by the surface simply
+    // never handing a browser view to anything - which is what it would do if
+    // the bridge were absent rather than the epic.
+    state.bridge = new TestBridge();
+    render(surfaceElement(NODE, createRecordingBinding()));
+
+    expect(state.annotationInputs.at(-1)?.browserView).not.toBeNull();
+  });
+
+  /**
+   * `onTileFocused` is a browser fact only this surface hears - the desktop
+   * reports it per tile, and nothing above knows which tile a report is for.
+   * What it MEANS is the host's: the canvas claims its pane's activation
+   * (covered in `browser-session-tile.test.tsx`), and the Start Page panel has
+   * no pane to claim. So what this surface owes is the forward, and the
+   * identity filter in front of it.
+   */
+  it("forwards native focus for its own tile to the host", () => {
     renderTile(createRecordingBinding());
 
     act(() => {
       state.bridge?.emitTileFocused();
     });
 
-    expect(claimPointerDown).not.toHaveBeenCalled();
-    expect(claimFocus).toHaveBeenCalledExactlyOnceWith({
-      defaultPrevented: false,
-      scope: null,
-      target: null,
+    expect(state.onNativeTileFocused).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores native focus reported for a different tile", () => {
+    renderTile(createRecordingBinding());
+
+    act(() => {
+      state.bridge?.emitTileFocusedForTile({
+        viewTabId: "view-9",
+        paneId: "pane-9",
+        tileInstanceId: "tile-9",
+        pageSessionId: "browser-session:other-session:other-tab",
+      });
     });
-    unregister();
+
+    expect(state.onNativeTileFocused).not.toHaveBeenCalled();
   });
 
   it("detaches the native surface when the tile becomes hidden", async () => {
@@ -443,14 +519,7 @@ describe("ElectronTabSurface", () => {
     });
 
     state.visible = false;
-    view.rerender(
-      <ElectronTabSurface
-        node={NODE}
-        binding={binding}
-        viewTabId="view-1"
-        paneId="pane-1"
-      />,
-    );
+    view.rerender(surfaceElement(NODE, binding));
     await waitFor(() => {
       expect(detach).toHaveBeenCalledOnce();
     });
@@ -465,14 +534,7 @@ describe("ElectronTabSurface", () => {
 
     const show = (visible: boolean): void => {
       state.visible = visible;
-      view.rerender(
-        <ElectronTabSurface
-          node={NODE}
-          binding={binding}
-          viewTabId="view-1"
-          paneId="pane-1"
-        />,
-      );
+      view.rerender(surfaceElement(NODE, binding));
     };
 
     show(false);
@@ -503,92 +565,29 @@ describe("ElectronTabSurface", () => {
     expect(wrapper.inert).toBe(true);
   });
 
-  it("opens an in-page popup as a tab of this pane, foreground focusing it", async () => {
+  it("forwards an in-page popup open request to onOpenLinkInNewTile untouched", async () => {
     const bridge = state.bridge;
     if (bridge === null) throw new Error("bridge missing");
-    state.sessions = liveSessions();
     renderTile(
       createBinding(() => Promise.resolve({ detach: () => Promise.resolve() })),
     );
 
     act(() => {
-      bridge.emitOpenTileRequest(popupRequest("foreground"));
+      bridge.emitOpenTileRequest({
+        viewTabId: "view-1",
+        paneId: "pane-1",
+        tileInstanceId: "tile-1",
+        pageSessionId: "browser-session:session-1:tab-1",
+        url: "https://popup.example/",
+        disposition: "background",
+      });
     });
 
     await waitFor(() => {
-      expect(state.openTile).toHaveBeenCalledTimes(1);
-    });
-    expect(state.openTile.mock.calls[0]?.[0]).toMatchObject({
-      target: { tabId: "view-1" },
-      gesture: "explicit",
-      modifiers: null,
-      placement: { kind: "tab", paneId: "pane-1", index: null },
-      dedupe: true,
-      node: { type: "browser-session", sessionId: "session-1", tabId: "tab-2" },
-    });
-  });
-
-  it("falls back to the epic when the view tab closed mid-open", async () => {
-    const bridge = state.bridge;
-    if (bridge === null) throw new Error("bridge missing");
-    state.sessions = liveSessions();
-    // Held open so the tab is still there when the request arrives and gone
-    // only while `openTab` is in flight - which is what makes this a test of
-    // WHEN the target is resolved, not just that a missing tab falls back.
-    const pending: {
-      settle: (tab: { sessionId: string; tabId: string }) => void;
-    } = { settle: () => undefined };
-    state.openTab.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          pending.settle = resolve;
-        }),
-    );
-    renderTile(
-      createBinding(() => Promise.resolve({ detach: () => Promise.resolve() })),
-    );
-
-    act(() => {
-      bridge.emitOpenTileRequest(popupRequest("foreground"));
-    });
-    await waitFor(() => {
-      expect(state.openTab).toHaveBeenCalledTimes(1);
-    });
-    expect(state.openTile).not.toHaveBeenCalled();
-
-    // The tab goes away mid-flight; targeting it would put a tile in a canvas
-    // with no route (R8).
-    canvasState.tabsById = {};
-    act(() => {
-      pending.settle({ sessionId: "session-1", tabId: "tab-2" });
-    });
-
-    await waitFor(() => {
-      expect(state.openTile).toHaveBeenCalledTimes(1);
-    });
-    expect(state.openTile.mock.calls[0]?.[0].target).toEqual({
-      epicId: "epic-1",
-    });
-  });
-
-  it("opens a background popup as a host push, leaving the current tab active", async () => {
-    const bridge = state.bridge;
-    if (bridge === null) throw new Error("bridge missing");
-    state.sessions = liveSessions();
-    renderTile(
-      createBinding(() => Promise.resolve({ detach: () => Promise.resolve() })),
-    );
-
-    act(() => {
-      bridge.emitOpenTileRequest(popupRequest("background"));
-    });
-
-    await waitFor(() => {
-      expect(state.openTile).toHaveBeenCalledTimes(1);
-    });
-    expect(state.openTile.mock.calls[0]?.[0]).toMatchObject({
-      gesture: "host",
-      placement: { kind: "tab", paneId: "pane-1", index: null },
+      expect(state.onOpenLinkInNewTile).toHaveBeenCalledExactlyOnceWith(
+        "https://popup.example/",
+        "background",
+      );
     });
   });
 
@@ -653,7 +652,6 @@ describe("ElectronTabSurface browser-scoped chords", () => {
     state.bridge = new TestBridge();
     state.chromeInputs = [];
     state.sessions = liveSessions();
-    canvasState.tabsById = { "view-1": { epicId: "epic-1" } };
     vi.clearAllMocks();
   });
 
@@ -683,7 +681,47 @@ describe("ElectronTabSurface browser-scoped chords", () => {
     });
   });
 
-  it("opens a new tab in the same session on Cmd+T", () => {
+  // The Start Page shape. Its panel close is a whole sequence - host close,
+  // store removal, tombstone, neighbour promotion - so a tile that ALSO sent
+  // the close would issue two for one gesture, the second racing a tab the host
+  // has already removed and surfacing its refusal as a toast nobody earned.
+  it("asks the host surface to close on Cmd+W under a landing placement, and sends nothing itself", async () => {
+    render(
+      <ElectronTabSurface
+        node={NODE}
+        binding={createBinding(
+          vi.fn(() => Promise.resolve({ detach: () => Promise.resolve() })),
+        )}
+        placement={{ kind: "landing", landingPageId: "landing-1" }}
+        visible={state.visible}
+        pageSessionId={PAGE_SESSION_ID}
+        onRequestClose={state.closeCanvasTile}
+        persistViewportPreset={state.persistViewportPreset}
+        onOpenLinkInNewTile={state.onOpenLinkInNewTile}
+        onRequestNewTab={null}
+        onConvertToPip={() => undefined}
+        onNativeTileFocused={null}
+      />,
+    );
+    const bridge = state.bridge;
+    expect(bridge).not.toBeNull();
+
+    act(() =>
+      bridge?.emitTileCommandForTile(
+        { viewTabId: "landing-1", paneId: "landing-panel" },
+        "closeTab",
+      ),
+    );
+
+    await waitFor(() => {
+      expect(state.closeCanvasTile).toHaveBeenCalledOnce();
+    });
+    // The canvas arm above still sends it; this one must not, or one Cmd+W is
+    // two closes.
+    expect(state.closeTab).not.toHaveBeenCalled();
+  });
+
+  it("forwards Cmd+T to onOpenLinkInNewTile as a foreground open of the default URL", () => {
     renderTile(
       createBinding(
         vi.fn(() => Promise.resolve({ detach: () => Promise.resolve() })),
@@ -692,9 +730,52 @@ describe("ElectronTabSurface browser-scoped chords", () => {
 
     act(() => state.bridge?.emitTileCommand("newTab"));
 
-    expect(state.openTab).toHaveBeenCalledOnce();
-    expect(state.openTab.mock.calls.at(0)?.at(0)).toBe("session-1");
+    expect(state.onOpenLinkInNewTile).toHaveBeenCalledExactlyOnceWith(
+      "about:blank",
+      "foreground",
+    );
     expect(state.closeTab).not.toHaveBeenCalled();
+  });
+
+  it("still reaches onOpenLinkInNewTile for Cmd+T when onRequestNewTab is null, exactly as the canvas adapter passes it", () => {
+    renderTile(
+      createBinding(
+        vi.fn(() => Promise.resolve({ detach: () => Promise.resolve() })),
+      ),
+    );
+
+    act(() => state.bridge?.emitTileCommand("newTab"));
+
+    expect(state.onOpenLinkInNewTile).toHaveBeenCalledExactlyOnceWith(
+      "about:blank",
+      "foreground",
+    );
+  });
+
+  it("calls a non-null onRequestNewTab for Cmd+T instead of onOpenLinkInNewTile", () => {
+    const onRequestNewTab = vi.fn<() => void>();
+    render(
+      <ElectronTabSurface
+        node={NODE}
+        binding={createBinding(
+          vi.fn(() => Promise.resolve({ detach: () => Promise.resolve() })),
+        )}
+        placement={PLACEMENT}
+        visible={state.visible}
+        pageSessionId={PAGE_SESSION_ID}
+        onRequestClose={state.closeCanvasTile}
+        persistViewportPreset={state.persistViewportPreset}
+        onOpenLinkInNewTile={state.onOpenLinkInNewTile}
+        onRequestNewTab={onRequestNewTab}
+        onConvertToPip={() => undefined}
+        onNativeTileFocused={null}
+      />,
+    );
+
+    act(() => state.bridge?.emitTileCommand("newTab"));
+
+    expect(onRequestNewTab).toHaveBeenCalledOnce();
+    expect(state.onOpenLinkInNewTile).not.toHaveBeenCalled();
   });
 
   it("asks the address field for the caret on Cmd+L", () => {
@@ -743,7 +824,6 @@ describe("ElectronTabSurface navigation stall", () => {
     state.bridge = new TestBridge();
     state.chromeInputs = [];
     state.sessions = liveSessions();
-    canvasState.tabsById = { "view-1": { epicId: "epic-1" } };
     vi.clearAllMocks();
     vi.useFakeTimers();
   });
@@ -876,7 +956,6 @@ describe("ElectronTabSurface echo-less settle", () => {
     state.chromeInputs = [];
     state.latchAttemptedUrl = null;
     state.sessions = liveSessions();
-    canvasState.tabsById = { "view-1": { epicId: "epic-1" } };
     vi.clearAllMocks();
     vi.useFakeTimers();
   });

@@ -64,7 +64,7 @@ import type {
   StreamFrameEnvelope,
 } from "./i-stream-session";
 import type { TransportEvidenceReporter } from "@traycer-clients/shared/host-selection/transport-evidence";
-import type { IStreamClient } from "./i-stream-client";
+import type { IStreamClient, StreamParamsProvider } from "./i-stream-client";
 import { dialPriorityForMethod } from "./dial-priority";
 import type {
   IStreamWebSocketFactory,
@@ -423,7 +423,7 @@ export class WsStreamClient<
    */
   subscribeWithParamsProvider<Method extends keyof Registry & string>(
     method: Method,
-    paramsProvider: () => ParamsOf<Registry, Method>,
+    paramsProvider: StreamParamsProvider<Registry, Method>,
   ): IStreamSession {
     return this.subscribeWithParamsProviderInternal(
       method,
@@ -436,7 +436,7 @@ export class WsStreamClient<
     Method extends keyof Registry & string,
   >(
     method: Method,
-    paramsProvider: () => ParamsOf<Registry, Method>,
+    paramsProvider: StreamParamsProvider<Registry, Method>,
     requiredSchemaVersion: SchemaVersion | null,
   ): IStreamSession {
     if (this.closed) {
@@ -1257,7 +1257,14 @@ type ExtractOpenRequest<MethodRegistry> =
 
 interface StreamSessionOptions<Registry extends VersionedStreamRpcRegistry> {
   readonly method: keyof Registry & string;
-  readonly paramsProvider: () => unknown;
+  /**
+   * Read once per wire subscribe, and handed the version the params are about
+   * to be declared at. This transport always knows it by then -
+   * {@link selectStreamSubscribeVersion} decides it from the two manifests, on
+   * the line above the read - so the argument is never `null` here, unlike the
+   * `IStreamClient` seam this is invoked from.
+   */
+  readonly paramsProvider: (onWireVersion: SchemaVersion) => unknown;
   /** Exact client version to declare; rejects older peers before subscribe. */
   readonly requiredSchemaVersion: SchemaVersion | null;
   readonly registry: Registry;
@@ -2184,12 +2191,21 @@ class StreamSession<
       return;
     }
 
+    // The version is decided BEFORE the params are read, so a method served on
+    // more than one major can shape its open request for the one that was
+    // negotiated. `prepareStreamSubscribeRequest` re-derives the same answer
+    // from the same pair, so the payload can never be declared at a version
+    // its provider was not told about.
+    const myCanonical = selectedManifest[this.config.method];
+    const theirCanonical = theirManifest[this.config.method];
     const prepared = prepareStreamSubscribeRequest(
       this.config.registry,
       this.config.method,
-      selectedManifest[this.config.method],
-      theirManifest[this.config.method],
-      this.config.paramsProvider(),
+      myCanonical,
+      theirCanonical,
+      this.config.paramsProvider(
+        selectStreamSubscribeVersion(myCanonical, theirCanonical),
+      ),
     );
     const subscribeFrame: ClientStreamSubscribeFrame = {
       kind: "subscribe",
@@ -3064,19 +3080,45 @@ export function prepareStreamSubscribeRequest(
   theirCanonical: SchemaVersion,
   params: unknown,
 ): PreparedStreamSubscribeRequest {
+  const onWireVersion = selectStreamSubscribeVersion(
+    myCanonical,
+    theirCanonical,
+  );
+  if (schemaVersionEqual(onWireVersion, myCanonical)) {
+    return { onWireVersion, onWirePayload: params };
+  }
+  const methodRegistry = registry[method] as StreamMethodVersionRegistry;
+  const olderLine = methodRegistry[myCanonical.major];
+  const olderEntry = olderLine.versions[onWireVersion.minor];
+  return {
+    onWireVersion,
+    onWirePayload: olderEntry.contract.openRequestSchema.parse(params),
+  };
+}
+
+/**
+ * Which version {@link prepareStreamSubscribeRequest} will declare, decided
+ * from the two manifests alone - so a caller can know it BEFORE it has the
+ * params, which is what lets a params provider shape its open request for the
+ * major that was actually negotiated (see `StreamParamsProvider`).
+ *
+ * Extracted rather than duplicated at the call sites precisely because those
+ * two answers must never diverge: a provider told `@1` whose payload is then
+ * declared as `@2` writes a frame the peer's strict schema drops, silently and
+ * on the open. Both transports read it through this function and then hand the
+ * same pair to `prepareStreamSubscribeRequest`.
+ */
+export function selectStreamSubscribeVersion(
+  myCanonical: SchemaVersion,
+  theirCanonical: SchemaVersion,
+): SchemaVersion {
   if (
     myCanonical.major !== theirCanonical.major ||
     myCanonical.minor <= theirCanonical.minor
   ) {
-    return { onWireVersion: myCanonical, onWirePayload: params };
+    return myCanonical;
   }
-  const methodRegistry = registry[method] as StreamMethodVersionRegistry;
-  const olderLine = methodRegistry[myCanonical.major];
-  const olderEntry = olderLine.versions[theirCanonical.minor];
-  return {
-    onWireVersion: theirCanonical,
-    onWirePayload: olderEntry.contract.openRequestSchema.parse(params),
-  };
+  return theirCanonical;
 }
 
 type SessionPhase = "idle" | "dialing" | "awaitingOpenAck" | "subscribed";

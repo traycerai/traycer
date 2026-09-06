@@ -66,12 +66,29 @@ export interface BrowserViewEntry {
    */
   rendererResetPending: boolean;
   internalNavigation: boolean;
+  /**
+   * Set when this guest is being closed only to be re-born in another window
+   * at the same tab identity ("Show here"). Its close must then leave the
+   * session's storage alone: an isolated partition is released with the
+   * session's last guest, and at that moment the successor does not exist
+   * yet, so without this the replacement would be born into a partition the
+   * close had just cleared. Cleared again if the successor's birth fails, at
+   * which point the close's release runs after all.
+   */
+  succeededByReplacement: boolean;
   /** One teardown shared by every close trigger for this guest. */
   closePromise: Promise<void> | null;
 }
 
 export interface BrowserViewNativeIdentity {
   readonly key: BrowserViewNativeTabKey;
+  /**
+   * The incarnation every host-side capability quotes. Fixed for the entry's
+   * life: a cross-window move REPLACES the entry (see
+   * `BrowserViewProvisioning.replaceNativeGuestForWindow`), so the new window's
+   * guest carries a freshly minted id and every call still quoting the old one
+   * finds no entry (`findExactNativeEntry` and `releaseTab`'s own check).
+   */
   readonly registrationId: string;
   /** Current renderer connection that owns this guest's lifecycle stream. */
   lifecycleWindowId: string;

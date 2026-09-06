@@ -11,10 +11,7 @@ import type {
   StreamFrameEnvelope,
 } from "@traycer-clients/shared/host-transport/i-stream-session";
 import { useScreencastSession } from "@/lib/browser-view/sessions/use-screencast-session";
-
-function unusedClientMethod(): never {
-  throw new Error("not exercised by this test");
-}
+import { epicScope } from "@/lib/browser-view/sessions/__tests__/browser-session-test-kit";
 
 /**
  * A fake `browser.screencast` client with the REAL transport's send contract:
@@ -50,7 +47,18 @@ function createScreencastClientHarness(id: string): {
     subscribe() {
       return session;
     },
-    subscribeWithParamsProvider: unusedClientMethod,
+    // These three are one seam, and the doubles must answer all three: the
+    // browser wrappers open through `subscribeWithParamsProvider` (the open
+    // request is shaped for the negotiated major) and through
+    // `subscribeAtVersion` for the `independent` scope, which pins `@2`. A
+    // double that answers only `subscribe` sends this test down a path
+    // production never takes.
+    subscribeWithParamsProvider(method, paramsProvider) {
+      return this.subscribe(method, paramsProvider(null));
+    },
+    subscribeAtVersion(method, _schemaVersion, params) {
+      return this.subscribe(method, params);
+    },
     close() {},
     isClosed: () => false,
     isReady: () => true,
@@ -95,11 +103,13 @@ function Harness(props: {
 }): React.JSX.Element {
   const session = useScreencastSession({
     client: props.client,
-    epicId: "epic-1",
+    scope: epicScope("epic-1"),
     hostId: "host-1",
     sessionId: "session-1",
     tabId: "tab-1",
     visible: true,
+    onRequestNewTab: null,
+    onRequestCloseTab: null,
     captureDormantSnapshot: () => {},
   });
   // Destructured to locals before any JSX use: `react-hooks/refs` rejects a
