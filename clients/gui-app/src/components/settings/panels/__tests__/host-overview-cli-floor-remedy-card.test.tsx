@@ -1,5 +1,6 @@
 import type { ReactElement } from "react";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -7,7 +8,15 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { HostOverviewUpdatesRegion } from "@/components/settings/panels/host-overview-updates";
 import {
@@ -53,8 +62,15 @@ class FakeDesktopBridge implements DesktopAppUpdatesBridge {
     Promise.resolve(SNAPSHOT),
   );
 
-  getSnapshot(): Promise<DesktopAppUpdateSnapshot> {
-    return Promise.resolve(SNAPSHOT);
+  // What MAIN holds, as distinct from what the rendered remedy was derived
+  // from: the mount check reads this (`useUpdateCheckOnBlockingMount`), never
+  // the remedy's snapshot, which on the first commit is the store's
+  // placeholder. A spy, so a negative "did not check" can first prove the
+  // hook consulted the bridge at all.
+  readonly getSnapshot: Mock<() => Promise<DesktopAppUpdateSnapshot>>;
+
+  constructor(snapshot: DesktopAppUpdateSnapshot) {
+    this.getSnapshot = vi.fn(() => Promise.resolve(snapshot));
   }
 
   setAllowPrerelease(
@@ -201,7 +217,7 @@ describe("HostOverviewUpdatesRegion CLI floor remedy", () => {
   });
 
   it("downloads an available Desktop update and never installs directly", () => {
-    const bridge = new FakeDesktopBridge();
+    const bridge = new FakeDesktopBridge(SNAPSHOT);
     const remedy = describeCliFloorRemedy({
       isLocalMachine: true,
       platform: "darwin-arm64",
@@ -232,7 +248,7 @@ describe("HostOverviewUpdatesRegion CLI floor remedy", () => {
       },
       { ...SNAPSHOT, status: "ready" as const, installInFlight: true },
     ]) {
-      const bridge = new FakeDesktopBridge();
+      const bridge = new FakeDesktopBridge(SNAPSHOT);
       const remedy = describeCliFloorRemedy({
         isLocalMachine: true,
         platform: "darwin-arm64",
@@ -258,7 +274,7 @@ describe("HostOverviewUpdatesRegion CLI floor remedy", () => {
   });
 
   it("opens the manual Desktop guidance dialog for a ready update", () => {
-    const bridge = new FakeDesktopBridge();
+    const bridge = new FakeDesktopBridge(SNAPSHOT);
     const remedy = describeCliFloorRemedy({
       isLocalMachine: true,
       platform: "linux-x64",
@@ -289,7 +305,7 @@ describe("HostOverviewUpdatesRegion CLI floor remedy", () => {
   });
 
   it("routes a ready Desktop update through the shared install request door", () => {
-    const bridge = new FakeDesktopBridge();
+    const bridge = new FakeDesktopBridge(SNAPSHOT);
     const remedy = describeCliFloorRemedy({
       isLocalMachine: true,
       platform: "darwin-arm64",
@@ -325,7 +341,7 @@ describe("HostOverviewUpdatesRegion CLI floor remedy", () => {
       },
     ] as const;
     for (const failure of failures) {
-      const bridge = new FakeDesktopBridge();
+      const bridge = new FakeDesktopBridge(SNAPSHOT);
       const remedy = describeCliFloorRemedy({
         isLocalMachine: true,
         platform: "darwin-arm64",
@@ -385,8 +401,16 @@ describe("HostOverviewUpdatesRegion CLI floor remedy", () => {
     }
   });
 
-  it("checks an unknown Desktop state once and does not create an effect retry loop", async () => {
-    const bridge = new FakeDesktopBridge();
+  it("checks a never-asked updater once, with automatic intent, and does not create an effect retry loop", async () => {
+    // Main has never been asked: `idle` with no `lastCheckedAt`. That is
+    // the ONE reason the mount check fires (`shouldCheckForUpdates`).
+    const bridge = new FakeDesktopBridge({
+      ...SNAPSHOT,
+      status: "idle",
+      latestVersion: null,
+      lastCheckedAt: null,
+      lastCheckIntent: null,
+    });
     const remedy = describeCliFloorRemedy({
       isLocalMachine: true,
       platform: "darwin-arm64",
@@ -402,6 +426,12 @@ describe("HostOverviewUpdatesRegion CLI floor remedy", () => {
     await waitFor(() =>
       expect(bridge.checkForUpdates).toHaveBeenCalledTimes(1),
     );
+    // AUTOMATIC, not manual: a manual check publishes "Checking…" then
+    // "up to date" into the app-wide snapshot and pops toasts from a
+    // settings pane; the mount check is the app's own intent, and only
+    // the button below is the user's. Falsification: pass "manual" from
+    // the hook and this pin goes RED.
+    expect(bridge.checkForUpdates).toHaveBeenCalledWith("automatic");
     rendered.rerender(
       regionElement(
         describeCliFloorRemedy({
@@ -420,9 +450,63 @@ describe("HostOverviewUpdatesRegion CLI floor remedy", () => {
     await waitFor(() =>
       expect(bridge.checkForUpdates).toHaveBeenCalledTimes(1),
     );
-    // Removing ONLY `if (checkOnMount)` while retaining `[bridge, checkOnMount]`
-    // would call once on idle mount and again on the idle-to-checking
-    // transition; this negative call-count pin must turn RED under D04.
+    // Back to idle: a failed automatic check publishes nothing, so the
+    // remedy returns to `idle` with `lastCheckedAt` still null and the
+    // bridge handed to the hook again (the `checking` arm hands it null,
+    // so that transition alone proves nothing about the ref). The
+    // once-per-mount ref is what stops this from being a poller.
+    // Falsification: drop `requested` from `useUpdateCheckOnBlockingMount`
+    // and this commit reads the never-checked snapshot and dispatches a
+    // second automatic check - the count below goes to 2.
+    rendered.rerender(regionElement(remedy, bridge));
+    await waitFor(() => expect(bridge.getSnapshot).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(bridge.checkForUpdates).toHaveBeenCalledTimes(1);
+  });
+
+  it("decides from the bridge's own snapshot: an idle REMEDY over an updater main has already checked fires nothing on mount, and the button stays the manual route", async () => {
+    // The rendered remedy is `idle` - exactly what the store's placeholder
+    // reports on the first commit whatever main holds - while main's own
+    // snapshot records a completed check. Deciding from the rendered
+    // snapshot fired a check on every mount of this remedy; the guarded hook
+    // reads the bridge instead. Falsification: decide from `checkOnMount`
+    // alone (skip `bridge.getSnapshot()`) and the zero below goes RED.
+    const bridge = new FakeDesktopBridge({
+      ...SNAPSHOT,
+      status: "idle",
+      lastCheckedAt: "2026-09-06T00:00:00Z",
+      lastCheckIntent: "automatic",
+    });
+    const remedy = describeCliFloorRemedy({
+      isLocalMachine: true,
+      platform: "darwin-arm64",
+      cliSource: "desktop",
+      cliBinaryPath: null,
+      cliVersion: "1.2.0",
+      requiredCliVersion: "1.3.0",
+      desktopUpdate: { ...SNAPSHOT, status: "idle", lastCheckedAt: null },
+      hostName: "build-host",
+    });
+    renderRegion(remedy, bridge);
+
+    // The idle arm keeps a labelled button (the mount check publishes
+    // nothing on a failed check, so `idle` can be what remains AFTER it).
+    const button = await screen.findByRole("button", {
+      name: "Check for updates",
+    });
+    // The negative is observed AFTER the hook consulted the bridge and its
+    // read resolved, so a zero here is the hook's decision, not a race
+    // with the effect.
+    await waitFor(() => expect(bridge.getSnapshot).toHaveBeenCalled());
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(bridge.checkForUpdates).not.toHaveBeenCalled();
+
+    fireEvent.click(button);
+    expect(bridge.checkForUpdates).toHaveBeenCalledTimes(1);
     expect(bridge.checkForUpdates).toHaveBeenCalledWith("manual");
   });
 });

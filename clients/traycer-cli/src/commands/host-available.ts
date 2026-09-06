@@ -1,5 +1,5 @@
+import { HOST_CLIENT_FLOOR_REASON_PREFIX } from "@traycer-clients/shared/host-version/client-floor-reason";
 import {
-  HOST_CLIENT_FLOOR_REASON_PREFIX,
   isCanonicalReleaseCandidate,
   isPreReleaseVersion,
 } from "@traycer-clients/shared/host-version/release-line";

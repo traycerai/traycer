@@ -2363,7 +2363,7 @@ aria-live="polite"` carrying the equivalent text for
       the Overview hands them to the projector as
       `FleetUpdateWireObservation.legacyFacts`. They project the existing
       `waiting-to-activate` ("Update installed — restart host to finish") and
-      `waiting-for-work` ("Update will continue when N sessions finish")
+      `waiting-for-work` ("Update waits for N sessions to finish")
       kinds, AFTER the coarse marker and before `idle`, and like every park
       they hold no lifecycle gate and earn no fast poll. The card offers
       **Restart** on the debt FACT rather than on the view kind, so a retained
@@ -2408,8 +2408,12 @@ aria-live="polite"` carrying the equivalent text for
       whose response never arrives ends as an error - each attempt bounded
       by the transport's 30 s response timeout, one query retry - never as
       an indefinitely retained payload. And a record leg that is not live is
-      not "gone": an open Force confirm closes only when a live leg no
-      longer carries its stage (the running version moving re-keys the
+      not "gone": the facts as read keep the catalog's comparison baseline
+      (an activation debt read from the record still names the installed
+      version, and the region's sentence says "(last known)" rather than
+      re-offering that version as available), while every offer and the
+      projector's park take the live facts only. An open Force confirm
+      closes only when a live leg no longer carries its stage (the running version moving re-keys the
       query, and the `usable` rule closes the confirm there), and an attempt
       park's Restart is offered only when a live leg vouches that no stage
       waits (Restart cannot activate a stage). The offers need a live STATUS
@@ -2430,29 +2434,48 @@ aria-live="polite"` carrying the equivalent text for
       `legacyFacts: null`, which the projector reads as "not observed".
     - **A CLI requirement has a remedy in the card.** The best target's
       projected unavailable asset is the executing CLI's verdict, recognized
-      by `HOST_CLIENT_FLOOR_REASON_PREFIX` from the shared release-line helpers.
+      by `HOST_CLIENT_FLOOR_REASON_PREFIX` from the shared
+      `host-version/client-floor-reason` module (the one authored reason a
+      client acts on; it lives in `clients/shared` because both endpoints are
+      OSS clients, and becomes protocol the day a host authors it). A floor
+      that is not a version - the pre-repair projector put the prefix on an
+      unreadable floor too - is not repairable: every route shows
+      installation help, and the recheck below does not run.
       A stored CLI version that already satisfies the requirement does not
       clear it: the host can still be executing an older copy. A retained hash
       on a withdrawn platform build is not evidence of a CLI requirement.
       `describeCliFloorRemedy` owns the sentence and actions together:
 
-      | Installation and update state                                                   | Card action                                                                                                                         |
-      | ------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-      | Local Desktop, update available                                                 | Download update, respecting the Desktop block reason                                                                                |
-      | Local Desktop, downloading                                                      | Disabled download progress                                                                                                          |
-      | Local Desktop, ready                                                            | Restart to update through the shared install flow, or Finish update for manual guidance; block reason and in-flight state still win |
-      | Local Desktop, up to date                                                       | Hint to restart Desktop to finish updating the host tools                                                                           |
-      | Local Desktop, other update state                                               | Checking sentence and one manual bridge check per mounted unknown-state episode                                                     |
-      | Package manager, local or remote                                                | Copy that manager's command from `PACKAGE_MANAGER_UPGRADE_COMMAND`                                                                  |
-      | Manual, remote Desktop, or local Desktop without a bridge; known POSIX platform | Copy the recorded absolute CLI path as one single-quoted shell token plus `cli upgrade`; otherwise copy `traycer cli upgrade`       |
-      | The same sources on Windows or an unknown platform                              | Copy `traycer cli upgrade` and `traycer host restart`; explicitly run outside Traycer on that machine                               |
-      | Installation manifest unreadable                                                | Show installation help, opening the Doctor sheet                                                                                    |
+      | Installation and update state                                                                               | Card action                                                                                                                                                                                                                               |
+      | ----------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+      | Any source, floor that is not a version                                                                     | Show installation help; no command, no recheck                                                                                                                                                                                            |
+      | Local Desktop, feed's latest (or the installed build, when up to date) below or incomparable with the floor | The Desktop floor fallback, decided before the available, downloading, ready and up-to-date rows below (never for a missing floor): a sentence naming the shortfall plus the copy-command route for the bundled CLI and installation help |
+      | Local Desktop, update available                                                                             | Download update, respecting the Desktop block reason                                                                                                                                                                                      |
+      | Local Desktop, downloading                                                                                  | Disabled download progress                                                                                                                                                                                                                |
+      | Local Desktop, ready                                                                                        | Restart to update through the shared install flow, or Finish update for manual guidance; block reason and in-flight state still win                                                                                                       |
+      | Local Desktop, up to date                                                                                   | Hint to restart Desktop to finish updating the host tools                                                                                                                                                                                 |
+      | Local Desktop, check failed or updater unavailable                                                          | The bridge's error message (or a fallback sentence), Check again, and installation help                                                                                                                                                   |
+      | Local Desktop, idle or checking                                                                             | Checking: the checking sentence. Idle: an invitation to check, one guarded automatic bridge check per mount (the authoritative snapshot, only an updater never asked, `automatic` intent) and a Check for updates button                  |
+      | npm, local or remote                                                                                        | Copy `npm install -g @traycerai/cli@<required version>` - the exact floor when the payload names one, RCs included; the table's stable `@latest` only when it names none                                                                  |
+      | Homebrew, winget, Scoop, apt, rpm; stable floor                                                             | Copy that manager's command from `PACKAGE_MANAGER_UPGRADE_COMMAND`                                                                                                                                                                        |
+      | Homebrew, winget, Scoop, apt, rpm; prerelease floor                                                         | Show installation help: those feeds carry stable releases (Homebrew's formula takes a prerelease only by manual dispatch), so the rolling command would report nothing newer                                                              |
+      | Manual, remote Desktop, or local Desktop without a bridge; known POSIX platform                             | Copy the recorded absolute CLI path as one single-quoted shell token plus `cli upgrade`; otherwise copy `traycer cli upgrade`                                                                                                             |
+      | The same sources on Windows with a recorded absolute path                                                   | Copy `& '<path>' cli upgrade` and `& '<path>' host restart` for PowerShell; explicitly run outside Traycer on that machine                                                                                                                |
+      | The same sources on Windows without a usable path, or an unknown platform                                   | Copy `traycer cli upgrade` and `traycer host restart`; explicitly run outside Traycer on that machine                                                                                                                                     |
+      | Installation manifest unreadable                                                                            | Show installation help, opening the Doctor sheet                                                                                                                                                                                          |
 
       The copy rows explain an older executing copy when the stored version
       already clears the requirement. No row opens an in-app terminal: the
       1.2.0 hosts needing this remedy cannot run a supplied command on ordinary
       terminal creation. Check now stays; the remedy replaces Update now until
-      the host accepts the candidate. Advanced rows retain their reasons.
+      the host accepts the candidate, and its copy says the page rechecks on
+      its own rather than asking for a click (the recheck below is what
+      restores Update now). Two pinned npm commands can be on screen in one
+      Settings dialog and disagree on purpose: the Desktop sidecar's hint
+      (`host-settings-package-manager-upgrade-hint.tsx`) pins the version
+      Desktop bundles, the answer to "your npm CLI is older than Desktop's";
+      this remedy pins the host's required floor, the answer to "this host
+      refuses the CLI it has". Advanced rows retain their reasons.
       Sentence precedence preserves the record-derived parks: **failure →
       activation debt → CLI remedy → checking → unreachable → no manifest →
       stranded on its release line / up to date → unavailable / available**.
@@ -2470,14 +2493,34 @@ aria-live="polite"` carrying the equivalent text for
       kept polling on floored rows of an `installed-rc` catalog that no
       remedy named, a release on another line included. The recheck stops
       with the remedy: a retired region (externally managed, unsupported
-      install) shows a notice in its place and is not re-asked. The table
-      keeps the `cli-unavailable` lane and the two error lanes for this
-      method, nothing data-driven beyond that. The existing 10-second
-      installation-info poll refreshes the stored CLI facts beside it.
-      A floored staged version, or one absent from the actionable manifest,
-      offers neither Force update nor Force restart: restarting cannot activate
-      a stage. An open Force confirmation rechecks its exact version at click
-      time, settles synchronously on refusal, and shows the reason inline.
+      install) shows a notice in its place and is not re-asked; so does a
+      floor that is not a version (`repairable` false - no upgrade can clear
+      it; a help-only remedy over a READABLE floor, such as a prerelease on
+      a manager that publishes none, keeps rechecking, because an install
+      made another way is what it waits for), and the page's own gate
+      (`enabled`) holds it as it holds the region. It is a flat 30 s, hotter
+      than the 5 s → 60 s lane it replaced but bounded by the remedy being on
+      screen; each tick refetches, so Check now briefly reads busy on its
+      own. The table keeps the `cli-unavailable` lane and the two error lanes
+      for this method, nothing data-driven beyond that. The existing
+      10-second installation-info poll refreshes the stored CLI facts beside
+      it. A floored staged version, or one absent from the actionable
+      manifest, offers neither Force update nor Force restart: restarting
+      cannot activate a stage. The Force gate reads the catalog ENTRY's own
+      floor too, apart from the asset's authored reason - staged bytes
+      install whatever the asset's availability says - so an entry whose
+      floor is not a version is refused even when the projector never
+      prefixed the asset. A readable floor stays the asset's verdict: the
+      stored CLI manifest is no substitute for the executing copy's own
+      comparison in either direction. An open
+      Force confirmation rechecks its exact version at click time, settles
+      synchronously on refusal, and shows the reason inline. The card's
+      Restart, Force update… and Force restart sit behind the same
+      capability and page-wide gates as the header's Restart and the region
+      (`restartDegrade`, `updates.degrade`, `anyPending`) - withheld rather
+      than disabled, since the card reports the park and the header's menu
+      item carries the reason - and an open confirm closes when its method
+      is withdrawn or its region retires.
   - **Installation** reads `host.getInstallationInfo`. `unmanaged` is a real
     state, not an error - a host run from a checkout has no install record - and
     it says so rather than claiming nothing is installed.

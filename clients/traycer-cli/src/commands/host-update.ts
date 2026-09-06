@@ -19,7 +19,7 @@ import {
   replaceUpdateProgressMarkerIfUnchanged,
   type HostUpdateProgress,
   sameProgress,
-  updateProgressRecordHasLiveWriter,
+  updateProgressRecordHasProvenLiveWriter,
 } from "../host/update-progress-marker";
 import { probeHostHealth } from "../service/health-probe";
 import {
@@ -71,8 +71,10 @@ import { createServiceController, serviceLabelFor } from "../service";
 // The `updating` marker is published from `onWillDownload` - after the
 // short-circuit decision, before the first byte - so the whole transfer is
 // visible as an update in progress and a transfer failure has a marker to
-// stamp `failed` onto. The no-transfer arms (already staged, activation debt,
-// explicit downgrade) publish it just before the apply half instead.
+// stamp `failed` onto. The arms that do not go through that download stage
+// (already staged, activation debt, and the explicit downgrade - which
+// stages its own source under its own lock) publish it just before their
+// apply half instead.
 //
 // SUCCESS CONTRACT: when an update is actually applied, exit 0 here means a
 // host came back healthy after the swap. Two limits are deliberate and worth
@@ -229,11 +231,16 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
     // busy gate) or a failure before the stop - puts it back, because that
     // writer's update is the one still in progress and removing its record
     // would hide the whole update until its own re-assert. Only a record
-    // some writer is acting on (`updateProgressRecordHasLiveWriter`) is
-    // retained here. A record no writer is acting on - a `failed`, or an
-    // `updating` whose writer is dead - is replaced and GONE, at the
-    // pre-lock claim and at the takeover alike, exactly as the blind
-    // publish treated it: put back on a park it re-plants a dead writer's
+    // with a PROVEN live writer (`updateProgressRecordHasProvenLiveWriter`:
+    // the probe answered alive) is retained here. Every other record -
+    // a `failed`, an `updating` whose writer is dead, or one whose writer
+    // is UNKNOWN (no id, an unparseable id, a probe that could not answer)
+    // - is replaced and GONE at the takeover. The pre-lock claim treats
+    // the unknown-writer case the other way round (it DEFERS, fail-open,
+    // since it holds no lock and may not stamp over a possibly-live
+    // update); under the lock this run is the owner and a record it
+    // cannot prove alive is not worth re-planting. Put back on a park such
+    // a record re-plants a dead writer's
     // `updating` that nobody will ever clear (a host without dead-writer
     // suppression renders it for as long as the park lives) or paints an
     // earlier attempt's `failed` over the staged-wait park the GUI derives
@@ -248,18 +255,21 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
     // restore is not loss-free in one corner: a live writer that finished
     // while its record was displaced found the path changed, left it, and
     // exited, so the restored record has no writer left to clear it. The
-    // host side suppresses an `updating` whose writer is dead, which is
-    // what makes that corner the lesser harm.
+    // host side suppresses an `updating` whose writer id names a dead pid,
+    // which is what makes that corner the lesser harm - and why only a
+    // record with a PROVEN live writer is retained at all: one with no
+    // writer id (an older CLI) the host renders forever, and restoring it
+    // would re-plant exactly that.
     const displacedMarker: { current: HostUpdateProgress | null } = {
       current: null,
     };
     // The record as the park and failure arms consume it: retained at the
-    // takeover while its writer was live, and live STILL at the moment of
-    // the restore - otherwise treated as no record at all.
+    // takeover while its writer was proven live, and proven live STILL at
+    // the moment of the restore - otherwise treated as no record at all.
     const liveDisplacedRecord = (
       record: HostUpdateProgress | null,
     ): HostUpdateProgress | null =>
-      record !== null && updateProgressRecordHasLiveWriter(record)
+      record !== null && updateProgressRecordHasProvenLiveWriter(record)
         ? record
         : null;
     // The version this run is working toward, as last announced to the
@@ -302,9 +312,17 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
           "Host update left another updater's live progress marker in place; this run publishes its own once it holds the lock",
           { environment, targetVersion },
         );
+        return;
       }
-      // "failed" was warned about by the marker layer; the update itself
-      // must not fail on its progress signal.
+      // The marker layer warned about the I/O itself (and about a
+      // displaced record it could not put back); this line is what the
+      // CLI's own log shows for why the transfer is invisible until the
+      // takeover under the lock. The update must not fail on its progress
+      // signal.
+      ctx.runtime.logger.warn(
+        "Host update could not publish its progress marker before the lock; the transfer proceeds unannounced until this run holds the lock",
+        { environment, targetVersion },
+      );
     };
     // Under the contender lock, before the disruptive half, make the marker
     // THIS run's. The marker is published BEFORE this run waits for admission
@@ -371,26 +389,41 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
           if (replaced === "replaced") {
             ownMarker.current = fresh;
             if (!isOwn) {
-              const writerLive = updateProgressRecordHasLiveWriter(onDisk);
+              // Retained for the restore only on POSITIVE evidence of a
+              // live writer (see `displacedMarker`): a record whose writer
+              // cannot be proven alive is replaced and gone, whether its
+              // writer is proven dead or simply unknown.
+              const writerLive =
+                updateProgressRecordHasProvenLiveWriter(onDisk);
               displacedMarker.current = writerLive ? onDisk : null;
               ctx.runtime.logger.info(
                 writerLive
                   ? "Host update took over the progress marker under the lock - its writer is not doing disruptive work"
-                  : "Host update replaced the progress marker under the lock - no writer is acting on it",
+                  : "Host update replaced the progress marker under the lock - no writer is proven to be acting on it",
                 {
                   environment,
                   targetVersion,
                   previousState: onDisk.state,
                   previousTarget: onDisk.targetVersion,
+                  previousWriterId: onDisk.writerId,
                 },
               );
             }
             return;
           }
           if (replaced === "failed") {
+            // `ownMarker.current` still names what it named: the marker
+            // layer either left the live path as it was or emptied it and
+            // said so. A failure past this point is stamped with the
+            // target this run INTENDED (`intendedTarget`), not the one the
+            // surviving record names.
             ctx.runtime.logger.warn(
               "Host update could not write the progress marker under the lock; proceeding without re-asserting it",
-              { environment, targetVersion },
+              {
+                environment,
+                targetVersion,
+                markerTargetVersion: own?.targetVersion ?? null,
+              },
             );
             return;
           }
@@ -452,24 +485,24 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
     // it - its stamp and clear CAS against a record that is gone). From
     // this point on the host's state is this run's doing, and its `failed`
     // is the truth the next updater takes over in turn. The apply and
-    // downgrade arms report the boundary through the progress stream -
-    // `commitInstallFromSource` emits `service-stop` immediately before the
-    // stop and `swap` before the rename - and the activation arm's stop
-    // reports it once its mutation-capability check has passed, immediately
-    // before the actuator (`stopHostForRestartWithAttempt`'s
-    // `onAuthorityVerified`). Not before that check: a capability that is
-    // refused has touched nothing, and marking the boundary around the call
-    // would have a failed check stamp this run's `failed` over a live
-    // writer's taken-over record, which that writer's later clear could
-    // never land.
+    // downgrade arms report it from their actuators - the lifecycle's
+    // pre-swap stop once its mutation-capability check has passed
+    // (`onWillStopHost`), or the swap itself when the lifecycle decided not
+    // to stop (`onWillSwap`) - and the activation arm's stop reports it the
+    // same way (`stopHostForRestartWithAttempt`'s `onAuthorityVerified`).
+    // NEVER from the `service-stop` / `swap` progress lines: those precede
+    // the status probe and the authority check, and a probe that throws or
+    // a capability that is refused has touched nothing - marking the
+    // boundary there would have such a failure stamp this run's `failed`
+    // over a live writer's taken-over record, which that writer's later
+    // clear could never land.
     let disruptionStarted = false;
+    // A free function over the runner's method for the arms' `onProgress`;
+    // it reports and infers nothing (the boundary is `markDisruptionStarted`).
     const reportProgress = (info: ProgressInfo): void => {
-      if (info.stage === "service-stop" || info.stage === "swap") {
-        disruptionStarted = true;
-      }
       ctx.progress(info);
     };
-    // The activation arm's boundary, handed to its stop facade.
+    // The one boundary, handed to every arm's actuator.
     const markDisruptionStarted = (): void => {
       disruptionStarted = true;
     };
@@ -538,7 +571,11 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
         activationReading !== null &&
         activationReading.kind === "activated"
       ) {
-        await clearStaleFailedMarker(ctx.runtime.logger, environment);
+        await clearStaleFailedMarker(
+          ctx.runtime.logger,
+          environment,
+          activationReading.installedVersion,
+        );
       }
 
       // The arms that reached here WITHOUT a transfer - an already-staged
@@ -575,6 +612,22 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
         legacy = activation.legacy;
         activationPerformed = activation.activated;
       } else if (preparation.kind === "staged") {
+        // An EXPLICIT request whose download was DISCARDED at promote time
+        // (the installed version moved past it in the unlocked transfer
+        // window, or the install record vanished) has nothing of its own
+        // to apply. Going on to `applyHost` would either commit whatever
+        // stage another promoter left - the version-binding below refuses
+        // that, but with a sentence about a replaced stage that names the
+        // wrong cause - or find nothing and report the "stage consumed"
+        // recovery. The discard IS the answer; say it and stop. An implicit
+        // "latest" discarded by a newer stage still applies that stage.
+        if (
+          args.versionRequest !== undefined &&
+          args.versionRequest !== null &&
+          preparation.download.outcome === "discarded"
+        ) {
+          throw discardedExplicitRequestError(preparation.download);
+        }
         const apply = await applyAndProjectLegacy(
           environment,
           args.force,
@@ -585,6 +638,15 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
           // directory holds whatever the latest promoter left there, and
           // `applyHost` installs what its reconcile leaves.
           (stagedVersion) => reassertMarkerUnderLock(stagedVersion),
+          markDisruptionStarted,
+          // An EXPLICIT request is bound to the version it resolved to: the
+          // caller (a Settings click, `--version X`) confirmed that version
+          // and checked its floor, and a stage another promoter replaced in
+          // the unlocked wait must not be committed under that confirmation.
+          // An implicit "latest" takes whatever newer stage it finds.
+          args.versionRequest === undefined || args.versionRequest === null
+            ? null
+            : downloadTargetVersion(preparation.download),
         );
         legacy = apply.legacy;
         applyPerformed = apply.applied;
@@ -633,6 +695,7 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
             force: args.force,
             onProgress: reportProgress,
             onBeforeCommit: () => reassertMarkerUnderLock(downgradeTarget),
+            onWillDisruptHost: markDisruptionStarted,
           }),
         );
         // `installHostDowngrade` returns only an `applied` outcome; a park
@@ -673,10 +736,10 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
               outcome: withdrawn,
               done: "Host update parked - the host has work in progress; the progress marker was withdrawn",
               moved:
-                "Host update parked - the host has work in progress; the progress marker was left in place - another updater owns it now",
+                "Host update parked - the host has work in progress; the progress marker was not withdrawn - another updater owns it now",
               gone: "Host update parked - the host has work in progress; found no progress marker to withdraw",
               failed:
-                "Host update parked - the host has work in progress; its progress marker could not be withdrawn and stays until the next update supersedes it",
+                "Host update parked - the host has work in progress; its progress marker could not be withdrawn - the marker log names what the path holds now",
             });
           } else {
             const restored = await replaceUpdateProgressMarkerIfUnchanged(
@@ -689,9 +752,8 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
               done: "Host update parked - the host has work in progress; the progress marker it took over was restored to its previous writer",
               moved:
                 "Host update parked - the host has work in progress; the progress marker it took over was not restored - another updater owns it now",
-              gone: "Host update parked - the host has work in progress; the progress marker it took over was not restored - the path is empty",
               failed:
-                "Host update parked - the host has work in progress; the progress marker it took over could not be restored and stays until the next update supersedes it",
+                "Host update parked - the host has work in progress; the progress marker it took over could not be restored - the marker log names what the path holds now",
             });
           }
         }
@@ -757,15 +819,16 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
             done: "Host update failed before disturbing the host; the progress marker it took over was restored to its previous writer",
             moved:
               "Host update failed before disturbing the host; the progress marker it took over was not restored - another updater owns it now",
-            gone: "Host update failed before disturbing the host; the progress marker it took over was not restored - the path is empty",
             failed:
-              "Host update failed before disturbing the host; the progress marker it took over could not be restored and stays until the next update supersedes it",
+              "Host update failed before disturbing the host; the progress marker it took over could not be restored - the marker log names what the path holds now",
           });
         } else if (
           !disruptionStarted &&
           (await targetObservedRunning(
             environment,
-            ownMarker.current.targetVersion,
+            // `intendedTarget` is set before any record of this run's
+            // exists; the fallback is the type's null arm.
+            intendedTarget.current ?? ownMarker.current.targetVersion,
           ))
         ) {
           // Same observed-state rule as the null arm above, reached with a
@@ -787,16 +850,24 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
             outcome: withdrawn,
             done: "Host update failed before disturbing the host, and the running host has been observed at the target it announced; the progress marker was withdrawn",
             moved:
-              "Host update failed before disturbing the host, and the running host has been observed at the target it announced; the progress marker was left in place - another updater owns it now",
+              "Host update failed before disturbing the host, and the running host has been observed at the target it announced; the progress marker was not withdrawn - another updater owns it now",
             gone: "Host update failed before disturbing the host, and the running host has been observed at the target it announced; found no progress marker to withdraw",
             failed:
-              "Host update failed before disturbing the host, and the running host has been observed at the target it announced; its progress marker could not be withdrawn and stays until the next update supersedes it",
+              "Host update failed before disturbing the host, and the running host has been observed at the target it announced; its progress marker could not be withdrawn - the marker log names what the path holds now",
           });
         } else {
+          // Stamped with the target this run was working toward. The two
+          // differ when a re-point under the lock FAILED (I/O): the record
+          // on disk still names the pre-lock target while the run went on
+          // to commit the version `applyHost` reported, and "update to
+          // <old> failed" would name a version this run never installed -
+          // which the host's target-running suppression then mis-handles.
           await markUpdateFailed(
             ctx.runtime.logger,
             environment,
-            ownMarker.current.targetVersion,
+            // Same null arm as above: the intended target is always set
+            // once a record of this run's is on disk.
+            intendedTarget.current ?? ownMarker.current.targetVersion,
             err instanceof Error ? err.message : String(err),
             ownMarker.current,
           );
@@ -866,7 +937,7 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
         // Warned about by the marker layer; named here so the CLI's own
         // log shows why an `updating` outlived a successful update.
         ctx.runtime.logger.info(
-          "Host update could not clear its progress marker; it stays until the next update supersedes it",
+          "Host update could not clear its progress marker - the marker log names what the path holds now",
           { environment },
         );
       }
@@ -1059,13 +1130,36 @@ async function targetObservedRunning(
  * writer's lock acquisition), so the marker module re-reads and compares
  * immediately before the unlink. Marker I/O never fails the command (same
  * rule as the writes).
+ *
+ * "Contradicts" is the host's own rule (`isStaleUpdateProgress`): a `failed`
+ * is stale when the version it names is the one now running. A `failed`
+ * naming ANOTHER version - an attempt at 2.0.0 that failed before the swap,
+ * read by a later `host update` while the registry offers only 1.9.0 - is
+ * a report the observed state does not contradict, and it stays until an
+ * attempt at that target supersedes it.
  */
 async function clearStaleFailedMarker(
   logger: ILogger,
   environment: Environment,
+  observedRunningVersion: string,
 ): Promise<void> {
   const marker = await readUpdateProgressMarker(environment);
   if (marker === null || marker.state !== "failed") return;
+  const comparison = compareHostVersions(
+    marker.targetVersion,
+    observedRunningVersion,
+  );
+  if (!comparison.comparable || comparison.ordering !== "equal") {
+    logger.info(
+      "Host update left the failed progress marker alone - it names a target the running host has not been observed at",
+      {
+        environment,
+        failedTargetVersion: marker.targetVersion,
+        observedRunningVersion,
+      },
+    );
+    return;
+  }
   const outcome = await deleteUpdateProgressMarkerIfUnchanged(
     environment,
     marker,
@@ -1252,6 +1346,48 @@ async function prepareHostUpdate(input: {
   };
 }
 
+// The refusal for an explicit request whose completed download was discarded
+// at promote time. Each reason is a fact the promoter established under its
+// lock; the sentence names it rather than the apply's "another download
+// replaced the stage", which is not what happened. `not-newer-than-installed`
+// carries the code the downgrade gate uses for the same fact, so a caller
+// keyed on it (Desktop's Settings click) can offer `--allow-downgrade`.
+function discardedExplicitRequestError(
+  outcome: Extract<HostDownloadOutcome, { readonly outcome: "discarded" }>,
+): CliError {
+  const target = outcome.targetVersion;
+  switch (outcome.reason) {
+    case "not-newer-than-installed":
+      return cliError({
+        code: CLI_ERROR_CODES.HOST_UPDATE_NOT_NEWER,
+        message: `host update: ${target} was downloaded, but the installed host is no longer older than it - another update landed meanwhile; nothing was applied. Run 'traycer host status' to see what is installed, or pass --allow-downgrade to install ${target} over it`,
+        details: { targetVersion: target, reason: outcome.reason },
+        exitCode: 1,
+      });
+    case "not-strictly-newer":
+      return cliError({
+        code: CLI_ERROR_CODES.UNEXPECTED,
+        message: `host update: a newer host was staged while ${target} downloaded; nothing was applied - run the update again to install what is staged`,
+        details: { targetVersion: target, reason: outcome.reason },
+        exitCode: 1,
+      });
+    case "install-record-vanished":
+      return cliError({
+        code: CLI_ERROR_CODES.UNEXPECTED,
+        message: `host update: the install record vanished while ${target} downloaded; nothing was applied - run 'traycer host doctor'`,
+        details: { targetVersion: target, reason: outcome.reason },
+        exitCode: 1,
+      });
+    case "automatic-refused-incomparable-installed":
+      return cliError({
+        code: CLI_ERROR_CODES.UNEXPECTED,
+        message: `host update: the installed host's version cannot be compared with ${target}; nothing was applied - run 'traycer host status' to see what is installed`,
+        details: { targetVersion: target, reason: outcome.reason },
+        exitCode: 1,
+      });
+  }
+}
+
 // Every `HostDownloadOutcome` branch names the version this invocation was
 // working toward; `promoted` reports it as the staged version it just placed.
 function downloadTargetVersion(outcome: HostDownloadOutcome): string {
@@ -1266,33 +1402,42 @@ function downloadTargetVersion(outcome: HostDownloadOutcome): string {
  * `replaced` is the operation done; `changed` is a record that moved under
  * this run (another updater's, left alone); `absent` (a delete only) is a
  * path already empty, nothing left to report on; `failed` is an I/O
- * failure the marker layer already warned about, named here so the
- * CLI's own log shows why a marker outlived the run that wrote it. All
- * INFO: none of these fails the update, and the marker layer owns the WARN.
- * (`replaceUpdateProgressMarkerIfUnchanged` reports an empty path as
- * `changed`, so `gone` is reachable from the delete sites only.)
+ * failure the marker layer already warned about - nothing of the intended
+ * write landed, and what the path holds now (the record as it was, or an
+ * empty path with the displaced record retained in a scratch) is in that
+ * warning - named here so the CLI's own log shows why a marker outlived the
+ * run that wrote it. All INFO: none of these fails the update, and the
+ * marker layer owns the WARN. `replaceUpdateProgressMarkerIfUnchanged`
+ * reports an empty path as `changed`, so a replace has no `gone` line: the
+ * type makes that arm unwritable rather than a dead string.
  */
 function logConditionalMarkerOutcome(
   logger: ILogger,
   environment: Environment,
-  lines: {
-    readonly outcome: ConditionalMarkerDelete | ConditionalMarkerReplace;
-    readonly done: string;
-    readonly moved: string;
-    readonly gone: string;
-    readonly failed: string;
-  },
+  lines:
+    | {
+        readonly outcome: ConditionalMarkerDelete;
+        readonly done: string;
+        readonly moved: string;
+        readonly gone: string;
+        readonly failed: string;
+      }
+    | {
+        readonly outcome: ConditionalMarkerReplace;
+        readonly done: string;
+        readonly moved: string;
+        readonly failed: string;
+      },
 ): void {
-  const { outcome } = lines;
   const message =
-    outcome === "cleared" || outcome === "replaced"
+    lines.outcome === "cleared" || lines.outcome === "replaced"
       ? lines.done
-      : outcome === "failed"
+      : lines.outcome === "failed"
         ? lines.failed
-        : outcome === "absent"
+        : lines.outcome === "absent"
           ? lines.gone
           : lines.moved;
-  logger.info(message, { environment, outcome });
+  logger.info(message, { environment, outcome: lines.outcome });
 }
 
 // Terminates the "updating" marker with the real cause so the daemon reports
@@ -1381,6 +1526,10 @@ async function applyAndProjectLegacy(
    * it; there is then no disruptive work to announce.
    */
   onWillCommitStaged: (stagedVersion: string) => Promise<void>,
+  /** `ApplyHostOptions.onWillDisruptHost`: the actuator-reported boundary. */
+  onWillDisruptHost: () => void,
+  /** `ApplyHostOptions.expectedStagedVersion`: the confirmed version, or `null`. */
+  expectedStagedVersion: string | null,
 ): Promise<{
   readonly legacy: LegacyHostUpdateResult;
   /** Whether bytes were swapped under the lock; a no-op is `false`. */
@@ -1409,13 +1558,16 @@ async function applyAndProjectLegacy(
         force,
         noService: false,
         expectedStageFingerprint: null,
+        expectedStagedVersion,
         onProgress,
         // What this run promoted before it waited is a pre-lock fact: the
         // shared stage may have been replaced (a later promoter, a parked
         // explicit `--version`), consumed, or reconciled away since, and a
         // read from HERE would still be on the wrong side of `applyHost`'s
-        // own reconcile. `applyHost` reports the version it is committing.
+        // own reconcile. `applyHost` reports the version it is committing
+        // (and refuses one other than `expectedStagedVersion` when set).
         onWillCommitStaged,
+        onWillDisruptHost,
       });
     } catch (err) {
       if (err instanceof CliError && err.code === CLI_ERROR_CODES.HOST_BUSY) {
@@ -1460,6 +1612,22 @@ async function applyAndProjectLegacy(
         details: {
           expectedStageFingerprint: outcome.expectedStageFingerprint,
           actualStageFingerprint: outcome.actualStageFingerprint,
+        },
+        exitCode: 1,
+      });
+    }
+    if (outcome.outcome === "stage-version-mismatch") {
+      // Nothing was consumed, announced or disturbed: the stage another
+      // promoter left is theirs, and the version this run was asked for is
+      // no longer staged. The caller re-runs its request; the marker this
+      // run published for the requested version is stamped `failed` by the
+      // catch that owns it, naming the version it announced.
+      throw cliError({
+        code: CLI_ERROR_CODES.UNEXPECTED,
+        message: `host update: the staged host is ${outcome.actualStagedVersion}, not the requested ${outcome.expectedStagedVersion}; another download replaced the stage before it could be applied - run the update again`,
+        details: {
+          expectedStagedVersion: outcome.expectedStagedVersion,
+          actualStagedVersion: outcome.actualStagedVersion,
         },
         exitCode: 1,
       });

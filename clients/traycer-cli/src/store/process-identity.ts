@@ -14,6 +14,7 @@ export {
   currentProcessIdentityToken,
   getPublishedProcessIdentityVerdict,
   isProcessAlive,
+  probeProcessLiveness,
   readLiveProcessStartTimeMs,
   readProcessStartIdentity,
   readProcessStartTimeMs,

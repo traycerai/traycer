@@ -37,6 +37,8 @@ export async function installHostDowngrade(input: {
    * not do.
    */
   readonly onBeforeCommit: () => Promise<void>;
+  /** See `ApplyHostOptions.onWillDisruptHost`: the same actuator-reported boundary. */
+  readonly onWillDisruptHost: () => void;
 }): Promise<Extract<ApplyHostOutcome, { outcome: "applied" }>> {
   const contenderOptions: WithCliUpdateContenderOptions = {
     environment: input.environment,
@@ -77,6 +79,7 @@ export async function installHostDowngrade(input: {
             environment: input.environment,
             bootstrap: null,
             force: input.force,
+            onWillStopHost: input.onWillDisruptHost,
           });
           const result = await commitHostInstallSourceWithAttempt(
             capability,
@@ -86,6 +89,7 @@ export async function installHostDowngrade(input: {
               staged,
               onProgress: input.onProgress,
               lifecycle: handle.lifecycle,
+              onWillSwap: input.onWillDisruptHost,
             },
           );
           return {

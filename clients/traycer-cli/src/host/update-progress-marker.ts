@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import { link, readFile, rename, rm, writeFile } from "node:fs/promises";
 import type { Environment } from "../runner/environment";
 import { createCliLogger, errorFromUnknown } from "../logger";
-import { isProcessAlive } from "../store/cli-lock";
+import { probeProcessLiveness } from "../store/process-identity";
 import {
   ensureHostHomeDir,
   hostUpdateProgressMarkerPath,
@@ -111,11 +111,14 @@ export async function deleteUpdateProgressMarker(
   }
 }
 
-// `failed` is an I/O failure after which the live path still holds what it
-// held (the expected record is restored when a stamp cannot land; the one
-// exception - neither the stamp nor the restore could land - is warned
-// about by name). Callers never retry it - only `changed` (a record that
-// moved) is worth a re-read.
+// `failed` is an I/O failure after which nothing of `next` landed. The live
+// path USUALLY still holds what it held (a record taken into the scratch is
+// put back when the stamp cannot land); the exception - the take succeeded
+// and neither route could land the restore - leaves the live path empty
+// with the displaced bytes retained in a named `.reconcile-*` scratch and
+// warned about by name, or, when the marker directory itself is gone,
+// with nothing retained (warned about without a path). Callers never retry
+// it - only `changed` (a record that moved) is worth a re-read.
 export type ConditionalMarkerDelete =
   | "cleared"
   | "changed"
@@ -154,6 +157,16 @@ function errnoCode(err: unknown): string | null {
 }
 
 /**
+ * A per-file suffix unique across processes (pid) AND within one process
+ * (time plus random): two swaps in one millisecond of one command - a
+ * failed restore retains its scratch, and the next swap must not rename
+ * over it - get distinct names, the same way two concurrent stagers do.
+ */
+function markerScratchSuffix(): string {
+  return `${process.pid}-${Date.now()}-${randomBytes(3).toString("hex")}`;
+}
+
+/**
  * Write `progress` to a private sibling of `target` and return its path. The
  * name is unique per writer: a shared `${target}.tmp` let two concurrent
  * writers overwrite each other's staging file, so one renamed the OTHER's
@@ -163,7 +176,7 @@ async function stageMarkerFile(
   target: string,
   progress: HostUpdateProgress,
 ): Promise<string> {
-  const tmp = `${target}.tmp-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const tmp = `${target}.tmp-${markerScratchSuffix()}`;
   await writeFile(tmp, `${JSON.stringify(progress, null, 2)}\n`, {
     encoding: "utf8",
     mode: 0o600,
@@ -190,7 +203,11 @@ export async function deleteUpdateProgressMarkerIfUnchanged(
   environment: Environment,
   expected: HostUpdateProgress,
 ): Promise<ConditionalMarkerDelete> {
-  const outcome = await swapMarkerIfUnchanged(environment, expected, null);
+  const outcome = await swapMarkerIfUnchanged(
+    environment,
+    { kind: "record", record: expected },
+    null,
+  );
   return outcome === "swapped" ? "cleared" : outcome;
 }
 
@@ -219,7 +236,11 @@ export async function replaceUpdateProgressMarkerIfUnchanged(
   expected: HostUpdateProgress,
   next: HostUpdateProgress,
 ): Promise<ConditionalMarkerReplace> {
-  const outcome = await swapMarkerIfUnchanged(environment, expected, next);
+  const outcome = await swapMarkerIfUnchanged(
+    environment,
+    { kind: "record", record: expected },
+    next,
+  );
   if (outcome === "swapped") return "replaced";
   if (outcome === "failed") return "failed";
   return "changed";
@@ -289,7 +310,9 @@ async function dropMarkerFile(
 // `exists` means a marker was already there and won; `failed` means neither
 // route could land it - two answers callers act on differently (a race is
 // re-read, an I/O failure is not retried), so they are never collapsed.
-type MarkerLanding = "landed" | "exists" | "failed";
+// `failed-nothing-retained`: the file to land was gone (or its directory
+// was), so no scratch survives for a caller to name.
+type MarkerLanding = "landed" | "exists" | "failed" | "failed-nothing-retained";
 
 async function landMarkerAtomically(
   environment: Environment,
@@ -315,6 +338,23 @@ async function landMarkerAtomically(
       if (errnoCode(createErr) === "EEXIST") {
         await dropMarkerFile(environment, from, `${step}-newer-exists`);
         return "exists";
+      }
+      if (errnoCode(createErr) === "ENOENT") {
+        // `from` is gone (or the marker directory is) - nothing to retain,
+        // so neither this warning nor the caller's may name a retained
+        // path. Neither route landed anything; the distinct value is what
+        // keeps the callers' "retained at <path>" lines honest.
+        createCliLogger(environment).warn(
+          "Host update progress marker conditional swap failed - the file to land is gone, nothing was retained",
+          {
+            environment,
+            step,
+            path: from,
+            errorName: errorFromUnknown(createErr).name,
+            errorMessage: errorFromUnknown(createErr).message,
+          },
+        );
+        return "failed-nothing-retained";
       }
       // Neither route could land `from` (no hard links AND the create
       // failed - ENOSPC, EIO). `from` may be the only complete copy of
@@ -345,39 +385,60 @@ async function landMarkerAtomically(
 const WRITER_ID_PID = /^(\d+)-[0-9a-f]+$/;
 
 /**
- * Whether the record's writer is a process that may still be acting on it.
- * Fail-open: a record with no writer id (an older CLI) or an unparseable
- * one is treated as live, the same reading the host daemon takes - a marker
- * that cannot be proven abandoned is not this reader's to replace.
+ * What is known about the record's writer: `live` is positive evidence (a
+ * parseable pid the OS reports alive), `dead` is positive evidence of the
+ * opposite, and `unknown` is everything the probe cannot settle - no writer
+ * id (an older CLI), an id in another shape, or a probe that failed
+ * (`tasklist` missing on Windows). The two predicates below read this from
+ * opposite sides: what cannot be proven abandoned is not replaced outside
+ * the lock, and what cannot be proven live is not put back.
  */
-function progressWriterMayBeLive(record: HostUpdateProgress): boolean {
-  if (record.writerId === null) return true;
+function writerLiveness(
+  record: HostUpdateProgress,
+): "live" | "dead" | "unknown" {
+  if (record.writerId === null) return "unknown";
   const match = WRITER_ID_PID.exec(record.writerId);
-  if (match === null) return true;
+  if (match === null) return "unknown";
   const pid = Number.parseInt(match[1], 10);
-  if (!Number.isSafeInteger(pid) || pid <= 0) return true;
-  return isProcessAlive(pid);
+  if (!Number.isSafeInteger(pid) || pid <= 0) return "unknown";
+  const verdict = probeProcessLiveness(pid);
+  if (verdict === "alive") return "live";
+  if (verdict === "dead") return "dead";
+  return "unknown";
 }
 
 /**
- * Whether some writer is still acting on the record: an `updating` whose
- * writer process may be alive (`progressWriterMayBeLive`, fail-open). A
- * `failed` has no writer by construction - its writer stamped it and
- * exited - whatever its `writerId` says. This is the one predicate behind
- * every "is this record mine to replace?" decision `host update` makes: the
- * pre-lock claim replaces a record without a live writer and defers to one
- * with; the takeover under the lock replaces either, but retains only a
- * live writer's record for the restore that a busy park or a
- * pre-disruption failure performs. A record no writer is acting on is
- * replaced and gone, exactly as the blind publish once treated it: putting
- * it back would re-plant a dead writer's `updating` that no one will ever
- * clear (a host without dead-writer suppression renders it forever), or an
- * earlier attempt's `failed` over the newer attempt's own outcome.
+ * Whether some writer MAY still be acting on the record: an `updating`
+ * whose writer is not proven dead (fail-open, the same reading the host
+ * daemon takes for a parseable id). A `failed` has no writer by
+ * construction - its writer stamped it and exited - whatever its `writerId`
+ * says. This is the predicate behind the pre-lock claim: it replaces a
+ * record without a live writer and defers to one that may have. A record no
+ * writer is acting on is replaced and gone, exactly as the blind publish
+ * once treated it: putting it back would re-plant a dead writer's
+ * `updating` that no one will ever clear, or an earlier attempt's `failed`
+ * over the newer attempt's own outcome.
  */
 export function updateProgressRecordHasLiveWriter(
   record: HostUpdateProgress,
 ): boolean {
-  return record.state !== "failed" && progressWriterMayBeLive(record);
+  return record.state !== "failed" && writerLiveness(record) !== "dead";
+}
+
+/**
+ * Whether a writer is PROVEN to be acting on the record: an `updating`
+ * whose pid the OS reports alive. The takeover under the lock retains a
+ * displaced record for the restore a busy park or a pre-disruption failure
+ * performs only on this evidence. The fail-open reading is wrong there: a
+ * record with no writer id is one the host daemon renders FOREVER (its
+ * dead-writer suppression needs a pid to check), so restoring it re-plants
+ * a marker no one will clear, and a record whose probe failed is one whose
+ * writer, if any, re-asserts its own marker under the lock anyway.
+ */
+export function updateProgressRecordHasProvenLiveWriter(
+  record: HostUpdateProgress,
+): boolean {
+  return record.state !== "failed" && writerLiveness(record) === "live";
 }
 
 /**
@@ -404,12 +465,23 @@ export function updateProgressRecordHasLiveWriter(
  * - `deferred`: the path holds another writer's live `updating`. Nothing
  *   was written; the caller runs without a marker of its own until it
  *   takes the marker over under the lock. Also the answer when concurrent
- *   writers kept winning the bounded retry - someone live is writing;
- * - `failed`: an I/O failure that landed nothing, reported by log.
+ *   writers kept winning the bounded retry - someone live is writing - and
+ *   for a file this CLI cannot read or does not recognise as a record
+ *   (`MarkerRead`: a foreign shape, an unreadable file), which is left
+ *   standing;
+ * - `failed`: an I/O failure after which nothing of `next` landed. The
+ *   record it was replacing may have been displaced into a retained
+ *   scratch when neither restore route could land (`ConditionalMarker*`,
+ *   warned about by name); the caller does not hold a record of its own
+ *   either way.
  *
- * The liveness check is synchronous (`isProcessAlive`; on Windows a
- * `tasklist` spawn with a bounded timeout) and runs once per record read,
- * at most three times per claim. Never throws.
+ * The liveness check is synchronous (`probeProcessLiveness`; on Windows a
+ * `tasklist` spawn with a bounded timeout) and runs once per record read:
+ * at most three times per claim call. Per `host update` that is at most
+ * eight - the claim can run twice (a claim that deferred at
+ * `onWillDownload` claims again before the work), the takeover under the
+ * lock reads once (only on the iteration that replaces), and the restore a
+ * park or a pre-disruption failure performs reads once. Never throws.
  */
 export interface UpdateProgressMarkerClaim {
   readonly outcome: "published" | "replaced-stale" | "deferred" | "failed";
@@ -458,10 +530,23 @@ export async function claimUpdateProgressMarkerBeforeLock(
 /**
  * Create-if-absent: land `next` at the live path ONLY if no marker stands
  * there, through the same `link` / `wx` landing the conditional swap uses.
- * `"exists"` means a marker was there - possibly one that landed between the
+ * `"exists"` means a RECORD was there - possibly one that landed between the
  * caller's read and this call, which is exactly the write this exists to
  * refuse: a read-then-`rename` would have overwritten it. Never throws;
  * `"failed"` is an I/O failure that landed nothing, reported by log.
+ *
+ * A file that is there but is not a record (see `MarkerRead`) is NOT
+ * `exists`: the claim and the reassert answer `exists` by re-reading
+ * (`markUpdateFailed` logs once and stops), and a re-read answers "no
+ * marker", so the pair would loop and give up - with the
+ * malformed file standing over every later update too. Such a file is
+ * replaced through the conditional swap, keyed on its exact bytes, so a
+ * record another writer lands in the meantime still wins. The residual is
+ * the `wx` fallback's own non-atomic write: on a filesystem without hard
+ * links, another updater's partial marker read in the instant of its write
+ * looks malformed, and if its bytes have not moved by the swap's compare it
+ * is replaced - one lost marker for that updater, in a window the size of
+ * one small write, and only where `link` is unavailable.
  */
 export async function createUpdateProgressMarkerIfAbsent(
   environment: Environment,
@@ -478,7 +563,46 @@ export async function createUpdateProgressMarkerIfAbsent(
       staged,
       "create",
     );
-    if (landing !== "landed") return landing;
+    if (landing === "failed") return "failed";
+    if (landing === "exists") {
+      const standing = await readMarkerState(target, environment);
+      if (standing.kind === "unrecognised") {
+        logger.warn(
+          "Host update progress marker has a shape this CLI does not read - leaving it in place",
+          { environment },
+        );
+        return "exists";
+      }
+      if (standing.kind === "unreadable") {
+        // Already warned about by the read, with the errno. Nothing can be
+        // compared, so nothing is replaced: the caller re-reads, finds "no
+        // marker" and its bounded loop gives up with its own warning.
+        return "exists";
+      }
+      if (standing.kind !== "malformed") return "exists";
+      logger.warn(
+        "Host update progress marker is not a record - replacing the malformed file",
+        { environment, length: standing.raw.length },
+      );
+      const swapped = await swapMarkerIfUnchanged(
+        environment,
+        { kind: "malformed", raw: standing.raw },
+        next,
+      );
+      if (swapped === "failed") return "failed";
+      // `changed` / `absent`: the file moved under us - a record landed, or
+      // the malformed bytes changed. The caller re-reads, as for `exists`.
+      if (swapped !== "swapped") return "exists";
+      logger.info(
+        "Host update progress marker created over a malformed file (conditional)",
+        {
+          environment,
+          state: next.state,
+          targetVersion: next.targetVersion,
+        },
+      );
+      return "created";
+    }
     logger.info("Host update progress marker created (conditional)", {
       environment,
       state: next.state,
@@ -496,14 +620,23 @@ export async function createUpdateProgressMarkerIfAbsent(
   }
 }
 
+/**
+ * What a conditional swap expects to find in its scratch: the exact record a
+ * caller read, or the exact malformed bytes `createUpdateProgressMarkerIfAbsent`
+ * found standing where a record should be.
+ */
+type SwapExpectation =
+  | { readonly kind: "record"; readonly record: HostUpdateProgress }
+  | { readonly kind: "malformed"; readonly raw: string };
+
 async function swapMarkerIfUnchanged(
   environment: Environment,
-  expected: HostUpdateProgress,
+  expected: SwapExpectation,
   next: HostUpdateProgress | null,
 ): Promise<"swapped" | "changed" | "absent" | "failed"> {
   const logger = createCliLogger(environment);
   const target = hostUpdateProgressMarkerPath(environment);
-  const scratch = `${target}.reconcile-${process.pid}-${Date.now()}`;
+  const scratch = `${target}.reconcile-${markerScratchSuffix()}`;
   const dropFile = (path: string, step: string): Promise<void> =>
     dropMarkerFile(environment, path, step);
   const landAtomically = (from: string, step: string): Promise<MarkerLanding> =>
@@ -513,7 +646,8 @@ async function swapMarkerIfUnchanged(
       "Host update progress marker changed under a conditional swap",
       {
         environment,
-        expectedState: expected.state,
+        expectedState:
+          expected.kind === "record" ? expected.record.state : "malformed",
         currentState,
         operation: next === null ? "clear" : "replace",
       },
@@ -550,12 +684,40 @@ async function swapMarkerIfUnchanged(
       absent = true;
     }
     if (!absent) {
-      const current = await readMarkerFile(scratch, environment);
-      if (current === null || !sameProgress(current, expected)) {
-        // Not ours: give it back unless a newer marker has since landed.
-        await landAtomically(scratch, "restore");
+      const current = await readMarkerState(scratch, environment);
+      // A malformed expectation matches the SAME bytes only: a file that
+      // parses now, or malformed bytes that differ, is someone else's
+      // marker (or their write completing) and goes back.
+      const matches =
+        expected.kind === "record"
+          ? current.kind === "record" &&
+            sameProgress(current.record, expected.record)
+          : current.kind === "malformed" && current.raw === expected.raw;
+      if (!matches) {
+        // Not ours: give it back unless a newer marker has since landed. A
+        // restore that lands, or loses to a newer marker, is a `changed`
+        // marker the caller re-reads. One that neither route could land is
+        // NOT: the live path is empty and the other writer's record sits
+        // in the retained scratch, which no "another updater owns it now"
+        // line may claim. That is `failed`, named here so the CLI's log
+        // says where the bytes went.
+        const restored = await landAtomically(scratch, "restore");
         await dropStaged();
-        return changed(current?.state ?? null);
+        if (restored === "failed") {
+          logger.warn(
+            "Host update progress marker conditional swap could not restore the record it found - the live path is empty",
+            { environment, step: "restore-other", retainedPath: scratch },
+          );
+          return "failed";
+        }
+        if (restored === "failed-nothing-retained") {
+          logger.warn(
+            "Host update progress marker conditional swap could not restore the record it found - the live path is empty and nothing was retained",
+            { environment, step: "restore-other" },
+          );
+          return "failed";
+        }
+        return changed(current.kind === "record" ? current.record.state : null);
       }
     }
     if (next === null) {
@@ -563,7 +725,7 @@ async function swapMarkerIfUnchanged(
       await dropFile(scratch, "expected");
       logger.info("Host update progress marker cleared (conditional)", {
         environment,
-        state: expected.state,
+        state: expected.kind === "record" ? expected.record.state : "malformed",
       });
       return "swapped";
     }
@@ -582,11 +744,14 @@ async function swapMarkerIfUnchanged(
     }
     // The expected record is still held in the scratch while `next` lands,
     // so a landing that FAILS can put it back: `failed` then means "nothing
-    // on the live path changed", which is what lets a caller keep trusting
-    // the record it holds. It is dropped only once `next` is the live
-    // marker. A landing that finds a marker already there (another writer's
-    // create-if-absent, in the instant the path was empty) is a changed
-    // marker: the restore is attempted for symmetry and loses to it.
+    // of `next` landed", and when the restore lands too, "nothing on the
+    // live path changed" - what lets a caller keep trusting the record it
+    // holds. When the restore ALSO fails the live path is empty and the
+    // record is retained in the scratch, warned about by name below. It is
+    // dropped only once `next` is the live marker. A landing that finds a
+    // marker already there (another writer's create-if-absent, in the
+    // instant the path was empty) is a changed marker: the restore is
+    // attempted for symmetry and loses to it.
     const landing = await landAtomically(staged, "stamp");
     if (landing !== "landed") {
       const restored = await landAtomically(scratch, "restore");
@@ -595,6 +760,12 @@ async function swapMarkerIfUnchanged(
       if (restored === "failed") {
         logger.warn(
           "Host update progress marker conditional swap failed and could not restore the expected record - the live path is empty",
+          { environment, step: "stamp-restore", retainedPath: scratch },
+        );
+      }
+      if (restored === "failed-nothing-retained") {
+        logger.warn(
+          "Host update progress marker conditional swap failed and could not restore the expected record - the live path is empty and nothing was retained",
           { environment, step: "stamp-restore" },
         );
       }
@@ -620,25 +791,70 @@ async function swapMarkerIfUnchanged(
   }
 }
 
-// Read-only accessor for Doctor / tests. Returns `null` when absent or
-// malformed (a malformed marker is treated the same as "no marker" - it is
-// advisory UI state, not an authoritative record worth failing loudly on).
+// Read-only accessor for Doctor / tests. Returns `null` when absent,
+// unreadable, malformed or unrecognised (anything that is not a record is
+// treated the same as "no marker" - it is advisory UI state, not an
+// authoritative record worth failing loudly on). WRITERS do not collapse
+// these: see `MarkerRead` and the malformed arm of
+// `createUpdateProgressMarkerIfAbsent`.
 export async function readUpdateProgressMarker(
   environment: Environment,
 ): Promise<HostUpdateProgress | null> {
   return readMarkerFile(hostUpdateProgressMarkerPath(environment), environment);
 }
 
-async function readMarkerFile(
+/**
+ * What stands at a marker path, with "there is a file but it is not a
+ * record" kept apart from "there is no file". Readers collapse the two (a
+ * malformed marker is no marker as far as UI state goes), but a WRITER must
+ * not: a create-if-absent lands only on an empty path, so a malformed file -
+ * a crash between the `wx` fallback's open and its write, a truncated disk -
+ * would answer every later create with `exists` while every read answered
+ * "nothing there", and each update would run without its marker until
+ * someone deleted the file by hand. `createUpdateProgressMarkerIfAbsent`
+ * replaces such a file conditionally on its exact bytes.
+ *
+ * `malformed` is bytes that do not parse to a JSON object - what a crash
+ * mid-write leaves (invalid JSON, or a scalar). `unrecognised` is a JSON
+ * object (an array included) this CLI does not read as a record: another
+ * writer's shape, most likely a NEWER CLI's marker with a state this one
+ * predates. That is a foreign record, not garbage - its writer's liveness
+ * cannot be honoured because its `writerId` cannot be trusted to mean what
+ * ours does - so a writer treats it as `exists` and never replaces it: the
+ * takeover under the lock loops on it and gives up too, exactly as
+ * before. `unreadable` is a
+ * file that is there but cannot be read (EACCES on a marker a `sudo` run
+ * left root-owned, EISDIR): nothing can be compared, so nothing is
+ * replaced, and it too is `exists` to a writer - warned about with its
+ * errno by the read, then by the caller's bounded loop giving up.
+ */
+type MarkerRead =
+  | { readonly kind: "absent" }
+  | { readonly kind: "unreadable" }
+  | { readonly kind: "malformed"; readonly raw: string }
+  | { readonly kind: "unrecognised" }
+  | { readonly kind: "record"; readonly record: HostUpdateProgress };
+
+async function readMarkerState(
   path: string,
   environment: Environment,
-): Promise<HostUpdateProgress | null> {
+): Promise<MarkerRead> {
   const logger = createCliLogger(environment);
   let raw: string;
   try {
     raw = await readFile(path, "utf8");
-  } catch {
-    return null;
+  } catch (err) {
+    // ENOENT is the ordinary answer. Anything else (EACCES, EISDIR) is a
+    // file this module can neither read nor compare: `unreadable`, kept
+    // apart from `absent` so a create-if-absent does not answer it with a
+    // replacement, and named in the log with its errno.
+    if (errnoCode(err) === "ENOENT") return { kind: "absent" };
+    logger.warn("Host update progress marker could not be read", {
+      environment,
+      errorName: errorFromUnknown(err).name,
+      errorMessage: errorFromUnknown(err).message,
+    });
+    return { kind: "unreadable" };
   }
   let parsed: unknown;
   try {
@@ -648,9 +864,11 @@ async function readMarkerFile(
       environment,
       errorName: errorFromUnknown(err).name,
     });
-    return null;
+    return { kind: "malformed", raw };
   }
-  if (parsed === null || typeof parsed !== "object") return null;
+  if (parsed === null || typeof parsed !== "object") {
+    return { kind: "malformed", raw };
+  }
   const obj = parsed as Record<string, unknown>;
   if (
     (obj.state !== "updating" && obj.state !== "failed") ||
@@ -658,15 +876,26 @@ async function readMarkerFile(
     typeof obj.targetVersion !== "string" ||
     typeof obj.updatedAt !== "string"
   ) {
-    return null;
+    return { kind: "unrecognised" };
   }
   return {
-    state: obj.state,
-    error: obj.error === null ? null : obj.error,
-    targetVersion: obj.targetVersion,
-    updatedAt: obj.updatedAt,
-    // Absent on markers written before the field existed; carried through so
-    // a conditional swap compares what was actually written.
-    writerId: typeof obj.writerId === "string" ? obj.writerId : null,
+    kind: "record",
+    record: {
+      state: obj.state,
+      error: obj.error === null ? null : obj.error,
+      targetVersion: obj.targetVersion,
+      updatedAt: obj.updatedAt,
+      // Absent on markers written before the field existed; carried through
+      // so a conditional swap compares what was actually written.
+      writerId: typeof obj.writerId === "string" ? obj.writerId : null,
+    },
   };
+}
+
+async function readMarkerFile(
+  path: string,
+  environment: Environment,
+): Promise<HostUpdateProgress | null> {
+  const read = await readMarkerState(path, environment);
+  return read.kind === "record" ? read.record : null;
 }

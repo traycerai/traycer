@@ -16,7 +16,7 @@ function managed(
     readonly version: string;
     readonly runtimeVersion: string | null;
   },
-  stagedRecord: { readonly version: string } | null = null,
+  stagedRecord: { readonly version: string } | null,
 ): LegacyUpdateInstallation {
   return { status: "managed", installRecord, stagedRecord };
 }
@@ -24,7 +24,10 @@ function managed(
 describe("deriveLegacyUpdateFacts — activationDebt, runtimeVersion SET", () => {
   it("equal to the running stamp - no debt", () => {
     const facts = deriveLegacyUpdateFacts({
-      installation: managed({ version: "1.3.0", runtimeVersion: "1.3.0" }),
+      installation: managed(
+        { version: "1.3.0", runtimeVersion: "1.3.0" },
+        null,
+      ),
       runningVersion: "1.3.0",
       busy: false,
       busySessionCount: null,
@@ -34,7 +37,10 @@ describe("deriveLegacyUpdateFacts — activationDebt, runtimeVersion SET", () =>
 
   it("unequal (running AHEAD of the recorded stamp) - debt", () => {
     const facts = deriveLegacyUpdateFacts({
-      installation: managed({ version: "1.3.0", runtimeVersion: "1.2.0" }),
+      installation: managed(
+        { version: "1.3.0", runtimeVersion: "1.2.0" },
+        null,
+      ),
       runningVersion: "1.3.0",
       busy: false,
       busySessionCount: null,
@@ -44,7 +50,10 @@ describe("deriveLegacyUpdateFacts — activationDebt, runtimeVersion SET", () =>
 
   it("unequal (running BEHIND the recorded stamp) - debt, the other direction", () => {
     const facts = deriveLegacyUpdateFacts({
-      installation: managed({ version: "1.3.0", runtimeVersion: "1.3.0" }),
+      installation: managed(
+        { version: "1.3.0", runtimeVersion: "1.3.0" },
+        null,
+      ),
       runningVersion: "1.2.0",
       busy: false,
       busySessionCount: null,
@@ -54,10 +63,13 @@ describe("deriveLegacyUpdateFacts — activationDebt, runtimeVersion SET", () =>
 
   it("unequal NON-SemVer staging stamps - debt. The domain is EQUALITY, never ordering", () => {
     const facts = deriveLegacyUpdateFacts({
-      installation: managed({
-        version: "1.3.0",
-        runtimeVersion: "staging.2.abc",
-      }),
+      installation: managed(
+        {
+          version: "1.3.0",
+          runtimeVersion: "staging.2.abc",
+        },
+        null,
+      ),
       runningVersion: "staging.1.def",
       busy: false,
       busySessionCount: null,
@@ -67,10 +79,13 @@ describe("deriveLegacyUpdateFacts — activationDebt, runtimeVersion SET", () =>
 
   it("equal NON-SemVer staging stamps - no debt", () => {
     const facts = deriveLegacyUpdateFacts({
-      installation: managed({
-        version: "1.3.0",
-        runtimeVersion: "staging.5.xyz",
-      }),
+      installation: managed(
+        {
+          version: "1.3.0",
+          runtimeVersion: "staging.5.xyz",
+        },
+        null,
+      ),
       runningVersion: "staging.5.xyz",
       busy: false,
       busySessionCount: null,
@@ -81,12 +96,14 @@ describe("deriveLegacyUpdateFacts — activationDebt, runtimeVersion SET", () =>
 
 describe("deriveLegacyUpdateFacts — activationDebt, no runtimeVersion (catalog-version fallback)", () => {
   it("running version is not valid SemVer (a foreign runtime) - no debt", () => {
-    // Falsification: removing the `isValidHostVersion` guard and letting
-    // `compareHostVersions` alone decide would coincidentally also read
-    // "not comparable" here, so this case alone would not catch a dropped
-    // guard - the rc.2/rc.3 case right below is what would.
+    // `compareHostVersions` validates both operands itself and answers "not
+    // comparable" for a foreign runtime, so the explicit `isValidHostVersion`
+    // guard in `isActivationDebt` is redundant with it - kept because it
+    // states the rule where a reader looks for it. No pin in this file can
+    // see that guard removed: this case and the rc.2/rc.3 one below both
+    // reach the same answer through the comparator alone.
     const facts = deriveLegacyUpdateFacts({
-      installation: managed({ version: "1.3.0", runtimeVersion: null }),
+      installation: managed({ version: "1.3.0", runtimeVersion: null }, null),
       runningVersion: "staging.1.abc",
       busy: false,
       busySessionCount: null,
@@ -96,10 +113,13 @@ describe("deriveLegacyUpdateFacts — activationDebt, no runtimeVersion (catalog
 
   it("comparable and unequal (rc.2 running, rc.3 installed) - debt", () => {
     const facts = deriveLegacyUpdateFacts({
-      installation: managed({
-        version: "1.3.0-rc.3",
-        runtimeVersion: null,
-      }),
+      installation: managed(
+        {
+          version: "1.3.0-rc.3",
+          runtimeVersion: null,
+        },
+        null,
+      ),
       runningVersion: "1.3.0-rc.2",
       busy: false,
       busySessionCount: null,
@@ -112,7 +132,7 @@ describe("deriveLegacyUpdateFacts — activationDebt, no runtimeVersion (catalog
     // not: the CLI's own `readActivationState` gives the same answer, and the
     // module's doc calls this out by name so nobody "fixes" it on one side only.
     const facts = deriveLegacyUpdateFacts({
-      installation: managed({ version: "1.3.0", runtimeVersion: null }),
+      installation: managed({ version: "1.3.0", runtimeVersion: null }, null),
       runningVersion: "0.0.0-dev",
       busy: false,
       busySessionCount: null,
@@ -122,7 +142,7 @@ describe("deriveLegacyUpdateFacts — activationDebt, no runtimeVersion (catalog
 
   it("equal - no debt", () => {
     const facts = deriveLegacyUpdateFacts({
-      installation: managed({ version: "1.3.0", runtimeVersion: null }),
+      installation: managed({ version: "1.3.0", runtimeVersion: null }, null),
       runningVersion: "1.3.0",
       busy: false,
       busySessionCount: null,
@@ -132,10 +152,13 @@ describe("deriveLegacyUpdateFacts — activationDebt, no runtimeVersion (catalog
 
   it("incomparable (installed is a local-file pin) - no debt", () => {
     const facts = deriveLegacyUpdateFacts({
-      installation: managed({
-        version: "local-abc-1699999999999",
-        runtimeVersion: null,
-      }),
+      installation: managed(
+        {
+          version: "local-abc-1699999999999",
+          runtimeVersion: null,
+        },
+        null,
+      ),
       runningVersion: "1.3.0",
       busy: false,
       busySessionCount: null,

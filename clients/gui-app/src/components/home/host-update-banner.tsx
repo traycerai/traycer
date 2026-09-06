@@ -346,6 +346,7 @@ function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
         }}
       />
       <HostBusyForceDeferDialog
+        purpose="update"
         open={busy !== null}
         message={forceDialogProps.message}
         isForcing={isPending}

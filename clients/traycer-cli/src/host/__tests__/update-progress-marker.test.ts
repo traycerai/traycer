@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import {
+  chmodSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -362,7 +363,10 @@ describe("update-progress-marker", () => {
       }
     });
 
-    it("retains the displaced marker in its scratch when neither restore route can land it", async () => {
+    it("reports `failed` (not `changed`) and retains the displaced marker in its scratch when neither restore route can land it", async () => {
+      // Falsification: discard the restore's landing and return `changed`
+      // (the old shape) - the caller then logs "another updater owns it
+      // now" over an EMPTY live path.
       vi.doMock("node:fs/promises", async (importOriginal) => {
         const actual =
           await importOriginal<typeof import("node:fs/promises")>();
@@ -412,10 +416,12 @@ describe("update-progress-marker", () => {
         await writeUpdateProgressMarker("production", b);
         expect(
           await deleteUpdateProgressMarkerIfUnchanged("production", a),
-        ).toBe("changed");
+        ).toBe("failed");
         // Neither `link` nor the `wx` fallback could land the displaced
         // marker back at the live path - it stays retained in its scratch
-        // rather than being dropped, and the live path is left empty.
+        // rather than being dropped, the live path is left empty, and the
+        // outcome says so: a `changed` here would promise a record that is
+        // not there.
         expect(await readUpdateProgressMarker("production")).toBeNull();
         const scratchFiles = scratchAndStagingFiles().filter((name) =>
           name.includes(".reconcile-"),
@@ -502,6 +508,60 @@ describe("update-progress-marker", () => {
           targetVersion: "1.7.0",
         }),
       ).toBe("exists");
+      expect(scratchAndStagingFiles()).toEqual([]);
+    });
+
+    it("replaces a MALFORMED file (a crash mid-write) instead of reporting `exists` forever", async () => {
+      // Falsification: return `landing` unchanged for `exists` (the old
+      // shape) and this reports `exists` while the read answers `null` - the
+      // pair every caller loops on until it gives up, on every later update.
+      const { createUpdateProgressMarkerIfAbsent, readUpdateProgressMarker } =
+        await import("../update-progress-marker");
+      const { hostUpdateProgressMarkerPath } =
+        await import("../../store/paths");
+      const path = hostUpdateProgressMarkerPath("production");
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, '{"state":"updating","targetVer');
+      expect(await readUpdateProgressMarker("production")).toBeNull();
+      const next = {
+        state: "updating" as const,
+        error: null,
+        targetVersion: "1.6.0",
+        updatedAt: "2026-07-03T00:00:00.000Z",
+        writerId: "writer-a",
+      };
+      expect(await createUpdateProgressMarkerIfAbsent("production", next)).toBe(
+        "created",
+      );
+      expect(await readUpdateProgressMarker("production")).toEqual(next);
+      expect(scratchAndStagingFiles()).toEqual([]);
+    });
+
+    it("leaves an UNRECOGNISED record (a shape this CLI does not read) in place as `exists`", async () => {
+      // A valid JSON object with a state this CLI predates is another
+      // writer's marker, not garbage: its liveness cannot be honoured, so it
+      // is never replaced outside the lock. Falsification: fold
+      // `unrecognised` into `malformed` and this replaces it.
+      const { createUpdateProgressMarkerIfAbsent, readUpdateProgressMarker } =
+        await import("../update-progress-marker");
+      const { hostUpdateProgressMarkerPath } =
+        await import("../../store/paths");
+      const path = hostUpdateProgressMarkerPath("production");
+      mkdirSync(dirname(path), { recursive: true });
+      const foreign =
+        '{"state":"verifying","error":null,"targetVersion":"9.0.0","updatedAt":"2026-07-03T00:00:00.000Z","writerId":"7-ab"}';
+      writeFileSync(path, foreign);
+      expect(await readUpdateProgressMarker("production")).toBeNull();
+      expect(
+        await createUpdateProgressMarkerIfAbsent("production", {
+          state: "updating",
+          error: null,
+          targetVersion: "1.6.0",
+          updatedAt: "2026-07-03T00:00:00.000Z",
+          writerId: "writer-a",
+        }),
+      ).toBe("exists");
+      expect(readFileSync(path, "utf8")).toBe(foreign);
       expect(scratchAndStagingFiles()).toEqual([]);
     });
   });
@@ -730,17 +790,15 @@ describe("update-progress-marker", () => {
               options !== null &&
               "flag" in options &&
               options.flag === "wx";
-            if (!isWx) {
+            // Keyed on the BYTES being staged, not on a call count: this
+            // test's own setup (`writeUpdateProgressMarker`, seeding the
+            // `updating` record) must land, and only `stageMarkerFile`'s
+            // write of the `failed` record inside the call under test
+            // throws. A count would silently retarget the injection if
+            // setup ever gained a write.
+            if (!isWx && String(data).includes('"state": "failed"')) {
               plainWriteCalls += 1;
-              // The first plain write is this test's own setup
-              // (`writeUpdateProgressMarker`, seeding `expected`) - it must
-              // land. The second is `stageMarkerFile`'s write for `next`,
-              // inside the call under test - that one throws.
-              if (plainWriteCalls === 2) {
-                throw Object.assign(new Error("ENOSPC"), {
-                  code: "ENOSPC",
-                });
-              }
+              throw Object.assign(new Error("ENOSPC"), { code: "ENOSPC" });
             }
             return actual.writeFile(path, data, options);
           },
@@ -763,6 +821,7 @@ describe("update-progress-marker", () => {
         expect(await readUpdateProgressMarker("production")).toEqual(
           expectedUpdating,
         );
+        expect(plainWriteCalls).toBe(1);
         expect(scratchAndStagingFiles()).toEqual([]);
       } finally {
         vi.doUnmock("node:fs/promises");
@@ -793,6 +852,26 @@ describe("update-progress-marker", () => {
         await claimUpdateProgressMarkerBeforeLock("production", next),
       ).toEqual({ outcome: "published" });
       expect(await readUpdateProgressMarker("production")).toEqual(next);
+    });
+
+    it("publishes over a MALFORMED file instead of deferring forever", async () => {
+      // A crash mid-write left bytes that are not a record. The read answers
+      // `null`, the create used to answer `exists`, and three rounds of that
+      // ended `deferred` - on this update and every later one, until someone
+      // deleted the file by hand. Falsification: make the create report
+      // `exists` for a malformed file again and this claim reads `deferred`.
+      const { claimUpdateProgressMarkerBeforeLock, readUpdateProgressMarker } =
+        await import("../update-progress-marker");
+      const { hostUpdateProgressMarkerPath } =
+        await import("../../store/paths");
+      const path = hostUpdateProgressMarkerPath("production");
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, '{"state":"upd');
+      expect(
+        await claimUpdateProgressMarkerBeforeLock("production", next),
+      ).toEqual({ outcome: "published" });
+      expect(await readUpdateProgressMarker("production")).toEqual(next);
+      expect(scratchAndStagingFiles()).toEqual([]);
     });
 
     it("replaces a `failed` record regardless of its writerId - no writer is acting on a stamped failure - the replaced record is gone", async () => {
@@ -1157,6 +1236,149 @@ describe("update-progress-marker", () => {
           writerId: "not-a-pid",
         }),
       ).toBe(true);
+    });
+  });
+
+  describe("updateProgressRecordHasProvenLiveWriter", () => {
+    // The takeover under the lock retains a displaced record for restore on
+    // POSITIVE evidence only. Falsification: implement it as the fail-open
+    // predicate and the first two pins report `true`.
+    it("a record with NO writer id is not proven live (the fail-open predicate still calls it live)", async () => {
+      const {
+        updateProgressRecordHasLiveWriter,
+        updateProgressRecordHasProvenLiveWriter,
+      } = await import("../update-progress-marker");
+      const record = {
+        state: "updating" as const,
+        error: null,
+        targetVersion: "1.4.0",
+        updatedAt: "2026-07-03T00:00:00.000Z",
+        writerId: null,
+      };
+      expect(updateProgressRecordHasProvenLiveWriter(record)).toBe(false);
+      expect(updateProgressRecordHasLiveWriter(record)).toBe(true);
+    });
+
+    it("an unparseable writer id is not proven live", async () => {
+      const { updateProgressRecordHasProvenLiveWriter } =
+        await import("../update-progress-marker");
+      expect(
+        updateProgressRecordHasProvenLiveWriter({
+          state: "updating",
+          error: null,
+          targetVersion: "1.4.0",
+          updatedAt: "2026-07-03T00:00:00.000Z",
+          writerId: "not-a-pid",
+        }),
+      ).toBe(false);
+    });
+
+    it("this very (live) process's writer id is proven live; a `failed` with the same id is not", async () => {
+      const { updateProgressRecordHasProvenLiveWriter } =
+        await import("../update-progress-marker");
+      const base = {
+        error: null,
+        targetVersion: "1.4.0",
+        updatedAt: "2026-07-03T00:00:00.000Z",
+        writerId: `${process.pid}-abcdef`,
+      };
+      expect(
+        updateProgressRecordHasProvenLiveWriter({
+          state: "updating",
+          ...base,
+        }),
+      ).toBe(true);
+      expect(
+        updateProgressRecordHasProvenLiveWriter({
+          state: "failed",
+          ...base,
+          error: "host did not become healthy",
+        }),
+      ).toBe(false);
+    });
+
+    it.skipIf(process.platform === "win32")(
+      "a dead writer process is not proven live",
+      async () => {
+        const { updateProgressRecordHasProvenLiveWriter } =
+          await import("../update-progress-marker");
+        const pid = await deadPid();
+        expect(
+          updateProgressRecordHasProvenLiveWriter({
+            state: "updating",
+            error: null,
+            targetVersion: "1.4.0",
+            updatedAt: "2026-07-03T00:00:00.000Z",
+            writerId: `${pid}-abcdef`,
+          }),
+        ).toBe(false);
+      },
+    );
+  });
+
+  // A file that is there but cannot be READ (a marker a `sudo traycer host
+  // update` left root-owned; here, mode 000) is neither absent nor a record
+  // this CLI can compare. Nothing is replaced: the create answers `exists`
+  // (the caller's bounded loop then gives up with its own warning) and the
+  // claim defers. Root reads a 000 file, so the pin is skipped there.
+  // Falsification: fold `unreadable` into `absent` in `readMarkerState` and
+  // the create tries to replace the file it could not read - answering
+  // `exists` only because its swap's compare fails - while the claim pin
+  // still holds; fold it into `malformed` (with empty bytes) and the create
+  // REPLACES the file, reddening the byte-identical assertion.
+  describe.skipIf(
+    process.platform === "win32" ||
+      (typeof process.getuid === "function" && process.getuid() === 0),
+  )("an UNREADABLE marker file", () => {
+    const next = {
+      state: "updating" as const,
+      error: null,
+      targetVersion: "1.6.0",
+      updatedAt: "2026-07-03T00:00:00.000Z",
+      writerId: "writer-a",
+    };
+    const contents =
+      '{"state":"updating","error":null,"targetVersion":"1.5.0","updatedAt":"2026-07-03T00:00:00.000Z","writerId":"7-ab"}';
+
+    it("is left in place as `exists` by the create-if-absent", async () => {
+      const { createUpdateProgressMarkerIfAbsent, readUpdateProgressMarker } =
+        await import("../update-progress-marker");
+      const { hostUpdateProgressMarkerPath } =
+        await import("../../store/paths");
+      const path = hostUpdateProgressMarkerPath("production");
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, contents);
+      chmodSync(path, 0o000);
+      try {
+        expect(await readUpdateProgressMarker("production")).toBeNull();
+        expect(
+          await createUpdateProgressMarkerIfAbsent("production", next),
+        ).toBe("exists");
+      } finally {
+        chmodSync(path, 0o600);
+      }
+      expect(readFileSync(path, "utf8")).toBe(contents);
+      expect(scratchAndStagingFiles()).toEqual([]);
+    });
+
+    it("is deferred to by the pre-lock claim", async () => {
+      const { claimUpdateProgressMarkerBeforeLock } =
+        await import("../update-progress-marker");
+      const { hostUpdateProgressMarkerPath } =
+        await import("../../store/paths");
+      const path = hostUpdateProgressMarkerPath("production");
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, contents);
+      chmodSync(path, 0o000);
+      try {
+        expect(
+          await claimUpdateProgressMarkerBeforeLock("production", next),
+        ).toEqual({ outcome: "deferred" });
+      } finally {
+        chmodSync(path, 0o600);
+      }
+      expect(readFileSync(path, "utf8")).toBe(contents);
+      expect(scratchAndStagingFiles()).toEqual([]);
     });
   });
 });

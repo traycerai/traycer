@@ -283,6 +283,7 @@ export function MenuCommandListener() {
         onClose={() => setPendingHostRestart(false)}
       />
       <HostBusyForceDeferDialog
+        purpose="restart"
         open={busy !== null}
         message={busy?.message ?? ""}
         isForcing={

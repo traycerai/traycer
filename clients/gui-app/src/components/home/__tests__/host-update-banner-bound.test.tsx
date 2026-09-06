@@ -413,7 +413,7 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
         execution: "parked",
         busySessionCount: 2,
       }),
-      expectedPhrase: /Update will continue when 2 sessions finish/,
+      expectedPhrase: /Update waits for 2 sessions to finish/,
     },
     {
       name: "waiting-to-activate",
@@ -619,9 +619,7 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
     renderBanner(undefined);
     // Positive control that the banner rendered at all - an absent button is
     // trivially "absent" if nothing rendered.
-    expect(await findPhaseText()).toMatch(
-      /Update will continue when work finishes/,
-    );
+    expect(await findPhaseText()).toMatch(/Update waits for work to finish/);
     expect(screen.queryByTestId("host-update-banner-force-restart")).toBeNull();
   });
 
@@ -673,7 +671,7 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
     });
     expect(restartCalls).toBe(0);
     // The banner is untouched - still showing the same attempt.
-    expect(await findPhaseText()).toMatch(/Update will continue/);
+    expect(await findPhaseText()).toMatch(/Update waits for/);
   });
 
   it("Force restart… CONFIRM dispatches the cooperative host.restart RPC", async () => {

@@ -435,6 +435,7 @@ describe("CLI capability-consuming mutation facades", () => {
             staged: stagedSource,
             onProgress: () => undefined,
             lifecycle: null,
+            onWillSwap: null,
           }),
         ).rejects.toMatchObject({ code: "E_CLI_LOCK_BUSY" });
         return "must-not-report-ran";

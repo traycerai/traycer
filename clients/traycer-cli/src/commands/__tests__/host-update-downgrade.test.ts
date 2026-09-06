@@ -229,6 +229,7 @@ describe("installHostDowngrade", () => {
       force: true,
       onProgress: noopProgress,
       onBeforeCommit: async () => undefined,
+      onWillDisruptHost: () => undefined,
     });
 
     expect(outcome.outcome).toBe("applied");
@@ -255,6 +256,7 @@ describe("installHostDowngrade", () => {
         force: false,
         onProgress: noopProgress,
         onBeforeCommit: async () => undefined,
+        onWillDisruptHost: () => undefined,
       }),
     ).rejects.toThrow("host is busy");
 
@@ -279,6 +281,7 @@ describe("installHostDowngrade", () => {
         force: false,
         onProgress: noopProgress,
         onBeforeCommit: async () => undefined,
+        onWillDisruptHost: () => undefined,
       }),
     ).rejects.toThrow("precommit failed");
 
@@ -314,6 +317,7 @@ describe("installHostDowngrade", () => {
         const installed = await readHostInstallRecord(ENV);
         installedVersionAtCallTime = installed?.version;
       },
+      onWillDisruptHost: () => undefined,
     });
 
     expect(beforeCommitCalls).toBe(1);
@@ -341,6 +345,7 @@ describe("installHostDowngrade", () => {
         onBeforeCommit: async () => {
           beforeCommitCalls += 1;
         },
+        onWillDisruptHost: () => undefined,
       }),
     ).rejects.toThrow("host is busy");
 

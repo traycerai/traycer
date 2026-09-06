@@ -697,9 +697,7 @@ describe("HostOverviewOperationCard — record-derived parks", () => {
     renderPanel();
 
     const card = await screen.findByTestId("host-overview-operation-card");
-    expect(card.textContent).toContain(
-      "Update will continue when 2 sessions finish",
-    );
+    expect(card.textContent).toContain("Update waits for 2 sessions to finish");
     expect(screen.queryByTestId("host-overview-operation-restart")).toBeNull();
     expect(
       screen.queryByTestId("host-overview-operation-force-restart"),
@@ -711,7 +709,10 @@ describe("HostOverviewOperationCard — record-derived parks", () => {
     const busyDialog = await screen.findByTestId(
       "host-busy-force-defer-dialog",
     );
-    expect(busyDialog).toBeTruthy();
+    // Force UPDATE, not the header's force restart: this page can open
+    // either verdict in the same dialog, and the purpose attribute is how
+    // a pin on the shared test id tells them apart.
+    expect(busyDialog.dataset.purpose).toBe("update");
     fireEvent.click(screen.getByTestId("host-busy-force"));
 
     await waitFor(() => {
@@ -753,7 +754,7 @@ describe("HostOverviewOperationCard — record-derived parks", () => {
     // staged-wait phase they are about.
     expect(
       screen.getByTestId("host-overview-operation-phase").textContent,
-    ).toBe("Update will continue when 2 sessions finish");
+    ).toBe("Update waits for 2 sessions to finish");
     // Removing `!updates.stagedEntryOfferable` from the panel's Force gate
     // would expose Force update for this CLI-floor refusal (the floored
     // staged version is not offerable); this negative affordance pin must
@@ -808,7 +809,7 @@ describe("HostOverviewOperationCard — record-derived parks", () => {
     // staged-wait card, not from some other view.
     expect(
       screen.getByTestId("host-overview-operation-phase").textContent,
-    ).toBe("Update will continue when 2 sessions finish");
+    ).toBe("Update waits for 2 sessions to finish");
     // Treating an absent staged entry as clear would make Force reachable while
     // its floor is unknown; this negative unknown-evidence pin must turn RED.
     expect(
@@ -1066,7 +1067,7 @@ describe("HostOverviewOperationCard — record-derived parks", () => {
     await waitFor(() => {
       expect(
         screen.getByTestId("host-overview-operation-phase").textContent,
-      ).toMatch(/^Last seen: Update will continue when/);
+      ).toMatch(/^Last seen: Update waits for/);
     });
     expect(
       screen.queryByTestId("host-overview-operation-force-update"),
@@ -1412,7 +1413,7 @@ describe("HostOverviewOperationCard — installation query keyed by running vers
     await screen.findByTestId("host-overview-operation-force-update");
     expect(
       screen.getByTestId("host-overview-operation-phase").textContent,
-    ).toBe("Update will continue when 2 sessions finish");
+    ).toBe("Update waits for 2 sessions to finish");
 
     // The next installation poll throws - `host.status` keeps succeeding
     // beside it, so this failure is the installation leg's alone. The
@@ -1432,7 +1433,7 @@ describe("HostOverviewOperationCard — installation query keyed by running vers
     await waitFor(() => {
       expect(
         screen.getByTestId("host-overview-operation-phase").textContent,
-      ).toBe("Update will continue when 2 sessions finish");
+      ).toBe("Update waits for 2 sessions to finish");
     });
     await screen.findByTestId("host-overview-operation-force-update");
 
@@ -1631,6 +1632,108 @@ describe("HostOverviewOperationCard — onForceRestart (attempt park)", () => {
     await screen.findByTestId("host-overview-operation-card");
     expect(
       screen.queryByTestId("host-overview-operation-force-restart"),
+    ).toBeNull();
+  });
+});
+
+describe("HostOverviewOperationCard — capability gates", () => {
+  it("Restart is withheld when host.restart is not negotiated, and an OPEN confirm closes the moment it drops out", async () => {
+    // The card's controls sit behind the same capability gates as the
+    // header's Restart: a method the handshake declined is not offered from
+    // the card either. Two halves, two falsifications: drop
+    // `restartDegrade === null` from the card's `onRestart` gate in
+    // `host-overview-panel.tsx` and the button survives the drop; drop the
+    // render-time close on `restartDegrade !== null` and the confirm stays
+    // open over a control the page no longer offers.
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.3.0-rc.2",
+      installation: managedInstallation(
+        installRecord("1.3.0-rc.3", null),
+        null,
+      ),
+      overrideHandlers: {
+        "host.status": () =>
+          statusWithBusy("1.3.0-rc.2", { kind: "none" }, false, 0),
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    fireEvent.click(
+      await screen.findByTestId("host-overview-operation-restart"),
+    );
+    await screen.findByTestId("confirm-destructive-dialog");
+
+    // The negotiated set is a subscribed store (`useHostMethodSupport`), so
+    // re-recording it under the mounted page is the same signal a
+    // re-handshake sends.
+    act(() => {
+      recordNegotiatedHostMethods(
+        "host-a",
+        ALL_OVERVIEW_METHODS.filter((method) => method !== "host.restart"),
+      );
+    });
+    await waitFor(() => {
+      expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull();
+    });
+    expect(screen.queryByTestId("host-overview-operation-restart")).toBeNull();
+    // The park itself is still reported - the evidence stays, the dispatch
+    // does not.
+    expect(
+      screen.getByTestId("host-overview-operation-phase").textContent,
+    ).toBe("Update installed — restart host to finish");
+  });
+
+  it("Force update… is withheld when host.update.install is not negotiated, while the check still runs and the staged entry is offerable", async () => {
+    // `installDegrade` retires the updates REGION but leaves the check
+    // query enabled, so the manifest still lists the staged version and
+    // `stagedEntryOfferable` is true - the only thing between this button
+    // and a dispatch the host would refuse is the card's own
+    // `updates.degrade !== null` gate. Falsification: drop it from
+    // `onForceUpdate` in `host-overview-panel.tsx` and the button renders.
+    let checks = 0;
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.3.0-rc.2",
+      installation: managedInstallation(
+        installRecord("1.3.0-rc.2", "1.3.0-rc.2"),
+        stagedRecord("1.3.0-rc.3"),
+      ),
+      overrideHandlers: {
+        "host.status": () =>
+          statusWithBusy("1.3.0-rc.2", { kind: "none" }, true, 2),
+        "host.update.check": () => {
+          checks += 1;
+          return {
+            outcome: "ok" as const,
+            effectiveIncludePreReleases: true,
+            includePreReleasesSource: "explicit-include" as const,
+            manifest: clearStagedManifest("1.3.0-rc.3"),
+          };
+        },
+      },
+    });
+    recordNegotiatedHostMethods(
+      "host-a",
+      ALL_OVERVIEW_METHODS.filter((method) => method !== "host.update.install"),
+    );
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    const card = await screen.findByTestId("host-overview-operation-card");
+    expect(card.textContent).toContain("Update waits for 2 sessions to finish");
+    // Wait for the check to answer so the absence is the gate's, not the
+    // loading frame's: the same fixture WITH the install method negotiated
+    // renders the button once this manifest lands (the dispatch pin above).
+    await waitFor(() => expect(checks).toBeGreaterThan(0));
+    expect(
+      screen.queryByTestId("host-overview-operation-force-update"),
     ).toBeNull();
   });
 });

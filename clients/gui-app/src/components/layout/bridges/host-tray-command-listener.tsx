@@ -260,6 +260,7 @@ export function HostTrayCommandListener() {
         }}
       />
       <HostBusyForceDeferDialog
+        purpose="restart"
         open={busy !== null}
         message={busy?.message ?? ""}
         isForcing={

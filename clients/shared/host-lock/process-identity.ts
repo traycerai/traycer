@@ -36,8 +36,12 @@ export type ProcessLivenessVerdict = "alive" | "dead" | "indeterminate";
 
 // Cross-platform process-liveness probe. POSIX uses `process.kill(pid, 0)`;
 // Windows uses `tasklist /FI "PID eq <pid>" /NH /FO CSV` and asserts the
-// CSV body is non-empty.
-function probeProcessLiveness(pid: number): ProcessLivenessVerdict {
+// CSV body is non-empty. Exported for the one reader that needs the
+// tri-state itself outside this module (`host update`'s progress-marker
+// takeover keeps a displaced record for restore only on POSITIVE evidence
+// its writer is alive); `verifyProcessIdentity` below consumes it too, and
+// everything else goes through the collapsing `isProcessAlive`.
+export function probeProcessLiveness(pid: number): ProcessLivenessVerdict {
   if (!Number.isInteger(pid) || pid <= 0) return "dead";
   if (process.platform === "win32") {
     let stdout: string;

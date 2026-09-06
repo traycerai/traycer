@@ -759,9 +759,13 @@ describe("downloadAndStageHost", () => {
     expect((await readHostStagedRecord(ENV))?.version).toBe("2.0.0");
   });
 
-  it("--automatic refuses to stage over an incomparable (local-*) installed version", async () => {
+  it("--automatic refuses to stage over an incomparable (local-*) installed version, without announcing a download", async () => {
     await writeInstall("local-custom-build-2026", {});
     let downloadStarted = false;
+    // The third short-circuit named in `onWillDownload`'s doc: nothing is
+    // transferred, so nothing is announced. Falsification: move the hook
+    // above the promotion decision and it fires here.
+    const onWillDownload = vi.fn(async () => undefined);
     const outcome = await downloadAndStageHost({
       environment: ENV,
       versionRequest: null,
@@ -775,13 +779,14 @@ describe("downloadAndStageHost", () => {
           downloadStarted = true;
         },
       }),
-      onWillDownload: null,
+      onWillDownload,
     });
     expect(outcome).toMatchObject({
       outcome: "short-circuit",
       reason: "automatic-refused-incomparable-installed",
     });
     expect(downloadStarted).toBe(false);
+    expect(onWillDownload).not.toHaveBeenCalled();
   });
   it("an explicit version request proceeds over an incomparable (local-*) installed version", async () => {
     await writeInstall("local-custom-build-2026", {});

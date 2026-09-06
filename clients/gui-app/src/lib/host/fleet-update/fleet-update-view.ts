@@ -576,8 +576,8 @@ function coarseProgressView(
  *
  * The two kinds already exist for the schema-v2 attempt's own parks and carry
  * exactly the right copy, gates and cadence: `waiting-to-activate` ("Update
- * installed — restart host to finish") and `waiting-for-work` ("Update will
- * continue when N sessions finish", with **Force** when the count is
+ * installed — restart host to finish") and `waiting-for-work` ("Update
+ * waits for N sessions to finish", with **Force** when the count is
  * positive). Neither holds the lifecycle gate nor earns the fast poll — a park
  * can sit for days, and the restart it waits for must stay pressable.
  *
