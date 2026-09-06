@@ -92,6 +92,7 @@ function renderTile(): void {
       visible={hookState.visible}
       onConvertToPip={() => {}}
       onRequestNewTab={null}
+      onRequestCloseTab={null}
       node={peekNode}
       completeMeans="ended"
     />,

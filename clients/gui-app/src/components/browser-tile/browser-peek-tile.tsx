@@ -91,10 +91,12 @@ interface BrowserPeekTileProps {
   /** Whether the tile body is actually on screen, not merely mounted. */
   readonly visible: boolean;
   /**
-   * No `onRequestClose` here on purpose: the streamed viewer never retires its
+   * No `onRequestClose` here on purpose: the streamed VIEWER never retires its
    * own tile. The body owns that decision, and the picture-in-picture handoff
    * - the one path that used to close from here - closes from the adapter that
-   * starts it.
+   * starts it. `onRequestCloseTab` below is not a way back in: it does not
+   * retire this tile, it hands one chord to a surface that owns its row's
+   * close, and the viewer that owns none passes `null`.
    */
   readonly onConvertToPip: (() => void) | null;
   /**
@@ -106,6 +108,16 @@ interface BrowserPeekTileProps {
    * The canvas passes `null` all the way down, so a canvas tile claims nothing.
    */
   readonly onRequestNewTab: (() => void) | null;
+  /**
+   * What `mod+w` means here, or `null` where the chord belongs to the page.
+   *
+   * The `closeTab` row's streamed half, non-null for exactly the surface that
+   * OWNS its row's close - the Start Page panel, whose close is tombstone-first
+   * and retires a row whose device may not even be reachable. The canvas passes
+   * `null` and keeps the deliberate omission above intact: nothing here can
+   * retire a canvas viewer's tile.
+   */
+  readonly onRequestCloseTab: (() => void) | null;
   readonly completeMeans: BrowserPeekCompleteMeaning;
 }
 
@@ -135,6 +147,7 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
     client,
     scope: props.scope,
     onRequestNewTab: props.onRequestNewTab,
+    onRequestCloseTab: props.onRequestCloseTab,
     hostId: node.hostId,
     sessionId: node.sessionId,
     tabId: node.tabId,

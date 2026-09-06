@@ -163,6 +163,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -196,6 +197,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -215,6 +217,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -230,6 +233,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -249,6 +253,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -282,6 +287,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={onRequestNewTab}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -308,6 +314,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -321,6 +328,86 @@ describe("BrowserPeekTile shortcuts and paste", () => {
     expect(keyboardFramesFor(stream, "t", "KeyT")).not.toEqual([]);
   });
 
+  // The `closeTab` row's streamed half. Same three facts as Cmd+T: an armed
+  // tile suppresses the app registry, the controller claimed neither chord,
+  // and everything unclaimed is typed at the remote page - so the row was
+  // never closed and the page received a W.
+  it("closes the landing row on Cmd+W without forwarding W", async () => {
+    const onRequestCloseTab = vi.fn<() => void>();
+    renderPeekTile(
+      <BrowserPeekTile
+        scope={{ kind: "independent" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
+        onRequestNewTab={null}
+        onRequestCloseTab={onRequestCloseTab}
+        node={PEEK_NODE}
+        completeMeans="ended"
+      />,
+    );
+    const stream = liveStream();
+    armPeekTile(stream);
+    await flushMacrotask();
+
+    firePlatformModKey(imeInput(), "keydown", "w", "KeyW");
+    firePlatformModKey(imeInput(), "keyup", "w", "KeyW");
+
+    expect(onRequestCloseTab).toHaveBeenCalledOnce();
+    expect(keyboardFramesFor(stream, "w", "KeyW")).toEqual([]);
+  });
+
+  // The canvas viewer owns no row and retires no tile of its own, so it hands
+  // the controller nothing to claim with and the page keeps its own Cmd+W.
+  it("forwards Cmd+W to the page when the surface has no close answer", async () => {
+    renderPeekTile(
+      <BrowserPeekTile
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
+        onRequestNewTab={null}
+        onRequestCloseTab={null}
+        node={PEEK_NODE}
+        completeMeans="ended"
+      />,
+    );
+    const stream = liveStream();
+    armPeekTile(stream);
+    await flushMacrotask();
+
+    firePlatformModKey(imeInput(), "keydown", "w", "KeyW");
+
+    expect(keyboardFramesFor(stream, "w", "KeyW")).not.toEqual([]);
+  });
+
+  // The close retires the row, which unmounts this tile mid-keystroke. The
+  // armed claim is what suppresses the whole app keybinding registry
+  // (`skipAppActions`), so a claim that outlived its tile would leave the app
+  // deaf to every chord with nothing on screen to explain it.
+  it("releases the armed gate when the Cmd+W close retires the row", async () => {
+    const view = renderPeekTile(
+      <BrowserPeekTile
+        scope={{ kind: "independent" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
+        onRequestNewTab={null}
+        onRequestCloseTab={() => {
+          view.unmount();
+        }}
+        node={PEEK_NODE}
+        completeMeans="ended"
+      />,
+    );
+    const stream = liveStream();
+    armPeekTile(stream);
+    await flushMacrotask();
+    expect(useScreencastArmedStore.getState().ownerId).toBe(PEEK_OWNER_ID);
+
+    firePlatformModKey(imeInput(), "keydown", "w", "KeyW");
+    await flushMacrotask();
+
+    expect(useScreencastArmedStore.getState().ownerId).toBeNull();
+  });
+
   it("reloads on Cmd+R without forwarding R", async () => {
     renderPeekTile(
       <BrowserPeekTile
@@ -328,6 +415,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -357,6 +445,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -385,6 +474,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -406,6 +496,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -438,6 +529,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -454,6 +546,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -470,6 +563,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -492,6 +586,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -519,6 +614,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -539,6 +635,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -560,6 +657,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -600,6 +698,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -627,6 +726,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -659,6 +759,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -690,6 +791,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
           visible={hookState.visible}
           onConvertToPip={() => {}}
           onRequestNewTab={null}
+          onRequestCloseTab={null}
           node={PEEK_NODE}
           completeMeans="ended"
         />
@@ -723,6 +825,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
           visible={hookState.visible}
           onConvertToPip={() => {}}
           onRequestNewTab={null}
+          onRequestCloseTab={null}
           node={PEEK_NODE}
           completeMeans="ended"
         />
@@ -731,6 +834,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
           visible={hookState.visible}
           onConvertToPip={() => {}}
           onRequestNewTab={null}
+          onRequestCloseTab={null}
           node={sibling}
           completeMeans="ended"
         />
@@ -746,6 +850,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
           visible={hookState.visible}
           onConvertToPip={() => {}}
           onRequestNewTab={null}
+          onRequestCloseTab={null}
           node={PEEK_NODE}
           completeMeans="ended"
         />

@@ -225,6 +225,12 @@ export interface ScreencastSessionOptions {
    * tile has to claim it itself.
    */
   readonly onRequestNewTab: (() => void) | null;
+  /**
+   * What `mod+w` means on the surface hosting this tile, or `null` where the
+   * chord belongs to the remote page. Non-null only for a surface that owns
+   * its row's close - see `readRequestCloseTab` in the controller.
+   */
+  readonly onRequestCloseTab: (() => void) | null;
 }
 
 /**
@@ -352,6 +358,8 @@ export function useScreencastSession(
    * controller built once for the life of the tile.
    */
   const requestNewTabRef = useRef(options.onRequestNewTab);
+  /** The surface's `mod+w` answer, read the same way and for the same reason. */
+  const requestCloseTabRef = useRef(options.onRequestCloseTab);
   const tileRef = useRef<HTMLDivElement | null>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const overlayButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -455,6 +463,7 @@ export function useScreencastSession(
       // passive effect below: pointer events always land after that commit.
       readVideoPainting: () => videoActiveRef.current,
       readRequestNewTab: () => requestNewTabRef.current,
+      readRequestCloseTab: () => requestCloseTabRef.current,
       listeners: {
         // Control, not the arm epoch, is what a render shows: a hover pre-arm
         // holds the epoch at the host but drives nothing.
@@ -813,6 +822,7 @@ export function useScreencastSession(
     presentedImageRef.current = planeView.image;
     captureDormantSnapshotRef.current = options.captureDormantSnapshot;
     requestNewTabRef.current = options.onRequestNewTab;
+    requestCloseTabRef.current = options.onRequestCloseTab;
     videoStatsRef.current = videoStats;
   });
 

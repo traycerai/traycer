@@ -238,6 +238,7 @@ describe("BrowserPeekTile input capture", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -268,6 +269,7 @@ describe("BrowserPeekTile input capture", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -308,6 +310,7 @@ describe("BrowserPeekTile input capture", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -340,6 +343,7 @@ describe("BrowserPeekTile input capture", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -416,6 +420,7 @@ describe("BrowserPeekTile input capture", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -486,6 +491,7 @@ describe("BrowserPeekTile input capture", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -528,6 +534,7 @@ describe("BrowserPeekTile input capture", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -566,6 +573,7 @@ describe("BrowserPeekTile input capture", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -600,6 +608,7 @@ describe("BrowserPeekTile input capture", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -623,6 +632,7 @@ describe("BrowserPeekTile input capture", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -686,6 +696,7 @@ describe("BrowserPeekTile input capture", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -775,6 +786,7 @@ describe("BrowserPeekTile input capture", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -806,6 +818,7 @@ describe("BrowserPeekTile input capture", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -840,6 +853,7 @@ describe("BrowserPeekTile input capture", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -905,6 +919,7 @@ describe("BrowserPeekTile input capture", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -1022,6 +1037,7 @@ describe("BrowserPeekTile input capture", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -1104,6 +1120,7 @@ describe("BrowserPeekTile input capture", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -1148,6 +1165,7 @@ describe("BrowserPeekTile input capture", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -1192,6 +1210,7 @@ describe("BrowserPeekTile input capture", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -1239,6 +1258,7 @@ describe("BrowserPeekTile input capture", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -1269,6 +1289,7 @@ describe("BrowserPeekTile input capture", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -1303,6 +1324,7 @@ describe("BrowserPeekTile input capture", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -1341,6 +1363,7 @@ describe("BrowserPeekTile input capture", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -1368,6 +1391,7 @@ describe("BrowserPeekTile input capture", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -1385,6 +1409,7 @@ describe("BrowserPeekTile input capture", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -1452,6 +1477,7 @@ describe("BrowserPeekTile input capture", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -1502,6 +1528,7 @@ describe("BrowserPeekTile input capture", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -1543,6 +1570,7 @@ describe("BrowserPeekTile input capture", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -1594,6 +1622,7 @@ describe("BrowserPeekTile input capture", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -1637,6 +1666,7 @@ describe("BrowserPeekTile input capture", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -1681,6 +1711,7 @@ describe("BrowserPeekTile input capture", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -1769,6 +1800,7 @@ describe("BrowserPeekTile input capture", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -1801,6 +1833,7 @@ describe("BrowserPeekTile input capture", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,

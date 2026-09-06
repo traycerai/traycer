@@ -150,6 +150,7 @@ describe("BrowserPeekTile toolbar chrome", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -191,6 +192,7 @@ describe("BrowserPeekTile toolbar chrome", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -213,6 +215,7 @@ describe("BrowserPeekTile toolbar chrome", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -247,6 +250,7 @@ describe("BrowserPeekTile toolbar chrome", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -305,6 +309,7 @@ describe("BrowserPeekTile toolbar chrome", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -365,6 +370,7 @@ describe("BrowserPeekTile toolbar chrome", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -427,6 +433,7 @@ describe("BrowserPeekTile toolbar chrome", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -456,6 +463,7 @@ describe("BrowserPeekTile toolbar chrome", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,

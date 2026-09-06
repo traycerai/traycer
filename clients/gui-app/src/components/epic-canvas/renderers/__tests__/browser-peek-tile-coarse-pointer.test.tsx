@@ -168,6 +168,7 @@ describe("BrowserPeekTile on a coarse pointer", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -218,6 +219,7 @@ describe("BrowserPeekTile on a coarse pointer", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,

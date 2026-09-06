@@ -155,6 +155,7 @@ describe("BrowserPeekTile", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -175,6 +176,7 @@ describe("BrowserPeekTile", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -240,6 +242,7 @@ describe("BrowserPeekTile", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -272,6 +275,7 @@ describe("BrowserPeekTile", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="native-handoff"
       />,
@@ -306,6 +310,7 @@ describe("BrowserPeekTile", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="native-elsewhere"
       />,
@@ -339,6 +344,7 @@ describe("BrowserPeekTile", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -351,6 +357,7 @@ describe("BrowserPeekTile", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -362,6 +369,7 @@ describe("BrowserPeekTile", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -394,6 +402,7 @@ describe("BrowserPeekTile", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -439,6 +448,7 @@ describe("BrowserPeekTile", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -483,6 +493,7 @@ describe("BrowserPeekTile", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -531,6 +542,7 @@ describe("BrowserPeekTile", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -573,6 +585,7 @@ describe("BrowserPeekTile", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -640,6 +653,7 @@ describe("BrowserPeekTile", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -695,6 +709,7 @@ describe("BrowserPeekTile", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -744,6 +759,7 @@ describe("BrowserPeekTile", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -858,6 +874,7 @@ describe("BrowserPeekTile", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -901,6 +918,7 @@ describe("BrowserPeekTile", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -914,6 +932,7 @@ describe("BrowserPeekTile", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -932,6 +951,7 @@ describe("BrowserPeekTile", () => {
           visible={hookState.visible}
           onConvertToPip={() => {}}
           onRequestNewTab={null}
+          onRequestCloseTab={null}
           node={PEEK_NODE}
           completeMeans="ended"
         />,
@@ -987,6 +1007,7 @@ describe("BrowserPeekTile", () => {
           visible={hookState.visible}
           onConvertToPip={() => {}}
           onRequestNewTab={null}
+          onRequestCloseTab={null}
           node={PEEK_NODE}
           completeMeans="ended"
         />,
@@ -1049,6 +1070,7 @@ describe("BrowserPeekTile rttProbe handling", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,
@@ -1079,6 +1101,7 @@ describe("BrowserPeekTile rttProbe handling", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={PEEK_NODE}
         completeMeans="ended"
       />,

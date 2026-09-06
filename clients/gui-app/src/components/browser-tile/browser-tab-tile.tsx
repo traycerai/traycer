@@ -17,6 +17,7 @@ import {
   type BrowserPeekNode,
 } from "./browser-peek-tile";
 import {
+  browserTileHostOwnsClose,
   browserTileScope,
   type BrowserTileNode,
   type BrowserTilePlacement,
@@ -260,6 +261,15 @@ function BrowserTabTileSurface(props: BrowserTabTileSurfaceProps) {
         visible={props.visible}
         onConvertToPip={props.onConvertToPip}
         onRequestNewTab={props.onRequestNewTab}
+        // The same predicate the native branch's `closeTab` command tests
+        // (`agent-browser-tile.tsx`): only a surface that OWNS its row's close
+        // is asked, and a canvas tile - which closes its own tile and has no
+        // row - hands the streamed viewer nothing to claim `mod+w` with.
+        onRequestCloseTab={
+          browserTileHostOwnsClose(props.placement)
+            ? props.onRequestClose
+            : null
+        }
         completeMeans={browserPeekCompleteMeaning(
           props.session.runtime.kind,
           props.canMaterializeElectron,

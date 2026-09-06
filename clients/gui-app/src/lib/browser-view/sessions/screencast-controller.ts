@@ -286,10 +286,22 @@ export function createScreencastController(options: {
    * is: the controller outlives the renders that supply it.
    */
   readonly readRequestNewTab: () => (() => void) | null;
+  /**
+   * What the surface hosting this tile does with `mod+w`, or `null` where the
+   * chord belongs to the page.
+   *
+   * The `closeTab` row's streamed half, and non-null for exactly the surface
+   * that OWNS its row's close - the Start Page panel
+   * (`browserTileHostOwnsClose`), whose close is tombstone-first. A canvas
+   * viewer passes `null`: it never retires its own tile, which is the same
+   * rule its native twin follows at `agent-browser-tile.tsx`'s `closeTab`.
+   */
+  readonly readRequestCloseTab: () => (() => void) | null;
 }): ScreencastController {
   const {
     listeners,
     readControlPlaneRttMs,
+    readRequestCloseTab,
     readRequestNewTab,
     readVideoPainting,
     refs,
@@ -1235,6 +1247,29 @@ export function createScreencastController(options: {
           releaseForwardedPageKeys();
         }
         requestNewTab();
+        return;
+      }
+      if (isScreencastModChord(event, "w")) {
+        const requestCloseTab = readRequestCloseTab();
+        if (requestCloseTab === null) return;
+        event.preventDefault();
+        event.stopPropagation();
+        claimedLocalCodes.add(event.code);
+        // Worth doing even though this tile is about to unmount, because the
+        // TAB may not be. The surface that owns this close is tombstone-first:
+        // it retires the row now and lets the host's `closeTab` settle later,
+        // so a device that cannot be reached keeps a live tab whose page still
+        // believes the modifier this chord was typed with is held. Releasing
+        // costs one frame on a transport that is usually about to close, and
+        // saves the one case where nothing else ever will.
+        //
+        // Before the callback, not after: the close retires the row
+        // synchronously, and the frames have to go out while this stream is
+        // still up.
+        if (document.activeElement === refs.imeInputRef.current) {
+          releaseForwardedPageKeys();
+        }
+        requestCloseTab();
       }
     },
     handleTileKeyUp: (event) => {

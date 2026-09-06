@@ -38,12 +38,18 @@ import { ignoreError } from "./ignore-error";
  * keybinding registry is skipped for every action while a tile is armed
  * (`keybinding-provider.tsx`), and everything the screencast controller does
  * not claim is forwarded to the remote page. That controller is where the
- * browser-scoped rows have to be honoured for a streamed tile, and today it
- * claims `focusAddressBar` (`mod+l`), reload (`mod+r`) and `newTab`
- * (`mod+t`, through the surface's own handler). `closeTab` is deliberately
- * absent there - the streamed viewer owns no close path - and the
- * APP-FORWARDED rows below have no streamed equivalent at all, because
- * nothing replays a key into a renderer that is already holding it.
+ * browser-scoped rows have to be honoured for a streamed tile, and it now
+ * claims every one of them: `focusAddressBar` (`mod+l`), reload (`mod+r`),
+ * `newTab` (`mod+t`) and `closeTab` (`mod+w`), the last two through the
+ * hosting surface's own handler and only where it has one. That gate is what
+ * keeps a canvas viewer out of both: it opens no tabs and retires no row, so
+ * it hands the controller nothing and those chords stay the page's.
+ *
+ * The APP-FORWARDED rows below still have no streamed equivalent, and it is
+ * not an omission of the same kind: forwarding means main replays the key into
+ * the renderer, and there is nothing to replay into a renderer that is already
+ * holding it. A streamed tile drops them because the app's registry is skipped
+ * wholesale while a tile is armed.
  *
  * The BROWSER-SCOPED rows are literal tokens, because they are not app
  * bindings at all: they are what a browser does with those keys, and the

@@ -126,6 +126,7 @@ function renderTile(): void {
       visible={hookState.visible}
       onConvertToPip={() => {}}
       onRequestNewTab={null}
+      onRequestCloseTab={null}
       node={peekNode}
       completeMeans="ended"
     />,
@@ -843,6 +844,7 @@ describe("BrowserPeekTile input ack", () => {
         visible={hookState.visible}
         onConvertToPip={() => {}}
         onRequestNewTab={null}
+        onRequestCloseTab={null}
         node={peekNode}
         completeMeans="ended"
       />,

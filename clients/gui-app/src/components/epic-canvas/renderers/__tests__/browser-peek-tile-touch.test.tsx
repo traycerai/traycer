@@ -142,6 +142,7 @@ function renderTile(): FakeStreamSession {
       visible={hookState.visible}
       onConvertToPip={() => {}}
       onRequestNewTab={null}
+      onRequestCloseTab={null}
       node={PEEK_NODE}
       completeMeans="ended"
     />,
