@@ -92,6 +92,7 @@ vi.mock("../../app/logger", () => ({
     info: vi.fn(),
     warn: vi.fn(),
   },
+  describeLogError: (error: unknown): string => String(error),
 }));
 
 class FakePolicySession {
@@ -189,11 +190,33 @@ class FakePolicySession {
   }
 
   clearStorageDataCalls = 0;
+  /**
+   * Holds the clear open for the barrier tests. Electron's returns after the
+   * jar is actually empty; the production default of resolving straight away
+   * is what hides the window this suite is about.
+   */
+  clearStorageDataGate: Promise<void> | null = null;
 
   clearStorageData(): Promise<void> {
     this.clearStorageDataCalls += 1;
-    return Promise.resolve();
+    return this.clearStorageDataGate ?? Promise.resolve();
   }
+}
+
+interface Deferred {
+  readonly promise: Promise<void>;
+  readonly resolve: () => void;
+  readonly reject: (error: Error) => void;
+}
+
+function deferred(): Deferred {
+  let resolve: () => void = () => undefined;
+  let reject: (error: Error) => void = () => undefined;
+  const promise = new Promise<void>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
 }
 
 class FakeTrackedWebContents extends EventEmitter {
@@ -551,6 +574,72 @@ describe("browser view session policy", () => {
     expect(mod.ensureBrowserViewSession(ISOLATED)).toBe(second);
     expect(electronState.fromPartitionCalls).toHaveLength(2);
     expect(second.downloadListeners).toHaveLength(1);
+  });
+
+  it("holds the partition until its clear settles, then hands back a fresh jar", async () => {
+    const mod = await import("../browser-session");
+    const first = new FakePolicySession();
+    const gate = deferred();
+    first.clearStorageDataGate = gate.promise;
+    electronState.browserSession = first;
+    expect(mod.ensureBrowserViewSession(ISOLATED)).toBe(first);
+    expect(
+      mod.pendingBrowserViewPartitionRelease(ISOLATED_PARTITION),
+    ).toBeNull();
+
+    const released = mod.releaseBrowserViewSession(ISOLATED_PARTITION);
+    const barrier = mod.pendingBrowserViewPartitionRelease(ISOLATED_PARTITION);
+    if (barrier === null) throw new Error("expected a pending release");
+    expect(first.clearStorageDataCalls).toBe(1);
+
+    // The whole point: the clear has STARTED and has not finished, and a
+    // would-be acquirer of this partition is still held. Without the barrier
+    // there is nothing here to hold it, and the guest it is about to mint gets
+    // its cookies emptied out from under it a moment later.
+    let admitted = false;
+    const waiter = barrier.then(() => {
+      admitted = true;
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(admitted).toBe(false);
+
+    gate.resolve();
+    await released;
+    await waiter;
+    expect(admitted).toBe(true);
+    // Lifted, so the next acquisition costs nothing and leaks no map entry.
+    expect(
+      mod.pendingBrowserViewPartitionRelease(ISOLATED_PARTITION),
+    ).toBeNull();
+
+    const second = new FakePolicySession();
+    electronState.browserSession = second;
+    expect(mod.ensureBrowserViewSession(ISOLATED)).toBe(second);
+  });
+
+  it("lifts the partition barrier when the clear itself fails", async () => {
+    const mod = await import("../browser-session");
+    const jar = new FakePolicySession();
+    const gate = deferred();
+    jar.clearStorageDataGate = gate.promise;
+    electronState.browserSession = jar;
+    mod.ensureBrowserViewSession(ISOLATED);
+
+    const released = mod.releaseBrowserViewSession(ISOLATED_PARTITION);
+    const barrier = mod.pendingBrowserViewPartitionRelease(ISOLATED_PARTITION);
+    if (barrier === null) throw new Error("expected a pending release");
+
+    gate.reject(new Error("clear failed"));
+    // Neither half may reject: a failed clear is a jar that MIGHT still hold
+    // the old data, and refusing to ever mint a guest into that partition
+    // again would be a hang rather than a fix. The release logs and moves on,
+    // and every waiter is let through the same way.
+    await expect(released).resolves.toBeUndefined();
+    await expect(barrier).resolves.toBeUndefined();
+    expect(
+      mod.pendingBrowserViewPartitionRelease(ISOLATED_PARTITION),
+    ).toBeNull();
   });
 
   it("refuses to clear a shared browser partition", async () => {

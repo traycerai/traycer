@@ -141,6 +141,12 @@ interface BrowserViewManagerOptions {
    * Drops an isolated session's partition once its last native tab is gone.
    * Only ever called with `profile: "isolated"`; the shared jars outlive
    * every guest.
+   *
+   * `void` rather than a promise, and that is not an oversight: the clear only
+   * STARTS here, and the step that must not run before it finishes is a later
+   * guest birth into the same partition, which is nowhere near this call.
+   * `browser-session.ts` publishes the in-flight clear per partition and
+   * provisioning waits on it there - see `pendingBrowserViewPartitionRelease`.
    */
   readonly releaseSessionStorage: (
     request: BrowserSessionProfileRequest,
@@ -1065,6 +1071,16 @@ export class BrowserViewManager {
     if (this.releasedIsolatedSessionKeys.has(sessionKey)) return;
     for (const remaining of this.entries.guestValues()) {
       if (nativeSessionKey(remaining.identity.key) === sessionKey) return;
+    }
+    // The scan above only sees REGISTERED guests, and a sibling tab whose
+    // birth has minted its `<webview>` but not yet run `onAttached` has no
+    // entry - so a close that is not the session's last still reads as one,
+    // and the jar is emptied under a guest that is already living in it. The
+    // debt is handed to provisioning, which re-asks when that birth ends.
+    if (
+      this.provisioning.deferIsolatedReleaseWhileEnsuring(entry, sessionKey)
+    ) {
+      return;
     }
     this.releasedIsolatedSessionKeys.add(sessionKey);
     this.releaseSessionStorage({

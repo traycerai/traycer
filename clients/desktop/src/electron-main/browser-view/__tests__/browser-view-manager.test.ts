@@ -51,6 +51,30 @@ const launchExternalFromGuestMock = vi.hoisted(() =>
 const confirmAndLaunchExternalSchemeMock = vi.hoisted(() =>
   vi.fn((_url: string) => Promise.resolve(true)),
 );
+/**
+ * The clear of an isolated partition that is still running, as provisioning
+ * sees it.
+ *
+ * Only `pendingBrowserViewPartitionRelease` is stubbed; `partitionForProfile`
+ * and the rest of the module stay real, so the partition NAMES these tests
+ * assert on are the production ones. A gate here stands for a
+ * `clearStorageData()` that has started and not finished - the state the real
+ * module publishes for exactly as long as the jar is being emptied, and which
+ * Electron otherwise hides behind a `fromPartition` that happily returns the
+ * partition being cleared.
+ */
+const partitionReleaseGates = vi.hoisted(
+  () => new Map<string, Promise<void>>(),
+);
+vi.mock("../browser-session", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../browser-session")>();
+  return {
+    ...actual,
+    pendingBrowserViewPartitionRelease: (
+      partition: string,
+    ): Promise<void> | null => partitionReleaseGates.get(partition) ?? null,
+  };
+});
 vi.mock("../../app/security", () => ({
   safelyOpenExternal: safelyOpenExternalMock,
   launchExternalFromGuest: launchExternalFromGuestMock,
@@ -681,6 +705,7 @@ const createdManagers: BrowserViewManager[] = [];
 afterEach(() => {
   for (const manager of createdManagers) manager.pip.stop();
   createdManagers.length = 0;
+  partitionReleaseGates.clear();
 });
 
 function createHarnessWithOptions(
@@ -3929,6 +3954,148 @@ describe("BrowserViewManager renderer guest capability", () => {
     await flushCloseEntry();
     expect(harness.manager.hasNativeTabsForWindow("window-1")).toBe(false);
     expect(harness.manager.hasNativeTabsForWindow("window-2")).toBe(false);
+    expect(harness.releasedIsolatedSessions).toEqual([
+      { profile: "isolated", sessionId: isolatedSession },
+    ]);
+  });
+
+  // The same failure, and then what the host actually does next: it retries
+  // the tab. The release that failure triggered has only STARTED - the IPC
+  // fires `releaseBrowserViewSession` and forgets it, and `clearStorageData()`
+  // is async - while Electron hands the retry the very same in-memory
+  // partition for the same name. A guest minted now is born into the jar that
+  // clear is emptying and loses its cookies and localStorage seconds after it
+  // loads, which reads as "the private session signed itself out".
+  it("holds a retry of a failed re-home until the isolated clear has finished", async () => {
+    const harness = createHarness();
+    const isolatedSession = "session-private";
+    const partition = `traycer-isolated-${isolatedSession}`;
+    const ensureInput = {
+      hostId: "host-1",
+      sessionId: isolatedSession,
+      tabId: "tab-1",
+      requestedUrl: "https://example.com/private",
+      profile: "isolated",
+      seedStorageState: null,
+      connectionId: null,
+    } as const;
+    const ready = await harness.manager.ensureTab("window-1", ensureInput);
+    await harness.manager.acceptTab(ready);
+
+    const seedHold = harness.holdNextGuestSeed();
+    const move = harness.manager.ensureTab("window-2", ensureInput);
+    await flushCloseEntry();
+    harness.rejectPendingGuestReady(new Error("webview guest birth failed"));
+    await expect(move).rejects.toThrow("webview guest birth failed");
+    seedHold.resolve();
+    await flushCloseEntry();
+    expect(harness.releasedIsolatedSessions).toEqual([
+      { profile: "isolated", sessionId: isolatedSession },
+    ]);
+
+    // That release is in flight: the jar is being emptied right now.
+    const clearing = Promise.withResolvers<void>();
+    partitionReleaseGates.set(partition, clearing.promise);
+    const mintsBeforeRetry = harness.attachMints.length;
+
+    const retry = harness.manager.ensureTab("window-2", ensureInput);
+    await flushCloseEntry();
+    // Reddens without the barrier: `ensureTab` mints the guest on the spot, so
+    // this has already grown by one and the new guest is holding the partition
+    // the clear is about to empty.
+    expect(harness.attachMints).toHaveLength(mintsBeforeRetry);
+
+    // The gate is deliberately left in the map after it settles: the real
+    // release lifts its own barrier, and a birth must not spin waiting for
+    // that to happen.
+    clearing.resolve();
+    const retried = await retry;
+    await harness.manager.acceptTab(retried);
+    expect(harness.attachMints).toHaveLength(mintsBeforeRetry + 1);
+    expect(harness.attachMints.at(-1)?.partition).toBe(partition);
+    expect(retried.registrationId).not.toBe(ready.registrationId);
+    // One release, not two: the retry is a fresh birth into a jar that has
+    // finished being cleared, and owes nothing of its own.
+    expect(harness.releasedIsolatedSessions).toHaveLength(1);
+  });
+
+  // A sibling tab reaches the same jar by another door: its ensure is an
+  // ordinary cold mint with no knowledge of the close that started the clear.
+  // The barrier is per PARTITION for that reason - a guard on the retry path
+  // alone would leave this one exactly as broken as it was.
+  it("holds a sibling tab's cold ensure while the session's jar is being cleared", async () => {
+    const harness = createHarness();
+    const isolatedSession = "session-private";
+    const partition = `traycer-isolated-${isolatedSession}`;
+    const clearing = Promise.withResolvers<void>();
+    partitionReleaseGates.set(partition, clearing.promise);
+
+    const sibling = harness.manager.ensureTab("window-1", {
+      hostId: "host-1",
+      sessionId: isolatedSession,
+      tabId: "tab-2",
+      requestedUrl: "https://example.com/private/second",
+      profile: "isolated",
+      seedStorageState: null,
+      connectionId: null,
+    });
+    await flushCloseEntry();
+    expect(harness.attachMints).toEqual([]);
+
+    clearing.resolve();
+    const born = await sibling;
+    await harness.manager.acceptTab(born);
+    expect(harness.attachMints.map((mint) => mint.partition)).toEqual([
+      partition,
+    ]);
+  });
+
+  // The mirror of the two above, and the half a barrier cannot answer: here the
+  // BIRTH is already under way and the CLEAR has not started. A sibling tab
+  // whose `<webview>` is minted but whose `onAttached` has not run has no
+  // registry entry, so the closing tab's release scan reads it as the
+  // session's last guest and empties the jar the minted guest already lives in.
+  it("keeps an isolated session's partition while a sibling tab is minted but unattached", async () => {
+    const harness = createHarness();
+    const isolatedSession = "session-private";
+    const base = {
+      hostId: "host-1",
+      sessionId: isolatedSession,
+      requestedUrl: "https://example.com/private",
+      profile: "isolated",
+      seedStorageState: null,
+      connectionId: null,
+    } as const;
+    const first = await harness.manager.ensureTab("window-1", {
+      ...base,
+      tabId: "tab-1",
+    });
+    await harness.manager.acceptTab(first);
+
+    const attachHold = harness.holdNextGuestAttach();
+    const sibling = harness.manager.ensureTab("window-1", {
+      ...base,
+      tabId: "tab-2",
+    });
+    await flushCloseEntry();
+    expect(harness.attachMints).toHaveLength(2);
+
+    await harness.manager.releaseTab(first);
+    await flushCloseEntry();
+    // Reddens without the deferral: the scan finds no surviving sibling and
+    // releases the partition the second guest is being born into.
+    expect(harness.releasedIsolatedSessions).toEqual([]);
+
+    attachHold.resolve();
+    const born = await sibling;
+    await harness.manager.acceptTab(born);
+    await flushCloseEntry();
+    // The debt is re-asked when that birth ends, and the now-registered
+    // sibling answers it: still no release.
+    expect(harness.releasedIsolatedSessions).toEqual([]);
+
+    await harness.manager.releaseTab(born);
+    await flushCloseEntry();
     expect(harness.releasedIsolatedSessions).toEqual([
       { profile: "isolated", sessionId: isolatedSession },
     ]);

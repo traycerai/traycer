@@ -3,6 +3,7 @@ import type { BrowserStorageState } from "@traycer/protocol/host/browser/contrac
 import { describeLogError, log } from "../../app/logger";
 import {
   partitionForProfile,
+  pendingBrowserViewPartitionRelease,
   type BrowserSessionProfile,
 } from "../browser-session";
 import type {
@@ -192,18 +193,14 @@ export class BrowserViewProvisioning {
       lifecycle,
       promise: lifecycle.provisioned,
     };
-    try {
-      this.ensureAttachedGuestTab(
-        windowId,
-        input,
-        lifecycle,
-        startedAt,
-        record,
-      );
-    } catch (error) {
-      lifecycle.failProvisioning(error);
-      return record.promise;
-    }
+    // Recorded in flight BEFORE the guest is minted, which it was not before
+    // the partition barrier existed. A birth that is waiting for its
+    // partition's jar to finish being cleared is every bit as much a guest on
+    // its way into that partition as one already attaching, so it has to be
+    // visible to `hasEnsureForSession` for the whole wait - otherwise the
+    // session's owed release would settle straight through it. Registering
+    // first also gives a synchronous mint failure the same settlement path as
+    // every other failure instead of the bespoke early return it used to take.
     this.inFlightEnsures.set(guestKey, record);
     void record.promise
       .finally(() => {
@@ -216,7 +213,98 @@ export class BrowserViewProvisioning {
         this.settleOwedIsolatedRelease(record.sessionKey);
       })
       .catch(() => undefined);
+    const partition = partitionForProfile(input.profile, input.sessionId);
+    if (pendingBrowserViewPartitionRelease(partition) === null) {
+      this.beginGuestBirth(guestKey, windowId, input, startedAt, record);
+    } else {
+      log.info("[browser-view] native tab ensure awaiting partition release", {
+        kind: "electron_tab_create",
+        hostId: input.hostId,
+        sessionId: input.sessionId,
+        tabId: input.tabId,
+      });
+      void this.beginGuestBirthAfterRelease(
+        guestKey,
+        windowId,
+        input,
+        startedAt,
+        record,
+      );
+    }
     return record.promise;
+  }
+
+  /**
+   * Mints the guest, unless this record has stopped being the key's incarnation
+   * while it waited.
+   *
+   * The identity check is what makes the deferred path safe: a different
+   * window's ensure can supersede this one during the wait, and superseding
+   * fails the lifecycle and drops the record without having anything to
+   * unmount. Minting afterwards would attach a `<webview>` for a promise that
+   * has already rejected - a guest nobody would ever close.
+   */
+  private beginGuestBirth(
+    guestKey: string,
+    windowId: string,
+    input: BrowserViewEnsureTab,
+    startedAt: number,
+    record: InFlightEnsure,
+  ): void {
+    if (this.inFlightEnsures.get(guestKey) !== record) return;
+    try {
+      this.ensureAttachedGuestTab(
+        windowId,
+        input,
+        record.lifecycle,
+        startedAt,
+        record,
+      );
+    } catch (error) {
+      record.lifecycle.failProvisioning(error);
+    }
+  }
+
+  /**
+   * Holds a birth until this partition's jar is done being cleared.
+   *
+   * The hazard is Electron's, not ours: `session.fromPartition` hands back the
+   * SAME in-memory partition for the same name, and an isolated partition's
+   * name is derived from the session id. So a guest minted while
+   * `clearStorageData()` is still running is born into the jar that clear is
+   * emptying and loses its cookies and localStorage a moment after it starts -
+   * which is exactly what a retry after a failed cross-window replacement
+   * does, since the release that failure owed has already been started by the
+   * time the host asks for the tab again.
+   *
+   * A LOOP, not one await, because the barrier answers for the partition as it
+   * is now: a sibling tab's close can start a fresh clear of the same jar
+   * between this one settling and the mint. Each iteration needs another close
+   * of another registered guest, so it terminates. The barrier never rejects
+   * (see `releaseBrowserViewSession`), so a clear that fails still lets the
+   * birth through rather than stranding it.
+   */
+  private async beginGuestBirthAfterRelease(
+    guestKey: string,
+    windowId: string,
+    input: BrowserViewEnsureTab,
+    startedAt: number,
+    record: InFlightEnsure,
+  ): Promise<void> {
+    const partition = partitionForProfile(input.profile, input.sessionId);
+    let pending = pendingBrowserViewPartitionRelease(partition);
+    while (pending !== null) {
+      const awaited = pending;
+      await awaited;
+      const next = pendingBrowserViewPartitionRelease(partition);
+      // Identity, not nullness, is what ends the loop. The release lifts its
+      // own barrier in a `finally` that is registered before any waiter's, so
+      // the map is normally clear by the time we look - but resting a loop on
+      // microtask ordering is resting it on a hang, and seeing the SAME
+      // settled promise twice can only mean the release has not got there yet.
+      pending = next === awaited ? null : next;
+    }
+    this.beginGuestBirth(guestKey, windowId, input, startedAt, record);
   }
 
   /**
@@ -237,6 +325,32 @@ export class BrowserViewProvisioning {
     this.owedIsolatedReleases.delete(sessionKey);
     owed.succeededByReplacement = false;
     this.releaseIsolatedSessionStorage(owed);
+  }
+
+  /**
+   * Takes over a release the manager is about to run, if a guest of that
+   * session is still being born.
+   *
+   * The mirror of the partition barrier, and the half a barrier cannot answer.
+   * The barrier holds a birth that has not started against a clear already
+   * running; this holds a clear that has not started against a birth already
+   * minted - a guest whose `<webview>` exists and whose `onAttached` has not
+   * run yet, so `releaseIsolatedSessionStorage`'s scan of REGISTERED siblings
+   * cannot see it and reads the closing tab as the session's last. Electron
+   * would then empty the jar the minted guest is already living in.
+   *
+   * Recorded rather than refused: `settleOwedIsolatedRelease` re-asks when
+   * that birth ends, and re-runs the manager's own guards - so a birth that
+   * SUCCEEDED keeps the partition through its new entry, and one that failed
+   * releases it after all. Returns whether the caller should stand down.
+   */
+  deferIsolatedReleaseWhileEnsuring(
+    entry: BrowserViewEntry,
+    sessionKey: string,
+  ): boolean {
+    if (!this.hasEnsureForSession(sessionKey)) return false;
+    this.owedIsolatedReleases.set(sessionKey, entry);
+    return true;
   }
 
   /** Is any guest of this session still being born? */
@@ -519,10 +633,14 @@ export class BrowserViewProvisioning {
       // the move over while this successor was being born, and its own cold
       // ensure carries no reference to the entry whose release was skipped.
       //
-      // Both doors are needed. This one covers a replacement that failed
-      // before it was ever recorded in flight (a synchronous throw out of
-      // `ensureAttachedGuestTab`); the in-flight `finally` covers every
-      // successor after it, and every sibling tab's birth as well.
+      // Redundant with the in-flight `finally`, and kept deliberately. It
+      // used to be the only door for a replacement that failed before it was
+      // ever recorded in flight - a synchronous throw out of
+      // `ensureAttachedGuestTab` - and that gap is closed now that `ensureTab`
+      // registers the record before minting. What is left is a second call on
+      // an obligation the first one already answered, which costs a map miss;
+      // the alternative is a settlement path that exists in exactly one
+      // ordering of two handlers on the same promise.
       this.settleOwedIsolatedRelease(sessionKey);
     });
     return replacement;
