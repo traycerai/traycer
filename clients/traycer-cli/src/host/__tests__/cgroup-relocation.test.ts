@@ -285,8 +285,9 @@ describe("relocateOutOfHostCgroupIfNeeded", () => {
   });
 
   // The relocated CLI reaching `withRunner`: one byte on fd 3, the channel
-  // closing behind it, and then whatever the command itself exits with. This
-  // is the NODE ordering - the ack is delivered before the process is reaped.
+  // closing behind it, and then whatever the command itself exits with: ack
+  // and channel end BEFORE process exit, one of the supported orderings (the
+  // exit-first ordering has its own test below).
   function acknowledgeThenExit(code: number | null): (fake: FakeChild) => void {
     return (fake) => {
       fake.child.emit("spawn");
@@ -426,8 +427,9 @@ describe("relocateOutOfHostCgroupIfNeeded", () => {
     // And it is NOT reported as a successful relocation.
     expect(loggerMock.info).not.toHaveBeenCalled();
 
-    // Ablation: in `runInTransientScope`, drop the `if (!acknowledged)` branch
-    // from `settle` so it always resolves → this test fails: the call resolves
+    // Ablation: in `runInTransientScope`'s `settle`, replace everything after
+    // the `if (!exited) return` guard with an unconditional
+    // `resolve(exitCode ?? 1)` → this test fails: the call resolves
     // `{kind:"completed", exitCode:1}` and the caller silently exits 1 with no
     // error envelope, which is the bug this pin exists for.
   });

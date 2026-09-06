@@ -458,8 +458,10 @@ async function runInTransientScope(
     } else {
       // No readable channel at all. Both supported runtimes hand back a
       // `net.Socket` here, so this is a runtime that cannot answer the
-      // question - and an unanswerable ack is treated as a missing one, which
-      // refuses the stop rather than performing it blind.
+      // question. An unanswerable ack is treated as a missing one: the parent
+      // rejects when the child exits rather than claiming an unconfirmed
+      // command completed. That governs the PARENT's result only - the child
+      // is already spawned and this does not cancel it.
       ackFinished = true;
     }
     child.once("error", (cause) => {
