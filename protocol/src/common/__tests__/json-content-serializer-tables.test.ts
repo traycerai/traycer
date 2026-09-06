@@ -110,6 +110,36 @@ describe("table cell escaping inside inline code", () => {
     ).toBe("| `a\\|\\|b` |");
   });
 
+  it("carries backslash parity across a code span split by an unrendered mark", () => {
+    // A thread anchor renders nothing, but it splits one code span into two
+    // text nodes - here between a trailing `\` and a leading `|`. The span
+    // stays open across that boundary, so the pipe must be escaped against
+    // the run that ends the previous node: `\|` on its own would hand the
+    // parser `a\\|b`, an even run, and the cell would split. Falsification:
+    // escape each node separately (drop the segment coalescing at the top of
+    // `serializeTextRunWith`) and this reads "| `a\\\\|b` |".
+    const doc = tableDoc([
+      text("a\\", [{ type: "code" }]),
+      text("|b", [
+        { type: "code" },
+        { type: "threadAnchor", attrs: { threadId: "t1" } },
+      ]),
+    ]);
+
+    expect(bodyRow(toMarkdown(doc))).toBe("| `a\\\\\\|b` |");
+  });
+
+  it("is unchanged by the same split in plain cell text (control)", () => {
+    // Plain text doubles every backslash, so its escape is context-free and
+    // per-node escaping already agreed with whole-span escaping here.
+    const doc = tableDoc([
+      text("a\\", undefined),
+      text("|b", [{ type: "threadAnchor", attrs: { threadId: "t1" } }]),
+    ]);
+
+    expect(bodyRow(toMarkdown(doc))).toBe("| a\\\\\\|b |");
+  });
+
   it("escapes plain cell text the CommonMark way around the code span", () => {
     const doc = tableDoc([
       text("see\\ ", undefined),

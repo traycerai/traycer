@@ -258,15 +258,50 @@ export function serializeTextRun(nodes: JsonContent[]): string {
   return serializeTextRunWith(nodes, noEscaping);
 }
 
-// `escaping.text` sees each node's text together with its renderable marks,
-// so a table cell can escape plain text and code text differently (see
-// `tableCellEscaping`); `escaping.delimiter` sees each mark delimiter.
+interface TextSegment {
+  text: string;
+  marks: RenderableMark[];
+}
+
+function sameMarkKeys(a: RenderableMark[], b: RenderableMark[]): boolean {
+  if (a.length !== b.length) return false;
+  const keys = new Set(b.map((mark) => mark.key));
+  return a.every((mark) => keys.has(mark.key));
+}
+
+// Adjacent text nodes carrying the same renderable marks are one continuous
+// span in the output - nothing closes or opens between them under the
+// boundary rules in `serializeTextRunWith` - so they are joined here and
+// escaped as ONE string. For the plain-text cell escape that changes nothing
+// (it is context-free per character), but the inline-code pipe escape reads
+// the backslash PARITY in front of the pipe, and a mark that renders nothing
+// (a thread anchor) can split one code span between a trailing `\` and a
+// leading `|`. Escaped on its own the second node sees no backslash, emits
+// `\|`, and the parser reads `a\\|b` as an even run and splits the cell.
+function coalesceTextSegments(nodes: JsonContent[]): TextSegment[] {
+  const segments: TextSegment[] = [];
+  for (const node of nodes) {
+    if (!node.text) continue;
+    const marks = renderableMarks(node.marks);
+    const last = segments[segments.length - 1];
+    if (last !== undefined && sameMarkKeys(last.marks, marks)) {
+      last.text += node.text;
+    } else {
+      segments.push({ text: node.text, marks });
+    }
+  }
+  return segments;
+}
+
+// `escaping.text` sees each segment's text together with its renderable
+// marks, so a table cell can escape plain text and code text differently
+// (see `tableCellEscaping`); `escaping.delimiter` sees each mark delimiter.
 function serializeTextRunWith(
   nodes: JsonContent[],
   escaping: TextRunEscaping,
 ): string {
-  const textNodes = nodes.filter((node) => Boolean(node.text));
-  const nodeMarks = textNodes.map((node) => renderableMarks(node.marks));
+  const segments = coalesceTextSegments(nodes);
+  const nodeMarks = segments.map((segment) => segment.marks);
 
   const continuation = (key: string, start: number): number => {
     let end = start;
@@ -289,7 +324,7 @@ function serializeTextRunWith(
     open = open.slice(0, depth);
   };
 
-  textNodes.forEach((node, index) => {
+  segments.forEach((segment, index) => {
     const marks = nodeMarks[index];
     const nextKeys = new Set(marks.map((mark) => mark.key));
 
@@ -320,7 +355,7 @@ function serializeTextRunWith(
       out += escaping.delimiter(mark.open);
       open.push(mark);
     }
-    out += escaping.text(node.text ?? "", marks);
+    out += escaping.text(segment.text, marks);
   });
 
   closeDownTo(0);
