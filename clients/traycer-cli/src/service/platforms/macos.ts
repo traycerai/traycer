@@ -152,24 +152,52 @@ async function takeoverDesktopRegistration(
   run: ProcessRunner,
 ): Promise<DesktopRegistrationTakeover> {
   const guiTarget = guiDomain();
+  // Both probes fail CLOSED here, unlike the advisory ownership probes the
+  // stop/restart paths use. Those collapse a non-zero or thrown `launchctl
+  // print` into "not loaded" because for an ownership question an unreadable
+  // label is safely "not ours". For a takeover the safe direction is the
+  // opposite: a label read as absent by a transient fault skips the
+  // cooperative stop below, and `installService`'s later probe then finds
+  // the loaded job and boots it out with no claim (Codex, traycer#1761).
+  const cliProbe = await probeLabelForTakeover(`${guiTarget}/${label.id}`, run);
+  if (cliProbe.kind === "indeterminate") {
+    throw takeoverProbeIndeterminate(label, label.id, cliProbe.cause);
+  }
   // Pre-split machines: the CLI label itself is Desktop's SMAppService
   // registration. Booting THAT out corrupts the BTM state the app manages.
-  const cliOwnership = await inspectLaunchdOwnership(
-    `${guiTarget}/${label.id}`,
-    run,
-  ).catch((): LaunchdOwnership => ({ kind: "not-loaded" }));
-  if (cliOwnership.kind === "smappservice") {
+  if (
+    cliProbe.kind === "loaded" &&
+    cliProbe.ownership.kind === "smappservice"
+  ) {
     throw cliError({
       code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
-      message: `service install --takeover: label '${label.id}' is Desktop's own SMAppService registration (pre-label-split machine, loaded from ${cliOwnership.path}); takeover cannot bootout this label without corrupting the login-item state the app manages. Run 'traycer host service uninstall', then re-run 'traycer host service install'.`,
-      details: { label: label.id, loadedPath: cliOwnership.path },
+      message: `service install --takeover: label '${label.id}' is Desktop's own SMAppService registration (pre-label-split machine, loaded from ${cliProbe.ownership.path}); takeover cannot bootout this label without corrupting the login-item state the app manages. Run 'traycer host service uninstall', then re-run 'traycer host service install'.`,
+      details: { label: label.id, loadedPath: cliProbe.ownership.path },
       exitCode: 1,
     });
   }
-  const desktopAgent = await probeDesktopAgentOwnership(label, run);
-  if (desktopAgent === null) {
-    return await standDownLiveCliLabelHost(label, cliOwnership);
+  const agentLabelId = smAppServiceAgentLabelId(label);
+  const agentProbe = await probeLabelForTakeover(
+    `${guiTarget}/${agentLabelId}`,
+    run,
+  );
+  if (agentProbe.kind === "indeterminate") {
+    throw takeoverProbeIndeterminate(label, agentLabelId, agentProbe.cause);
   }
+  if (
+    agentProbe.kind !== "loaded" ||
+    agentProbe.ownership.kind !== "smappservice"
+  ) {
+    return await standDownLiveCliLabelHost(
+      label,
+      cliProbe.kind === "loaded" ? cliProbe.ownership : { kind: "not-loaded" },
+      run,
+    );
+  }
+  const desktopAgent: DesktopAgentOwnership = {
+    agentLabelId,
+    loadedPath: agentProbe.ownership.path,
+  };
   // The CLI is taking this label over; Desktop's registration is retired, not
   // relaunched. Nothing is coming back under this identity.
   const outcome = await requestCooperativeShutdown(
@@ -280,6 +308,73 @@ async function takeoverDesktopRegistration(
   };
 }
 
+type TakeoverLabelProbe =
+  | { readonly kind: "absent" }
+  | { readonly kind: "indeterminate"; readonly cause: string }
+  | {
+      readonly kind: "loaded";
+      readonly ownership: Exclude<LaunchdOwnership, { kind: "not-loaded" }>;
+    };
+
+// Three-state `launchctl print` for the takeover's two labels: `absent` only
+// on launchctl's own not-found answer, `indeterminate` for everything that
+// is not an answer (spawn failure, timeout, permission, unrecognized
+// output), `loaded` with the same ownership classification the advisory
+// probes use. A revoked mutation capability still rethrows, as everywhere.
+async function probeLabelForTakeover(
+  target: string,
+  run: ProcessRunner,
+): Promise<TakeoverLabelProbe> {
+  let result: ProbeCommandResult;
+  try {
+    const value = await run("launchctl", ["print", target], {
+      env: undefined,
+      cwd: undefined,
+      timeoutMs: 10_000,
+      tolerateNonZeroExit: true,
+    });
+    result = {
+      exitCode: value.exitCode,
+      stdout: value.stdout,
+      stderr: value.stderr,
+      timedOut: false,
+      spawnFailed: false,
+      signal: null,
+    };
+  } catch (cause) {
+    if (isServiceMutationAuthorityError(cause)) throw cause;
+    result = {
+      exitCode: -1,
+      stdout: "",
+      stderr: "",
+      timedOut: false,
+      spawnFailed: true,
+      signal: null,
+    };
+  }
+  const probe = classifyLaunchctlPrintResult(result, null, null);
+  if (probe.kind === "absent") return { kind: "absent" };
+  if (probe.kind === "indeterminate") {
+    return { kind: "indeterminate", cause: probe.cause };
+  }
+  const ownership = classifyLaunchdPrintOutput(probe.raw);
+  if (ownership.kind === "not-loaded") return { kind: "absent" };
+  return { kind: "loaded", ownership };
+}
+
+function takeoverProbeIndeterminate(
+  label: ServiceLabel,
+  probedLabelId: string,
+  cause: string,
+): Error {
+  return cliError({
+    code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+    message: `service install --takeover: could not read launchd's state for '${probedLabelId}' (${cause}), so the takeover was stopped rather than reload a job it could not see. Re-run the command, or run 'traycer host service uninstall' first.`,
+    details: { label: label.id, probedLabel: probedLabelId, cause },
+    exitCode: 1,
+  });
+}
+
 // The takeover with NO Desktop agent to retire. Its caller (`installService`)
 // boots out a loaded CLI label with a plain `launchctl bootout` and no
 // cooperative claim - fine for a job with no process, and exactly wrong for
@@ -300,9 +395,20 @@ async function takeoverDesktopRegistration(
 // interruption this guard exists to prevent. The window closes on its own;
 // the caller retries. Only a host that answered - stood down, or is
 // provably unreachable behind a published endpoint - lets the reload run.
+//
+// And it runs only once the job is provably GONE: the same `bootout --wait`
+// barrier and positive re-probe the Desktop-agent arm uses. A cooperative
+// stop waits for the host child, not the supervisor launchd runs, and an
+// unreachable host was never asked at all; `installService`'s own bootout
+// does not wait, so without the barrier it can bootstrap the replacement
+// while the incumbent is still tearing down and still publishing `pid.json`
+// - the replacement's `findLiveIncumbentHost` then reads the corpse as live,
+// declines, exits 0, and `KeepAlive{SuccessfulExit: false}` leaves the
+// machine hostless (CodeRabbit, traycer#1761).
 async function standDownLiveCliLabelHost(
   label: ServiceLabel,
   cliOwnership: LaunchdOwnership,
+  run: ProcessRunner,
 ): Promise<DesktopRegistrationTakeover> {
   if (cliOwnership.kind !== "cli-or-other" || cliOwnership.pid === null) {
     return { kind: "not-applicable" };
@@ -351,6 +457,29 @@ async function standDownLiveCliLabelHost(
       "Takeover: the host running under the CLI label stood down before the reload.",
       { label: label.id, pid: cliOwnership.pid, outcome: outcome.kind },
     );
+  }
+  const serviceTarget = `${guiDomain()}/${label.id}`;
+  await run("launchctl", ["bootout", "--wait", serviceTarget], {
+    env: undefined,
+    cwd: undefined,
+    timeoutMs: STOP_EXIT_TIMEOUT_MS,
+    tolerateNonZeroExit: true,
+  });
+  const postBootout = await verifyAgentBootedOut(serviceTarget, run);
+  if (postBootout !== "absent") {
+    throw cliError({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+      message:
+        postBootout === "still-loaded"
+          ? `service install --takeover: launchctl bootout of '${label.id}' did not take effect (the job is still loaded), so the reload was stopped rather than start a replacement beside the old host. Re-run the command, or run 'traycer host service uninstall' first.`
+          : `service install --takeover: could not confirm that '${label.id}' was booted out (launchctl did not answer), so the reload was stopped rather than risk running two hosts. Re-run the command, or run 'traycer host service uninstall' first.`,
+      details: {
+        label: label.id,
+        pid: cliOwnership.pid,
+        verification: postBootout,
+      },
+      exitCode: 1,
+    });
   }
   return {
     kind: "cli-host-stopped",

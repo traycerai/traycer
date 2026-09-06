@@ -2391,11 +2391,21 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
     // tripping the pre-split refusal) with an optional live `pid` -
     // the KeepAlive-respawn race `standDownLiveCliLabelHost` exists to
     // close.
-    function stageStandDownRunner(input: { pid: number | null }): {
+    //
+    // `postBootout` controls the SECOND non-`.agent` print (the positive
+    // re-probe after `bootout --wait`, mirroring `agentLoadedAfterBootout`
+    // in `stageTakeoverRunner` above): "absent" (default) answers with
+    // launchd's not-found output, "still-loaded" repeats the loaded
+    // answer, and "spawn-failure" throws so the probe reads indeterminate.
+    function stageStandDownRunner(input: {
+      pid: number | null;
+      postBootout?: "absent" | "still-loaded" | "spawn-failure";
+    }): {
       calls: RecordedCall[];
       controller: ServiceController;
     } {
       const calls: RecordedCall[] = [];
+      let cliLabelPrints = 0;
       const runner: ProcessRunner = async (command, args) => {
         calls.push({ command, args });
         if (args[0] === "print") {
@@ -2406,11 +2416,30 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
               exitCode: 113,
             };
           }
-          const pidLine = input.pid === null ? "" : `\tpid = ${input.pid}\n`;
+          cliLabelPrints += 1;
+          if (cliLabelPrints === 1) {
+            const pidLine = input.pid === null ? "" : `\tpid = ${input.pid}\n`;
+            return {
+              stdout: `\tpath = /Users/me/Library/LaunchAgents/${label.id}.plist\n\ttype = LaunchAgent\n${pidLine}`,
+              stderr: "",
+              exitCode: 0,
+            };
+          }
+          const postBootout = input.postBootout ?? "absent";
+          if (postBootout === "still-loaded") {
+            return {
+              stdout: `\tpath = /Users/me/Library/LaunchAgents/${label.id}.plist\n\ttype = LaunchAgent\n`,
+              stderr: "",
+              exitCode: 0,
+            };
+          }
+          if (postBootout === "spawn-failure") {
+            throw new Error("launchctl could not be spawned");
+          }
           return {
-            stdout: `\tpath = /Users/me/Library/LaunchAgents/${label.id}.plist\n\ttype = LaunchAgent\n${pidLine}`,
-            stderr: "",
-            exitCode: 0,
+            stdout: "",
+            stderr: "Could not find specified service\n",
+            exitCode: 113,
           };
         }
         return buildSuccessResult();
@@ -2465,8 +2494,8 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       expect(calls.some((c) => c.args[0] === "bootout")).toBe(false);
     });
 
-    it("resolves cli-host-stopped/stopped and logs the stand-down when the live CLI-label host stops cooperatively", async () => {
-      const { controller } = stageStandDownRunner({ pid: 4242 });
+    it("resolves cli-host-stopped/stopped and logs the stand-down when the live CLI-label host stops cooperatively, after booting it out and verifying it is gone", async () => {
+      const { calls, controller } = stageStandDownRunner({ pid: 4242 });
       MOCKS.requestCooperativeShutdown.mockResolvedValue({ kind: "stopped" });
 
       await expect(
@@ -2484,10 +2513,20 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         expect.stringContaining("stood down before the reload"),
         expect.objectContaining({ label: label.id, pid: 4242 }),
       );
+      const bootout = calls.find((c) => c.args[0] === "bootout");
+      expect(bootout?.args).toEqual([
+        "bootout",
+        "--wait",
+        `gui/${process.getuid?.() ?? 0}/${label.id}`,
+      ]);
+      const prints = calls.filter(
+        (c) => c.args[0] === "print" && c.args[1]?.endsWith(".agent") !== true,
+      );
+      expect(prints).toHaveLength(2);
     });
 
-    it("resolves cli-host-stopped/skipped-unreachable and warns when the live CLI-label host cannot be stopped cooperatively", async () => {
-      const { controller } = stageStandDownRunner({ pid: 4242 });
+    it("resolves cli-host-stopped/skipped-unreachable and warns when the live CLI-label host cannot be stopped cooperatively, after booting it out and verifying it is gone", async () => {
+      const { calls, controller } = stageStandDownRunner({ pid: 4242 });
       MOCKS.requestCooperativeShutdown.mockResolvedValue({
         kind: "unreachable",
         cause: "boom",
@@ -2503,6 +2542,42 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         expect.stringContaining("could not be stopped cooperatively"),
         expect.objectContaining({ cause: "boom" }),
       );
+      expect(calls.some((c) => c.args[0] === "bootout")).toBe(true);
+    });
+
+    it("rejects with SERVICE_INSTALL_FAILED ('did not take effect') when the post-bootout probe still finds the CLI-label job loaded", async () => {
+      const { controller } = stageStandDownRunner({
+        pid: 4242,
+        postBootout: "still-loaded",
+      });
+      MOCKS.requestCooperativeShutdown.mockResolvedValue({ kind: "stopped" });
+
+      await expect(
+        controller.takeoverDesktopRegistration(label),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+        message: expect.stringContaining(
+          "did not take effect (the job is still loaded)",
+        ),
+      });
+    });
+
+    it("rejects with SERVICE_INSTALL_FAILED ('could not confirm') when the post-bootout probe fails to spawn", async () => {
+      const { controller } = stageStandDownRunner({
+        pid: 4242,
+        postBootout: "spawn-failure",
+      });
+      MOCKS.requestCooperativeShutdown.mockResolvedValue({
+        kind: "unreachable",
+        cause: "boom",
+      });
+
+      await expect(
+        controller.takeoverDesktopRegistration(label),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+        message: expect.stringContaining("could not confirm"),
+      });
     });
 
     it("reports not-applicable and never calls requestCooperativeShutdown when the CLI label is loaded but has no live pid", async () => {
@@ -2521,6 +2596,77 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
     // at `not-loaded` (not `cli-or-other`), so `standDownLiveCliLabelHost`
     // short-circuits to `not-applicable` without calling
     // `requestCooperativeShutdown`. No separate test added here.
+  });
+
+  describe("takeoverDesktopRegistration - indeterminate label probes fail closed", () => {
+    // `probeLabelForTakeover` is three-state: a positive not-found answer is
+    // `absent`, a positive loaded answer is `loaded`, and everything else
+    // (spawn failure, timeout, permission text, an unrecognized non-zero
+    // exit) is `indeterminate` - and an indeterminate read of EITHER label
+    // must abort the takeover rather than fall through to "not applicable"
+    // and let `installService`'s later plain bootout run with no claim.
+    it("rejects when the CLI-label print exits non-zero with unrelated output, naming the CLI label and never touching cooperative shutdown or launchd", async () => {
+      const calls: RecordedCall[] = [];
+      const runner: ProcessRunner = async (command, args) => {
+        calls.push({ command, args });
+        if (args[0] === "print") {
+          return {
+            stdout: "",
+            stderr: "launchctl: some unrecognized internal error\n",
+            exitCode: 1,
+          };
+        }
+        return buildSuccessResult();
+      };
+      const controller = createMacosController(runner);
+
+      await expect(
+        controller.takeoverDesktopRegistration(label),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+        message: expect.stringContaining(
+          `could not read launchd's state for '${label.id}'`,
+        ),
+        details: expect.objectContaining({ probedLabel: label.id }),
+      });
+      expect(MOCKS.requestCooperativeShutdown).not.toHaveBeenCalled();
+      expect(calls.some((c) => c.args[0] === "bootout")).toBe(false);
+      // Only the CLI-label probe should have run; an indeterminate CLI-label
+      // read must abort before the `.agent` probe is even attempted.
+      expect(calls.map((c) => c.args[0])).toEqual(["print"]);
+    });
+
+    it("rejects when the CLI label is absent but the .agent print fails to spawn, naming the agent label and never touching cooperative shutdown or launchd", async () => {
+      const calls: RecordedCall[] = [];
+      const runner: ProcessRunner = async (command, args) => {
+        calls.push({ command, args });
+        if (args[0] === "print") {
+          if (args[1]?.endsWith(".agent") === true) {
+            throw new Error("launchctl could not be spawned");
+          }
+          return {
+            stdout: "",
+            stderr: "Could not find specified service\n",
+            exitCode: 113,
+          };
+        }
+        return buildSuccessResult();
+      };
+      const controller = createMacosController(runner);
+
+      await expect(
+        controller.takeoverDesktopRegistration(label),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+        message: expect.stringContaining(
+          `could not read launchd's state for '${label.id}.agent'`,
+        ),
+        details: expect.objectContaining({ probedLabel: `${label.id}.agent` }),
+      });
+      expect(MOCKS.requestCooperativeShutdown).not.toHaveBeenCalled();
+      expect(calls.some((c) => c.args[0] === "bootout")).toBe(false);
+      expect(calls.map((c) => c.args[0])).toEqual(["print", "print"]);
+    });
   });
 
   it("stop/start/restart proceed normally when the agent probe reads not-loaded (CLI-managed machine)", async () => {
