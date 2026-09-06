@@ -31,8 +31,10 @@ export const STOP_EXIT_GRACE_MARGIN_MS = 2_000;
  * (`traycer-cli/src/service/platforms/windows.ts`: `stopService` /
  * `killHostProcessTree` / `startService` / `restartService`). Windows has no
  * single graceful-stop signal like launchd SIGTERM - `restart` runs a
- * sequence of independently-capped steps: `schtasks /End`, a PowerShell
- * process-tree scan, `taskkill` on any surviving pids, then `schtasks /Run`,
+ * sequence of independently-capped steps: `schtasks /End`, then up to
+ * `WINDOWS_KILL_CONVERGENCE_ROUNDS` PowerShell process-tree scans each
+ * followed by `taskkill` on the pids that scan returns plus one final
+ * confirming scan, then `schtasks /Run`,
  * post-`/Run` spawn-evidence verification, and (on verification failure) a
  * Last Run Result query.
  * Exported here (not left as local literals in `windows.ts`) so the outer
@@ -40,10 +42,38 @@ export const STOP_EXIT_GRACE_MARGIN_MS = 2_000;
  * of duplicating these numbers as a second, driftable magic number.
  */
 export const WINDOWS_SCHTASKS_END_TIMEOUT_MS = 30_000;
-export const WINDOWS_PROCESS_SCAN_TIMEOUT_MS = 10_000;
+/**
+ * Bound on ONE `Get-CimInstance Win32_Process` scan. Sized from what the CLI
+ * actually spawns, not from an interactive shell: Traycer ships x64 only, so
+ * on Windows-on-ARM the child is the EMULATED x64 `powershell.exe`, whose bare
+ * startup measured 4.2–5.1 s and the scan 7.3–8.5 s on an idle 4-vCPU Windows
+ * 11 ARM64 VM (native ARM64 PowerShell: 1.4–1.7 s). At 10 s any load pushed
+ * the scan over the bound and `host stop` was refused fail-closed - 3 of 5
+ * loaded attempts on 2026-09-06 - before anything was killed. 30 s is the
+ * same ceiling the schtasks steps already carry; the loop's round bound, not
+ * this timeout, is what keeps a non-converging host from grinding.
+ */
+export const WINDOWS_PROCESS_SCAN_TIMEOUT_MS = 30_000;
 export const WINDOWS_TASKKILL_TIMEOUT_MS = 30_000;
 export const WINDOWS_SCHTASKS_RUN_TIMEOUT_MS = 30_000;
 export const WINDOWS_SCHTASKS_QUERY_TIMEOUT_MS = 10_000;
+
+/**
+ * How many KILL passes `killHostProcessTree` may make before it gives up and
+ * fails naming the survivors. The scan is a SNAPSHOT: a process the host (or
+ * an agent under it) spawns after the table is materialized is in no round's
+ * kill set, and `taskkill /T` - which this CLI must never use, being routinely
+ * a child of the host it is stopping - is what used to sweep it up. Rescanning
+ * is the only enumerator left. Bounded, because a host spawning faster than we
+ * can scan is not converging and grinding on it is worse than failing: the
+ * error names the surviving pids, and the install swap's own EBUSY detail scan
+ * names the lock holders.
+ *
+ * The loop scans once MORE than it kills, so the last scan is always a
+ * confirming one: N kill passes, N+1 scans. Only an empty scan reports
+ * success, which is why the budget below counts scans and kills separately.
+ */
+export const WINDOWS_KILL_CONVERGENCE_ROUNDS = 3;
 
 /**
  * After `schtasks /Run`, how long `startService` polls for post-baseline
@@ -70,8 +100,14 @@ export const HOST_READY_EXTENDED_TIMEOUT_MS = 5 * 60_000;
  */
 export const WINDOWS_RESTART_SEQUENCE_TIMEOUT_MS =
   WINDOWS_SCHTASKS_END_TIMEOUT_MS +
-  WINDOWS_PROCESS_SCAN_TIMEOUT_MS +
-  WINDOWS_TASKKILL_TIMEOUT_MS +
+  // The kill step is a bounded scan-then-kill loop, not a single pass, so its
+  // worst case scales with the round bound. Leaving this as one scan + one
+  // taskkill would understate the sequence and let the caller's SIGKILL land
+  // mid-restart - the exact failure the outer budget below exists to prevent.
+  // Scans and kills are counted separately because the loop confirms with a
+  // final scan it does not kill from: N+1 scans, N kills.
+  (WINDOWS_KILL_CONVERGENCE_ROUNDS + 1) * WINDOWS_PROCESS_SCAN_TIMEOUT_MS +
+  WINDOWS_KILL_CONVERGENCE_ROUNDS * WINDOWS_TASKKILL_TIMEOUT_MS +
   WINDOWS_SCHTASKS_RUN_TIMEOUT_MS +
   WINDOWS_START_SPAWN_VERIFY_MS +
   WINDOWS_SCHTASKS_QUERY_TIMEOUT_MS;
