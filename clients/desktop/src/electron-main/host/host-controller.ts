@@ -9,7 +9,9 @@ import {
   hasUnappliedPendingLoginItemRevision,
   hostManagesHostLoginItem,
   readHostLoginItemStatus,
+  readParkedRegistrationTakeover,
   type HostLoginItemStatus,
+  type ParkedRegistrationTakeover,
   type RegisterHostLoginItemResult,
 } from "../app/host-login-item";
 import { resolveBundledCliPath } from "../cli/cli-discovery";
@@ -719,6 +721,9 @@ type LockedMacActivationStep =
    * restart itself through the CLI (`host restart`, cooperative claim →
    * commit → kickstart); the supervisor it relaunches re-resolves the install
    * record on spawn, which is the activation this cycle set out to perform.
+   * With NO host running and a park SMAppService can never resolve, the
+   * CLI-owned LaunchAgent takes the registration over instead
+   * (`takeOverParkedRegistrationIfDown`).
    */
   | {
       readonly phase: "parked";
@@ -1522,8 +1527,11 @@ export class HostController {
   // definitively failed to register the LaunchAgent (as opposed to
   // `requires-approval`, which means it IS registered and only needs the
   // user's own toggle) - the CLI's raw-LaunchAgent takeover can recover from
-  // exactly these. Single source of truth for the three call sites below so
-  // a future `HostLoginItemStatus` member can't drift between them.
+  // exactly these. Single source of truth for every post-cycle call site
+  // below, so a future `HostLoginItemStatus` member can't drift between them.
+  // The PARKED path uses the narrower `readParkedRegistrationTakeover`
+  // instead (no bootout happened, so `not-registered` is not admitted); a new
+  // member has to be placed in both, and that predicate's doc says how.
   private isCliTakeoverRecoverableStatus(
     status: RegisterHostLoginItemResult,
   ): status is "not-registered" | "not-found" | "not-supported" {
@@ -1536,7 +1544,11 @@ export class HostController {
 
   // Last-rung recovery for a macOS register cycle whose SMAppService calls
   // failed (`not-found` / `not-registered` / `not-supported`) AFTER the
-  // cycle's own bootout already tore down the loaded agent. Field RCA
+  // cycle's own bootout already tore down the loaded agent - and, since the
+  // 2026-09-06 incident, for a cycle that PARKED on a status SMAppService can
+  // never resolve while no host runs (`takeOverParkedRegistrationIfDown`;
+  // there nothing was booted out, and the CLI stops a still-loaded agent
+  // cooperatively before retiring it). Field RCA
   // (2026-07-28): SMAppService can answer `not-found` for a byte-correct
   // in-bundle plist for the remainder of the app process's life (the BTM
   // record's identity keyed to a previous build), so re-running the same
@@ -1988,8 +2000,12 @@ export class HostController {
    * started through the same CLI cycle (its relaunch half kickstarts the
    * registered agent, which needs no live pid); `requires-approval` fails
    * with the System Settings guidance, since nothing but the user can
-   * re-enable it; anything else fails immediately naming the parked
-   * registration, not with a two-minute timeout that names the wrong cause.
+   * re-enable it; a park SMAppService can never resolve (`not-found` /
+   * `not-supported` with nothing registered under the legacy label either)
+   * is finished by the CLI-owned LaunchAgent, exactly as a register cycle
+   * that FAILED with that status is; anything else fails immediately naming
+   * the parked registration, not with a two-minute timeout that names the
+   * wrong cause.
    */
   private async activateAroundParkedRegistration(
     step: Extract<LockedMacActivationStep, { phase: "parked" }>,
@@ -2011,6 +2027,11 @@ export class HostController {
         return this.failedAfterServiceCycle(approvalRequiredMessage());
       }
       if (loginItemStatus !== "enabled") {
+        const takeover = await this.takeOverParkedRegistrationIfDown(
+          step.prePid,
+          step.expectedRuntimeVersion,
+        );
+        if (takeover !== null) return takeover;
         log.warn(
           "[host-controller] login-item registration parked with no running host to restart",
           { loginItemStatus },
@@ -2055,6 +2076,151 @@ export class HostController {
         : ["host", "restart", "--if-idle", "--defer-if-parked"],
       step.prePid,
     );
+  }
+
+  /**
+   * The parked-cycle takeover verdict shared by every consumer of `parked`:
+   * `null` unless NO host is running and `readParkedRegistrationTakeover`
+   * says the CLI-owned LaunchAgent may finish the registration.
+   *
+   * `prePid === null` alone is not "no host": it is a structural read of
+   * `pid.json`, absent for a host in its first seconds after a `KeepAlive`
+   * respawn or one whose metadata tore. The verdict's own launchd probe
+   * supplies the positive half (no live process under either label), and it
+   * is read HERE, at the decision, not from the snapshot captured before the
+   * register cycle queued.
+   */
+  private async parkedTakeoverVerdict(
+    prePid: number | null,
+  ): Promise<Extract<ParkedRegistrationTakeover, { kind: "takeover" }> | null> {
+    if (prePid !== null) return null;
+    const verdict = await readParkedRegistrationTakeover();
+    if (verdict.kind !== "takeover") {
+      log.info(
+        "[host-controller] parked login-item registration is not one the CLI-owned LaunchAgent may finish",
+        { reason: verdict.reason },
+      );
+      return null;
+    }
+    return verdict;
+  }
+
+  /**
+   * The takeover arm of a parked register cycle, shared by every consumer of
+   * `parked` that finds NO host running: `null` when the park is not one the
+   * CLI-owned LaunchAgent may finish, otherwise the takeover's outcome.
+   *
+   * A park attempted nothing, so the machine is exactly as the caller found
+   * it: bytes committed, no host, and - when `parkedTakeoverVerdict` admits it
+   * - no registration SMAppService can ever manage from this process and no
+   * live process under either label. Nothing on the machine will start this
+   * host. This is the state `host uninstall` followed by a reinstall leaves
+   * an ad-hoc-signed build in (2026-09-06: every boot retry parked here,
+   * failed "no host is running to restart", and waited fifty minutes for a
+   * person to run `host service install`). The recovery is the one a
+   * register cycle that FAILED with this status already uses: `host service
+   * install --takeover`, which with nothing loaded is a plain install of the
+   * CLI-owned LaunchAgent. Unlike that path, nothing was booted out first,
+   * so a still-loaded (idle) desktop agent is stopped cooperatively and
+   * retired by the CLI - a larger action than a plain install, and the right
+   * one for an agent SMAppService can no longer see.
+   *
+   * Down-host only, by design. With a host RUNNING under the CLI label the
+   * callers' cooperative `host restart` is the right route: it makes the
+   * shutdown claim and a busy host refuses it, whereas the takeover's install
+   * boots that label out with no claim at all. A running host with NO
+   * registration anywhere (a hand-run `host start`) is not this method's
+   * case either: the restart fails to relaunch, the next boot retry finds the
+   * host down, and lands here.
+   *
+   * `force` is deliberately not threaded in: `host service install` has no
+   * force and the takeover is cooperative by construction. So a `busy`
+   * refusal (a host appeared between the verdict and the CLI's own probe) is
+   * reported `deferred`, not `busy`: the busy outcome advertises a Force
+   * affordance, and Force would re-run this same forceless command against
+   * the same host - a loop with a live button on it. The next boot retry
+   * re-derives the verdict from live evidence instead.
+   */
+  private async takeOverParkedRegistrationIfDown(
+    prePid: number | null,
+    expectedRuntimeVersion: string | null,
+  ): Promise<MutationOutcome<{ readonly activated: boolean }> | null> {
+    const takeover = await this.parkedTakeoverVerdict(prePid);
+    if (takeover === null) return null;
+    log.warn(
+      "[host-controller] login-item registration parked with no running host and no registration SMAppService can manage - finishing it through the CLI-owned LaunchAgent",
+      { loginItemStatus: takeover.status },
+    );
+    const recovery = await this.recoverRegistrationViaCliTakeover({
+      adoptionArgs: [],
+      failedStatus: takeover.status,
+      prePid: null,
+      expectedRuntimeVersion,
+    });
+    if (recovery.recovered) {
+      return { kind: "ok", value: { activated: true } };
+    }
+    return recovery.outcome.kind === "busy"
+      ? { kind: "deferred", message: recovery.outcome.message }
+      : recovery.outcome;
+  }
+
+  /**
+   * The F3 continuation's takeover, as a thunk the executor runs OUTSIDE its
+   * actuator span (the takeover child takes the cli-lock itself, so running
+   * it inline would block the parent on its own child). One body for the two
+   * states that need it - a register cycle that failed with a recoverable
+   * status, and a park with no host that SMAppService can never resolve - so
+   * the adoption minting and its failure reporting cannot drift between them.
+   */
+  private mintedTakeoverContinuation(
+    capability: UpdateMutationCapability,
+    args: {
+      readonly failedStatus: HostLoginItemStatus;
+      readonly prePid: number | null;
+      readonly expectedRuntimeVersion: string | null;
+    },
+  ): () => Promise<DesktopActivationCycleOutcome> {
+    return async (): Promise<DesktopActivationCycleOutcome> => {
+      const recovery = await withMintedAdoption(
+        capability,
+        this.layout,
+        (adoptionArgs) =>
+          this.recoverRegistrationViaCliTakeover({
+            failedStatus: args.failedStatus,
+            prePid: args.prePid,
+            expectedRuntimeVersion: args.expectedRuntimeVersion,
+            adoptionArgs,
+          }),
+      ).catch((err: unknown) => {
+        const cause = err instanceof Error ? err.message : String(err);
+        log.warn("[host-controller] takeover adoption could not be minted", {
+          cause,
+        });
+        return { mintFailure: cause };
+      });
+      if ("mintFailure" in recovery) {
+        // Carry the REAL cause. This used to return the generic lock-busy
+        // message, which `terminalize` then wrote to disk as the failure's
+        // `cause` - so a local proof-write I/O error was permanently recorded
+        // as lock contention, which is not merely vague but actively wrong
+        // for whoever reads that diagnostic later.
+        //
+        // Same invariant as the takeover-diagnostics ruling earlier in this
+        // ticket: classification may normalize the failure CATEGORY, but it
+        // must never replace caller-only discriminating evidence.
+        return {
+          kind: "failed",
+          message: `adoption proof could not be minted: ${recovery.mintFailure}`,
+        };
+      }
+      return recovery.recovered
+        ? { kind: "activated" }
+        : {
+            kind: "deferred",
+            message: describeTakeoverRefusal(recovery.outcome),
+          };
+    };
   }
 
   private async runLockedMacActivationCycleOnce(
@@ -3721,15 +3887,28 @@ export class HostController {
           if (registration.status === "parked") {
             // A park attempted NOTHING, so the login item is exactly what it
             // was before this call. This method's promise is "registered",
-            // and only an item that already reads `enabled` can keep it - a
-            // `requires-approval` or unreadable item is the user's (or
-            // `traycer host doctor`'s) to fix, and restarting the running
-            // host would cost it its connections without registering a
-            // thing. The status is read HERE, not taken from the snapshot the
-            // guard refused on: the guard also parks on the LEGACY label and
-            // the manifest, so the primary item can be enabled under a park.
+            // and two states can keep it: an item that already reads
+            // `enabled`, and - with nothing running - an item SMAppService can
+            // never manage, where the CLI-owned LaunchAgent is the only
+            // registration this machine can have and installing it is what a
+            // person would do next. A `requires-approval` or unreadable item
+            // is the user's (or `traycer host doctor`'s) to fix, and
+            // restarting the running host would cost it its connections
+            // without registering a thing. The status is read HERE, not taken
+            // from the snapshot the guard refused on: the guard also parks on
+            // the LEGACY label and the manifest, so the primary item can be
+            // enabled under a park.
             const loginItemStatus = readHostLoginItemStatus();
             if (loginItemStatus !== "enabled") {
+              const takeover = await this.takeOverParkedRegistrationIfDown(
+                registration.prePid,
+                registration.expectedRuntimeVersion,
+              );
+              if (takeover !== null) {
+                return takeover.kind === "ok"
+                  ? { kind: "ok", value: { registered: true } }
+                  : takeover;
+              }
               return {
                 kind: "failed",
                 message:
@@ -4100,9 +4279,31 @@ export class HostController {
           if (step.phase === "registered") return { kind: "activated" };
           if (step.phase === "parked") {
             // The executor segment holds the actuator lock and the parked
-            // fallback spawns the CLI, so it cannot run inline. Report it as
-            // deferred: the record stays where it is and the next
-            // continuation (or an explicit Restart) performs the activation.
+            // fallback spawns the CLI, so it cannot run inline. A park with NO
+            // host running that SMAppService can never resolve is finished
+            // outside the lock by the same takeover a failed register uses
+            // (the down-host rule of `takeOverParkedRegistrationIfDown`);
+            // every other park is reported deferred: the record stays where
+            // it is and the next continuation (or an explicit Restart)
+            // performs the activation.
+            const takeover = await this.parkedTakeoverVerdict(step.prePid);
+            if (takeover !== null) {
+              log.warn(
+                "[host-controller] login-item registration parked with no running host and no registration SMAppService can manage - finishing the continuation through the CLI-owned LaunchAgent",
+                { loginItemStatus: takeover.status },
+              );
+              return {
+                kind: "needs-takeover",
+                recoverOutsideLock: this.mintedTakeoverContinuation(
+                  capability,
+                  {
+                    failedStatus: takeover.status,
+                    prePid: null,
+                    expectedRuntimeVersion: step.expectedRuntimeVersion,
+                  },
+                ),
+              };
+            }
             return {
               kind: "deferred",
               message:
@@ -4117,51 +4318,14 @@ export class HostController {
             if (this.isCliTakeoverRecoverableStatus(step.status)) {
               return {
                 kind: "needs-takeover",
-                recoverOutsideLock:
-                  async (): Promise<DesktopActivationCycleOutcome> => {
-                    const recovery = await withMintedAdoption(
-                      capability,
-                      this.layout,
-                      (adoptionArgs) =>
-                        this.recoverRegistrationViaCliTakeover({
-                          failedStatus: step.status,
-                          prePid: step.prePid,
-                          expectedRuntimeVersion: step.expectedRuntimeVersion,
-                          adoptionArgs,
-                        }),
-                    ).catch((err: unknown) => {
-                      const cause =
-                        err instanceof Error ? err.message : String(err);
-                      log.warn(
-                        "[host-controller] takeover adoption could not be minted",
-                        { cause },
-                      );
-                      return { mintFailure: cause };
-                    });
-                    if ("mintFailure" in recovery) {
-                      // Carry the REAL cause. This used to return the generic
-                      // lock-busy message, which `terminalize` then wrote to disk
-                      // as the failure's `cause` - so a local proof-write I/O
-                      // error was permanently recorded as lock contention, which
-                      // is not merely vague but actively wrong for whoever reads
-                      // that diagnostic later.
-                      //
-                      // Same invariant as the takeover-diagnostics ruling earlier
-                      // in this ticket: classification may normalize the failure
-                      // CATEGORY, but it must never replace caller-only
-                      // discriminating evidence.
-                      return {
-                        kind: "failed",
-                        message: `adoption proof could not be minted: ${recovery.mintFailure}`,
-                      };
-                    }
-                    return recovery.recovered
-                      ? { kind: "activated" }
-                      : {
-                          kind: "deferred",
-                          message: describeTakeoverRefusal(recovery.outcome),
-                        };
+                recoverOutsideLock: this.mintedTakeoverContinuation(
+                  capability,
+                  {
+                    failedStatus: step.status,
+                    prePid: step.prePid,
+                    expectedRuntimeVersion: step.expectedRuntimeVersion,
                   },
+                ),
               };
             }
             // Carries the login-item status rather than a message. Keep the
