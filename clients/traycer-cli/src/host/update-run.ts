@@ -1329,8 +1329,12 @@ async function resumedApplyArm(
     // private source on any throw, so the resume re-downloads (Plan D14).
     // Safe to reach with a foreign stage present, and the reason is
     // structural: the downgrade installer stages into an owner-tokened temp
-    // dir and commits from there, so it never writes the shared stage and
-    // cannot destroy whatever is in it.
+    // dir and commits from there, so its private download never PROMOTES
+    // into the shared stage and an eligible newer stage survives it (review
+    // B probe: 2.0.0 over 3.0.0 with 4.0.0 staged keeps the stage id,
+    // sidecar and bytes). The ordinary commit-time reconciliation still runs
+    // (`reconcileHostStageWithAttempt`) and may remove a stale or invalid
+    // stage - that is the reconcile rule's decision, not a transfer over it.
     await writer.phaseWrite("downloading");
     return downgradeArm(input, writer);
   }
