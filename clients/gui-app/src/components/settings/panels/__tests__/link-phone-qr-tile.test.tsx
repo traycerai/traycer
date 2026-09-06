@@ -2,8 +2,8 @@
  * The branded QR tile is drawn from the encoder's own matrix, so these tests
  * compare the rendered SVG against a symbol encoded here: every module the
  * encoder produced is drawn, at its own coordinates, at level H, inside the
- * quiet zone. The expiry frame's drain and the rotation fade are asserted the
- * same way — off the rendered attributes, with no library standing in.
+ * quiet zone. The frame's geometry and the rotation fade are asserted the same
+ * way — off the rendered attributes, with no library standing in.
  */
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
@@ -64,13 +64,7 @@ afterEach(() => {
 describe("LinkPhoneQrTile", () => {
   it("draws exactly the encoder's matrix for the code's deep-link payload", () => {
     const expected = expectedSymbol(CODE);
-    render(
-      <LinkPhoneQrTile
-        platformBaseUrl={PLATFORM}
-        code={CODE}
-        remainingFraction={1}
-      />,
-    );
+    render(<LinkPhoneQrTile platformBaseUrl={PLATFORM} code={CODE} />);
     expect(renderedModules()).toEqual(expected.dark);
     // A different code encodes a different symbol, so the comparison above is
     // load-bearing rather than a shape check.
@@ -80,13 +74,7 @@ describe("LinkPhoneQrTile", () => {
 
   it("encodes at level H inside a full quiet zone, with the three eyes drawn", () => {
     const expected = expectedSymbol(CODE);
-    render(
-      <LinkPhoneQrTile
-        platformBaseUrl={PLATFORM}
-        code={CODE}
-        remainingFraction={1}
-      />,
-    );
+    render(<LinkPhoneQrTile platformBaseUrl={PLATFORM} code={CODE} />);
     const svg = screen.getByTestId("link-phone-qr");
     expect(svg.getAttribute("data-qr-error-correction")).toBe("H");
     expect(svg.getAttribute("data-qr-quiet-zone")).toBe(String(QUIET_ZONE));
@@ -100,66 +88,9 @@ describe("LinkPhoneQrTile", () => {
     expect(eyeRects.length).toBe(9);
   });
 
-  it("drains the expiry frame with the remaining share of the code's life", () => {
-    const view = render(
-      <LinkPhoneQrTile
-        platformBaseUrl={PLATFORM}
-        code={CODE}
-        remainingFraction={1}
-      />,
-    );
-    const offset = () =>
-      screen
-        .getByTestId("link-phone-expiry-frame")
-        .getAttribute("stroke-dashoffset");
-    expect(offset()).toBe("0");
-    view.rerender(
-      <LinkPhoneQrTile
-        platformBaseUrl={PLATFORM}
-        code={CODE}
-        remainingFraction={0.5}
-      />,
-    );
-    expect(offset()).toBe("0.5");
-    view.rerender(
-      <LinkPhoneQrTile
-        platformBaseUrl={PLATFORM}
-        code={CODE}
-        remainingFraction={0}
-      />,
-    );
-    expect(offset()).toBe("1");
-  });
-
-  it("clamps a fraction the clock overshot instead of drawing past the frame", () => {
-    const view = render(
-      <LinkPhoneQrTile
-        platformBaseUrl={PLATFORM}
-        code={CODE}
-        remainingFraction={1.4}
-      />,
-    );
-    const frame = () => screen.getByTestId("link-phone-expiry-frame");
-    expect(frame().getAttribute("data-remaining-fraction")).toBe("1.00");
-    view.rerender(
-      <LinkPhoneQrTile
-        platformBaseUrl={PLATFORM}
-        code={CODE}
-        remainingFraction={-0.2}
-      />,
-    );
-    expect(frame().getAttribute("data-remaining-fraction")).toBe("0.00");
-  });
-
   it("ends the paper on the frame's centre line, sharing its corner curve", () => {
     const expected = expectedSymbol(CODE);
-    render(
-      <LinkPhoneQrTile
-        platformBaseUrl={PLATFORM}
-        code={CODE}
-        remainingFraction={1}
-      />,
-    );
+    render(<LinkPhoneQrTile platformBaseUrl={PLATFORM} code={CODE} />);
     const svg = screen.getByTestId("link-phone-qr");
     const extent = expected.size + QUIET_ZONE * 2;
     // The paper is the first rect in the symbol — everything else is a module
@@ -179,45 +110,35 @@ describe("LinkPhoneQrTile", () => {
     );
     // Four light modules have to survive the stroke covering the paper's rim.
     expect(QUIET_ZONE - inset).toBeGreaterThanOrEqual(4);
+    // And the frame itself is drawn on that same centre line, in its own
+    // percent units, so the two describe one edge.
+    const frame = screen.getByTestId("link-phone-tile-frame");
+    expect(frame.getAttribute("x")).toBe(String(FRAME_CENTRE_INSET_PERCENT));
+    expect(frame.getAttribute("width")).toBe(
+      String(100 - FRAME_CENTRE_INSET_PERCENT * 2),
+    );
+    expect(frame.getAttribute("rx")).toBe(String(FRAME_RADIUS_PERCENT));
   });
 
-  it("draws the drain flush against its track, with no protruding caps", () => {
-    render(
-      <LinkPhoneQrTile
-        platformBaseUrl={PLATFORM}
-        code={CODE}
-        remainingFraction={0.5}
-      />,
-    );
-    const drain = screen.getByTestId("link-phone-expiry-frame");
-    expect(drain.getAttribute("stroke-linecap")).toBe("butt");
-    // Track and drain are the same path, so the band cannot step or gap.
-    const track = drain.previousElementSibling;
-    for (const attribute of ["x", "y", "width", "height", "rx"]) {
-      expect(track?.getAttribute(attribute)).toBe(
-        drain.getAttribute(attribute),
-      );
-    }
+  it("draws one static band with nothing that could drain or animate", () => {
+    render(<LinkPhoneQrTile platformBaseUrl={PLATFORM} code={CODE} />);
+    const frame = screen.getByTestId("link-phone-tile-frame");
+    // A single stroke, no dash bookkeeping: there is no remaining-life input
+    // to drive one, and the band must not read as a timer.
+    expect(frame.parentElement?.querySelectorAll("rect").length).toBe(1);
+    expect(frame.getAttribute("stroke-dasharray")).toBeNull();
+    expect(frame.getAttribute("stroke-dashoffset")).toBeNull();
+    expect(frame.getAttribute("class")).not.toContain("transition");
   });
 
   it("holds the same footprint while a code is being minted", () => {
     const view = render(
-      <LinkPhoneQrTile
-        platformBaseUrl={PLATFORM}
-        code={CODE}
-        remainingFraction={1}
-      />,
+      <LinkPhoneQrTile platformBaseUrl={PLATFORM} code={CODE} />,
     );
     const withCode = screen.getByTestId("link-phone-qr-tile");
     expect(withCode.getAttribute("data-tile-state")).toBe("code");
 
-    view.rerender(
-      <LinkPhoneQrTile
-        platformBaseUrl={PLATFORM}
-        code={null}
-        remainingFraction={0}
-      />,
-    );
+    view.rerender(<LinkPhoneQrTile platformBaseUrl={PLATFORM} code={null} />);
     const pending = screen.getByTestId("link-phone-qr-tile");
     // jsdom does no layout, so the invariant is pinned on the box that
     // decides the height: same element, same sizing classes, both states.
@@ -225,30 +146,18 @@ describe("LinkPhoneQrTile", () => {
     expect(pending.getAttribute("data-tile-state")).toBe("loading");
     expect(screen.getByTestId("link-phone-qr-placeholder")).toBeTruthy();
     expect(screen.queryByTestId("link-phone-qr")).toBeNull();
-    // The frame stays, empty — the tile still reads as the code's place.
-    expect(
-      screen
-        .getByTestId("link-phone-expiry-frame")
-        .getAttribute("data-remaining-fraction"),
-    ).toBe("0.00");
+    // The frame stays — the tile still reads as the code's place.
+    expect(screen.getByTestId("link-phone-tile-frame")).toBeTruthy();
   });
 
   it("fades a rotated code in on a fresh surface", () => {
     const view = render(
-      <LinkPhoneQrTile
-        platformBaseUrl={PLATFORM}
-        code={CODE}
-        remainingFraction={1}
-      />,
+      <LinkPhoneQrTile platformBaseUrl={PLATFORM} code={CODE} />,
     );
     const first = screen.getByTestId("link-phone-qr-surface");
     expect(first.className).toContain("fade-in-0");
     view.rerender(
-      <LinkPhoneQrTile
-        platformBaseUrl={PLATFORM}
-        code="22222-33333"
-        remainingFraction={1}
-      />,
+      <LinkPhoneQrTile platformBaseUrl={PLATFORM} code="22222-33333" />,
     );
     // Keyed on the code: the rotation mounts a new surface rather than
     // mutating the old one, which is what replays the fade.

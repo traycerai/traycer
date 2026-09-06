@@ -72,6 +72,7 @@ function createSource(
     isLatestRenameStamp: () => false,
     applyChatRecords: () => {},
     applyChatRecordDelta: () => {},
+    applyConfirmedChatMutation: () => {},
     applyTuiAgentRecords: () => {},
     applyTuiAgentRecordDelta: () => {},
     markChatRecordListAuthoritative: () => {},
@@ -285,6 +286,7 @@ describe("commands.apply", () => {
         applyChatRecords: record("applyChatRecords"),
         detachTransport: record("detachTransport"),
         applyChatRecordDelta: record("applyChatRecordDelta"),
+        applyConfirmedChatMutation: record("applyConfirmedChatMutation"),
         applyTuiAgentRecords: record("applyTuiAgentRecords"),
         applyTuiAgentRecordDelta: record("applyTuiAgentRecordDelta"),
         markChatRecordListAuthoritative: record("markAuthoritative"),
@@ -304,6 +306,17 @@ describe("commands.apply", () => {
     ports.commands.apply({
       kind: "apply-chat-records",
       payload: { records: [], issuedAtSeq: 7 },
+    });
+    ports.commands.apply({
+      kind: "apply-confirmed-chat-mutation",
+      payload: {
+        mutation: {
+          kind: "remove",
+          ownerUserId: "user-1",
+          originHostId: "host-1",
+          chatId: "chat-1",
+        },
+      },
     });
     ports.commands.apply({
       kind: "mark-chat-records-authoritative",
@@ -337,6 +350,7 @@ describe("commands.apply", () => {
 
     expect(calls).toEqual([
       "applyChatRecords([],7)",
+      'applyConfirmedChatMutation({"kind":"remove","ownerUserId":"user-1","originHostId":"host-1","chatId":"chat-1"})',
       "markAuthoritative()",
       "markNotAuthoritative()",
       'clearPendingChatCreation("chat-1")',

@@ -1,3 +1,4 @@
+import type { ConfirmedChatMutation } from "@traycer-clients/shared/replica-runtime/worker/bridge-protocol";
 /**
  * The record plane: the root replica, the projector that reads it, the record
  * tables that union over it, and the local divergence the sync pill reports.
@@ -242,6 +243,7 @@ export interface EpicRecordsReplica extends Replica<
     issuedAtSeq: number | null,
   ): void;
   applyChatRecordDelta(delta: ChatRecordDelta): void;
+  applyConfirmedChatMutation(mutation: ConfirmedChatMutation): void;
   peekChatIngestSeq(): number;
   markChatRecordListAuthoritative(): void;
   /**
@@ -1407,6 +1409,13 @@ export function createEpicRecordsReplica(
               chatRetractions: publication.chatRetractions,
             },
       );
+    },
+
+    applyConfirmedChatMutation(mutation): void {
+      if (isDisposed()) return;
+      const publication = chatTable.applyConfirmedMutation(mutation);
+      if (publication !== null)
+        publishRecordSlice({ chatRecords: publication.chatRecords });
     },
 
     applyChatRecordDelta(delta): void {

@@ -244,4 +244,30 @@ describe("observationFromCanonicalRead", () => {
     expect(view.qualified).toBe(true);
     expect(view.lastKnownKind).toBe("downloading");
   });
+
+  it("carries `status.updateProgress` through to `coarseProgress`, null and non-null alike", () => {
+    const withoutMarker = observationFromCanonicalRead({
+      hostId: "host-a",
+      status: { ...status({ kind: "none" }), updateProgress: null },
+      dataUpdatedAt: NOW_MS,
+      health: healthyHealth(),
+      source: "selected",
+    });
+    expect(withoutMarker.coarseProgress).toBeNull();
+
+    const withMarker = observationFromCanonicalRead({
+      hostId: "host-a",
+      status: {
+        ...status({ kind: "none" }),
+        updateProgress: { state: "failed", error: "disk full" },
+      },
+      dataUpdatedAt: NOW_MS,
+      health: healthyHealth(),
+      source: "selected",
+    });
+    expect(withMarker.coarseProgress).toEqual({
+      state: "failed",
+      error: "disk full",
+    });
+  });
 });

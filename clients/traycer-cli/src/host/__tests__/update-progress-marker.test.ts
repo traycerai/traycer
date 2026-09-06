@@ -1,6 +1,13 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // The update-progress marker is the cross-process handoff the host daemon
@@ -45,6 +52,7 @@ describe("update-progress-marker", () => {
       error: null,
       targetVersion: "1.4.0",
       updatedAt: "2026-07-03T00:00:00.000Z",
+      writerId: "writer-a",
     });
     const raw = readFileSync(
       hostUpdateProgressMarkerPath("production"),
@@ -55,6 +63,7 @@ describe("update-progress-marker", () => {
       error: null,
       targetVersion: "1.4.0",
       updatedAt: "2026-07-03T00:00:00.000Z",
+      writerId: "writer-a",
     });
   });
 
@@ -66,12 +75,14 @@ describe("update-progress-marker", () => {
       error: null,
       targetVersion: "1.4.0",
       updatedAt: "2026-07-03T00:00:00.000Z",
+      writerId: "writer-a",
     });
     await writeUpdateProgressMarker("production", {
       state: "failed",
       error: "host process (pid 123) is not alive",
       targetVersion: "1.4.0",
       updatedAt: "2026-07-03T00:01:00.000Z",
+      writerId: "writer-a",
     });
     const progress = await readUpdateProgressMarker("production");
     expect(progress).toEqual({
@@ -79,6 +90,7 @@ describe("update-progress-marker", () => {
       error: "host process (pid 123) is not alive",
       targetVersion: "1.4.0",
       updatedAt: "2026-07-03T00:01:00.000Z",
+      writerId: "writer-a",
     });
   });
 
@@ -93,6 +105,7 @@ describe("update-progress-marker", () => {
       error: null,
       targetVersion: "1.4.0",
       updatedAt: "2026-07-03T00:00:00.000Z",
+      writerId: "writer-a",
     });
     await deleteUpdateProgressMarker("production");
     expect(await readUpdateProgressMarker("production")).toBeNull();
@@ -106,12 +119,14 @@ describe("update-progress-marker", () => {
       error: null,
       targetVersion: "1.0.0",
       updatedAt: "2026-07-03T00:00:00.000Z",
+      writerId: "writer-a",
     });
     await writeUpdateProgressMarker("dev", {
       state: "failed",
       error: "boom",
       targetVersion: "2.0.0",
       updatedAt: "2026-07-03T00:00:00.000Z",
+      writerId: "writer-b",
     });
     expect((await readUpdateProgressMarker("production"))?.state).toBe(
       "updating",
@@ -123,5 +138,469 @@ describe("update-progress-marker", () => {
     const { readUpdateProgressMarker } =
       await import("../update-progress-marker");
     expect(await readUpdateProgressMarker("production")).toBeNull();
+  });
+
+  it("a marker written without a writerId (older CLI) reads back with writerId null", async () => {
+    const { readUpdateProgressMarker } =
+      await import("../update-progress-marker");
+    const { hostUpdateProgressMarkerPath } = await import("../../store/paths");
+    const path = hostUpdateProgressMarkerPath("production");
+    mkdirSync(dirname(path), { recursive: true });
+    const legacyRecord = {
+      state: "updating" as const,
+      error: null,
+      targetVersion: "1.4.0",
+      updatedAt: "2026-07-03T00:00:00.000Z",
+    };
+    writeFileSync(path, `${JSON.stringify(legacyRecord, null, 2)}\n`, "utf8");
+    expect(await readUpdateProgressMarker("production")).toEqual({
+      ...legacyRecord,
+      writerId: null,
+    });
+  });
+
+  it("progressRecord stamps the process identity and two records from this process share it", async () => {
+    const { progressRecord, sameProgress } =
+      await import("../update-progress-marker");
+    const a = progressRecord({
+      state: "updating",
+      error: null,
+      targetVersion: "1.4.0",
+    });
+    const b = progressRecord({
+      state: "updating",
+      error: null,
+      targetVersion: "1.4.0",
+    });
+    expect(a.writerId).toMatch(/^\d+-[0-9a-f]{12}$/);
+    expect(b.writerId).toBe(a.writerId);
+    expect(sameProgress(a, { ...a, writerId: "someone-else" })).toBe(false);
+  });
+
+  // Shared by the delete and replace conditional-swap suites: both back
+  // `host update`'s marker reconciliation with the same compare-and-swap
+  // primitive, and a scratch (`.reconcile-`) or staging (`.tmp-`) leftover in
+  // either direction is the same kind of bug.
+  const failed = {
+    state: "failed" as const,
+    error: "host did not become healthy",
+    targetVersion: "1.4.0",
+    updatedAt: "2026-07-03T00:00:00.000Z",
+    writerId: "writer-a",
+  };
+
+  function scratchAndStagingFiles(): string[] {
+    const dir = join(workHome, ".traycer", "host");
+    let names: string[];
+    try {
+      names = readdirSync(dir);
+    } catch (err) {
+      if (
+        typeof err === "object" &&
+        err !== null &&
+        "code" in err &&
+        err.code === "ENOENT"
+      ) {
+        return [];
+      }
+      throw err;
+    }
+    return names.filter(
+      (name) => name.includes(".reconcile-") || name.includes(".tmp-"),
+    );
+  }
+
+  // The conditional delete backs `host update`'s stale-failure reconcile: it
+  // decided from a marker it READ, and another updater can replace that
+  // marker with a live `updating` before the unlink. Deleting unconditionally
+  // there would erase the legacy path's only progress signal.
+  describe("deleteUpdateProgressMarkerIfUnchanged", () => {
+    it("clears the marker when it still reads exactly as expected", async () => {
+      const {
+        writeUpdateProgressMarker,
+        readUpdateProgressMarker,
+        deleteUpdateProgressMarkerIfUnchanged,
+      } = await import("../update-progress-marker");
+      await writeUpdateProgressMarker("production", failed);
+      expect(
+        await deleteUpdateProgressMarkerIfUnchanged("production", failed),
+      ).toBe("cleared");
+      expect(await readUpdateProgressMarker("production")).toBeNull();
+    });
+
+    it("leaves a marker that changed underneath - a live `updating` written by another updater survives", async () => {
+      const {
+        writeUpdateProgressMarker,
+        readUpdateProgressMarker,
+        deleteUpdateProgressMarkerIfUnchanged,
+      } = await import("../update-progress-marker");
+      await writeUpdateProgressMarker("production", failed);
+      // The race: between the caller's read and its delete, another updater
+      // replaced the marker.
+      await writeUpdateProgressMarker("production", {
+        state: "updating",
+        error: null,
+        targetVersion: "1.5.0",
+        updatedAt: "2026-07-03T00:00:01.000Z",
+        writerId: "writer-b",
+      });
+      expect(
+        await deleteUpdateProgressMarkerIfUnchanged("production", failed),
+      ).toBe("changed");
+      // Restored byte-for-byte, and the scratch the compare-and-delete took
+      // it through is gone.
+      expect(await readUpdateProgressMarker("production")).toEqual({
+        state: "updating",
+        error: null,
+        targetVersion: "1.5.0",
+        updatedAt: "2026-07-03T00:00:01.000Z",
+        writerId: "writer-b",
+      });
+      expect(scratchAndStagingFiles()).toEqual([]);
+    });
+
+    it("leaves no scratch behind on the cleared path either", async () => {
+      const {
+        writeUpdateProgressMarker,
+        deleteUpdateProgressMarkerIfUnchanged,
+      } = await import("../update-progress-marker");
+      await writeUpdateProgressMarker("production", failed);
+      await deleteUpdateProgressMarkerIfUnchanged("production", failed);
+      expect(scratchAndStagingFiles()).toEqual([]);
+    });
+
+    it("reports absent when there is no marker to clear", async () => {
+      const { deleteUpdateProgressMarkerIfUnchanged } =
+        await import("../update-progress-marker");
+      expect(
+        await deleteUpdateProgressMarkerIfUnchanged("production", failed),
+      ).toBe("absent");
+    });
+
+    it("does not clear a byte-identical record written by ANOTHER writer in the same millisecond", async () => {
+      const {
+        writeUpdateProgressMarker,
+        readUpdateProgressMarker,
+        deleteUpdateProgressMarkerIfUnchanged,
+      } = await import("../update-progress-marker");
+      const theirRecord = { ...failed, writerId: "writer-b" };
+      await writeUpdateProgressMarker("production", theirRecord);
+      expect(
+        await deleteUpdateProgressMarkerIfUnchanged("production", {
+          ...theirRecord,
+          writerId: "writer-a",
+        }),
+      ).toBe("changed");
+      expect(await readUpdateProgressMarker("production")).toEqual(theirRecord);
+      expect(scratchAndStagingFiles()).toEqual([]);
+    });
+
+    it("restores via the wx fallback when link fails for a reason other than EEXIST", async () => {
+      vi.doMock("node:fs/promises", async (importOriginal) => {
+        const actual =
+          await importOriginal<typeof import("node:fs/promises")>();
+        return {
+          ...actual,
+          link: async () => {
+            throw Object.assign(new Error("EPERM"), { code: "EPERM" });
+          },
+        };
+      });
+      try {
+        const {
+          writeUpdateProgressMarker,
+          readUpdateProgressMarker,
+          deleteUpdateProgressMarkerIfUnchanged,
+        } = await import("../update-progress-marker");
+        const a = {
+          state: "updating" as const,
+          error: null,
+          targetVersion: "1.4.0",
+          updatedAt: "2026-07-03T00:00:00.000Z",
+          writerId: "writer-a",
+        };
+        const b = {
+          state: "updating" as const,
+          error: null,
+          targetVersion: "1.5.0",
+          updatedAt: "2026-07-03T00:00:01.000Z",
+          writerId: "writer-b",
+        };
+        await writeUpdateProgressMarker("production", a);
+        await writeUpdateProgressMarker("production", b);
+        expect(
+          await deleteUpdateProgressMarkerIfUnchanged("production", a),
+        ).toBe("changed");
+        expect(await readUpdateProgressMarker("production")).toEqual(b);
+        expect(scratchAndStagingFiles()).toEqual([]);
+      } finally {
+        vi.doUnmock("node:fs/promises");
+      }
+    });
+
+    it("retains the displaced marker in its scratch when neither restore route can land it", async () => {
+      vi.doMock("node:fs/promises", async (importOriginal) => {
+        const actual =
+          await importOriginal<typeof import("node:fs/promises")>();
+        return {
+          ...actual,
+          link: async () => {
+            throw Object.assign(new Error("EPERM"), { code: "EPERM" });
+          },
+          writeFile: async (
+            path: Parameters<typeof actual.writeFile>[0],
+            data: Parameters<typeof actual.writeFile>[1],
+            options: Parameters<typeof actual.writeFile>[2],
+          ) => {
+            if (
+              typeof options === "object" &&
+              options !== null &&
+              "flag" in options &&
+              options.flag === "wx"
+            ) {
+              throw Object.assign(new Error("ENOSPC"), { code: "ENOSPC" });
+            }
+            return actual.writeFile(path, data, options);
+          },
+        };
+      });
+      try {
+        const {
+          writeUpdateProgressMarker,
+          readUpdateProgressMarker,
+          deleteUpdateProgressMarkerIfUnchanged,
+        } = await import("../update-progress-marker");
+        const a = {
+          state: "updating" as const,
+          error: null,
+          targetVersion: "1.4.0",
+          updatedAt: "2026-07-03T00:00:00.000Z",
+          writerId: "writer-a",
+        };
+        const b = {
+          state: "updating" as const,
+          error: null,
+          targetVersion: "1.5.0",
+          updatedAt: "2026-07-03T00:00:01.000Z",
+          writerId: "writer-b",
+        };
+        await writeUpdateProgressMarker("production", a);
+        await writeUpdateProgressMarker("production", b);
+        expect(
+          await deleteUpdateProgressMarkerIfUnchanged("production", a),
+        ).toBe("changed");
+        // Neither `link` nor the `wx` fallback could land the displaced
+        // marker back at the live path - it stays retained in its scratch
+        // rather than being dropped, and the live path is left empty.
+        expect(await readUpdateProgressMarker("production")).toBeNull();
+        const scratchFiles = scratchAndStagingFiles().filter((name) =>
+          name.includes(".reconcile-"),
+        );
+        expect(scratchFiles).toHaveLength(1);
+        const scratchContents = readFileSync(
+          join(workHome, ".traycer", "host", scratchFiles[0]),
+          "utf8",
+        );
+        expect(JSON.parse(scratchContents)).toEqual(b);
+      } finally {
+        vi.doUnmock("node:fs/promises");
+      }
+    });
+  });
+
+  // The conditional replace backs `host update`'s failure stamp: it computes
+  // `next` from a record it already holds (the `updating` marker THIS
+  // invocation wrote), and another updater can land its own `updating` at
+  // the same path before the stamp writes. Replacing unconditionally there
+  // would bury that updater's live progress under a failure that is not
+  // about it.
+  describe("replaceUpdateProgressMarkerIfUnchanged", () => {
+    const expectedUpdating = {
+      state: "updating" as const,
+      error: null,
+      targetVersion: "1.4.0",
+      updatedAt: "2026-07-03T00:00:00.000Z",
+      writerId: "writer-a",
+    };
+    const failedNext = {
+      state: "failed" as const,
+      error: "host did not become healthy",
+      targetVersion: "1.4.0",
+      updatedAt: "2026-07-03T00:01:00.000Z",
+      writerId: "writer-a",
+    };
+
+    it("replaces the marker when it still reads exactly as expected", async () => {
+      const {
+        writeUpdateProgressMarker,
+        readUpdateProgressMarker,
+        replaceUpdateProgressMarkerIfUnchanged,
+      } = await import("../update-progress-marker");
+      await writeUpdateProgressMarker("production", expectedUpdating);
+      expect(
+        await replaceUpdateProgressMarkerIfUnchanged(
+          "production",
+          expectedUpdating,
+          failedNext,
+        ),
+      ).toBe("replaced");
+      expect(await readUpdateProgressMarker("production")).toEqual(failedNext);
+    });
+
+    it("leaves a marker that changed underneath - another updater's `updating` survives byte-for-byte", async () => {
+      const {
+        writeUpdateProgressMarker,
+        readUpdateProgressMarker,
+        replaceUpdateProgressMarkerIfUnchanged,
+      } = await import("../update-progress-marker");
+      await writeUpdateProgressMarker("production", expectedUpdating);
+      // The race: between the caller's read (of `expectedUpdating`) and its
+      // replace, another updater landed its own `updating` at the same path.
+      const theirs = {
+        state: "updating" as const,
+        error: null,
+        targetVersion: "1.5.0",
+        updatedAt: "2026-07-03T00:00:01.000Z",
+        writerId: "writer-b",
+      };
+      await writeUpdateProgressMarker("production", theirs);
+      expect(
+        await replaceUpdateProgressMarkerIfUnchanged(
+          "production",
+          expectedUpdating,
+          failedNext,
+        ),
+      ).toBe("changed");
+      expect(await readUpdateProgressMarker("production")).toEqual(theirs);
+      expect(scratchAndStagingFiles()).toEqual([]);
+    });
+
+    it("treats an absent marker as changed - nothing is landed", async () => {
+      const {
+        readUpdateProgressMarker,
+        replaceUpdateProgressMarkerIfUnchanged,
+      } = await import("../update-progress-marker");
+      expect(
+        await replaceUpdateProgressMarkerIfUnchanged(
+          "production",
+          expectedUpdating,
+          failedNext,
+        ),
+      ).toBe("changed");
+      expect(await readUpdateProgressMarker("production")).toBeNull();
+      expect(scratchAndStagingFiles()).toEqual([]);
+    });
+
+    it("leaves no scratch or staging files behind on the replaced path", async () => {
+      const {
+        writeUpdateProgressMarker,
+        replaceUpdateProgressMarkerIfUnchanged,
+      } = await import("../update-progress-marker");
+      await writeUpdateProgressMarker("production", expectedUpdating);
+      await replaceUpdateProgressMarkerIfUnchanged(
+        "production",
+        expectedUpdating,
+        failedNext,
+      );
+      expect(scratchAndStagingFiles()).toEqual([]);
+    });
+
+    it("does not replace a byte-identical record written by ANOTHER writer in the same millisecond", async () => {
+      const {
+        writeUpdateProgressMarker,
+        readUpdateProgressMarker,
+        replaceUpdateProgressMarkerIfUnchanged,
+      } = await import("../update-progress-marker");
+      const theirRecord = { ...expectedUpdating, writerId: "writer-b" };
+      await writeUpdateProgressMarker("production", theirRecord);
+      expect(
+        await replaceUpdateProgressMarkerIfUnchanged(
+          "production",
+          { ...expectedUpdating, writerId: "writer-a" },
+          failedNext,
+        ),
+      ).toBe("changed");
+      expect(await readUpdateProgressMarker("production")).toEqual(theirRecord);
+      expect(scratchAndStagingFiles()).toEqual([]);
+    });
+
+    it("still lands the replace via the wx fallback when link fails for a reason other than EEXIST", async () => {
+      vi.doMock("node:fs/promises", async (importOriginal) => {
+        const actual =
+          await importOriginal<typeof import("node:fs/promises")>();
+        return {
+          ...actual,
+          link: async () => {
+            throw Object.assign(new Error("EPERM"), { code: "EPERM" });
+          },
+        };
+      });
+      try {
+        const {
+          writeUpdateProgressMarker,
+          readUpdateProgressMarker,
+          replaceUpdateProgressMarkerIfUnchanged,
+        } = await import("../update-progress-marker");
+        await writeUpdateProgressMarker("production", expectedUpdating);
+        expect(
+          await replaceUpdateProgressMarkerIfUnchanged(
+            "production",
+            expectedUpdating,
+            failedNext,
+          ),
+        ).toBe("replaced");
+        expect(await readUpdateProgressMarker("production")).toEqual(
+          failedNext,
+        );
+        expect(scratchAndStagingFiles()).toEqual([]);
+      } finally {
+        vi.doUnmock("node:fs/promises");
+      }
+    });
+
+    it("never throws even when every rm call rejects", async () => {
+      vi.doMock("node:fs/promises", async (importOriginal) => {
+        const actual =
+          await importOriginal<typeof import("node:fs/promises")>();
+        return {
+          ...actual,
+          rm: async () => {
+            const err = Object.assign(new Error("EACCES"), {
+              code: "EACCES",
+            });
+            throw err;
+          },
+        };
+      });
+      try {
+        const {
+          writeUpdateProgressMarker,
+          readUpdateProgressMarker,
+          deleteUpdateProgressMarkerIfUnchanged,
+          replaceUpdateProgressMarkerIfUnchanged,
+        } = await import("../update-progress-marker");
+        // writeUpdateProgressMarker does not use rm, so it still works with
+        // the mocked module.
+        await writeUpdateProgressMarker("production", failed);
+        await expect(
+          deleteUpdateProgressMarkerIfUnchanged("production", failed),
+        ).resolves.toBe("cleared");
+        // The marker exists again and matches: replaces despite every `rm`
+        // rejecting.
+        await writeUpdateProgressMarker("production", expectedUpdating);
+        await expect(
+          replaceUpdateProgressMarkerIfUnchanged(
+            "production",
+            expectedUpdating,
+            failedNext,
+          ),
+        ).resolves.toBe("replaced");
+        expect(await readUpdateProgressMarker("production")).toEqual(
+          failedNext,
+        );
+      } finally {
+        vi.doUnmock("node:fs/promises");
+      }
+    });
   });
 });

@@ -106,6 +106,7 @@ const BROWSER_VIEWPORT_PRESETS: ReadonlyArray<{
 export function BrowserTileToolbar(props: {
   readonly controller: TileController;
   readonly pictureInPicture: BrowserPictureInPictureControl | null;
+  readonly loading: boolean;
 }) {
   const controller = props.controller;
   const capabilities = controller.capabilities;
@@ -126,7 +127,12 @@ export function BrowserTileToolbar(props: {
 
   return (
     <div className="flex min-h-0 min-w-0 items-center gap-2 border-b border-border px-2 py-1.5 text-ui-sm">
-      {showNav ? <BrowserTileToolbarNav controller={controller} /> : null}
+      {showNav ? (
+        <BrowserTileToolbarNav
+          controller={controller}
+          loading={props.loading}
+        />
+      ) : null}
       {showAddress ? (
         <BrowserTileToolbarAddress controller={controller} />
       ) : null}
@@ -157,7 +163,10 @@ export function BrowserTileToolbarCompact(props: {
       className="flex min-h-11 w-full shrink-0 items-center gap-1 border-b border-border px-2"
       data-testid="browser-tile-toolbar-compact"
     >
-      <BrowserTileToolbarNav controller={props.controller} />
+      <BrowserTileToolbarNav
+        controller={props.controller}
+        loading={props.loading}
+      />
       {props.controller.capabilities.navigate ? (
         <BrowserTileToolbarAddress controller={props.controller} />
       ) : (
@@ -170,7 +179,7 @@ export function BrowserTileToolbarCompact(props: {
           View only
         </Badge>
       ) : null}
-      {props.loading ? (
+      {props.loading && !props.controller.capabilities.reload ? (
         <span role="status" aria-label="Page loading" className="shrink-0">
           <AgentSpinningDots
             className="text-muted-foreground"
@@ -183,7 +192,10 @@ export function BrowserTileToolbarCompact(props: {
   );
 }
 
-function BrowserTileToolbarNav(props: { readonly controller: TileController }) {
+function BrowserTileToolbarNav(props: {
+  readonly controller: TileController;
+  readonly loading: boolean;
+}) {
   const controller = props.controller;
   const capabilities = controller.capabilities;
   return (
@@ -218,10 +230,19 @@ function BrowserTileToolbarNav(props: { readonly controller: TileController }) {
           variant="ghost"
           size="icon-sm"
           aria-label="Reload"
+          aria-busy={props.loading}
           disabled={controller.disabled}
           onClick={controller.onReload}
         >
-          <RotateCw />
+          {props.loading ? (
+            <AgentSpinningDots
+              className="text-muted-foreground"
+              testId="browser-reload-loading"
+              variant={undefined}
+            />
+          ) : (
+            <RotateCw />
+          )}
         </Button>
       ) : null}
     </div>
@@ -256,6 +277,17 @@ function BrowserTileToolbarAddress(props: {
           value={addressValue}
           onChange={(event) => {
             onAddressChange(event.target.value);
+          }}
+          onMouseDown={(event) => {
+            if (
+              props.controller.selectAddressOnFocus &&
+              event.button === 0 &&
+              event.currentTarget.ownerDocument.activeElement !==
+                event.currentTarget
+            ) {
+              event.preventDefault();
+              event.currentTarget.focus();
+            }
           }}
           onFocus={() => onAddressFocusChange(true)}
           onBlur={() => onAddressFocusChange(false)}

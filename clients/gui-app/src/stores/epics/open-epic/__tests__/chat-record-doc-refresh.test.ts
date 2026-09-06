@@ -222,3 +222,44 @@ describe("createChatRecordTable - refreshing a doc-resident row", () => {
     expect(table.current().byId[CHAT_ID].title).toBe("Polled");
   });
 });
+
+describe("createChatRecordTable - confirmed mutation caller revision guard", () => {
+  it("rejects an older owner answer after a newer unknown-home delta, then admits an equal stated-home fill", () => {
+    // The sole caller (`applyConfirmedMutation`) refuses revision < held
+    // before `applyPointRead`. A generic fence on point-read would also
+    // block the equal-revision home-stating answer the unknown-home waiver
+    // exists for. This pairing is that caller, not the snapshot path above.
+    const table = freshTable();
+    expect(
+      table.applyDelta({
+        kind: "upsert",
+        epicId: "epic-doc",
+        record: record({ revision: 3, title: "Pushed" }),
+      }),
+    ).not.toBeNull();
+    expect(table.current().byId[CHAT_ID].title).toBe("Pushed");
+    expect(table.current().byId[CHAT_ID].docResident).toBeNull();
+
+    table.applyConfirmedMutation({
+      kind: "upsert",
+      record: record({
+        revision: 2,
+        title: "Owner stale",
+        docResident: false,
+      }),
+    });
+    expect(table.current().byId[CHAT_ID].title).toBe("Pushed");
+    expect(table.current().byId[CHAT_ID].docResident).toBeNull();
+
+    table.applyConfirmedMutation({
+      kind: "upsert",
+      record: record({
+        revision: 3,
+        title: "Pushed",
+        docResident: false,
+      }),
+    });
+    expect(table.current().byId[CHAT_ID].title).toBe("Pushed");
+    expect(table.current().byId[CHAT_ID].docResident).toBe(false);
+  });
+});

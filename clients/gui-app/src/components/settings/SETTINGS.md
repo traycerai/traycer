@@ -2330,6 +2330,27 @@ aria-live="polite"` carrying the equivalent text for
       Progress after an accepted install comes from `host.status.updateProgress`,
       not from the install response, because the swap is detached and outlives
       it.
+    - **The operation card renders an OPERATION, never a quiet host.** The
+      shared projection (`projectFleetUpdateView`) consults the coarse
+      `updateProgress` marker BEFORE concluding `idle` from
+      `updateOperation: {kind:"none"}`, because the shipped legacy updater
+      (`traycer host update`, every host while the executor cohort is
+      shadow-disabled) writes no attempt record at all - a @1.3 host on that
+      path says "no attempt" and "updating" in the same reply, and reading the
+      attempt alone rendered a live download → swap → restart as "Host is up to
+      date" on the Overview whose own Update now had just started it. The
+      coarse marker projects `updating` (generic sentence, indeterminate bar)
+      or `failed` with the updater's own cause. Both are INFORMATIONAL: the
+      marker is a file with no liveness (a crashed updater leaves a host
+      serving `updating` forever), so `updating` neither holds the lifecycle
+      gate nor earns the fast poll - Restart, Diagnostics and the service
+      verbs stay usable under it, and the 10s `host.status` baseline is what
+      refreshes it. A view `isQuietUpdateView` accepts (`idle`, or
+      `unknown` with no retained phase) renders NO card: "Host is up to date"
+      was a sentence about the catalog from a projection that knows only the
+      attempt record, and it sat directly above the updates region saying
+      "v1.3.0-rc.2 is available." about the same host. The landing banner hides
+      on the same predicate, so the two cannot drift on where quiet begins.
   - **Installation** reads `host.getInstallationInfo`. `unmanaged` is a real
     state, not an error - a host run from a checkout has no install record - and
     it says so rather than claiming nothing is installed.

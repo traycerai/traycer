@@ -159,6 +159,21 @@ function statusWith(
   };
 }
 
+// Same as `statusWith`, but lets the coarse `updateProgress` marker vary
+// independently of the attempt record - the shipped legacy `traycer host
+// update` path reports `updateOperation: {kind:"none"}` with the marker
+// carrying the whole signal, and that is exactly the shape this suite's
+// coarse-progress tests below exercise.
+function statusWithCoarseProgress(
+  operation: HostStatusUpdateOperation,
+  updateProgress: ResponseOfMethod<
+    HostRpcRegistry,
+    "host.status"
+  >["updateProgress"],
+): ResponseOfMethod<HostRpcRegistry, "host.status"> {
+  return { ...statusWith(operation), updateProgress };
+}
+
 afterEach(() => {
   resetHostServiceWriteLatchesForTest();
   cleanup();
@@ -277,5 +292,86 @@ describe("HostOverviewOperationCard — measured byte progress (G5)", () => {
     const bytesEl = screen.getByTestId("host-overview-operation-bytes");
     expect(bytesEl.textContent).not.toBe("");
     vi.useRealTimers();
+  });
+});
+
+// The coarse `updateProgress` marker, carried BESIDE `updateOperation:
+// {kind:"none"}` - the shipped legacy `traycer host update` path's whole
+// vocabulary for "in flight" or "just failed". Before this field was wired
+// through, a @1.3 host running that path rendered as "Host is up to date"
+// (the pre-fix `idle` card) on the very Overview whose Update had just
+// started - the incident `isQuietUpdateView`'s gate exists to prevent.
+describe("HostOverviewOperationCard - the coarse updateProgress marker beside {kind:'none'}", () => {
+  it("updateOperation:{kind:'none'} with no coarse marker renders no card and no stale 'Host is up to date' text", async () => {
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      overrideHandlers: {
+        // The live version differs from the registry copy (`1.5.0`) on
+        // purpose: the header renders the process's own answer once
+        // `host.status` has settled, so its appearance is the proof that
+        // the SAME reply carrying `{kind:"none"}` + no marker is on screen.
+        "host.status": () => ({
+          ...statusWithCoarseProgress({ kind: "none" }, null),
+          hostVersion: "1.5.0-live",
+        }),
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    // The card is also absent while the status query is still loading, so
+    // the absence is asserted only after a render derived from the status
+    // reply is on screen. (The fixture's own call counter is bypassed by an
+    // overridden handler, and a counted call proves the request, not the
+    // render.)
+    await screen.findByText(/1\.5\.0-live/);
+    expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
+    expect(screen.queryByText(/Host is up to date/i)).toBeNull();
+  });
+
+  it("updateOperation:{kind:'none'} + coarse {state:'updating'} renders the card with 'Updating host' and an indeterminate bar", async () => {
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      overrideHandlers: {
+        "host.status": () =>
+          statusWithCoarseProgress(
+            { kind: "none" },
+            { state: "updating", error: null },
+          ),
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    const card = await screen.findByTestId("host-overview-operation-card");
+    expect(card.textContent).toContain("Updating host");
+    await screen.findByTestId("update-progress-indeterminate");
+  });
+
+  it("updateOperation:{kind:'none'} + coarse {state:'failed', error} renders the card with 'Update failed: <error>'", async () => {
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      overrideHandlers: {
+        "host.status": () =>
+          statusWithCoarseProgress(
+            { kind: "none" },
+            { state: "failed", error: "health probe failed" },
+          ),
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    const card = await screen.findByTestId("host-overview-operation-card");
+    expect(card.textContent).toContain("Update failed: health probe failed");
   });
 });

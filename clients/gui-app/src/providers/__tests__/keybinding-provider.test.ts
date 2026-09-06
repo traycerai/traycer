@@ -253,8 +253,8 @@ describe("dispatchAction", () => {
   it("registers a default binding for the notification center", () => {
     const defaults = getDefaultBindings();
 
-    expect(defaults["app.notifications.open"]).toBe("mod+shift+n");
-    expect(findActionForChord("mod+shift+n")).toBe("app.notifications.open");
+    expect(defaults["app.notifications.open"]).toBe("mod+shift+b");
+    expect(findActionForChord("mod+shift+b")).toBe("app.notifications.open");
   });
 
   it("app.sidebar.toggle no-ops when no bridge is registered", () => {

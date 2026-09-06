@@ -86,7 +86,16 @@ export function useScreencastTileChrome(
   const addressValue = draft.addressValue;
   const navigateToUrl = (url: string): void => {
     draft.onAddressSubmitted(url);
-    onNavigateUrl(url);
+    if (url === normalizeBrowserAddressInput(liveUrl)) {
+      onReload();
+    } else {
+      onNavigateUrl(url);
+    }
+  };
+
+  const onAddressFocusChange = (focused: boolean): void => {
+    draft.onAddressFocusChange(focused);
+    if (focused) draft.focusAddress();
   };
 
   const controller: TileController = {
@@ -94,6 +103,7 @@ export function useScreencastTileChrome(
     profile: args.profile,
     url: liveUrl,
     addressValue,
+    selectAddressOnFocus: true,
     setAddressInput: draft.setAddressInput,
     focusAddress: draft.focusAddress,
     canGoBack: navState.canGoBack,
@@ -109,7 +119,7 @@ export function useScreencastTileChrome(
       navigateToUrl(url);
     },
     onAddressChange: draft.onAddressChange,
-    onAddressFocusChange: draft.onAddressFocusChange,
+    onAddressFocusChange,
     onBack: () => {
       if (!navState.canGoBack) return;
       onBack();
@@ -132,7 +142,7 @@ export function useScreencastTileChrome(
   return {
     controller,
     navigateToUrl,
-    onAddressFocusChange: draft.onAddressFocusChange,
+    onAddressFocusChange,
   };
 }
 
