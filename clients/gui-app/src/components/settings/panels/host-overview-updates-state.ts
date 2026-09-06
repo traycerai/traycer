@@ -288,6 +288,19 @@ export function useHostOverviewUpdates(input: {
   // versions the failed check could not confirm - under a summary that says
   // the host could not be checked.
   const actionableManifest = checkQuery.isError ? null : manifest;
+  // A repaired refusal must not return when a later check loses its catalog.
+  // Retire it on a newer successful answer, using the same guarded render
+  // adjustment as installDiscovered; hiding the text alone keeps stale state.
+  retireForceRefusalIfRefuted({
+    refusal: forceRefusal,
+    manifest: actionableManifest,
+    checkDataUpdatedAt: checkQuery.dataUpdatedAt,
+    checkSucceeded: checkQuery.isSuccess,
+    checkIsPlaceholderData: checkQuery.isPlaceholderData,
+    platformKey: input.platformKey,
+    hostName,
+    retire: () => setForceRefusal(null),
+  });
   const failureDescription = describeUpdateFailure({
     refusal: forceRefusal,
     manifest: actionableManifest,
@@ -376,7 +389,11 @@ export function useHostOverviewUpdates(input: {
         hostName,
       });
       if (refusal !== null) {
-        setForceRefusal({ version, text: refusal });
+        setForceRefusal({
+          version,
+          text: refusal,
+          checkDataUpdatedAt: checkQuery.dataUpdatedAt,
+        });
         // No mutation means no mutation settle callback. Close synchronously
         // here or the confirmation would be stranded over the inline notice.
         onSettled();
@@ -837,6 +854,7 @@ interface CliFloor {
 interface ForceUpdateRefusal {
   readonly version: string;
   readonly text: string;
+  readonly checkDataUpdatedAt: number;
 }
 
 function deriveFloorRemedies(input: {
@@ -917,6 +935,46 @@ function describeForceUpdateRefusal(input: {
   }
   // An absent entry, failed check, or incomplete refusal cannot name a floor.
   return `Traycer couldn't verify that v${input.version} can be installed on ${input.hostName}. Select Check now and try again.`;
+}
+
+interface ForceRefusalEvidence {
+  readonly refusal: ForceUpdateRefusal | null;
+  readonly manifest: HostAvailableManifest | null;
+  readonly checkDataUpdatedAt: number;
+  readonly checkSucceeded: boolean;
+  readonly checkIsPlaceholderData: boolean;
+  readonly platformKey: string | null;
+  readonly hostName: string;
+}
+
+/**
+ * The guarded render adjustment for a Force refusal: one decision, one
+ * action, stated beside its predicate rather than inline in the hook.
+ * `retire` is the state setter; calling it conditionally during render is
+ * the same pattern the `installDiscovered` adjustment uses.
+ */
+function retireForceRefusalIfRefuted(
+  input: ForceRefusalEvidence & { readonly retire: () => void },
+): void {
+  if (checkRefutesForceRefusal(input)) input.retire();
+}
+
+function checkRefutesForceRefusal(input: ForceRefusalEvidence): boolean {
+  // A retained or placeholder catalog cannot prove a subsequent repair.
+  // The exact refused version must be cleared by a newer successful answer.
+  return (
+    input.refusal !== null &&
+    input.checkSucceeded &&
+    !input.checkIsPlaceholderData &&
+    input.manifest !== null &&
+    input.checkDataUpdatedAt > input.refusal.checkDataUpdatedAt &&
+    describeForceUpdateRefusal({
+      manifest: input.manifest,
+      version: input.refusal.version,
+      platformKey: input.platformKey,
+      hostName: input.hostName,
+    }) === null
+  );
 }
 
 function describeUpdateFailure(input: {

@@ -1859,14 +1859,14 @@ describe("Overview updates — CLI floor remedy", () => {
       overrideHandlers: {
         "host.update.check": () => {
           checks += 1;
+          if (checks >= 4) {
+            return Promise.resolve({ outcome: "cli-failed" as const });
+          }
           return Promise.resolve({
             outcome: "ok" as const,
             effectiveIncludePreReleases: false,
             includePreReleasesSource: "stable-default" as const,
-            manifest:
-              checks === 1 || checks >= 3
-                ? floorManifest("1.3.0", true)
-                : floorManifest("1.3.0", false),
+            manifest: floorManifest("1.3.0", checks === 1 || checks === 3),
           });
         },
         "host.update.install": (request) => {
@@ -1925,6 +1925,26 @@ describe("Overview updates — CLI floor remedy", () => {
     // The available answer ends the condition-poll episode; retaining the
     // lane after repair would keep shelling the host on every further tick.
     expect(checks).toBe(checksAfterRecovery);
+    const checksBeforeFailure = checks;
+    await act(async () => {
+      await queryClient.invalidateQueries();
+    });
+    await waitFor(() => expect(checks).toBeGreaterThan(checksBeforeFailure));
+    // Deleting only the guarded checkRefutesForceRefusal/setForceRefusal(null)
+    // retirement block would keep every earlier repair assertion green but
+    // revive the old floor text after this later failed check; these negative
+    // current-failure pins must turn RED under that concrete ablation.
+    await waitFor(() => {
+      expect(screen.getByRole("status").textContent).toBe(
+        "host-a's Traycer CLI couldn't complete the request.",
+      );
+      const notice = screen.getByTestId("host-overview-update-attempt-failed");
+      expect(notice.textContent).toBe(
+        "host-a's Traycer CLI couldn't complete the request.",
+      );
+      expect(notice.textContent).not.toContain("needs Traycer CLI");
+    });
+    expect(installCalls).toEqual([]);
   });
 
   it("settles Force refusal synchronously exactly once for floored, absent, and incomplete-floor entries", async () => {
