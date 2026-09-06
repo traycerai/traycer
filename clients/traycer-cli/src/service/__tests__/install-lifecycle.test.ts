@@ -12,6 +12,7 @@ import {
 } from "../install-lifecycle";
 import { CLI_ERROR_CODES, CliError } from "../../runner/errors";
 import type { SwapLockRecovery } from "../../installer";
+import { epochMicrosNow } from "../platforms/windows";
 
 const mocks = vi.hoisted(() => ({
   createServiceControllerMock: vi.fn(),
@@ -59,10 +60,21 @@ vi.mock("../platforms/macos", () => ({
 // The Windows swap-lock recovery functions shell out to schtasks /
 // powershell / taskkill - stub the module so the wiring tests can assert
 // the lifecycle hands the label through without touching the OS.
-vi.mock("../platforms/windows", () => ({
-  killLingeringSlotProcesses: mocks.killLingeringSlotProcessesMock,
-  describeSlotLockHolders: mocks.describeSlotLockHoldersMock,
-}));
+vi.mock("../platforms/windows", async () => {
+  // The REAL clock helper, re-exported through the mock: the wiring test
+  // below asserts by identity that this exact function reaches the platform
+  // seam, and separately that it reads in the unit the kill loop compares
+  // against. A reimplementation here would let both pass for a helper that
+  // drifted.
+  const actual = await vi.importActual<typeof import("../platforms/windows")>(
+    "../platforms/windows",
+  );
+  return {
+    killLingeringSlotProcesses: mocks.killLingeringSlotProcessesMock,
+    describeSlotLockHolders: mocks.describeSlotLockHoldersMock,
+    epochMicrosNow: actual.epochMicrosNow,
+  };
+});
 
 // Deliberately NOT mocked: `../cli-invocation-shape`. The self-naming
 // predicate under test in the preserve-path suite below must run for real -
@@ -1001,10 +1013,24 @@ describe("swap-lock recovery wiring", () => {
       await expect(recovery.describeLockHolders()).resolves.toEqual(holders);
     }
     expect(mocks.killLingeringSlotProcessesMock).toHaveBeenCalledTimes(2);
+    // The clock is a required dependency, not an ambient one: the kill loop
+    // bounds its cross-round victim memory with it, and a caller that forgot to
+    // pass one would fail at the call rather than quietly reading a global.
+    // Asserted by IDENTITY (the real `epochMicrosNow`, re-exported through the
+    // mock above) and by UNIT: the loop compares this clock against creation
+    // times the scan projects in epoch microseconds, so a clock in
+    // milliseconds would put every victim's window a thousand times too early.
     expect(mocks.killLingeringSlotProcessesMock).toHaveBeenCalledWith(
       label,
       null,
+      { now: epochMicrosNow },
     );
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+    try {
+      expect(epochMicrosNow()).toBe(1_700_000_000_000_000);
+    } finally {
+      nowSpy.mockRestore();
+    }
     expect(mocks.describeSlotLockHoldersMock).toHaveBeenCalledWith(label, null);
   });
 

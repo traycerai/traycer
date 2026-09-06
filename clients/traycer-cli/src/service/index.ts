@@ -6,7 +6,8 @@ import type { CliInvocation } from "./cli-binary";
 import type { ServiceLabel } from "./label";
 import { createLinuxController } from "./platforms/linux";
 import { createMacosController } from "./platforms/macos";
-import { createWindowsController } from "./platforms/windows";
+import { createWindowsController, epochMicrosNow } from "./platforms/windows";
+import { assertNotInsideHostUnit } from "../host/cgroup-relocation";
 import { clearStopIntent, writeStopIntent } from "../host/stop-intent";
 import { findLiveIncumbentHost } from "../host/incumbent-check";
 import { hostHomeDir } from "../store/paths";
@@ -366,8 +367,18 @@ export function withCliInvocationRecord(
 ): ServiceController {
   return {
     ...controller,
-    install: (options) =>
-      runServiceRegistrationWithInvocationRecord({
+    install: async (options) => {
+      // The Linux self-protection guard runs BEFORE the record transaction
+      // here too, for the mirror image of the `uninstall` reason below: a
+      // throw from `register` is treated as an OS registration that may be
+      // half-done and marks the live record stale, and a refusal that touched
+      // nothing must not do that to an intact registration. The guard is on
+      // `install` at all because the Linux install's failure path is a stop:
+      // `installService` rolls a failed `enable --now` back with
+      // `disable --now` on the unit, which stops the live host - and the CLI
+      // with it, if the relocation silently left it inside the unit.
+      await assertNotInsideHostUnit();
+      return runServiceRegistrationWithInvocationRecord({
         environment: options.label.environment,
         hostHomeDir: hostHomeDir(options.label.environment),
         serviceLabel: options.label.id,
@@ -375,16 +386,28 @@ export function withCliInvocationRecord(
         register: () => controller.install(options),
         waitMs: CLI_INVOCATION_TXN_WAIT_MS,
         pollIntervalMs: CLI_INVOCATION_TXN_POLL_MS,
-      }),
-    uninstall: (options) =>
-      runServiceUninstallWithInvocationRecord({
+      });
+    },
+    uninstall: async (options) => {
+      // The Linux self-protection guard runs BEFORE the record transaction,
+      // not only inside `withStopIntent` beneath it. Inside the transaction a
+      // refusal is indistinguishable from an OS uninstall that threw, and
+      // `runServiceRemovalWithInvocationRecord` rightly treats that as "the
+      // service may be half-gone" and marks the live record stale - for a
+      // preflight that touched nothing, that would send every later host read
+      // through OS recovery for an intact registration. The inner guard stays:
+      // it is `withStopIntent`'s own contract for any composition that lacks
+      // this decorator, and a second cgroup read costs nothing.
+      await assertNotInsideHostUnit();
+      return runServiceUninstallWithInvocationRecord({
         environment: options.label.environment,
         hostHomeDir: hostHomeDir(options.label.environment),
         serviceLabel: options.label.id,
         uninstall: () => controller.uninstall(options),
         waitMs: CLI_INVOCATION_TXN_WAIT_MS,
         pollIntervalMs: CLI_INVOCATION_TXN_POLL_MS,
-      }),
+      });
+    },
     // The competing-registration repair removes THIS label's registration -
     // the one a live record describes - on macOS when Desktop owns host
     // registration, so it runs inside the same transaction as an uninstall.
@@ -442,7 +465,28 @@ export function withStopIntent(
     // written - before it has spawned a child or published `pid.json`. Clearing
     // there hands the old supervisor a window in which it sees neither intent
     // nor an incumbent, and it relaunches. One restart, two hosts.
+    //
+    // Each route also carries the Linux self-protection guard, BEFORE its
+    // announcement so a refusal leaves no record of a stop that never happened.
+    // This is the second line behind the relocation in `withRunner`
+    // (host/cgroup-relocation.ts): it re-reads the cgroup, so a machine with no
+    // `systemd-run`, no user manager, or a scope that failed to move us is
+    // refused here instead of killing the process issuing the stop. `restart`
+    // is included because it is a real actuator - `systemctl --user restart`
+    // goes through it, not through `stop` - and leaving it out would leave one
+    // allowlisted command with no second line. `install` carries the guard for
+    // the same reason and nothing else: it is not a stop and announces no
+    // intent, but the Linux `installService` rolls a failed `enable --now`
+    // back with `disable --now` on the unit, and that rollback stops the live
+    // host. Every route into it - `host service install`, and the
+    // registration inside `host install` / `ensure` / `apply` / `update` -
+    // reaches this decorator through the production factory.
+    install: async (options) => {
+      await assertNotInsideHostUnit();
+      return controller.install(options);
+    },
     stop: async (label, options) => {
+      await assertNotInsideHostUnit();
       await announceStop(label.environment, "stop", options.force);
       try {
         return await controller.stop(label, options);
@@ -452,6 +496,7 @@ export function withStopIntent(
       }
     },
     stopForRestart: async (label, options) => {
+      await assertNotInsideHostUnit();
       await announceStop(label.environment, "restart", options.force);
       try {
         return await controller.stopForRestart(label, options);
@@ -461,6 +506,7 @@ export function withStopIntent(
       }
     },
     uninstall: async (options) => {
+      await assertNotInsideHostUnit();
       await announceStop(options.label.environment, "uninstall", false);
       try {
         return await controller.uninstall(options);
@@ -470,6 +516,7 @@ export function withStopIntent(
       }
     },
     restart: async (label) => {
+      await assertNotInsideHostUnit();
       await announceStop(label.environment, "restart", false);
       try {
         return await controller.restart(label);
@@ -491,6 +538,10 @@ export function withStopIntent(
  * supervisor would sit silenced for the intent's lifetime with no uninstall
  * having occurred. Inside the transaction, the intent is announced only once
  * the backend uninstall is actually about to run.
+ *
+ * The one thing that runs before BOTH is the Linux cgroup guard: the outer
+ * decorator's uninstall re-runs it ahead of acquiring the transaction, so a
+ * refusal neither publishes an intent nor invalidates the record.
  */
 export function createServiceController(): ServiceController {
   const platform = osPlatform();
@@ -516,7 +567,7 @@ export function createServiceController(): ServiceController {
       environment: config.environment,
     });
     return withCliInvocationRecord(
-      withStopIntent(createWindowsController(null)),
+      withStopIntent(createWindowsController(null, { now: epochMicrosNow })),
     );
   }
   logger.error(
