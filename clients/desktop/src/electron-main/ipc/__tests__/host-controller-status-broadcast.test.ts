@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { IpcHostController } from "../runner-ipc-bridge";
 import type {
   HostControllerStatus,
+  LocalAttemptFacts,
   MutationLaneStatus,
   MutationProgress,
 } from "../../host/host-controller-types";
@@ -15,8 +16,14 @@ vi.mock("../../app/logger", () => ({
   log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
 
+// `localAttempt` is a second REQUIRED parameter (no optional params - see
+// CLAUDE.md's type-safety rules) so every existing call site must say
+// explicitly what it means by "no local attempt" rather than leaning on a
+// default. The D13 pins that need a live/parked/interrupted record use
+// `fakeLocalAttempt` below instead.
 function fakeStatus(
   download: HostControllerStatus["download"],
+  localAttempt: LocalAttemptFacts | null,
 ): HostControllerStatus {
   return {
     download,
@@ -29,9 +36,26 @@ function fakeStatus(
     updateReady: false,
     activation: "activated",
     reachable: true,
-    localAttempt: null,
+    localAttempt,
     removedByUser: false,
     checkedAt: new Date().toISOString(),
+  };
+}
+
+function fakeLocalAttempt(
+  overrides: Partial<LocalAttemptFacts>,
+): LocalAttemptFacts {
+  return {
+    attemptId: "attempt-1",
+    generation: 1,
+    sequence: 1,
+    targetVersion: "2.0.0",
+    phase: "restarting",
+    continuation: null,
+    updatedAt: new Date().toISOString(),
+    liveness: "live",
+    livenessObservedAtMs: Date.now(),
+    ...overrides,
   };
 }
 
@@ -61,7 +85,7 @@ function fakeHostController(withMutationStatus: boolean): FakeHostController {
   let statusReads = 0;
   const base: FakeHostController = {
     lifecycleAdmissionBlock: null,
-    status: fakeStatus(null),
+    status: fakeStatus(null, null),
     getStatusError: null,
     getStatusCallCount(): number {
       return statusReads;
@@ -224,11 +248,11 @@ describe("registerHostControllerStatusBroadcast", () => {
     // single pending re-read rather than 49 concurrent ones.
     expect(resolvers).toHaveLength(1);
 
-    resolvers[0]!(fakeStatus(null));
+    resolvers[0]!(fakeStatus(null, null));
     await vi.advanceTimersByTimeAsync(0);
     expect(resolvers).toHaveLength(2);
 
-    const newest = { ...fakeStatus(null), stagedVersion: "2.0.0" };
+    const newest = { ...fakeStatus(null, null), stagedVersion: "2.0.0" };
     resolvers[1]!(newest);
     await vi.advanceTimersByTimeAsync(0);
 
@@ -278,7 +302,7 @@ describe("registerHostControllerStatusBroadcast", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(reads).toHaveLength(2);
 
-    const terminal = { ...fakeStatus(null), stagedVersion: "2.0.0" };
+    const terminal = { ...fakeStatus(null, null), stagedVersion: "2.0.0" };
     reads[1]!.resolve(terminal);
     await vi.advanceTimersByTimeAsync(0);
     expect(bridge.fanOutCalls.at(-1)).toEqual([
@@ -343,11 +367,14 @@ describe("registerHostControllerStatusBroadcast", () => {
     const bridge = fakeBridge(hostController);
     registerHostControllerStatusBroadcast(bridge);
 
-    hostController.status = fakeStatus({
-      version: "1.5.0",
-      progress: null,
-      lastError: null,
-    });
+    hostController.status = fakeStatus(
+      {
+        version: "1.5.0",
+        progress: null,
+        lastError: null,
+      },
+      null,
+    );
     hostController.emitProgress();
     await vi.advanceTimersByTimeAsync(0);
     const afterFirstTick = bridge.fanOutCalls.length;
@@ -358,7 +385,7 @@ describe("registerHostControllerStatusBroadcast", () => {
     await vi.advanceTimersByTimeAsync(1_900);
     expect(bridge.fanOutCalls.length).toBeGreaterThan(afterFirstTick + 1);
 
-    hostController.status = fakeStatus(null);
+    hostController.status = fakeStatus(null, null);
     const afterDownloadCleared = bridge.fanOutCalls.length;
     hostController.emitProgress();
     await vi.advanceTimersByTimeAsync(0);
@@ -376,11 +403,14 @@ describe("registerHostControllerStatusBroadcast", () => {
     const hostController = fakeHostController(false);
     const bridge = fakeBridge(hostController);
     registerHostControllerStatusBroadcast(bridge);
-    hostController.status = fakeStatus({
-      version: "1.5.0",
-      progress: null,
-      lastError: "download failed",
-    });
+    hostController.status = fakeStatus(
+      {
+        version: "1.5.0",
+        progress: null,
+        lastError: "download failed",
+      },
+      null,
+    );
 
     hostController.emitProgress();
     await vi.advanceTimersByTimeAsync(0);
@@ -423,11 +453,14 @@ describe("registerHostControllerStatusBroadcast", () => {
     const hostController = fakeHostController(false);
     const bridge = fakeBridge(hostController);
     registerHostControllerStatusBroadcast(bridge);
-    hostController.status = fakeStatus({
-      version: "1.5.0",
-      progress: null,
-      lastError: null,
-    });
+    hostController.status = fakeStatus(
+      {
+        version: "1.5.0",
+        progress: null,
+        lastError: null,
+      },
+      null,
+    );
 
     // Engage the 750ms active cadence via an in-flight download tick.
     hostController.emitProgress();
@@ -443,5 +476,184 @@ describe("registerHostControllerStatusBroadcast", () => {
     // produced several more reads here.
     await vi.advanceTimersByTimeAsync(3_000);
     expect(hostController.getStatusCallCount()).toBe(readsAfterFailure);
+  });
+});
+
+// D13: `localAttempt.liveness === "live"` is the fast poll's second trigger,
+// independent of the download lane - the host-down window where no
+// `host.status` answers and this poll is the renderer's only source of
+// phase movement. Ablation (c) - keying the fast poll on the download leg
+// only - reddens `B1` below: a `live` record with `download: null` would
+// never leave the idle floor.
+describe("registerHostControllerStatusBroadcast: liveness-keyed fast poll (D13)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  // B1: a live active record alone (no download) engages the 750ms cadence.
+  it("starts active polling for a live local attempt with no download in flight", async () => {
+    const hostController = fakeHostController(false);
+    const bridge = fakeBridge(hostController);
+    registerHostControllerStatusBroadcast(bridge);
+
+    hostController.status = fakeStatus(
+      null,
+      fakeLocalAttempt({
+        attemptId: "a1",
+        generation: 1,
+        sequence: 1,
+        liveness: "live",
+      }),
+    );
+    hostController.emitProgress();
+    await vi.advanceTimersByTimeAsync(0);
+    const afterFirstTick = bridge.fanOutCalls.length;
+
+    // Same shape as the download-lane cadence assertion above: ~2.5 active
+    // intervals must produce more than one extra tick well inside the 5s
+    // idle floor.
+    await vi.advanceTimersByTimeAsync(1_900);
+    expect(bridge.fanOutCalls.length).toBeGreaterThan(afterFirstTick + 1);
+  });
+
+  // B2: a parked record is never `live` (D13: parked is not probed), so it
+  // must never leave the idle floor.
+  it("stays at the idle floor for a parked local attempt", async () => {
+    const hostController = fakeHostController(false);
+    const bridge = fakeBridge(hostController);
+    registerHostControllerStatusBroadcast(bridge);
+
+    hostController.status = fakeStatus(
+      null,
+      fakeLocalAttempt({
+        attemptId: "a1",
+        phase: "waiting-for-work",
+        continuation: "resume-apply",
+        liveness: "unknown",
+        livenessObservedAtMs: null,
+      }),
+    );
+    hostController.emitProgress();
+    await vi.advanceTimersByTimeAsync(0);
+    const afterFirstTick = bridge.fanOutCalls.length;
+
+    // Well short of the 5s idle floor: an engaged active timer would have
+    // produced further ticks here.
+    await vi.advanceTimersByTimeAsync(1_900);
+    expect(bridge.fanOutCalls.length).toBe(afterFirstTick);
+  });
+
+  // B3: liveness alone is not progress. A held lock whose record never
+  // advances must fall back to the idle floor once the 60s advance window
+  // elapses, or a wedged executor would be polled at 750ms forever.
+  it("drops from 750ms to the idle floor once the attempt stops advancing for 60s", async () => {
+    const hostController = fakeHostController(false);
+    const bridge = fakeBridge(hostController);
+    registerHostControllerStatusBroadcast(bridge);
+
+    hostController.status = fakeStatus(
+      null,
+      fakeLocalAttempt({
+        attemptId: "a1",
+        generation: 1,
+        sequence: 1,
+        liveness: "live",
+      }),
+    );
+    hostController.emitProgress();
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Run the unchanged `(generation, sequence)` through the whole 60s
+    // advance window - the active timer keeps re-publishing the identical
+    // identity until the window's own elapsed check drops it.
+    await vi.advanceTimersByTimeAsync(60_000);
+    const afterWindowExpired = bridge.fanOutCalls.length;
+
+    // Well inside the 5s idle floor: if the active timer were still armed,
+    // this would produce several more ticks.
+    await vi.advanceTimersByTimeAsync(1_900);
+    expect(bridge.fanOutCalls.length).toBe(afterWindowExpired);
+  });
+
+  // B4: an advance (`sequence` moving forward) re-arms the fast cadence even
+  // after the window has already dropped it to idle.
+  it("re-arms the 750ms cadence when the attempt advances after the window expired", async () => {
+    const hostController = fakeHostController(false);
+    const bridge = fakeBridge(hostController);
+    registerHostControllerStatusBroadcast(bridge);
+
+    hostController.status = fakeStatus(
+      null,
+      fakeLocalAttempt({
+        attemptId: "a1",
+        generation: 1,
+        sequence: 1,
+        liveness: "live",
+      }),
+    );
+    hostController.emitProgress();
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    // A fresh `sequence` on the SAME attempt is an advance - it must land
+    // via a mutation-progress tick (which always publishes) and re-engage
+    // the timer, independent of whether the active timer is currently armed.
+    hostController.status = fakeStatus(
+      null,
+      fakeLocalAttempt({
+        attemptId: "a1",
+        generation: 1,
+        sequence: 2,
+        liveness: "live",
+      }),
+    );
+    hostController.emitProgress();
+    await vi.advanceTimersByTimeAsync(0);
+    const afterAdvanceTick = bridge.fanOutCalls.length;
+
+    await vi.advanceTimersByTimeAsync(1_900);
+    expect(bridge.fanOutCalls.length).toBeGreaterThan(afterAdvanceTick + 1);
+  });
+
+  // B5: a NEW `attemptId` also re-arms the window, even without a higher
+  // `(generation, sequence)` than the window's own anchor - the window is
+  // about "this attempt still moving", not a monotonic counter.
+  it("resets the advance window on a new attemptId with no higher sequence", async () => {
+    const hostController = fakeHostController(false);
+    const bridge = fakeBridge(hostController);
+    registerHostControllerStatusBroadcast(bridge);
+
+    hostController.status = fakeStatus(
+      null,
+      fakeLocalAttempt({
+        attemptId: "a1",
+        generation: 1,
+        sequence: 1,
+        liveness: "live",
+      }),
+    );
+    hostController.emitProgress();
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    hostController.status = fakeStatus(
+      null,
+      fakeLocalAttempt({
+        attemptId: "a2",
+        generation: 1,
+        sequence: 1,
+        liveness: "live",
+      }),
+    );
+    hostController.emitProgress();
+    await vi.advanceTimersByTimeAsync(0);
+    const afterNewAttemptTick = bridge.fanOutCalls.length;
+
+    await vi.advanceTimersByTimeAsync(1_900);
+    expect(bridge.fanOutCalls.length).toBeGreaterThan(afterNewAttemptTick + 1);
   });
 });

@@ -2,6 +2,7 @@ import { log } from "../app/logger";
 import { RunnerHostEvent } from "../../ipc-contracts/ipc-channels";
 import type {
   HostControllerStatus,
+  LocalAttemptFacts,
   MutationLaneStatus,
 } from "../host/host-controller-types";
 import type { IpcHostController } from "./runner-ipc-bridge";
@@ -12,8 +13,27 @@ import type { IpcHostController } from "./runner-ipc-bridge";
 // while a download is actually in flight; a low-frequency idle floor
 // catches any other externally-driven transition (e.g. a `stageLatest()`
 // kicked off by the launch converge reconcile before any window subscribed).
-const ACTIVE_DOWNLOAD_POLL_MS = 750;
+//
+// The tight cadence has a SECOND trigger since D13: a durable attempt whose
+// holder Desktop has positively probed as live. That is the host-down window -
+// no `host.status` is answering, so this poll is the renderer's only source of
+// phase changes, and at the idle floor a whole restart can pass between two
+// reads. Neither trigger knows about the other; either one arms the timer.
+const ACTIVE_POLL_MS = 750;
 const IDLE_POLL_MS = 5_000;
+
+/**
+ * How long the live cadence survives an attempt that stops ADVANCING.
+ *
+ * Liveness alone is not progress: a held lock with a record that never moves
+ * is a wedged executor, and polling it at 750 ms forever costs a `getStatus`
+ * (three JSON reads, a reachability probe and now a holder probe) every tick
+ * for information that is not changing. So the fast lane is armed by liveness
+ * and KEPT by movement - a fresh `(generation, sequence)`, or a new attempt
+ * entirely - and otherwise falls back to the idle floor, which still observes
+ * everything, just less often.
+ */
+const ATTEMPT_ADVANCE_WINDOW_MS = 60_000;
 
 type MutationStatusObserver = {
   onMutationStatus(
@@ -98,7 +118,55 @@ export function registerHostControllerStatusBroadcast(
     if (activeTimer !== null || disposed) return;
     activeTimer = setInterval(() => {
       void broadcast();
-    }, ACTIVE_DOWNLOAD_POLL_MS);
+    }, ACTIVE_POLL_MS);
+  };
+
+  // The advancement window, per BRIDGE (this closure is one registration).
+  // Two windows watching the same host each keep their own, which is correct:
+  // the window is about what THIS broadcaster has published, and a bridge
+  // registered mid-attempt has seen no advance yet and must not inherit
+  // another's.
+  let attemptAdvance: {
+    readonly attemptId: string;
+    readonly generation: number;
+    readonly sequence: number;
+    readonly atMs: number;
+  } | null = null;
+
+  const liveAttemptWantsFastPoll = (
+    localAttempt: LocalAttemptFacts | null,
+    nowMs: number,
+  ): boolean => {
+    // `live` already implies an active record - it is minted only for one - so
+    // parks, interrupted and unknown reads all fall through to the idle floor
+    // without a second test of the phase here.
+    if (localAttempt === null || localAttempt.liveness !== "live") return false;
+    const seen = attemptAdvance;
+    const advanced =
+      seen === null ||
+      seen.attemptId !== localAttempt.attemptId ||
+      localAttempt.generation > seen.generation ||
+      (localAttempt.generation === seen.generation &&
+        localAttempt.sequence > seen.sequence);
+    if (advanced) {
+      attemptAdvance = {
+        attemptId: localAttempt.attemptId,
+        generation: localAttempt.generation,
+        sequence: localAttempt.sequence,
+        atMs: nowMs,
+      };
+      return true;
+    }
+    const elapsedMs = nowMs - seen.atMs;
+    if (elapsedMs < 0) {
+      // A backward wall-clock step (the pitfall the holder cache's own TTL
+      // guards) would otherwise hold the window open until the clock caught
+      // up - hours, on an unchanging record. Re-anchor and let the 60 s run
+      // again from here.
+      attemptAdvance = { ...seen, atMs: nowMs };
+      return true;
+    }
+    return elapsedMs < ATTEMPT_ADVANCE_WINDOW_MS;
   };
 
   const publish = async (): Promise<void> => {
@@ -122,7 +190,16 @@ export function registerHostControllerStatusBroadcast(
         });
       }
     }
-    if (status.download !== null && status.download.lastError === null) {
+    // Both legs are evaluated on every publication, never short-circuited:
+    // the advancement window has to see each observation to know whether the
+    // record is still moving, and a download in flight must not hide that.
+    const downloadInFlight =
+      status.download !== null && status.download.lastError === null;
+    const attemptLive = liveAttemptWantsFastPoll(
+      status.localAttempt,
+      Date.now(),
+    );
+    if (downloadInFlight || attemptLive) {
       ensureActivePolling();
     } else {
       stopActivePolling();

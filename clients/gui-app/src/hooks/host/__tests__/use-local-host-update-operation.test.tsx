@@ -65,6 +65,9 @@ function localAttempt(
     phase: "preparing",
     continuation: null,
     updatedAt: "2026-08-27T00:00:00.000Z",
+    // Desktop's probed liveness (D13); `unknown` unless a case is about it.
+    liveness: "unknown",
+    livenessObservedAtMs: null,
     ...overrides,
   };
 }

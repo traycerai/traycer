@@ -876,6 +876,10 @@ describe("projectFleetUpdateView — the durable-record arm (host-down window)",
         phase: "failed",
         continuation: null,
         updatedAt: "2026-08-27T00:00:00.000Z",
+        // A terminal record is never probed (D13), so Desktop publishes
+        // `unknown` with no observation timestamp.
+        liveness: "unknown",
+        livenessObservedAtMs: null,
       },
       observedAtMs: NOW_MS,
     });

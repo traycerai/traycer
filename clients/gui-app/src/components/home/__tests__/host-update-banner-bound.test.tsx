@@ -1099,6 +1099,11 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
         phase: "preparing",
         continuation: null,
         updatedAt: "2026-05-15T00:00:00Z",
+        // The record leg alone, with no liveness proof behind it - which is
+        // what these host-down cases are about: a retained phase rendered as
+        // last-seen, outside the lifecycle gate.
+        liveness: "unknown",
+        livenessObservedAtMs: null,
       },
     };
 
