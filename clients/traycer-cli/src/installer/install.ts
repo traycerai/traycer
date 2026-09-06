@@ -146,9 +146,13 @@ export interface InstallHostLifecycle {
 //   - `afterSwap` - the swap committed, the relaunch has not started. The
 //     service lifecycle runs it at the TOP of its own `afterSwap`, before
 //     any kickstart/register, so the caller's write always precedes the
-//     start request. On `externally-managed` darwin that lifecycle performs
-//     no start at all, so a caller writing "restarting" there is describing
-//     Desktop's next register cycle, not a CLI-driven relaunch.
+//     start request - on EVERY prior-state branch, `externally-managed`
+//     included. That branch does not re-register the Desktop-owned label
+//     (SMAppService owns it), but on darwin it does kickstart it: a forced
+//     recycle when the pre-swap stop resolved, a plain start when the stop
+//     degraded. So a caller writing "restarting" from here is naming a
+//     CLI-requested relaunch in the ordinary case, and Desktop's next
+//     register cycle only when that kickstart itself fails.
 //
 // Passing the callbacks is deliberately REQUIRED rather than optional: an
 // omitted barrier is indistinguishable from a caller that meant to observe

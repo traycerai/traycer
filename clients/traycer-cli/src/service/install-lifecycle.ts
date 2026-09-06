@@ -219,11 +219,16 @@ export function createServiceInstallLifecycle(
     },
     afterSwap: async () => {
       // At the TOP, before every branch below: the bytes are committed and
-      // nothing has been asked to start yet. On `externally-managed` darwin
-      // the branch below performs no CLI-driven start at all (it kickstarts
-      // Desktop's agent label, or leaves the machine to Desktop's next
-      // register cycle), so a caller marking "restarting" from here is
-      // naming that relaunch, whoever performs it.
+      // nothing has been asked to start yet. That holds on every prior
+      // state, `externally-managed` included - which does NOT mean nothing
+      // starts there. That branch declines to re-register Desktop's
+      // SMAppService label, but on darwin it still kickstarts it below
+      // (`relaunchAfterRestart` with `forcedRecycle` after a resolved stop,
+      // `controller.start` after a degraded one) and records
+      // `postSwapAction: "start"`. A caller marking "restarting" here is
+      // therefore naming a CLI-requested relaunch in the ordinary case; the
+      // machine waits for Desktop's own register cycle only when that
+      // kickstart throws (`postSwapError`, `postSwapAction` left "none").
       await options.hooks.afterSwap();
       if (state.priorState === "externally-managed") {
         // Traycer Desktop's SMAppService owns registration here. Any

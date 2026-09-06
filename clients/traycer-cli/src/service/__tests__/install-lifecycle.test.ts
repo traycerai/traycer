@@ -13,6 +13,7 @@ import {
 import { CLI_ERROR_CODES, CliError } from "../../runner/errors";
 import { NO_INSTALL_PHASE_HOOKS, type SwapLockRecovery } from "../../installer";
 import { epochMicrosNow } from "../platforms/windows";
+import { makeBarrierGate } from "../../__tests__/support/barrier-gate";
 
 const mocks = vi.hoisted(() => ({
   createServiceControllerMock: vi.fn(),
@@ -1103,6 +1104,49 @@ describe("swap-lock recovery wiring", () => {
 describe("InstallPhaseHooks forwarding", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it("createServiceInstallLifecycle forwards beforeSwapCommit to the caller's hook and waits for it", async () => {
+    // Cold review A (R2): this suite drove `beforeSwap` and `afterSwap` but
+    // never `beforeSwapCommit`, so the real forwarding could be replaced by
+    // an async no-op with nothing failing here. The barrier's PLACEMENT
+    // (after a resolved stop, before the swap) belongs to
+    // `commitInstallFromSource` and is pinned in
+    // `installer/__tests__/apply-real-lifecycle.test.ts`; what this pins is
+    // that the constructor hands the member through at all, and returns the
+    // caller's promise rather than a resolved one.
+    const harness = makeController("running");
+    mocks.createServiceControllerMock.mockReturnValue(harness.controller);
+    let released = false;
+    const gate = makeBarrierGate();
+    const calls: string[] = [];
+    const handle = createServiceInstallLifecycle({
+      environment: "production",
+      bootstrap,
+      force: false,
+      hooks: {
+        beforeSwapCommit: async () => {
+          calls.push("beforeSwapCommit");
+          await gate.promise;
+          released = true;
+        },
+        afterSwap: async () => {
+          calls.push("afterSwap");
+        },
+      },
+    });
+
+    const pending = handle.lifecycle.beforeSwapCommit();
+    gate.release();
+    await pending;
+
+    expect(calls).toEqual(["beforeSwapCommit"]);
+    // The awaited half: a forwarding that dropped the caller's promise
+    // would resolve `pending` before the hook body finished.
+    expect(released).toBe(true);
+    // Falsification: replace the forwarding with `async () => {}` and
+    // `calls` stays empty; return without awaiting the caller's promise and
+    // `released` is false.
   });
 
   it("createBytesOnlyInstallLifecycle forwards both barriers verbatim and starts nothing itself", async () => {
