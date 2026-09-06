@@ -75,6 +75,7 @@ import type {
 } from "@traycer/protocol/config/installation-records";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { hostQueryKeys } from "@/lib/query-keys";
+import type { BoundDispatchResponse } from "@/components/settings/panels/host-overview-rpc";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import {
   resetHostServiceWriteLatchesForTest,
@@ -85,6 +86,7 @@ import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { HostSettingsPanel } from "@/components/settings/panels/host-settings-panel";
 import {
   buildOverviewHostFixture,
+  openHostOverviewAdvanced,
   openHostOverviewMenu,
   updateCheckManifest,
   type OverviewHostFixture,
@@ -287,6 +289,12 @@ afterEach(() => {
   scopeOverrides.current = {};
   hostBindingMock.current = null;
   vi.useRealTimers();
+  // BOTH, and in this order. `restoreAllMocks` undoes spies (pin (g)'s
+  // `newOverviewIncarnation`), but the `toast` doubles come from this file's
+  // `vi.mock` factory — they are plain `vi.fn()`s that no restore touches, so
+  // their call history would otherwise accumulate across the whole suite and a
+  // "was never called" assertion would be reading the previous test's toast.
+  vi.clearAllMocks();
   vi.restoreAllMocks();
 });
 
@@ -711,8 +719,11 @@ describe("HostOverviewPanel — dispatch ownership: unusable scope and unmount-b
     });
 
     // The ownership WRITE, in contrast, must NOT have happened for the
-    // retired mount: its incarnation was deregistered on unmount, so
+    // retired mount: unmounting ran the panel's incarnation DISPOSER, which
+    // retires the token from `liveOverviewIncarnations`, so
     // `settleUpdateDispatch`'s `isLiveOverviewIncarnation` check refuses it.
+    // (Nothing here concerns `host.service.deregister`, which is a different
+    // mechanism that clears the slot for its own reason — see the pin for it.)
     expect(
       useHostServiceWriteLatchStore.getState().byHost["host-a"]
         ?.updateDispatch ?? null,
@@ -755,6 +766,119 @@ describe("HostOverviewPanel — dispatch ownership: unusable scope and unmount-b
     });
     fireEvent.click(await restartMenuButton());
     await screen.findByTestId("confirm-destructive-dialog");
+  });
+});
+
+describe("HostOverviewPanel — an accepted host-service deregister clears the dispatch slot (cold review C, F2)", () => {
+  it("clears the slot, so a re-register under the same hostId does not inherit the removed service's activation offer", async () => {
+    // THE PIN. The slot's fourth clear. `host.service.deregister` removes the
+    // service the dispatch was made about; `hostId` is a stable string, so
+    // installing the service again reuses it — and without this clear the
+    // freshly registered service's first `waiting-to-activate a1` frame is
+    // read as this page's own dispatch parking, and opens a dialog about an
+    // attempt belonging to a service that no longer exists.
+    //
+    // Falsifies: dropping the `clearUpdateDispatch` from
+    // `useHostServiceDeregister`'s accepted arm (`host-overview-rpc.ts`).
+    // Without it the slot survives, `seen` flips on the frame below, and the
+    // dialog opens.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    // Four phases, and the middle two are what make the page ANSWERABLE when
+    // the deregister is clicked. `preparing` carries the coarse marker that
+    // releases the accepted latch and flips the slot's `seen`; `quiet` then
+    // reports `{kind: "none"}`, which drops the lifecycle gate — an active
+    // attempt disables the service controls, exactly as it should — while
+    // deliberately PRESERVING the slot, since a frame naming no attempt is not
+    // a different attempt (`nextDispatchSlot`). So by the deregister the slot
+    // is armed, seen, and the only thing standing between this page and an
+    // auto-open is the clear under test.
+    let phase: "idle" | "preparing" | "quiet" | "parked" = "idle";
+    const statusOperation = (): HostStatusUpdateOperation => {
+      if (phase === "quiet") return { kind: "none" };
+      return sequencePinOperation(phase);
+    };
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      overrideHandlers: {
+        "host.status": () => ({
+          ready: true,
+          hostVersion: "1.5.0",
+          protocolVersion: { major: 1, minor: 3 },
+          busy: false,
+          busySessionCount: 2,
+          updateProgress:
+            phase === "preparing"
+              ? { state: "updating" as const, error: null }
+              : null,
+          busyBreakdown: null,
+          updateOperation: statusOperation(),
+          updateTransaction: {
+            recordSchemaVersion: 2 as const,
+            authority: "attempt" as const,
+          },
+        }),
+        "host.update.check": () => ({
+          outcome: "ok" as const,
+          effectiveIncludePreReleases: false,
+          includePreReleasesSource: "stable-default" as const,
+          manifest: updateCheckManifest("1.6.0"),
+        }),
+        "host.update.install": () => {
+          phase = "preparing";
+          return { outcome: "accepted" as const, attemptId: "a1" };
+        },
+      },
+    });
+    record("host-a", [
+      ...METHODS_WITH_BOUND,
+      "host.service.status",
+      "host.service.register",
+      "host.service.deregister",
+    ]);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Update now" }));
+    await waitFor(() => {
+      expect(
+        useHostServiceWriteLatchStore.getState().byHost["host-a"]
+          ?.updateDispatch ?? null,
+      ).not.toBeNull();
+    });
+
+    // Let the preparing frame land (latch released, `seen` flipped), then let
+    // the attempt fall quiet so the page is not gated by a live update.
+    await vi.advanceTimersByTimeAsync(11_000);
+    await waitFor(() => {
+      expect(
+        useHostServiceWriteLatchStore.getState().byHost["host-a"]
+          ?.updateDispatch?.seen,
+      ).toBe(true);
+    });
+    phase = "quiet";
+    await vi.advanceTimersByTimeAsync(11_000);
+
+    await openHostOverviewAdvanced();
+    fireEvent.click(
+      await screen.findByTestId("host-overview-service-deregister"),
+    );
+    await screen.findByTestId("confirm-destructive-dialog");
+    fireEvent.click(screen.getByTestId("confirm-action"));
+
+    await waitFor(() => {
+      expect(
+        useHostServiceWriteLatchStore.getState().byHost["host-a"]
+          ?.updateDispatch ?? null,
+      ).toBeNull();
+    });
+
+    // The service comes back under the same id and its attempt parks. With no
+    // slot there is nothing to own it, so nothing opens.
+    phase = "parked";
+    await vi.advanceTimersByTimeAsync(11_000);
+    expect(screen.queryByTestId("host-busy-force-defer-dialog")).toBeNull();
   });
 });
 
@@ -1086,6 +1210,118 @@ describe("HostOverviewPanel — the bound methods' cli-failed and dispatch-indet
         .queryByRole("button", { name: "Update now" })
         ?.hasAttribute("disabled"),
     ).not.toBe(true);
+  });
+
+  it("(m2) the BOUND dispatch's own indeterminate and already-updating arms toast info, not the cli-failed error, and release the latch", async () => {
+    // Pin (m) below drives every reason through `host.update.install`, which
+    // reaches `classifyInstallOutcome` — a different function from the one the
+    // bound methods use. So deleting `handleBoundDispatchOutcome`'s
+    // `dispatch-indeterminate` / `already-updating` arms left nothing red:
+    // both outcomes would fall through to the `cli-failed` tail below them and
+    // toast an ERROR with `response.reason` read off an arm that has none.
+    //
+    // Falsifies: exactly that deletion. Both arms are routed through
+    // `host.update.activate` here, and the assertions separate `toast.info`
+    // from `toast.error` rather than just checking a string.
+    const scenarios: ReadonlyArray<{
+      readonly label: string;
+      readonly response: BoundDispatchResponse;
+      readonly expected: string;
+      /**
+       * Whether this outcome RELEASES the page-wide accepted latch, which is a
+       * real difference between the two and not incidental: an indeterminate
+       * dispatch means nothing is known to be running, so holding lifecycle
+       * controls shut would be locking the page on a guess; `already-updating`
+       * means an update genuinely IS running, and the latch stays armed until
+       * a coarse `updating` frame supersedes it exactly as an accept's would.
+       */
+      readonly releasesLatch: boolean;
+    }> = [
+      {
+        label: "dispatch-indeterminate",
+        response: {
+          outcome: "dispatch-indeterminate" as const,
+          reason: "recovered-complete",
+        },
+        expected: "The last update already finished.",
+        releasesLatch: true,
+      },
+      {
+        label: "already-updating",
+        response: { outcome: "already-updating" as const, attemptId: "a1" },
+        expected: "host-a is already installing an update.",
+        releasesLatch: false,
+      },
+    ];
+
+    for (const scenario of scenarios) {
+      const fixture = buildOverviewHostFixture({
+        hostId: "host-a",
+        isLocalMachine: true,
+        overrideHandlers: {
+          "host.status": () => ({
+            ready: true,
+            hostVersion: "1.5.0",
+            protocolVersion: { major: 1, minor: 3 },
+            busy: false,
+            busySessionCount: 2,
+            updateProgress: null,
+            busyBreakdown: null,
+            updateOperation: attempt({
+              phase: "waiting-to-activate",
+              execution: "parked",
+              busySessionCount: 2,
+            }),
+            updateTransaction: {
+              recordSchemaVersion: 2 as const,
+              authority: "attempt" as const,
+            },
+          }),
+          "host.update.check": () => ({
+            outcome: "ok" as const,
+            effectiveIncludePreReleases: false,
+            includePreReleasesSource: "stable-default" as const,
+            manifest: updateCheckManifest("1.6.0"),
+          }),
+          "host.update.activate": () => scenario.response,
+        },
+      });
+      record("host-a", METHODS_WITH_BOUND);
+      hostBindingMock.current = { hostClient: fixture.client };
+      scopeOverrides.current = scopeFrom("host-a", fixture);
+      renderPanel();
+
+      fireEvent.click(
+        await screen.findByTestId("host-overview-operation-restart"),
+      );
+      await screen.findByTestId("host-busy-force-defer-dialog");
+      fireEvent.click(screen.getByTestId("host-busy-force"));
+
+      await waitFor(() => {
+        expect(toast.info).toHaveBeenCalledWith(scenario.expected);
+      });
+      // The arm below these two in `handleBoundDispatchOutcome` is
+      // `cli-failed`, and falling into it is the precise regression — so the
+      // absence of an error toast is half of what this pin asserts.
+      expect(vi.mocked(toast.error).mock.calls).toEqual([]);
+      const latchAfter = (): number | null =>
+        useHostServiceWriteLatchStore.getState().byHost["host-a"]
+          ?.updateInstallAcceptedAt ?? null;
+      if (scenario.releasesLatch) {
+        await waitFor(() => {
+          expect(latchAfter()).toBeNull();
+        });
+      } else {
+        expect(latchAfter()).not.toBeNull();
+      }
+
+      cleanup();
+      resetHostServiceWriteLatchesForTest();
+      resetNegotiatedManifests();
+      scopeOverrides.current = {};
+      hostBindingMock.current = null;
+      vi.clearAllMocks();
+    }
   });
 
   it("(m) dispatch-indeterminate reasons map to their own sentences, and an unknown reason keeps the generic one with the reason named", async () => {

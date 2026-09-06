@@ -660,29 +660,35 @@ export function HostOverviewPanel(props: {
   const localAttemptObservation = useLocalAttemptRecordObservation(
     (host?.isLocalMachine ?? false) ? scope.hostId : null,
   );
-  // ⚠ A TICKING CLOCK, replacing `statusQuery.dataUpdatedAt`.
+  // ⚠ A TICKING CLOCK, and it belongs to the RECORD leg ALONE.
   //
-  // The old comment here argued FOR the frozen clock, and its argument was
-  // sound for the wire leg alone: `observationFromCanonicalRead` folds the
-  // query's own health into the deadline and stamps an unhealthy read as
-  // already expired, so `nowMs` only had to be a finite instant at or after the
-  // observation for that verdict to apply.
+  // The record leg's evidence expires on its own. A holder probe's positive
+  // verdict is proof for five seconds (`LOCAL_LIVENESS_PROOF_MS`) and no
+  // longer, and the two timestamps this page could have aged it against BOTH
+  // stop advancing exactly when it matters: `statusQuery.dataUpdatedAt` because
+  // the host is down (that is the whole situation), and the controller query's
+  // own `dataUpdatedAt` because Desktop's broadcaster keeps its idle loop
+  // running through a failing `publish()` — the 5 s loop continues, nothing new
+  // lands in a query with `staleTime: Infinity`, and the payload saying
+  // `liveness: "live"` sits there forever. A deadline measured against either
+  // would never arrive, and the lifecycle gate would be held by a proof nobody
+  // is refreshing.
   //
-  // The record leg breaks that premise, because its evidence expires on its
-  // own. A holder probe's positive verdict is proof for five seconds
-  // (`LOCAL_LIVENESS_PROOF_MS`) and no longer, and the two timestamps this page
-  // could have aged it against BOTH stop advancing exactly when it matters:
-  // `statusQuery.dataUpdatedAt` because the host is down (that is the whole
-  // situation), and the controller query's own `dataUpdatedAt` because
-  // Desktop's broadcaster keeps its idle loop running through a failing
-  // `publish()` — the 5 s loop continues, nothing new lands in a query with
-  // `staleTime: Infinity`, and the payload saying `liveness: "live"` sits there
-  // forever. A deadline measured against either would never arrive, and the
-  // lifecycle gate would be held by a proof nobody is refreshing.
+  // The WIRE leg keeps `statusQuery.dataUpdatedAt`, which is what it always
+  // had. `observationFromCanonicalRead` folds the query's health into the
+  // deadline and stamps an unhealthy read as already expired, so freshness
+  // there is a HEALTH verdict — not a race against how long the round trip
+  // took. This page briefly fed the tick to both, and the cost was not the
+  // "one extra condition" the comment here used to claim: a single `host.status`
+  // slower than the fresh window (2.5 × the poll delay, ~3 s while an update is
+  // active — ordinary for a remote host over the relay) demoted the card to
+  // "Last seen", dropped the page-wide gate, and disengaged the very
+  // accelerator that was supposed to keep ahead of it, once per cycle.
   //
-  // The cost is a render per second while this page is open, and one extra
-  // condition on the wire leg's staleness — which the fast-poll accelerator
-  // below already exists to keep ahead of.
+  // What remains is a render per second while this page is open, which is
+  // accepted: the record leg cannot be correct without it, and the surfaces it
+  // re-renders are already re-rendering on a 2 s poll during the window that
+  // matters.
   const nowMs = useNowMs(LOCAL_RECORD_TICK_MS);
   // ONE precedence-plus-projection, shared with the landing banner's hook
   // (`projectLocalUpdate`). This page used to call `projectFleetUpdateView`
@@ -692,7 +698,7 @@ export function HostOverviewPanel(props: {
   const projection = projectLocalUpdate({
     wire: operationObservation,
     record: localAttemptObservation,
-    nowMs,
+    clock: { wireNowMs: statusQuery.dataUpdatedAt, recordNowMs: nowMs },
     connected: usable,
   });
   const operationView =
@@ -1582,6 +1588,7 @@ export function HostOverviewPanel(props: {
           card is gone; see `host-overview-status-card.tsx`. */}
       <HostBusyForceDeferDialog
         open={forceRestartOffer !== null}
+        title="Host is busy"
         message={
           forceRestartOffer === null
             ? ""
@@ -1623,6 +1630,7 @@ export function HostOverviewPanel(props: {
           above respawns the host process. */}
       <HostBusyForceDeferDialog
         open={forceUpdateOffer !== null}
+        title="Host is busy"
         message={
           forceUpdateOffer === null
             ? ""
@@ -1655,6 +1663,9 @@ export function HostOverviewPanel(props: {
           the person cannot dismiss for as long as the park lasts. */}
       <HostBusyForceDeferDialog
         open={boundOffer !== null}
+        title={
+          boundOffer === null ? "Host is busy" : boundDispatchTitle(boundOffer)
+        }
         message={
           boundOffer === null
             ? ""
@@ -1912,6 +1923,23 @@ function boundDispatchMessage(
 /** The button on a bound dispatch's confirmation, by what it actually does. */
 function boundDispatchForceLabel(offer: BoundDispatchOffer): string {
   return offer.intent === "activate" ? "Restart host" : "Force update";
+}
+
+/**
+ * The HEADING on a bound dispatch's confirmation, by what is actually being
+ * asked.
+ *
+ * Not "Host is busy", which is what this dialog hard-coded for every caller
+ * before it took a title. The two legacy confirmations really are about a busy
+ * host, but this one opens on an attempt that has PARKED — and for `activate`
+ * the host is typically idle and merely waiting to be restarted, so the message
+ * underneath may be counting no blocking work at all. Heading that with "Host
+ * is busy" states the opposite of the sentence it introduces.
+ */
+function boundDispatchTitle(offer: BoundDispatchOffer): string {
+  return offer.intent === "activate"
+    ? "Restart to finish the update"
+    : "Finish the update now";
 }
 
 /**

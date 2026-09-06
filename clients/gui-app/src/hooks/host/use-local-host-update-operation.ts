@@ -131,17 +131,21 @@ export function useLocalHostUpdateOperation(): LocalHostUpdateOperation {
   // performed it) lives in `useLocalAttemptRecordObservation`, shared with the
   // selected-host Overview.
   const recordObservation = useLocalAttemptRecordObservation(hostId);
-  // ⚠ A TICKING CLOCK, replacing `statusQuery.dataUpdatedAt`.
+  // ⚠ A TICKING CLOCK, and it belongs to the RECORD leg ALONE.
   //
-  // The comment this replaces argued FOR the frozen clock, and its argument
-  // was sound for the WIRE leg alone: `observationFromCanonicalRead` folds the
-  // query's own health into the deadline and stamps an unhealthy read as
-  // already expired, so `nowMs` only had to be a finite instant at or after the
-  // observation for that verdict to apply — and it was the reactive choice,
-  // since the health signals move the query's state and notify while a
-  // render-time clock does not.
+  // The WIRE leg keeps the frozen instant, and the argument for it was always
+  // sound: `observationFromCanonicalRead` folds the query's own health into the
+  // deadline and stamps an unhealthy read as already expired, so measuring that
+  // deadline against the instant it was derived from is the statement that a
+  // HEALTHY read is fresh until health says otherwise — never a race against
+  // how long the round trip took. It is also the reactive choice, since the
+  // health signals move the query's state and notify while a render-time clock
+  // does not. Feeding it the tick instead cost a dropped lifecycle gate and a
+  // disengaged poll accelerator once per slow round trip; see
+  // `projectLocalUpdate`.
   //
-  // The record leg breaks the premise, because its evidence expires on its own
+  // The record leg is the one that breaks the premise, because its evidence
+  // expires on its own
   // and nothing re-renders when it does. Desktop's probe verdict is proof for
   // five seconds (`LOCAL_LIVENESS_PROOF_MS`), and both candidate timestamps
   // stop advancing exactly when that matters: `statusQuery.dataUpdatedAt`
@@ -156,11 +160,18 @@ export function useLocalHostUpdateOperation(): LocalHostUpdateOperation {
   // Precedence is still not decided here — `projectLocalUpdate` owns it, and
   // owns it jointly with the Overview so the two surfaces cannot disagree about
   // one host in the one window this arm exists for.
+  //
+  // THE COST, owned here rather than left implicit: this tick re-renders the
+  // landing banner once a second for as long as it is mounted, whether or not
+  // any update is running, and it is unconditional because the record it ages
+  // can appear without anything else changing. Accepted — the banner is cheap
+  // and the record leg cannot be correct without a clock nobody refreshes. It
+  // buys nothing on the wire leg, which no longer reads it at all.
   const nowMs = useNowMs(LOCAL_RECORD_TICK_MS);
   const { view } = projectLocalUpdate({
     wire: observation,
     record: recordObservation,
-    nowMs,
+    clock: { wireNowMs: statusQuery.dataUpdatedAt, recordNowMs: nowMs },
     connected: readiness.isReady,
   });
 

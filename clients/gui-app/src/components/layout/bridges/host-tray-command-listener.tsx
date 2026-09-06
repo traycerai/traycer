@@ -261,6 +261,7 @@ export function HostTrayCommandListener() {
       />
       <HostBusyForceDeferDialog
         open={busy !== null}
+        title="Host is busy"
         message={busy?.message ?? ""}
         isForcing={
           applyStagedMutation.isPending || activateInstalledMutation.isPending

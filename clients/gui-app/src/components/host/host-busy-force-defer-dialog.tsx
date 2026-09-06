@@ -9,6 +9,17 @@ import {
 
 export interface HostBusyForceDeferDialogProps {
   readonly open: boolean;
+  /**
+   * The dialog's heading, and REQUIRED rather than defaulted.
+   *
+   * This used to hard-code "Host is busy", which was true of the two
+   * confirmations it was written for and false of the third. The bound
+   * activation offer opens on a host that has PARKED waiting for a restart,
+   * whose own `message` may well be counting zero blocking sessions — heading
+   * that with "Host is busy" contradicts the sentence directly underneath it.
+   * A default would have preserved that: every call site states its own.
+   */
+  readonly title: string;
   readonly message: string;
   readonly isForcing: boolean;
   readonly forceLabel: string;
@@ -46,7 +57,7 @@ export function HostBusyForceDeferDialog(props: HostBusyForceDeferDialogProps) {
       >
         <div className="flex flex-col gap-1.5 p-5">
           <DialogTitle className="text-ui font-semibold leading-snug">
-            Host is busy
+            {props.title}
           </DialogTitle>
           <DialogDescription className="text-ui-sm leading-relaxed text-muted-foreground">
             {props.message}

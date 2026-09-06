@@ -175,9 +175,8 @@ interface HostServiceWriteLatchState {
   ) => void;
   /**
    * Feeds one `host.status` attempt frame to the slot: `null` when the frame
-   * named no attempt. Owns three of the slot's four clears (terminal id, a
-   * different id once `seen`, and the `seen` flip itself); the fourth is the
-   * unseen TTL, which needs a timer and lives with the panel.
+   * named no attempt. Owns the two FRAME-driven clears (a terminal id, and a
+   * different id once `seen`) plus the `seen` flip itself.
    */
   readonly observeUpdateDispatchFrame: (
     hostId: string,
@@ -186,6 +185,16 @@ interface HostServiceWriteLatchState {
       readonly terminal: boolean;
     } | null,
   ) => void;
+  /**
+   * The two clears no frame can express, both of them by a caller who knows
+   * something the status stream does not:
+   *
+   *  - the UNSEEN TTL, which needs a timer and so lives with the panel; and
+   *  - an ACCEPTED host-service **deregister** (`host-overview-rpc.ts`), where
+   *    the service the dispatch was made about is being removed. Without it a
+   *    re-register under the same `hostId` inherits the removed service's
+   *    activation offer.
+   */
   readonly clearUpdateDispatch: (hostId: string) => void;
 }
 
