@@ -1,3 +1,4 @@
+import { useSidebarCopyIdMenuEntry } from "@/components/epic-canvas/sidebar/use-sidebar-copy-id-menu-entry";
 /**
  * Artifact tree body for the sidebar. Renders specs, tickets, stories, and
  * their child artifacts with full tree navigation and management.
@@ -2032,6 +2033,7 @@ function useArtifactRowMenuEntries(
 ): ReadonlyArray<SidebarRowMenuEntry> {
   const exportArtifacts = useEpicExportArtifacts();
   const { canMutate, nodeId, nodeName, onPerformDelete, onStartRename } = props;
+  const copyIdEntry = useSidebarCopyIdMenuEntry(nodeId);
   const exportPending = exportArtifacts.isPending;
   const exportMutate = exportArtifacts.mutate;
   // Built once per input change rather than on every row render. This runs for
@@ -2102,6 +2104,7 @@ function useArtifactRowMenuEntries(
         },
         onSelect: onStartRename,
       },
+      copyIdEntry,
       { kind: "separator", id: "before-delete" },
       {
         kind: "item",
@@ -2120,6 +2123,7 @@ function useArtifactRowMenuEntries(
     ];
   }, [
     canMutate,
+    copyIdEntry,
     exportMutate,
     exportPending,
     nodeId,
