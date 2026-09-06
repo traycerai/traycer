@@ -4,15 +4,19 @@ import {
   decideAttemptRecovery,
   isTerminalPhase,
   readUpdateAttemptRecord,
+  type AttemptClaimDecision,
+  type AttemptClaimRefresh,
   type AttemptCommitOutcome,
   type AttemptClaimRequest,
   type HostUpdateAttemptIdentity,
+  type HostUpdateAttemptRead,
   type HostUpdateAttemptRecord,
   type HostUpdateTrigger,
   type UpdateContenderExecutionContext,
   type UpdateContenderOutcome,
   type UpdateMutationCapability,
 } from "@traycer-clients/shared/host-update";
+import { encodeInstallGeneration } from "@traycer-clients/shared/host-version/install-generation";
 import type { AttemptMutationIntent } from "@traycer-clients/shared/host-update/store";
 import {
   commitExecutorAttemptMutation,
@@ -43,7 +47,45 @@ export interface ExecutorClaimRequest {
   readonly expected: HostUpdateAttemptIdentity | null;
   readonly newAttemptId: string;
   readonly initialPhase: AttemptClaimRequest["initialPhase"];
+  /**
+   * The continuation a created attempt is already executing (D5), and the
+   * claim baseline `createdRecord` writes verbatim (D19).
+   *
+   * Both are facts read UNDER the lock, which is exactly why the request is
+   * now produced by a selector rather than fixed before it: the pre-lock
+   * plan is advisory, and a baseline copied from it could name an install
+   * generation another actor has since replaced.
+   */
+  readonly initialContinuation: AttemptClaimRequest["initialContinuation"];
+  readonly claim: AttemptClaimRequest["claim"];
 }
+
+/**
+ * What the caller's selector decided when it saw the record under the lock.
+ *
+ * `release` is a first-class answer, not a failure: an intent whose work is
+ * already done, or whose park belongs to someone else, must leave the record
+ * untouched and say WHY - the reason is what the dispatch ACK reports, so it
+ * belongs to the ACK's reason grammar (`^[a-z0-9-]{1,64}$`).
+ */
+export type ExecutorClaimSelection =
+  | { readonly kind: "claim"; readonly request: ExecutorClaimRequest }
+  | { readonly kind: "release"; readonly reason: string };
+
+/**
+ * Decide the claim from the record read under the lock.
+ *
+ * Asynchronous on purpose. A caller whose selection depends on live evidence
+ * - the activation-debt arm re-reading `install.json` and the running host,
+ * the no-op arm reading the install record for its projection - has nowhere
+ * else legal to do those reads: the advisory plan runs BEFORE the lock (where
+ * both facts can still move), and `execute` runs AFTER the claim (where a
+ * phase is already written and "nothing to do" is no longer expressible). So
+ * the await happens here, inside the lock and before any write.
+ */
+export type ExecutorClaimSelector = (
+  current: HostUpdateAttemptRead,
+) => Promise<ExecutorClaimSelection>;
 
 /** Every boundary is injectable so parent/child/write crash tests stay deterministic. */
 export interface UpdateExecutorFaults {
@@ -177,7 +219,33 @@ export interface RunAttemptExecutorClaimOptions {
    */
   readonly platform: HostInstallPlatform;
   readonly contender: WithCliAttemptExecutorOptions;
-  readonly request: ExecutorClaimRequest;
+  /** Awaited under the lock, with the record this executor just read. */
+  readonly request: ExecutorClaimSelector;
+  /**
+   * Where a recovered `activate` continuation goes.
+   *
+   * `"park"` re-parks it as `waiting-to-activate` before releasing, for a
+   * caller that performs no activation of its own (the verifier: activation
+   * belongs to Desktop, and an active-and-unheld record left behind is the
+   * stranding LOOP `parkResumedActivation` documents).
+   *
+   * `"execute"` hands the resumed ACTIVE record to `execute`, for a caller
+   * that is about to perform the activation itself.
+   */
+  readonly recoveredActivation: "park" | "execute";
+  /**
+   * What happens after a recovery TERMINALIZED the interrupted attempt.
+   *
+   * `"report"` returns that terminal outcome to the caller unchanged.
+   *
+   * `"reselect"` re-reads and asks the selector once more, so an interrupted
+   * A followed by a request for B completes A and then starts B in one run.
+   * Post-recovery selection is caller policy precisely because the two
+   * callers differ: a dispatcher named a target and still wants it, while the
+   * verifier is REPORTING on one attempt and must never re-apply its own
+   * pre-recovery request to a record whose generation recovery just bumped.
+   */
+  readonly afterRecovery: "reselect" | "report";
   /** Called only after the executor owns the canonical lock. */
   readonly readRecoveryEvidence: () => Promise<AttemptRecoveryEvidenceObservation>;
   /** The executor owns its own timestamps; dispatch cannot pre-date a claim. */
@@ -208,6 +276,22 @@ export type ExecutorClaimOutcome =
       readonly kind: "rejected";
       readonly reason: string;
       readonly observed: HostUpdateAttemptRecord | null;
+    }
+  /**
+   * The selector declined the work under the lock. Nothing was claimed and
+   * nothing was written by the selection itself.
+   *
+   * `outcome` is the terminal record a RECOVERY wrote just before the decline
+   * - the reselect arm - and `null` for a plain release. That distinction is
+   * the whole point of the arm: an interrupted attempt that recovery ended
+   * and a caller that then found nothing left to do is not a generic "nothing
+   * to do", and the caller (and the ACK behind it) must be able to report the
+   * fate of the attempt that actually ran.
+   */
+  | {
+      readonly kind: "released";
+      readonly reason: string;
+      readonly outcome: HostUpdateAttemptRecord | null;
     };
 
 /**
@@ -411,7 +495,16 @@ async function claimUnderExecutorCapability(
   const current = await readUpdateAttemptRecord(
     options.contender.hostHomeDir ?? hostHomeDir(options.contender.environment),
   );
-  const request = claimRequestAtExecutor(options.request, options.nowIso());
+  // AWAITED here, between the under-lock read and the first write. The
+  // selector may read whatever live evidence its intent needs; until it
+  // resolves this executor has written nothing, and if it throws it has
+  // written nothing at all - the caller's pre-claim throw path is what turns
+  // that into an ACK.
+  const selection = await options.request(current);
+  if (selection.kind === "release") {
+    return { kind: "released", reason: selection.reason, outcome: null };
+  }
+  const request = claimRequestAtExecutor(selection.request, options.nowIso());
   const decision = decideAttemptClaim({
     current,
     request,
@@ -433,6 +526,22 @@ async function claimUnderExecutorCapability(
       request,
     );
   }
+  return commitDecidedClaim(capability, options, request, decision);
+}
+
+/**
+ * Act on a claim decision the core did NOT refuse.
+ *
+ * Shared by the ordinary claim and by the post-recovery reselect so the two
+ * cannot drift: a second copy of this ladder is how a reselect would quietly
+ * grow its own supersede semantics.
+ */
+async function commitDecidedClaim(
+  capability: UpdateMutationCapability,
+  options: RunAttemptExecutorClaimOptions,
+  request: AttemptClaimRequest,
+  decision: Exclude<AttemptClaimDecision, { readonly kind: "refuse" }>,
+): Promise<ExecutorClaimOutcome> {
   if (decision.kind === "attach") {
     // An acquired canonical handle cannot truthfully attach to another
     // holder. Keep this defensive arm so a future lock implementation
@@ -538,14 +647,14 @@ async function recoverInterruptedAttempt(
             recovery: recoveryRequest,
           },
         );
-        return { kind: "committed" as const, recovery, committed };
+        return { kind: "committed" as const, recovery, committed, final };
       }
       const committed = await commitCliExecutorRecoveryMutation(
         capability,
         options.contender,
         { kind: "recover", recovery: recoveryRequest },
       );
-      return { kind: "committed" as const, recovery, committed };
+      return { kind: "committed" as const, recovery, committed, final };
     },
   );
   if (outcome.kind === "flapped") {
@@ -558,29 +667,105 @@ async function recoverInterruptedAttempt(
   if (outcome.kind === "refuse") {
     return { kind: "rejected", reason: outcome.reason, observed: current };
   }
-  const { recovery, committed } = outcome;
+  const { recovery, committed, final } = outcome;
   if (committed.kind !== "committed") {
     return rejectedCommit(committed, current);
   }
   await options.faults.hit("after-recovery-write-before-action");
   switch (recovery.kind) {
     case "resume-new-generation":
-      return parkResumedActivation(
+      // A caller that performs the activation itself takes the resumed ACTIVE
+      // record; one that does not must not leave it active-and-unheld.
+      return options.recoveredActivation === "execute"
+        ? acknowledgedClaim(committed.record, recovery.continuation)
+        : parkResumedActivation(
+            capability,
+            options,
+            committed.record,
+            recovery.continuation,
+            final,
+          );
+    case "terminalize-complete":
+      return afterTerminalizingRecovery(
         capability,
         options,
         committed.record,
-        recovery.continuation,
+        "complete",
       );
-    case "terminalize-complete":
-      return terminalized(committed.record, "complete");
     case "terminalize-failed":
-      return terminalized(committed.record, "failed");
+      return afterTerminalizingRecovery(
+        capability,
+        options,
+        committed.record,
+        "failed",
+      );
     case "supersede":
       // Preserve the core's two durable facts. A crash after the recovery
       // terminalization leaves the old attempt safely superseded; only this
       // next call may mint the requested replacement.
-      return createAfterSupersede(capability, options, request);
+      return createAfterSupersede(capability, options);
   }
+}
+
+/**
+ * Post-recovery disposition (D4), which is CALLER policy rather than a
+ * property of the recovery.
+ *
+ * `"report"` is the verifier's: the terminalized outcome is what it was asked
+ * for, and its own fixed request - minted before the lock, carrying the
+ * PRE-recovery identity - must never be re-applied to a record whose
+ * generation this recovery just bumped.
+ *
+ * `"reselect"` is the dispatcher's: the interrupted attempt is finished, the
+ * target it was asked for may still be unmet, so the selector sees the
+ * now-terminal record and answers once more. Three answers, three arms:
+ *
+ *  - a claim the core accepts starts (or supersedes-then-starts) the new work;
+ *  - a decline keeps the RECOVERY's reason and terminal record, never the
+ *    selector's - "nothing more to do" after finishing an attempt is a report
+ *    about that attempt, and the ACK reason is what the GUI renders;
+ *  - a claim the core REFUSES is `rejected`. The terminal write already
+ *    stands, so the honest answer is that this request did not match the
+ *    record recovery left, not that the recovery failed.
+ */
+async function afterTerminalizingRecovery(
+  capability: UpdateMutationCapability,
+  options: RunAttemptExecutorClaimOptions,
+  terminal: HostUpdateAttemptRecord,
+  outcome: "complete" | "failed",
+): Promise<ExecutorClaimOutcome> {
+  if (options.afterRecovery === "report")
+    return terminalized(terminal, outcome);
+  const current = await readUpdateAttemptRecord(
+    options.contender.hostHomeDir ?? hostHomeDir(options.contender.environment),
+  );
+  const selection = await options.request(current);
+  if (selection.kind === "release") {
+    return {
+      kind: "released",
+      reason:
+        outcome === "complete" ? "recovered-complete" : "recovered-failed",
+      outcome: terminal,
+    };
+  }
+  const request = claimRequestAtExecutor(selection.request, options.nowIso());
+  const decision = decideAttemptClaim({
+    current,
+    request,
+    holder: { kind: "held-by-self" },
+  });
+  if (decision.kind === "refuse") {
+    // Deliberately NOT a second recovery pass: the record this reselect sees
+    // is the terminal one this run just wrote, and a `requires-recovery`
+    // refusal here would mean something else replaced it under a lock we
+    // hold. Refusing is the fail-closed direction.
+    return {
+      kind: "rejected",
+      reason: decision.reason,
+      observed: decision.observed,
+    };
+  }
+  return commitDecidedClaim(capability, options, request, decision);
 }
 
 /**
@@ -619,6 +804,7 @@ async function parkResumedActivation(
   options: RunAttemptExecutorClaimOptions,
   recovered: HostUpdateAttemptRecord,
   continuation: "resume-apply" | "activate" | null,
+  observed: AttemptRecoveryEvidenceObservation,
 ): Promise<ExecutorClaimOutcome> {
   if (continuation !== "activate" || recovered.phase !== "preparing") {
     return acknowledgedClaim(recovered, continuation);
@@ -634,10 +820,17 @@ async function parkResumedActivation(
         continuation: "activate",
         progress: null,
         error: null,
-        // Carry the recovered record's baseline unchanged. This park is
-        // written from the recovery decision alone; the facts a refresh
-        // requires are read by the caller that observed them under the lock.
-        claimRefresh: null,
+        // Refreshed from the very observation this recovery decided on (D19),
+        // which read the install and stage records under this same lock.
+        //
+        // Load-bearing, not bookkeeping. A record that died at `restarting`
+        // and came back through the verifier is parked here; the `activate`
+        // that follows compares the live install record with THIS baseline
+        // under the lock, and a stale one - the identity the attempt was
+        // created against, before its own apply promoted new bytes - would
+        // terminalize that park `failed {install-changed}` for a mismatch its
+        // own successful apply caused.
+        claimRefresh: claimRefreshFrom(observed),
         nowIso: options.nowIso(),
       },
     },
@@ -649,20 +842,56 @@ async function parkResumedActivation(
   return acknowledgedClaim(parked.record, "activate");
 }
 
+/**
+ * The claim baseline a park writes, from the install and stage facts an
+ * observation already read under this lock.
+ *
+ * `installGeneration` goes through `encodeInstallGeneration` - the one
+ * encoder every producer calls (`apply.ts`, `install.ts`, `provision.ts`) -
+ * so a baseline written here and the generation a later resume re-reads are
+ * byte-equal strings rather than two encodings that merely look alike.
+ *
+ * `null` when nothing could be read: the core reads that as "carry the
+ * record's prior baseline unchanged", which is strictly better than minting
+ * one from an observation that saw no install record. (A record with no
+ * baseline at all stays without one; a refresh cannot grant an authorization
+ * nobody issued.)
+ */
+function claimRefreshFrom(
+  observed: AttemptRecoveryEvidenceObservation,
+): AttemptClaimRefresh | null {
+  const identity = observed.installIdentity;
+  if (identity === null) return null;
+  return {
+    installedVersion: identity.version,
+    installGeneration: encodeInstallGeneration(identity),
+    stageFingerprint: observed.stageFingerprint,
+  };
+}
+
 async function createAfterSupersede(
   capability: UpdateMutationCapability,
   options: RunAttemptExecutorClaimOptions,
-  request: AttemptClaimRequest,
 ): Promise<ExecutorClaimOutcome> {
-  const next = {
-    ...request,
-    action: "start" as const,
-    expected: null,
-    nowIso: options.nowIso(),
-  };
   const current = await readUpdateAttemptRecord(
     options.contender.hostHomeDir ?? hostHomeDir(options.contender.environment),
   );
+  // Selected AGAIN, against the post-supersede read. The supersede is durable
+  // by now, so this second decision must be made from what is actually on
+  // disk - and the baseline it writes must come from facts read after it, not
+  // from a request minted before the record moved.
+  const selection = await options.request(current);
+  if (selection.kind === "release") {
+    return { kind: "released", reason: selection.reason, outcome: null };
+  }
+  const next = {
+    ...claimRequestAtExecutor(selection.request, options.nowIso()),
+    // The second write is a plain core `create`, whatever the selector asked
+    // for: the record it would have resumed is the one this run just
+    // superseded.
+    action: "start" as const,
+    expected: null,
+  };
   const decision = decideAttemptClaim({
     current,
     request: next,
@@ -701,7 +930,7 @@ async function commitSupersedeThenCreate(
   // The second write is intentionally a normal core `create`; do not fold it
   // into recovery or a synthetic transition. A crash above leaves the old
   // record durably superseded, which is the exact two-write invariant.
-  return createAfterSupersede(capability, options, request);
+  return createAfterSupersede(capability, options);
 }
 
 async function commitClaimMutation(
@@ -769,20 +998,19 @@ function rejectedCommit(
   };
 }
 
+/**
+ * The one place the executor stamps its own clock onto a selected request.
+ *
+ * Everything else is carried verbatim: the selector ran under the lock, so
+ * the continuation and the claim baseline it chose are exactly the facts this
+ * claim should record. Dispatch cannot pre-date a claim, which is why the
+ * timestamp is the executor's and not the request's.
+ */
 function claimRequestAtExecutor(
   request: ExecutorClaimRequest,
   nowIso: string,
 ): AttemptClaimRequest {
-  return {
-    ...request,
-    // Today's behaviour, stated explicitly. `ExecutorClaimRequest` is fixed
-    // before the lock and therefore cannot carry either fact: the continuation
-    // an activation-debt start needs, and the claim baseline, are both read
-    // UNDER the lock by the caller that will supply them here.
-    initialContinuation: null,
-    claim: null,
-    nowIso,
-  };
+  return { ...request, nowIso };
 }
 
 /** Parent-side private-ack protocol; it never carries a lock handle or token. */
@@ -851,6 +1079,13 @@ export type DispatchAttemptExecutorOutcome =
       readonly outcome: Extract<
         ExecutorClaimOutcome,
         { readonly kind: "rejected" }
+      >;
+    }
+  | {
+      readonly kind: "released";
+      readonly outcome: Extract<
+        ExecutorClaimOutcome,
+        { readonly kind: "released" }
       >;
     }
   | {
@@ -936,5 +1171,7 @@ export async function dispatchAttemptExecutor(
       return { kind: "terminalized", outcome: acknowledgement.outcome };
     case "rejected":
       return { kind: "rejected", outcome: acknowledgement.outcome };
+    case "released":
+      return { kind: "released", outcome: acknowledgement.outcome };
   }
 }

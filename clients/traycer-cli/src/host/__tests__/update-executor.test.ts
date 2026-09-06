@@ -122,11 +122,14 @@ import {
   runLocalAttemptExecutorSegment,
   type DispatchAttemptExecutorOptions,
   type ExecutorClaimOutcome,
+  type ExecutorClaimRequest,
+  type ExecutorClaimSelector,
   type ExecutorPrivateAcknowledgement,
   type RunAttemptExecutorClaimOptions,
   type SpawnedAttemptExecutor,
   type UpdateExecutorFaults,
 } from "../update-executor";
+import type { InstallGenerationIdentity } from "@traycer-clients/shared/host-version/install-generation";
 import {
   decodeUpdateDispatchAck,
   updateDispatchAckPath,
@@ -144,14 +147,44 @@ async function freshHome(): Promise<string> {
   return join(root, "host-home");
 }
 
+/**
+ * An injected observation carrying evidence only, with no install identity to
+ * refresh a claim baseline from. Tests that care what a park RECORDS use
+ * `observationOf` and pass one.
+ */
 function observation(
   evidence: AttemptRecoveryEvidence,
 ): AttemptRecoveryEvidenceObservation {
+  return observationOf(evidence, null, null);
+}
+
+function observationOf(
+  evidence: AttemptRecoveryEvidence,
+  installIdentity: InstallGenerationIdentity | null,
+  stageFingerprint: string | null,
+): AttemptRecoveryEvidenceObservation {
   // A test-only surrogate fingerprint: it only needs to be a pure function
-  // of the evidence content so `sameAttemptRecoveryEvidenceObservation`
+  // of the observation's content so `sameAttemptRecoveryEvidenceObservation`
   // (real fingerprint string equality) reacts correctly to a changed vs.
   // unchanged evidence object between two injected reads.
-  return { evidence, fingerprint: JSON.stringify(evidence) };
+  return {
+    evidence,
+    fingerprint: JSON.stringify({
+      evidence,
+      installIdentity,
+      stageFingerprint,
+    }),
+    installIdentity,
+    stageFingerprint,
+  };
+}
+
+/**
+ * A request fixed before the lock, wrapped as the selector the executor now
+ * takes - the shape every caller that does not decide under the lock uses.
+ */
+function fixedSelection(request: ExecutorClaimRequest): ExecutorClaimSelector {
+  return async () => ({ kind: "claim", request });
 }
 
 beforeEach(async () => {
@@ -687,14 +720,20 @@ function claimOptions(
       waitMs: 0,
       pollIntervalMs: 10,
     },
-    request: {
+    request: fixedSelection({
       targetVersion: "1.2.3",
       trigger: "manual",
       action: "start",
       expected: null,
       newAttemptId: "attempt-1",
       initialPhase: "downloading",
-    },
+      initialContinuation: null,
+      claim: null,
+    }),
+    // Today's verifier disposition is the default here, so every pre-existing
+    // test in this file keeps asserting exactly the behaviour it always did.
+    recoveredActivation: "park",
+    afterRecovery: "report",
     readRecoveryEvidence: () =>
       Promise.reject(new Error("recovery evidence not configured")),
     nowIso: () => "2026-01-01T00:00:00.000Z",
@@ -777,14 +816,16 @@ describe("runAttemptExecutorSegment - acknowledge runs before execute, and only 
     // is refused before any write - a pre-claim rejection, not a fault.
     const outcome = await runAttemptExecutorSegment(
       claimOptions(hostHomeDir, {
-        request: {
+        request: fixedSelection({
           targetVersion: "1.2.3",
           trigger: "manual",
           action: "force",
           expected: { attemptId: "gone", generation: 1, sequence: 1 },
           newAttemptId: "attempt-1",
           initialPhase: "downloading",
-        },
+          initialContinuation: null,
+          claim: null,
+        }),
       }),
       async () => {
         acknowledgeCalls += 1;
@@ -1059,14 +1100,16 @@ describe("runAttemptExecutorSegment - the cohort gate is scoped to ADMISSION (Ti
 
     const outcome = await runAttemptExecutorSegment(
       claimOptions(hostHomeDir, {
-        request: {
+        request: fixedSelection({
           targetVersion: "1.2.3",
           trigger: "manual",
           action: "activate",
           expected: identity,
           newAttemptId: "unused-for-resume",
           initialPhase: "applying",
-        },
+          initialContinuation: null,
+          claim: null,
+        }),
       }),
       async () => {},
       async () => "ran",
@@ -1156,14 +1199,16 @@ describe("runAttemptExecutorSegment - recovery path runs the injected reader und
         // (`actionMayResume` never authorizes "start"). Reaching
         // `resume-new-generation` needs an identity-bound resume-class
         // request, matching the seeded record's identity.
-        request: {
+        request: fixedSelection({
           targetVersion: "1.2.3",
           trigger: "manual",
           action: "activate",
           expected: { attemptId: "attempt-1", generation: 1, sequence: 1 },
           newAttemptId: "attempt-1",
           initialPhase: "downloading",
-        },
+          initialContinuation: null,
+          claim: null,
+        }),
         readRecoveryEvidence: () => {
           readRecoveryEvidenceCalls += 1;
           calls.push("read-recovery-evidence");
@@ -1331,14 +1376,16 @@ describe("runAttemptExecutorSegment - recovery path runs the injected reader und
         // (`actionMayResume` never authorizes "start"). Reaching
         // `resume-new-generation` needs an identity-bound resume-class
         // request, matching the seeded record's identity.
-        request: {
+        request: fixedSelection({
           targetVersion: "1.2.3",
           trigger: "manual",
           action: "activate",
           expected: { attemptId: "attempt-1", generation: 1, sequence: 1 },
           newAttemptId: "attempt-1",
           initialPhase: "downloading",
-        },
+          initialContinuation: null,
+          claim: null,
+        }),
         readRecoveryEvidence: () => Promise.resolve(observation(evidence)),
       }),
       async () => {},
@@ -1523,14 +1570,16 @@ describe("runAttemptExecutorSegment - recovery path runs the injected reader und
     let retryExecuteCalls = 0;
     const retryOutcome = await runAttemptExecutorSegment(
       claimOptions(hostHomeDir, {
-        request: {
+        request: fixedSelection({
           targetVersion: "1.2.3",
           trigger: "manual",
           action: "start",
           expected: null,
           newAttemptId: "attempt-2",
           initialPhase: "downloading",
-        },
+          initialContinuation: null,
+          claim: null,
+        }),
       }),
       async () => {
         retryAcknowledgeCalls += 1;
