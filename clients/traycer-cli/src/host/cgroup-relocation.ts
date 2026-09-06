@@ -189,9 +189,10 @@ export type CgroupRelocation =
  *
  * `completed` means the child ran the whole command and this process must exit
  * with its code without running anything itself. `not-needed` means nothing was
- * moved and the caller runs the command in place - which covers every machine
- * where nothing can kill us for issuing a stop: a host started by hand, WSL
- * without systemd, a container, and every non-Linux platform.
+ * moved and the caller runs the command in place: a readable cgroup that places
+ * this process outside any host unit (a host started by hand, a shell of the
+ * user's own), every non-Linux platform, a command or option form that never
+ * reaches a stop, and the relocated child itself.
  *
  * Throws `SERVICE_CONTROL_FAILED` when the move was needed and could not be
  * made - including when membership itself could not be established. It
@@ -344,41 +345,59 @@ export function findHostUnitCgroup(contents: string): HostUnitCgroup | null {
 /**
  * Read our own cgroup membership, or refuse to answer.
  *
- * ABSENCE is an answer: no `/proc/self/cgroup` (ENOENT) and no `/proc` at all
- * (ENOTDIR) mean there is no cgroup that can kill us - a container, WSL without
- * systemd, a kernel without the filesystem mounted - and "not inside a host
- * unit" is exactly right there.
+ * Every read failure is a FAILED CHECK, not a negative answer - ABSENCE
+ * included. An absent `/proc/self/cgroup` (ENOENT, or ENOTDIR when `/proc` is
+ * not a directory) says where this process cannot look, not where it is: a
+ * mount namespace may hide procfs, or just this file (a sandboxed agent, a
+ * wrapping unit's `TemporaryFileSystem=` or `InaccessiblePaths=`), while the
+ * process still belongs to the cgroup it was born in and still reaches the
+ * user manager through `$XDG_RUNTIME_DIR/systemd/private`, which needs no
+ * procfs. Answering "not inside" there is exactly the stop that kills its
+ * issuer (Codex on #1755, post-merge). A kernel built without cgroups omits the
+ * file too, and refusing there costs nothing: the service registration this
+ * guard protects is systemd-only, and systemd needs cgroups. No independent
+ * marker rescues the case either: `sd_booted()`'s `/run/systemd/system/` is
+ * namespace-local as well, and `TemporaryFileSystem=` hides it while leaving
+ * `/run/user/<uid>` bound, so its absence proves nothing about the manager the
+ * stop would reach.
  *
- * Every OTHER read failure is a FAILED CHECK, not a negative answer. EACCES,
- * EMFILE and EIO say nothing about membership, and the earlier blanket catch
- * turned each of them into permission to stop: relocation would be skipped, the
- * guard would pass, intent would be written, and the stop would kill the process
- * issuing it. So they refuse instead, with the errno recorded at DEBUG.
+ * EACCES, EMFILE and EIO say nothing about membership either, and the earlier
+ * blanket catch turned each of them into permission to stop: relocation would
+ * be skipped, the guard would pass, intent would be written, and the stop
+ * would kill the process issuing it. So every failure refuses, with the errno
+ * recorded at DEBUG and absence named in the message because it is the case a
+ * person can recognise (a sandbox) rather than a permission to fix.
  */
 async function readHostUnitCgroup(): Promise<HostUnitCgroup | null> {
   let contents: string;
   try {
     contents = await readFile(PROC_SELF_CGROUP, "utf8");
   } catch (cause) {
-    if (isMissingCgroupFile(cause)) return null;
+    const absent = isAbsentPath(cause);
     createCliLogger(config.environment).debug(
       "Failed to read the cgroup this process belongs to",
-      { path: PROC_SELF_CGROUP, cause: errorFromUnknown(cause).message },
+      {
+        path: PROC_SELF_CGROUP,
+        absent,
+        cause: errorFromUnknown(cause).message,
+      },
     );
     throw cliError({
       code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
       message:
-        `could not read ${PROC_SELF_CGROUP}, so this command cannot tell whether ` +
-        "stopping the Traycer host would also kill it. " +
-        "Run it again from a shell outside the Traycer host.",
-      details: { path: PROC_SELF_CGROUP },
+        (absent
+          ? `${PROC_SELF_CGROUP} is absent in this environment`
+          : `could not read ${PROC_SELF_CGROUP}`) +
+        ", so this command cannot tell whether stopping the Traycer host " +
+        "would also kill it. Run it again from a shell outside the Traycer host.",
+      details: { path: PROC_SELF_CGROUP, absent },
       exitCode: 1,
     });
   }
   return findHostUnitCgroup(contents);
 }
 
-function isMissingCgroupFile(cause: unknown): boolean {
+function isAbsentPath(cause: unknown): boolean {
   if (!isErrnoException(cause)) return false;
   return cause.code === "ENOENT" || cause.code === "ENOTDIR";
 }

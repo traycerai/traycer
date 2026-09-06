@@ -149,10 +149,12 @@ Every way that can fail leaves the host running and reports
 
 - `systemd-run` is missing, or starts and then exits before the command does -
   there is no systemd user manager, or the transient scope was refused;
-- the CLI cannot read its own `/proc/self/cgroup`. An absent file (a container,
-  or WSL without systemd) means nothing can kill the command and it simply runs;
-  a file that exists but cannot be read says nothing either way, and is treated
-  as a failed check rather than permission to proceed;
+- the CLI cannot read its own `/proc/self/cgroup`. Any read failure, absence
+  included, means the CLI cannot establish which cgroup it is in, and it refuses
+  the stop rather than proceeding: a mount namespace can hide procfs from a
+  process that is still inside the host's unit and can still reach the user
+  manager. The message says `absent` when that is what was seen, so a sandbox is
+  recognisable as the cause;
 - an argument contains `$`. systemd 258 expands variables in scope arguments by
   default, and the option to turn that off does not exist before systemd 254, so
   a path such as `--from '/tmp/${BUILD}/host.tar.gz'` is refused instead of being
