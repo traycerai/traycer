@@ -6,11 +6,11 @@ import {
   type BootstrapPhase,
 } from "../host/bootstrap-log";
 import {
+  publishedHostProcessGone,
   readHostPidMetadata,
   type HostPidMetadata,
 } from "../host/pid-metadata";
 import { bootstrapLogPath } from "../store/paths";
-import { isProcessAlive } from "../store/cli-lock";
 import { makeColorizer, shouldUseColor, type Colorizer } from "../runner/ansi";
 import type { CommandFn, CommandResult } from "../runner/runner";
 import type { RuntimeContext } from "../runner/runtime";
@@ -63,12 +63,16 @@ export const hostStatusCommand: CommandFn = async (
     BOOTSTRAP_LOG_TAIL_LINES,
   );
 
+  // `running` must reflect process liveness, not merely the presence of a
+  // pid.json - a stopped/crashed host can leave a stale record behind, and a
+  // recycled pid a live-looking one; `publishedHostProcessGone` reads the
+  // record's creation stamp for the second case. (service status reads the
+  // same predicate; this keeps host status consistent and makes `host stop`
+  // observable.)
+  const running =
+    pidMetadata !== null && !publishedHostProcessGone(pidMetadata);
   const output: HostStatusOutput = {
-    // `running` must reflect process liveness, not merely the presence of a
-    // pid.json - a stopped/crashed host can leave a stale record behind.
-    // (service status already checks isProcessAlive; this keeps host
-    // status consistent and makes `host stop` observable.)
-    running: pidMetadata !== null && isProcessAlive(pidMetadata.pid),
+    running,
     pidMetadata,
     bootstrapMarkers: markers,
     bootstrapLogPath: bootstrapLogPath(ctx.runtime.environment),

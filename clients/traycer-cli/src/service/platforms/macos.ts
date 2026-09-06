@@ -3,6 +3,7 @@ import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname } from "node:path";
 import {
+  publishedHostProcessGone,
   readHostPidMetadata,
   readHostPidMetadataEvidence,
 } from "../../host/pid-metadata";
@@ -1607,7 +1608,7 @@ async function statusService(
     return statusNotInstalled();
   }
   const pidMetadata = await readHostPidMetadata(label.environment);
-  if (pidMetadata !== null && isProcessAlive(pidMetadata.pid)) {
+  if (pidMetadata !== null && !publishedHostProcessGone(pidMetadata)) {
     return {
       state: "running",
       version: pidMetadata.version,

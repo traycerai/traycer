@@ -853,7 +853,14 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
         .getByRole("button", { name: "Install 1.2.0+build.2" })
         .hasAttribute("disabled"),
     ).toBe(true);
-    expect(equalRow.textContent).toContain("Already on v1.2.0+build.1");
+    // Not "already on": this host runs build.1, and the row IS another build.
+    expect(equalRow.textContent).toContain(
+      "Another build of v1.2.0+build.1 is installed.",
+    );
+    expect(equalRow.textContent).toContain(
+      "traycer host update --version 1.2.0+build.2 --allow-downgrade",
+    );
+    expect(equalRow.textContent).not.toContain("Already on");
     expect(
       within(rowFor(rows.getAllByRole("listitem"), "1.1.0"))
         .getByRole("button", { name: "Install 1.1.0" })

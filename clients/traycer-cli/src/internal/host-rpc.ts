@@ -31,9 +31,9 @@ import { config } from "../config";
 import { createCliLogger, errorFromUnknown } from "../logger";
 import {
   isValidLocalHostWebsocketUrl,
+  publishedHostProcessGone,
   readHostPidMetadata,
 } from "../host/pid-metadata";
-import { isProcessAlive } from "../store/cli-lock";
 import {
   createCliCredentialsStore,
   createStoreBackedRevalidator,
@@ -301,7 +301,7 @@ export async function resolveEndpoint(): Promise<HostTransportEndpoint> {
       exitCode: 1,
     });
   }
-  if (!isProcessAlive(metadata.pid)) {
+  if (publishedHostProcessGone(metadata)) {
     logger.warn("Host RPC endpoint resolution failed; process is not alive", {
       environment: config.environment,
       hostId: metadata.hostId,
