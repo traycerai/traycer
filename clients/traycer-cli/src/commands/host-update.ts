@@ -4,6 +4,7 @@ import {
 } from "@traycer-clients/shared/host-version/compare-host-versions";
 import { installHostDowngrade } from "./host-update-downgrade";
 import type { ApplyHostOutcome } from "../installer/apply";
+import { NO_INSTALL_PHASE_HOOKS } from "../installer/install";
 import {
   downloadAndStageHost,
   type HostDownloadOutcome,
@@ -1248,6 +1249,11 @@ async function prepareHostUpdate(input: {
       onProgress: input.onProgress,
       registryClient: null,
       onWillDownload: input.onWillDownload,
+      // See `hooks` at the apply call: no attempt record on this path.
+      beforeExtract: async () => {},
+      // No attempt of its own, so every nonterminal record is foreign and
+      // the promotion guard yields to it exactly as it does today.
+      ownAttempt: null,
     }),
   };
 }
@@ -1416,6 +1422,11 @@ async function applyAndProjectLegacy(
         // read from HERE would still be on the wrong side of `applyHost`'s
         // own reconcile. `applyHost` reports the version it is committing.
         onWillCommitStaged,
+        // The legacy command owns the coarse marker, not an attempt record,
+        // and `onWillCommitStaged` above is where it takes the marker over.
+        // The two swap barriers belong to the executor arms (ticket 04);
+        // this path observes neither.
+        hooks: NO_INSTALL_PHASE_HOOKS,
       });
     } catch (err) {
       if (err instanceof CliError && err.code === CLI_ERROR_CODES.HOST_BUSY) {

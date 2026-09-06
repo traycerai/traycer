@@ -31,6 +31,13 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../installer", () => ({
+  // The two swap barriers this command observes: none. Inlined rather than
+  // re-exported from the real module so this factory keeps the installer out
+  // of the module graph entirely, which is what it exists for.
+  NO_INSTALL_PHASE_HOOKS: {
+    beforeSwapCommit: async () => {},
+    afterSwap: async () => {},
+  },
   stageHostInstallSource: async (
     ...callArgs: Parameters<typeof mocks.stageHostInstallSourceMock>
   ) => {
@@ -159,7 +166,10 @@ import { buildHostInstallCommand, type HostInstallArgs } from "../host-install";
 import { CLI_ERROR_CODES, cliError } from "../../runner/errors";
 import type { CommandContext } from "../../runner/runner";
 import type { HostInstallRecord } from "../../manifest/host-install";
-import type { StagedHostInstallSource } from "../../installer";
+import {
+  NO_INSTALL_PHASE_HOOKS,
+  type StagedHostInstallSource,
+} from "../../installer";
 import type { ServiceInstallLifecycleHandle } from "../../service/install-lifecycle";
 
 function sampleRecord(version: string): HostInstallRecord {
@@ -219,6 +229,7 @@ function sampleLifecycleHandle(): ServiceInstallLifecycleHandle {
     },
     lifecycle: {
       beforeSwap: async () => {},
+      beforeSwapCommit: async () => {},
       afterSwap: async () => {},
       swapLockRecovery: null,
     },
@@ -401,6 +412,7 @@ describe("buildHostInstallCommand", () => {
     // entirely and uses the bytes-only builder instead.
     const bytesOnlyLifecycle = {
       beforeSwap: vi.fn(async () => {}),
+      beforeSwapCommit: async () => {},
       afterSwap: vi.fn(async () => {}),
       swapLockRecovery: null,
     };
@@ -491,6 +503,8 @@ describe("buildHostInstallCommand", () => {
       environment: "production",
       bootstrap: { enableLinger: false, allowSelfInvocation: true },
       force: false,
+      // `host install` is not an update: it observes neither swap barrier.
+      hooks: NO_INSTALL_PHASE_HOOKS,
     });
   });
 
@@ -1056,6 +1070,7 @@ describe("buildHostInstallCommand", () => {
   it("--no-service-register: skips the sign-in pre-flight entirely, reports state=not-checked", async () => {
     const bytesOnlyLifecycle = {
       beforeSwap: vi.fn(async () => {}),
+      beforeSwapCommit: async () => {},
       afterSwap: vi.fn(async () => {}),
       swapLockRecovery: null,
     };
@@ -1230,6 +1245,7 @@ describe("buildHostInstallCommand", () => {
     it("--no-service-register: never provisions a credential", async () => {
       const bytesOnlyLifecycle = {
         beforeSwap: vi.fn(async () => {}),
+        beforeSwapCommit: async () => {},
         afterSwap: vi.fn(async () => {}),
         swapLockRecovery: null,
       };
@@ -1263,6 +1279,7 @@ describe("buildHostInstallCommand", () => {
         },
         lifecycle: {
           beforeSwap: async () => {},
+          beforeSwapCommit: async () => {},
           afterSwap: async () => {},
           swapLockRecovery: null,
         },

@@ -116,6 +116,7 @@ vi.mock("../../service/install-lifecycle", () => ({
           if (mocks.beforeSwapError) throw new Error("precommit failed");
           state.stoppedBeforeSwap = true;
         },
+        beforeSwapCommit: async () => {},
         afterSwap: async () => {
           state.postSwapAction = "install";
         },

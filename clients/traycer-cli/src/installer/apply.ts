@@ -15,7 +15,11 @@ import { assertHostNotBusy } from "../host/busy-check";
 import type { ServiceState } from "../service";
 import { createServiceInstallLifecycle } from "../service/install-lifecycle";
 import { reconcileHostStageWithAttempt } from "./stage-reconcile";
-import { commitInstallFromSource, currentInstallPlatform } from "./install";
+import {
+  commitInstallFromSource,
+  currentInstallPlatform,
+  type InstallPhaseHooks,
+} from "./install";
 
 // `host apply` core - Host Update Layer Redesign Tech Plan, "New/changed
 // commands" > `host apply`. Promotes the single-slot staged tree over the
@@ -66,6 +70,21 @@ export interface ApplyHostOptions {
    * nothing is announced for work that does not happen.
    */
   readonly onWillCommitStaged?: (stagedVersion: string) => Promise<void>;
+  /**
+   * The two swap barriers, threaded into the lifecycle this function builds
+   * internally so a caller reaches them without duplicating the apply path
+   * or its contender wrapper (`host/update-mutation.ts`).
+   *
+   * They sit BESIDE `onWillCommitStaged`, not in place of it, and the three
+   * fire at three different moments: `onWillCommitStaged` before the
+   * lifecycle exists (so before the cooperative stop),
+   * `hooks.beforeSwapCommit` after that stop SUCCEEDED, `hooks.afterSwap`
+   * after the swap. A stop denial therefore reaches the first and neither of
+   * the others. `--no-service` builds no lifecycle at all and reaches
+   * neither barrier. Callers driving no attempt record pass
+   * `NO_INSTALL_PHASE_HOOKS`.
+   */
+  readonly hooks: InstallPhaseHooks;
 }
 
 // The facts `createServiceInstallLifecycle` observed around the swap -
@@ -206,6 +225,7 @@ export async function applyHost(
         // denied the cooperative shutdown claim and `--force` aborted
         // anyway.
         force: opts.force,
+        hooks: opts.hooks,
       });
   if (lifecycleHandle !== null && opts.publishHostStartAdoption !== undefined) {
     lifecycleHandle.lifecycle.setHostStartAdoptionPublisher?.(

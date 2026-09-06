@@ -577,6 +577,10 @@ describe("buildHostUpdateCommand composite", () => {
       onProgress: expect.any(Function),
       registryClient: null,
       onWillDownload: expect.any(Function),
+      // The legacy command drives no attempt record: no verified-bytes
+      // barrier, and no own attempt for the promotion guard to exempt.
+      beforeExtract: expect.any(Function),
+      ownAttempt: null,
     });
   });
 
