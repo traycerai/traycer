@@ -511,6 +511,7 @@ function CooperativeFirstRestartFlow(
         }}
       />
       <HostBusyForceDeferDialog
+        purpose="restart"
         open={busyOpen}
         message={forceOffer?.message ?? ""}
         isForcing={forceRestart.isPending || respawnInFlight}

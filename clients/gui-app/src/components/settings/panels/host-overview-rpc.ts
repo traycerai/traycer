@@ -1,6 +1,7 @@
 import {
   keepPreviousData,
   useQueryClient,
+  type QueryClient,
   type UseMutationResult,
 } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -180,17 +181,41 @@ function scopedSessionMembershipSignature(hostId: string): string {
  * the difference matters on this page: "no install record" is a legitimate,
  * describable state (someone is running the host from a checkout), not an
  * error, and rendering it as one would put a red box on every dev machine.
+ *
+ * Polled (table-owned cadence, 10s), not merely stale-timed, because the
+ * Overview now DERIVES from it: the install record against the running
+ * version is what says "installed, restart to finish", and the staged record
+ * beside a busy host is what says "staged, waiting for work". Both change
+ * under a mounted page through actors this client never sees - a detached CLI
+ * run, the desktop's launch converge - and a 60s staleTime with no interval
+ * observed neither until the page was remounted. `staleTime` still exceeds
+ * the interval so a healthy poll never reads as stale.
+ *
+ * Keyed by the RUNNING version the caller has observed. The facts derived
+ * from this read are comparisons against that version, and a version change
+ * is exactly the moment the install record moved under the page (the host
+ * restarted onto new bytes): a payload fetched under the old version is not
+ * a stale answer to the same question, it is an answer to a different one,
+ * and TanStack would otherwise keep serving it - "installed X, running Y,
+ * restart to finish" for a host that just finished. A new key has no data
+ * until the fresh read answers, which the derivation reads as "not observed".
+ * Disabled until a running version is known for the same reason.
  */
 export function useHostInstallationInfoQuery(input: {
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly enabled: boolean;
+  readonly runningVersion: string | null;
 }) {
   return useHostQuery<HostRpcRegistry, "host.getInstallationInfo">({
-    cacheKeyIdentity: undefined,
+    cacheKeyIdentity: [input.runningVersion],
     client: input.client,
     method: "host.getInstallationInfo",
     params: EMPTY_PARAMS,
-    options: { enabled: input.enabled, staleTime: 60_000 },
+    options: {
+      enabled: input.enabled && input.runningVersion !== null,
+      staleTime: 60_000,
+      poll: true,
+    },
   });
 }
 
@@ -362,10 +387,15 @@ export function useHostUpdateCheckQuery(input: {
       enabled: input.enabled,
       // Long, deliberately. This is the one read on the page that costs a
       // process on the host, and what it returns — which versions the registry
-      // publishes — changes on a release cadence, not a browsing one. The one
-      // exception — re-asking while the answer is `cli-unavailable`, so a
-      // reinstalled CLI revives the retired region — is table-owned condition
-      // polling (`host-method-policy-table.ts`), not an option here.
+      // publishes — changes on a release cadence, not a browsing one. The two
+      // exceptions are not options here. Re-asking while the answer is
+      // `cli-unavailable`, so a reinstalled CLI revives the retired region,
+      // is table-owned condition polling (`host-method-policy-table.ts`).
+      // Re-asking while the Overview shows a CLI-floor remedy, so a repaired
+      // CLI reveals Update now without a click, is the Overview's own
+      // invalidation (`useHostOverviewUpdates`): which floored row the
+      // remedy names depends on the installed version, which only that
+      // hook knows.
       staleTime: 5 * 60_000,
       refetchOnWindowFocus: false,
       // Keeps the PREVIOUS filter's list on screen while the new one loads.
@@ -654,9 +684,7 @@ export function useHostUpdateInstall(
           useHostServiceWriteLatchStore
             .getState()
             .releaseUpdateInstallAccepted(context.hostId);
-          void queryClient.invalidateQueries({
-            queryKey: hostQueryKeys.methodScope(context.hostId, "host.status"),
-          });
+          invalidateUpdateReads(queryClient, context.hostId);
           return;
         }
         if (
@@ -677,9 +705,7 @@ export function useHostUpdateInstall(
         // against that active swap. The refresh below is how the progress
         // row appears once the CLI reports it, and the panel's release
         // effect (or the bounded timer) unwinds the latch from there.
-        void queryClient.invalidateQueries({
-          queryKey: hostQueryKeys.methodScope(context.hostId, "host.status"),
-        });
+        invalidateUpdateReads(queryClient, context.hostId);
       },
       onError: (_error, _variables, context) => {
         if (context === undefined || context.hostId === null) return;
@@ -689,6 +715,22 @@ export function useHostUpdateInstall(
       },
     },
   });
+}
+
+/**
+ * The two reads an accepted install changes: `host.status` for the coarse
+ * marker the detached updater publishes, and `host.getInstallationInfo` for
+ * the records it leaves behind when it PARKS instead - a stage kept because
+ * the host was busy, or an install committed under a host that refused to
+ * restart. The second used to wait for its own poll; a Settings click that
+ * parks within a second then showed nothing for up to ten.
+ */
+function invalidateUpdateReads(queryClient: QueryClient, hostId: string): void {
+  for (const method of ["host.status", "host.getInstallationInfo"] as const) {
+    void queryClient.invalidateQueries({
+      queryKey: hostQueryKeys.methodScope(hostId, method),
+    });
+  }
 }
 
 /** Narrowing helper so callers read the managed arm without re-checking. */

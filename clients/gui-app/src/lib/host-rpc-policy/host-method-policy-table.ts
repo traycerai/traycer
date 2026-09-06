@@ -385,6 +385,14 @@ export const HOST_METHOD_POLL_TABLE = {
     poll: defineConditionPolicy("host.update.check", {
       classify: (data) => {
         if (data === undefined) return false;
+        // ONLY the CLI's absence. The other repair this method is re-asked
+        // for - a CLI-floor refusal the Overview is showing a remedy for -
+        // is NOT a lane here: whether a floored catalog row is the row the
+        // Overview offers depends on the installed version and its release
+        // line, which the response does not carry, and a classifier over
+        // the response alone kept polling on floored rows no remedy named.
+        // The Overview owns that recheck (`useHostOverviewUpdates`), keyed
+        // on the remedy it renders.
         return data.outcome === "cli-unavailable"
           ? UPDATE_CHECK_CLI_RECOVERY_POLL_LANE
           : false;
@@ -399,7 +407,19 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
-  "host.getInstallationInfo": { ...LATEST_SCHEDULING, poll: null },
+  // Polled, at the `host.status` cadence, for one consumer: the Overview
+  // derives "installed, restart to finish" and "staged, waiting for work"
+  // from the install and staged records beside the live status. Those
+  // records change UNDER a mounted page - a detached `traycer host update`
+  // commits or parks, the desktop's launch converge swaps bytes - and a read
+  // that only goes stale never observes them, so the card that should offer
+  // the restart never appeared until the page was remounted. One host RPC
+  // over an open connection, only while the Overview is mounted (it is the
+  // only surface that opts into `poll: true` on this method).
+  "host.getInstallationInfo": {
+    ...LATEST_SCHEDULING,
+    poll: { kind: "fixed", intervalMs: 10_000 },
+  },
   "host.service.status": { ...LATEST_SCHEDULING, poll: null },
   // FIFO, like `host.update.install` and for the same reason: these mutate the
   // host's own lifecycle, so two in flight must never collapse to "the latest".

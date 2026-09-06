@@ -577,6 +577,7 @@ async function commitInstall(
         // denied the cooperative shutdown claim and `--force` aborted
         // anyway.
         force: opts.force,
+        onWillStopHost: null,
       })
     : null;
   const lifecycle =
@@ -600,6 +601,7 @@ async function commitInstall(
       staged,
       onProgress: progress,
       lifecycle,
+      onWillSwap: null,
     },
   );
   const post = await readProvisionState(controller, label, opts.runtime);

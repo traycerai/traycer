@@ -176,6 +176,7 @@ async function runLifecycle(
     environment: "production",
     bootstrap: options,
     force,
+    onWillStopHost: null,
   });
   await handle.lifecycle.beforeSwap();
   await handle.lifecycle.afterSwap();
@@ -286,6 +287,7 @@ describe("service install lifecycle re-registration", () => {
       environment: "production",
       bootstrap,
       force: false,
+      onWillStopHost: null,
     });
     runningHandle.lifecycle.setMutationVerifier?.(async () => {
       throw lost;
@@ -304,6 +306,7 @@ describe("service install lifecycle re-registration", () => {
       environment: "production",
       bootstrap,
       force: false,
+      onWillStopHost: null,
     });
     let verifierCalls = 0;
     externalHandle.lifecycle.setMutationVerifier?.(async () => {
@@ -328,6 +331,7 @@ describe("service install lifecycle re-registration", () => {
       environment: "production",
       bootstrap,
       force: false,
+      onWillStopHost: null,
     });
     bootstrapHandle.lifecycle.setMutationVerifier?.(async () => {
       throw lost;
@@ -478,6 +482,7 @@ describe("service install lifecycle re-registration", () => {
         environment: "production",
         bootstrap,
         force: false,
+        onWillStopHost: null,
       });
 
       await expect(handle.lifecycle.beforeSwap()).rejects.toMatchObject({
@@ -513,6 +518,7 @@ describe("service install lifecycle re-registration", () => {
         environment: "production",
         bootstrap,
         force: false,
+        onWillStopHost: null,
       });
 
       await expect(handle.lifecycle.beforeSwap()).resolves.toBeUndefined();
@@ -552,6 +558,7 @@ describe("service install lifecycle re-registration", () => {
         environment: "production",
         bootstrap,
         force: false,
+        onWillStopHost: null,
       });
 
       await expect(handle.lifecycle.beforeSwap()).resolves.toBeUndefined();
@@ -579,6 +586,7 @@ describe("service install lifecycle re-registration", () => {
         environment: "production",
         bootstrap,
         force: false,
+        onWillStopHost: null,
       });
       await handle.lifecycle.beforeSwap();
 
@@ -615,6 +623,7 @@ describe("service install lifecycle re-registration", () => {
       environment: "production",
       bootstrap,
       force: false,
+      onWillStopHost: null,
     });
     await handle.lifecycle.beforeSwap();
 
@@ -794,6 +803,7 @@ describe("runWithPublishedHostStartAdoption (via registerService's install)", ()
       environment: "production",
       bootstrap,
       force: false,
+      onWillStopHost: null,
     });
     const setPublisher = handle.lifecycle.setHostStartAdoptionPublisher;
     if (setPublisher === undefined) {
@@ -827,6 +837,7 @@ describe("runWithPublishedHostStartAdoption (via registerService's install)", ()
       environment: "production",
       bootstrap,
       force: false,
+      onWillStopHost: null,
     });
     const setPublisher = handle.lifecycle.setHostStartAdoptionPublisher;
     if (setPublisher === undefined) {
@@ -867,6 +878,7 @@ describe("runWithPublishedHostStartAdoption (via registerService's install)", ()
       environment: "production",
       bootstrap,
       force: false,
+      onWillStopHost: null,
     });
     const setPublisher = handle.lifecycle.setHostStartAdoptionPublisher;
     if (setPublisher === undefined) {
@@ -897,6 +909,7 @@ describe("runWithPublishedHostStartAdoption (via registerService's install)", ()
       environment: "production",
       bootstrap,
       force: false,
+      onWillStopHost: null,
     });
     const setPublisher = handle.lifecycle.setHostStartAdoptionPublisher;
     if (setPublisher === undefined) {
@@ -938,6 +951,7 @@ describe("runWithPublishedHostStartAdoption (via registerService's install)", ()
       environment: "production",
       bootstrap,
       force: false,
+      onWillStopHost: null,
     });
     const setPublisher = handle.lifecycle.setHostStartAdoptionPublisher;
     if (setPublisher === undefined) {
@@ -988,6 +1002,7 @@ describe("swap-lock recovery wiring", () => {
         environment: "production",
         bootstrap: null,
         force: false,
+        onWillStopHost: null,
       });
       const bytesOnly = createBytesOnlyInstallLifecycle(
         harness.controller,
@@ -1042,6 +1057,7 @@ describe("swap-lock recovery wiring", () => {
         environment: "production",
         bootstrap: null,
         force: false,
+        onWillStopHost: null,
       });
       const bytesOnly = createBytesOnlyInstallLifecycle(
         harness.controller,
@@ -1050,5 +1066,103 @@ describe("swap-lock recovery wiring", () => {
       expect(serviceHandle.lifecycle.swapLockRecovery).toBeNull();
       expect(bytesOnly.swapLockRecovery).toBeNull();
     });
+  });
+});
+
+// The disruption boundary `host update` restores a taken-over progress
+// marker against: reported from the actuator, after the status probe and
+// the authority check, never before either.
+describe("service install lifecycle onWillStopHost", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.serviceLabelForMock.mockReturnValue(label);
+    mocks.resolveServiceCliInvocationMock.mockResolvedValue({
+      command: "/usr/local/bin/traycer",
+      args: [],
+    });
+    mocks.readRegisteredCliInvocationMock.mockResolvedValue(null);
+  });
+
+  it("fires once, after the authority check and immediately before the stop of a running host", async () => {
+    // Falsification: call it before `withServiceMutationAuthority` and the
+    // refused-authority pin below reddens; call it after `controller.stop`
+    // and the order here flips.
+    const harness = makeController("running");
+    mocks.createServiceControllerMock.mockReturnValue(harness.controller);
+    const order: string[] = [];
+    harness.stop.mockImplementation(async () => {
+      order.push("stop");
+    });
+    const handle = createServiceInstallLifecycle({
+      environment: "production",
+      bootstrap: null,
+      force: false,
+      onWillStopHost: () => {
+        order.push("boundary");
+      },
+    });
+
+    await handle.lifecycle.beforeSwap();
+
+    expect(order).toEqual(["boundary", "stop"]);
+    expect(handle.state.stoppedBeforeSwap).toBe(true);
+  });
+
+  it("does not fire when the mutation authority is refused - nothing was touched", async () => {
+    const harness = makeController("running");
+    mocks.createServiceControllerMock.mockReturnValue(harness.controller);
+    const onWillStopHost = vi.fn();
+    const handle = createServiceInstallLifecycle({
+      environment: "production",
+      bootstrap: null,
+      force: false,
+      onWillStopHost,
+    });
+    const lost = new Error("update attempt capability was lost");
+    handle.lifecycle.setMutationVerifier?.(async () => {
+      throw lost;
+    });
+
+    await expect(handle.lifecycle.beforeSwap()).rejects.toBe(lost);
+
+    expect(onWillStopHost).not.toHaveBeenCalled();
+    expect(harness.stop).not.toHaveBeenCalled();
+  });
+
+  it("does not fire when the status probe itself throws - nothing was touched", async () => {
+    const harness = makeController("running");
+    const probeFailure = new Error("launchctl print failed");
+    vi.mocked(harness.controller.status).mockRejectedValue(probeFailure);
+    mocks.createServiceControllerMock.mockReturnValue(harness.controller);
+    const onWillStopHost = vi.fn();
+    const handle = createServiceInstallLifecycle({
+      environment: "production",
+      bootstrap: null,
+      force: false,
+      onWillStopHost,
+    });
+
+    await expect(handle.lifecycle.beforeSwap()).rejects.toBe(probeFailure);
+
+    expect(onWillStopHost).not.toHaveBeenCalled();
+    expect(harness.stop).not.toHaveBeenCalled();
+  });
+
+  it("does not fire for a service the lifecycle decides not to stop (stopped, on POSIX) - the swap reports that boundary", async () => {
+    const harness = makeController("stopped");
+    mocks.createServiceControllerMock.mockReturnValue(harness.controller);
+    const onWillStopHost = vi.fn();
+    const handle = createServiceInstallLifecycle({
+      environment: "production",
+      bootstrap: null,
+      force: false,
+      onWillStopHost,
+    });
+
+    await withPlatformAsync("linux", () => handle.lifecycle.beforeSwap());
+
+    expect(onWillStopHost).not.toHaveBeenCalled();
+    expect(harness.stop).not.toHaveBeenCalled();
+    expect(handle.state.stoppedBeforeSwap).toBe(false);
   });
 });

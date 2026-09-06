@@ -1,5 +1,9 @@
 import { readFile, rename, writeFile } from "node:fs/promises";
 import { readStoredCliInstallManifestAtPath } from "@traycer/protocol/config/installation";
+import {
+  PACKAGE_MANAGER_UPGRADE_COMMAND,
+  type PackageManagerCliSource,
+} from "@traycer-clients/shared/cli-install/package-manager-upgrade-command";
 import { ZodError } from "zod";
 import { createCliLogger } from "../logger";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
@@ -64,37 +68,27 @@ export const VALID_CLI_INSTALL_SOURCES: ReadonlySet<CliInstallSource> =
     "manual",
   ]);
 
-// Package-manager-owned sources for the upgrade-ownership contract.
-// `cli upgrade` refuses to self-replace these binaries; `cli mark-source`
-// is the only entrypoint a PM hook should call. The dedicated
-// `cli re-anchor` command lives next to `cli mark-source` and is the
-// user-facing way to record a manual install - see `cli-re-anchor.ts`.
-export const PACKAGE_MANAGER_CLI_SOURCES: ReadonlySet<CliInstallSource> =
-  new Set<CliInstallSource>([
-    "homebrew",
-    "npm",
-    "winget",
-    "scoop",
-    "apt",
-    "rpm",
-  ]);
+// The package-manager-owned sources for the upgrade-ownership contract are
+// `PACKAGE_MANAGER_CLI_SOURCES` in `@traycer-clients/shared/cli-install`,
+// derived from the shared command table: `cli upgrade` refuses to
+// self-replace these binaries; `cli mark-source` is the only entrypoint a PM
+// hook should call. The dedicated `cli re-anchor` command lives next to
+// `cli mark-source` and is the user-facing way to record a manual install -
+// see `cli-re-anchor.ts`.
 
-// Canonical per-package-manager upgrade hint, written ONCE and shared by the
-// `cli upgrade` package-manager-owned refusal (cli-upgrade.ts) and the
-// protocol-incompatibility recovery hint (compat-recovery.ts). The desktop and
-// manual vectors are phrased differently per caller and are supplied by each
-// map, not here - so a package-manager command (e.g. the formula name) changes
-// in exactly one place instead of drifting between the two surfaces.
+// Keep the CLI's existing sentences (including the yum alternative), deriving
+// the command itself from the same table Desktop and the GUI remedy consume.
+// Read by `cli upgrade`'s refusal and by `host/compat-recovery.ts`.
 export const PACKAGE_MANAGER_UPGRADE_HINT: Record<
-  Exclude<CliInstallSource, "desktop" | "manual">,
+  PackageManagerCliSource,
   string
 > = {
-  homebrew: "Run 'brew upgrade traycer'.",
-  npm: "Run 'npm install -g @traycerai/cli@latest'.",
-  winget: "Run 'winget upgrade Traycer.CLI'.",
-  scoop: "Run 'scoop update traycer-cli'.",
-  apt: "Run 'sudo apt update && sudo apt install --only-upgrade traycer-cli'.",
-  rpm: "Run 'sudo dnf upgrade traycer-cli' (or 'yum upgrade').",
+  homebrew: `Run '${PACKAGE_MANAGER_UPGRADE_COMMAND.homebrew}'.`,
+  npm: `Run '${PACKAGE_MANAGER_UPGRADE_COMMAND.npm}'.`,
+  winget: `Run '${PACKAGE_MANAGER_UPGRADE_COMMAND.winget}'.`,
+  scoop: `Run '${PACKAGE_MANAGER_UPGRADE_COMMAND.scoop}'.`,
+  apt: `Run '${PACKAGE_MANAGER_UPGRADE_COMMAND.apt}'.`,
+  rpm: `Run '${PACKAGE_MANAGER_UPGRADE_COMMAND.rpm}' (or 'yum upgrade').`,
 };
 
 function currentProcessBinaryPath(): string {

@@ -38,21 +38,31 @@ vi.mock("sonner", () => ({
   },
 }));
 
-import type { ReactElement } from "react";
+import type { ReactElement, ReactNode } from "react";
 import {
   act,
   cleanup,
   fireEvent,
   render,
+  renderHook,
   screen,
   waitFor,
   within,
+  type RenderHookResult,
   type RenderResult,
 } from "@testing-library/react";
 import { toast } from "sonner";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { HostAvailableManifest } from "@traycer/protocol/host/maintenance/index";
+import type {
+  HostAvailableManifest,
+  HostGetInstallationInfoResponseV11,
+} from "@traycer/protocol/host/maintenance/index";
+import type {
+  HostInstallRecord,
+  HostStagedRecord,
+  StoredCliInstallManifest,
+} from "@traycer/protocol/config/installation-records";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import {
   recordNegotiatedHostManifest,
@@ -72,6 +82,10 @@ import {
   openHostOverviewMenu,
   type OverviewHostFixture,
 } from "@/components/settings/panels/__tests__/host-overview-test-support";
+import {
+  useHostOverviewUpdates,
+  type HostOverviewUpdatesState,
+} from "@/components/settings/panels/host-overview-updates-state";
 
 /**
  * The version PICKER that replaced the single "Update to v<latest>" button
@@ -86,6 +100,7 @@ afterEach(() => {
   resetNegotiatedManifests();
   scopeOverrides.current = {};
   hostBindingMock.current = null;
+  vi.useRealTimers();
 });
 
 const ALL_OVERVIEW_METHODS = [
@@ -278,6 +293,245 @@ function rowFor(rows: readonly HTMLElement[], version: string): HTMLElement {
     throw new Error(`no version row rendered for v${version}`);
   }
   return row;
+}
+
+/**
+ * The minimum-viable HostInstallRecord for the
+ * activation-debt suite below - every field the wire schema requires
+ * (protocol/src/config/installation-records.ts), populated with benign
+ * placeholders except version/runtimeVersion, which each test varies.
+ */
+function installRecord(
+  version: string,
+  runtimeVersion: string | null,
+): HostInstallRecord {
+  return {
+    installId: "install-1",
+    version,
+    runtimeVersion,
+    platform: "darwin",
+    arch: "arm64",
+    installedAt: "2026-08-10T00:00:00Z",
+    source: { kind: "registry", value: version },
+    archiveSha256: "a".repeat(64),
+    signatureVerifiedAt: "2026-08-10T00:00:00Z",
+    signatureKeyId: "key-1",
+    sizeBytes: 1024,
+    executablePath: `/tmp/traycer/${version}/host`,
+    executableSha256: "b".repeat(64),
+  };
+}
+
+function managedInstallation(
+  install: HostInstallRecord,
+  staged: HostStagedRecord | null,
+): HostGetInstallationInfoResponseV11 {
+  return {
+    status: "managed",
+    installRecord: install,
+    stagedRecord: staged,
+    cliManifest: null,
+  };
+}
+
+function managedInstallationWithCli(
+  install: HostInstallRecord,
+  cliVersion: string,
+  source: StoredCliInstallManifest["source"],
+  binaryPath: string,
+): HostGetInstallationInfoResponseV11 {
+  // Built directly rather than spread from `managedInstallation`: that helper
+  // returns the response UNION, and TypeScript will not add `cliManifest` to a
+  // spread it cannot narrow to the managed arm.
+  return {
+    status: "managed",
+    installRecord: install,
+    stagedRecord: null,
+    cliManifest: {
+      version: cliVersion,
+      installedAt: "2026-09-06T00:00:00Z",
+      binaryPath,
+      source,
+      pendingUpgrade: null,
+    },
+  };
+}
+
+function stagedRecord(version: string): HostStagedRecord {
+  return {
+    schemaVersion: 1,
+    stageId: null,
+    version,
+    runtimeVersion: null,
+    archiveSha256: "a".repeat(64),
+    sizeBytes: 1024,
+    source: { kind: "registry", value: version },
+    signatureKeyId: "key-1",
+    signatureVerifiedAt: "2026-08-10T00:00:00Z",
+    executablePath: `/tmp/traycer/${version}/host`,
+    platform: "darwin",
+    arch: "arm64",
+    executableSha256: "b".repeat(64),
+  };
+}
+
+function managedInstallationWithCliAndStage(
+  install: HostInstallRecord,
+  staged: HostStagedRecord,
+): HostGetInstallationInfoResponseV11 {
+  return {
+    status: "managed",
+    installRecord: install,
+    stagedRecord: staged,
+    cliManifest: {
+      version: "1.2.0",
+      installedAt: "2026-09-06T00:00:00Z",
+      binaryPath: "/home/u/.local/bin/traycer",
+      source: "manual",
+      pendingUpgrade: null,
+    },
+  };
+}
+
+function floorManifest(
+  version: string,
+  available: boolean,
+): HostAvailableManifest {
+  const base = multiVersionManifest([version]);
+  return {
+    ...base,
+    versions: base.versions.map((entry) => ({
+      ...entry,
+      requiredCliVersion: "1.3.0",
+      platforms: {
+        "darwin-arm64": {
+          ...entry.platforms["darwin-arm64"],
+          available,
+          unavailableReason: available
+            ? null
+            : "Needs Traycer CLI 1.3.0 or newer (this host's CLI is 1.2.0).",
+        },
+      },
+    })),
+  };
+}
+
+function floorManifestWithoutRequiredVersion(
+  version: string,
+): HostAvailableManifest {
+  const manifest = floorManifest(version, false);
+  return {
+    ...manifest,
+    versions: manifest.versions.map((entry) => ({
+      ...entry,
+      requiredCliVersion: null,
+      platforms: {
+        "darwin-arm64": {
+          ...entry.platforms["darwin-arm64"],
+          unavailableReason: "Needs Traycer CLI ",
+        },
+      },
+    })),
+  };
+}
+
+function lowerRcFallbackManifest(): HostAvailableManifest {
+  const stableFloor = floorManifest("1.3.0", false).versions[0];
+  const rc = multiVersionManifest(["1.3.0-rc.2"]).versions[0];
+  return {
+    schemaVersion: 1,
+    generatedAt: "2026-09-06T00:00:00Z",
+    latest: "1.3.0",
+    versions: [stableFloor, { ...rc, requiredCliVersion: "1.2.0" }],
+  };
+}
+
+const SELECTED_RC_CASES = [
+  {
+    name: "a yanked floor-refused stable",
+    stableYanked: true,
+    stableReason:
+      "Needs Traycer CLI 1.3.0 or newer (this host's CLI is 1.2.0).",
+  },
+  {
+    name: "a non-floor unavailable stable",
+    stableYanked: false,
+    stableReason: "platform build withdrawn",
+  },
+] as const;
+
+type SelectedRcCase = (typeof SELECTED_RC_CASES)[number];
+
+function selectedRcManifest(testCase: SelectedRcCase): HostAvailableManifest {
+  const stableBase = multiVersionManifest(["1.3.0"]).versions[0];
+  const rcBase = multiVersionManifest(["1.3.0-rc.2"]).versions[0];
+  const stable = {
+    ...stableBase,
+    yanked: testCase.stableYanked,
+    requiredCliVersion: "1.3.0",
+    platforms: {
+      "darwin-arm64": {
+        ...stableBase.platforms["darwin-arm64"],
+        available: false,
+        unavailableReason: testCase.stableReason,
+      },
+    },
+  };
+  const rc = {
+    ...rcBase,
+    requiredCliVersion: "1.3.0-rc.4",
+    platforms: {
+      "darwin-arm64": {
+        ...rcBase.platforms["darwin-arm64"],
+        available: false,
+        unavailableReason:
+          "Needs Traycer CLI 1.3.0-rc.4 or newer (this host's CLI is 1.2.0).",
+      },
+    },
+  };
+  return {
+    ...multiVersionManifest(["1.3.0", "1.3.0-rc.2"]),
+    latest: "1.3.0",
+    versions: [stable, rc],
+  };
+}
+
+function renderUpdatesHook(
+  client: OverviewHostFixture["client"],
+  hostId: string,
+  runningVersion: string,
+  stagedVersion: string | null,
+): RenderHookResult<
+  HostOverviewUpdatesState,
+  { readonly children: ReactNode }
+> {
+  const queryClient = newQueryClient();
+  return renderHook(
+    () =>
+      useHostOverviewUpdates({
+        client,
+        hostName: "host-a",
+        hostId,
+        runningVersion,
+        activationDebt: null,
+        platformKey: "darwin-arm64",
+        cliManifest: null,
+        isLocalMachine: false,
+        desktopUpdate: null,
+        stagedVersion,
+        enabled: true,
+        checkDegrade: null,
+        installDegrade: null,
+        busy: false,
+      }),
+    {
+      wrapper: (props: { readonly children: ReactNode }) => (
+        <QueryClientProvider client={queryClient}>
+          {props.children}
+        </QueryClientProvider>
+      ),
+    },
+  );
 }
 
 describe("<HostSettingsPanel /> Overview updates — version picker", () => {
@@ -1412,5 +1666,1623 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
         .getByRole("button", { name: "Install 2.0.0-rc.1" })
         .hasAttribute("disabled"),
     ).toBe(false);
+  });
+});
+
+describe("Overview updates — CLI floor remedy", () => {
+  it("projects the latest refusal over an old stored CLI and replaces Update now with copy guidance", async () => {
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.2.0",
+      installation: managedInstallationWithCli(
+        installRecord("1.2.0", null),
+        "1.2.0",
+        "manual",
+        "/home/u/.local/bin/traycer",
+      ),
+      overrideHandlers: {
+        "host.update.check": () =>
+          Promise.resolve({
+            outcome: "ok" as const,
+            effectiveIncludePreReleases: false,
+            includePreReleasesSource: "stable-default" as const,
+            manifest: floorManifest("1.3.0", false),
+          }),
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    await screen.findByText(
+      "First update Traycer's command-line tools on host-a. Open a terminal on that machine and run the copied command. When it finishes, come back here: this page rechecks while it is open, and Update now appears once the host accepts the update.",
+    );
+    // This lone unavailable asset keeps Update now hidden even if only the
+    // cliFloor suppression is removed: the asset gate independently rejects
+    // it. The lower-RC hook fixture below isolates that suppression by leaving
+    // a lower same-line RC offerable. This mounted negative instead catches a
+    // fabricated Update now that ignores both remedy and asset eligibility.
+    expect(screen.queryByRole("button", { name: "Update now" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Copy command" })).toBeTruthy();
+  });
+
+  it("retains the remedy when the stored CLI is new, with the older-copy sentence", async () => {
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.2.0",
+      installation: managedInstallationWithCli(
+        installRecord("1.2.0", null),
+        "1.3.0",
+        "manual",
+        "/home/u/.local/bin/traycer",
+      ),
+      overrideHandlers: {
+        "host.update.check": () =>
+          Promise.resolve({
+            outcome: "ok" as const,
+            effectiveIncludePreReleases: false,
+            includePreReleasesSource: "stable-default" as const,
+            manifest: floorManifest("1.3.0", false),
+          }),
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    await screen.findByText(
+      "Traycer's command-line tools on host-a were updated, but the host is still using an older copy. Run the command again: First update Traycer's command-line tools on host-a. Open a terminal on that machine and run the copied command. When it finishes, come back here: this page rechecks while it is open, and Update now appears once the host accepts the update.",
+    );
+    // Treating cliManifest.version as clearance while restoring updatableVersion
+    // would expose Update now; the meaningful positive pin above is the
+    // older-copy sentence itself, while the lower-RC hook case isolates
+    // suppression.
+    expect(screen.queryByRole("button", { name: "Update now" })).toBeNull();
+  });
+
+  it("lets activation debt win the sentence while retaining the floor remedy action", async () => {
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.2.0",
+      installation: managedInstallationWithCli(
+        installRecord("1.2.1", null),
+        "1.2.0",
+        "manual",
+        "/home/u/.local/bin/traycer",
+      ),
+      overrideHandlers: {
+        "host.update.check": () =>
+          Promise.resolve({
+            outcome: "ok" as const,
+            effectiveIncludePreReleases: false,
+            includePreReleasesSource: "stable-default" as const,
+            manifest: floorManifest("1.3.0", false),
+          }),
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    await screen.findByText("v1.2.1 is installed — restart host to finish.");
+    // Removing the activation-debt arm from describeCheckState would let the
+    // remedy sentence win; this negative precedence pin must turn RED under
+    // that concrete ablation while the remedy action remains available.
+    expect(screen.getByRole("button", { name: "Copy command" })).toBeTruthy();
+  });
+
+  it("turns an unreadable CLI manifest into installation help", async () => {
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.2.0",
+      installation: managedInstallation(installRecord("1.2.0", null), null),
+      overrideHandlers: {
+        "host.update.check": () =>
+          Promise.resolve({
+            outcome: "ok" as const,
+            effectiveIncludePreReleases: false,
+            includePreReleasesSource: "stable-default" as const,
+            manifest: floorManifest("1.3.0", false),
+          }),
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    await screen.findByText(
+      "Traycer couldn't determine how its command-line tools were installed on host-a.",
+    );
+    expect(
+      screen.getByRole("button", { name: "Show installation help" }),
+    ).toBeTruthy();
+  });
+
+  it("does not offer a CLI repair for a malformed required version reason", async () => {
+    const requiredCliVersion = "1.3.0; npm install -g @traycerai/cli@latest";
+    const base = floorManifest("1.3.0", false);
+    const baseEntry = base.versions[0];
+    const malformedManifest: HostAvailableManifest = {
+      ...base,
+      versions: [
+        {
+          ...baseEntry,
+          requiredCliVersion,
+          platforms: {
+            "darwin-arm64": {
+              ...baseEntry.platforms["darwin-arm64"],
+              unavailableReason: `host registry: version '1.3.0' declares requiredCliVersion ${JSON.stringify(requiredCliVersion)}, which is not a version this CLI can compare against. The manifest is wrong; do not work around it by installing a different version.`,
+            },
+          },
+        },
+      ],
+    };
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.2.0",
+      installation: managedInstallationWithCli(
+        installRecord("1.2.0", null),
+        "1.2.0",
+        "manual",
+        "/home/u/.local/bin/traycer",
+      ),
+      overrideHandlers: {
+        "host.update.check": () => ({
+          outcome: "ok" as const,
+          effectiveIncludePreReleases: false,
+          includePreReleasesSource: "stable-default" as const,
+          manifest: malformedManifest,
+        }),
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    const rendered = renderUpdatesHook(fixture.client, "host-a", "1.2.0", null);
+    await waitFor(() =>
+      expect(rendered.result.current.picker.awaitingFirstCheck).toBe(false),
+    );
+    // Broadening readCliFloor to every unavailable asset would misclassify
+    // this malformed reason as a repairable floor; these null hook fields must
+    // turn RED under that GUI predicate ablation.
+    expect(rendered.result.current.cliFloor).toBeNull();
+    expect(rendered.result.current.summary.remedy).toBeNull();
+    rendered.unmount();
+
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+    await screen.findByText(
+      "v1.3.0 is available, but host-a can't install it.",
+    );
+    expect(screen.queryByRole("button", { name: "Copy command" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Show installation help" }),
+    ).toBeNull();
+    expect(screen.queryByRole("button", { name: "Update now" })).toBeNull();
+  });
+
+  it("does not classify a withdrawn platform build with a retained SHA as a floor", async () => {
+    const withdrawn = floorManifest("1.3.0", false);
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.2.0",
+      installation: managedInstallationWithCli(
+        installRecord("1.2.0", null),
+        "1.2.0",
+        "manual",
+        "/home/u/.local/bin/traycer",
+      ),
+      overrideHandlers: {
+        "host.update.check": () =>
+          Promise.resolve({
+            outcome: "ok" as const,
+            effectiveIncludePreReleases: false,
+            includePreReleasesSource: "stable-default" as const,
+            manifest: {
+              ...withdrawn,
+              versions: withdrawn.versions.map((entry) => ({
+                ...entry,
+                platforms: {
+                  "darwin-arm64": {
+                    ...entry.platforms["darwin-arm64"],
+                    unavailableReason: "platform build withdrawn",
+                    sha256: "b".repeat(64),
+                  },
+                },
+              })),
+            },
+          }),
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    await screen.findByText(
+      "v1.3.0 is available, but host-a can't install it.",
+    );
+    // Removing the authored floor-reason predicate would offer remedy copy for
+    // this withdrawn-with-hash counterexample; this negative pin must turn RED
+    // under that concrete structural-ablation.
+    expect(screen.queryByRole("button", { name: "Copy command" })).toBeNull();
+
+    cleanup();
+    const yankedFloored = floorManifest("1.3.0", false);
+    const yankedLatestManifest = {
+      ...yankedFloored,
+      versions: yankedFloored.versions.map((entry) => ({
+        ...entry,
+        yanked: true,
+      })),
+    };
+    const yankedLatestFixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.2.0",
+      installation: managedInstallationWithCli(
+        installRecord("1.2.0", null),
+        "1.2.0",
+        "manual",
+        "/home/u/.local/bin/traycer",
+      ),
+      overrideHandlers: {
+        "host.update.check": () =>
+          Promise.resolve({
+            outcome: "ok" as const,
+            effectiveIncludePreReleases: false,
+            includePreReleasesSource: "stable-default" as const,
+            manifest: yankedLatestManifest,
+          }),
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: yankedLatestFixture.client };
+    scopeOverrides.current = scopeFrom("host-a", yankedLatestFixture);
+    renderPanel();
+
+    await screen.findByText(
+      "v1.3.0 is available, but host-a can't install it.",
+    );
+    // Removing !entry.yanked from the summary target would expose the floor
+    // remedy for this release; these negative no-repair pins must turn RED.
+    expect(screen.queryByRole("button", { name: "Copy command" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Show installation help" }),
+    ).toBeNull();
+    expect(screen.queryByRole("button", { name: "Update now" })).toBeNull();
+  });
+
+  it("rechecks a repaired manifest and reveals Update now without a click", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let checks = 0;
+    const installCalls: Array<{ version: string; force: boolean }> = [];
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      busy: true,
+      busySessionCount: 1,
+      hostVersion: "1.2.0",
+      installation: managedInstallationWithCliAndStage(
+        installRecord("1.2.0", null),
+        stagedRecord("1.3.0"),
+      ),
+      overrideHandlers: {
+        "host.update.check": () => {
+          checks += 1;
+          if (checks >= 4) {
+            return Promise.resolve({ outcome: "cli-failed" as const });
+          }
+          return Promise.resolve({
+            outcome: "ok" as const,
+            effectiveIncludePreReleases: false,
+            includePreReleasesSource: "stable-default" as const,
+            manifest: floorManifest("1.3.0", checks === 1 || checks === 3),
+          });
+        },
+        "host.update.install": (request) => {
+          installCalls.push({ version: request.version, force: request.force });
+          return { outcome: "accepted" as const, attemptId: null };
+        },
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    const { queryClient } = renderPanel();
+
+    await screen.findByTestId("host-overview-operation-force-update");
+    fireEvent.click(screen.getByTestId("host-overview-operation-force-update"));
+    await screen.findByTestId("host-busy-force-defer-dialog");
+    // The confirmation re-asks before dispatch so this rendered panel records
+    // a real refusal against the exact staged version, rather than a synthetic
+    // hook state. The repair below must come only from the Overview's own
+    // floor recheck (`useHostOverviewUpdates`), never from a click.
+    await act(async () => {
+      await queryClient.invalidateQueries();
+    });
+    await waitFor(() => expect(checks).toBeGreaterThan(1));
+    fireEvent.click(screen.getByTestId("host-busy-force"));
+    await waitFor(() => {
+      expect(installCalls).toEqual([]);
+      expect(screen.getByRole("status").textContent).toContain(
+        "v1.3.0 needs Traycer CLI 1.3.0 or newer on host-a.",
+      );
+      expect(
+        screen.getByTestId("host-overview-update-attempt-failed").textContent,
+      ).toContain("v1.3.0 needs Traycer CLI 1.3.0 or newer on host-a.");
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    await screen.findByRole("button", { name: "Update now" });
+    const checksAfterRecovery = checks;
+    // Removing the Overview's floor recheck (`useHostOverviewUpdates`), or
+    // raising `CLI_FLOOR_RECHECK_MS` above 30s, would leave this refusal
+    // visible and fail the assertion above.
+    expect(checksAfterRecovery).toBeGreaterThan(1);
+    // Removing describeUpdateFailure's live-descriptor condition and returning
+    // stored refusal text whenever refusal exists would keep both stale
+    // surfaces visible after repair; these negative recovery pins must RED.
+    await waitFor(() => {
+      expect(screen.getByRole("status").textContent).toBe(
+        "v1.3.0 is available.",
+      );
+      expect(
+        screen.queryByTestId("host-overview-update-attempt-failed"),
+      ).toBeNull();
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(31_000);
+    });
+    // The available answer ends the condition-poll episode; retaining the
+    // lane after repair would keep shelling the host on every further tick.
+    expect(checks).toBe(checksAfterRecovery);
+    const checksBeforeFailure = checks;
+    await act(async () => {
+      await queryClient.invalidateQueries();
+    });
+    await waitFor(() => expect(checks).toBeGreaterThan(checksBeforeFailure));
+    // Deleting only the guarded checkRefutesForceRefusal/setForceRefusal(null)
+    // retirement block would keep every earlier repair assertion green but
+    // revive the old floor text after this later failed check; these negative
+    // current-failure pins must turn RED under that concrete ablation.
+    await waitFor(() => {
+      expect(screen.getByRole("status").textContent).toBe(
+        "host-a's Traycer CLI couldn't complete the request.",
+      );
+      const notice = screen.getByTestId("host-overview-update-attempt-failed");
+      expect(notice.textContent).toBe(
+        "host-a's Traycer CLI couldn't complete the request.",
+      );
+      expect(notice.textContent).not.toContain("needs Traycer CLI");
+    });
+    expect(installCalls).toEqual([]);
+  });
+
+  it("rechecks only while a remedy is on screen: a floored row on ANOTHER release line under installed-rc earns no recheck, a floored later RC on the installed line does", async () => {
+    // The recheck is keyed on the rendered remedy (`useHostOverviewUpdates`),
+    // not on the response: the response carries no installed version, so a
+    // classifier over it alone - the table lane this replaced - re-asked the
+    // host every 30 s on ANY floored row of an `installed-rc` catalog, a
+    // release on another line included, with no remedy on screen to end it.
+    // Falsification: key the effect on "any floored row in the manifest" (or
+    // restore the table lane) and the first half goes RED - the 1.4.0-rc.1
+    // floor keeps re-asking a host that shows no remedy.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let checks = 0;
+    let sameLineFloored = false;
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.3.0-rc.1",
+      installation: managedInstallationWithCli(
+        installRecord("1.3.0-rc.1", null),
+        "1.2.0",
+        "manual",
+        "/home/u/.local/bin/traycer",
+      ),
+      overrideHandlers: {
+        "host.update.check": () => {
+          checks += 1;
+          const base = multiVersionManifest(["1.2.0", "1.3.0-rc.1"]);
+          const flooredOtherLine = floorManifest("1.4.0-rc.1", false)
+            .versions[0];
+          const flooredSameLine = floorManifest("1.3.0-rc.2", false)
+            .versions[0];
+          return Promise.resolve({
+            outcome: "ok" as const,
+            effectiveIncludePreReleases: true,
+            includePreReleasesSource: "installed-rc" as const,
+            manifest: {
+              ...base,
+              versions: [
+                flooredOtherLine,
+                ...(sameLineFloored ? [flooredSameLine] : []),
+                ...base.versions,
+              ],
+            },
+          });
+        },
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    // The catalog answered. The installed line (1.3.0) has no matching stable
+    // and no later RC, so the summary walk names nothing and no remedy
+    // renders - the 1.4.0-rc.1 floor is another line's business.
+    await waitFor(() => expect(checks).toBe(1));
+    await waitForButton("Check now");
+    expect(screen.queryByRole("button", { name: "Copy command" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Show installation help" }),
+    ).toBeNull();
+    // Two full recheck periods pass and the host is not asked again.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(31_000);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(31_000);
+    });
+    expect(checks).toBe(1);
+
+    // Positive control, same host, same catalog plus a floored later RC on
+    // the INSTALLED line: the remedy renders and the recheck runs.
+    sameLineFloored = true;
+    fireEvent.click(await waitForButton("Check now"));
+    await waitFor(() => expect(checks).toBe(2));
+    await screen.findByRole("button", { name: "Copy command" });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    await waitFor(() => expect(checks).toBe(3));
+
+    vi.useRealTimers();
+  });
+
+  it("a retired region ends the recheck: an externally-managed discovery under a floored catalog stops re-asking the host", async () => {
+    // "On screen" is literal. `installDiscovered: "externally-managed"` is
+    // latched for the life of the mount (only `cli-unavailable` is ever
+    // refuted) and replaces the whole region with a notice, while the check
+    // query stays ENABLED - so a floor read before the retirement would keep
+    // re-asking a host with nothing on screen to end it, the very defect the
+    // table lane had. Falsification: drop `degrade === null` from
+    // `recheckFloor` and the count below climbs across the two periods.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let checks = 0;
+    const floored = floorManifest("1.3.0", false);
+    const installable = multiVersionManifest(["1.2.5"]).versions[0];
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.2.0",
+      installation: managedInstallationWithCli(
+        installRecord("1.2.0", null),
+        "1.2.0",
+        "manual",
+        "/home/u/.local/bin/traycer",
+      ),
+      overrideHandlers: {
+        "host.update.check": () => {
+          checks += 1;
+          return Promise.resolve({
+            outcome: "ok" as const,
+            effectiveIncludePreReleases: false,
+            includePreReleasesSource: "stable-default" as const,
+            manifest: {
+              ...floored,
+              versions: [...floored.versions, installable],
+            },
+          });
+        },
+        "host.update.install": () =>
+          Promise.resolve({ outcome: "externally-managed" as const }),
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    // The floored latest renders the remedy: the recheck is armed.
+    await screen.findByRole("button", { name: "Copy command" });
+    await waitFor(() => expect(checks).toBe(1));
+
+    // An install of the lower installable row discovers the host is
+    // externally managed; the region retires behind its notice.
+    await openHostOverviewAdvanced();
+    fireEvent.click(await waitForButton("Install 1.2.5"));
+    await screen.findByTestId("host-overview-updates-degraded");
+    expect(screen.queryByRole("button", { name: "Copy command" })).toBeNull();
+
+    // Nothing on screen to repair, so nothing is re-asked.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(31_000);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(31_000);
+    });
+    expect(checks).toBe(1);
+
+    vi.useRealTimers();
+  });
+
+  it("settles Force refusal synchronously exactly once for floored, absent, and incomplete-floor entries", async () => {
+    const scenarios = [
+      {
+        manifest: floorManifest("1.3.0", false),
+        version: "1.3.0",
+        expected: "v1.3.0 needs Traycer CLI 1.3.0 or newer on host-a.",
+      },
+      {
+        manifest: floorManifest("1.2.0", true),
+        version: "1.3.0",
+        expected:
+          "Traycer couldn't verify that v1.3.0 can be installed on host-a.",
+      },
+      {
+        manifest: floorManifestWithoutRequiredVersion("1.3.0"),
+        version: "1.3.0",
+        expected:
+          "Traycer couldn't verify that v1.3.0 can be installed on host-a.",
+      },
+    ] as const;
+
+    for (const scenario of scenarios) {
+      const installCalls: Array<{ version: string; force: boolean }> = [];
+      const fixture = buildOverviewHostFixture({
+        hostId: "host-a",
+        isLocalMachine: false,
+        hostVersion: "1.2.0",
+        overrideHandlers: {
+          "host.update.check": () => ({
+            outcome: "ok" as const,
+            effectiveIncludePreReleases: false,
+            includePreReleasesSource: "stable-default" as const,
+            manifest: scenario.manifest,
+          }),
+          "host.update.install": (request) => {
+            installCalls.push({
+              version: request.version,
+              force: request.force,
+            });
+            return { outcome: "accepted" as const, attemptId: null };
+          },
+        },
+      });
+      recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+      const rendered = renderUpdatesHook(
+        fixture.client,
+        "host-a",
+        "1.2.0",
+        scenario.version,
+      );
+      await waitFor(() =>
+        expect(rendered.result.current.picker.awaitingFirstCheck).toBe(false),
+      );
+
+      let returned = false;
+      const onSettled = vi.fn(() => {
+        expect(returned).toBe(false);
+      });
+      // Moving onSettled to a microtask or removing it would make this spy
+      // observe after installForce returns; this is the synchronous settlement
+      // pin. Bypassing describeForceUpdateRefusal would reach installForce's
+      // mutation and redden the no-mutation/failure assertions below.
+      act(() => {
+        rendered.result.current.installForce(scenario.version, onSettled);
+        returned = true;
+      });
+      expect(onSettled).toHaveBeenCalledTimes(1);
+      expect(installCalls).toEqual([]);
+      expect(rendered.result.current.summary.failureDescription).toContain(
+        scenario.expected,
+      );
+      // Missing required field/reason version must take the unknown branch,
+      // never interpolate a fabricated null or undefined requirement. Removing
+      // floor.requiredCliVersion's null guard would instead produce a rejected
+      // `null` requirement; this negative text pin must turn RED under that
+      // concrete ablation.
+      expect(rendered.result.current.summary.failureDescription).not.toContain(
+        "null",
+      );
+      expect(rendered.result.current.summary.failureDescription).not.toContain(
+        "undefined",
+      );
+      rendered.unmount();
+    }
+  });
+
+  it("suppresses Update now when the best stable target is floored even though a lower same-line RC is offerable", async () => {
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: false,
+      hostVersion: "1.3.0-rc.1",
+      overrideHandlers: {
+        "host.update.check": () => ({
+          outcome: "ok" as const,
+          effectiveIncludePreReleases: true,
+          includePreReleasesSource: "installed-rc" as const,
+          manifest: lowerRcFallbackManifest(),
+        }),
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    const rendered = renderUpdatesHook(
+      fixture.client,
+      "host-a",
+      "1.3.0-rc.1",
+      null,
+    );
+    await waitFor(() =>
+      expect(rendered.result.current.cliFloor).not.toBeNull(),
+    );
+    // Dropping `candidate.cliFloor !== null` in offerableLatestVersion would
+    // advertise this selected floored stable as Update now; this non-vacuous
+    // hook pin must RED at the actual candidate gate.
+    expect(rendered.result.current.summary.updatableVersion).toBeNull();
+    expect(rendered.result.current.summary.remedy).not.toBeNull();
+    expect(rendered.result.current.cliFloor?.requiredCliVersion).toBe("1.3.0");
+    rendered.unmount();
+
+    const yankedManifestBase = lowerRcFallbackManifest();
+    const yankedStable = { ...yankedManifestBase.versions[0], yanked: true };
+    const yankedManifest = {
+      ...yankedManifestBase,
+      versions: [yankedStable, yankedManifestBase.versions[1]],
+    };
+    const installCalls: Array<{ version: string; force: boolean }> = [];
+    const yankedFixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: false,
+      hostVersion: "1.3.0-rc.1",
+      overrideHandlers: {
+        "host.update.check": () => ({
+          outcome: "ok" as const,
+          effectiveIncludePreReleases: true,
+          includePreReleasesSource: "installed-rc" as const,
+          manifest: yankedManifest,
+        }),
+        "host.update.install": (request) => {
+          installCalls.push({ version: request.version, force: request.force });
+          return { outcome: "accepted" as const, attemptId: null };
+        },
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    const yankedRendered = renderUpdatesHook(
+      yankedFixture.client,
+      "host-a",
+      "1.3.0-rc.1",
+      "1.3.0",
+    );
+
+    await waitFor(() =>
+      expect(yankedRendered.result.current.summary.updatableVersion).toBe(
+        "1.3.0-rc.2",
+      ),
+    );
+    // Removing `entry.yanked` from selectSummaryCandidate would misclassify
+    // this yanked stable floor and hide the available RC fallback; this
+    // negative summary pin must turn RED under that source-predicate ablation.
+    expect(yankedRendered.result.current.cliFloor).toBeNull();
+    expect(yankedRendered.result.current.summary.remedy).toBeNull();
+    // `describeForceUpdateRefusal` checks `entry.yanked` BEFORE it ever reads
+    // a CLI floor - a withdrawn release has no floor to remedy (no CLI
+    // version installs a yanked release), so the withdrawal text wins over
+    // the "needs Traycer CLI X" text this same staged version would
+    // otherwise carry. `stagedFloor` no longer exists as a separate field;
+    // `stagedEntryOfferable` is the one predicate both the offer and the
+    // dispatch read, and it is false here.
+    expect(yankedRendered.result.current.stagedEntryOfferable).toBe(false);
+
+    let returned = false;
+    const onSettled = vi.fn(() => {
+      expect(returned).toBe(false);
+    });
+    // This pins the WITHDRAWAL gate of `describeForceUpdateRefusal`, which
+    // is consulted before any floor: `readCliFloor` is never reached for a
+    // yanked entry, so no change to it can authorize this release. Dropping
+    // the `entry.yanked` refusal is what reddens the no-mutation pin.
+    act(() => {
+      yankedRendered.result.current.installForce("1.3.0", onSettled);
+      returned = true;
+    });
+    expect(onSettled).toHaveBeenCalledTimes(1);
+    expect(installCalls).toEqual([]);
+    // The withdrawal text, not the floor text: yanked is checked first.
+    expect(yankedRendered.result.current.summary.failureDescription).toContain(
+      "v1.3.0 has been withdrawn and can't be installed on host-a.",
+    );
+    yankedRendered.unmount();
+  });
+
+  it("keeps an installable stable target ahead of a later floor-refused RC", async () => {
+    const stable = multiVersionManifest(["1.3.0"]).versions[0];
+    const rcBase = multiVersionManifest(["1.3.0-rc.2"]).versions[0];
+    const rc = {
+      ...rcBase,
+      requiredCliVersion: "1.4.0",
+      platforms: {
+        "darwin-arm64": {
+          ...rcBase.platforms["darwin-arm64"],
+          available: false,
+          unavailableReason:
+            "Needs Traycer CLI 1.4.0 or newer (this host's CLI is 1.2.0).",
+        },
+      },
+    };
+    const manifest: HostAvailableManifest = {
+      ...multiVersionManifest(["1.3.0", "1.3.0-rc.2"]),
+      latest: "1.3.0",
+      versions: [stable, rc],
+    };
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: false,
+      hostVersion: "1.3.0-rc.1",
+      overrideHandlers: {
+        "host.update.check": () => ({
+          outcome: "ok" as const,
+          effectiveIncludePreReleases: true,
+          includePreReleasesSource: "installed-rc" as const,
+          manifest,
+        }),
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    const rendered = renderUpdatesHook(
+      fixture.client,
+      "host-a",
+      "1.3.0-rc.1",
+      null,
+    );
+
+    await waitFor(() =>
+      expect(rendered.result.current.summary.updatableVersion).toBe("1.3.0"),
+    );
+    // Bypassing selectSummaryCandidate's installable-candidate return would
+    // let the later floored RC hide this usable stable target; these exact
+    // stable-selection pins must turn RED under that candidate-walk ablation.
+    expect(rendered.result.current.cliFloor).toBeNull();
+    expect(rendered.result.current.summary.remedy).toBeNull();
+    rendered.unmount();
+  });
+
+  it.each(SELECTED_RC_CASES)(
+    "selects the RC floor after $name",
+    async (testCase) => {
+      const manifest = selectedRcManifest(testCase);
+      const fixture = buildOverviewHostFixture({
+        hostId: "host-a",
+        isLocalMachine: false,
+        hostVersion: "1.3.0-rc.1",
+        overrideHandlers: {
+          "host.update.check": () => ({
+            outcome: "ok" as const,
+            effectiveIncludePreReleases: true,
+            includePreReleasesSource: "installed-rc" as const,
+            manifest,
+          }),
+        },
+      });
+      recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+      const rendered = renderUpdatesHook(
+        fixture.client,
+        "host-a",
+        "1.3.0-rc.1",
+        null,
+      );
+
+      await waitFor(() =>
+        expect(rendered.result.current.cliFloor?.requiredCliVersion).toBe(
+          "1.3.0-rc.4",
+        ),
+      );
+      // Restricting floor acceptance to targetCandidates[0] would miss the
+      // RC after this unusable preferred stable; both explicit variants must
+      // turn RED under that candidate-walk ablation.
+      expect(rendered.result.current.summary.updatableVersion).toBeNull();
+      expect(rendered.result.current.summary.remedy).not.toBeNull();
+      rendered.unmount();
+    },
+  );
+
+  it("shows the selected RC floor in the mounted npm remedy command", async () => {
+    const manifest = selectedRcManifest(SELECTED_RC_CASES[0]);
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.3.0-rc.1",
+      installation: managedInstallationWithCli(
+        installRecord("1.3.0-rc.1", null),
+        "1.2.0",
+        "npm",
+        "/home/u/.local/bin/traycer",
+      ),
+      overrideHandlers: {
+        "host.update.check": () => ({
+          outcome: "ok" as const,
+          effectiveIncludePreReleases: true,
+          includePreReleasesSource: "installed-rc" as const,
+          manifest,
+        }),
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    const sentence =
+      "On host-a, run this command to prepare the host update: npm install -g @traycerai/cli@1.3.0-rc.4. This page rechecks while it is open, and Update now appears once the host accepts the update.";
+    await screen.findByText(sentence);
+    // Skipping floor acceptance after the unusable preferred stable would
+    // remove this selected RC remedy; with no installable fallback, it would
+    // not expose Update now. This visible npm-floor pin must turn RED.
+    expect(screen.getByRole("button", { name: "Copy command" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Update now" })).toBeNull();
+  });
+});
+
+// `stagedEntryOfferable` (host-overview-updates-state.ts): the ONE predicate
+// that gates both whether the panel OFFERS Force for a staged-wait version
+// and whether `installForce` actually DISPATCHES it - both read
+// `describeForceUpdateRefusal` for the staged version. A withdrawn or
+// asset-unavailable stage is never offered; the CLI would purge the parked
+// stage and then refuse the version anyway, so offering it could only ever
+// destroy the stage for nothing.
+describe("Overview updates — stagedEntryOfferable", () => {
+  it("a yanked staged entry is not offerable, and installForce refuses with the withdrawal text without dispatching", async () => {
+    const base = multiVersionManifest(["1.3.0"]);
+    const yankedEntry = { ...base.versions[0], yanked: true };
+    const manifest = { ...base, versions: [yankedEntry] };
+    const installCalls: Array<{ version: string; force: boolean }> = [];
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: false,
+      hostVersion: "1.2.0",
+      overrideHandlers: {
+        "host.update.check": () => ({
+          outcome: "ok" as const,
+          effectiveIncludePreReleases: false,
+          includePreReleasesSource: "stable-default" as const,
+          manifest,
+        }),
+        "host.update.install": (request) => {
+          installCalls.push({ version: request.version, force: request.force });
+          return { outcome: "accepted" as const, attemptId: null };
+        },
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    const rendered = renderUpdatesHook(
+      fixture.client,
+      "host-a",
+      "1.2.0",
+      "1.3.0",
+    );
+    await waitFor(() =>
+      expect(rendered.result.current.picker.awaitingFirstCheck).toBe(false),
+    );
+    // Falsification: check `entry.yanked` after the floor read instead of
+    // before in `describeForceUpdateRefusal`, and `stagedEntryOfferable`
+    // would still read false here (no floor either), but the failure text
+    // asserted below would be the "couldn't verify" catch-all instead of
+    // naming the withdrawal specifically.
+    expect(rendered.result.current.stagedEntryOfferable).toBe(false);
+
+    let returned = false;
+    const onSettled = vi.fn(() => {
+      expect(returned).toBe(false);
+    });
+    act(() => {
+      rendered.result.current.installForce("1.3.0", onSettled);
+      returned = true;
+    });
+    expect(onSettled).toHaveBeenCalledTimes(1);
+    expect(installCalls).toEqual([]);
+    expect(rendered.result.current.summary.failureDescription).toContain(
+      "v1.3.0 has been withdrawn and can't be installed on host-a.",
+    );
+    rendered.unmount();
+  });
+
+  it("a staged entry whose asset RESOLVED but is unavailable for this platform (not a floor) IS offerable - an already-staged version installs from the stage regardless", async () => {
+    // `describeForceUpdateRefusal` checks the CATALOG's disposition of the
+    // version (absent, yanked, unresolvable asset, CLI floor) - it never
+    // reads `asset.available` on its own. The CLI's own
+    // `discardIneligibleStagedVersion` purges a parked stage only when the
+    // catalog no longer lists the version or has yanked it; an already-
+    // staged target then short-circuits before any asset is resolved again,
+    // so a platform build the catalog has since marked unavailable still
+    // installs from the stage. Refusing the offer here would strand a
+    // downloaded update behind a control that has already vanished.
+    const base = multiVersionManifest(["1.3.0"]);
+    const unavailableEntry = {
+      ...base.versions[0],
+      platforms: {
+        "darwin-arm64": {
+          ...base.versions[0].platforms["darwin-arm64"],
+          available: false,
+          unavailableReason: "platform build withdrawn",
+        },
+      },
+    };
+    const manifest = { ...base, versions: [unavailableEntry] };
+    const installCalls: Array<{ version: string; force: boolean }> = [];
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: false,
+      hostVersion: "1.2.0",
+      overrideHandlers: {
+        "host.update.check": () => ({
+          outcome: "ok" as const,
+          effectiveIncludePreReleases: false,
+          includePreReleasesSource: "stable-default" as const,
+          manifest,
+        }),
+        "host.update.install": (request) => {
+          installCalls.push({ version: request.version, force: request.force });
+          return { outcome: "accepted" as const, attemptId: null };
+        },
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    const rendered = renderUpdatesHook(
+      fixture.client,
+      "host-a",
+      "1.2.0",
+      "1.3.0",
+    );
+    await waitFor(() =>
+      expect(rendered.result.current.picker.awaitingFirstCheck).toBe(false),
+    );
+    // Not a floor: `requiredCliVersion` is null on this entry, so a bug that
+    // gated `stagedEntryOfferable` on the floor alone would wrongly read
+    // false here.
+    expect(rendered.result.current.cliFloor).toBeNull();
+    expect(rendered.result.current.stagedEntryOfferable).toBe(true);
+
+    // Falsification: add an `assetUnavailableReason` refusal back to
+    // `describeForceUpdateRefusal` and `installCalls` below stays empty.
+    act(() => {
+      rendered.result.current.installForce("1.3.0", () => {});
+    });
+    await waitFor(() => {
+      expect(installCalls).toEqual([{ version: "1.3.0", force: true }]);
+    });
+    rendered.unmount();
+  });
+
+  it("a staged entry that is known, not yanked, with a usable asset and no floor is offerable (positive control)", async () => {
+    const manifest = multiVersionManifest(["1.3.0"]);
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: false,
+      hostVersion: "1.2.0",
+      overrideHandlers: {
+        "host.update.check": () => ({
+          outcome: "ok" as const,
+          effectiveIncludePreReleases: false,
+          includePreReleasesSource: "stable-default" as const,
+          manifest,
+        }),
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    const rendered = renderUpdatesHook(
+      fixture.client,
+      "host-a",
+      "1.2.0",
+      "1.3.0",
+    );
+    await waitFor(() =>
+      expect(rendered.result.current.picker.awaitingFirstCheck).toBe(false),
+    );
+    expect(rendered.result.current.stagedEntryOfferable).toBe(true);
+    rendered.unmount();
+  });
+
+  it("an unresolved platform asset (null platformKey against a multi-platform entry) is not offerable, and reads as 'couldn't verify'", async () => {
+    // CodeRabbit r3944197329: a `platformKey` this page cannot resolve is
+    // NOT the same claim as "the release can't install here" - it is a
+    // claim this page cannot make at all, so the refusal text has to be the
+    // generic "couldn't verify" catch-all, never the asset-unavailable text
+    // (which would assert a fact the code does not actually know).
+    //
+    // A null `platformKey` is not reachable through the panel itself - the
+    // Force offer is gated by this same `describeForceUpdateRefusal`
+    // predicate, so a person never sees an offer this dispatch would then
+    // refuse. This test pins the dispatch guard as a contract in its own
+    // right, independent of whatever gates the offer above it.
+    const base = multiVersionManifest(["1.3.0"]);
+    const multiPlatformEntry = {
+      ...base.versions[0],
+      platforms: {
+        ...base.versions[0].platforms,
+        "linux-x64": {
+          ...base.versions[0].platforms["darwin-arm64"],
+        },
+      },
+    };
+    const manifest = { ...base, versions: [multiPlatformEntry] };
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: false,
+      hostVersion: "1.2.0",
+      overrideHandlers: {
+        "host.update.check": () => ({
+          outcome: "ok" as const,
+          effectiveIncludePreReleases: false,
+          includePreReleasesSource: "stable-default" as const,
+          manifest,
+        }),
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    const queryClient = newQueryClient();
+    const rendered = renderHook(
+      () =>
+        useHostOverviewUpdates({
+          client: fixture.client,
+          hostName: "host-a",
+          hostId: "host-a",
+          runningVersion: "1.2.0",
+          activationDebt: null,
+          platformKey: null,
+          cliManifest: null,
+          isLocalMachine: false,
+          desktopUpdate: null,
+          stagedVersion: "1.3.0",
+          enabled: true,
+          checkDegrade: null,
+          installDegrade: null,
+          busy: false,
+        }),
+      {
+        wrapper: (props: { readonly children: ReactNode }) => (
+          <QueryClientProvider client={queryClient}>
+            {props.children}
+          </QueryClientProvider>
+        ),
+      },
+    );
+    await waitFor(() =>
+      expect(rendered.result.current.picker.awaitingFirstCheck).toBe(false),
+    );
+    expect(rendered.result.current.stagedEntryOfferable).toBe(false);
+
+    let returned = false;
+    const onSettled = vi.fn(() => {
+      expect(returned).toBe(false);
+    });
+    act(() => {
+      rendered.result.current.installForce("1.3.0", onSettled);
+      returned = true;
+    });
+    expect(onSettled).toHaveBeenCalledTimes(1);
+    expect(rendered.result.current.summary.failureDescription).toContain(
+      "Traycer couldn't verify that v1.3.0 can be installed on host-a.",
+    );
+    rendered.unmount();
+  });
+
+  it("a force refusal for a yanked staged version is retired only once a later check lists it un-yanked", async () => {
+    // Exercised through the hook directly (not the panel/dialog chrome) so
+    // this pins `retireForceRefusalIfRefuted`'s own predicate - a strictly
+    // NEWER successful check whose manifest no longer refuses the exact
+    // refused version - rather than incidental dialog wiring. Fake timers
+    // (as the sibling "rechecks a repaired manifest" panel test above also
+    // needs) guarantee `checkQuery.dataUpdatedAt` strictly increases between
+    // the refusal and each recheck; without that, the retire predicate's
+    // strict `>` comparison could tie and never fire.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const base = multiVersionManifest(["1.3.0"]);
+      let manifest: HostAvailableManifest = {
+        ...base,
+        versions: [{ ...base.versions[0], yanked: true }],
+      };
+      const fixture = buildOverviewHostFixture({
+        hostId: "host-a",
+        isLocalMachine: false,
+        hostVersion: "1.2.0",
+        overrideHandlers: {
+          "host.update.check": () =>
+            Promise.resolve({
+              outcome: "ok" as const,
+              effectiveIncludePreReleases: false,
+              includePreReleasesSource: "stable-default" as const,
+              manifest,
+            }),
+        },
+      });
+      recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+      const queryClient = newQueryClient();
+      const rendered = renderHook(
+        () =>
+          useHostOverviewUpdates({
+            client: fixture.client,
+            hostName: "host-a",
+            hostId: "host-a",
+            runningVersion: "1.2.0",
+            activationDebt: null,
+            platformKey: "darwin-arm64",
+            cliManifest: null,
+            isLocalMachine: false,
+            desktopUpdate: null,
+            stagedVersion: "1.3.0",
+            enabled: true,
+            checkDegrade: null,
+            installDegrade: null,
+            busy: false,
+          }),
+        {
+          wrapper: (props: { readonly children: ReactNode }) => (
+            <QueryClientProvider client={queryClient}>
+              {props.children}
+            </QueryClientProvider>
+          ),
+        },
+      );
+      await waitFor(() =>
+        expect(rendered.result.current.picker.awaitingFirstCheck).toBe(false),
+      );
+
+      act(() => {
+        rendered.result.current.installForce("1.3.0", () => {});
+      });
+      await waitFor(() =>
+        expect(rendered.result.current.summary.failureDescription).toContain(
+          "v1.3.0 has been withdrawn and can't be installed on host-a.",
+        ),
+      );
+
+      // A later successful check that STILL lists the version as yanked must
+      // NOT retire the refusal - the fact it was refused for has not changed.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000);
+        await queryClient.invalidateQueries();
+      });
+      await waitFor(() =>
+        expect(rendered.result.current.summary.failureDescription).toContain(
+          "v1.3.0 has been withdrawn and can't be installed on host-a.",
+        ),
+      );
+
+      // A later check that lists the SAME version un-yanked retires it - the
+      // fact the refusal named is no longer true.
+      manifest = {
+        ...base,
+        versions: [{ ...base.versions[0], yanked: false }],
+      };
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000);
+        await queryClient.invalidateQueries();
+      });
+      await waitFor(() =>
+        expect(rendered.result.current.summary.failureDescription).toBeNull(),
+      );
+      rendered.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+// The Overview's `legacyFacts` derivation (`legacy-update-facts.ts`): the
+// install RECORD is ahead of the running host. `describeCheckState` names
+// this "activation debt" and it outranks every catalog sentence except a
+// transient install failure - the summary should say so whether or not the
+// catalog ALSO has something newer than the installed version, and "Update
+// now" should track the INSTALLED version, not the running one.
+describe("Overview updates — activation debt", () => {
+  it("the debt sentence renders exactly, and Update now is absent when nothing beats the installed version", async () => {
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.3.0-rc.2",
+      installation: managedInstallation(
+        installRecord("1.3.0-rc.3", null),
+        null,
+      ),
+      overrideHandlers: {
+        "host.update.check": () =>
+          Promise.resolve({
+            outcome: "ok" as const,
+            effectiveIncludePreReleases: false,
+            includePreReleasesSource: "stable-default" as const,
+            manifest: multiVersionManifest(["1.3.0-rc.3"]),
+          }),
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    await screen.findByText(
+      "v1.3.0-rc.3 is installed — restart host to finish.",
+    );
+    // Falsification: comparing the catalog against the RUNNING version
+    // (1.3.0-rc.2) instead of the installed one would offer "Update now" for
+    // the very version already sitting on disk.
+    expect(screen.queryByRole("button", { name: "Update now" })).toBeNull();
+  });
+
+  it("the debt sentence stays, and Update now DOES appear when the catalog has something newer than the installed version", async () => {
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.3.0-rc.2",
+      installation: managedInstallation(
+        installRecord("1.3.0-rc.3", null),
+        null,
+      ),
+      overrideHandlers: {
+        "host.update.check": () =>
+          Promise.resolve({
+            outcome: "ok" as const,
+            effectiveIncludePreReleases: true,
+            includePreReleasesSource: "explicit-include" as const,
+            manifest: multiVersionManifest(["1.3.0-rc.4", "1.3.0-rc.3"]),
+          }),
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    // Debt outranks the catalog sentence even though there IS something to
+    // offer - see `describeCheckState`'s ordering comment.
+    await screen.findByText(
+      "v1.3.0-rc.3 is installed — restart host to finish.",
+    );
+    await screen.findByRole("button", { name: "Update now" });
+  });
+
+  it("host.getInstallationInfo's poll refreshes the debt card live, with no remount", async () => {
+    // Companion to the direct policy-table pin
+    // (host-method-policy-table.test.ts: "polls host.getInstallationInfo on a
+    // fixed 10s cadence, matching host.status") — that test proves the TABLE
+    // entry; this one proves the CONSEQUENCE reaches a mounted page. Driven
+    // through an explicit `invalidateQueries()` rather than fake timers,
+    // which fight this suite's real-timer TanStack Query scheduling; the
+    // 10s-cadence claim itself is covered by the policy-table pin, not here.
+    let installationCalls = 0;
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.3.0-rc.2",
+      overrideHandlers: {
+        "host.getInstallationInfo": () => {
+          installationCalls += 1;
+          return managedInstallation(
+            installRecord(
+              installationCalls === 1 ? "1.3.0-rc.2" : "1.3.0-rc.3",
+              null,
+            ),
+            null,
+          );
+        },
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    const { queryClient } = renderPanel();
+
+    // First read: the install record matches the running host - no debt, no
+    // card.
+    await waitFor(() => expect(installationCalls).toBeGreaterThan(0));
+    expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
+
+    await act(async () => {
+      await queryClient.invalidateQueries();
+    });
+
+    await screen.findByTestId("host-overview-operation-restart");
+  });
+});
+
+describe("Overview updates — record-leg liveness and entry-level floor gates", () => {
+  it("a failed installation read keeps the debt sentence as (last known) and withholds Update now, instead of re-offering the installed version", async () => {
+    // The catalog's comparison baseline is the facts as READ, qualified by
+    // the record leg's liveness - not the live-only facts the card's
+    // controls take. Erasing the facts on one failed poll dropped the
+    // baseline, and the region then re-offered the version that is already
+    // on disk as "available" with a live Update now, for bytes a failed poll
+    // did not change. Falsification: build `activationDebt` from
+    // `legacyFacts` (live-only) instead of `legacyFactsRead` in
+    // `host-overview-panel.tsx` and the (last known) sentence below becomes
+    // "v1.3.0-rc.3 is available." beside an Update now button.
+    let installationCalls = 0;
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.3.0-rc.2",
+      overrideHandlers: {
+        "host.getInstallationInfo": () => {
+          installationCalls += 1;
+          if (installationCalls === 2) {
+            throw new Error("host unreachable");
+          }
+          return managedInstallation(installRecord("1.3.0-rc.3", null), null);
+        },
+        "host.update.check": () => ({
+          outcome: "ok" as const,
+          effectiveIncludePreReleases: true,
+          includePreReleasesSource: "installed-rc" as const,
+          manifest: multiVersionManifest(["1.3.0-rc.3"]),
+        }),
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    const { queryClient } = renderPanel();
+
+    // Live debt: the record (rc.3) is ahead of the running host (rc.2), and
+    // the catalog's rc.3 is what is installed - no offer, a restart.
+    await waitFor(() => {
+      expect(screen.getByRole("status").textContent).toBe(
+        "v1.3.0-rc.3 is installed — restart host to finish.",
+      );
+    });
+    expect(screen.queryByRole("button", { name: "Update now" })).toBeNull();
+    await screen.findByTestId("host-overview-operation-restart");
+
+    // The record poll fails while the status read keeps succeeding beside
+    // it. The debt is retained as EVIDENCE (the comparison baseline), said
+    // as last known; the controls that would dispatch on it are withdrawn.
+    await act(async () => {
+      await queryClient.invalidateQueries();
+    });
+    await waitFor(() => expect(installationCalls).toBe(2));
+    await waitFor(() => {
+      expect(screen.getByRole("status").textContent).toBe(
+        "v1.3.0-rc.3 is installed (last known) — restart host to finish.",
+      );
+    });
+    expect(screen.queryByRole("button", { name: "Update now" })).toBeNull();
+    expect(screen.queryByTestId("host-overview-operation-restart")).toBeNull();
+
+    // The next successful read restores the live sentence and its control.
+    await act(async () => {
+      await queryClient.invalidateQueries();
+    });
+    await waitFor(() => expect(installationCalls).toBe(3));
+    await waitFor(() => {
+      expect(screen.getByRole("status").textContent).toBe(
+        "v1.3.0-rc.3 is installed — restart host to finish.",
+      );
+    });
+    await screen.findByTestId("host-overview-operation-restart");
+  });
+
+  it("a failed STATUS read qualifies the debt sentence as (last known) too - the running version it compares against is retained data", async () => {
+    // The debt is the record's installed version read against the status
+    // read's running version. A status poll that fails while the record
+    // poll keeps succeeding leaves `legacyFactsRead` built on a retained
+    // `hostVersion`, and the host may already have restarted onto the
+    // installed version - so the sentence must say "last known" exactly
+    // as it does for a failed record read (the pin above). Falsification:
+    // key `activationDebt.live` on `installationLive` alone and the
+    // qualified sentence below never appears.
+    let statusCalls = 0;
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.3.0-rc.2",
+      installation: managedInstallation(
+        installRecord("1.3.0-rc.3", null),
+        null,
+      ),
+      overrideHandlers: {
+        "host.status": () => {
+          statusCalls += 1;
+          if (statusCalls === 2) {
+            throw new Error("host unreachable");
+          }
+          return {
+            ready: true,
+            hostVersion: "1.3.0-rc.2",
+            protocolVersion: { major: 1, minor: 1 },
+            busy: false,
+            busySessionCount: 0,
+            updateProgress: null,
+            busyBreakdown: null,
+            updateOperation: null,
+            updateTransaction: null,
+          };
+        },
+        "host.update.check": () => ({
+          outcome: "ok" as const,
+          effectiveIncludePreReleases: true,
+          includePreReleasesSource: "installed-rc" as const,
+          manifest: multiVersionManifest(["1.3.0-rc.3"]),
+        }),
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    const { queryClient } = renderPanel();
+
+    await waitFor(() => {
+      expect(screen.getByRole("status").textContent).toBe(
+        "v1.3.0-rc.3 is installed — restart host to finish.",
+      );
+    });
+
+    await act(async () => {
+      await queryClient.invalidateQueries();
+    });
+    await waitFor(() => expect(statusCalls).toBe(2));
+    await waitFor(() => {
+      expect(screen.getByRole("status").textContent).toBe(
+        "v1.3.0-rc.3 is installed (last known) — restart host to finish.",
+      );
+    });
+    expect(screen.queryByRole("button", { name: "Update now" })).toBeNull();
+  });
+
+  it("a floor that is not a version renders help and does NOT arm the recheck; a readable floor beside it does", async () => {
+    // `CliFloor.repairable` is what the recheck is keyed on: the mounted
+    // 30 s recheck exists to notice a CLI upgrade clearing the floor, and no
+    // upgrade clears a requirement this page cannot read - so polling it
+    // would re-ask the host forever with nothing on screen able to end it.
+    // Falsification: drop `cliFloor.repairable` from `recheckFloor` in
+    // `host-overview-updates-state.ts` and the count climbs across the two
+    // quiet periods below.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let checks = 0;
+    let floorReadable = false;
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.2.0",
+      installation: managedInstallationWithCli(
+        installRecord("1.2.0", null),
+        "1.2.0",
+        "manual",
+        "/home/u/.local/bin/traycer",
+      ),
+      overrideHandlers: {
+        "host.update.check": () => {
+          checks += 1;
+          const floored = floorManifest("1.3.0", false);
+          const declared = floorReadable ? "1.3.0" : "v1.3.0";
+          return Promise.resolve({
+            outcome: "ok" as const,
+            effectiveIncludePreReleases: false,
+            includePreReleasesSource: "stable-default" as const,
+            manifest: {
+              ...floored,
+              versions: floored.versions.map((entry) => ({
+                ...entry,
+                requiredCliVersion: declared,
+                platforms: {
+                  "darwin-arm64": {
+                    ...entry.platforms["darwin-arm64"],
+                    unavailableReason: `Needs Traycer CLI ${declared} or newer (this host's CLI is 1.2.0).`,
+                  },
+                },
+              })),
+            },
+          });
+        },
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    // Help on screen, no command - and no recheck behind it.
+    await waitFor(() => expect(checks).toBe(1));
+    await waitForButton("Show installation help");
+    expect(screen.getByRole("status").textContent).toBe(
+      "Traycer couldn't verify the required command-line tools version on host-a.",
+    );
+    expect(screen.queryByRole("button", { name: "Copy command" })).toBeNull();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(31_000);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(31_000);
+    });
+    expect(checks).toBe(1);
+
+    // Positive control, same host: a READABLE floor renders the command and
+    // arms the recheck.
+    floorReadable = true;
+    fireEvent.click(await waitForButton("Check now"));
+    await waitFor(() => expect(checks).toBe(2));
+    await waitForButton("Copy command");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    await waitFor(() => expect(checks).toBe(3));
+
+    vi.useRealTimers();
+  });
+
+  it("Force update… is withheld for a staged version whose catalog entry declares a floor this page cannot read, even with the asset available", async () => {
+    // Staged bytes install whatever the asset's availability says: the
+    // CLI's already-staged short-circuit resolves no asset and applies no
+    // floor. So the Force gate reads the catalog ENTRY's own floor, apart
+    // from the asset's authored reason, and refuses one that is not a
+    // version - the executing CLI's verdict never reached it. A READABLE
+    // floor is left to the asset's verdict (`available` is the executing
+    // CLI's own comparison), which the positive control below relies on.
+    // Falsification: drop the `!isValidHostVersion(declaredFloor)` arm from
+    // `describeForceUpdateRefusal` and the first absence goes RED.
+    let declaredFloor = "v1.3.0";
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      busy: true,
+      busySessionCount: 1,
+      hostVersion: "1.2.0",
+      installation: managedInstallationWithCliAndStage(
+        installRecord("1.2.0", null),
+        stagedRecord("1.3.0"),
+      ),
+      overrideHandlers: {
+        "host.update.check": () => {
+          const cleared = floorManifest("1.3.0", true);
+          return Promise.resolve({
+            outcome: "ok" as const,
+            effectiveIncludePreReleases: false,
+            includePreReleasesSource: "stable-default" as const,
+            manifest: {
+              ...cleared,
+              versions: cleared.versions.map((entry) => ({
+                ...entry,
+                requiredCliVersion: declaredFloor,
+              })),
+            },
+          });
+        },
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    const card = await screen.findByTestId("host-overview-operation-card");
+    expect(card.textContent).toContain("Update waits for 1 session to finish");
+    // The check has answered (the region left "Checking…") before the
+    // absence is read, so this is the gate's decision, not a loading frame.
+    await waitFor(() => {
+      expect(screen.getByRole("status").textContent).not.toBe(
+        "Checking for updates…",
+      );
+    });
+    expect(
+      screen.queryByTestId("host-overview-operation-force-update"),
+    ).toBeNull();
+
+    // Positive control: the same entry with a readable floor the asset
+    // clears offers Force.
+    declaredFloor = "1.3.0";
+    fireEvent.click(await waitForButton("Check now"));
+    await screen.findByTestId("host-overview-operation-force-update");
   });
 });

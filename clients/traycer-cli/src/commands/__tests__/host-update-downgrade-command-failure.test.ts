@@ -2,12 +2,15 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CommandContext } from "../../runner/runner";
 import type { HostInstallRecord } from "../../manifest/host-install";
 import type { HostUpdateProgress } from "../../host/update-progress-marker";
+import { CLI_ERROR_CODES, cliError } from "../../runner/errors";
 
 const mocks = vi.hoisted(() => ({
   installHostDowngradeMock: vi.fn(),
   readHostInstallRecordMock: vi.fn(),
-  writeUpdateProgressMarkerMock: vi.fn(),
+  claimUpdateProgressMarkerBeforeLockMock: vi.fn(),
+  createUpdateProgressMarkerIfAbsentMock: vi.fn(),
   deleteUpdateProgressMarkerMock: vi.fn(),
+  deleteUpdateProgressMarkerIfUnchangedMock: vi.fn(),
   replaceUpdateProgressMarkerMock: vi.fn(),
   probeHostHealthMock: vi.fn(),
   installDispatchAckStamperMock: vi.fn(),
@@ -22,11 +25,20 @@ vi.mock("../../manifest/host-install", () => ({
 }));
 
 vi.mock("../../host/update-progress-marker", () => ({
-  writeUpdateProgressMarker: mocks.writeUpdateProgressMarkerMock,
+  claimUpdateProgressMarkerBeforeLock:
+    mocks.claimUpdateProgressMarkerBeforeLockMock,
+  createUpdateProgressMarkerIfAbsent:
+    mocks.createUpdateProgressMarkerIfAbsentMock,
   deleteUpdateProgressMarker: mocks.deleteUpdateProgressMarkerMock,
   readUpdateProgressMarker: async () => null,
-  deleteUpdateProgressMarkerIfUnchanged: async () => "absent",
+  deleteUpdateProgressMarkerIfUnchanged:
+    mocks.deleteUpdateProgressMarkerIfUnchangedMock,
   replaceUpdateProgressMarkerIfUnchanged: mocks.replaceUpdateProgressMarkerMock,
+  // No writer-liveness fixture here (this suite never exercises the
+  // takeover/pre-lock-replace paths that consult it) - a `failed` has no
+  // writer by construction, everything else is treated as live.
+  updateProgressRecordHasLiveWriter: (record: HostUpdateProgress) =>
+    record.state !== "failed",
   progressRecord: (fields: {
     state: "updating" | "failed";
     error: string | null;
@@ -35,6 +47,7 @@ vi.mock("../../host/update-progress-marker", () => ({
     ...fields,
     updatedAt: new Date().toISOString(),
     writerId: "test-writer",
+    writerStartIdentity: null,
   }),
   sameProgress: () => true,
 }));
@@ -115,6 +128,9 @@ describe("host update explicit downgrade failure", () => {
     mocks.installHostDowngradeMock.mockRejectedValue(
       new Error("downgrade commit failed"),
     );
+    mocks.claimUpdateProgressMarkerBeforeLockMock.mockResolvedValue({
+      outcome: "published",
+    });
     mocks.replaceUpdateProgressMarkerMock.mockResolvedValue("replaced");
 
     await expect(
@@ -126,10 +142,14 @@ describe("host update explicit downgrade failure", () => {
       })(fakeCtx()),
     ).rejects.toThrow("downgrade commit failed");
 
-    // Only the initial `updating` write happens unconditionally; the
+    // The initial `updating` is the pre-lock CLAIM (conditional, once); the
     // `failed` stamp goes through the compare-and-swap against it.
-    expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenCalledTimes(1);
-    expect(mocks.writeUpdateProgressMarkerMock).toHaveBeenNthCalledWith(
+    expect(mocks.claimUpdateProgressMarkerBeforeLockMock).toHaveBeenCalledTimes(
+      1,
+    );
+    expect(
+      mocks.claimUpdateProgressMarkerBeforeLockMock,
+    ).toHaveBeenNthCalledWith(
       1,
       "production",
       expect.objectContaining({
@@ -149,6 +169,53 @@ describe("host update explicit downgrade failure", () => {
         error: "downgrade commit failed",
       }),
     );
+    expect(mocks.probeHostHealthMock).not.toHaveBeenCalled();
+    expect(mocks.deleteUpdateProgressMarkerMock).not.toHaveBeenCalled();
+  });
+
+  it("HOST_BUSY from installHostDowngrade parks: deletes the written updating marker and never stamps failed", async () => {
+    mocks.installDispatchAckStamperMock.mockReturnValue(null);
+    mocks.readHostInstallRecordMock.mockResolvedValue(installedRecord);
+    mocks.installHostDowngradeMock.mockRejectedValue(
+      cliError({
+        code: CLI_ERROR_CODES.HOST_BUSY,
+        message: "The running host has work in progress",
+        details: null,
+        exitCode: 1,
+      }),
+    );
+    mocks.claimUpdateProgressMarkerBeforeLockMock.mockResolvedValue({
+      outcome: "published",
+    });
+    mocks.deleteUpdateProgressMarkerIfUnchangedMock.mockResolvedValue(
+      "cleared",
+    );
+
+    await expect(
+      buildHostUpdateCommand({
+        allowDowngrade: true,
+        force: false,
+        versionRequest: "1.2.0",
+        ackNonce: null,
+      })(fakeCtx()),
+    ).rejects.toMatchObject({ code: CLI_ERROR_CODES.HOST_BUSY });
+
+    // Only the initial `updating` claim happens - the park withdraws it
+    // rather than stamping a second, `failed` one.
+    expect(mocks.claimUpdateProgressMarkerBeforeLockMock).toHaveBeenCalledTimes(
+      1,
+    );
+    const written = mocks.claimUpdateProgressMarkerBeforeLockMock.mock
+      .calls[0][1] as HostUpdateProgress;
+    expect(written.state).toBe("updating");
+    expect(written.targetVersion).toBe("1.2.0");
+    expect(
+      mocks.deleteUpdateProgressMarkerIfUnchangedMock,
+    ).toHaveBeenCalledWith("production", written);
+    // Falsification: drop the HOST_BUSY arm in the catch (fall through to
+    // the generic failure branch) and this goes red - `replace…` would be
+    // called with a `failed` record instead.
+    expect(mocks.replaceUpdateProgressMarkerMock).not.toHaveBeenCalled();
     expect(mocks.probeHostHealthMock).not.toHaveBeenCalled();
     expect(mocks.deleteUpdateProgressMarkerMock).not.toHaveBeenCalled();
   });

@@ -37,6 +37,11 @@ import type {
   ConditionPollLane,
   ErasedConditionPollPolicy,
 } from "@/lib/host-rpc-policy/host-method-policy-table";
+import type {
+  HostAvailableManifest,
+  HostUpdateCheckResponseV11,
+} from "@traycer/protocol/host/maintenance/index";
+import { UPDATE_CHECK_CLI_RECOVERY_POLL_LANE } from "@/lib/host-rpc-policy/host-method-policy-table";
 
 const typedProvidersClassifier = (
   data: ResponseOfMethod<HostRpcRegistry, "providers.list"> | undefined,
@@ -51,6 +56,58 @@ const typedToErasedPolicy: ErasedConditionPollPolicy<"providers.list"> = {
   staleDataErrorLane: PROVIDERS_STALE_ERROR_POLL_LANE,
   resetLaneIds: new Set([PROVIDERS_STEADY_POLL_LANE.id]),
 };
+
+function floorManifest(options: {
+  latest: string;
+  floorVersion: string;
+  floorReason: string;
+  yanked: boolean;
+  floorSha256: string;
+}): HostAvailableManifest {
+  const { latest, floorVersion, floorReason, yanked, floorSha256 } = options;
+  const entry = (version: string, refused: boolean) => ({
+    version,
+    releasedAt: "2026-09-06T00:00:00Z",
+    releaseNotesUrl: "https://example.invalid/notes",
+    yanked: refused ? yanked : false,
+    deprecationReason: null,
+    requiredCliVersion: refused ? "1.3.0" : null,
+    platforms: {
+      "darwin-arm64": {
+        available: !refused,
+        unavailableReason: refused ? floorReason : null,
+        url: "https://example.invalid/host.tar.gz",
+        sizeBytes: 100,
+        sha256: refused ? floorSha256 : "a".repeat(64),
+        signatureUrl: "https://example.invalid/host.tar.gz.minisig",
+        signatureAlgorithm: "minisign" as const,
+        publicKeyId: "key-1",
+      },
+    },
+  });
+  const versions = [entry(latest, latest === floorVersion)];
+  if (floorVersion !== latest) {
+    versions.push(entry(floorVersion, true));
+  }
+  return {
+    schemaVersion: 1,
+    generatedAt: "2026-09-06T00:00:00Z",
+    latest,
+    versions,
+  };
+}
+
+function checkResponse(
+  manifest: HostAvailableManifest,
+  source: "stable-default" | "installed-rc",
+): HostUpdateCheckResponseV11 {
+  return {
+    outcome: "ok",
+    manifest,
+    effectiveIncludePreReleases: source === "installed-rc",
+    includePreReleasesSource: source,
+  };
+}
 
 // @ts-expect-error The phantom method field must reject a policy under another key.
 const wrongKeyPolicy: ErasedConditionPollPolicy<"agent.gui.listHarnesses"> =
@@ -186,6 +243,59 @@ describe("host method poll policy table", () => {
     expect(intervalMs).toBe(15 * 60 * 1_000);
   });
 
+  describe("host.update.check recovery lanes", () => {
+    const policy = HOST_METHOD_POLL_TABLE["host.update.check"].poll;
+
+    it("polls only the CLI's absence: a floor-refused catalog row is not a lane here", () => {
+      // The CLI-floor recheck used to be a lane in this table, keyed on the
+      // response alone. Which floored row the Overview offers a remedy for is
+      // its summary walk's answer - the matching stable and the later RCs on
+      // the INSTALLED line - and the response carries no installed version,
+      // so the classifier kept a 30 s cadence on floored rows no remedy named
+      // (any row of an `installed-rc` catalog, another release line included).
+      // The recheck belongs to the Overview now (`useHostOverviewUpdates`,
+      // keyed on the remedy it renders). Restoring a floor arm here would
+      // classify either response below to a lane and turn this pin RED.
+      const flooredLatest = checkResponse(
+        floorManifest({
+          latest: "1.3.0",
+          floorVersion: "1.3.0",
+          floorReason:
+            "Needs Traycer CLI 1.3.0 or newer (this host's CLI is 1.2.0).",
+          yanked: false,
+          floorSha256: "",
+        }),
+        "stable-default",
+      );
+      expect(policy.classify(flooredLatest)).toBe(false);
+      const flooredRcOnAnyLine = checkResponse(
+        floorManifest({
+          latest: "1.2.0",
+          floorVersion: "1.4.0-rc.1",
+          floorReason:
+            "Needs Traycer CLI 1.3.0 or newer (this host's CLI is 1.2.0).",
+          yanked: false,
+          floorSha256: "",
+        }),
+        "installed-rc",
+      );
+      expect(policy.classify(flooredRcOnAnyLine)).toBe(false);
+    });
+
+    it("preserves the existing cli-unavailable recovery lane", () => {
+      // Removing the cli-unavailable arm would classify this response to
+      // `false` and lose the one DATA-driven recovery poll this table still
+      // owns for the method (its two error lanes are separate); this lane pin
+      // must turn RED under that ablation.
+      const response: HostUpdateCheckResponseV11 = {
+        outcome: "cli-unavailable",
+      };
+      expect(policy.classify(response)).toBe(
+        UPDATE_CHECK_CLI_RECOVERY_POLL_LANE,
+      );
+    });
+  });
+
   // `host.status` used to be un-polled entirely. It is now opted in
   // (`poll: { kind: "fixed", intervalMs: 10_000 }`) for one caller: the
   // Overview's drain affordance, whose `liveBusySessionCount` must stay a LIVE
@@ -199,6 +309,19 @@ describe("host method poll policy table", () => {
     // retained `liveBusySessionCount` to `null` — inverting the two would make
     // a healthy query flicker between live and unknown on every tick.
     expect(intervalMs).toBeLessThan(30_000);
+  });
+
+  // `host.getInstallationInfo` used to have no cadence at all. It is now
+  // opted in for one caller: the Overview derives the two record-derived
+  // parks (`legacy-update-facts.ts`) from the install/staged records beside
+  // the live `host.status` read, and those records change UNDER a mounted
+  // page — a detached `traycer host update` commits or parks, Desktop's
+  // launch converge swaps bytes — so a read that only goes stale on its own
+  // never observes them.
+  it("polls host.getInstallationInfo on a fixed 10s cadence, matching host.status", () => {
+    const policy = HOST_METHOD_POLL_TABLE["host.getInstallationInfo"].poll;
+    const intervalMs: number = policy.intervalMs;
+    expect(intervalMs).toBe(10_000);
   });
 
   it("consumes condition cache data as unknown", () => {

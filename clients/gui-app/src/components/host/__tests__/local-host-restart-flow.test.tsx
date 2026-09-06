@@ -377,6 +377,9 @@ describe("<LocalHostRestartFlow /> - host runtime binding present, local host re
       const busyDialog = await screen.findByTestId(
         "host-busy-force-defer-dialog",
       );
+      // The same dialog serves the update banner's Force; `data-purpose`
+      // is what tells a page test which of the two it opened.
+      expect(busyDialog.dataset.purpose).toBe("restart");
       expect(busyDialog.textContent).toContain(busyMessage(subject));
       expect(
         screen.getByRole("button", { name: "Force restart" }),

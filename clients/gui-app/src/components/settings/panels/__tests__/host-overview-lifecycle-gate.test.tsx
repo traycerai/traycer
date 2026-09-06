@@ -325,6 +325,53 @@ describe("HostOverviewPanel — lifecycle gate matrix (G1)", () => {
     });
   });
 
+  it("(d2) a pre-@1.3 peer's COARSE 'updating' marker releases the gate once the read goes unhealthy — the retained wire field must not outlive the projection's demotion", async () => {
+    // (c) for the coarse leg. The pre-@1.3 fallback used to read the RAW
+    // `view.updateProgress.state` off the retained response, which TanStack
+    // keeps verbatim across a failed background refetch - so an old host whose
+    // updater crashed mid-swap (marker left at `updating`, nothing alive to
+    // clear it) locked Restart for as long as the response was retained. The
+    // fallback now reads the PROJECTED kind, which `projectFleetUpdateView`
+    // demotes to `unknown` on an unhealthy read.
+    //
+    // Falsification: put `view.updateProgress?.state === "updating"` back in
+    // `host-overview-panel.tsx`'s `updateInFlight` fallback and the second
+    // assertion goes red while (d) above stays green.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let statusCalls = 0;
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      overrideHandlers: {
+        "host.status": () => {
+          statusCalls += 1;
+          if (statusCalls === 1) {
+            return statusWith(null, {
+              updateProgress: { state: "updating", error: null },
+            });
+          }
+          throw new Error("host unreachable");
+        },
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    // Healthy read: the released behaviour, gate HOLDS (same as (d)).
+    await waitFor(async () => {
+      expect(await editNameDisabled()).toBe(true);
+    });
+
+    // Past the 10s baseline poll: the refetch fails and the `updating`
+    // response is retained. The projection demotes it; the gate must follow.
+    await vi.advanceTimersByTimeAsync(11_000);
+    await waitFor(async () => {
+      expect(await editNameDisabled()).toBe(false);
+    });
+  });
+
   it("(c) THE DEFECT ITSELF — a retained active status whose READ THEN GOES UNHEALTHY must release the gate, and an already-open restart confirmation must STAY open", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     let statusCalls = 0;
@@ -468,5 +515,54 @@ describe("HostOverviewPanel — lifecycle gate matrix (G1)", () => {
     // controls rather than merely disabling them.
     expect(screen.queryByTestId("host-overview-edit-name")).toBeNull();
     expect(screen.queryByTestId("host-overview-menu")).toBeNull();
+  });
+
+  it("(c3) an open restart confirmation CLOSES when the scope turns unusable — the withdrawal of the Restart control, one commit late", async () => {
+    // `host-overview-panel.tsx`: `if (!usable && restartConfirm ===
+    // "cooperative") closeRestartConfirm();`. The control that OPENS this dialog is
+    // already withdrawn on `!usable` (c2's own assertion), but a confirmation
+    // opened while the scope was still usable is not touched by that
+    // withdrawal — answered, it would dispatch `host.restart` over a client
+    // the scope no longer vouches for. Falsification: comment out that `if`
+    // in the panel and the final `waitFor` below goes red while the dialog
+    // stays on screen.
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      overrideHandlers: {
+        // No active attempt (`updateOperation: null`) and no coarse marker,
+        // so the lifecycle gate is released and Restart is enabled from the
+        // first render.
+        "host.status": () => statusWith(null, undefined),
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    const panel = renderPanelPersistent();
+
+    await screen.findByTestId("host-overview-edit-name");
+    expect(await restartMenuAriaDisabled()).not.toBe("true");
+    fireEvent.click(screen.getByTestId("host-overview-restart"));
+    await screen.findByTestId("confirm-destructive-dialog");
+
+    // Control: rerendering with the scope still usable keeps the dialog
+    // open — otherwise the assertion below would prove nothing about
+    // `usable` specifically.
+    panel.rerender();
+    expect(screen.getByTestId("confirm-destructive-dialog")).toBeTruthy();
+
+    // THE FIX: the scope turns unusable — same predicate (c2) demotes the
+    // operation card on — and the already-open confirmation closes, one
+    // commit late with the controls that open it.
+    scopeOverrides.current = {
+      ...scopeFrom("host-a", fixture),
+      status: "unreachable",
+    };
+    panel.rerender();
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull();
+    });
   });
 });
