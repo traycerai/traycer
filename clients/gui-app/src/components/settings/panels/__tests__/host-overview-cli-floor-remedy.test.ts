@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import type { CliInstallSource } from "@traycer/protocol/config/installation-records";
+import {
+  CLI_NPM_PACKAGE_NAME,
+  PACKAGE_MANAGER_UPGRADE_COMMAND,
+  type CliInstallSource,
+} from "@traycer/protocol/config/installation-records";
 import {
   CLI_FLOOR_REMEDY_ACTION_KINDS,
   describeCliFloorRemedy,
@@ -187,6 +191,10 @@ describe("describeCliFloorRemedy", () => {
       "desktop" | "manual"
     >[]) {
       for (const isLocalMachine of [true, false]) {
+        const command =
+          source === "npm"
+            ? `npm install -g ${CLI_NPM_PACKAGE_NAME}@1.3.0`
+            : PACKAGE_MANAGER_COMMANDS[source];
         const result = describeCliFloorRemedy(
           input({
             source,
@@ -200,11 +208,154 @@ describe("describeCliFloorRemedy", () => {
           {
             kind: "copy-command",
             label: "Copy command",
-            command: PACKAGE_MANAGER_COMMANDS[source],
+            command,
           },
         ]);
-        expect(result.sentence).toContain(PACKAGE_MANAGER_COMMANDS[source]);
+        expect(result.sentence).toContain(command);
       }
+    }
+  });
+
+  it("pins the shared npm package constant and stable command table", () => {
+    // Mutating CLI_NPM_PACKAGE_NAME or the generic npm @latest suffix would
+    // make these shared literal pins RED before remedy-specific interpolation.
+    expect(CLI_NPM_PACKAGE_NAME).toBe("@traycerai/cli");
+    expect(PACKAGE_MANAGER_UPGRADE_COMMAND).toEqual({
+      homebrew: "brew upgrade traycer",
+      npm: "npm install -g @traycerai/cli@latest",
+      winget: "winget upgrade Traycer.CLI",
+      scoop: "scoop update traycer-cli",
+      apt: "sudo apt update && sudo apt install --only-upgrade traycer-cli",
+      rpm: "sudo dnf upgrade traycer-cli",
+    });
+  });
+
+  it("uses exact package-manager floors and publisher-specific prerelease guidance", () => {
+    const packageManagerRows = [
+      {
+        source: "homebrew" as const,
+        stable: "brew upgrade traycer",
+        prerelease: "brew upgrade traycer",
+        rc: "brew upgrade traycer",
+        missing: "brew upgrade traycer",
+        build: "brew upgrade traycer",
+      },
+      {
+        source: "npm" as const,
+        stable: "npm install -g @traycerai/cli@1.3.0",
+        prerelease: "npm install -g @traycerai/cli@1.3.0-beta.1",
+        rc: "npm install -g @traycerai/cli@1.3.0-rc.4",
+        missing: "npm install -g @traycerai/cli@latest",
+        build: "npm install -g @traycerai/cli@1.3.0+build.7",
+      },
+      {
+        source: "winget" as const,
+        stable: "winget upgrade Traycer.CLI",
+        prerelease: null,
+        rc: null,
+        missing: "winget upgrade Traycer.CLI",
+        build: "winget upgrade Traycer.CLI",
+      },
+      {
+        source: "scoop" as const,
+        stable: "scoop update traycer-cli",
+        prerelease: null,
+        rc: null,
+        missing: "scoop update traycer-cli",
+        build: "scoop update traycer-cli",
+      },
+      {
+        source: "apt" as const,
+        stable:
+          "sudo apt update && sudo apt install --only-upgrade traycer-cli",
+        prerelease: null,
+        rc: null,
+        missing:
+          "sudo apt update && sudo apt install --only-upgrade traycer-cli",
+        build: "sudo apt update && sudo apt install --only-upgrade traycer-cli",
+      },
+      {
+        source: "rpm" as const,
+        stable: "sudo dnf upgrade traycer-cli",
+        prerelease: null,
+        rc: null,
+        missing: "sudo dnf upgrade traycer-cli",
+        build: "sudo dnf upgrade traycer-cli",
+      },
+    ] as const;
+    const floorCases = [
+      { key: "stable" as const, requiredVersion: "1.3.0" },
+      { key: "prerelease" as const, requiredVersion: "1.3.0-beta.1" },
+      { key: "rc" as const, requiredVersion: "1.3.0-rc.4" },
+      { key: "missing" as const, requiredVersion: null },
+      { key: "build" as const, requiredVersion: "1.3.0+build.7" },
+    ] as const;
+    const cases = [true, false].flatMap((isLocalMachine) =>
+      packageManagerRows.flatMap((row) =>
+        floorCases.map((floorCase) => ({
+          isLocalMachine,
+          requiredVersion: floorCase.requiredVersion,
+          row,
+          floorKey: floorCase.key,
+        })),
+      ),
+    );
+
+    for (const testCase of cases) {
+      const command = testCase.row[testCase.floorKey];
+      const result = describeCliFloorRemedy(
+        input({
+          source: testCase.row.source,
+          platform: "darwin-arm64",
+          isLocalMachine: testCase.isLocalMachine,
+          desktopUpdate: null,
+          overrides: { requiredCliVersion: testCase.requiredVersion },
+        }),
+      );
+      if (command === null) {
+        // Removing the publisher guard would offer a command for a feed that
+        // does not publish prereleases; this help-only pin must turn RED.
+        expect(result.sentence).toBe(
+          `Traycer CLI prereleases aren't published through ${testCase.row.source}. Install Traycer CLI ${testCase.requiredVersion} another way, then select Check now.`,
+        );
+        expect(result.actions).toEqual([
+          { kind: "help", label: "Show installation help" },
+        ]);
+      } else {
+        // Replacing exact npm floors with the generic latest table, or
+        // disabling the Homebrew/npm prerelease exemptions, makes these
+        // concrete package-manager command pins RED.
+        // The npm missing-floor row additionally turns RED if only the
+        // requiredVersion !== null guard is removed and @null is interpolated.
+        expect(result.actions).toEqual([
+          { kind: "copy-command", label: "Copy command", command },
+        ]);
+        expect(result.sentence).toContain(command);
+      }
+    }
+
+    for (const requiredVersion of [
+      "1.3.0; rm -rf /",
+      "1.3.0' && echo unsafe",
+      "v1.3.0",
+    ]) {
+      const result = describeCliFloorRemedy(
+        input({
+          source: "npm",
+          platform: "darwin-arm64",
+          isLocalMachine: true,
+          desktopUpdate: null,
+          overrides: { requiredCliVersion: requiredVersion },
+        }),
+      );
+      // Removing the isValidHostVersion guard would interpolate shell text
+      // into the npm command; these malformed-floor help pins must turn RED.
+      expect(result.sentence).toBe(
+        "Traycer couldn't verify the required command-line tools version on build-host.",
+      );
+      expect(result.actions).toEqual([
+        { kind: "help", label: "Show installation help" },
+      ]);
     }
   });
 

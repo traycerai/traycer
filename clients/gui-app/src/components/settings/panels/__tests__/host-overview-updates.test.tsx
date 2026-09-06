@@ -438,7 +438,57 @@ function lowerRcFallbackManifest(): HostAvailableManifest {
     schemaVersion: 1,
     generatedAt: "2026-09-06T00:00:00Z",
     latest: "1.3.0",
-    versions: [stableFloor, rc],
+    versions: [stableFloor, { ...rc, requiredCliVersion: "1.2.0" }],
+  };
+}
+
+const SELECTED_RC_CASES = [
+  {
+    name: "a yanked floor-refused stable",
+    stableYanked: true,
+    stableReason:
+      "Needs Traycer CLI 1.3.0 or newer (this host's CLI is 1.2.0).",
+  },
+  {
+    name: "a non-floor unavailable stable",
+    stableYanked: false,
+    stableReason: "platform build withdrawn",
+  },
+] as const;
+
+type SelectedRcCase = (typeof SELECTED_RC_CASES)[number];
+
+function selectedRcManifest(testCase: SelectedRcCase): HostAvailableManifest {
+  const stableBase = multiVersionManifest(["1.3.0"]).versions[0];
+  const rcBase = multiVersionManifest(["1.3.0-rc.2"]).versions[0];
+  const stable = {
+    ...stableBase,
+    yanked: testCase.stableYanked,
+    requiredCliVersion: "1.3.0",
+    platforms: {
+      "darwin-arm64": {
+        ...stableBase.platforms["darwin-arm64"],
+        available: false,
+        unavailableReason: testCase.stableReason,
+      },
+    },
+  };
+  const rc = {
+    ...rcBase,
+    requiredCliVersion: "1.3.0-rc.4",
+    platforms: {
+      "darwin-arm64": {
+        ...rcBase.platforms["darwin-arm64"],
+        available: false,
+        unavailableReason:
+          "Needs Traycer CLI 1.3.0-rc.4 or newer (this host's CLI is 1.2.0).",
+      },
+    },
+  };
+  return {
+    ...multiVersionManifest(["1.3.0", "1.3.0-rc.2"]),
+    latest: "1.3.0",
+    versions: [stable, rc],
   };
 }
 
@@ -1749,6 +1799,69 @@ describe("Overview updates — CLI floor remedy", () => {
     ).toBeTruthy();
   });
 
+  it("does not offer a CLI repair for a malformed required version reason", async () => {
+    const requiredCliVersion = "1.3.0; npm install -g @traycerai/cli@latest";
+    const base = floorManifest("1.3.0", false);
+    const baseEntry = base.versions[0];
+    const malformedManifest: HostAvailableManifest = {
+      ...base,
+      versions: [
+        {
+          ...baseEntry,
+          requiredCliVersion,
+          platforms: {
+            "darwin-arm64": {
+              ...baseEntry.platforms["darwin-arm64"],
+              unavailableReason: `host registry: version '1.3.0' declares requiredCliVersion ${JSON.stringify(requiredCliVersion)}, which is not a version this CLI can compare against. The manifest is wrong; do not work around it by installing a different version.`,
+            },
+          },
+        },
+      ],
+    };
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.2.0",
+      installation: managedInstallationWithCli(
+        installRecord("1.2.0", null),
+        "1.2.0",
+        "manual",
+        "/home/u/.local/bin/traycer",
+      ),
+      overrideHandlers: {
+        "host.update.check": () => ({
+          outcome: "ok" as const,
+          effectiveIncludePreReleases: false,
+          includePreReleasesSource: "stable-default" as const,
+          manifest: malformedManifest,
+        }),
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    const rendered = renderUpdatesHook(fixture.client, "host-a", "1.2.0", null);
+    await waitFor(() =>
+      expect(rendered.result.current.picker.awaitingFirstCheck).toBe(false),
+    );
+    // Broadening readCliFloor to every unavailable asset would misclassify
+    // this malformed reason as a repairable floor; these null hook fields must
+    // turn RED under that GUI predicate ablation.
+    expect(rendered.result.current.cliFloor).toBeNull();
+    expect(rendered.result.current.summary.remedy).toBeNull();
+    rendered.unmount();
+
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+    await screen.findByText(
+      "v1.3.0 is available, but host-a can't install it.",
+    );
+    expect(screen.queryByRole("button", { name: "Copy command" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Show installation help" }),
+    ).toBeNull();
+    expect(screen.queryByRole("button", { name: "Update now" })).toBeNull();
+  });
+
   it("does not classify a withdrawn platform build with a retained SHA as a floor", async () => {
     const withdrawn = floorManifest("1.3.0", false);
     const fixture = buildOverviewHostFixture({
@@ -2057,10 +2170,12 @@ describe("Overview updates — CLI floor remedy", () => {
     await waitFor(() =>
       expect(rendered.result.current.cliFloor).not.toBeNull(),
     );
-    // Removing only the cliFloor suppression would expose the lower RC's
-    // offerable fallback as Update now; this non-vacuous hook pin must RED.
+    // Dropping `candidate.cliFloor !== null` in offerableLatestVersion would
+    // advertise this selected floored stable as Update now; this non-vacuous
+    // hook pin must RED at the actual candidate gate.
     expect(rendered.result.current.summary.updatableVersion).toBeNull();
     expect(rendered.result.current.summary.remedy).not.toBeNull();
+    expect(rendered.result.current.cliFloor?.requiredCliVersion).toBe("1.3.0");
     rendered.unmount();
 
     const yankedManifestBase = lowerRcFallbackManifest();
@@ -2100,9 +2215,9 @@ describe("Overview updates — CLI floor remedy", () => {
         "1.3.0-rc.2",
       ),
     );
-    // Removing !entry.yanked from the summary target would misclassify this
-    // yanked stable floor and hide the available RC fallback; this negative
-    // summary pin must turn RED under that source-predicate ablation.
+    // Removing `entry.yanked` from selectSummaryCandidate would misclassify
+    // this yanked stable floor and hide the available RC fallback; this
+    // negative summary pin must turn RED under that source-predicate ablation.
     expect(yankedRendered.result.current.cliFloor).toBeNull();
     expect(yankedRendered.result.current.summary.remedy).toBeNull();
     expect(yankedRendered.result.current.stagedFloor).not.toBeNull();
@@ -2124,6 +2239,133 @@ describe("Overview updates — CLI floor remedy", () => {
       "v1.3.0 needs Traycer CLI 1.3.0 or newer on host-a.",
     );
     yankedRendered.unmount();
+  });
+
+  it("keeps an installable stable target ahead of a later floor-refused RC", async () => {
+    const stable = multiVersionManifest(["1.3.0"]).versions[0];
+    const rcBase = multiVersionManifest(["1.3.0-rc.2"]).versions[0];
+    const rc = {
+      ...rcBase,
+      requiredCliVersion: "1.4.0",
+      platforms: {
+        "darwin-arm64": {
+          ...rcBase.platforms["darwin-arm64"],
+          available: false,
+          unavailableReason:
+            "Needs Traycer CLI 1.4.0 or newer (this host's CLI is 1.2.0).",
+        },
+      },
+    };
+    const manifest: HostAvailableManifest = {
+      ...multiVersionManifest(["1.3.0", "1.3.0-rc.2"]),
+      latest: "1.3.0",
+      versions: [stable, rc],
+    };
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: false,
+      hostVersion: "1.3.0-rc.1",
+      overrideHandlers: {
+        "host.update.check": () => ({
+          outcome: "ok" as const,
+          effectiveIncludePreReleases: true,
+          includePreReleasesSource: "installed-rc" as const,
+          manifest,
+        }),
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    const rendered = renderUpdatesHook(
+      fixture.client,
+      "host-a",
+      "1.3.0-rc.1",
+      null,
+    );
+
+    await waitFor(() =>
+      expect(rendered.result.current.summary.updatableVersion).toBe("1.3.0"),
+    );
+    // Bypassing selectSummaryCandidate's installable-candidate return would
+    // let the later floored RC hide this usable stable target; these exact
+    // stable-selection pins must turn RED under that candidate-walk ablation.
+    expect(rendered.result.current.cliFloor).toBeNull();
+    expect(rendered.result.current.summary.remedy).toBeNull();
+    rendered.unmount();
+  });
+
+  it.each(SELECTED_RC_CASES)(
+    "selects the RC floor after $name",
+    async (testCase) => {
+      const manifest = selectedRcManifest(testCase);
+      const fixture = buildOverviewHostFixture({
+        hostId: "host-a",
+        isLocalMachine: false,
+        hostVersion: "1.3.0-rc.1",
+        overrideHandlers: {
+          "host.update.check": () => ({
+            outcome: "ok" as const,
+            effectiveIncludePreReleases: true,
+            includePreReleasesSource: "installed-rc" as const,
+            manifest,
+          }),
+        },
+      });
+      recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+      const rendered = renderUpdatesHook(
+        fixture.client,
+        "host-a",
+        "1.3.0-rc.1",
+        null,
+      );
+
+      await waitFor(() =>
+        expect(rendered.result.current.cliFloor?.requiredCliVersion).toBe(
+          "1.3.0-rc.4",
+        ),
+      );
+      // Restricting floor acceptance to targetCandidates[0] would miss the
+      // RC after this unusable preferred stable; both explicit variants must
+      // turn RED under that candidate-walk ablation.
+      expect(rendered.result.current.summary.updatableVersion).toBeNull();
+      expect(rendered.result.current.summary.remedy).not.toBeNull();
+      rendered.unmount();
+    },
+  );
+
+  it("shows the selected RC floor in the mounted npm remedy command", async () => {
+    const manifest = selectedRcManifest(SELECTED_RC_CASES[0]);
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.3.0-rc.1",
+      installation: managedInstallationWithCli(
+        installRecord("1.3.0-rc.1", null),
+        "1.2.0",
+        "npm",
+        "/home/u/.local/bin/traycer",
+      ),
+      overrideHandlers: {
+        "host.update.check": () => ({
+          outcome: "ok" as const,
+          effectiveIncludePreReleases: true,
+          includePreReleasesSource: "installed-rc" as const,
+          manifest,
+        }),
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    const sentence =
+      "On host-a, run this command to prepare the host update: npm install -g @traycerai/cli@1.3.0-rc.4. Then select Check now.";
+    await screen.findByText(sentence);
+    // Skipping floor acceptance after the unusable preferred stable would
+    // remove this selected RC remedy; with no installable fallback, it would
+    // not expose Update now. This visible npm-floor pin must turn RED.
+    expect(screen.getByRole("button", { name: "Copy command" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Update now" })).toBeNull();
   });
 });
 

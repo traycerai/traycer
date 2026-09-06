@@ -1,8 +1,13 @@
 import {
+  CLI_NPM_PACKAGE_NAME,
   PACKAGE_MANAGER_UPGRADE_COMMAND,
   type CliInstallSource,
 } from "@traycer/protocol/config/installation-records";
-import { compareHostVersions } from "@traycer-clients/shared/host-version/compare-host-versions";
+import {
+  compareHostVersions,
+  isValidHostVersion,
+} from "@traycer-clients/shared/host-version/compare-host-versions";
+import { isPreReleaseVersion } from "@traycer-clients/shared/host-version/release-line";
 import type { DesktopAppUpdateSnapshot } from "@/lib/windows/types";
 
 // There is deliberately no terminal action: a 1.2.0 host ignores shellCommand
@@ -93,13 +98,7 @@ export function describeCliFloorRemedy(
     return describeDesktopRemedy(input.desktopUpdate, input);
   }
   if (input.cliSource !== "desktop" && input.cliSource !== "manual") {
-    const command = PACKAGE_MANAGER_UPGRADE_COMMAND[input.cliSource];
-    return describeCopyRemedy(
-      input,
-      `On ${input.hostName}, run this command to prepare the host update: ${command}. Then select Check now.`,
-      command,
-      "Copy command",
-    );
+    return describePackageManagerRemedy(input, input.cliSource);
   }
   // Unknown platforms take the Windows-safe route too. The old Windows CLI
   // finalizes its staged upgrade during host restart, whose taskkill /T would
@@ -117,6 +116,43 @@ export function describeCliFloorRemedy(
     input,
     `First update Traycer's command-line tools on ${input.hostName}. Open a terminal on that machine and run the copied command. When it finishes, come back here: this page rechecks while it is open, and Update now appears once the host accepts the update.`,
     posixCliUpgradeCommand(input.cliBinaryPath),
+    "Copy command",
+  );
+}
+
+function describePackageManagerRemedy(
+  input: CliFloorRemedyInput,
+  source: Exclude<CliInstallSource, "desktop" | "manual">,
+): CliFloorRemedy {
+  const requiredVersion = input.requiredCliVersion;
+  // Legacy projections can mislabel a malformed floor as repairable. Never
+  // interpolate unchecked manifest text into the copied npm shell command.
+  if (requiredVersion !== null && !isValidHostVersion(requiredVersion)) {
+    return {
+      sentence: `Traycer couldn't verify the required command-line tools version on ${input.hostName}.`,
+      actions: [{ kind: "help", label: "Show installation help" }],
+    };
+  }
+  if (
+    requiredVersion !== null &&
+    isPreReleaseVersion(requiredVersion) &&
+    source !== "npm" &&
+    source !== "homebrew"
+  ) {
+    return {
+      sentence: `Traycer CLI prereleases aren't published through ${source}. Install Traycer CLI ${requiredVersion} another way, then select Check now.`,
+      actions: [{ kind: "help", label: "Show installation help" }],
+    };
+  }
+  // npm's `latest` is stable-only; pin the published floor, including RCs.
+  const command =
+    source === "npm" && requiredVersion !== null
+      ? `npm install -g ${CLI_NPM_PACKAGE_NAME}@${requiredVersion}`
+      : PACKAGE_MANAGER_UPGRADE_COMMAND[source];
+  return describeCopyRemedy(
+    input,
+    `On ${input.hostName}, run this command to prepare the host update: ${command}. Then select Check now.`,
+    command,
     "Copy command",
   );
 }

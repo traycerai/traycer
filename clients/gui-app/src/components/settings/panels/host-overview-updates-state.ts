@@ -323,10 +323,16 @@ export function useHostOverviewUpdates(input: {
     installedVersion,
     source: check.source,
   });
+  const summaryCandidate = selectSummaryCandidate({
+    manifest: actionableManifest,
+    installedVersion,
+    platformKey: input.platformKey,
+    source: check.source,
+  });
   const { cliFloor, stagedFloor, stagedEntryKnown, remedy } =
     deriveFloorRemedies({
       manifest: actionableManifest,
-      targetVersion,
+      summaryCandidate,
       stagedVersion: input.stagedVersion,
       platformKey: input.platformKey,
       cliManifest: input.cliManifest,
@@ -356,15 +362,7 @@ export function useHostOverviewUpdates(input: {
   // picker rows: a latest with no usable asset for this host is advertised
   // nowhere rather than installable in one surface and unavailable in the
   // other.
-  const updatableVersion =
-    cliFloor === null
-      ? offerableLatestVersion({
-          manifest: actionableManifest,
-          installedVersion,
-          platformKey: input.platformKey,
-          source: check.source,
-        })
-      : null;
+  const updatableVersion = offerableLatestVersion(summaryCandidate);
   const installingVersion = installMutation.isPending
     ? installMutation.variables.version
     : null;
@@ -567,12 +565,30 @@ function visibleVersionRows(input: {
  * explicit include: a user who asked for the broad catalog gets the broad
  * catalog's own pointer rather than a line restriction they did not request.
  */
-function offerableLatestVersion(input: {
+function offerableLatestVersion(
+  candidate: SummaryUpdateCandidate | null,
+): string | null {
+  if (candidate === null || candidate.cliFloor !== null) return null;
+  return candidate.version;
+}
+
+interface SummaryUpdateCandidate {
+  readonly version: string;
+  readonly cliFloor: CliFloor | null;
+}
+
+/**
+ * One ordered walk owns both the update and its CLI remedy. An unusable
+ * stable may leave an RC as the first repairable target; a floored stable
+ * must instead keep its priority over an already-installable lower RC.
+ * Yanked entries never become usable after a CLI repair, so skip them here.
+ */
+function selectSummaryCandidate(input: {
   readonly manifest: HostAvailableManifest | null;
   readonly installedVersion: string | null;
   readonly platformKey: string | null;
   readonly source: HostIncludePreReleasesSource | null;
-}): string | null {
+}): SummaryUpdateCandidate | null {
   const { manifest } = input;
   if (manifest === null) return null;
   for (const candidate of targetCandidates({
@@ -591,7 +607,11 @@ function offerableLatestVersion(input: {
     );
     if (entry === undefined || entry.yanked) continue;
     const asset = platformAssetFor(entry.platforms, input.platformKey);
-    if (assetUnavailableReason(asset) === null) return candidate;
+    if (assetUnavailableReason(asset) === null) {
+      return { version: candidate, cliFloor: null };
+    }
+    const cliFloor = readCliFloor(entry, input.platformKey);
+    if (cliFloor !== null) return { version: candidate, cliFloor };
   }
   return null;
 }
@@ -659,7 +679,7 @@ function targetCandidates(input: {
   );
   // EXCLUDING the matching stable, which also satisfies both predicates below
   // — it is on the line and strictly newer. Without this the stable is
-  // returned twice, and `offerableLatestVersion` pays for a second yanked and
+  // returned twice, and `selectSummaryCandidate` pays for a second yanked and
   // platform-asset probe on a candidate it already accepted or rejected.
   const laterOnLine = versions
     .filter(
@@ -859,7 +879,7 @@ interface ForceUpdateRefusal {
 
 function deriveFloorRemedies(input: {
   readonly manifest: HostAvailableManifest | null;
-  readonly targetVersion: string | null;
+  readonly summaryCandidate: SummaryUpdateCandidate | null;
   readonly stagedVersion: string | null;
   readonly platformKey: string | null;
   readonly cliManifest: StoredCliInstallManifest | null;
@@ -872,16 +892,12 @@ function deriveFloorRemedies(input: {
   readonly stagedEntryKnown: boolean;
   readonly remedy: CliFloorRemedy | null;
 } {
-  // Yanked releases stay unavailable after a CLI repair, and the recovery
-  // poll ignores them. Keep this summary-only: a staged floor must still
-  // refuse Force even when the staged release has been yanked.
-  const target = input.manifest?.versions.find(
-    (entry) => entry.version === input.targetVersion && !entry.yanked,
-  );
+  // The shared summary walk skips yanked releases, but a staged floor must
+  // still refuse Force even when the staged release has been yanked.
   const staged = input.manifest?.versions.find(
     (entry) => entry.version === input.stagedVersion,
   );
-  const cliFloor = readCliFloor(target, input.platformKey);
+  const cliFloor = input.summaryCandidate?.cliFloor ?? null;
   return {
     cliFloor,
     stagedFloor: readCliFloor(staged, input.platformKey),
