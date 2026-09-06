@@ -253,22 +253,103 @@ describe("describeCliFloorRemedy", () => {
   });
 
   it("uses both outside-Traycer commands for Windows and unknown platforms", () => {
-    for (const platform of ["win32-x64", "win32-arm64", null]) {
+    const windowsPathCases = [
+      {
+        binaryPath: "C:\\Users\\x\\AppData\\Local\\Traycer\\cli\\traycer.exe",
+        invocation:
+          "& 'C:\\Users\\x\\AppData\\Local\\Traycer\\cli\\traycer.exe'",
+      },
+      {
+        binaryPath: "C:\\Users\\x\\O'Brien\\Traycer\\traycer.exe",
+        invocation: "& 'C:\\Users\\x\\O''Brien\\Traycer\\traycer.exe'",
+      },
+      {
+        binaryPath: "\\\\server\\share\\Traycer\\traycer.exe",
+        invocation: "& '\\\\server\\share\\Traycer\\traycer.exe'",
+      },
+      {
+        binaryPath: "D:/Users/x/Traycer/cli/traycer.exe",
+        invocation: "& 'D:/Users/x/Traycer/cli/traycer.exe'",
+      },
+    ] as const;
+    const windowsSources = ["manual", "desktop"] as const;
+    const windowsCases = windowsSources.flatMap((source) =>
+      windowsPathCases.map((pathCase) => ({ source, ...pathCase })),
+    );
+    for (const testCase of windowsCases) {
       const result = describeCliFloorRemedy(
         input({
-          source: "manual",
-          platform,
+          source: testCase.source,
+          platform: "win32-x64",
           isLocalMachine: false,
           desktopUpdate: null,
-          overrides: {},
+          overrides: { cliBinaryPath: testCase.binaryPath },
         }),
       );
-      expect(result.actions[0]).toMatchObject({
+      // E01/E02/E03/E04/E08: removing drive/UNC recognition, apostrophe
+      // doubling, PowerShell's `&`, or the second recorded invocation would
+      // make this exact two-line command RED.
+      expect(result.actions).toEqual([
+        {
+          kind: "copy-command",
+          label: "Copy commands",
+          command: `${testCase.invocation} cli upgrade\n${testCase.invocation} host restart`,
+        },
+      ]);
+      expect(result.sentence).toBe(
+        "Run the copied commands on build-host from a PowerShell window outside Traycer on that machine (a Windows Terminal tab there, or an SSH session that opens PowerShell). Restarting briefly disconnects this host. When it reconnects, select Check now, then Update now.",
+      );
+    }
+
+    const bareWindowsCases = [
+      null,
+      "",
+      "traycer",
+      "C:Users\\x\\Traycer\\traycer.exe",
+      "/home/u/bin/traycer",
+    ] as const;
+    const bareCases = windowsSources.flatMap((source) =>
+      bareWindowsCases.map((binaryPath) => ({ source, binaryPath })),
+    );
+    for (const testCase of bareCases) {
+      const result = describeCliFloorRemedy(
+        input({
+          source: testCase.source,
+          platform: "win32-arm64",
+          isLocalMachine: false,
+          desktopUpdate: null,
+          overrides: { cliBinaryPath: testCase.binaryPath },
+        }),
+      );
+      // E05: allowing relative, empty, drive-relative, or POSIX-shaped paths
+      // would guess a Windows executable instead of using bare traycer.
+      expect(result.actions).toEqual([
+        {
+          kind: "copy-command",
+          label: "Copy commands",
+          command: "traycer cli upgrade\ntraycer host restart",
+        },
+      ]);
+    }
+
+    const unknownPlatform = describeCliFloorRemedy(
+      input({
+        source: "manual",
+        platform: null,
+        isLocalMachine: false,
+        desktopUpdate: null,
+        overrides: { cliBinaryPath: "/home/u/bin/traycer" },
+      }),
+    );
+    // Unknown platforms retain the safe outside-Traycer route and do not
+    // guess a PowerShell path from a POSIX-shaped recording.
+    expect(unknownPlatform.actions).toEqual([
+      {
         kind: "copy-command",
         label: "Copy commands",
         command: "traycer cli upgrade\ntraycer host restart",
-      });
-    }
+      },
+    ]);
   });
 
   it("falls back to copy-only guidance for a local Desktop host without a bridge", () => {
@@ -526,8 +607,8 @@ describe("describeCliFloorRemedy", () => {
           },
         }),
       );
-      // Removing the absolute-POSIX/non-Windows path guard would guess a
-      // command for an unsafe case; these negative fallback pins must RED.
+      // Removing the platform-specific absolute-path/no-PATH-guessing guard
+      // would guess a command for an unsafe case; these D06 pins must RED.
       expect(
         result.actions.some((action) => action.kind === "copy-command"),
       ).toBe(pathCase.copy);
@@ -535,6 +616,61 @@ describe("describeCliFloorRemedy", () => {
         kind: "help",
         label: "Show installation help",
       });
+    }
+
+    const windowsFallbackCases = [
+      {
+        binaryPath: "C:\\Users\\x\\AppData\\Local\\Traycer\\cli\\traycer.exe",
+        command:
+          "& 'C:\\Users\\x\\AppData\\Local\\Traycer\\cli\\traycer.exe' cli upgrade\n& 'C:\\Users\\x\\AppData\\Local\\Traycer\\cli\\traycer.exe' host restart",
+        copy: true,
+      },
+      { binaryPath: null, command: null, copy: false },
+      { binaryPath: "", command: null, copy: false },
+      { binaryPath: "traycer", command: null, copy: false },
+      {
+        binaryPath: "C:Users\\x\\Traycer\\traycer.exe",
+        command: null,
+        copy: false,
+      },
+      { binaryPath: "/home/u/bin/traycer", command: null, copy: false },
+    ] as const;
+    for (const pathCase of windowsFallbackCases) {
+      const result = describeCliFloorRemedy(
+        input({
+          source: "desktop",
+          platform: "win32-x64",
+          isLocalMachine: true,
+          desktopUpdate: snapshot("available", { latestVersion: "1.2.0" }),
+          overrides: {
+            cliBinaryPath: pathCase.binaryPath,
+            requiredCliVersion: "1.3.0",
+          },
+        }),
+      );
+      if (pathCase.copy) {
+        // E07: withholding all Windows fallback commands would lose the
+        // usable recorded path and make this positive pin RED.
+        expect(result.actions).toEqual([
+          {
+            kind: "copy-command",
+            label: "Copy commands",
+            command: pathCase.command,
+          },
+          { kind: "help", label: "Show installation help" },
+        ]);
+        // E09: removing the PowerShell/outside wording would lose the shell
+        // guidance appended to the Desktop floor sentence.
+        expect(result.sentence).toContain(
+          "PowerShell window outside Traycer on that machine",
+        );
+      } else {
+        // E06: bypassing the Windows no-path gate would guess PATH for an
+        // absent or non-absolute recording; this exact help-only pin must RED.
+        expect(result.actions).toEqual([
+          { kind: "help", label: "Show installation help" },
+        ]);
+      }
     }
 
     const upToDate = describeCliFloorRemedy(

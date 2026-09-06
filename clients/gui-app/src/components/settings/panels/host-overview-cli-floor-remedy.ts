@@ -58,6 +58,12 @@ export interface CliFloorRemedy {
   readonly actions: readonly CliFloorRemedyAction[];
 }
 
+interface CliUpgradeInstructions {
+  readonly sentence: string;
+  readonly command: string;
+  readonly label: string;
+}
+
 export interface CliFloorRemedyInput {
   readonly isLocalMachine: boolean;
   readonly platform: string | null;
@@ -99,11 +105,12 @@ export function describeCliFloorRemedy(
   // finalizes its staged upgrade during host restart, whose taskkill /T would
   // kill that very CLI if the command ran in a Traycer-hosted terminal.
   if (input.platform === null || input.platform.startsWith("win32")) {
+    const instructions = describeWindowsCliUpgrade(input);
     return describeCopyRemedy(
       input,
-      `Run traycer cli upgrade on ${input.hostName}, then traycer host restart, from a terminal outside Traycer on that machine (an SSH session or a Windows Terminal window there). Restarting briefly disconnects this host. When it reconnects, select Check now, then Update now.`,
-      "traycer cli upgrade\ntraycer host restart",
-      "Copy commands",
+      instructions.sentence,
+      instructions.command,
+      instructions.label,
     );
   }
   return describeCopyRemedy(
@@ -254,29 +261,55 @@ function describeDesktopFloorFallback(
     comparison !== null && comparison.comparable
       ? `${versionDescription} and its command-line tools are below ${requiredCliVersion}.`
       : `Traycer couldn't verify that this Desktop update includes Traycer CLI ${requiredCliVersion} or newer.`;
-  // A Desktop-owned CLI may have a separate recorded binary. Only reuse the
-  // model's existing absolute POSIX path route; guessing PATH could upgrade
-  // another copy and leave this host refused by the same bundled CLI.
-  const command =
-    input.platform !== null &&
-    !input.platform.startsWith("win32") &&
-    input.cliBinaryPath !== null &&
-    input.cliBinaryPath.startsWith("/")
-      ? posixCliUpgradeCommand(input.cliBinaryPath)
-      : null;
+  const instructions = describeDesktopCliUpgrade(input);
   const help: CliFloorRemedyAction = {
     kind: "help",
     label: "Show installation help",
   };
   return {
     sentence:
-      command === null
-        ? sentence
-        : `${sentence} Open a terminal on ${input.hostName} and run the copied command, then select Check now.`,
+      instructions === null ? sentence : `${sentence} ${instructions.sentence}`,
     actions:
-      command === null
+      instructions === null
         ? [help]
-        : [{ kind: "copy-command", label: "Copy command", command }, help],
+        : [
+            {
+              kind: "copy-command",
+              label: instructions.label,
+              command: instructions.command,
+            },
+            help,
+          ],
+  };
+}
+
+function describeDesktopCliUpgrade(
+  input: CliFloorRemedyInput,
+): CliUpgradeInstructions | null {
+  // Never guess PATH for a Desktop-owned CLI: its private slot or a manually
+  // re-anchored binary may not be registered there, or may name another copy.
+  if (input.platform === null || input.cliBinaryPath === null) return null;
+  if (input.platform.startsWith("win32")) {
+    return isAbsoluteWindowsPath(input.cliBinaryPath)
+      ? describeWindowsCliUpgrade(input)
+      : null;
+  }
+  if (!input.cliBinaryPath.startsWith("/")) return null;
+  return {
+    sentence: `Open a terminal on ${input.hostName} and run the copied command, then select Check now.`,
+    command: posixCliUpgradeCommand(input.cliBinaryPath),
+    label: "Copy command",
+  };
+}
+
+function describeWindowsCliUpgrade(
+  input: CliFloorRemedyInput,
+): CliUpgradeInstructions {
+  const invocation = windowsCliInvocation(input.cliBinaryPath);
+  return {
+    sentence: `Run the copied commands on ${input.hostName} from a PowerShell window outside Traycer on that machine (a Windows Terminal tab there, or an SSH session that opens PowerShell). Restarting briefly disconnects this host. When it reconnects, select Check now, then Update now.`,
+    command: `${invocation} cli upgrade\n${invocation} host restart`,
+    label: "Copy commands",
   };
 }
 
@@ -300,6 +333,23 @@ function describeCopyRemedy(
       : sentence,
     actions: [{ kind: "copy-command", label, command }],
   };
+}
+
+// Drive-rooted (`C:\`, `D:/`) or UNC (`\\server\share`). A drive-relative
+// `C:traycer.exe` or a bare name is not a path we can hand to a shell.
+function isAbsoluteWindowsPath(binaryPath: string): boolean {
+  return /^[A-Za-z]:[\\/]/.test(binaryPath) || binaryPath.startsWith("\\\\");
+}
+
+function windowsCliInvocation(binaryPath: string | null): string {
+  if (binaryPath === null || !isAbsoluteWindowsPath(binaryPath)) {
+    return "traycer";
+  }
+  // Windows Terminal's default profile is PowerShell: a double-quoted path
+  // at command position is a string expression, so invocation needs `&`.
+  // Single quotes keep the path literal; cmd users need double quotes
+  // without `&` instead.
+  return `& '${binaryPath.replaceAll("'", "''")}'`;
 }
 
 function posixCliUpgradeCommand(binaryPath: string | null): string {

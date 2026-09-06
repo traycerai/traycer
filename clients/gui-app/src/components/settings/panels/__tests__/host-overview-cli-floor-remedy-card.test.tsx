@@ -167,6 +167,39 @@ describe("HostOverviewUpdatesRegion CLI floor remedy", () => {
     expect(clipboardWriteText).toHaveBeenCalledWith("traycer cli upgrade");
   });
 
+  it("copies Windows Desktop fallback commands and renders PowerShell guidance", () => {
+    const binaryPath =
+      "C:\\Users\\x\\AppData\\Local\\Traycer\\cli\\traycer.exe";
+    const remedy = describeCliFloorRemedy({
+      isLocalMachine: true,
+      platform: "win32-x64",
+      cliSource: "desktop",
+      cliBinaryPath: binaryPath,
+      cliVersion: "1.2.0",
+      requiredCliVersion: "1.3.0",
+      desktopUpdate: {
+        ...SNAPSHOT,
+        latestVersion: "1.2.0",
+      },
+      hostName: "build-host",
+    });
+    renderRegion(remedy, null);
+
+    expect(screen.getByRole("status").textContent).toBe(remedy.sentence);
+    // E09: removing the PowerShell/outside wording would make this visible
+    // shell-guidance pin RED even if the copy payload remained unchanged.
+    expect(screen.getByRole("status").textContent).toContain(
+      "PowerShell window outside Traycer on that machine",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Copy commands" }));
+    // E07: withholding Windows Desktop fallback commands would leave this
+    // exact clipboard payload unavailable; this positive copy pin must RED.
+    expect(clipboardWriteText).toHaveBeenCalledWith(
+      "& 'C:\\Users\\x\\AppData\\Local\\Traycer\\cli\\traycer.exe' cli upgrade\n& 'C:\\Users\\x\\AppData\\Local\\Traycer\\cli\\traycer.exe' host restart",
+    );
+    expect(requestInstallMock).not.toHaveBeenCalled();
+  });
+
   it("downloads an available Desktop update and never installs directly", () => {
     const bridge = new FakeDesktopBridge();
     const remedy = describeCliFloorRemedy({
