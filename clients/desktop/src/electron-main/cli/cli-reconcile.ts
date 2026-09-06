@@ -1,4 +1,5 @@
 import { access } from "node:fs/promises";
+import { PACKAGE_MANAGER_UPGRADE_COMMAND } from "@traycer/protocol/config/installation-records";
 import {
   CLI_RECONCILE_PROBE_TIMEOUT_MS,
   cliBinariesDiffer,
@@ -135,26 +136,12 @@ function packageManagerUpgradeHint(
   source: PackageManagerSource,
   bundledVersion: string,
 ): string {
-  switch (source) {
-    case "homebrew":
-      // Must match the Homebrew formula name shipped via
-      // scripts/native-packaging/publish-cli-package-managers.cjs
-      // (`Formula/traycer.rb`) and the CLI self-upgrade guidance in
-      // traycer-cli/src/commands/cli-upgrade.ts.
-      return "brew upgrade traycer";
-    case "npm":
-      // `latest` names stable builds, so it can be older than an installed RC.
-      // Name the version this reconciliation actually offered to upgrade to.
-      return `npm install -g @traycerai/cli@${bundledVersion}`;
-    case "winget":
-      return "winget upgrade Traycer.CLI";
-    case "scoop":
-      return "scoop update traycer-cli";
-    case "apt":
-      return "sudo apt update && sudo apt install --only-upgrade traycer-cli";
-    case "rpm":
-      return "sudo dnf upgrade traycer-cli";
-  }
+  const command = PACKAGE_MANAGER_UPGRADE_COMMAND[source];
+  // `latest` can be older than an installed RC. Preserve Desktop's exact
+  // candidate, while sharing the package name and command with every caller.
+  return source === "npm"
+    ? command.replace(/@latest$/, `@${bundledVersion}`)
+    : command;
 }
 
 export interface ReconcileCliDeps {

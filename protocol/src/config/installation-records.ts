@@ -176,6 +176,31 @@ export const cliInstallSourceSchema = z.enum([
 ]);
 export type CliInstallSource = z.infer<typeof cliInstallSourceSchema>;
 
+export const CLI_NPM_PACKAGE_NAME = "@traycerai/cli";
+
+/**
+ * One command vocabulary for CLI refusals, Desktop reconciliation and the GUI remedy.
+ * `publish-cli-package-managers.yml` publishes npm prereleases under their own
+ * dist-tag (for example `rc`), while Homebrew's rolling formula can receive
+ * that same prerelease on manual dispatch. An npm floor remedy must therefore
+ * name its exact required version instead of the stable `latest` tag.
+ * Traycer does not publish prereleases to winget, Scoop, apt or rpm feeds:
+ * their renderers/release artifacts are not feed publishers. The GUI offers
+ * installation help for those sources under a prerelease floor; these generic
+ * upgrade commands remain available for stable floors.
+ */
+export const PACKAGE_MANAGER_UPGRADE_COMMAND: Record<
+  Exclude<CliInstallSource, "desktop" | "manual">,
+  string
+> = {
+  homebrew: "brew upgrade traycer",
+  npm: `npm install -g ${CLI_NPM_PACKAGE_NAME}@latest`,
+  winget: "winget upgrade Traycer.CLI",
+  scoop: "scoop update traycer-cli",
+  apt: "sudo apt update && sudo apt install --only-upgrade traycer-cli",
+  rpm: "sudo dnf upgrade traycer-cli",
+};
+
 export const cliPendingUpgradeSchema = z.object({
   version: z.string(),
   stagedBinaryPath: z.string(),

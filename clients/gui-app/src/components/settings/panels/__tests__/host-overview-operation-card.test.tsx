@@ -58,6 +58,7 @@ import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import type { HostStatusUpdateOperation } from "@traycer/protocol/host/status/index";
 import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostGetInstallationInfoResponseV11 } from "@traycer/protocol/host/maintenance/index";
+import type { HostAvailableManifest } from "@traycer/protocol/host/maintenance/index";
 import type {
   HostInstallRecord,
   HostStagedRecord,
@@ -117,20 +118,18 @@ function makeRunnerHost(): IRunnerHost {
   });
 }
 
-function renderPanel(): void {
+function renderPanel(): QueryClient {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: 0 } },
+  });
   render(
-    <QueryClientProvider
-      client={
-        new QueryClient({
-          defaultOptions: { queries: { retry: false, gcTime: 0 } },
-        })
-      }
-    >
+    <QueryClientProvider client={queryClient}>
       <RunnerHostProvider runnerHost={makeRunnerHost()}>
         <HostSettingsPanel />
       </RunnerHostProvider>
     </QueryClientProvider>,
   );
+  return queryClient;
 }
 
 // Same `QueryClient`/tree kept alive across a `rerender` - the shape
@@ -308,6 +307,55 @@ function managedInstallation(
     installRecord: install,
     stagedRecord: staged,
     cliManifest: null,
+  };
+}
+
+function clearStagedManifest(version: string): HostAvailableManifest {
+  return {
+    schemaVersion: 1,
+    generatedAt: "2026-09-06T00:00:00Z",
+    latest: version,
+    versions: [
+      {
+        version,
+        releasedAt: "2026-09-06T00:00:00Z",
+        releaseNotesUrl: "https://example.invalid/notes",
+        yanked: false,
+        deprecationReason: null,
+        requiredCliVersion: null,
+        platforms: {
+          "darwin-arm64": {
+            available: true,
+            unavailableReason: null,
+            url: "https://example.invalid/host.tar.gz",
+            sizeBytes: 1024,
+            sha256: "a".repeat(64),
+            signatureUrl: "https://example.invalid/host.tar.gz.minisig",
+            signatureAlgorithm: "minisign",
+            publicKeyId: "key-1",
+          },
+        },
+      },
+    ],
+  };
+}
+
+function floorStagedManifest(version: string): HostAvailableManifest {
+  const manifest = clearStagedManifest(version);
+  return {
+    ...manifest,
+    versions: manifest.versions.map((entry) => ({
+      ...entry,
+      requiredCliVersion: "1.3.0",
+      platforms: {
+        "darwin-arm64": {
+          ...entry.platforms["darwin-arm64"],
+          available: false,
+          unavailableReason:
+            "Needs Traycer CLI 1.3.0 or newer (this host's CLI is 1.2.0).",
+        },
+      },
+    })),
   };
 }
 
@@ -629,6 +677,14 @@ describe("HostOverviewOperationCard — record-derived parks", () => {
       overrideHandlers: {
         "host.status": () =>
           statusWithBusy("1.3.0-rc.2", { kind: "none" }, true, 2),
+        "host.update.check": () => ({
+          outcome: "ok" as const,
+          effectiveIncludePreReleases: true,
+          includePreReleasesSource: "explicit-include" as const,
+          // Conservative staged-floor gating needs positive evidence for the
+          // staged version; an empty manifest means the entry is unknown.
+          manifest: clearStagedManifest("1.3.0-rc.3"),
+        }),
         "host.update.install": (req) => {
           installCalls.push({ version: req.version, force: req.force });
           return { outcome: "accepted" as const, attemptId: null };
@@ -660,6 +716,223 @@ describe("HostOverviewOperationCard — record-derived parks", () => {
 
     await waitFor(() => {
       expect(installCalls).toEqual([{ version: "1.3.0-rc.3", force: true }]);
+    });
+  });
+
+  it("hides both force controls when the staged version is explicitly floored", async () => {
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.3.0-rc.2",
+      installation: managedInstallation(
+        installRecord("1.3.0-rc.2", "1.3.0-rc.2"),
+        stagedRecord("1.3.0-rc.3"),
+      ),
+      overrideHandlers: {
+        "host.status": () =>
+          statusWithBusy("1.3.0-rc.2", { kind: "none" }, true, 2),
+        "host.update.check": () => ({
+          outcome: "ok" as const,
+          effectiveIncludePreReleases: true,
+          includePreReleasesSource: "explicit-include" as const,
+          manifest: floorStagedManifest("1.3.0-rc.3"),
+        }),
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    await screen.findByText(
+      "Traycer couldn't determine how its command-line tools were installed on host-a.",
+    );
+    await screen.findByTestId("host-overview-operation-card");
+    // The negatives below are half a pin on their own: a card rendered in some
+    // other view would also have no force controls. Anchor them to the
+    // staged-wait phase they are about.
+    expect(
+      screen.getByTestId("host-overview-operation-phase").textContent,
+    ).toBe("Update will continue when 2 sessions finish");
+    // Removing the stagedFloor gate would expose Force update for a CLI-floor
+    // refusal; this negative affordance pin must turn RED under that ablation.
+    expect(
+      screen.queryByTestId("host-overview-operation-force-update"),
+    ).toBeNull();
+    // Restoring a non-null onForceRestart for a staged wait would offer a
+    // fallback restart control that cannot activate the floored stage; this
+    // negative no-restart pin must turn RED under that ablation.
+    expect(
+      screen.queryByTestId("host-overview-operation-force-restart"),
+    ).toBeNull();
+  });
+
+  it("hides both force controls when the staged version is absent from the check manifest", async () => {
+    let checkCalls = 0;
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.3.0-rc.2",
+      installation: managedInstallation(
+        installRecord("1.3.0-rc.2", "1.3.0-rc.2"),
+        stagedRecord("1.3.0-rc.3"),
+      ),
+      overrideHandlers: {
+        "host.status": () =>
+          statusWithBusy("1.3.0-rc.2", { kind: "none" }, true, 2),
+        "host.update.check": () => {
+          checkCalls += 1;
+          return {
+            outcome: "ok" as const,
+            effectiveIncludePreReleases: true,
+            includePreReleasesSource: "explicit-include" as const,
+            manifest: {
+              ...clearStagedManifest("1.3.0-rc.2"),
+              latest: "1.3.0-rc.2",
+            },
+          };
+        },
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    await screen.findByTestId("host-overview-operation-card");
+    await screen.findByText("This host is running the latest version.");
+    await waitFor(() => expect(checkCalls).toBeGreaterThan(0));
+    // Same anchor as above: the absent controls must be absent FROM the
+    // staged-wait card, not from some other view.
+    expect(
+      screen.getByTestId("host-overview-operation-phase").textContent,
+    ).toBe("Update will continue when 2 sessions finish");
+    // Treating an absent staged entry as clear would make Force reachable while
+    // its floor is unknown; this negative unknown-evidence pin must turn RED.
+    expect(
+      screen.queryByTestId("host-overview-operation-force-update"),
+    ).toBeNull();
+    // Restoring a non-null onForceRestart for a staged wait would offer a
+    // fallback restart control that cannot activate the absent stage; this
+    // negative no-restart pin must turn RED under that ablation.
+    expect(
+      screen.queryByTestId("host-overview-operation-force-restart"),
+    ).toBeNull();
+  });
+
+  it("revalidates a changed staged entry at confirmation and settles refusal synchronously", async () => {
+    let checkCalls = 0;
+    const installCalls: Array<{ version: string; force: boolean }> = [];
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.3.0-rc.2",
+      installation: managedInstallation(
+        installRecord("1.3.0-rc.2", "1.3.0-rc.2"),
+        stagedRecord("1.3.0-rc.3"),
+      ),
+      overrideHandlers: {
+        "host.status": () =>
+          statusWithBusy("1.3.0-rc.2", { kind: "none" }, true, 2),
+        "host.update.check": () => {
+          checkCalls += 1;
+          return {
+            outcome: "ok" as const,
+            effectiveIncludePreReleases: true,
+            includePreReleasesSource: "explicit-include" as const,
+            manifest:
+              checkCalls === 1
+                ? clearStagedManifest("1.3.0-rc.3")
+                : floorStagedManifest("1.3.0-rc.3"),
+          };
+        },
+        "host.update.install": (req) => {
+          installCalls.push({ version: req.version, force: req.force });
+          return { outcome: "accepted" as const, attemptId: null };
+        },
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    const queryClient = renderPanel();
+
+    const forceButton = await screen.findByTestId(
+      "host-overview-operation-force-update",
+    );
+    fireEvent.click(forceButton);
+    await screen.findByTestId("host-busy-force-defer-dialog");
+    await queryClient.invalidateQueries();
+    await waitFor(() => expect(checkCalls).toBeGreaterThan(1));
+    fireEvent.click(screen.getByTestId("host-busy-force"));
+    expect(screen.queryByTestId("host-busy-force-defer-dialog")).toBeNull();
+
+    await waitFor(() => {
+      // Removing click-time revalidation would dispatch the stale staged
+      // version; this negative mutation pin must turn RED under that ablation.
+      expect(installCalls).toEqual([]);
+      expect(screen.queryByTestId("host-busy-force-defer-dialog")).toBeNull();
+      expect(
+        screen.getByTestId("host-overview-update-attempt-failed").textContent,
+      ).toContain("v1.3.0-rc.3 needs Traycer CLI 1.3.0 or newer on host-a.");
+    });
+  });
+
+  it("refuses and closes when the staged entry disappears before confirmation", async () => {
+    let checkCalls = 0;
+    const installCalls: Array<{ version: string; force: boolean }> = [];
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.3.0-rc.2",
+      installation: managedInstallation(
+        installRecord("1.3.0-rc.2", "1.3.0-rc.2"),
+        stagedRecord("1.3.0-rc.3"),
+      ),
+      overrideHandlers: {
+        "host.status": () =>
+          statusWithBusy("1.3.0-rc.2", { kind: "none" }, true, 2),
+        "host.update.check": () => {
+          checkCalls += 1;
+          return {
+            outcome: "ok" as const,
+            effectiveIncludePreReleases: true,
+            includePreReleasesSource: "explicit-include" as const,
+            manifest:
+              checkCalls === 1
+                ? clearStagedManifest("1.3.0-rc.3")
+                : clearStagedManifest("1.3.0-rc.2"),
+          };
+        },
+        "host.update.install": (req) => {
+          installCalls.push({ version: req.version, force: req.force });
+          return { outcome: "accepted" as const, attemptId: null };
+        },
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    const queryClient = renderPanel();
+
+    fireEvent.click(
+      await screen.findByTestId("host-overview-operation-force-update"),
+    );
+    await screen.findByTestId("host-busy-force-defer-dialog");
+    await queryClient.invalidateQueries();
+    await waitFor(() => expect(checkCalls).toBeGreaterThan(1));
+    fireEvent.click(screen.getByTestId("host-busy-force"));
+
+    await waitFor(() => {
+      // Bypassing describeForceUpdateRefusal would dispatch stale force:true;
+      // this no-mutation pin and closed-dialog assertion redden that ablation.
+      expect(installCalls).toEqual([]);
+      expect(
+        screen.getByTestId("host-overview-update-attempt-failed").textContent,
+      ).toContain(
+        "Traycer couldn't verify that v1.3.0-rc.3 can be installed on host-a.",
+      );
+      expect(screen.queryByTestId("host-busy-force-defer-dialog")).toBeNull();
     });
   });
 
@@ -764,6 +1037,15 @@ describe("HostOverviewOperationCard — record-derived parks", () => {
       overrideHandlers: {
         "host.status": () =>
           statusWithBusy("1.3.0-rc.2", { kind: "none" }, true, 2),
+        // Force update renders only once the check proves the staged entry
+        // clear of the CLI floor (`stagedEntryKnown`), same as the positive
+        // Force fixture above; without it the button never appears.
+        "host.update.check": () => ({
+          outcome: "ok" as const,
+          effectiveIncludePreReleases: true,
+          includePreReleasesSource: "explicit-include" as const,
+          manifest: clearStagedManifest("1.3.0-rc.3"),
+        }),
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
@@ -811,6 +1093,15 @@ describe("HostOverviewOperationCard — record-derived parks", () => {
       overrideHandlers: {
         "host.status": () =>
           statusWithBusy("1.3.0-rc.2", { kind: "none" }, true, 2),
+        // Force update renders only once the check proves the staged entry
+        // clear of the CLI floor (`stagedEntryKnown`), same as the positive
+        // Force fixture above; without it the button never appears.
+        "host.update.check": () => ({
+          outcome: "ok" as const,
+          effectiveIncludePreReleases: true,
+          includePreReleasesSource: "explicit-include" as const,
+          manifest: clearStagedManifest("1.3.0-rc.3"),
+        }),
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);

@@ -1,4 +1,5 @@
 import {
+  HOST_CLIENT_FLOOR_REASON_PREFIX,
   isCanonicalReleaseCandidate,
   isPreReleaseVersion,
 } from "@traycer-clients/shared/host-version/release-line";
@@ -10,6 +11,7 @@ import {
 } from "../registry";
 import {
   evaluateHostClientFloor,
+  hostClientFloorRefusalMessage,
   isHostClientFloorRefusal,
 } from "../registry/client-floor";
 import { resolveCliVersion } from "../cli-version";
@@ -299,13 +301,20 @@ function projectClientFloor(
     requiredCliVersion: entry.requiredCliVersion,
   });
   if (!isHostClientFloorRefusal(floor)) return entry;
+  // Only a valid floor can be repaired by upgrading the CLI. Keep malformed
+  // registry data outside the GUI's repairable-reason prefix or it will keep
+  // asking for an upgrade that cannot fix the manifest.
+  const unavailableReason =
+    floor.kind === "floor-unreadable"
+      ? hostClientFloorRefusalMessage(floor, entry.version)
+      : `${HOST_CLIENT_FLOOR_REASON_PREFIX}${floor.requiredCliVersion} or newer (this host's CLI is ${cliVersion}).`;
   return {
     ...entry,
     platforms: {
       [platformKey]: {
         ...asset,
         available: false,
-        unavailableReason: `Needs Traycer CLI ${floor.requiredCliVersion} or newer (this host's CLI is ${cliVersion}).`,
+        unavailableReason,
       },
     },
   };

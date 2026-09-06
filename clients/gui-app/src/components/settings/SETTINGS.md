@@ -2380,6 +2380,47 @@ aria-live="polite"` carrying the equivalent text for
       `host.status`. The Overview is the only leg that derives: the landing
       banner keeps its desktop-status debt arm, and the fleet legs pass
       `legacyFacts: null`, which the projector reads as "not observed".
+    - **A CLI requirement has a remedy in the card.** The best target's
+      projected unavailable asset is the executing CLI's verdict, recognized
+      by `HOST_CLIENT_FLOOR_REASON_PREFIX` from the shared release-line helpers.
+      A stored CLI version that already satisfies the requirement does not
+      clear it: the host can still be executing an older copy. A retained hash
+      on a withdrawn platform build is not evidence of a CLI requirement.
+      `describeCliFloorRemedy` owns the sentence and actions together:
+
+      | Installation and update state                                                   | Card action                                                                                                                         |
+      | ------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+      | Local Desktop, update available                                                 | Download update, respecting the Desktop block reason                                                                                |
+      | Local Desktop, downloading                                                      | Disabled download progress                                                                                                          |
+      | Local Desktop, ready                                                            | Restart to update through the shared install flow, or Finish update for manual guidance; block reason and in-flight state still win |
+      | Local Desktop, up to date                                                       | Hint to restart Desktop to finish updating the host tools                                                                           |
+      | Local Desktop, other update state                                               | Checking sentence and one manual bridge check per mounted unknown-state episode                                                     |
+      | Package manager, local or remote                                                | Copy that manager's command from `PACKAGE_MANAGER_UPGRADE_COMMAND`                                                                  |
+      | Manual, remote Desktop, or local Desktop without a bridge; known POSIX platform | Copy the recorded absolute CLI path as one single-quoted shell token plus `cli upgrade`; otherwise copy `traycer cli upgrade`       |
+      | The same sources on Windows or an unknown platform                              | Copy `traycer cli upgrade` and `traycer host restart`; explicitly run outside Traycer on that machine                               |
+      | Installation manifest unreadable                                                | Show installation help, opening the Doctor sheet                                                                                    |
+
+      The copy rows explain an older executing copy when the stored version
+      already clears the requirement. No row opens an in-app terminal: the
+      1.2.0 hosts needing this remedy cannot run a supplied command on ordinary
+      terminal creation. Check now stays; the remedy replaces Update now until
+      the host accepts the candidate. Advanced rows retain their reasons.
+      Sentence precedence preserves the record-derived parks: **failure →
+      activation debt → CLI remedy → checking → unreachable → no manifest →
+      stranded on its release line / up to date → unavailable / available**.
+      A failed catalog read drops the remedy along with the actionable catalog.
+
+    - **Repair rechecks while the Overview is open.** A table-owned condition
+      lane polls `host.update.check` every 30 seconds while the latest
+      non-yanked candidate carries the CLI refusal. For `installed-rc`, every
+      non-yanked entry is considered because the response has no installed
+      version with which to reconstruct the same-line walk. The first clear
+      response stops the lane and restores Update now. The existing 10-second
+      installation-info poll refreshes the stored CLI facts beside it.
+      A floored staged version, or one absent from the actionable manifest,
+      offers neither Force update nor Force restart: restarting cannot activate
+      a stage. An open Force confirmation rechecks its exact version at click
+      time, settles synchronously on refusal, and shows the reason inline.
   - **Installation** reads `host.getInstallationInfo`. `unmanaged` is a real
     state, not an error - a host run from a checkout has no install record - and
     it says so rather than claiming nothing is installed.

@@ -6,6 +6,8 @@ import {
   isStrictlyNewerHostVersion,
 } from "@traycer-clients/shared/host-version/compare-host-versions";
 import {
+  HOST_CLIENT_FLOOR_REASON_PREFIX,
+  isHostClientFloorRefusedAsset,
   isMatchingStableRelease,
   isSameReleaseLine,
 } from "@traycer-clients/shared/host-version/release-line";
@@ -14,6 +16,12 @@ import type {
   HostIncludePreReleasesSource,
   HostUpdateCheckResponseV11,
 } from "@traycer/protocol/host/maintenance/index";
+import type { StoredCliInstallManifest } from "@traycer/protocol/config/installation-records";
+import type { DesktopAppUpdateSnapshot } from "@/lib/windows/types";
+import {
+  describeCliFloorRemedy,
+  type CliFloorRemedy,
+} from "@/components/settings/panels/host-overview-cli-floor-remedy";
 import type { VersionPickerProps } from "@/components/settings/panels/host-overview-advanced";
 import type { HostVersionRow } from "@/components/settings/panels/host-version-rows";
 import { VERSION_LIST_PREVIEW } from "@/components/settings/panels/host-settings-panel-model";
@@ -101,6 +109,10 @@ export function useHostOverviewUpdates(input: {
    */
   readonly activationDebt: { readonly installedVersion: string } | null;
   readonly platformKey: string | null;
+  readonly cliManifest: StoredCliInstallManifest | null;
+  readonly isLocalMachine: boolean;
+  readonly desktopUpdate: DesktopAppUpdateSnapshot | null;
+  readonly stagedVersion: string | null;
   /** Whether this host is worth asking at all — the page owns that gate. */
   readonly enabled: boolean;
   readonly checkDegrade: OverviewDegradeReason | null;
@@ -167,6 +179,9 @@ export function useHostOverviewUpdates(input: {
   const [installFailure, setInstallFailure] = useState<CliShellFailure | null>(
     null,
   );
+  const [forceRefusal, setForceRefusal] = useState<ForceUpdateRefusal | null>(
+    null,
+  );
 
   const checkQuery = useHostUpdateCheckQuery({
     client,
@@ -212,6 +227,7 @@ export function useHostOverviewUpdates(input: {
   const checking = checkQuery.isFetching;
 
   const runCheck = (): void => {
+    setForceRefusal(null);
     void checkQuery.refetch();
   };
 
@@ -223,6 +239,7 @@ export function useHostOverviewUpdates(input: {
     // state only, like the callbacks beside it.
     onSettled: (() => void) | null,
   ): void => {
+    setForceRefusal(null);
     installMutation.mutate(
       { version, force },
       {
@@ -271,6 +288,26 @@ export function useHostOverviewUpdates(input: {
   // versions the failed check could not confirm - under a summary that says
   // the host could not be checked.
   const actionableManifest = checkQuery.isError ? null : manifest;
+  // A repaired refusal must not return when a later check loses its catalog.
+  // Retire it on a newer successful answer, using the same guarded render
+  // adjustment as installDiscovered; hiding the text alone keeps stale state.
+  retireForceRefusalIfRefuted({
+    refusal: forceRefusal,
+    manifest: actionableManifest,
+    checkDataUpdatedAt: checkQuery.dataUpdatedAt,
+    checkSucceeded: checkQuery.isSuccess,
+    checkIsPlaceholderData: checkQuery.isPlaceholderData,
+    platformKey: input.platformKey,
+    hostName,
+    retire: () => setForceRefusal(null),
+  });
+  const failureDescription = describeUpdateFailure({
+    refusal: forceRefusal,
+    manifest: actionableManifest,
+    platformKey: input.platformKey,
+    failure: transientFailure,
+    hostName,
+  });
   // The best STRICTLY NEWER version this catalog offers, before the yanked and
   // platform-asset gates - what the sentence is about, where
   // `updatableVersion` below is what the button can act on.
@@ -286,6 +323,23 @@ export function useHostOverviewUpdates(input: {
     installedVersion,
     source: check.source,
   });
+  const summaryCandidate = selectSummaryCandidate({
+    manifest: actionableManifest,
+    installedVersion,
+    platformKey: input.platformKey,
+    source: check.source,
+  });
+  const { cliFloor, stagedFloor, stagedEntryKnown, remedy } =
+    deriveFloorRemedies({
+      manifest: actionableManifest,
+      summaryCandidate,
+      stagedVersion: input.stagedVersion,
+      platformKey: input.platformKey,
+      cliManifest: input.cliManifest,
+      isLocalMachine: input.isLocalMachine,
+      desktopUpdate: input.desktopUpdate,
+      hostName,
+    });
   // Read off the resolved target rather than `manifest.latest`, which for an
   // installed-RC catalog is the WRONG pointer: `latest` tracks the stable
   // channel, so a host on `2.0.0-rc.1` sees `1.9.0` there and would be told it
@@ -308,34 +362,54 @@ export function useHostOverviewUpdates(input: {
   // picker rows: a latest with no usable asset for this host is advertised
   // nowhere rather than installable in one surface and unavailable in the
   // other.
-  const updatableVersion = offerableLatestVersion({
-    manifest: actionableManifest,
-    installedVersion,
-    platformKey: input.platformKey,
-    source: check.source,
-  });
+  const updatableVersion = offerableLatestVersion(summaryCandidate);
   const installingVersion = installMutation.isPending
     ? installMutation.variables.version
     : null;
 
   return {
     degrade,
+    cliFloor,
+    stagedFloor,
+    stagedEntryKnown,
     // The staged-wait force: the SAME dispatch as a row's Install, with
     // `force: true`, so the accepted latch, the invalidations and the
     // outcome toasts are the ones every other install on this page gets.
     // The confirmation that precedes it is the panel's (the ellipsis on
     // "Force update…" is a promise); this is only the dispatch.
-    installForce: (version, onSettled) => install(version, true, onSettled),
+    installForce: (version, onSettled) => {
+      // Re-read the exact version named by the confirmation. A catalog poll
+      // can withdraw it or project a refusal after the offer was opened.
+      const refusal = describeForceUpdateRefusal({
+        manifest: actionableManifest,
+        version,
+        platformKey: input.platformKey,
+        hostName,
+      });
+      if (refusal !== null) {
+        setForceRefusal({
+          version,
+          text: refusal,
+          checkDataUpdatedAt: checkQuery.dataUpdatedAt,
+        });
+        // No mutation means no mutation settle callback. Close synchronously
+        // here or the confirmation would be stranded over the inline notice.
+        onSettled();
+        return;
+      }
+      install(version, true, onSettled);
+    },
     summary: {
       hostName,
       description: describeCheckState({
         manifest,
         checking,
-        failure: transientFailure,
+        failure: failureDescription,
         unreachable: checkQuery.isError,
         hostName,
         upToDate,
         activationDebt: input.activationDebt,
+        remedy,
         offerable: updatableVersion !== null,
         // What the BUTTON will install, when it can install anything. The two
         // differ whenever the best candidate is unusable: with a yanked
@@ -347,7 +421,8 @@ export function useHostOverviewUpdates(input: {
         strandedOnLine,
         installedVersion,
       }),
-      transientFailure,
+      failureDescription,
+      remedy,
       checking,
       // Offered only for a latest that is BOTH known and not already installed,
       // and never while the row is still reporting a failed attempt. "Update
@@ -405,7 +480,8 @@ export function useHostOverviewUpdates(input: {
 export interface HostOverviewUpdatesSummary {
   readonly hostName: string;
   readonly description: string;
-  readonly transientFailure: CliShellFailure | null;
+  readonly failureDescription: string | null;
+  readonly remedy: CliFloorRemedy | null;
   readonly checking: boolean;
   readonly updatableVersion: string | null;
   readonly installing: boolean;
@@ -418,6 +494,9 @@ export interface HostOverviewUpdatesState {
   readonly degrade: OverviewDegradeReason | null;
   readonly summary: HostOverviewUpdatesSummary;
   readonly picker: VersionPickerProps;
+  readonly cliFloor: CliFloor | null;
+  readonly stagedFloor: CliFloor | null;
+  readonly stagedEntryKnown: boolean;
   /**
    * `host.update.install {version, force: true}` — the staged-wait force.
    * `onSettled` runs once the request answers or fails, so the confirmation
@@ -486,12 +565,30 @@ function visibleVersionRows(input: {
  * explicit include: a user who asked for the broad catalog gets the broad
  * catalog's own pointer rather than a line restriction they did not request.
  */
-function offerableLatestVersion(input: {
+function offerableLatestVersion(
+  candidate: SummaryUpdateCandidate | null,
+): string | null {
+  if (candidate === null || candidate.cliFloor !== null) return null;
+  return candidate.version;
+}
+
+interface SummaryUpdateCandidate {
+  readonly version: string;
+  readonly cliFloor: CliFloor | null;
+}
+
+/**
+ * One ordered walk owns both the update and its CLI remedy. An unusable
+ * stable may leave an RC as the first repairable target; a floored stable
+ * must instead keep its priority over an already-installable lower RC.
+ * Yanked entries never become usable after a CLI repair, so skip them here.
+ */
+function selectSummaryCandidate(input: {
   readonly manifest: HostAvailableManifest | null;
   readonly installedVersion: string | null;
   readonly platformKey: string | null;
   readonly source: HostIncludePreReleasesSource | null;
-}): string | null {
+}): SummaryUpdateCandidate | null {
   const { manifest } = input;
   if (manifest === null) return null;
   for (const candidate of targetCandidates({
@@ -510,7 +607,11 @@ function offerableLatestVersion(input: {
     );
     if (entry === undefined || entry.yanked) continue;
     const asset = platformAssetFor(entry.platforms, input.platformKey);
-    if (assetUnavailableReason(asset) === null) return candidate;
+    if (assetUnavailableReason(asset) === null) {
+      return { version: candidate, cliFloor: null };
+    }
+    const cliFloor = readCliFloor(entry, input.platformKey);
+    if (cliFloor !== null) return { version: candidate, cliFloor };
   }
   return null;
 }
@@ -578,7 +679,7 @@ function targetCandidates(input: {
   );
   // EXCLUDING the matching stable, which also satisfies both predicates below
   // — it is on the line and strictly newer. Without this the stable is
-  // returned twice, and `offerableLatestVersion` pays for a second yanked and
+  // returned twice, and `selectSummaryCandidate` pays for a second yanked and
   // platform-asset probe on a candidate it already accepted or rejected.
   const laterOnLine = versions
     .filter(
@@ -766,6 +867,158 @@ function soleKeyBelongsToHost(
 type PlatformAsset =
   HostAvailableManifest["versions"][number]["platforms"][string];
 
+interface CliFloor {
+  readonly requiredCliVersion: string | null;
+}
+
+interface ForceUpdateRefusal {
+  readonly version: string;
+  readonly text: string;
+  readonly checkDataUpdatedAt: number;
+}
+
+function deriveFloorRemedies(input: {
+  readonly manifest: HostAvailableManifest | null;
+  readonly summaryCandidate: SummaryUpdateCandidate | null;
+  readonly stagedVersion: string | null;
+  readonly platformKey: string | null;
+  readonly cliManifest: StoredCliInstallManifest | null;
+  readonly isLocalMachine: boolean;
+  readonly desktopUpdate: DesktopAppUpdateSnapshot | null;
+  readonly hostName: string;
+}): {
+  readonly cliFloor: CliFloor | null;
+  readonly stagedFloor: CliFloor | null;
+  readonly stagedEntryKnown: boolean;
+  readonly remedy: CliFloorRemedy | null;
+} {
+  // The shared summary walk skips yanked releases, but a staged floor must
+  // still refuse Force even when the staged release has been yanked.
+  const staged = input.manifest?.versions.find(
+    (entry) => entry.version === input.stagedVersion,
+  );
+  const cliFloor = input.summaryCandidate?.cliFloor ?? null;
+  return {
+    cliFloor,
+    stagedFloor: readCliFloor(staged, input.platformKey),
+    stagedEntryKnown: staged !== undefined,
+    remedy:
+      cliFloor === null
+        ? null
+        : describeCliFloorRemedy({
+            isLocalMachine: input.isLocalMachine,
+            platform: input.platformKey,
+            cliSource: input.cliManifest?.source ?? null,
+            cliBinaryPath: input.cliManifest?.binaryPath ?? null,
+            cliVersion: input.cliManifest?.version ?? null,
+            requiredCliVersion: cliFloor.requiredCliVersion,
+            desktopUpdate: input.desktopUpdate,
+            hostName: input.hostName,
+          }),
+  };
+}
+
+function readCliFloor(
+  entry: HostAvailableManifest["versions"][number] | undefined,
+  platformKey: string | null,
+): CliFloor | null {
+  if (entry === undefined) return null;
+  const asset = platformAssetFor(entry.platforms, platformKey);
+  if (!isHostClientFloorRefusedAsset(asset)) return null;
+  // The version decorates the verdict; it never decides it. Older payloads
+  // can omit the field while the authored refusal still names the requirement.
+  const reasonVersion = asset?.unavailableReason
+    ?.slice(HOST_CLIENT_FLOOR_REASON_PREFIX.length)
+    .match(/^(\S+) or newer\b/)?.[1];
+  return {
+    requiredCliVersion: entry.requiredCliVersion ?? reasonVersion ?? null,
+  };
+}
+
+function describeForceUpdateRefusal(input: {
+  readonly manifest: HostAvailableManifest | null;
+  readonly version: string;
+  readonly platformKey: string | null;
+  readonly hostName: string;
+}): string | null {
+  const entry = input.manifest?.versions.find(
+    (candidate) => candidate.version === input.version,
+  );
+  const floor = readCliFloor(entry, input.platformKey);
+  if (entry !== undefined && floor === null) return null;
+  if (floor !== null && floor.requiredCliVersion !== null) {
+    return `v${input.version} needs Traycer CLI ${floor.requiredCliVersion} or newer on ${input.hostName}. Update the command-line tools first.`;
+  }
+  // An absent entry, failed check, or incomplete refusal cannot name a floor.
+  return `Traycer couldn't verify that v${input.version} can be installed on ${input.hostName}. Select Check now and try again.`;
+}
+
+interface ForceRefusalEvidence {
+  readonly refusal: ForceUpdateRefusal | null;
+  readonly manifest: HostAvailableManifest | null;
+  readonly checkDataUpdatedAt: number;
+  readonly checkSucceeded: boolean;
+  readonly checkIsPlaceholderData: boolean;
+  readonly platformKey: string | null;
+  readonly hostName: string;
+}
+
+/**
+ * The guarded render adjustment for a Force refusal: one decision, one
+ * action, stated beside its predicate rather than inline in the hook.
+ * `retire` is the state setter; calling it conditionally during render is
+ * the same pattern the `installDiscovered` adjustment uses.
+ */
+function retireForceRefusalIfRefuted(
+  input: ForceRefusalEvidence & { readonly retire: () => void },
+): void {
+  if (checkRefutesForceRefusal(input)) input.retire();
+}
+
+function checkRefutesForceRefusal(input: ForceRefusalEvidence): boolean {
+  // A retained or placeholder catalog cannot prove a subsequent repair.
+  // The exact refused version must be cleared by a newer successful answer.
+  return (
+    input.refusal !== null &&
+    input.checkSucceeded &&
+    !input.checkIsPlaceholderData &&
+    input.manifest !== null &&
+    input.checkDataUpdatedAt > input.refusal.checkDataUpdatedAt &&
+    describeForceUpdateRefusal({
+      manifest: input.manifest,
+      version: input.refusal.version,
+      platformKey: input.platformKey,
+      hostName: input.hostName,
+    }) === null
+  );
+}
+
+function describeUpdateFailure(input: {
+  readonly refusal: ForceUpdateRefusal | null;
+  readonly manifest: HostAvailableManifest | null;
+  readonly platformKey: string | null;
+  readonly failure: CliShellFailure | null;
+  readonly hostName: string;
+}): string | null {
+  // A successful poll can repair the exact version refused at confirmation.
+  // Derive visibility from the current catalog so both failure surfaces clear
+  // with that answer, without waiting for another click to reset local state.
+  if (
+    input.refusal !== null &&
+    describeForceUpdateRefusal({
+      manifest: input.manifest,
+      version: input.refusal.version,
+      platformKey: input.platformKey,
+      hostName: input.hostName,
+    }) !== null
+  ) {
+    return input.refusal.text;
+  }
+  return input.failure === null
+    ? null
+    : describeCliShellFailure(input.failure, input.hostName);
+}
+
 function assetUnavailableReason(asset: PlatformAsset | null): string | null {
   if (asset === null) return "No asset for this platform.";
   if (asset.available) return null;
@@ -917,13 +1170,14 @@ function handleInstallOutcome(input: {
 function describeCheckState(input: {
   readonly manifest: HostAvailableManifest | null;
   readonly checking: boolean;
-  readonly failure: CliShellFailure | null;
+  readonly failure: string | null;
   /** The RPC itself failed — a transport fault, not an answer from the host. */
   readonly unreachable: boolean;
   readonly hostName: string;
   readonly upToDate: boolean;
   /** The install record is ahead of the running host; see the hook's input. */
   readonly activationDebt: { readonly installedVersion: string } | null;
+  readonly remedy: CliFloorRemedy | null;
   /** `updatableVersion` resolved — the summary can actually OFFER the latest. */
   readonly offerable: boolean;
   /** The strictly-newer version this sentence is about, if there is one. */
@@ -939,7 +1193,7 @@ function describeCheckState(input: {
   // keeps the previous manifest on screen, so "vX is available." would otherwise
   // sit there unchanged while a re-check ran, or failed.
   if (input.failure !== null) {
-    return describeCliShellFailure(input.failure, input.hostName);
+    return input.failure;
   }
   // Debt outranks everything the CATALOG can say, including "checking": it is
   // a fact about this host's own disk, true whether or not the registry
@@ -951,6 +1205,9 @@ function describeCheckState(input: {
   if (input.activationDebt !== null) {
     return `v${input.activationDebt.installedVersion} is installed — restart host to finish.`;
   }
+  // Like debt, the remedy stays useful during the next check. The hook drops
+  // it when that check fails or returns a catalog that clears the refusal.
+  if (input.remedy !== null) return input.remedy.sentence;
   if (input.checking) return "Checking for updates…";
   if (input.unreachable) {
     // Deliberately NOT a toast, which is what the imperative check's `onError`

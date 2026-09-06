@@ -37,6 +37,15 @@ import type {
   ConditionPollLane,
   ErasedConditionPollPolicy,
 } from "@/lib/host-rpc-policy/host-method-policy-table";
+import type {
+  HostAvailableManifest,
+  HostUpdateCheckResponseV11,
+} from "@traycer/protocol/host/maintenance/index";
+import {
+  UPDATE_CHECK_CLI_RECOVERY_POLL_LANE,
+  UPDATE_CHECK_FLOOR_RECOVERY_POLL_LANE,
+  responseHasFloorRefusedCandidate,
+} from "@/lib/host-rpc-policy/host-method-policy-table";
 
 const typedProvidersClassifier = (
   data: ResponseOfMethod<HostRpcRegistry, "providers.list"> | undefined,
@@ -51,6 +60,58 @@ const typedToErasedPolicy: ErasedConditionPollPolicy<"providers.list"> = {
   staleDataErrorLane: PROVIDERS_STALE_ERROR_POLL_LANE,
   resetLaneIds: new Set([PROVIDERS_STEADY_POLL_LANE.id]),
 };
+
+function floorManifest(options: {
+  latest: string;
+  floorVersion: string;
+  floorReason: string;
+  yanked: boolean;
+  floorSha256: string;
+}): HostAvailableManifest {
+  const { latest, floorVersion, floorReason, yanked, floorSha256 } = options;
+  const entry = (version: string, refused: boolean) => ({
+    version,
+    releasedAt: "2026-09-06T00:00:00Z",
+    releaseNotesUrl: "https://example.invalid/notes",
+    yanked: refused ? yanked : false,
+    deprecationReason: null,
+    requiredCliVersion: refused ? "1.3.0" : null,
+    platforms: {
+      "darwin-arm64": {
+        available: !refused,
+        unavailableReason: refused ? floorReason : null,
+        url: "https://example.invalid/host.tar.gz",
+        sizeBytes: 100,
+        sha256: refused ? floorSha256 : "a".repeat(64),
+        signatureUrl: "https://example.invalid/host.tar.gz.minisig",
+        signatureAlgorithm: "minisign" as const,
+        publicKeyId: "key-1",
+      },
+    },
+  });
+  const versions = [entry(latest, latest === floorVersion)];
+  if (floorVersion !== latest) {
+    versions.push(entry(floorVersion, true));
+  }
+  return {
+    schemaVersion: 1,
+    generatedAt: "2026-09-06T00:00:00Z",
+    latest,
+    versions,
+  };
+}
+
+function checkResponse(
+  manifest: HostAvailableManifest,
+  source: "stable-default" | "installed-rc",
+): HostUpdateCheckResponseV11 {
+  return {
+    outcome: "ok",
+    manifest,
+    effectiveIncludePreReleases: source === "installed-rc",
+    includePreReleasesSource: source,
+  };
+}
 
 // @ts-expect-error The phantom method field must reject a policy under another key.
 const wrongKeyPolicy: ErasedConditionPollPolicy<"agent.gui.listHarnesses"> =
@@ -184,6 +245,181 @@ describe("host method poll policy table", () => {
     const fixed = HOST_METHOD_POLL_TABLE["host.getRateLimitUsage"].poll;
     const intervalMs: number = fixed.intervalMs;
     expect(intervalMs).toBe(15 * 60 * 1_000);
+  });
+
+  describe("host.update.check CLI-floor recovery", () => {
+    const policy = HOST_METHOD_POLL_TABLE["host.update.check"].poll;
+
+    it("polls a latest candidate whose projected asset carries the authored floor reason", () => {
+      const response = checkResponse(
+        floorManifest({
+          latest: "1.3.0",
+          floorVersion: "1.3.0",
+          floorReason:
+            "Needs Traycer CLI 1.3.0 or newer (this host's CLI is 1.2.0).",
+          yanked: false,
+          floorSha256: "",
+        }),
+        "stable-default",
+      );
+      expect(responseHasFloorRefusedCandidate(response)).toBe(true);
+      expect(policy.classify(response)).toBe(
+        UPDATE_CHECK_FLOOR_RECOVERY_POLL_LANE,
+      );
+      expect(UPDATE_CHECK_FLOOR_RECOVERY_POLL_LANE.initialDelayMs).toBe(30_000);
+      expect(UPDATE_CHECK_FLOOR_RECOVERY_POLL_LANE.maxDelayMs).toBe(30_000);
+    });
+
+    it("rejects available and yanked candidates", () => {
+      const availableWithFloorReason = checkResponse(
+        {
+          ...floorManifest({
+            latest: "1.3.0",
+            floorVersion: "1.3.0",
+            floorReason:
+              "Needs Traycer CLI 1.3.0 or newer (this host's CLI is 1.2.0).",
+            yanked: false,
+            floorSha256: "c".repeat(64),
+          }),
+          versions: floorManifest({
+            latest: "1.3.0",
+            floorVersion: "1.3.0",
+            floorReason:
+              "Needs Traycer CLI 1.3.0 or newer (this host's CLI is 1.2.0).",
+            yanked: false,
+            floorSha256: "c".repeat(64),
+          }).versions.map((entry) => ({
+            ...entry,
+            platforms: {
+              "darwin-arm64": {
+                ...entry.platforms["darwin-arm64"],
+                available: true,
+                unavailableReason:
+                  "Needs Traycer CLI 1.3.0 or newer (this host's CLI is 1.2.0).",
+              },
+            },
+          })),
+        },
+        "stable-default",
+      );
+      // Removing the !asset.available predicate would classify this genuinely
+      // available asset as a floor despite its stale reason; this negative
+      // availability pin must turn RED under that concrete ablation.
+      expect(responseHasFloorRefusedCandidate(availableWithFloorReason)).toBe(
+        false,
+      );
+      expect(policy.classify(availableWithFloorReason)).toBe(false);
+      const nonFloorRefusal = checkResponse(
+        floorManifest({
+          latest: "1.3.0",
+          floorVersion: "1.3.0",
+          floorReason: "not a floor",
+          yanked: false,
+          floorSha256: "",
+        }),
+        "stable-default",
+      );
+      // Removing the authored prefix check would treat any unavailable asset
+      // as a floor; this negative available-asset pin must turn RED under that
+      // concrete classifier-ablation.
+      expect(responseHasFloorRefusedCandidate(nonFloorRefusal)).toBe(false);
+      const yanked = checkResponse(
+        floorManifest({
+          latest: "1.3.0",
+          floorVersion: "1.3.0",
+          floorReason:
+            "Needs Traycer CLI 1.3.0 or newer (this host's CLI is 1.2.0).",
+          yanked: true,
+          floorSha256: "",
+        }),
+        "stable-default",
+      );
+      // Removing the !entry.yanked predicate would poll a yanked catalog row
+      // as repairable; this negative pin must turn RED under that ablation.
+      expect(responseHasFloorRefusedCandidate(yanked)).toBe(false);
+      expect(policy.classify(yanked)).toBe(false);
+    });
+
+    it("does not mistake a withdrawn asset with a retained SHA for a CLI floor", () => {
+      const withdrawn = checkResponse(
+        floorManifest({
+          latest: "1.3.0",
+          floorVersion: "1.3.0",
+          floorReason: "platform build withdrawn",
+          yanked: false,
+          floorSha256: "b".repeat(64),
+        }),
+        "stable-default",
+      );
+      // Removing the authored-reason prefix predicate would classify this
+      // withdrawn-with-hash counterexample as a floor; this negative pin must
+      // turn RED under that concrete structural-ablation.
+      expect(responseHasFloorRefusedCandidate(withdrawn)).toBe(false);
+      expect(policy.classify(withdrawn)).toBe(false);
+    });
+
+    it("checks every non-yanked installed-RC candidate, but not ordinary nonlatest rows", () => {
+      const nonlatestFloor = checkResponse(
+        floorManifest({
+          latest: "1.2.0",
+          floorVersion: "1.3.0-rc.2",
+          floorReason:
+            "Needs Traycer CLI 1.3.0 or newer (this host's CLI is 1.2.0).",
+          yanked: false,
+          floorSha256: "",
+        }),
+        "stable-default",
+      );
+      // Removing the latest/installed-rc candidate constraint would poll this
+      // ordinary nonlatest row; this negative candidate-scope pin must turn
+      // RED under that source-predicate ablation.
+      expect(responseHasFloorRefusedCandidate(nonlatestFloor)).toBe(false);
+      // Removing the installed-rc expansion would miss this later RC refusal
+      // even though latest is clear; this negative source-expansion pin must
+      // turn RED under that concrete ablation.
+      expect(
+        responseHasFloorRefusedCandidate(
+          checkResponse(
+            floorManifest({
+              latest: "1.2.0",
+              floorVersion: "1.3.0-rc.2",
+              floorReason:
+                "Needs Traycer CLI 1.3.0 or newer (this host's CLI is 1.2.0).",
+              yanked: false,
+              floorSha256: "",
+            }),
+            "installed-rc",
+          ),
+        ),
+      ).toBe(true);
+      expect(
+        policy.classify(
+          checkResponse(
+            floorManifest({
+              latest: "1.2.0",
+              floorVersion: "1.3.0-rc.2",
+              floorReason:
+                "Needs Traycer CLI 1.3.0 or newer (this host's CLI is 1.2.0).",
+              yanked: false,
+              floorSha256: "",
+            }),
+            "installed-rc",
+          ),
+        ),
+      ).toBe(UPDATE_CHECK_FLOOR_RECOVERY_POLL_LANE);
+    });
+
+    it("preserves the existing cli-unavailable recovery lane", () => {
+      // Removing the explicit cli-unavailable arm would route this legacy
+      // response through the floor helper and lose its recovery polling;
+      // this negative lane pin must turn RED under that source-arm ablation.
+      const response: HostUpdateCheckResponseV11 = {
+        outcome: "cli-unavailable",
+      };
+      expect(policy.classify(response)).toBe(
+        UPDATE_CHECK_CLI_RECOVERY_POLL_LANE,
+      );
+    });
   });
 
   // `host.status` used to be un-polled entirely. It is now opted in
