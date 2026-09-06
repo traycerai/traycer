@@ -395,35 +395,81 @@ async function stopService(
 // tree MINUS the process performing it - which is the only tree a stop can
 // ever have meant. Each survivor is then killed on its own, without `/T`.
 //
+// The tree keeps moving while it is being taken: a worker the host forks
+// between the snapshot and the kill is in no scan, and once its parent is
+// dead it matches nothing by path and hangs off a pid nobody is walking. (An
+// old `/T` could still find it, enumerating at kill time.) So the kill runs
+// in bounded PASSES: every pass hands the scan the pids it has already killed
+// and their creation stamps, and the scan adopts as further roots the
+// processes whose recorded parent is one of those - provided that parent pid
+// is no longer present (a present one is a reused pid, and its children are
+// nobody's business) and the child was born no earlier than the parent it
+// claims. The loop ends the first time a pass finds nothing new, or at the
+// pass bound; the updater exclusion holds throughout.
+//
 // The raw recorded pid is used only when the scan itself is unavailable: a
 // host that died without cleanup leaves pid.json behind, and Windows may have
 // recycled that pid for an unrelated process an unverified kill would take
 // down. That path cannot enumerate, so it keeps `/T` - except when the
 // recorded pid is this process's own parent, the one shape in which `/T` is
 // known to be suicide.
+const WINDOWS_KILL_TREE_MAX_PASSES = 3;
+
 async function killHostProcessTree(
   label: ServiceLabel,
   run: ProcessRunner,
 ): Promise<void> {
-  const scannedPids = await findSlotProcessIds(label, run);
-  const pidMetadata =
-    scannedPids === null ? await readHostPidMetadata(label.environment) : null;
-  const fallbackPids = pidMetadata === null ? [] : [pidMetadata.pid];
-  const pids = uniqueProcessIds(scannedPids ?? fallbackPids);
-  const treeFlag = (pid: number): readonly string[] =>
-    scannedPids === null && pid !== process.ppid ? ["/T"] : [];
-  await Promise.all(
-    pids.map((pid) =>
-      run("taskkill", [...treeFlag(pid), "/F", "/PID", String(pid)], {
-        env: undefined,
-        cwd: undefined,
-        timeoutMs: WINDOWS_TASKKILL_TIMEOUT_MS,
-        tolerateNonZeroExit: true,
-      }).catch((cause) => {
-        if (isServiceMutationAuthorityError(cause)) throw cause;
-      }),
-    ),
-  );
+  const killed = new Map<number, number | null>();
+  for (let pass = 0; pass < WINDOWS_KILL_TREE_MAX_PASSES; pass += 1) {
+    const scanned = await findSlotProcesses(
+      label,
+      run,
+      killedProcesses(killed),
+    );
+    if (scanned === null) {
+      if (pass === 0) await killRecordedPidUnverified(label, run);
+      return;
+    }
+    const fresh = scanned.filter((entry) => !killed.has(entry.pid));
+    if (fresh.length === 0) return;
+    for (const entry of fresh) killed.set(entry.pid, entry.creationMs);
+    await Promise.all(
+      fresh.map((entry) =>
+        run("taskkill", ["/F", "/PID", String(entry.pid)], {
+          env: undefined,
+          cwd: undefined,
+          timeoutMs: WINDOWS_TASKKILL_TIMEOUT_MS,
+          tolerateNonZeroExit: true,
+        }).catch((cause) => {
+          if (isServiceMutationAuthorityError(cause)) throw cause;
+        }),
+      ),
+    );
+  }
+}
+
+function killedProcesses(
+  killed: ReadonlyMap<number, number | null>,
+): readonly KilledProcess[] {
+  return Array.from(killed, ([pid, creationMs]) => ({ pid, creationMs }));
+}
+
+async function killRecordedPidUnverified(
+  label: ServiceLabel,
+  run: ProcessRunner,
+): Promise<void> {
+  const pidMetadata = await readHostPidMetadata(label.environment);
+  if (pidMetadata === null || !isKillableProcessId(pidMetadata.pid)) return;
+  const pid = pidMetadata.pid;
+  const treeFlag = pid === process.ppid ? [] : ["/T"];
+  await run("taskkill", [...treeFlag, "/F", "/PID", String(pid)], {
+    env: undefined,
+    cwd: undefined,
+    timeoutMs: WINDOWS_TASKKILL_TIMEOUT_MS,
+    tolerateNonZeroExit: true,
+  }).catch((cause) => {
+    if (isServiceMutationAuthorityError(cause)) throw cause;
+  });
 }
 
 async function startService(
@@ -626,10 +672,11 @@ function describeCause(cause: unknown): string {
 // Returns null (rather than an empty list) when the scan could not run at
 // all, so the caller can distinguish "verified: nothing to kill" from
 // "unknown: PowerShell unavailable".
-async function findSlotProcessIds(
+async function findSlotProcesses(
   label: ServiceLabel,
   run: ProcessRunner,
-): Promise<readonly number[] | null> {
+  killed: readonly KilledProcess[],
+): Promise<readonly SlotProcessToKill[] | null> {
   try {
     const result = await run(
       "powershell.exe",
@@ -640,6 +687,7 @@ async function findSlotProcessIds(
         buildSlotProcessScanScript({
           hostHome: hostHomeDir(label.environment),
           currentPid: process.pid,
+          killed,
         }),
       ],
       {
@@ -649,16 +697,31 @@ async function findSlotProcessIds(
         tolerateNonZeroExit: true,
       },
     );
-    return parseProcessIdJson(result.stdout);
+    return parseProcessKillSetJson(result.stdout);
   } catch (cause) {
     if (isServiceMutationAuthorityError(cause)) throw cause;
     return null;
   }
 }
 
+/** A process an earlier pass killed: its pid and the creation stamp it had. */
+export interface KilledProcess {
+  readonly pid: number;
+  /** `CreationDate` as epoch milliseconds, or `null` when the scan had none. */
+  readonly creationMs: number | null;
+}
+
+/** A process the scan says to kill, with the stamp a later pass adopts by. */
+export interface SlotProcessToKill {
+  readonly pid: number;
+  readonly creationMs: number | null;
+}
+
 interface SlotProcessScanOptions {
   readonly hostHome: string;
   readonly currentPid: number;
+  /** Pids killed by earlier passes; the scan adopts their orphans as roots. */
+  readonly killed: readonly KilledProcess[];
 }
 
 // The kill set: every slot-matching process AND its descendants, minus this
@@ -678,6 +741,23 @@ function buildSlotProcessScanScript(options: SlotProcessScanOptions): string {
   return buildSlotProcessScanScriptWithProjection(options, [
     "$byId = @{}",
     "foreach ($p in $all) { $byId[[int]$p.ProcessId] = $p }",
+    "$stamp = { param($p) if ($null -eq $p -or $null -eq $p.CreationDate) { $null } else { [long](($p.CreationDate.ToUniversalTime() - [datetime]'1970-01-01').TotalMilliseconds) } }",
+    "$killed = @{}",
+    ...options.killed.map(
+      (entry) =>
+        `$killed[${String(entry.pid)}] = ${entry.creationMs === null ? "$null" : `[long]${String(entry.creationMs)}`}`,
+    ),
+    // Orphans of an earlier pass: their recorded parent is a pid we killed,
+    // that pid is not present now (present = reused, unrelated), and they
+    // were born no earlier than the parent they name.
+    "$orphans = $all | Where-Object {",
+    "  $parentId = [int]$_.ParentProcessId",
+    "  if (-not $killed.ContainsKey($parentId)) { return $false }",
+    "  if ($byId.ContainsKey($parentId)) { return $false }",
+    "  if ($excluded -contains [int]$_.ProcessId) { return $false }",
+    "  $born = & $stamp $_",
+    "  ($null -eq $killed[$parentId]) -or ($null -eq $born) -or ($born -ge $killed[$parentId])",
+    "}",
     "$children = @{}",
     "foreach ($p in $all) {",
     "  $parentId = [int]$p.ParentProcessId",
@@ -703,9 +783,9 @@ function buildSlotProcessScanScript(options: SlotProcessScanOptions): string {
     "}",
     `$spared = @{ $PID = $true }`,
     `foreach ($id in (& $expand @(${options.currentPid}))) { $spared[[int]$id] = $true }`,
-    "$roots = @($matches | ForEach-Object { [int]$_.ProcessId })",
+    "$roots = @($matches | ForEach-Object { [int]$_.ProcessId }) + @($orphans | ForEach-Object { [int]$_.ProcessId })",
     "$victims = @(& $expand $roots) | Where-Object { -not $spared.ContainsKey([int]$_) } | ForEach-Object { [int]$_ }",
-    "@($victims) | ConvertTo-Json -Compress",
+    "@($victims | ForEach-Object { [pscustomobject]@{ ProcessId = $_; CreationMs = (& $stamp $byId[$_]) } }) | ConvertTo-Json -Compress",
   ]);
 }
 
@@ -784,6 +864,14 @@ function powershellStringArray(values: readonly string[]): string {
 }
 
 function parseProcessIdJson(stdout: string): readonly number[] {
+  return parseProcessKillSetJson(stdout).map((entry) => entry.pid);
+}
+
+// Accepts both the kill-set shape (`{ProcessId, CreationMs}` objects) and
+// bare pids, in array or single-value form - Windows PowerShell 5.1 emits a
+// bare value for a single element even under `@(...)`. Duplicates collapse to
+// the first occurrence.
+function parseProcessKillSetJson(stdout: string): readonly SlotProcessToKill[] {
   const trimmed = stdout.trim();
   if (trimmed.length === 0) return [];
   let parsed: unknown;
@@ -794,11 +882,30 @@ function parseProcessIdJson(stdout: string): readonly number[] {
     return [];
   }
   const values = Array.isArray(parsed) ? parsed : [parsed];
-  return values.filter(isKillableProcessId);
+  const seen = new Set<number>();
+  const entries: SlotProcessToKill[] = [];
+  for (const value of values) {
+    const entry = parseKillSetEntry(value);
+    if (entry === null || seen.has(entry.pid)) continue;
+    seen.add(entry.pid);
+    entries.push(entry);
+  }
+  return entries;
 }
 
-function uniqueProcessIds(values: readonly number[]): readonly number[] {
-  return Array.from(new Set(values.filter(isKillableProcessId)));
+function parseKillSetEntry(value: unknown): SlotProcessToKill | null {
+  if (isKillableProcessId(value)) return { pid: value, creationMs: null };
+  if (typeof value !== "object" || value === null) return null;
+  const record = value as Record<string, unknown>;
+  if (!isKillableProcessId(record.ProcessId)) return null;
+  const stamp = record.CreationMs;
+  return {
+    pid: record.ProcessId,
+    creationMs:
+      typeof stamp === "number" && Number.isSafeInteger(stamp) && stamp > 0
+        ? stamp
+        : null,
+  };
 }
 
 // A slot-matching process reported by the detail scan. Field names mirror
@@ -876,6 +983,7 @@ export async function describeSlotLockHolders(
         buildSlotProcessDetailScanScript({
           hostHome: hostHomeDir(label.environment),
           currentPid: process.pid,
+          killed: [],
         }),
       ],
       {
@@ -1210,5 +1318,6 @@ export {
   buildSlotProcessScanScript as buildWindowsSlotProcessScanScript,
   buildSlotProcessDetailScanScript as buildWindowsSlotProcessDetailScanScript,
   parseProcessIdJson as parseWindowsProcessIdJson,
+  parseProcessKillSetJson as parseWindowsProcessKillSetJson,
   parseProcessDetailJson as parseWindowsProcessDetailJson,
 };

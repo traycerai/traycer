@@ -10,6 +10,7 @@ import {
   parseSchtasksLastRunResult,
   parseWindowsProcessDetailJson,
   parseWindowsProcessIdJson,
+  parseWindowsProcessKillSetJson,
   setWindowsStartEvidenceDepsForTests,
   setWindowsTaskInstallDepsForTests,
   WINDOWS_SLOT_PROCESS_SCAN_FILTER_LINE_COUNT,
@@ -101,6 +102,7 @@ describe("Windows service stale host cleanup", () => {
     const script = buildWindowsSlotProcessScanScript({
       hostHome: "C:\\Users\\Traycer Dev\\.traycer\\host\\staging",
       currentPid: 1234,
+      killed: [],
     });
     expect(script).toContain("$excluded = @(1234, $PID)");
     expect(script).toContain(".traycer\\host\\staging\\install\\");
@@ -111,6 +113,7 @@ describe("Windows service stale host cleanup", () => {
     const script = buildWindowsSlotProcessScanScript({
       hostHome: "C:\\Users\\Traycer Dev\\.traycer\\host",
       currentPid: 1234,
+      killed: [],
     });
     expect(script).toContain(
       "c:\\users\\traycer dev\\.traycer\\host\\install\\",
@@ -122,6 +125,7 @@ describe("Windows service stale host cleanup", () => {
     const options = {
       hostHome: "C:\\Users\\Traycer Dev\\.traycer\\host",
       currentPid: 1234,
+      killed: [],
     };
     const detail = buildWindowsSlotProcessDetailScanScript(options);
     expect(detail).toContain("$excluded = @(1234, $PID)");
@@ -144,6 +148,7 @@ describe("Windows service stale host cleanup", () => {
     const script = buildWindowsSlotProcessScanScript({
       hostHome: "C:\\Users\\Traycer Dev\\.traycer\\host",
       currentPid: 1234,
+      killed: [],
     });
     // The tree is walked from the one snapshot the filter took, over parent
     // links guarded by creation order (pid reuse turns a dead parent's id
@@ -156,9 +161,53 @@ describe("Windows service stale host cleanup", () => {
     expect(script).toContain("$spared = @{ $PID = $true }");
     expect(script).toContain("& $expand @(1234)");
     expect(script).toContain("-not $spared.ContainsKey([int]$_)");
+    expect(script).toContain(
+      "[pscustomobject]@{ ProcessId = $_; CreationMs = (& $stamp $byId[$_]) }",
+    );
+    expect(script.trim().endsWith("| ConvertTo-Json -Compress")).toBe(true);
+  });
+
+  it("adopts orphans of pids an earlier pass killed, guarded by presence and creation order", () => {
+    const script = buildWindowsSlotProcessScanScript({
+      hostHome: "C:\\Users\\Traycer Dev\\.traycer\\host",
+      currentPid: 1234,
+      killed: [
+        { pid: 401, creationMs: 1788000000000 },
+        { pid: 402, creationMs: null },
+      ],
+    });
+    expect(script).toContain("$killed[401] = [long]1788000000000");
+    expect(script).toContain("$killed[402] = $null");
+    // Recorded parent among the killed, that pid gone (present = reused),
+    // never this CLI's own pid, and born no earlier than the parent.
+    expect(script).toContain(
+      "if (-not $killed.ContainsKey($parentId)) { return $false }",
+    );
+    expect(script).toContain(
+      "if ($byId.ContainsKey($parentId)) { return $false }",
+    );
+    expect(script).toContain(
+      "if ($excluded -contains [int]$_.ProcessId) { return $false }",
+    );
+    expect(script).toContain("($born -ge $killed[$parentId])");
+    expect(script).toContain(
+      "+ @($orphans | ForEach-Object { [int]$_.ProcessId })",
+    );
+  });
+
+  it("parses the kill-set object shape and bare pids alike, collapsing duplicates", () => {
     expect(
-      script.trim().endsWith("@($victims) | ConvertTo-Json -Compress"),
-    ).toBe(true);
+      parseWindowsProcessKillSetJson(
+        '[{"ProcessId":401,"CreationMs":1788000000000},{"ProcessId":402,"CreationMs":null},401,{"Name":"no-pid"}]',
+      ),
+    ).toEqual([
+      { pid: 401, creationMs: 1788000000000 },
+      { pid: 402, creationMs: null },
+    ]);
+    expect(
+      parseWindowsProcessKillSetJson('{"ProcessId":7,"CreationMs":9}'),
+    ).toEqual([{ pid: 7, creationMs: 9 }]);
+    expect(parseWindowsProcessKillSetJson("")).toEqual([]);
   });
 
   it("parses PowerShell process detail JSON in both array and single-object shape", () => {
@@ -259,6 +308,65 @@ describe("Windows service stale host cleanup", () => {
       ["/F", "/PID", "401"],
       ["/F", "/PID", "402"],
     ]);
+    // A second pass ran, was told what the first killed, found nothing new
+    // and ended the loop - no third scan.
+    const scans = calls.filter((call) => call.command === "powershell.exe");
+    expect(scans).toHaveLength(2);
+    expect(scans[1]?.args.at(-1)).toContain("$killed[401] = $null");
+    expect(scans[1]?.args.at(-1)).toContain("$killed[402] = $null");
+  });
+
+  it("reaps a child that appeared after the first snapshot through the follow-up pass", async () => {
+    // Pass 1 sees the host; between its snapshot and the kill the host forks
+    // a worker. Pass 2, told the host's pid and stamp, adopts the orphan.
+    const calls: RecordedCall[] = [];
+    let scan = 0;
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (command !== "powershell.exe") return success("");
+      scan += 1;
+      if (scan === 1) return success('[{"ProcessId":401,"CreationMs":100}]');
+      return success('[{"ProcessId":777,"CreationMs":150}]');
+    };
+    const controller = createWindowsController(runner);
+
+    await controller.stop(serviceLabelFor("staging"), { force: false });
+
+    expect(
+      calls
+        .filter((call) => call.command === "taskkill")
+        .map((call) => call.args),
+    ).toEqual([
+      ["/F", "/PID", "401"],
+      ["/F", "/PID", "777"],
+    ]);
+    const scans = calls.filter((call) => call.command === "powershell.exe");
+    expect(scans).toHaveLength(3);
+    expect(scans[1]?.args.at(-1)).toContain("$killed[401] = [long]100");
+    expect(scans[2]?.args.at(-1)).toContain("$killed[777] = [long]150");
+  });
+
+  it("bounds the follow-up passes even when every pass finds something new", async () => {
+    const calls: RecordedCall[] = [];
+    let scan = 0;
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (command !== "powershell.exe") return success("");
+      scan += 1;
+      return success(`[${String(1000 + scan)}]`);
+    };
+    const controller = createWindowsController(runner);
+
+    await controller.stop(serviceLabelFor("staging"), { force: false });
+
+    expect(
+      calls.filter((call) => call.command === "powershell.exe"),
+    ).toHaveLength(3);
+    expect(
+      calls
+        .filter((call) => call.command === "taskkill")
+        .map((call) => call.args[2]),
+    ).toEqual(["1001", "1002", "1003"]);
   });
 
   it("kills exactly the scan-verified pids when the scan covers the recorded pid", async () => {
