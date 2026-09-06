@@ -19,10 +19,17 @@ const NOW_MS = 1_000_000;
 /**
  * The fresh window while an update is ACTIVE: `observationFromCanonicalRead`
  * derives `freshUntilMs` as `dataUpdatedAt + 2.5 × pollDelay`, and the
- * accelerator drives the poll to 2 s during an attempt — so ~3 s, which is
- * well inside what a relayed round trip can take.
+ * accelerator drives the poll to 2 s during an attempt — so 5 s.
+ *
+ * That is the window a slow round trip has to BREACH for the regression to
+ * bite, not the latency itself: a relayed `host.status` can take several
+ * seconds, and it is the ones that overrun 5 s that a shared clock would read
+ * as the host having stopped reporting.
  */
-const ACTIVE_FRESH_WINDOW_MS = 3_000;
+const ACTIVE_FRESH_WINDOW_MS = 5_000;
+
+/** A round trip that overruns the window above — the case under test. */
+const LATE_ROUND_TRIP_MS = ACTIVE_FRESH_WINDOW_MS + 1_000;
 
 function wireObservation(
   overrides: Partial<FleetUpdateWireObservation>,
@@ -83,28 +90,39 @@ function recordObservation(
 }
 
 describe("projectLocalUpdate — the wire leg is NOT aged by the record leg's tick (cold review C, F3)", () => {
-  it("a live attempt whose next poll arrives 4s late keeps its kind, the lifecycle gate and the fast poll", () => {
+  it("a live attempt whose next poll overruns the fresh window keeps its kind, the lifecycle gate and the fast poll — and still OUTRANKS the record", () => {
     // THE PIN. A slow `host.status` round trip is not a state change on the
     // host, and the wire read's own deadline says so: `freshUntilMs` was
     // derived from the same `dataUpdatedAt` this is measured against, with the
     // query's health already folded in, so a HEALTHY read is fresh by
     // construction and only health demotes it.
     //
-    // Falsifies: feeding the renderer tick to the WIRE leg (which
-    // `projectLocalUpdate` briefly did, taking one `nowMs` for both). The tick
-    // below has moved 4 s past the read — beyond the ~3 s active fresh window
-    // — so a shared clock demotes this to `unknown` + "last seen", releases
-    // the page-wide lifecycle gate mid-restart, and drops the fast poll that
-    // was keeping the wire caught up. Every cycle, on a host that is answering
-    // perfectly well and is merely far away.
+    // Falsifies BOTH consumers of `wireNowMs`, which is why the record below
+    // is not `null`:
+    //
+    //  - PRECEDENCE (`preferLiveOverRecord`'s `clock.wireNowMs <=
+    //    wire.freshUntilMs`). With `record: null` that function returns before
+    //    it reads a clock at all, so the freshness line there would be free to
+    //    take `recordNowMs` with nothing red. Handing it a record — one that
+    //    would win on a stale wire, same attempt, one `sequence` ahead — makes
+    //    the comparison decide, and `observation.source` is what it decided.
+    //  - PROJECTION (`projectFleetUpdateView`'s `nowMs > freshUntilMs`), via
+    //    `projectLocalUpdate` routing the winner to `wireNowMs`.
+    //
+    // The tick below has moved past the 5 s active fresh window, so a single
+    // shared clock demotes this to `unknown` + "last seen", hands the slot to
+    // the record, releases the page-wide lifecycle gate mid-restart, and drops
+    // the fast poll that was keeping the wire caught up. Every cycle, on a
+    // host that is answering perfectly well and is merely far away.
     const wireReadAtMs = NOW_MS;
-    const tickMs = wireReadAtMs + ACTIVE_FRESH_WINDOW_MS + 1_000;
+    const tickMs = wireReadAtMs + LATE_ROUND_TRIP_MS;
     const projection = projectLocalUpdate({
       wire: wireObservation({ observedAtMs: wireReadAtMs }),
-      record: null,
+      record: recordObservation({ sequence: 2 }),
       clock: { wireNowMs: wireReadAtMs, recordNowMs: tickMs },
       connected: true,
     });
+    expect(projection.observation?.source).toBe("selected");
     expect(projection.view.kind).toBe("restarting");
     expect(projection.view.lastKnownKind).toBeNull();
     expect(holdsLifecycleGate(projection.view)).toBe(true);
@@ -138,8 +156,11 @@ describe("projectLocalUpdate — the wire leg is NOT aged by the record leg's ti
     // The complement, and the reason the two instants cannot simply be
     // collapsed onto `dataUpdatedAt` either: with no wire read at all the
     // record answers, and its five-second proof must expire on a clock that
-    // keeps moving while the host is down. Both assertions below share one
-    // frozen `wireNowMs`; only `recordNowMs` differs.
+    // keeps moving while the host is down. Only `recordNowMs` differs between
+    // the two calls below — `wireNowMs` is passed but never consulted here,
+    // since `preferLiveOverRecord` returns the record before reading a clock
+    // when there is no wire at all. The pin above is the one that holds the
+    // wire instant's own consumers.
     const probeAtMs = NOW_MS;
     const record = recordObservation({
       liveness: "live",

@@ -2511,9 +2511,9 @@ aria-live="polite"` carrying the equivalent text for
       health into `freshUntilMs` — so a healthy read is fresh until health says
       otherwise, never until the round trip runs long. Feeding the tick to both
       made one `host.status` slower than the fresh window (2.5 × the poll
-      delay, ~3 s while an update is active, ordinary over the relay) demote a
-      live attempt to "Last seen", drop the page-wide gate and disengage the
-      poll accelerator, once per cycle. Precedence between the two legs
+      delay, so 5 s while the accelerator holds the poll at 2 s) demote a live
+      attempt to "Last seen", drop the page-wide gate and disengage the poll
+      accelerator, once per cycle. Precedence between the two legs
       (`preferLiveOverRecord`): a healthy wire read always wins; once it is
       stale, the same attempt is ordered by `(generation, sequence)` — so a
       repeated read of one unchanged record can never outrank a live frame —

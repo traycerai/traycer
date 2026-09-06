@@ -845,8 +845,9 @@ describe("holdsLifecycleGate — direct unit coverage", () => {
  * `preferLiveOverRecord` takes a wire instant and a record instant because
  * production has two different clocks to offer it (see `LocalUpdateClock`).
  * A test whose subject is ordering, not clock choice, has no reason to
- * separate them — and collapsing them here keeps the divergent-clock pin below
- * visibly special rather than lost among identical-looking literals.
+ * separate them, and every case in THIS file is such a test. The pins that do
+ * separate the two instants live with the helper that routes them,
+ * `__tests__/local-update-projection.test.ts`.
  */
 function sameClock(nowMs: number): LocalUpdateClock {
   return { wireNowMs: nowMs, recordNowMs: nowMs };
