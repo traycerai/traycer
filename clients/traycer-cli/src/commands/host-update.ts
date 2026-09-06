@@ -1013,8 +1013,8 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
           // on disk still names the pre-lock target while the run went on
           // to commit the version `applyHost` reported, and "update to
           // <old> failed" would name a version this run never installed -
-          // and the host's narrower, string-equal suppression would then
-          // never retire it.
+          // and neither string-equal stale-failed rule would then ever
+          // retire it.
           await markUpdateFailed(
             ctx.runtime.logger,
             environment,
@@ -1252,10 +1252,21 @@ async function readActivationState(
  * Whether the running host has been OBSERVED serving `targetVersion`: the
  * install record names it and the live process is at the record
  * (`readActivationState` → `activated`, with its identity verdict). Used by
- * the failure path of a run that holds no marker of its own to withhold a
- * `failed` for a target another updater has since delivered. Never throws:
- * a reading that cannot be taken is "not observed", and the stamp lands -
- * a failure that cannot be contradicted is reported, not swallowed.
+ * the failure path to withhold a `failed` for a target another updater has
+ * since delivered. Never throws: a reading that cannot be taken is "not
+ * observed", and the stamp lands - a failure that cannot be contradicted is
+ * reported, not swallowed.
+ *
+ * "Names it" is STRING identity of the record with the target, the grain
+ * the version binding uses (`installedVersionMismatch`) and the rule the
+ * host's `isStaleUpdateProgress` applies to the same marker: `2.0.0+foo` is
+ * another artifact than `2.0.0+bar`, and a run for one that finds the other
+ * running was not delivered - its failure stands, whatever the catalog
+ * comparator (build-metadata-blind, right for ORDERING) would call equal.
+ * Another actor delivering the same registry artifact writes the same
+ * string, so a real match is never defeated. The activation reading above
+ * it keeps the comparator: running-vs-record is a runtime-stamp question,
+ * record-vs-target is an artifact one.
  */
 async function targetObservedRunning(
   environment: Environment,
@@ -1263,15 +1274,9 @@ async function targetObservedRunning(
 ): Promise<boolean> {
   try {
     const reading = await readActivationState(environment);
-    if (reading.kind !== "activated") return false;
-    // The catalog-domain comparator `readActivationState` itself uses, not
-    // `===`: it ignores build metadata, so `1.3.0+abc` and `1.3.0` are one
-    // release to it and must be one release here.
-    const comparison = compareHostVersions(
-      reading.installedVersion,
-      targetVersion,
+    return (
+      reading.kind === "activated" && reading.installedVersion === targetVersion
     );
-    return comparison.comparable && comparison.ordering === "equal";
   } catch {
     return false;
   }
@@ -1289,35 +1294,35 @@ async function targetObservedRunning(
  * immediately before the unlink. Marker I/O never fails the command (same
  * rule as the writes).
  *
- * "Contradicts" is the rule the host's `isStaleUpdateProgress` applies in
- * its narrower form (string equality of the marker's target with the
- * runtime version it publishes, so a staging host's `staging.<epoch>.<sha>`
- * never matches a catalog target there): a `failed` is stale when the
- * version it names is the one now running. Here the comparison is the
- * catalog comparator's, the domain the record and the target share. A `failed`
- * naming ANOTHER version - an attempt at 2.0.0 that failed before the swap,
- * read by a later `host update` while the registry offers only 1.9.0 - is
- * a report the observed state does not contradict, and it stays until an
- * attempt at that target supersedes it.
+ * "Contradicts" is the rule the host's `isStaleUpdateProgress` applies to
+ * the same marker: a `failed` is stale when the version it names IS the one
+ * now running - string identity, the artifact grain (see
+ * `targetObservedRunning`). The host compares against the runtime version
+ * it publishes, so a staging host's `staging.<epoch>.<sha>` never matches a
+ * catalog target there; here the comparison is against the install record
+ * the running host has been observed at, the domain the marker's target was
+ * written in. A `failed` naming ANOTHER version - an attempt at 2.0.0 that
+ * failed before the swap, read by a later `host update` while the registry
+ * offers only 1.9.0, or an attempt at `2.0.0+foo` over a host that runs
+ * `2.0.0+bar` - is a report the observed state does not contradict, and it
+ * stays until a later run that does work replaces it (a retry at that
+ * target over a record at or above it short-circuits and never touches
+ * the marker).
  */
 async function clearStaleFailedMarker(
   logger: ILogger,
   environment: Environment,
-  observedRunningVersion: string,
+  observedInstalledVersion: string,
 ): Promise<void> {
   const marker = await readUpdateProgressMarker(environment);
   if (marker === null || marker.state !== "failed") return;
-  const comparison = compareHostVersions(
-    marker.targetVersion,
-    observedRunningVersion,
-  );
-  if (!comparison.comparable || comparison.ordering !== "equal") {
+  if (marker.targetVersion !== observedInstalledVersion) {
     logger.info(
       "Host update left the failed progress marker alone - it names a target the running host has not been observed at",
       {
         environment,
         failedTargetVersion: marker.targetVersion,
-        observedRunningVersion,
+        observedInstalledVersion,
       },
     );
     return;

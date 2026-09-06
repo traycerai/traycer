@@ -1322,6 +1322,59 @@ describe("buildHostUpdateCommand — stage consumed by another actor while waiti
     );
   });
 
+  it("EXPLICIT request for 2.0.0+foo, another actor committed AND activated 2.0.0+bar: refused as E_UNEXPECTED and STAMPED - the comparator's 'equal' is not the artifact the caller named", async () => {
+    // Codex r3945265711: the binding refuses (string identity), but the
+    // catch's observed-running check compared with `compareHostVersions`,
+    // which calls `2.0.0+foo` and `2.0.0+bar` equal, and withdrew the
+    // refusal's record - remote clients saw no failure for an artifact
+    // that was never delivered. Falsification: compare the record with
+    // the target through the comparator in `targetObservedRunning` and the
+    // delete below fires while the `failed` replace does not.
+    mocks.downloadAndStageHostMock.mockResolvedValue({
+      outcome: "promoted",
+      stagedVersion: "2.0.0+foo",
+      installedVersion: "1.0.0",
+    } satisfies HostDownloadOutcome);
+    mocks.readHostInstallRecordMock.mockResolvedValue(
+      sampleRecord("2.0.0+bar"),
+    );
+    mocks.applyHostMock.mockResolvedValue({
+      outcome: "no-op",
+      installedVersion: "2.0.0+bar",
+    } satisfies ApplyHostOutcome);
+    mocks.readHostPidMetadataMock.mockResolvedValue(pidAt("2.0.0+bar"));
+    mocks.identityVerdictMock.mockResolvedValue("current");
+
+    await expect(
+      buildHostUpdateCommand({
+        force: false,
+        allowDowngrade: false,
+        versionRequest: "2.0.0+foo",
+        ackNonce: null,
+      })(fakeCtx()),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.UNEXPECTED,
+      details: {
+        expectedInstalledVersion: "2.0.0+foo",
+        actualInstalledVersion: "2.0.0+bar",
+      },
+    });
+    expect(mocks.stopHostForRestartWithAttemptMock).not.toHaveBeenCalled();
+    expect(
+      mocks.deleteUpdateProgressMarkerIfUnchangedMock,
+    ).not.toHaveBeenCalled();
+    expect(
+      mocks.replaceUpdateProgressMarkerIfUnchangedMock,
+    ).toHaveBeenCalledWith(
+      "production",
+      expect.objectContaining({
+        state: "updating",
+        targetVersion: "2.0.0+foo",
+      }),
+      expect.objectContaining({ state: "failed", targetVersion: "2.0.0+foo" }),
+    );
+  });
+
   it("EXPLICIT request, the running host is not a release version (`foreign-runtime` reading) over a record another actor moved: refused, never the no-op at that record", async () => {
     // Falsification: leave `installedVersion` off the `foreign-runtime`
     // reading (or skip it in the binding) and this reports "host already
@@ -2642,10 +2695,15 @@ describe("buildHostUpdateCommand update-progress marker (T16)", () => {
     ).not.toHaveBeenCalled();
   });
 
-  it("the observed-match comparator ignores build metadata: 2.0.0+build.7 satisfies an announced 2.0.0", async () => {
-    // `targetObservedRunning` uses `compareHostVersions` (the catalog-domain
-    // comparator, same as `readActivationState`), not `===` - the installed
-    // record's build metadata must not defeat a real match.
+  it("build metadata is artifact identity: a host observed at 2.0.0+build.7 does NOT satisfy an announced 2.0.0 - the lost download is stamped, not withdrawn", async () => {
+    // `targetObservedRunning` is string identity of the record with the
+    // target - the grain `installedVersionMismatch` binds an explicit
+    // request at, and the rule the host's `isStaleUpdateProgress` applies
+    // to this marker - not the catalog comparator, which ignores build
+    // metadata. Falsification: compare with `compareHostVersions` and this
+    // run's record is withdrawn over a host that never ran what it
+    // announced (round 15, Codex r3945265711 - the explicit variant is
+    // pinned beside the recovery arm).
     mocks.downloadAndStageHostMock.mockImplementation(
       async (opts: DownloadAndStageHostOptions) => {
         if (opts.onWillDownload === null) {
@@ -2682,14 +2740,61 @@ describe("buildHostUpdateCommand update-progress marker (T16)", () => {
       .calls[0][1] as HostUpdateProgress;
     expect(
       mocks.deleteUpdateProgressMarkerIfUnchangedMock,
-    ).toHaveBeenCalledWith("production", written);
+    ).not.toHaveBeenCalled();
     expect(
       mocks.replaceUpdateProgressMarkerIfUnchangedMock,
-    ).not.toHaveBeenCalledWith(
+    ).toHaveBeenCalledWith(
       "production",
       written,
-      expect.objectContaining({ state: "failed" }),
+      expect.objectContaining({
+        state: "failed",
+        targetVersion: "2.0.0",
+        error: "download failed: ECONNRESET",
+      }),
     );
+  });
+
+  it("the same artifact observed running - record 2.0.0 for an announced 2.0.0 - is withdrawn (control for the build-metadata pin)", async () => {
+    mocks.downloadAndStageHostMock.mockImplementation(
+      async (opts: DownloadAndStageHostOptions) => {
+        if (opts.onWillDownload === null) {
+          throw new Error("expected onWillDownload to be provided");
+        }
+        await opts.onWillDownload("2.0.0");
+        throw new Error("download failed: ECONNRESET");
+      },
+    );
+    mocks.readHostInstallRecordMock.mockResolvedValue(sampleRecord("2.0.0"));
+    mocks.readHostPidMetadataMock.mockResolvedValue({
+      pid: 4242,
+      hostId: "host-1",
+      version: "2.0.0",
+      websocketUrl: "ws://127.0.0.1:51820/rpc",
+      startedAt: "2026-01-01T00:00:00.000Z",
+      processStartIdentity: null,
+      layer0: null,
+      layer0Slot: null,
+    });
+    mocks.identityVerdictMock.mockResolvedValue("current");
+
+    await expect(
+      buildHostUpdateCommand({
+        force: false,
+        allowDowngrade: false,
+        ackNonce: null,
+      })(fakeCtx()),
+    ).rejects.toThrow("download failed: ECONNRESET");
+
+    const written = mocks.claimUpdateProgressMarkerBeforeLockMock.mock
+      .calls[0][1] as HostUpdateProgress;
+    expect(
+      mocks.deleteUpdateProgressMarkerIfUnchangedMock,
+    ).toHaveBeenCalledWith("production", written);
+    expect(
+      mocks.replaceUpdateProgressMarkerIfUnchangedMock.mock.calls.filter(
+        (call) => (call[2] as HostUpdateProgress).state === "failed",
+      ),
+    ).toEqual([]);
   });
 });
 
@@ -3735,6 +3840,51 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
     ).toHaveBeenCalledWith(
       "production",
       expect.objectContaining({ state: "failed", targetVersion: "2.0.0" }),
+    );
+    expect(result.human).toContain("no-op");
+  });
+
+  it("a failed marker naming 2.0.0+foo over a host observed at 2.0.0+bar is NOT stale - build metadata is artifact identity for the stale-failed rule too, as it is for the host's", async () => {
+    // The same rule as `targetObservedRunning` (Codex r3945265711): the
+    // catalog comparator calls the two equal; the failure named an artifact
+    // this host never ran. Falsification: compare through
+    // `compareHostVersions` in `clearStaleFailedMarker` and the conditional
+    // delete below fires.
+    mocks.downloadAndStageHostMock.mockResolvedValue(upToDate("2.0.0+bar"));
+    mocks.readHostInstallRecordMock.mockResolvedValue(
+      sampleRecord("2.0.0+bar"),
+    );
+    mocks.readHostPidMetadataMock.mockResolvedValue(
+      pidRecord("2.0.0+bar", 4242),
+    );
+    mocks.identityVerdictMock.mockResolvedValue("current");
+    mocks.readUpdateProgressMarkerMock.mockResolvedValue({
+      state: "failed",
+      error: "host did not become healthy: tcp refused",
+      targetVersion: "2.0.0+foo",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      writerId: null,
+      writerStartIdentity: null,
+    });
+
+    const ctx = fakeCtx();
+    const result = await buildHostUpdateCommand({
+      force: false,
+      allowDowngrade: false,
+      ackNonce: null,
+    })(ctx);
+
+    expect(mocks.stopHostForRestartWithAttemptMock).not.toHaveBeenCalled();
+    expect(mocks.deleteUpdateProgressMarkerMock).not.toHaveBeenCalled();
+    expect(
+      mocks.deleteUpdateProgressMarkerIfUnchangedMock,
+    ).not.toHaveBeenCalled();
+    expect(vi.mocked(ctx.runtime.logger.info)).toHaveBeenCalledWith(
+      "Host update left the failed progress marker alone - it names a target the running host has not been observed at",
+      expect.objectContaining({
+        failedTargetVersion: "2.0.0+foo",
+        observedInstalledVersion: "2.0.0+bar",
+      }),
     );
     expect(result.human).toContain("no-op");
   });
@@ -5727,7 +5877,7 @@ describe("buildHostUpdateCommand — reassertMarkerUnderLock under the lock", ()
       {
         environment: "production",
         failedTargetVersion: "3.0.0",
-        observedRunningVersion: "2.0.0",
+        observedInstalledVersion: "2.0.0",
       },
     );
   });
