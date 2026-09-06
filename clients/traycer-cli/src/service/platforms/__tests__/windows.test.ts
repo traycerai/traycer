@@ -19,6 +19,7 @@ import {
   type WindowsTaskInstallDeps,
 } from "../windows";
 import { serviceLabelFor } from "../../label";
+import { WINDOWS_KILL_CONVERGENCE_ROUNDS } from "@traycer/protocol/host/lifecycle-constants";
 import { ProcessRunError, type RunResult } from "../../process-runner";
 import type { SpawnEvidenceBaseline } from "../../../host/spawn-evidence";
 import { CLI_ERROR_CODES } from "../../../runner/errors";
@@ -74,6 +75,49 @@ function stagedTaskInstallDeps(): WindowsTaskInstallDeps {
     }),
     removeStagedTaskDefinition: async () => undefined,
   };
+}
+
+// Rows as the table scan's JSON, in the shape `parseWindowsProcessTableJson`
+// expects. Shared by every fixture below that needs to hand a fake table back
+// through `run("powershell.exe", ...)`.
+function tableJson(rows: readonly WindowsProcessTableRow[]): string {
+  return JSON.stringify(
+    rows.map((row) => ({
+      ProcessId: row.processId,
+      ParentProcessId: row.parentProcessId,
+      Slot: row.slot,
+    })),
+  );
+}
+
+// A fake scan-then-kill runner that CONVERGES the way the real scan does. A
+// real scan verifies by exe path/command line, not by remembering what an
+// earlier round saw, so a process this round's `taskkill` actually reached is
+// simply ABSENT from the next snapshot - it isn't "seen and skipped", it's
+// gone. `killHostProcessTree`'s bounded convergence loop (Codex round 2 on
+// #1755: the old single-pass scan left anything spawned after the snapshot
+// untouched) rescans after every kill, so a fixture that keeps returning one
+// constant table makes every pid look like a survivor and gets re-killed
+// `WINDOWS_KILL_CONVERGENCE_ROUNDS` times instead of once. This tracks which
+// pids a `taskkill` call has fired for and drops those rows from every later
+// snapshot, so a fixture built for the old one-pass code keeps its original
+// meaning under the new loop.
+function convergingTableRunner(rows: readonly WindowsProcessTableRow[]): {
+  readonly runner: ProcessRunner;
+  readonly calls: RecordedCall[];
+} {
+  const calls: RecordedCall[] = [];
+  let live = rows;
+  const runner: ProcessRunner = async (command, args) => {
+    calls.push({ command, args });
+    if (command === "powershell.exe") return success(tableJson(live));
+    if (command === "taskkill") {
+      const killedPid = Number(args[2]);
+      live = live.filter((row) => row.processId !== killedPid);
+    }
+    return success("");
+  };
+  return { runner, calls };
 }
 
 describe("Windows service stale host cleanup", () => {
@@ -315,26 +359,11 @@ describe("Windows service stale host cleanup", () => {
   // test process's own pid) as the CLI identity, so every fake table below
   // treats `process.pid` as an ordinary, unrelated process with no parent in
   // the table - it must never appear in a kill set built from these tables.
-  function tableJson(rows: readonly WindowsProcessTableRow[]): string {
-    return JSON.stringify(
-      rows.map((row) => ({
-        ProcessId: row.processId,
-        ParentProcessId: row.parentProcessId,
-        Slot: row.slot,
-      })),
-    );
-  }
 
   it("re-kills scan-verified processes through killLingeringSlotProcesses", async () => {
-    const calls: RecordedCall[] = [];
-    const runner: ProcessRunner = async (command, args) => {
-      calls.push({ command, args });
-      return command === "powershell.exe"
-        ? success(
-            tableJson([{ processId: 401, parentProcessId: 1, slot: true }]),
-          )
-        : success("");
-    };
+    const { runner, calls } = convergingTableRunner([
+      { processId: 401, parentProcessId: 1, slot: true },
+    ]);
 
     await killLingeringSlotProcesses(serviceLabelFor("staging"), runner);
 
@@ -347,18 +376,10 @@ describe("Windows service stale host cleanup", () => {
   });
 
   it("kills slot-scanned processes when pid metadata is missing", async () => {
-    const calls: RecordedCall[] = [];
-    const runner: ProcessRunner = async (command, args) => {
-      calls.push({ command, args });
-      return command === "powershell.exe"
-        ? success(
-            tableJson([
-              { processId: 401, parentProcessId: 1, slot: true },
-              { processId: 402, parentProcessId: 1, slot: true },
-            ]),
-          )
-        : success("");
-    };
+    const { runner, calls } = convergingTableRunner([
+      { processId: 401, parentProcessId: 1, slot: true },
+      { processId: 402, parentProcessId: 1, slot: true },
+    ]);
     const controller = createWindowsController(runner);
 
     await controller.stop(serviceLabelFor("staging"), { force: false });
@@ -386,18 +407,10 @@ describe("Windows service stale host cleanup", () => {
       websocketUrl: "ws://127.0.0.1:54321/rpc",
       startedAt: "2026-01-01T00:00:00.000Z",
     });
-    const calls: RecordedCall[] = [];
-    const runner: ProcessRunner = async (command, args) => {
-      calls.push({ command, args });
-      return command === "powershell.exe"
-        ? success(
-            tableJson([
-              { processId: 401, parentProcessId: 1, slot: true },
-              { processId: 402, parentProcessId: 1, slot: true },
-            ]),
-          )
-        : success("");
-    };
+    const { runner, calls } = convergingTableRunner([
+      { processId: 401, parentProcessId: 1, slot: true },
+      { processId: 402, parentProcessId: 1, slot: true },
+    ]);
     const controller = createWindowsController(runner);
 
     await controller.stop(serviceLabelFor("staging"), { force: false });
@@ -420,18 +433,10 @@ describe("Windows service stale host cleanup", () => {
       websocketUrl: "ws://127.0.0.1:54321/rpc",
       startedAt: "2026-01-01T00:00:00.000Z",
     });
-    const calls: RecordedCall[] = [];
-    const runner: ProcessRunner = async (command, args) => {
-      calls.push({ command, args });
-      return command === "powershell.exe"
-        ? success(
-            tableJson([
-              { processId: 401, parentProcessId: 1, slot: false },
-              { processId: 402, parentProcessId: 1, slot: true },
-            ]),
-          )
-        : success("");
-    };
+    const { runner, calls } = convergingTableRunner([
+      { processId: 401, parentProcessId: 1, slot: false },
+      { processId: 402, parentProcessId: 1, slot: true },
+    ]);
     const controller = createWindowsController(runner);
 
     await controller.stop(serviceLabelFor("staging"), { force: false });
@@ -496,6 +501,219 @@ describe("Windows service stale host cleanup", () => {
   });
 });
 
+// `killHostProcessTree` (Codex round 2 on #1755, one P2): the scan is a
+// SNAPSHOT, so a process the host or an agent under it spawns after
+// `Get-CimInstance` materializes the table is in no round's kill set - and
+// with no `/T`, nothing walks down to catch it. `killProcessIds`' argv is
+// covered above; these pin the ROUND STRUCTURE around it: a bounded
+// scan-then-kill loop that stops the moment a scan comes back empty.
+describe("killHostProcessTree convergence loop", () => {
+  beforeEach(() => {
+    mocks.readHostPidMetadata.mockReset();
+    mocks.readHostPidMetadata.mockResolvedValue(null);
+    mocks.removeHostPidMetadata.mockReset();
+    mocks.removeHostPidMetadata.mockResolvedValue(undefined);
+  });
+
+  // A per-round scripted scan, for scenarios `convergingTableRunner`'s
+  // kill-tracking can't express - a snapshot that materializes a pid no
+  // earlier round ever saw (a late spawn), or a scan that only fails on a
+  // LATER round. `responses[n]` is the table (or throw) the (n+1)th
+  // `powershell.exe` call answers with; once exhausted, further calls answer
+  // with an empty table (converged) rather than reusing the last response -
+  // a test that needs more rounds than it scripted should say so explicitly.
+  type RoundResponse =
+    | {
+        readonly kind: "table";
+        readonly rows: readonly WindowsProcessTableRow[];
+      }
+    | { readonly kind: "throw" };
+
+  function roundedRunner(responses: readonly RoundResponse[]): {
+    readonly runner: ProcessRunner;
+    readonly calls: RecordedCall[];
+  } {
+    const calls: RecordedCall[] = [];
+    let scanCount = 0;
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (command === "powershell.exe") {
+        const response = responses[scanCount] ?? { kind: "table", rows: [] };
+        scanCount += 1;
+        if (response.kind === "throw") throw new Error("spawn failed");
+        return success(tableJson(response.rows));
+      }
+      return success("");
+    };
+    return { runner, calls };
+  }
+
+  it("convergence catches a late spawn: a process absent from round 1's snapshot is still killed in round 2", async () => {
+    // Round 1 sees A and B; round 2's snapshot has C instead - a process that
+    // spawned only after round 1's `Get-CimInstance` ran, which a single-pass
+    // scan (the bug Codex found) would never enumerate at all; round 3 is
+    // clean. This is the exact finding: without the loop, C survives the stop.
+    const { runner, calls } = roundedRunner([
+      {
+        kind: "table",
+        rows: [
+          { processId: 401, parentProcessId: 1, slot: true },
+          { processId: 402, parentProcessId: 1, slot: true },
+        ],
+      },
+      {
+        kind: "table",
+        rows: [{ processId: 403, parentProcessId: 1, slot: true }],
+      },
+      { kind: "table", rows: [] },
+    ]);
+    const controller = createWindowsController(runner);
+
+    await controller.stop(serviceLabelFor("staging"), { force: false });
+
+    // The kill set is asserted FIRST on purpose: it is the finding's own
+    // symptom, so a regression here reports "403 was never killed" rather
+    // than an arithmetic complaint about how many times we scanned.
+    expect(
+      calls
+        .filter((call) => call.command === "taskkill")
+        .map((call) => call.args),
+    ).toEqual([
+      ["/F", "/PID", "401"],
+      ["/F", "/PID", "402"],
+      ["/F", "/PID", "403"],
+    ]);
+    expect(
+      calls.filter((call) => call.command === "powershell.exe"),
+    ).toHaveLength(3);
+
+    // Ablation (§C): in `killHostProcessTree`, change the loop bound from
+    // `round <= WINDOWS_KILL_CONVERGENCE_ROUNDS` to `round <= 1` (a single
+    // pass) → this test fails: only 401 and 402 are ever killed, one
+    // `powershell.exe` call is made instead of three, and 403 - the late
+    // spawn - survives the stop exactly as the Codex finding describes.
+  });
+
+  it("the bound holds: a host that never stops spawning is scanned and killed exactly WINDOWS_KILL_CONVERGENCE_ROUNDS times, not forever", async () => {
+    // Every round's scan hands back a BRAND NEW pid, so the loop never
+    // converges on its own - the only thing that ends it is the round bound.
+    // Bounded is the right call: a host spawning faster than we can scan is
+    // not converging, and grinding on it forever is worse than stopping and
+    // reporting the swap's own EBUSY detail scan naming the survivors.
+    let scanCount = 0;
+    const calls: RecordedCall[] = [];
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (command === "powershell.exe") {
+        const pid = 800 + scanCount;
+        scanCount += 1;
+        return success(
+          tableJson([{ processId: pid, parentProcessId: 1, slot: true }]),
+        );
+      }
+      return success("");
+    };
+    const controller = createWindowsController(runner);
+
+    await controller.stop(serviceLabelFor("staging"), { force: false });
+
+    expect(
+      calls.filter((call) => call.command === "powershell.exe"),
+    ).toHaveLength(WINDOWS_KILL_CONVERGENCE_ROUNDS);
+    const taskkillPids = calls
+      .filter((call) => call.command === "taskkill")
+      .map((call) => call.args[2]);
+    expect(taskkillPids).toEqual(
+      Array.from({ length: WINDOWS_KILL_CONVERGENCE_ROUNDS }, (_, index) =>
+        String(800 + index),
+      ),
+    );
+
+    // Ablation (§C): removing the round bound (e.g. `for (;;)` instead of
+    // `for (let round = 1; round <= WINDOWS_KILL_CONVERGENCE_ROUNDS; ...)`)
+    // has no one-line inverse that stays safe to run in a test process - a
+    // fixture that never converges would hang the suite instead of failing
+    // it. Nothing here exercises that mutation; the finite scan count this
+    // test asserts is what an unbounded loop would violate.
+  });
+
+  it("round-1 fallback stays a one-round affair: an unavailable scan is not retried", async () => {
+    mocks.readHostPidMetadata.mockResolvedValue({
+      pid: 401,
+      hostId: "host-test",
+      version: "1.0.0",
+      websocketUrl: "ws://127.0.0.1:54321/rpc",
+      startedAt: "2026-01-01T00:00:00.000Z",
+    });
+    const { runner, calls } = roundedRunner([{ kind: "throw" }]);
+    const controller = createWindowsController(runner);
+
+    await controller.stop(serviceLabelFor("staging"), { force: false });
+
+    // Rescanning cannot help when the scan itself is what is unavailable, so
+    // round 1's fallback is the whole story: one attempt, one kill.
+    expect(
+      calls.filter((call) => call.command === "powershell.exe"),
+    ).toHaveLength(1);
+    expect(
+      calls
+        .filter((call) => call.command === "taskkill")
+        .map((call) => call.args),
+    ).toEqual([["/F", "/PID", "401"]]);
+
+    // Ablation (§C): in `killHostProcessTree`, delete the `if (round > 1)
+    // return;` guard (letting the loop fall through to another
+    // `findSlotProcessIds` call after a round-1 failure) → this test still
+    // passes, because round 1 already `return`s unconditionally after the
+    // fallback kill. There is no one-line mutation of the round-1 path this
+    // test can distinguish from correct behaviour; test (d) below is what
+    // pins the guard that actually matters: a scan failure LATER than
+    // round 1.
+  });
+
+  it("a later round's failed scan ends the loop without touching pid.json - a stale recorded pid is not a second opinion", async () => {
+    // Round 1 kills 901 normally. Round 2's scan is unavailable - and unlike
+    // round 1, this is NOT the moment to fall back to pid.json: round 1 may
+    // already have killed the recorded pid, so it now names a slot Windows is
+    // free to have recycled for something unrelated. Consulting it here would
+    // be exactly the recycled-pid kill the scan-verification exists to
+    // prevent.
+    mocks.readHostPidMetadata.mockResolvedValue({
+      pid: 901,
+      hostId: "host-test",
+      version: "1.0.0",
+      websocketUrl: "ws://127.0.0.1:54321/rpc",
+      startedAt: "2026-01-01T00:00:00.000Z",
+    });
+    const { runner, calls } = roundedRunner([
+      {
+        kind: "table",
+        rows: [{ processId: 901, parentProcessId: 1, slot: true }],
+      },
+      { kind: "throw" },
+    ]);
+    const controller = createWindowsController(runner);
+
+    await controller.stop(serviceLabelFor("staging"), { force: false });
+
+    expect(
+      calls.filter((call) => call.command === "powershell.exe"),
+    ).toHaveLength(2);
+    expect(
+      calls
+        .filter((call) => call.command === "taskkill")
+        .map((call) => call.args),
+    ).toEqual([["/F", "/PID", "901"]]);
+    expect(mocks.readHostPidMetadata).not.toHaveBeenCalled();
+
+    // Ablation (§C): in `killHostProcessTree`, change `if (round > 1) return;`
+    // to `if (false) return;` (always falling through to the round-1
+    // fallback, whatever the round) → this test fails: `readHostPidMetadata`
+    // is called on round 2, and the stale pid 901 - already killed in round 1
+    // - is handed to `killProcessIds` a second time.
+  });
+});
+
 // `computeWindowsHostKillSet` is the algebra a host stop's kill set is built
 // from (victims = slot ∪ descendants(slot); spared = cli ∪ descendants(cli) ∪
 // (ancestors(cli) − slot); kill = victims − spared). These pins exercise it
@@ -503,16 +721,6 @@ describe("Windows service stale host cleanup", () => {
 // alone would not catch a wiring bug that hands the wrong pid in as `cliPid`
 // (`process.pid`, not PowerShell's own `$PID` inside the scan script).
 describe("computeWindowsHostKillSet and the taskkill self-protection it drives", () => {
-  function table(rows: readonly WindowsProcessTableRow[]): string {
-    return JSON.stringify(
-      rows.map((row) => ({
-        ProcessId: row.processId,
-        ParentProcessId: row.parentProcessId,
-        Slot: row.slot,
-      })),
-    );
-  }
-
   beforeEach(() => {
     mocks.readHostPidMetadata.mockReset();
     mocks.readHostPidMetadata.mockResolvedValue(null);
@@ -535,11 +743,7 @@ describe("computeWindowsHostKillSet and the taskkill self-protection it drives",
       { processId: 400, parentProcessId: 100, slot: false },
     ];
 
-    const calls: RecordedCall[] = [];
-    const runner: ProcessRunner = async (command, args) => {
-      calls.push({ command, args });
-      return command === "powershell.exe" ? success(table(rows)) : success("");
-    };
+    const { runner, calls } = convergingTableRunner(rows);
     const controller = createWindowsController(runner);
 
     const originalPid = Object.getOwnPropertyDescriptor(process, "pid");
@@ -584,11 +788,7 @@ describe("computeWindowsHostKillSet and the taskkill self-protection it drives",
       { processId: 400, parentProcessId: 100, slot: false },
     ];
 
-    const calls: RecordedCall[] = [];
-    const runner: ProcessRunner = async (command, args) => {
-      calls.push({ command, args });
-      return command === "powershell.exe" ? success(table(rows)) : success("");
-    };
+    const { runner, calls } = convergingTableRunner(rows);
     const controller = createWindowsController(runner);
 
     const originalPid = Object.getOwnPropertyDescriptor(process, "pid");

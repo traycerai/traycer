@@ -23,6 +23,7 @@ import {
   type SpawnEvidenceReader,
 } from "../../host/spawn-evidence";
 import {
+  WINDOWS_KILL_CONVERGENCE_ROUNDS,
   WINDOWS_PROCESS_SCAN_TIMEOUT_MS,
   WINDOWS_SCHTASKS_END_TIMEOUT_MS,
   WINDOWS_SCHTASKS_QUERY_TIMEOUT_MS,
@@ -393,23 +394,56 @@ async function stopService(
 // its children running, the VBS launcher re-runs the host only on exit 75 (the
 // refreshed-slot signal) and never after a kill, and the CLI-side supervisor is
 // already silenced by the stop intent written before any of this.
+//
+// Not `/T` also means nothing sweeps up what is spawned DURING the kill. The
+// scan is a snapshot, so a child the host or one of its agents starts after
+// `Get-CimInstance` materializes the table is in no round's kill set; killing
+// its parent orphans it, and the caller goes on to delete the pid metadata
+// while it still holds the install dir open. So this rescans and kills again
+// until a round comes back empty. Each round kills exactly what THAT round's
+// scan returned - the scan verifies by exe path/command line, so a pid Windows
+// recycled between rounds is simply not in it.
 async function killHostProcessTree(
   label: ServiceLabel,
   run: ProcessRunner,
 ): Promise<void> {
-  const scannedPids = await findSlotProcessIds(label, run, process.pid);
-  const pidMetadata =
-    scannedPids === null ? await readHostPidMetadata(label.environment) : null;
-  // The no-scan fallback: kill the recorded pid, still without `/T`. We cannot
-  // enumerate that pid's tree here, and a tree we cannot enumerate is a tree we
-  // cannot prove this process is outside of. Children that keep handles inside
-  // the install dir fail the swap loudly, naming themselves through the detail
-  // scan, which is the better failure of the two.
-  const fallbackPids = pidMetadata === null ? [] : [pidMetadata.pid];
-  // The kill boundary, and the only place a pid has to be POSITIVE: the scan
-  // and its algebra work over an unfiltered table that includes pid 0, and
-  // `isKillableProcessId` is what keeps 0 - and our own pid - out of an argv.
-  const pids = uniqueProcessIds(scannedPids ?? fallbackPids);
+  for (let round = 1; round <= WINDOWS_KILL_CONVERGENCE_ROUNDS; round += 1) {
+    const scannedPids = await findSlotProcessIds(label, run, process.pid);
+    if (scannedPids === null) {
+      // A LATER round without a scan is not the round-1 fallback below: the
+      // earlier rounds already killed the recorded pid, so pid.json is not a
+      // second opinion - it is a stale one, pointing at a pid Windows is now
+      // free to have recycled. And a round we cannot enumerate is a round we
+      // cannot call converged, so say nothing rather than claim it.
+      if (round > 1) return;
+      const pidMetadata = await readHostPidMetadata(label.environment);
+      // The no-scan fallback: kill the recorded pid, still without `/T`, and
+      // stop there - rescanning cannot help when the scan is the thing that is
+      // unavailable. We cannot enumerate that pid's tree here, and a tree we
+      // cannot enumerate is a tree we cannot prove this process is outside of.
+      // Children that keep handles inside the install dir fail the swap
+      // loudly, naming themselves through the detail scan, which is the better
+      // failure of the two.
+      const fallbackPids = pidMetadata === null ? [] : [pidMetadata.pid];
+      await killProcessIds(uniqueProcessIds(fallbackPids), run);
+      return;
+    }
+    // The kill boundary, and the only place a pid has to be POSITIVE: the scan
+    // and its algebra work over an unfiltered table that includes pid 0, and
+    // `isKillableProcessId` is what keeps 0 - and our own pid - out of an argv.
+    const pids = uniqueProcessIds(scannedPids);
+    // Converged: a scan taken after the previous round's kills found nothing
+    // left in this slot. (Round 1 reaches here whenever there was never
+    // anything to kill, which is the ordinary stop of an already-dead host.)
+    if (pids.length === 0) return;
+    await killProcessIds(pids, run);
+  }
+}
+
+async function killProcessIds(
+  pids: readonly number[],
+  run: ProcessRunner,
+): Promise<void> {
   await Promise.all(
     pids.map((pid) =>
       run("taskkill", ["/F", "/PID", String(pid)], {
