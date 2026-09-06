@@ -1632,6 +1632,31 @@ function registerHostCommands(program: Command): void {
           "Internal: correlation nonce for the dispatching host's ACK wait",
         ).hideHelp(),
       )
+      // Hidden: the BOUND INTENT contract (Plan D16). These are argv options
+      // and not environment variables on purpose. The trigger is provenance
+      // and must keep working on every CLI, so it rides the env an old CLI
+      // ignores; an intent is AUTHORITY and must fail closed on every CLI that
+      // cannot honour it, and the only gate that can do that is the executing
+      // parser: a pre-cutover Commander program rejects `--intent` as an
+      // unknown option and exits before this command's body runs - whatever
+      // image the slot holds at that instant, including one the CLI's own
+      // pre-parse self-refresh (`refreshCliSlotBeforeCommand`, awaited in
+      // `runEntry` before `program.parseAsync`) just staged. `--version`
+      // preflights cannot substitute: they prove the image that ANSWERED, not
+      // the image that runs next. `allowUnknownOption` is never enabled on
+      // root, `host` or `update`, which is what makes that exit reachable.
+      .addOption(
+        new Option(
+          "--intent <intent>",
+          "Internal: the bound intent this dispatch is authorized for (activate|continue)",
+        ).hideHelp(),
+      )
+      .addOption(
+        new Option(
+          "--expect-attempt <id>",
+          "Internal: the attempt id the bound intent is bound to",
+        ).hideHelp(),
+      )
       .addHelpText(
         "after",
         [
@@ -1679,6 +1704,12 @@ function registerHostCommands(program: Command): void {
           allowDowngrade: opts.allowDowngrade === true,
           versionRequest: release,
           ackNonce: typeof opts.ackNonce === "string" ? opts.ackNonce : null,
+          // Passed through RAW: the pairing rule and the legal-value check
+          // live in the command body, which is the only place that can report
+          // them as a CLI error rather than a parser exit.
+          intent: typeof opts.intent === "string" ? opts.intent : null,
+          expectAttempt:
+            typeof opts.expectAttempt === "string" ? opts.expectAttempt : null,
         })(ctx);
       };
     },

@@ -100,8 +100,17 @@ vi.mock("../../host/busy-check", () => ({
   },
 }));
 
+// The production lifecycle forwards the caller's `InstallPhaseHooks` at the
+// two barriers of the same name, so this stand-in does too: without that the
+// `beforeSwapCommit` pins below would assert against a hook nothing calls.
 vi.mock("../../service/install-lifecycle", () => ({
-  createServiceInstallLifecycle: (options: { readonly force: boolean }) => {
+  createServiceInstallLifecycle: (options: {
+    readonly force: boolean;
+    readonly hooks: {
+      readonly beforeSwapCommit: () => Promise<void>;
+      readonly afterSwap: () => Promise<void>;
+    };
+  }) => {
     mocks.lifecycleCalls.push({ force: options.force });
     const state = {
       priorState: "running" as ServiceInstallLifecycleState["priorState"],
@@ -116,9 +125,12 @@ vi.mock("../../service/install-lifecycle", () => ({
           if (mocks.beforeSwapError) throw new Error("precommit failed");
           state.stoppedBeforeSwap = true;
         },
-        beforeSwapCommit: async () => {},
+        beforeSwapCommit: async () => {
+          await options.hooks.beforeSwapCommit();
+        },
         afterSwap: async () => {
           state.postSwapAction = "install";
+          await options.hooks.afterSwap();
         },
         swapLockRecovery: null,
       },
@@ -130,6 +142,7 @@ import {
   readHostInstallRecord,
   writeHostInstallRecord,
 } from "../../manifest/host-install";
+import { NO_INSTALL_PHASE_HOOKS } from "../../installer/install";
 import { installHostDowngrade } from "../host-update-downgrade";
 
 const ENV: Environment = "production";
@@ -229,7 +242,8 @@ describe("installHostDowngrade", () => {
       version: "1.2.0",
       force: true,
       onProgress: noopProgress,
-      onBeforeCommit: async () => undefined,
+      beforeExtract: async () => undefined,
+      hooks: NO_INSTALL_PHASE_HOOKS,
     });
 
     expect(outcome.outcome).toBe("applied");
@@ -255,7 +269,8 @@ describe("installHostDowngrade", () => {
         version: "1.2.0",
         force: false,
         onProgress: noopProgress,
-        onBeforeCommit: async () => undefined,
+        beforeExtract: async () => undefined,
+        hooks: NO_INSTALL_PHASE_HOOKS,
       }),
     ).rejects.toThrow("host is busy");
 
@@ -279,7 +294,8 @@ describe("installHostDowngrade", () => {
         version: "1.2.0",
         force: false,
         onProgress: noopProgress,
-        onBeforeCommit: async () => undefined,
+        beforeExtract: async () => undefined,
+        hooks: NO_INSTALL_PHASE_HOOKS,
       }),
     ).rejects.toThrow("precommit failed");
 
@@ -290,15 +306,16 @@ describe("installHostDowngrade", () => {
     expect(readdirSync(stagingRoot())).toEqual([]);
   });
 
-  it("invokes onBeforeCommit exactly once, after the busy gate and before the commit lands", async () => {
-    // `onBeforeCommit` is `host update`'s marker-takeover hook, run under
-    // the mutation lock AFTER the busy gate and immediately before the
-    // commit - the first point at which this command is the only updater
-    // acting AND has committed to acting (a busy refusal must come first,
-    // so a parked run never seizes a marker for work it then does not do).
-    // Observing the install record from INSIDE the callback (rather than
-    // just counting calls) pins the "before the commit" half: a call that
-    // ran after the swap would see the NEW version already committed.
+  it("invokes hooks.beforeSwapCommit exactly once, after the busy gate and before the commit lands", async () => {
+    // `hooks.beforeSwapCommit` is the attempt-driving caller's `applying`
+    // barrier (ticket 03), and it replaced this arm's marker-takeover hook
+    // verbatim in position: under the mutation lock, AFTER the busy gate and
+    // after the cooperative stop, immediately before the commit - the first
+    // point at which this command is the only updater acting AND has
+    // committed to acting. Observing the install record from INSIDE the
+    // callback (rather than just counting calls) pins the "before the commit"
+    // half: a call that ran after the swap would see the NEW version already
+    // committed.
     await writeInstalled("1.3.0-rc.1", "old");
     configureRegistry("1.2.0", "new");
     mocks.busy = false;
@@ -310,10 +327,14 @@ describe("installHostDowngrade", () => {
       version: "1.2.0",
       force: false,
       onProgress: noopProgress,
-      onBeforeCommit: async () => {
-        beforeCommitCalls += 1;
-        const installed = await readHostInstallRecord(ENV);
-        installedVersionAtCallTime = installed?.version;
+      beforeExtract: async () => undefined,
+      hooks: {
+        beforeSwapCommit: async () => {
+          beforeCommitCalls += 1;
+          const installed = await readHostInstallRecord(ENV);
+          installedVersionAtCallTime = installed?.version;
+        },
+        afterSwap: async () => undefined,
       },
     });
 
@@ -324,10 +345,10 @@ describe("installHostDowngrade", () => {
     );
   });
 
-  it("is NOT called when the busy gate throws - a parked run never seizes the marker for work it then does not do", async () => {
-    // Falsification: move the `onBeforeCommit()` call in
-    // `installHostDowngrade` to before `assertHostNotBusy` and
-    // `beforeCommitCalls` below goes to 1 even though the run is busy.
+  it("is NOT called when the busy gate throws - a parked run never announces work it then does not do", async () => {
+    // Falsification: move the busy gate in `installHostDowngradeInSegment` to
+    // after `commitHostInstallSourceWithAttempt` and `beforeCommitCalls`
+    // below goes to 1 even though the run is busy.
     await writeInstalled("1.3.0-rc.1", "old");
     configureRegistry("1.2.0", "new");
     mocks.busy = true;
@@ -339,8 +360,12 @@ describe("installHostDowngrade", () => {
         version: "1.2.0",
         force: false,
         onProgress: noopProgress,
-        onBeforeCommit: async () => {
-          beforeCommitCalls += 1;
+        beforeExtract: async () => undefined,
+        hooks: {
+          beforeSwapCommit: async () => {
+            beforeCommitCalls += 1;
+          },
+          afterSwap: async () => undefined,
         },
       }),
     ).rejects.toThrow("host is busy");

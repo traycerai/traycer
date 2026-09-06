@@ -13,7 +13,10 @@ import {
   decodeUpdateDispatchAck,
   updateDispatchAckPath,
 } from "@traycer/protocol/config/host-update-ack";
-import { stampUpdateDispatchAck } from "../update-dispatch-ack";
+import {
+  stampUpdateDispatchAck,
+  type UpdateDispatchAckDecision,
+} from "../update-dispatch-ack";
 
 // Direct unit suite for the §5.2.8 child-side ACK writer.
 
@@ -34,6 +37,11 @@ afterEach(async () => {
 });
 
 const IDENTITY = { attemptId: "attempt-1", generation: 2, sequence: 5 };
+const CLAIMED: UpdateDispatchAckDecision = {
+  kind: "claimed",
+  identity: IDENTITY,
+  claimedAtIso: "2026-01-01T00:00:00.000Z",
+};
 
 describe("stampUpdateDispatchAck", () => {
   it("writes an ACK the shared decoder accepts", async () => {
@@ -41,8 +49,7 @@ describe("stampUpdateDispatchAck", () => {
     await stampUpdateDispatchAck({
       hostHomeDir: home,
       nonce: "nonce-abcdefgh",
-      identity: IDENTITY,
-      claimedAtIso: "2026-01-01T00:00:00.000Z",
+      decision: CLAIMED,
     });
 
     // Read back through the DECODER the resolver uses, not through a local
@@ -72,8 +79,7 @@ describe("stampUpdateDispatchAck", () => {
     await stampUpdateDispatchAck({
       hostHomeDir: home,
       nonce: "nonce-abcdefgh",
-      identity: IDENTITY,
-      claimedAtIso: "2026-01-01T00:00:00.000Z",
+      decision: CLAIMED,
     });
 
     // Enumerated, not a single-name absence check: an unexpected extra file
@@ -87,14 +93,20 @@ describe("stampUpdateDispatchAck", () => {
     await stampUpdateDispatchAck({
       hostHomeDir: home,
       nonce: "nonce-oldrunabc",
-      identity: { attemptId: "attempt-old", generation: 1, sequence: 1 },
-      claimedAtIso: "2026-01-01T00:00:00.000Z",
+      decision: {
+        kind: "claimed",
+        identity: { attemptId: "attempt-old", generation: 1, sequence: 1 },
+        claimedAtIso: "2026-01-01T00:00:00.000Z",
+      },
     });
     await stampUpdateDispatchAck({
       hostHomeDir: home,
       nonce: "nonce-abcdefgh",
-      identity: IDENTITY,
-      claimedAtIso: "2026-01-02T00:00:00.000Z",
+      decision: {
+        kind: "claimed",
+        identity: IDENTITY,
+        claimedAtIso: "2026-01-02T00:00:00.000Z",
+      },
     });
 
     expect((await readdir(home)).sort()).toEqual(["update-dispatch-ack.json"]);
@@ -125,8 +137,7 @@ describe("stampUpdateDispatchAck", () => {
       stampUpdateDispatchAck({
         hostHomeDir: home,
         nonce: "nonce-abcdefgh",
-        identity: IDENTITY,
-        claimedAtIso: "2026-01-01T00:00:00.000Z",
+        decision: CLAIMED,
       }),
     ).rejects.toThrow();
 
@@ -140,14 +151,54 @@ describe("stampUpdateDispatchAck", () => {
       stampUpdateDispatchAck({
         hostHomeDir: home,
         nonce: "../../etc/passwd",
-        identity: IDENTITY,
-        claimedAtIso: "2026-01-01T00:00:00.000Z",
+        decision: CLAIMED,
       }),
     ).rejects.toThrow(/nonce/);
 
     // Both halves. Throwing while still having written a junk file would be
     // worse than not refusing at all: no wait would ever accept it, and it
     // would sit in the host home indefinitely.
+    expect(await readdir(home)).toEqual([]);
+  });
+
+  it("writes the v2 `no-attempt` arm with its reason, and the shared decoder accepts it", async () => {
+    const home = await freshHome();
+    await stampUpdateDispatchAck({
+      hostHomeDir: home,
+      nonce: "nonce-abcdefgh",
+      decision: { kind: "no-attempt", reason: "refused-e-host-not-installed" },
+    });
+
+    const decoded = decodeUpdateDispatchAck(
+      await readFile(updateDispatchAckPath(home), "utf8"),
+    );
+    expect(decoded).toEqual({
+      kind: "valid",
+      ack: {
+        v: 2,
+        nonce: "nonce-abcdefgh",
+        result: {
+          kind: "no-attempt",
+          reason: "refused-e-host-not-installed",
+        },
+      },
+    });
+  });
+
+  it("REFUSES a reason outside the ACK grammar, and writes nothing at all", async () => {
+    // Same rule as the nonce, and for the same reason: the value crosses a
+    // repository boundary and the host re-checks it against this exact grammar
+    // before it reaches a log line or an RPC response. A reason no producer in
+    // this contract could have written must not be written in the first place.
+    const home = await freshHome();
+    await expect(
+      stampUpdateDispatchAck({
+        hostHomeDir: home,
+        nonce: "nonce-abcdefgh",
+        decision: { kind: "no-attempt", reason: "Refused: E_HOST_NOT_FOUND" },
+      }),
+    ).rejects.toThrow(/reason/);
+
     expect(await readdir(home)).toEqual([]);
   });
 
@@ -170,8 +221,11 @@ describe("stampUpdateDispatchAck", () => {
       stampUpdateDispatchAck({
         hostHomeDir: home,
         nonce: "bad nonce",
-        identity: IDENTITY,
-        claimedAtIso: "2026-01-02T00:00:00.000Z",
+        decision: {
+          kind: "claimed",
+          identity: IDENTITY,
+          claimedAtIso: "2026-01-02T00:00:00.000Z",
+        },
       }),
     ).rejects.toThrow(/nonce/);
 
