@@ -154,6 +154,9 @@ describe("Windows service stale host cleanup", () => {
     // links guarded by creation order (pid reuse turns a dead parent's id
     // into an unrelated process's).
     expect(script).toContain("ParentProcessId");
+    expect(script).toContain(
+      "if ($null -eq $parent.CreationDate -or $null -eq $p.CreationDate) { continue }",
+    );
     expect(script).toContain("$parent.CreationDate -gt $p.CreationDate");
     // This process and everything under it (the scan, the taskkills) is
     // spared - the daemon spawns `host update` as its own child, so the CLI

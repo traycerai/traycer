@@ -759,11 +759,16 @@ interface SlotProcessScanOptions {
 // it is stopping (the daemon spawns `host update` as its child). See
 // `killHostProcessTree`.
 //
-// Parent links are trusted only when the parent started no later than the
-// child: `ParentProcessId` is a bare number, and once the real parent has
-// exited Windows can hand its pid to an unrelated process that then reads as
-// the orphan's parent. `taskkill /T` walks that link blindly; the creation
-// order check refuses it. Cycles from the same reuse are closed by the
+// Parent links are trusted only when BOTH creation stamps are readable and
+// the parent started no later than the child: `ParentProcessId` is a bare
+// number, and once the real parent has exited Windows can hand its pid to an
+// unrelated process that then reads as the orphan's parent. `taskkill /T`
+// walks that link blindly; the creation order check refuses it. A link with
+// an unreadable stamp on either end is refused too - the same fail-closed
+// policy the orphan adoption below applies - at the cost of a child whose
+// stamp the scan could not read (`SilentlyContinue` hides the failure);
+// such a process is one the scan could barely see, and killing on a guess
+// is the wrong side to err on. Cycles from the same reuse are closed by the
 // visited set.
 function buildSlotProcessScanScript(options: SlotProcessScanOptions): string {
   return buildSlotProcessScanScriptWithProjection(options, [
@@ -801,7 +806,8 @@ function buildSlotProcessScanScript(options: SlotProcessScanOptions): string {
     "  $parentId = [int]$p.ParentProcessId",
     "  $parent = $byId[$parentId]",
     "  if ($null -eq $parent) { continue }",
-    "  if ($null -ne $parent.CreationDate -and $null -ne $p.CreationDate -and $parent.CreationDate -gt $p.CreationDate) { continue }",
+    "  if ($null -eq $parent.CreationDate -or $null -eq $p.CreationDate) { continue }",
+    "  if ($parent.CreationDate -gt $p.CreationDate) { continue }",
     "  if (-not $children.ContainsKey($parentId)) { $children[$parentId] = New-Object System.Collections.ArrayList }",
     "  [void]$children[$parentId].Add([int]$p.ProcessId)",
     "}",
@@ -840,15 +846,27 @@ function buildSlotProcessDetailScanScript(
   ]);
 }
 
-// The lines shared by every scan: the snapshot and the slot filter. Exported
-// (as a count) so the suite can pin that the kill and the diagnostic never
-// drift apart on what they call a host process.
-export const WINDOWS_SLOT_PROCESS_SCAN_FILTER_LINE_COUNT = 19;
-
 function buildSlotProcessScanScriptWithProjection(
   options: SlotProcessScanOptions,
   projection: readonly string[],
 ): string {
+  return [...slotProcessScanFilterLines(options), ...projection].join("\n");
+}
+
+// The lines shared by every scan: the snapshot and the slot filter. The count
+// is exported, derived from the lines themselves, so the suite can pin that
+// the kill and the diagnostic never drift apart on what they call a host
+// process.
+export const WINDOWS_SLOT_PROCESS_SCAN_FILTER_LINE_COUNT =
+  slotProcessScanFilterLines({
+    hostHome: "",
+    currentPid: 0,
+    killed: [],
+  }).length;
+
+function slotProcessScanFilterLines(
+  options: SlotProcessScanOptions,
+): readonly string[] {
   const hostPaths = powershellStringArray(
     slotHostProcessPaths(options.hostHome),
   );
@@ -872,8 +890,7 @@ function buildSlotProcessScanScriptWithProjection(
     "    $hostMatch",
     "  }",
     "}",
-    ...projection,
-  ].join("\n");
+  ];
 }
 
 function slotHostProcessPaths(hostHome: string): readonly string[] {
