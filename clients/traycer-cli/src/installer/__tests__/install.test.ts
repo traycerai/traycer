@@ -155,6 +155,7 @@ import {
   discardStagedHostInstallSource,
   installHost,
   setSwapRenameDelaysForTests,
+  stageHostInstallSource as stageHostInstallSourceRaw,
   SWAP_RENAME_DELAYS_MS,
   SWAP_RENAME_MAX_TOTAL_MS,
   sweepOldTrash,
@@ -167,6 +168,7 @@ import { CLI_ERROR_CODES, CliError } from "../../runner/errors";
 const ENV: Environment = "production";
 
 const testMutationVerifier = async (): Promise<void> => undefined;
+const noopBeforeExtract = async (): Promise<void> => undefined;
 type CommitHostOptions = Parameters<
   typeof commitHostInstallSourceWithAuthority
 >[0];
@@ -190,6 +192,22 @@ const commitInstallFromSource = (
     ...options,
     verifyMutationCapability:
       options.verifyMutationCapability ?? testMutationVerifier,
+  });
+type StageSourceOptions = Parameters<typeof stageHostInstallSourceRaw>[0];
+const stageHostInstallSource = (
+  options: Omit<
+    StageSourceOptions,
+    "verifyMutationCapability" | "beforeExtract"
+  > &
+    Partial<
+      Pick<StageSourceOptions, "verifyMutationCapability" | "beforeExtract">
+    >,
+) =>
+  stageHostInstallSourceRaw({
+    ...options,
+    verifyMutationCapability:
+      options.verifyMutationCapability ?? testMutationVerifier,
+    beforeExtract: options.beforeExtract ?? noopBeforeExtract,
   });
 
 function writeLocalHostSource(sourceDir: string, marker: string): void {
@@ -400,6 +418,181 @@ describe("commitInstallFromSource", () => {
     ).rejects.toThrow();
 
     expect(committed).toBe(false);
+  });
+
+  it("awaits beforeSwapCommit between beforeSwap resolving and atomicSwap replacing the install dir", async () => {
+    const sourceDir = join(sandboxRoot, "pre-staged");
+    writeLocalHostSource(sourceDir, "v1");
+    const executablePath = join(sourceDir, "traycer-host");
+    const order: string[] = [];
+
+    await commitInstallFromSource({
+      environment: ENV,
+      sourceDir,
+      executablePath,
+      version: "1.0.0",
+      runtimeVersion: null,
+      source: { kind: "local-file", value: sourceDir },
+      archiveSha256: null,
+      signatureVerifiedAt: new Date().toISOString(),
+      signatureKeyId: "local-file:unsigned",
+      sizeBytes: 0,
+      onProgress: () => {},
+      lifecycle: {
+        beforeSwap: async () => {
+          order.push("beforeSwap");
+        },
+        beforeSwapCommit: async () => {
+          order.push("beforeSwapCommit");
+          // The stop resolved, but nothing has moved yet - `atomicSwap`
+          // has not run.
+          expect(existsSync(installDirFor(ENV))).toBe(false);
+        },
+        afterSwap: async () => {
+          order.push("afterSwap");
+        },
+        swapLockRecovery: null,
+      },
+      onCommitted: () => {},
+    });
+
+    expect(order).toEqual(["beforeSwap", "beforeSwapCommit", "afterSwap"]);
+    expect(existsSync(installDirFor(ENV))).toBe(true);
+    // Falsification: await `beforeSwapCommit` before `beforeSwap`, or after
+    // `atomicSwap`, and either `order` reorders or the pre-swap existence
+    // check above fails.
+  });
+
+  it("never calls beforeSwapCommit and swaps nothing when beforeSwap denies the cooperative stop", async () => {
+    const sourceDir = join(sandboxRoot, "pre-staged");
+    writeLocalHostSource(sourceDir, "v1");
+    const executablePath = join(sourceDir, "traycer-host");
+    let beforeSwapCommitCalled = false;
+
+    await expect(
+      commitInstallFromSource({
+        environment: ENV,
+        sourceDir,
+        executablePath,
+        version: "1.0.0",
+        runtimeVersion: null,
+        source: { kind: "local-file", value: sourceDir },
+        archiveSha256: null,
+        signatureVerifiedAt: new Date().toISOString(),
+        signatureKeyId: "local-file:unsigned",
+        sizeBytes: 0,
+        onProgress: () => {},
+        lifecycle: {
+          beforeSwap: async () => {
+            throw new Error("host busy");
+          },
+          beforeSwapCommit: async () => {
+            beforeSwapCommitCalled = true;
+          },
+          afterSwap: async () => {},
+          swapLockRecovery: null,
+        },
+        onCommitted: () => {},
+      }),
+    ).rejects.toThrow("host busy");
+
+    expect(beforeSwapCommitCalled).toBe(false);
+    expect(existsSync(installDirFor(ENV))).toBe(false);
+    // Falsification: move `beforeSwapCommit` ahead of `beforeSwap`, or
+    // swallow `beforeSwap`'s rejection instead of propagating it, and
+    // `beforeSwapCommitCalled` flips to `true`.
+  });
+
+  it("reaches neither lifecycle barrier on the lifecycle: null path (--no-service)", async () => {
+    // There is no lifecycle object to observe here - `--no-service`'s whole
+    // point is stopping nothing and starting nothing, so there is no
+    // stop-succeeded or pre-relaunch moment for a barrier to mark. This pin
+    // only needs the `noService` commit to keep succeeding with a `null`
+    // lifecycle now that `InstallHostLifecycle` carries a required
+    // `beforeSwapCommit` member - a caller passing `lifecycle: null` is
+    // exempt from that requirement altogether.
+    const sourceDir = join(sandboxRoot, "pre-staged");
+    writeLocalHostSource(sourceDir, "v1");
+    const executablePath = join(sourceDir, "traycer-host");
+
+    const { record } = await commitInstallFromSource({
+      environment: ENV,
+      sourceDir,
+      executablePath,
+      version: "1.0.0",
+      runtimeVersion: null,
+      source: { kind: "local-file", value: sourceDir },
+      archiveSha256: null,
+      signatureVerifiedAt: new Date().toISOString(),
+      signatureKeyId: "local-file:unsigned",
+      sizeBytes: 0,
+      onProgress: () => {},
+      lifecycle: null,
+      onCommitted: () => {},
+    });
+
+    expect(record.version).toBe("1.0.0");
+    expect(existsSync(installDirFor(ENV))).toBe(true);
+  });
+});
+
+describe("stageHostInstallSource", () => {
+  beforeEach(() => {
+    sandboxRoot = mkdtempSync(join(tmpdir(), "traycer-install-test-"));
+    osHome.current = sandboxRoot;
+  });
+
+  afterEach(() => {
+    rmSync(sandboxRoot, { recursive: true, force: true });
+  });
+
+  it("awaits beforeExtract after staging the source and before extractHostSource writes the tree - the downgrade/private-source path, not only downloadAndStageHost", async () => {
+    // The ticket's first ablation: putting `beforeExtract` only in
+    // `downloadAndStageHost` (download-stage.ts) would leave THIS path -
+    // `stageHostInstallSource`, which `commands/host-update-downgrade.ts`
+    // drives for a private-source downgrade - never observing the barrier
+    // at all. This pin fails on that ablation because it calls
+    // `stageHostInstallSource` directly, not `downloadAndStageHost`.
+    const sourceDir = join(sandboxRoot, "source-1");
+    writeLocalHostSource(sourceDir, "v1");
+    const order: string[] = [];
+
+    const staged = await stageHostInstallSource({
+      environment: ENV,
+      source: { kind: "local-file", path: sourceDir },
+      onProgress: (info) => {
+        if (
+          info.stage === "extract" &&
+          order[order.length - 1] !== "progress-extract"
+        ) {
+          order.push("progress-extract");
+        }
+      },
+      recordVersionOverride: "9.9.9",
+      beforeExtract: async () => {
+        order.push("before-extract");
+        // The owned temp dir under the staging root already exists (it is
+        // created before staging begins), but nothing has been extracted
+        // into it yet.
+        const [ownedDirName, ...rest] = readdirSync(stagingRootFor(ENV));
+        expect(rest).toEqual([]);
+        if (ownedDirName === undefined) {
+          throw new Error("expected one owned staging dir to exist by now");
+        }
+        // The owned-temp-dir ownership marker (`store/owned-temp.ts`) is
+        // written at creation, before staging begins - only ITS presence,
+        // and nothing else, is expected before extraction has run.
+        expect(readdirSync(join(stagingRootFor(ENV), ownedDirName))).toEqual([
+          ".owner.json",
+        ]);
+      },
+    });
+
+    expect(order).toEqual(["before-extract", "progress-extract"]);
+    expect(existsSync(staged.executablePath)).toBe(true);
+    // Falsification: drop the `await` on `beforeExtract` in
+    // `stageVerifiedSource`, or call `extractHostSource` before it, and
+    // "progress-extract" moves ahead of "before-extract" in `order`.
   });
 });
 

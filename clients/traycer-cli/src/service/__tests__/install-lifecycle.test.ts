@@ -248,6 +248,35 @@ describe("service install lifecycle re-registration", () => {
     },
   );
 
+  it("runs hooks.afterSwap at the TOP of its own afterSwap, before the re-registration install call", async () => {
+    const harness = makeController("running");
+    mocks.createServiceControllerMock.mockReturnValue(harness.controller);
+    const order: string[] = [];
+    harness.install.mockImplementation(async () => {
+      order.push("install");
+    });
+    const handle = createServiceInstallLifecycle({
+      environment: "production",
+      bootstrap,
+      force: false,
+      hooks: {
+        beforeSwapCommit: async () => {},
+        afterSwap: async () => {
+          order.push("hooks.afterSwap");
+        },
+      },
+    });
+
+    await handle.lifecycle.beforeSwap();
+    await handle.lifecycle.afterSwap();
+
+    expect(order).toEqual(["hooks.afterSwap", "install"]);
+    // Falsification: move `await options.hooks.afterSwap()` below the
+    // re-registration branch in `install-lifecycle.ts`'s `afterSwap` (or
+    // drop the call) and "install" would lead "hooks.afterSwap" in `order`,
+    // or the hook would never appear at all.
+  });
+
   it("leaves a not-installed service untouched when bootstrap is null", async () => {
     const { state, harness } = await runLifecycle("not-installed", null, false);
 
@@ -1068,5 +1097,44 @@ describe("swap-lock recovery wiring", () => {
       expect(serviceHandle.lifecycle.swapLockRecovery).toBeNull();
       expect(bytesOnly.swapLockRecovery).toBeNull();
     });
+  });
+});
+
+describe("InstallPhaseHooks forwarding", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("createBytesOnlyInstallLifecycle forwards both barriers verbatim and starts nothing itself", async () => {
+    const harness = makeController("running");
+    const calls: string[] = [];
+    const lifecycle = createBytesOnlyInstallLifecycle(
+      harness.controller,
+      label,
+      {
+        beforeSwapCommit: async () => {
+          calls.push("beforeSwapCommit");
+        },
+        afterSwap: async () => {
+          calls.push("afterSwap");
+        },
+      },
+    );
+
+    await lifecycle.beforeSwapCommit();
+    await lifecycle.afterSwap();
+
+    expect(calls).toEqual(["beforeSwapCommit", "afterSwap"]);
+    // This lifecycle never starts/registers anything on its own - its
+    // `afterSwap` IS the caller's hook, verbatim, with nothing else behind
+    // it (unlike the service lifecycle's `afterSwap`, which runs the hook
+    // and THEN its own retire/kickstart/register work).
+    expect(harness.start).not.toHaveBeenCalled();
+    expect(harness.restart).not.toHaveBeenCalled();
+    expect(harness.install).not.toHaveBeenCalled();
+    // Falsification: have `createBytesOnlyInstallLifecycle` wrap the hooks
+    // in its own logic (e.g. swallow their errors, or re-derive `afterSwap`
+    // from `hooks.beforeSwapCommit`) and `calls` would stop matching the
+    // exact identity/order pinned above.
   });
 });
