@@ -454,9 +454,23 @@ function armActivationDefaults(): void {
   mocks.readHostPidMetadataMock.mockResolvedValue(null);
   mocks.identityVerdictMock.mockResolvedValue("current");
   mocks.assertHostNotBusyMock.mockResolvedValue(undefined);
-  mocks.stopHostForRestartWithAttemptMock.mockResolvedValue({
-    forcedRecycle: false,
-  });
+  // Models the facade's boundary: the capability check passed and the
+  // actuator is about to stop the host, so `onAuthorityVerified` fires
+  // before the (mock) stop returns. A test that needs the check to FAIL
+  // rejects WITHOUT calling it.
+  mocks.stopHostForRestartWithAttemptMock.mockImplementation(
+    async (
+      _capability: unknown,
+      _contenderOptions: unknown,
+      _controller: unknown,
+      _label: unknown,
+      _options: unknown,
+      onAuthorityVerified: (() => void) | null,
+    ) => {
+      onAuthorityVerified?.();
+      return { forcedRecycle: false };
+    },
+  );
   mocks.relaunchHostAfterRestartWithAttemptMock.mockResolvedValue(undefined);
 }
 
@@ -2562,11 +2576,25 @@ describe("buildHostUpdateCommand — activation debt (installed-up-to-date short
     mocks.downloadAndStageHostMock.mockResolvedValue(upToDate("2.0.0"));
     mocks.readHostInstallRecordMock.mockResolvedValue(sampleRecord("2.0.0"));
     mocks.readHostPidMetadataMock.mockResolvedValue(pidRecord("1.0.0", 4242));
-    // A REAL failure under the lock - the stop half throws. Not a busy
-    // refusal: that one is a park now (see "the host is busy" below) and
-    // never reaches the failure stamp this test is about.
-    mocks.stopHostForRestartWithAttemptMock.mockRejectedValue(
-      new Error("stop failed"),
+    // A REAL failure under the lock - the stop half throws AFTER it has
+    // reported the disruption boundary, the way the actuator does. Not a
+    // busy refusal: that one is a park now (see "the host is busy" below)
+    // and never reaches the failure stamp this test is about. And not a
+    // capability refusal either - that rejects BEFORE the boundary and is
+    // the subject of "the activation arm's stop refused by its capability
+    // check" below.
+    mocks.stopHostForRestartWithAttemptMock.mockImplementation(
+      async (
+        _capability: unknown,
+        _contenderOptions: unknown,
+        _controller: unknown,
+        _label: unknown,
+        _options: unknown,
+        onAuthorityVerified: (() => void) | null,
+      ) => {
+        onAuthorityVerified?.();
+        throw new Error("stop failed");
+      },
     );
     // By the time the failure is stamped, a third updater has already
     // landed its own `updating` at the live path - the compare-and-swap
@@ -4413,10 +4441,13 @@ describe("buildHostUpdateCommand — reassertMarkerUnderLock under the lock", ()
     );
   });
 
-  it("the activation arm counts as disturbing the host from its hook on", async () => {
-    // Falsification: replace `reassertMarkerThenDisrupt` with
-    // `reassertMarkerUnderLock` at the debt call site and this restores
-    // instead.
+  it("the activation arm's stop refused by its capability check, before the actuator, restores a live writer's taken-over record", async () => {
+    // Falsification: set `disruptionStarted` around the stop call (the old
+    // `reassertMarkerThenDisrupt`) instead of from the facade's
+    // `onAuthorityVerified`, and a refused check stamps this run's `failed`
+    // over the live writer's record - which that writer's later clear can
+    // never land. The stop mock here rejects WITHOUT calling the boundary
+    // callback: the check failed, the actuator never ran.
     mocks.downloadAndStageHostMock.mockResolvedValue({
       outcome: "short-circuit",
       reason: "installed-up-to-date",
@@ -4456,7 +4487,7 @@ describe("buildHostUpdateCommand — reassertMarkerUnderLock under the lock", ()
     mocks.stopHostForRestartWithAttemptMock.mockRejectedValue(
       cliError({
         code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
-        message: "could not stop the service",
+        message: "mutation capability refused",
         details: null,
         exitCode: 1,
       }),
@@ -4486,8 +4517,114 @@ describe("buildHostUpdateCommand — reassertMarkerUnderLock under the lock", ()
     );
     const adopted = mocks.replaceUpdateProgressMarkerIfUnchangedMock.mock
       .calls[0][2] as HostUpdateProgress;
-    // The hook already ran (the takeover above proves it) before the stop
-    // rejected, so this is a `failed` stamp, never a restore.
+    // The takeover happened (above), the boundary never did: the second
+    // conditional write RESTORES the foreign record over the adopted one.
+    expect(
+      mocks.replaceUpdateProgressMarkerIfUnchangedMock,
+    ).toHaveBeenNthCalledWith(2, "production", adopted, foreignRecord);
+    expect(
+      mocks.replaceUpdateProgressMarkerIfUnchangedMock,
+    ).not.toHaveBeenCalledWith(
+      "production",
+      expect.anything(),
+      expect.objectContaining({ state: "failed" }),
+    );
+    expect(mocks.disk.current).toEqual(foreignRecord);
+    expect(ctx.runtime.logger.info).toHaveBeenCalledWith(
+      "Host update failed before disturbing the host; the progress marker it took over was restored to its previous writer",
+      expect.objectContaining({
+        environment: "production",
+        outcome: "replaced",
+      }),
+    );
+  });
+
+  it("the activation arm counts as disturbing the host from the stop's authority check on", async () => {
+    // Falsification: drop `onWillDisruptHost` from the activation arm's stop
+    // call (pass `null`) and this restores instead of stamping. The stop
+    // mock here CALLS the boundary callback - the check passed, the actuator
+    // ran and failed - and then rejects.
+    mocks.downloadAndStageHostMock.mockResolvedValue({
+      outcome: "short-circuit",
+      reason: "installed-up-to-date",
+      targetVersion: "2.0.0",
+      installedVersion: "2.0.0",
+      stagedVersion: null,
+    } satisfies HostDownloadOutcome);
+    mocks.readHostInstallRecordMock.mockResolvedValue(sampleRecord("2.0.0"));
+    const runningAt1 = {
+      pid: 4242,
+      hostId: "host-1",
+      version: "1.0.0",
+      websocketUrl: "ws://127.0.0.1:51820/rpc",
+      startedAt: "2026-01-01T00:00:00.000Z",
+      processStartIdentity: null,
+      layer0: null,
+      layer0Slot: null,
+    };
+    const foreignRecord: HostUpdateProgress = {
+      state: "updating",
+      error: null,
+      targetVersion: "2.0.0",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      writerId: "foreign-writer",
+    };
+    // Debt on both reads (out of the lock, and again under the activation
+    // arm's own lock) - the SECOND read's side effect is what lands the
+    // foreign marker under the lock, between this run's pre-lock publish
+    // and the activation arm's takeover hook.
+    mocks.readHostPidMetadataMock
+      .mockResolvedValueOnce(runningAt1)
+      .mockImplementationOnce(async () => {
+        mocks.disk.current = foreignRecord;
+        return runningAt1;
+      });
+    mocks.identityVerdictMock.mockResolvedValue("current");
+    mocks.stopHostForRestartWithAttemptMock.mockImplementation(
+      async (
+        _capability: unknown,
+        _contenderOptions: unknown,
+        _controller: unknown,
+        _label: unknown,
+        _options: unknown,
+        onAuthorityVerified: (() => void) | null,
+      ) => {
+        onAuthorityVerified?.();
+        throw cliError({
+          code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+          message: "could not stop the service",
+          details: null,
+          exitCode: 1,
+        });
+      },
+    );
+
+    const ctx = fakeCtx();
+    await expect(
+      buildHostUpdateCommand({
+        force: false,
+        allowDowngrade: false,
+        ackNonce: null,
+      })(ctx),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+    });
+
+    expect(
+      mocks.replaceUpdateProgressMarkerIfUnchangedMock,
+    ).toHaveBeenNthCalledWith(
+      1,
+      "production",
+      foreignRecord,
+      expect.objectContaining({
+        state: "updating",
+        targetVersion: "2.0.0",
+      }),
+    );
+    const adopted = mocks.replaceUpdateProgressMarkerIfUnchangedMock.mock
+      .calls[0][2] as HostUpdateProgress;
+    // The boundary fired before the stop rejected, so this is a `failed`
+    // stamp, never a restore.
     expect(
       mocks.replaceUpdateProgressMarkerIfUnchangedMock,
     ).toHaveBeenNthCalledWith(

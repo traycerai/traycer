@@ -454,9 +454,14 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
     // is the truth the next updater takes over in turn. The apply and
     // downgrade arms report the boundary through the progress stream -
     // `commitInstallFromSource` emits `service-stop` immediately before the
-    // stop and `swap` before the rename - and the activation arm's hook
-    // runs immediately before its stop (see `reassertMarkerThenDisrupt` for
-    // the one check between).
+    // stop and `swap` before the rename - and the activation arm's stop
+    // reports it once its mutation-capability check has passed, immediately
+    // before the actuator (`stopHostForRestartWithAttempt`'s
+    // `onAuthorityVerified`). Not before that check: a capability that is
+    // refused has touched nothing, and marking the boundary around the call
+    // would have a failed check stamp this run's `failed` over a live
+    // writer's taken-over record, which that writer's later clear could
+    // never land.
     let disruptionStarted = false;
     const reportProgress = (info: ProgressInfo): void => {
       if (info.stage === "service-stop" || info.stage === "swap") {
@@ -464,15 +469,8 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
       }
       ctx.progress(info);
     };
-    // The activation arm's hook runs after its busy gate and immediately
-    // before its stop; the only thing between is the mutation-capability
-    // check the stop performs, and a failure there lands a `failed` into an
-    // EMPTY path at most (a taken-over record is stamped, which is the
-    // outcome the next updater takes over anyway).
-    const reassertMarkerThenDisrupt = async (
-      targetVersion: string,
-    ): Promise<void> => {
-      await reassertMarkerUnderLock(targetVersion);
+    // The activation arm's boundary, handed to its stop facade.
+    const markDisruptionStarted = (): void => {
       disruptionStarted = true;
     };
     // The preparation runs INSIDE the try whose catch owns the marker. The
@@ -571,7 +569,8 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
           activationDebt.runningVersion,
           // The record is read again under the lock; the marker is made this
           // run's there, naming the version as read, and the stop follows.
-          reassertMarkerThenDisrupt,
+          reassertMarkerUnderLock,
+          markDisruptionStarted,
         );
         legacy = activation.legacy;
         activationPerformed = activation.activated;
@@ -618,7 +617,8 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
               environment,
               args.force,
               reading.runningVersion,
-              reassertMarkerThenDisrupt,
+              reassertMarkerUnderLock,
+              markDisruptionStarted,
             );
             legacy = activation.legacy;
             activationPerformed = activation.activated;
@@ -1136,6 +1136,12 @@ async function activateInstalledAndProjectLegacy(
   force: boolean,
   lastSeenRunningVersion: string,
   onInstalledVersionUnderLock: (installedVersion: string) => Promise<void>,
+  /**
+   * Runs once the stop's mutation-capability check has passed and
+   * immediately before the actuator stops the host: the first point at
+   * which this arm can have disturbed it. See `disruptionStarted`.
+   */
+  onWillDisruptHost: () => void,
 ): Promise<{
   readonly legacy: LegacyHostUpdateResult;
   readonly activated: boolean;
@@ -1171,7 +1177,9 @@ async function activateInstalledAndProjectLegacy(
     // not before: the caller takes the progress marker over here, and a park
     // must not follow a takeover for work never done. The stop below is the
     // only thing that can still park, and the caller's park path restores
-    // a live writer's displaced record for that case.
+    // a live writer's displaced record for that case; a stop refused by its
+    // own capability check, before the actuator, is reported the same way
+    // (`onWillDisruptHost` has not run).
     await onInstalledVersionUnderLock(installed.version);
     // The stop → relaunch pair `host restart` drives, with `force` threaded
     // into the stop half. The busy gate above is only the pre-check: on a
@@ -1189,6 +1197,7 @@ async function activateInstalledAndProjectLegacy(
       controller,
       label,
       { force },
+      onWillDisruptHost,
     );
     await relaunchHostAfterRestartWithAttempt(
       capability,
