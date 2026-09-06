@@ -1,67 +1,48 @@
 # AGENTS.md
 
-Default branch: `main`. Bun 1.3.12 workspaces + Nx.
+Default branch: `main`.
+Bun 1.3.12 workspaces + Nx.
 
-Open-source **clients, CLI, and protocol**. The Traycer Host and cloud backends
-are **not** here — the CLI provisions a signed host from GitHub Releases; see
-[`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md).
+Open-source **clients, CLI, and protocol**.
+The Traycer Host and cloud backends are **not** here - the CLI provisions a signed host from GitHub Releases.
+See [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md).
 
-## Nested docs (read when editing there)
+## Nested docs
+
+Nested `AGENTS.md` files load with the tree they sit in - read them when the task enters that tree.
+`CLAUDE.md` is always a symlink to `AGENTS.md` in the same directory (`ln -s AGENTS.md CLAUDE.md`).
+Never a copy.
 
 - [`clients/gui-app/AGENTS.md`](clients/gui-app/AGENTS.md)
 - [`clients/desktop/AGENTS.md`](clients/desktop/AGENTS.md)
+- [`clients/mobile/AGENTS.md`](clients/mobile/AGENTS.md)
 
-## Map
+## Tooling
 
-| Path                   | Package                        | Role                             |
-| ---------------------- | ------------------------------ | -------------------------------- |
-| `protocol/`            | `@traycer/protocol`            | Client⇄host wire contract        |
-| `clients/traycer-cli/` | `@traycer-clients/traycer-cli` | CLI (host install, auth, agents) |
-| `clients/shared/`      | `@traycer-clients/shared`      | Transport / auth / formatting    |
-| `clients/gui-app/`     | `@traycer-clients/gui-app`     | GUI renderer                     |
-| `clients/desktop/`     | `@traycer-clients/desktop`     | Electron shell                   |
+Type-check with `bun run compile`, never `tsc`.
+`pre-commit` already runs the affected workspace checks (build, compile, lint, format).
+Do not re-run those before committing.
+Tests run in CI (`test.yml`), not in the hook.
+Re-run a check only when diagnosing a hook or CI failure.
+Commits need DCO (`git commit -s`).
 
-## Commands
+`make dev-desktop` talks to the **production** cloud - no local backends.
+Details: [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md).
+Commands live in `package.json` and the Makefile.
 
-```bash
-bun install
-bun run build
-bun run compile                 # never tsc directly
-bun run lint && bun run format
-make test-affected              # optional targeted run; CI owns the test gate
-bunx nx run @traycer-clients/traycer-cli:build   # single package
-pre-commit run --all-files      # explicit full-repo static validation
+## Domain
 
-make dev-desktop                # signed host from Releases + HMR desktop
-make dev-desktop VERSION=1.2.3  # pin host release
-```
-
-`make dev-desktop` talks to the **production** cloud — no local backends. Details:
-[`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md).
-
-**Commits:** do **not** manually run `compile` / `build` / `lint` / `format`
-before committing. `pre-commit` already runs the affected workspace checks
-(build, compile, lint, format). Tests run in CI (`test.yml`), not in the hook —
-only re-run checks yourself when diagnosing a hook or CI failure. Commits need
-DCO (`git commit -s`).
-
-## Non-negotiable
-
-**Protocol** — `@traycer/protocol` uses per-method `{ major, minor }` RPC versions
-negotiated at handshake (not npm semver). CLI **inlines** protocol at build time.
+**Protocol** - `@traycer/protocol` uses per-method `{ major, minor }` RPC versions negotiated at handshake (not npm semver).
+CLI **inlines** protocol at build time.
 See `protocol/README.md`.
 
-**Host identity** (GUI):
+**Host identity** (GUI) - `hostId` is canonical; tabs bind a `hostId` for life.
+Read `clients/gui-app/src/hooks/host/AGENTS.md` when changing host addressing, pins, or composer placement.
 
-1. `hostId` is canonical; "device" is UI copy — no parallel `deviceId` field.
-2. Tabs bind a `hostId` for life (`<TabHostProvider>` → `useTabHostId()`). Never
-   use `useAddressableHostId()` inside a tab. Cross-host = **clone-not-migrate**.
-   Reachability checked at tab-open only.
+**Shared code** - transport / auth in `clients/shared/`; wire contract in `protocol/`.
+Do not duplicate.
 
-**Shared code** — transport/auth in `clients/shared/`; wire contract in
-`protocol/`. Don't duplicate.
-
-## Type safety (ESLint — do not bypass)
+## Type safety (ESLint - do not bypass)
 
 ```ts
 // BAD                         // GOOD
@@ -74,4 +55,5 @@ ReturnType<typeof fn>          // name the concrete type
 
 ## Skills
 
-Use when the task matches. GUI skills: see `clients/gui-app/AGENTS.md`.
+Use a skill when the task matches.
+GUI skills: `clients/gui-app/AGENTS.md`.

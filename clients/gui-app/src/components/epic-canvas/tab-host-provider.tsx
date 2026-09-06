@@ -1,12 +1,13 @@
 /**
  * Per-tile host binding context.
  *
- * CLAUDE.md mandates that chat / terminal artifacts are bound to a host
- * for life. The renderer addresses **two host scopes** simultaneously:
+ * Chat / terminal artifacts are bound to a host for life
+ * (`src/hooks/host/AGENTS.md`). The renderer addresses **two host scopes**
+ * simultaneously:
  *
  *   - **Default host** - machine-local host for app-wide features
  *     (Epic list, opening artifacts, host-status footer). Read with
- *     `useAddressableHostId()` / `useHostClient()`.
+ *     `useEffectiveHostId()` / `useHostClient()`.
  *   - **Tab-scoped host** - per-tile binding from the artifact schema
  *     (`EpicNodeRef.hostId`). Read with `useTabHostId()` (from
  *     `./use-tab-host-id`); never with `useAddressableHostId()`.

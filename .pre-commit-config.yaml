@@ -7,15 +7,16 @@ repos:
     rev: v5.0.0
     hooks:
       - id: trailing-whitespace
-        exclude: \.gen\.(ts|tsx)$
+        exclude: (\.gen\.(ts|tsx)|CLAUDE\.md)$
       - id: end-of-file-fixer
-        exclude: \.gen\.(ts|tsx)$
+        exclude: (\.gen\.(ts|tsx)|CLAUDE\.md)$
       - id: check-added-large-files
         args: ["--maxkb=5000"]
       - id: check-executables-have-shebangs
       - id: check-shebang-scripts-are-executable
       - id: detect-private-key
       - id: mixed-line-ending
+        exclude: CLAUDE\.md$
       - id: check-yaml
       - id: check-json
       - id: check-merge-conflict
