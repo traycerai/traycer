@@ -1046,6 +1046,14 @@ export function HostOverviewPanel(props: {
   // there when the page loaded.
   const autoOpen = deriveActivationAutoOpen({
     usable,
+    // WAIT, do not skip. The one-shot spends itself when it fires, and the
+    // stale-open rule above would close a dialog opened while the page-wide
+    // gate is armed — in the same render pass, before anyone saw it, with
+    // `autoOpenedFor` already recorded. The ordinary sequence runs straight
+    // into that: an accepted dispatch's own latch is still held when its first
+    // frames arrive. Holding off until the gate clears costs a poll and keeps
+    // the one shot.
+    gateArmed: anyPending,
     supported: updates.activate !== null,
     dispatch: updateDispatch,
     incarnation,
@@ -1794,13 +1802,15 @@ interface BoundDispatchOffer {
  */
 function deriveActivationAutoOpen(input: {
   readonly usable: boolean;
+  /** The page-wide lifecycle gate. See the call site for why this defers. */
+  readonly gateArmed: boolean;
   readonly supported: boolean;
   readonly dispatch: HostUpdateDispatchSlot | null;
   readonly incarnation: string;
   readonly view: FleetUpdateView | null;
 }): BoundDispatchOffer | null {
   const { dispatch, view } = input;
-  if (!input.usable || !input.supported) return null;
+  if (!input.usable || input.gateArmed || !input.supported) return null;
   if (dispatch === null || !dispatch.seen) return null;
   if (dispatch.incarnation !== input.incarnation) return null;
   if (view === null || view.kind !== "waiting-to-activate") return null;
