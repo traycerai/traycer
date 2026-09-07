@@ -181,6 +181,9 @@ function observationOf(
     // Not part of the fingerprint in production either: it explains a reading,
     // it never participates in one.
     runningDiagnosis: "classified",
+    // The same contract, and the same reason it is safe to pin at a constant
+    // here: a `classified` reading is by definition one the host answered.
+    runningRefusal: null,
     fingerprint: JSON.stringify({
       evidence,
       installIdentity,

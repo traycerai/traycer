@@ -10,6 +10,7 @@ import type {
 } from "@traycer-clients/shared/host-update";
 import { isValidHostVersion } from "@traycer-clients/shared/host-version/compare-host-versions";
 import type { InstallGenerationIdentity } from "@traycer-clients/shared/host-version/install-generation";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { callHostRpcAtEndpoint } from "../internal/host-rpc";
 import { readHostInstallRecord } from "../manifest/host-install";
 import { readHostStagedRecord } from "../manifest/host-staged";
@@ -66,6 +67,20 @@ export type RunningEvidenceDiagnosis =
   | "pid-identity-indeterminate"
   /** The host did not answer `host.status` at its recorded endpoint. */
   | "host-rpc-unreachable"
+  /**
+   * The host ANSWERED and refused this client's authenticated call (Q19).
+   *
+   * Split out of `host-rpc-unreachable` because the two say opposite things
+   * about waiting. A host that is not answering yet may be mid-restart, and the
+   * verify budget exists for exactly that. A host that produced an RPC error
+   * frame is up, is listening, has completed the transport handshake, and has
+   * decided it will not talk to us - which the next poll will decide again,
+   * identically, until the deadline. The Linux lane measured this: an old host
+   * that fails enrollment stays unprovisioned, holds no JWKS, and rejects every
+   * authenticated inbound call while still serving unauthenticated loopback
+   * HTTP - 45 s of polling to learn what the first answer said.
+   */
+  | "host-refuses-authenticated-rpc"
   /** The host answered, and said it is not ready. */
   | "host-not-ready"
   /** The host answered with a version its own pid record disagrees with. */
@@ -87,6 +102,16 @@ export interface AttemptRecoveryEvidenceObservation {
    * change because of it.
    */
   readonly runningDiagnosis: RunningEvidenceDiagnosis;
+  /**
+   * The host's OWN words for a refusal, when there was one; `null` otherwise.
+   *
+   * Deliberately not folded into the token above, which is a closed set of
+   * fixed strings precisely so it is always safe to render and to assert
+   * against. This is host-reported text, so it is carried separately and only
+   * ever surfaces in an error's `details` - never in a token, never in the
+   * fingerprint, and never in anything a decision reads.
+   */
+  readonly runningRefusal: string | null;
   /**
    * The install record's generation inputs exactly as this observation read
    * them, or `null` when no record could be read at all.
@@ -168,6 +193,10 @@ export async function observeAttemptRecoveryEvidence(
     runningDiagnosis: flapped
       ? "host-restarted-during-probe"
       : runningAfter.diagnosis,
+    // A flap outranks a refusal, and the reason goes with the token it
+    // belongs to: the observation no longer claims the host refused us, so it
+    // must not carry the words either.
+    runningRefusal: flapped ? null : runningAfter.refusal,
     fingerprint: JSON.stringify({
       installed: installed.fingerprint,
       staged: staged.fingerprint,
@@ -354,6 +383,8 @@ type RunningObservation = {
   readonly evidence: AttemptRecoveryRunningEvidence;
   readonly fingerprint: string;
   readonly diagnosis: RunningEvidenceDiagnosis;
+  /** Host-reported refusal text, or `null`. See `runningRefusal` above. */
+  readonly refusal: string | null;
 };
 
 async function readRunningObservation(
@@ -397,8 +428,22 @@ async function readRunningObservation(
       {},
       { hostId: metadata.hostId, websocketUrl: metadata.websocketUrl },
     );
-  } catch {
-    return unreadableRunning("host-rpc-unreachable");
+  } catch (err) {
+    // An RPC ERROR FRAME is the discriminator, and it is a strong one: to
+    // produce one the host accepted the connection, completed the handshake,
+    // decoded the request and chose a refusal. Nothing about that changes on
+    // the next poll. Every other failure here - a refused dial, a timeout, a
+    // close mid-flight - is consistent with a host that is still coming up,
+    // which is what the verify budget is for.
+    //
+    // `UNAUTHORIZED` and `FORBIDDEN` only. A `WORKTREE_BUSY` or an
+    // `E_INVALID_ARGUMENT` from this call would mean something has gone wrong
+    // in a way that is not about admission, and shortening the budget is not
+    // this arm's answer to that.
+    const refusal = authenticatedRefusalReason(err);
+    return refusal === null
+      ? unreadableRunning("host-rpc-unreachable")
+      : refusedRunning(refusal);
   }
   if (!status.ready) return unreadableRunning("host-not-ready");
   if (status.hostVersion !== metadata.version) {
@@ -420,6 +465,7 @@ async function readRunningObservation(
   }
   return {
     diagnosis: "classified",
+    refusal: null,
     evidence: classifyRunningIdentity(status.hostVersion, installed),
     fingerprint: JSON.stringify({
       pid: metadata.pid,
@@ -595,10 +641,34 @@ function unreadableArtifact(): ArtifactObservation {
   return { evidence: { kind: "unreadable" }, fingerprint: "unreadable" };
 }
 
+/**
+ * The host's own refusal text when an authenticated call was REFUSED by a host
+ * that answered, or `null` for every other failure (Q19).
+ *
+ * `HostRpcError` is itself most of the discriminator: the transport only
+ * constructs one from a host's error frame, so its mere existence proves the
+ * connection opened, the handshake completed and the host replied. The code
+ * narrows that to refusals of ADMISSION - the case where retrying until the
+ * deadline cannot change the answer - and leaves every other RPC error on the
+ * budgeted path, where a host that is still coming up belongs.
+ */
+function authenticatedRefusalReason(err: unknown): string | null {
+  if (!(err instanceof HostRpcError)) return null;
+  if (err.code !== "UNAUTHORIZED" && err.code !== "FORBIDDEN") return null;
+  // The host's words, tagged with its own code so the operator can match the
+  // CLI's report against the host log line that produced it.
+  return `${err.code}: ${err.message}`;
+}
+
 function absentRunning(
   diagnosis: RunningEvidenceDiagnosis,
 ): RunningObservation {
-  return { evidence: { kind: "absent" }, fingerprint: "absent", diagnosis };
+  return {
+    evidence: { kind: "absent" },
+    fingerprint: "absent",
+    diagnosis,
+    refusal: null,
+  };
 }
 
 function unreadableRunning(
@@ -608,6 +678,23 @@ function unreadableRunning(
     evidence: { kind: "unreadable" },
     fingerprint: "unreadable",
     diagnosis,
+    refusal: null,
+  };
+}
+
+/**
+ * The one unreadable reading that carries the host's own words with it (Q19).
+ *
+ * Separate from `unreadableRunning` rather than a parameter on it, so every
+ * other refusal site keeps a `null` it cannot forget to pass and this one
+ * cannot be reached without a reason to carry.
+ */
+function refusedRunning(reason: string): RunningObservation {
+  return {
+    evidence: { kind: "unreadable" },
+    fingerprint: "unreadable",
+    diagnosis: "host-refuses-authenticated-rpc",
+    refusal: reason,
   };
 }
 
@@ -627,6 +714,8 @@ function unreadableObservation(): AttemptRecoveryEvidenceObservation {
     // baseline unchanged rather than inventing one.
     installIdentity: null,
     stageFingerprint: null,
+    // Nothing was asked of any host, so there is no refusal to report.
+    runningRefusal: null,
   };
 }
 

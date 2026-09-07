@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -19,6 +20,11 @@ const MIGRATED_CALLERS: readonly string[] = [
   "clients/traycer-cli/src/installer/apply.ts",
   "clients/traycer-cli/src/installer/install.ts",
   "clients/traycer-cli/src/installer/download-stage.ts",
+  // Already passing an identity whole before this change, and not
+  // `bafc226ec`'s. Found by the discovery scan below, which is the point of
+  // having one: the first version of these lists was hand-written and this
+  // caller was in neither (cold review B).
+  "clients/traycer-cli/src/host/update-executor.ts",
 ];
 
 const PENDING_LITERAL_CALLERS: readonly string[] = [
@@ -36,6 +42,40 @@ const PENDING_LITERAL_CALLERS: readonly string[] = [
 
 function sourceOf(repoRelativePath: string): string {
   return readFileSync(join(REPO_ROOT, repoRelativePath), "utf8");
+}
+
+/**
+ * Every production file that calls `encodeInstallGeneration`, DISCOVERED.
+ *
+ * The lists above are claims about the tree; this reads the tree. Without it
+ * the register can only check files it was already told about, so a brand-new
+ * caller - the case the pin exists for - is invisible rather than red. Cold
+ * review B proved that on this branch: `host/update-executor.ts` called the
+ * encoder from neither list and nothing objected, correct today and unpinned
+ * against tomorrow.
+ *
+ * `git grep -l` rather than a directory walk: it already respects
+ * `.gitignore`, so build output, `node_modules` and scratch files cannot join
+ * the register by being written next to source. `--untracked` is not optional
+ * here - without it a caller added in a BRAND-NEW file is invisible until
+ * someone stages it, which is exactly the window in which the pin is supposed
+ * to speak.
+ */
+function discoveredCallers(): readonly string[] {
+  const out = execFileSync(
+    "git",
+    ["grep", "-l", "--untracked", "encodeInstallGeneration(", "--", "clients"],
+    { cwd: REPO_ROOT, encoding: "utf8" },
+  );
+  return (
+    out
+      .split("\n")
+      .filter((line) => line.length > 0)
+      .filter((line) => !line.includes("__tests__"))
+      // The encoder's own module defines it; it does not call it.
+      .filter((line) => !line.endsWith("host-version/install-generation.ts"))
+      .sort()
+  );
 }
 
 /**
@@ -147,6 +187,15 @@ describe("encodeInstallGeneration call sites", () => {
     const source = sourceOf(path);
     expect(source).toContain("encodeInstallGeneration(");
     expect(source).not.toMatch(HAND_BUILT_LITERAL);
+  });
+
+  it("knows about every caller in the tree", () => {
+    // The discovery step, and the one assertion that can fail for a caller
+    // nobody wrote down. Without it the two directional tests below only ever
+    // read files the lists already name, so the register's headline claim -
+    // that a NEW hand-built literal reddens - was false as first written.
+    const known = [...MIGRATED_CALLERS, ...PENDING_LITERAL_CALLERS].sort();
+    expect(discoveredCallers()).toEqual(known);
   });
 
   it("names every remaining hand-built literal, and no others", () => {

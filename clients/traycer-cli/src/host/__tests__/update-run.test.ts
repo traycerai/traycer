@@ -499,6 +499,13 @@ const world = {
    * the exact cause it wants to see rendered (E13).
    */
   runningDiagnosis: "pid-metadata-absent" as RunningEvidenceDiagnosis,
+  /**
+   * The host's own refusal words, when the diagnosis above is a refusal (Q19).
+   * Production carries these OUT of the token deliberately - the token is a
+   * closed set of fixed strings, this is host-reported text - and the world
+   * models the same split rather than deriving one from the other.
+   */
+  runningRefusal: null as string | null,
   latest: "2.0.0",
 };
 
@@ -619,6 +626,10 @@ function observationOfWorld(): AttemptRecoveryEvidenceObservation {
     evidence,
     runningDiagnosis:
       running === null ? world.runningDiagnosis : ("classified" as const),
+    // Q19: the host's own refusal words, present only when the world declares
+    // a refusal reading. Every other observation carries `null`, exactly as
+    // production does.
+    runningRefusal: running === null ? world.runningRefusal : null,
     fingerprint: JSON.stringify(evidence),
     installIdentity:
       installed === null
@@ -1163,6 +1174,7 @@ beforeEach(async () => {
   world.stageSerial = 0;
   world.runningVersion = null;
   world.runningDiagnosis = "pid-metadata-absent";
+  world.runningRefusal = null;
   world.latest = "2.0.0";
   logger = fakeLogger();
   armWorld();
@@ -5152,6 +5164,52 @@ describe("acceptance: cells with no legacy ancestor", () => {
     });
   });
 
+  it("Q16: a marker whose writer liveness is UNKNOWN is deleted, not spared", async () => {
+    // The row cold review B found missing, and the reason it matters is that
+    // the docblock USED to claim the opposite. `hasProvenLiveWriter` is
+    // `writerLiveness === "live"`, and `writerLiveness` answers `unknown` for a
+    // null or unparseable writer id or a failed probe - so unknown ⇒ DELETE.
+    // Without this row the only pinned liveness case was `alive-same`, dropping
+    // the guard reddened one pin, and an editor trusting the old prose could
+    // have tightened to `!hasLiveWriter` with nothing objecting.
+    //
+    // What makes deleting it correct is the VERSION test, not the liveness
+    // one: this marker names the version the host is observed running, so
+    // whoever owns it is working toward a version already being served.
+    // Falsification (run): tighten the guard in the strict direction - spare
+    // any marker carrying a writer id at all, rather than only a proven-live
+    // one - and this reddens alone, the proven-live pin above staying green.
+    // (The literal `!updateProgressRecordHasLiveWriter` swap review B named is
+    // not runnable as written: neither this module nor the marker mock imports
+    // that predicate. The mutation above is that change's effect on the one
+    // case the two predicates disagree about, which is what the pin is for.)
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    await crashAtRestarting("2.0.0");
+    world.runningVersion = "2.0.0";
+    // A writer id in a shape the pid extractor cannot parse: liveness is
+    // neither `live` nor `dead`, it is UNKNOWN.
+    mocks.disk.current = {
+      state: "updating",
+      error: null,
+      targetVersion: "2.0.0",
+      updatedAt: "2026-01-02T00:00:00.000Z",
+      writerId: "not-a-pid-shaped-writer-id",
+      writerStartIdentity: null,
+    };
+    mocks.updateProgressRecordHasProvenLiveWriter.mockImplementation(
+      (record: HostUpdateProgress) =>
+        record.state !== "failed" &&
+        record.writerId !== null &&
+        mocks.deadWriterIds.has(`${record.writerId}:live`),
+    );
+
+    const outcome = await runUpdate({});
+
+    expect(outcome.releasedReason).toBe("recovered-complete");
+    expect(mocks.disk.current).toBeNull();
+  });
+
   it("Q16: a `failed` marker is NOT this clear's business", async () => {
     await seedInstalled("1.0.0");
     world.runningVersion = "1.0.0";
@@ -6747,6 +6805,203 @@ describe("E13: the verify leg says WHY the host never became healthy", () => {
       });
     },
   );
+
+  // ---- Q19: a host that ANSWERED and refused ends the leg now ---------------
+  //
+  // The Linux lane measured the case: an old host that fails enrollment stays
+  // unprovisioned, holds no JWKS, and rejects every authenticated inbound call
+  // while still serving unauthenticated loopback HTTP. The verify leg then
+  // spent the whole 45 s budget re-asking a question the first answer had
+  // already settled, and reported a TIMEOUT for a host that had replied
+  // promptly and definitely.
+  //
+  // The rule has two halves and the pins below are one per half: a REFUSAL
+  // short-circuits, and a host that is merely not answering yet does not.
+
+  it("Q19: two consecutive refusals end the leg early, and say so", async () => {
+    // The poll count is the assertion that matters. With `verifyBudgetMs: 200`
+    // and `verifyPollIntervalMs: 5` the deadline arm takes ~40 observations;
+    // this must take exactly the streak length.
+    // Falsification (the ablation): drop the `refused ||` from the loop's exit
+    // condition and this reddens on the observation count, on the record code
+    // and on the message.
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    applyThenLeaveWorld(() => {
+      world.runningVersion = null;
+      world.runningDiagnosis = "host-refuses-authenticated-rpc";
+      world.runningRefusal =
+        "UNAUTHORIZED: no applicable key found in the JSON Web Key Set";
+    });
+
+    const failure = await runUpdate({}).then(
+      () => null,
+      (error: unknown) => error,
+    );
+
+    expect(mocks.observeAttemptRecoveryEvidence).toHaveBeenCalledTimes(2);
+    expect(failure).toMatchObject({
+      code: CLI_ERROR_CODES.HOST_UPDATE_HEALTH_CHECK_FAILED,
+      // The host's OWN words, which is the one fact the operator cannot
+      // reconstruct from a token.
+      details: {
+        refusal:
+          "UNAUTHORIZED: no applicable key found in the JSON Web Key Set",
+      },
+      message: expect.stringContaining("REFUSED this client's authenticated"),
+    });
+    // NOT `verify-timeout`. Nothing timed out - the leg stopped early because
+    // the host gave a definite answer - and a record saying otherwise sends
+    // the operator hunting a slow host instead of a rejected client. This is
+    // the Q11 lesson in the other direction.
+    const record = await requireRecord();
+    expect(record.error).toMatchObject({
+      code: "host-refuses-rpc",
+      phase: "verifying",
+    });
+  });
+
+  it.each([
+    // 1.2.0: fails enrollment against its OWN minted hostId.
+    ["UNAUTHORIZED: no applicable key found in the JSON Web Key Set"],
+    // 1.1.11: logs no enrollment attempt at all, same dead end.
+    ["FORBIDDEN: device credential file does not match this host"],
+  ])(
+    "Q19: every authenticated refusal classifies the same, whatever the host says (%s)",
+    async (reason) => {
+      // The lane measured two eras failing the same way by different routes -
+      // 1.2.0 mints its own hostId and is refused, 1.1.11 never attempts
+      // enrollment - and both must land on ONE token. They do by construction
+      // rather than by luck: the gate keys on the RPC error CODE, so nothing
+      // about a host's enrollment behaviour, its log wording or its hostId
+      // reaches the classification. Only `details.refusal` differs.
+      // Falsification: key the gate on the message text instead of the code
+      // and one of these rows reddens.
+      await seedInstalled("1.0.0");
+      world.runningVersion = "1.0.0";
+      applyThenLeaveWorld(() => {
+        world.runningVersion = null;
+        world.runningDiagnosis = "host-refuses-authenticated-rpc";
+        world.runningRefusal = reason;
+      });
+
+      const failure = await runUpdate({}).then(
+        () => null,
+        (error: unknown) => error,
+      );
+
+      expect(mocks.observeAttemptRecoveryEvidence).toHaveBeenCalledTimes(2);
+      expect(failure).toMatchObject({ details: { refusal: reason } });
+      expect((await requireRecord()).error).toMatchObject({
+        code: "host-refuses-rpc",
+      });
+    },
+  );
+
+  it("Q19: a host that is merely NOT ANSWERING keeps its whole budget", async () => {
+    // The other half, and the one that makes the first half safe: a host that
+    // has not answered yet may be mid-restart, which is the entire reason the
+    // budget exists. Only an ANSWER - an RPC error frame, which proves the
+    // connection opened and the host chose a refusal - may shorten it.
+    // Falsification (the ablation): widen `authenticatedRefusalReason` to
+    // return a reason for any error, and this reddens on both the observation
+    // count and the record code while the pin above stays green.
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    applyThenLeaveWorld(() => {
+      world.runningVersion = null;
+      world.runningDiagnosis = "host-rpc-unreachable";
+    });
+
+    await expect(runUpdate({})).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_UPDATE_HEALTH_CHECK_FAILED,
+    });
+
+    expect(
+      mocks.observeAttemptRecoveryEvidence.mock.calls.length,
+    ).toBeGreaterThan(5);
+    expect((await requireRecord()).error).toMatchObject({
+      code: "verify-timeout",
+    });
+  });
+
+  it("Q19: ONE refusal does not short-circuit - the streak has to be consecutive", async () => {
+    // What `consecutive` buys, made falsifiable. The messenger under this call
+    // revalidates a bearer and retries once, so a lone `UNAUTHORIZED` can be
+    // the tail of a rotation this run is about to win; stopping on it would
+    // turn a self-healing case into a reported failure.
+    // Falsification (the ablation): set `VERIFY_REFUSAL_STREAK_TO_STOP` to 1,
+    // or latch the flag instead of resetting it, and this reddens.
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    applyThenLeaveWorld(() => {
+      world.runningVersion = null;
+      world.runningDiagnosis = "host-refuses-authenticated-rpc";
+      world.runningRefusal = "UNAUTHORIZED: rotating";
+    });
+    // ...and the very next reading is a different failure, which resets the
+    // streak. The run must then ride the budget out like any other.
+    mocks.observeAttemptRecoveryEvidence.mockImplementationOnce(async () => {
+      const observation = observationOfWorld();
+      world.runningDiagnosis = "host-rpc-unreachable";
+      world.runningRefusal = null;
+      return observation;
+    });
+
+    await expect(runUpdate({})).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_UPDATE_HEALTH_CHECK_FAILED,
+    });
+
+    expect(
+      mocks.observeAttemptRecoveryEvidence.mock.calls.length,
+    ).toBeGreaterThan(5);
+    expect((await requireRecord()).error).toMatchObject({
+      code: "verify-timeout",
+    });
+  });
+
+  it("Q19: the refusal's marker stamp is UNCONDITIONAL, like its two siblings", async () => {
+    // The trap `UNCONDITIONALLY_STAMPED_FAILURE_CODES`' docblock names in
+    // advance - Q6 fell into it once and its ablation came back green. A third
+    // code of that class has to be added to the SET, not just to the message,
+    // or the observed-running suppression silences it.
+    //
+    // It would be at its most wrong here: a host that refuses the CLI's
+    // authenticated call is very likely still serving `pid.json` AT the
+    // target, so the suppression would read "healthy", withhold the stamp, and
+    // leave the operator a machine nothing can update and no signal saying so.
+    // Falsification (the ablation): remove `"host-refuses-rpc"` from the set
+    // and this reddens on the marker never being written.
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    mocks.createUpdateProgressMarkerIfAbsent.mockResolvedValueOnce("failed");
+    // The world the suppression is wrong about, built the way the sibling
+    // `verify-timeout` pin builds it: the apply lands and `pid.json` comes back
+    // AT the target - the reading `targetObservedRunning` trusts - while the
+    // evidence loop's running leg stays UNREADABLE because the host refuses to
+    // talk to this client.
+    mocks.observeAttemptRecoveryEvidence.mockImplementation(async () => {
+      const observation = observationOfWorld();
+      return {
+        ...observation,
+        evidence: {
+          ...observation.evidence,
+          running: { kind: "unreadable" as const },
+        },
+        runningDiagnosis: "host-refuses-authenticated-rpc" as const,
+        runningRefusal: "UNAUTHORIZED: unprovisioned host",
+      };
+    });
+
+    await expect(runUpdate({})).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_UPDATE_HEALTH_CHECK_FAILED,
+    });
+
+    expect(mocks.disk.current).toMatchObject({
+      state: "failed",
+      targetVersion: "2.0.0",
+    });
+  });
 
   it("Q6: says the SERVICE START failed, rather than reporting it as a health timeout", async () => {
     // Mac item 6 / F-mac-1. `applyHostWithAttempt` returned

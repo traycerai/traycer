@@ -256,6 +256,20 @@ const CONTENDER_POLL_INTERVAL_MS = 100;
 /** The evidence loop's own budget, matching the health probe it replaces. */
 const VERIFY_BUDGET_MS = 45_000;
 const VERIFY_POLL_INTERVAL_MS = 500;
+/**
+ * Consecutive authenticated-RPC refusals that end the verify leg early (Q19).
+ *
+ * TWO, and the second one is doing real work rather than being caution. The
+ * messenger under this call revalidates a bearer and retries once, so a single
+ * `UNAUTHORIZED` can be the tail of a rotation this run is about to win, and
+ * stopping on it would turn a self-healing case into a reported failure. Two
+ * readings a poll apart cost 500 ms.
+ *
+ * Not more than two: each extra reading buys nothing - a host that has refused
+ * twice across a poll has decided - and pays for it in the exact seconds this
+ * ticket exists to stop burning.
+ */
+const VERIFY_REFUSAL_STREAK_TO_STOP = 2;
 
 /**
  * The budget when the post-swap service start ITSELF errored (Mac item 6,
@@ -1618,6 +1632,16 @@ async function writeFailure(
   // writer's - so without this arm the generic path below stamps `failed` and
   // undoes the whole fix one frame up the stack. Leaving the record where the
   // verify loop had it IS the answer; see the throw site for who concludes it.
+  //
+  // WHAT THIS GUARD ASSUMES, stated because it is not visible from here (cold
+  // review B). The rule is "over a host verified HEALTHY at the target"; the
+  // test is an error CODE. Those coincide only because the code has exactly
+  // ONE throw site - `runner/errors.ts` declares it once, `verifyUnderClaim`
+  // throws it once, past the verify loop's `break`, and this is its only
+  // reader. A second throw from a path that has not verified health - a
+  // refused write at `applying`, say - would inherit the carve-out silently
+  // and leave an active record with nothing stamped and no one reconciling it.
+  // Adding one means re-deriving this, not reusing it.
   if (
     err instanceof CliError &&
     err.code === CLI_ERROR_CODES.HOST_UPDATE_RECORD_NOT_CONCLUDED
@@ -2894,6 +2918,7 @@ async function verifyUnderClaim(
   const budgetMs = verifyBudgetFor(postSwapError, args.verifyBudgetMs ?? null);
   const pollMs = args.verifyPollIntervalMs ?? VERIFY_POLL_INTERVAL_MS;
   const deadline = Date.now() + budgetMs;
+  let consecutiveRefusals = 0;
   for (;;) {
     const observation = await observeAttemptRecoveryEvidence(
       args.environment,
@@ -2920,7 +2945,33 @@ async function verifyUnderClaim(
       runningKind: running.kind,
       diagnosis: verifyDiagnosisToken(observation, target),
     });
-    if (Date.now() >= deadline) {
+    // Q19: a host that ANSWERED and refused this client ends the leg now.
+    //
+    // Two consecutive refusals, not one. The messenger below this already
+    // revalidates and retries a bearer once, so a single `UNAUTHORIZED` can be
+    // the tail of a token rotation this run is about to win. Two readings a
+    // poll apart cost 500 ms and rule that out, and nothing else can produce
+    // two in a row except a host that has decided.
+    //
+    // The counter RESETS on any other reading, which is the whole point of
+    // counting rather than latching: a host that refuses once and then goes
+    // quiet is restarting, and a restart gets its budget.
+    //
+    // WHAT THIS DOES NOT COVER, and why not. Only a host whose `pid.json`
+    // carries the start stamp ever reaches the RPC at all; an older one is
+    // already `pid-start-stamp-missing` two gates up and still burns the whole
+    // budget. That reading looks equally terminal - a pid record does not grow
+    // a field while we poll - but it is NOT: mid-restart the path can still
+    // hold the OLD host's record, which the new host is about to replace. So
+    // the stamp check is exactly the transient case the budget exists for, and
+    // shortening it would report a failure against a host that was seconds
+    // from being healthy. The refusal is the opposite: an answer.
+    consecutiveRefusals =
+      observation.runningDiagnosis === "host-refuses-authenticated-rpc"
+        ? consecutiveRefusals + 1
+        : 0;
+    const refused = consecutiveRefusals >= VERIFY_REFUSAL_STREAK_TO_STOP;
+    if (refused || Date.now() >= deadline) {
       // The REASON, carried into the message rather than thrown away with the
       // observation (Linux E13). The legacy `probeHostHealth` rendered four
       // diagnoses and this leg rendered none, so a failed update said "not
@@ -2936,13 +2987,22 @@ async function verifyUnderClaim(
       // different remedies: `host service install` versus investigating the
       // host itself. The run knew the start had errored 65 ms after the swap
       // and said nothing.
-      const message =
-        postSwapError === null
+      // A refusal is REPORTED as a refusal, at every layer. Saying
+      // `verify-timeout` here would be the Q11 mistake in the other direction:
+      // nothing timed out - the leg stopped early precisely because the host
+      // gave a definite answer - and a record that says otherwise sends the
+      // operator to look for a slow host instead of a rejected client.
+      const message = refused
+        ? `host update: applied ${target}, and the host is up at its recorded endpoint but REFUSED this client's authenticated call, so the update could not be verified: ${observation.runningRefusal ?? diagnosis}. The bytes ARE committed at ${target}. This is an admission failure, not a slow start - check that the host is provisioned and that this CLI is signed in to the same account.`
+        : postSwapError === null
           ? `host update: applied ${target} but the host did not become healthy at that version: ${diagnosis}`
           : `host update: applied ${target} but the service start failed, so the host never came up: ${postSwapError}. The bytes ARE committed at ${target}; run 'traycer host service install' and then 'traycer host service start'. (probe: ${diagnosis})`;
       await writer.fail({
-        code:
-          postSwapError === null ? "verify-timeout" : "service-start-failed",
+        code: refused
+          ? "host-refuses-rpc"
+          : postSwapError === null
+            ? "verify-timeout"
+            : "service-start-failed",
         message,
         phase: "verifying",
       });
@@ -2954,6 +3014,9 @@ async function verifyUnderClaim(
           version: target,
           diagnosis,
           postSwapError,
+          // The host's OWN words, which is the only fact here the operator
+          // cannot reconstruct from the token. Null on every other path.
+          refusal: observation.runningRefusal,
         },
         exitCode: 1,
       });
@@ -3494,6 +3557,14 @@ async function classifyActivationAgainst(
 const UNCONDITIONALLY_STAMPED_FAILURE_CODES: ReadonlySet<string> = new Set([
   "verify-timeout",
   "service-start-failed",
+  // Q19, and the third code the docblock above predicted. It has the class's
+  // property exactly: the bytes are committed and the host did not come back
+  // USABLE. The suppression this membership defeats would be at its most wrong
+  // here, because a host that refuses the CLI's authenticated call is very
+  // likely serving `pid.json` at the target - so the observed-running check
+  // would read "healthy", withhold the stamp, and leave the operator with a
+  // machine nothing can update and no signal saying so.
+  "host-refuses-rpc",
 ]);
 
 function isUnconditionallyStampedFailure(
@@ -4063,14 +4134,27 @@ async function clearStaleFailedMarker(
  *  - it names the version now RUNNING. That is what makes it concluded rather
  *    than in flight, and it is the same string-identity test at the same
  *    artifact grain the stale-`failed` clear uses;
- *  - no writer is PROVEN live on it. The version test alone would be a race:
- *    the CAS below only proves the bytes did not change between the read and
- *    the delete, not that they are nobody's live work. A third updater that
- *    republished this exact target while this run recovered still owns its
- *    marker, and erasing it would take out the only progress signal for a
- *    whole download → swap → restart. Fail-CLOSED here, unlike the takeover's
- *    fail-open reading: leaving a stale marker costs a wrong card until the
- *    next update, deleting a live one costs a blind one.
+ *  - no writer is PROVEN live on it. The CAS below proves only that the bytes
+ *    did not change between the read and the delete, never whose live work
+ *    they are, so a third updater that republished this exact target still
+ *    owns its marker and the version test alone would erase it.
+ *
+ * That third condition is the WEAKER of the two liveness predicates in
+ * `update-progress-marker.ts`, deliberately - cold review B corrected an
+ * earlier version of this comment that claimed the opposite, and the claim is
+ * worth stating right because it reads backwards. `writerLiveness` answers
+ * `unknown` for a null writer id, an unparseable one, or a failed probe, and
+ * `hasProvenLiveWriter` is `=== "live"`, so **unknown ⇒ delete**.
+ * `!updateProgressRecordHasLiveWriter` is the strict predicate; this is not
+ * it. Nor is it a contrast with the takeover, which uses this same reading
+ * (`liveDisplacedRecord`) for the same directional effect.
+ *
+ * What makes the weaker reading safe here is the VERSION test above it, not a
+ * risk appetite. The only marker this can delete is one naming the version the
+ * host is observed RUNNING, so a live third updater holding it is by
+ * construction working toward a version already being served: it takes the
+ * lock next and finds nothing to do. The "blind update" the strict predicate
+ * would protect is one that was going to conclude as redundant anyway.
  */
 async function clearConcludedUpdatingMarker(
   logger: ILogger,
