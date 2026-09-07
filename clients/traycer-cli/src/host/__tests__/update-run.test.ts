@@ -3225,6 +3225,66 @@ describe("ported: update-progress marker (T16)", () => {
     expect((await requireRecord()).phase).toBe("complete");
   });
 
+  it("ticket 07 detective half: a marker that turns FOREIGN after ours landed aborts the update", async () => {
+    // The transition, which is the whole point. Ours lands at the entry
+    // mirror; a lock-blind pre-1.3.0 CLI then replaces it while this segment
+    // is still running; the next record write observes the swap and aborts.
+    //
+    // This is what a claim-boundary check could not do. At the claim there is
+    // one sample, and one sample cannot separate "a stale marker nobody is
+    // driving" - the common case the entry takeover exists to absorb - from
+    // "somebody else is mutating this host right now". Only the mirror sees
+    // both halves, because only it knows its own write landed.
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    // The FIRST read is the entry mirror's takeover, which must land - a
+    // takeover that never landed is the I/O-failed-CAS case, and its foreign
+    // marker is evidence of our failed write rather than of another actor.
+    // Every read after it is the detective's, and by then a lock-blind
+    // updater owns the path.
+    //
+    // `writerId: null` on purpose: that is a CLI old enough to predate the
+    // field, which is exactly the actor the fence exists to detect, and it
+    // must read as foreign rather than as "unknown, assume ours".
+    let reads = 0;
+    mocks.readUpdateProgressMarker.mockImplementation(async () => {
+      reads += 1;
+      if (reads <= 1) return mocks.disk.current;
+      return {
+        state: "updating" as const,
+        error: null,
+        targetVersion: "9.9.9",
+        updatedAt: new Date().toISOString(),
+        writerId: null,
+        writerStartIdentity: null,
+      };
+    });
+
+    await expect(runUpdate({})).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_UPDATE_CONCURRENT_LEGACY_UPDATER,
+    });
+  });
+
+  it("...and the executor's OWN mirror writes never abort, however many it makes", async () => {
+    // The twin, and the one that decides whether the fence is shippable: the
+    // executor mirrors its own writes onto this marker on every record write,
+    // so a detective half that cannot tell its own marker from a stranger's
+    // aborts every healthy update. `updateProgressRecordWrittenByThisProcess`
+    // is identity, not equality with a remembered value, so a marker this run
+    // rewrote several times still reads as ours.
+    //
+    // No mock overrides here on purpose: the default world already publishes
+    // this run's marker and rewrites it, which is precisely the traffic the
+    // withdrawn claim-boundary wiring mistook for a concurrent updater.
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+
+    const outcome = await runUpdate({});
+
+    expect(outcome.legacy.version).toBe("2.0.0");
+    expect((await requireRecord()).phase).toBe("complete");
+  });
+
   it("a lost download after a deferred claim lands its failure into the path the other writer has since cleared", async () => {
     await seedInstalled("1.0.0");
     world.runningVersion = "1.0.0";

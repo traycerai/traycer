@@ -129,6 +129,8 @@ export const CLI_ERROR_CODES = {
    */
   HOST_UPDATE_RECORD_NOT_CONCLUDED: "E_HOST_UPDATE_RECORD_NOT_CONCLUDED",
   HOST_UPDATE_NOT_NEWER: "E_HOST_UPDATE_NOT_NEWER",
+  HOST_UPDATE_CONCURRENT_LEGACY_UPDATER:
+    "E_HOST_UPDATE_CONCURRENT_LEGACY_UPDATER",
   // The selected host version declares a `requiredCliVersion` this CLI does
   // not meet (or one it cannot parse). Distinct from HOST_INCOMPATIBLE, which
   // is a RUNNING host answering a handshake: this fires before anything is

@@ -7,6 +7,7 @@ import { encodeInstallGeneration } from "@traycer-clients/shared/host-version/in
 import {
   attemptIdentityOf,
   isParkedPhase,
+  decideLegacyMarkerConcurrency,
   isTerminalPhase,
   readUpdateAttemptRecord,
   type AttemptAdvance,
@@ -62,6 +63,7 @@ import {
   deleteUpdateProgressMarkerIfUnchanged,
   progressRecord,
   readUpdateProgressMarker,
+  updateProgressRecordWrittenByThisProcess,
   replaceUpdateProgressMarkerIfUnchanged,
   sameProgress,
   updateProgressRecordHasProvenLiveWriter,
@@ -1341,6 +1343,7 @@ function installGenerationOf(record: HostInstallRecord): string {
  * an arm can never pass a barrier that did not land and go on to actuate.
  */
 class AttemptRecordWriter {
+  private abortingForConcurrency = false;
   private held: HostUpdateAttemptIdentity;
   private phaseNow: HostUpdateAttemptPhase;
   private continuationNow: HostUpdateAttemptContinuation;
@@ -1434,11 +1437,11 @@ class AttemptRecordWriter {
    * also returns `null` when the install record cannot be read, which is why
    * a fresh baseline is not an invariant of post-Q12 records. See its docblock.
    */
-  phaseWrite(
+  async phaseWrite(
     phase: HostUpdateAttemptPhase,
     claimRefresh: AttemptClaimRefresh | null,
   ): Promise<void> {
-    return this.barrier({
+    await this.barrier({
       phase,
       continuation: this.continuationNow,
       progress: null,
@@ -1447,6 +1450,15 @@ class AttemptRecordWriter {
       verification: null,
       nowIso: new Date().toISOString(),
     });
+    // AFTER the barrier drains, never inside `commit`.
+    //
+    // `commit` runs inside this writer's serialized queue, so a park or fail
+    // issued from there enqueues BEHIND the very commit that issued it and
+    // the run deadlocks. The pin found that as a hang rather than a wrong
+    // answer, which is the second time this round a test located a defect by
+    // not terminating. Here the queue is already drained, so the abort's own
+    // write is an ordinary one.
+    await this.abortOnConcurrentLegacyUpdater(phase);
   }
 
   park(
@@ -1558,6 +1570,57 @@ class AttemptRecordWriter {
     this.phaseNow = outcome.record.phase;
     this.continuationNow = outcome.record.continuation;
     await this.mirror.record(outcome.record);
+  }
+
+  /**
+   * The detective half's firing point (ticket 07).
+   *
+   * HERE rather than at the claim boundary, and the reason is the whole
+   * finding: the evidence is a transition, this is the only thing that runs
+   * REPEATEDLY inside the segment, and the mirror it just called is the only
+   * thing that knows whether its own write landed. A claim-time check sees
+   * one sample and cannot tell a stale marker from a live updater.
+   *
+   * Terminal writes are exempt so an abort cannot recurse into the failure
+   * write that reports it - and `decideLegacyMarkerConcurrency` returns
+   * `clear` for terminal phases anyway, so this only avoids asking a question
+   * whose answer is fixed.
+   */
+  private async abortOnConcurrentLegacyUpdater(
+    phase: HostUpdateAttemptPhase,
+  ): Promise<void> {
+    if (!this.mirror.foreignTakeoverObserved) return;
+    // Re-entrancy guard, and it is load-bearing rather than defensive: the
+    // abort's own park/fail write goes through `commit`, which mirrors and
+    // arrives back here with the latch still set. Exempting only TERMINAL
+    // writes is not enough - `park` writes `waiting-for-work`, which is not
+    // terminal, so the park re-aborts and parks again forever. The pin below
+    // found this as a hang rather than a wrong answer.
+    if (this.abortingForConcurrency) return;
+    this.abortingForConcurrency = true;
+    const verdict = decideLegacyMarkerConcurrency({
+      legacyMarkerPresent: true,
+      attemptPhase: phase,
+    });
+    if (verdict.kind === "clear") return;
+    // Park or terminalize per the disposition the pure function chose, then
+    // throw. The record must not be left `active` describing a segment that
+    // is about to stop running.
+    if (verdict.disposition === "park") {
+      await this.park("waiting-for-work", null);
+    } else {
+      await this.fail({
+        code: "concurrent-legacy-updater",
+        message: verdict.diagnostic,
+        phase,
+      });
+    }
+    throw cliError({
+      code: CLI_ERROR_CODES.HOST_UPDATE_CONCURRENT_LEGACY_UPDATER,
+      message: `host update: ${verdict.diagnostic}`,
+      details: { phase, disposition: verdict.disposition },
+      exitCode: 1,
+    });
   }
 
   private tickIsWorthWriting(
@@ -3884,6 +3947,25 @@ interface MarkerMirror {
   record(record: HostUpdateAttemptRecord): Promise<void>;
   markDisturbed(): void;
   /**
+   * Whether a FOREIGN marker has appeared since this run's own write landed
+   * (ticket 07's detective half).
+   *
+   * The fence's evidence is a TRANSITION, and a transition cannot be read
+   * from one sample. `decideLegacyMarkerConcurrency`'s own contract says so -
+   * a marker "appearing WHILE a schema-v2 attempt is live" - and appearing is
+   * the load-bearing word. A boundary that only ever sees a STATE cannot tell
+   * a stale marker (common, benign, and exactly what the entry takeover
+   * exists to absorb) from a live lock-blind updater, which is why wiring
+   * this at the claim boundary aborted good updates and was withdrawn.
+   *
+   * The mirror is the only thing that can see both halves, because it is the
+   * only thing that knows whether ITS OWN write landed. Latched rather than
+   * sampled: a foreign writer that takes the marker and is then taken back
+   * still happened, and the fence's question is whether anything else has
+   * been driving this host during the segment.
+   */
+  readonly foreignTakeoverObserved: boolean;
+  /**
    * Whether this run has begun to disturb the host - the actuator-reported
    * boundary, never inferred from a phase label. Read by `writeFailure` to
    * choose the terminal: only a PRE-disruption refusal can be a superseded
@@ -3924,6 +4006,37 @@ function createMarkerMirror(
   // entry mirror could not land holds no record and still has a target to name.
   let announcedTarget: string | null = null;
   let entered = false;
+  // Latched, never cleared. See `MarkerMirror.foreignTakeoverObserved`.
+  let foreignTakeoverObserved = false;
+
+  /**
+   * The transition read: did somebody else take the marker after ours landed?
+   *
+   * Every `null` return below is a deliberate NON-observation rather than a
+   * negative finding, and each one is a mistake the withdrawn wiring made:
+   *
+   *  - `own === null` means this run's own write never landed. A foreign
+   *    marker then is evidence of OUR FAILED WRITE, not of another actor -
+   *    the I/O-failed-CAS case, where the takeover deliberately did not land
+   *    and the marker on disk is simply the one that was always there.
+   *  - an empty path is nobody driving anything.
+   *
+   * The discriminator is identity, not equality with `own`: a `null`
+   * `writerId` is NOT ours, and is precisely the pre-1.3.0 lock-blind CLI the
+   * fence exists to detect.
+   */
+  async function observeForeignTakeover(): Promise<void> {
+    if (foreignTakeoverObserved) return;
+    if (own === null) return;
+    const onDisk = await readUpdateProgressMarker(environment);
+    if (onDisk === null) return;
+    if (updateProgressRecordWrittenByThisProcess(onDisk)) return;
+    foreignTakeoverObserved = true;
+    logger.warn(
+      "Host update observed the progress marker taken over by another writer after its own write landed",
+      { environment, targetVersion: announcedTarget },
+    );
+  }
 
   const liveDisplacedRecord = (): HostUpdateProgress | null =>
     displaced !== null && updateProgressRecordHasProvenLiveWriter(displaced)
@@ -4223,6 +4336,9 @@ function createMarkerMirror(
     get disturbed(): boolean {
       return disturbed;
     },
+    get foreignTakeoverObserved(): boolean {
+      return foreignTakeoverObserved;
+    },
     markDisturbed: (): void => {
       disturbed = true;
     },
@@ -4239,7 +4355,14 @@ function createMarkerMirror(
             // target - the target is fixed at the claim and no arm re-points -
             // and a run whose entry mirror could not land stays marker-less,
             // which is what the failure arm's create-if-absent is for.
-            if (entered) return;
+            if (entered) {
+              // The later active-phase writes are where the detective half
+              // lives. They used to return without touching the path, which
+              // is why nothing could see a transition: the entry mirror is
+              // one sample, and one sample is a state.
+              await observeForeignTakeover();
+              return;
+            }
             entered = true;
             await takeOver(record.targetVersion);
             return;
