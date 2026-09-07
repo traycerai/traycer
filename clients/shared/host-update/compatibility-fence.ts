@@ -325,6 +325,32 @@ const POST_TOMBSTONE_PHASES: ReadonlySet<HostUpdateAttemptPhase> = new Set([
  * is exhaustively testable. Calling it during `applying`'s write window would
  * be a caller bug, and the disposition it returns for `applying` (`park`)
  * assumes the caller waited for the boundary rather than interrupting one.
+ *
+ * ## STILL UNWIRED, and the reason is a finding rather than an omission
+ *
+ * `legacyMarkerPresent` is not "a marker exists". The executor MIRRORS its own
+ * writes onto that marker, and its entry mirror deliberately TAKES OVER any
+ * record it finds — so at claim time a foreign marker is ambiguous between a
+ * stale file (common, benign, and what the takeover exists to absorb) and a
+ * live lock-blind updater. Wiring the check there aborts good updates on stale
+ * markers.
+ *
+ * This function's own contract already says the right thing — a marker
+ * "appearing WHILE a schema-v2 attempt is live" — and appearing is the word
+ * that carries the weight: the evidence is a marker that becomes foreign AFTER
+ * our takeover landed, which only the mirror can observe, because only it
+ * knows whether its own write succeeded. A takeover that failed on I/O is not
+ * evidence of a concurrent actor; it is evidence of a failed write, and the
+ * legacy marker is best-effort by contract — a marker read that throws must
+ * never fail an update.
+ *
+ * So the caller this needs is a MIRROR-owned boundary that can distinguish
+ * "our write landed and something replaced it" from "our write never landed".
+ * Attempted at `runArm`'s entry and withdrawn: it reddened two existing pins,
+ * both correctly (a marker read that rejects must not fail the update; a
+ * deliberately-failed takeover is not a concurrent updater). Documented rather
+ * than shipped half-right, because a detective gate that fires on stale
+ * markers would be retired by whoever it first interrupted.
  */
 export function decideLegacyMarkerConcurrency(
   input: LegacyMarkerConcurrencyInput,

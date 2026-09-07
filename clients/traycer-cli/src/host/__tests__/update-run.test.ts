@@ -259,6 +259,15 @@ vi.mock("../update-progress-marker", () => ({
   createUpdateProgressMarkerIfAbsent: mocks.createUpdateProgressMarkerIfAbsent,
   updateProgressRecordHasProvenLiveWriter:
     mocks.updateProgressRecordHasProvenLiveWriter,
+  // The REAL identity comparison, against this suite's own writer id. Every
+  // marker `progressRecord` below builds is one THIS run wrote, so it must
+  // read as ours - otherwise the detective half would see a foreign updater
+  // in every test that publishes a marker, which is all of them. A test that
+  // wants a foreign marker seeds a different `writerId` (or `null`, which is
+  // a marker from a CLI predating the field).
+  updateProgressRecordWrittenByThisProcess: (
+    record: import("../update-progress-marker").HostUpdateProgress,
+  ): boolean => record.writerId === "test-writer",
   progressRecord: (fields: {
     state: "updating" | "failed";
     error: string | null;
