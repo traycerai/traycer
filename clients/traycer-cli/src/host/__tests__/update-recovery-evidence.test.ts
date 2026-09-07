@@ -1429,11 +1429,18 @@ describe("observeAttemptRecoveryEvidence - Q1: the version-only fallback for a p
   });
 
   it("X1 CONTROL: the same unparseable stamp under identity-required is unchanged", async () => {
-    // The half that pins the mutation "gate the arm on the policy instead of
-    // the stamp". Under that mutation this row and the one above BOTH still
-    // refuse, so it cannot detect it alone - what it establishes is that the
-    // policy makes NO difference to an unparseable stamp, which is what makes
-    // the row above a statement about the stamp rather than about the policy.
+    // What this row establishes: the policy makes NO difference to an
+    // unparseable stamp, which is what makes the row above a statement about
+    // the STAMP rather than about the policy.
+    //
+    // It does not redden either of the two mutations that motivated X1 - under
+    // both, this row and the one above still refuse. The mutation it DOES hold
+    // against was named by reviewer C and measured rather than guessed:
+    // collapse the two diagnoses, so an unrecognized stamp reports
+    // `pid-start-stamp-missing` under either policy. That reddens both rows
+    // (49/51), which is what makes this a pin on the distinction the row above
+    // depends on rather than decoration. A control no mutation can redden
+    // should be cut; this one has a falsifier, so it stays.
     seedUnparseableStampHost();
 
     const observation = await observeAttemptRecoveryEvidence(
