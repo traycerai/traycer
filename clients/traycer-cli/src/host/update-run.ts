@@ -224,6 +224,17 @@ export interface HostUpdateRunOutcome {
    * having to parse the sentence.
    */
   readonly foreignRuntimeVersion: string | null;
+  /**
+   * What a live host was serving when this run finished, or `null` when NO
+   * host is running (Linux E6L, Q5 defect 3).
+   *
+   * Only a release populates it, and only because a release is the one exit
+   * that reports on a host it did not touch. `legacy.version` is the INSTALLED
+   * version, so "host stays at 1.4.3" was true about the bytes and false about
+   * the machine: it read as reassurance over a box with nothing running. The
+   * running state is a different fact and now travels as one.
+   */
+  readonly runningVersion: string | null;
 }
 
 // Matches `projectInstallResult`'s own fallback when `serviceLifecycle` is
@@ -927,9 +938,27 @@ async function selectBoundResume(
     return { kind: "release", reason: "refused-attempt-gone" };
   }
   if (record.execution !== "parked") {
-    // An ACTIVE record for this id is an interrupted attempt; recovery owns
-    // it, and a bound intent has no park to resume.
-    return { kind: "release", reason: "refused-attempt-gone" };
+    // PRESENT, and therefore not GONE (Linux E6L, Q5 defect 2).
+    //
+    // An ACTIVE record under this exact id is an interrupted attempt whose
+    // holder is dead - proven, not assumed: lock acquisition precedes
+    // selection, so a live holder would have refused this run admission
+    // before the selector ever ran. That is the RECOVERABLE case, and it is
+    // the only shape a crashed `host update` leaves behind.
+    //
+    // Releasing `refused-attempt-gone` here said the opposite of what is on
+    // disk, and said it to the two readers who act on it: the dispatching
+    // host projects it as "there is nothing to continue", and the
+    // level-triggered reconciler stops naming an attempt it is told does not
+    // exist. On a CLI-only install that is a permanent outage - the record
+    // sits at `restarting` indefinitely, and the recovery that would fix it
+    // is exactly what this verb was dispatched to run.
+    //
+    // So it claims, and the CORE decides: an active record is
+    // `requires-recovery`, and the recovery arm reconciles it from lock-scoped
+    // evidence. Holder disposition and record presence are different
+    // questions, and only the first one was ever asked here.
+    return interruptedResume(input, record, intent);
   }
   if (intent === "activate" && record.phase !== "waiting-to-activate") {
     return { kind: "release", reason: "refused-attempt-gone" };
@@ -967,6 +996,42 @@ async function selectBoundResume(
   return consented
     ? resumeSelection(input, record)
     : { kind: "release", reason: "refused-unverifiable" };
+}
+
+/**
+ * The claim a BOUND verb makes on an interrupted attempt it named.
+ *
+ * The action is the VERB's, and that is the whole of the safety argument.
+ * `resumeSelection`'s `continue` adopts either continuation by design - the
+ * dispatcher named an attempt and the record says what it is - which is right
+ * for `continue` and would be an over-authorization for `activate`: an
+ * `activate` that reached `resume-new-generation` on a `resume-apply`
+ * continuation would apply a stage nobody asked it to. Carrying the verb
+ * through means `actionMayResume` refuses that pair inside the core, as
+ * `request-action-mismatch`, instead of this function having to re-derive the
+ * rule and get it wrong in a second place.
+ *
+ * `expected` is the record's own identity, so a record that moves between this
+ * read and the claim is refused rather than resumed.
+ */
+function interruptedResume(
+  input: SelectClaimInput,
+  record: HostUpdateAttemptRecord,
+  intent: HostUpdateBoundIntent,
+): ExecutorClaimSelection {
+  return {
+    kind: "claim",
+    request: {
+      targetVersion: record.targetVersion,
+      trigger: record.trigger,
+      action: intent === "continue" ? "continue" : "activate",
+      expected: attemptIdentityOf(record),
+      newAttemptId: randomUUID(),
+      initialPhase: "preparing",
+      initialContinuation: null,
+      claim: null,
+    },
+  };
 }
 
 function strictlyNewer(candidate: string, floor: string): boolean {
@@ -1444,6 +1509,15 @@ async function revalidateInstallIdentity(
     live.version === baseline.installedVersion &&
     installGenerationOf(live) === baseline.installGeneration;
   if (matches) return live;
+  // ...or the install moved to this attempt's OWN target because this attempt
+  // is what put it there. Not a foreign change, and the baseline is simply
+  // stale (Linux E6L, Q5).
+  if (
+    live !== null &&
+    installedByThisAttempt(input.claim.record, baseline, live)
+  ) {
+    return live;
+  }
   // Held to the REQUEST before it is called a changed install (#1752 round
   // 14). This is the site rounds 14's "the record moved while waiting for the
   // lock" reaches on the executor: the claim's baseline named the request, and
@@ -1477,6 +1551,91 @@ async function revalidateInstallIdentity(
     },
     exitCode: 1,
   });
+}
+
+/**
+ * Does the live install record read as THIS attempt's own work, rather than
+ * as a foreign change the baseline comparison above is there to catch?
+ *
+ * ## The seam this closes (Linux E6L, Q5)
+ *
+ * An update to 1.4.3 reached `restarting` - the install dir already swapped
+ * to 1.4.3 by this very attempt - and the CLI was then killed. The recovery
+ * run reads the record, whose claim baseline still names the PRE-swap install
+ * (1.4.2, refreshed only by parks), finds 1.4.3 on disk, and calls the
+ * attempt's own successful swap "the installed host changed while attempt
+ * <id> was waiting". The record terminalizes, the host is left DOWN because
+ * nothing relaunched it, and every later `host update --version 1.4.3` hits
+ * the same refusal - a state only `--allow-downgrade` could reset.
+ *
+ * Two correct halves, wrong at the join. `recoveryContinuation` had just
+ * certified, from attested lock-scoped evidence, that the installed leg
+ * verifies at this record's own `targetVersion`; this function then read the
+ * same install record as evidence of a stranger.
+ *
+ * ## Why the CONTINUATION is the carrier, and not the phase
+ *
+ * The rule is "the install equals the attempt's own target AND this attempt
+ * is past the swap". The phase cannot say the second half here: `resumedRecord`
+ * lands EVERY recovery resume at `preparing`, for both continuations and by
+ * design, so the `restarting` / `verifying` the killed run left behind is gone
+ * before this code sees the record. A phase test at this site would never
+ * fire.
+ *
+ * The continuation survives, and says exactly the right thing. Quoting
+ * `resumedRecord`'s own comment on retaining it: it "is what still says
+ * 'bytes are already placed, do not re-apply' if this segment dies before it
+ * reaches its next write". And it is not testimony - `recoveryContinuation`
+ * returns `activate` ONLY when the installed artifact is attested-verified at
+ * this record's `targetVersion`, decided under this same lock from bytes it
+ * hashed itself.
+ *
+ * ## The move this forgives is exactly one, and only once
+ *
+ * A baseline that ALREADY names the target has nothing left to explain: this
+ * attempt's swap is accounted for in it, so any later difference is somebody
+ * else's. That is what keeps the rule narrow enough to leave the
+ * re-materialized park terminal - a `waiting-to-activate` park whose baseline
+ * was refreshed to 2.0.0 at the park and whose install is now a DIFFERENT
+ * 2.0.0 is `host install --force` re-landing bytes this claim never
+ * authorized, and version equality alone cannot see it. Only the pre-swap
+ * baseline → target step is forgiven, which is the one step the attempt
+ * itself performed.
+ *
+ * ## What still refuses, and why each one must
+ *
+ *  - `resume-apply`: the bytes are NOT placed, so a target-equal install is
+ *    another actor consuming this park's stage - the case the plan requires
+ *    to terminalize `install-changed` rather than resume (D19), because
+ *    resuming would apply a stage that is no longer the reason this park
+ *    exists;
+ *  - a `null` continuation: a fresh start has placed nothing at all;
+ *  - a baseline already AT the target: the re-materialized park above, still
+ *    decided by the install generation;
+ *  - any install that is neither the baseline nor the target: genuinely
+ *    foreign, and today's terminal is unchanged.
+ *
+ * ## Why VERSION equality carries the target side
+ *
+ * The generation is not available to compare against: the pre-swap baseline
+ * names the generation this attempt REPLACED, so there is nothing here that
+ * records what its own swap wrote. What decides instead is the layer that
+ * already looked: `recoveryContinuation` returned `activate` only because the
+ * installed artifact verified - hashed under this same lock - at this
+ * record's own target. Re-deriving a stricter answer here from a baseline
+ * that predates the swap would not be a second check; it would be a refusal
+ * of the first one.
+ */
+function installedByThisAttempt(
+  record: HostUpdateAttemptRecord,
+  baseline: HostUpdateAttemptClaimBaseline,
+  live: HostInstallRecord,
+): boolean {
+  return (
+    record.continuation === "activate" &&
+    live.version === record.targetVersion &&
+    baseline.installedVersion !== record.targetVersion
+  );
 }
 
 /**
@@ -2669,6 +2828,9 @@ async function projectSegment(
       legacy: segment.result,
       releasedReason: null,
       foreignRuntimeVersion: selection.foreignRuntimeVersion,
+      // An executed arm reports through its own result; the running state is
+      // the release path's question.
+      runningVersion: null,
     };
   }
   // `terminalized` is `update-verify`'s exit and never this command's: under
@@ -2710,11 +2872,54 @@ async function projectSegment(
     selection.installedUnderLock ??
     (await readHostInstallRecord(args.environment));
   if (installed === null) throw hostNotInstalled(args.environment);
+  // The RUNNING state, read here and nowhere earlier: this is the one exit
+  // that reports on a host it did not touch, and every fact it has so far is
+  // about bytes (Q5 defect 3).
+  const reading = await classifyActivationAgainst(args.environment, installed);
+  const runningVersion = runningVersionOf(reading);
+  // A BOUND verb that declined its work over a host that is not running has
+  // not left things "as they are" - it has left an outage, and exit 0 makes
+  // that reading authoritative to the dispatching host, the reconciler and
+  // the GUI alike. The plain `install` verb is deliberately not held to this:
+  // its own no-op arms are the up-to-date path every healthy machine takes,
+  // and a stopped host is not this command's to report on when nobody asked
+  // it to change one.
+  if (args.intent !== null && runningVersion === null) {
+    throw cliError({
+      code: CLI_ERROR_CODES.HOST_NOT_RUNNING,
+      message: `host update: the attempt was not claimed (${reason}) and no host is running; ${installed.version} is installed but nothing is serving it`,
+      details: {
+        environment: args.environment,
+        reason,
+        installedVersion: installed.version,
+        intent: args.intent,
+      },
+      exitCode: 1,
+    });
+  }
   return {
     legacy: projectNoOp(installed),
     releasedReason: reason,
     foreignRuntimeVersion: selection.foreignRuntimeVersion,
+    runningVersion,
   };
+}
+
+/** The version a LIVE host is serving, or `null` when none is. */
+function runningVersionOf(reading: ActivationReading): string | null {
+  switch (reading.kind) {
+    case "activated":
+      return reading.installedVersion;
+    case "debt":
+      return reading.runningVersion;
+    case "foreign-runtime":
+      // A live host, but not one this command reasons about by version. It is
+      // running, which is the question this answers.
+      return reading.runningVersion;
+    case "no-live-host":
+    case "no-install":
+      return null;
+  }
 }
 
 export function projectNoOp(

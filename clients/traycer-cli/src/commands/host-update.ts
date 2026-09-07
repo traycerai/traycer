@@ -106,9 +106,15 @@ function humanSummary(outcome: HostUpdateRunOutcome): string {
     return `host already at ${legacy.version} (no-op); the running host is ${outcome.foreignRuntimeVersion}, not a release build, so nothing was activated`;
   }
   if (outcome.releasedReason !== null) {
-    return outcome.releasedReason === "nothing-to-do"
-      ? `host already at ${legacy.version} (no-op)`
-      : `host update did not claim an attempt (${outcome.releasedReason}); host stays at ${legacy.version}`;
+    if (outcome.releasedReason === "nothing-to-do") {
+      return `host already at ${legacy.version} (no-op)`;
+    }
+    // The RUNNING host, never the installed version (Q5 defect 3). "host stays
+    // at 1.4.3" named the bytes on disk and read as an assurance about the
+    // machine - which is how a box with nothing running reported itself as
+    // fine. A bound verb that declines over a stopped host does not reach
+    // here at all any more; it exits non-zero from the run.
+    return `host update did not claim an attempt (${outcome.releasedReason}); ${runningState(outcome)}`;
   }
   if (legacy.previousVersion === legacy.version) {
     return `host already at ${legacy.version} (no-op)`;
@@ -117,4 +123,11 @@ function humanSummary(outcome: HostUpdateRunOutcome): string {
     return `updated host to ${legacy.version}; service did not converge: ${legacy.serviceLifecycle.postSwapError}`;
   }
   return `updated host ${legacy.previousVersion ?? "?"} → ${legacy.version}`;
+}
+
+/** What is SERVING, for a run that changed nothing and must say so. */
+function runningState(outcome: HostUpdateRunOutcome): string {
+  return outcome.runningVersion === null
+    ? `no host is running (${outcome.legacy.version} is installed)`
+    : `the running host is ${outcome.runningVersion}`;
 }

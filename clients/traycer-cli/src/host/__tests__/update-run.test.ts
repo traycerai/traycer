@@ -2669,10 +2669,53 @@ describe("ported: buildHostUpdateCommand composite", () => {
       expectAttempt: parked.attemptId,
     })(shellContext());
 
+    // The sentence names the RUNNING host, not the installed version (Q5
+    // defect 3). Here they DIFFER - 2.0.0 is installed, 1.0.0 is serving -
+    // which is what makes this pin able to tell them apart at all: the old
+    // wording said "host stays at 2.0.0" over a host that was serving 1.0.0.
     expect(result.human).toBe(
-      "host update did not claim an attempt (refused-unverifiable); host stays at 2.0.0",
+      "host update did not claim an attempt (refused-unverifiable); the running host is 1.0.0",
     );
+    expect(result.human).not.toContain("2.0.0");
+    // A host IS running, so the release is still a truthful exit 0.
     expect(result.exitCode).toBe(0);
+  });
+
+  it("Q5 defect 3: a bound verb that declines while NO host is running says so, and does not exit 0", async () => {
+    await seedInstalled("2.0.0");
+    world.runningVersion = "1.0.0";
+    mocks.assertHostNotBusy.mockRejectedValueOnce(busyError());
+    await expect(runUpdate({})).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_BUSY,
+    });
+    const parked = await requireRecord();
+    await stripClaimFromRecordOnDisk();
+    // The host is GONE - the E6L shape. Nothing is serving the bytes the
+    // release is about to report on.
+    world.runningVersion = null;
+
+    await expect(
+      runUpdate({
+        intent: "activate",
+        expectAttempt: parked.attemptId,
+        versionRequest: "2.0.0",
+        registryClient: unreachableRegistry(),
+        ackNonce: "nonce-abcdefgh",
+      }),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_NOT_RUNNING,
+      details: { reason: "refused-unverifiable", intent: "activate" },
+    });
+
+    // The refusal is still reported to the dispatcher as the release it was -
+    // the exit code is about the machine, not about the claim.
+    await expectAck("nonce-abcdefgh", {
+      kind: "no-attempt",
+      reason: "refused-unverifiable",
+    });
+    // ...and nothing was touched on the way out.
+    expect(mocks.stopHostForRestartWithAttempt).not.toHaveBeenCalled();
+    expect((await requireRecord()).phase).toBe("waiting-to-activate");
   });
 });
 
@@ -4537,6 +4580,279 @@ describe("acceptance: cells with no legacy ancestor", () => {
       kind: "no-attempt",
       reason: "recovered-complete",
     });
+  });
+
+  // ---- Q5 / Linux E6L: killed after the swap, host never came back ---------
+  //
+  // The same crash as the pin above, minus the one thing that made that pin
+  // pass: the host does NOT come back out of band. So recovery cannot
+  // terminalize `complete` from a running target; it hands back the `activate`
+  // continuation instead, and the arm meets the identity re-validation with a
+  // claim baseline that still names the PRE-swap install.
+  //
+  // On the real box that combination left the host DOWN with no self-heal:
+  // every later `host update --version 1.4.3` refused
+  // `E_HOST_INSTALL_RECORD_INVALID`, and only an `--allow-downgrade` reset
+  // recovered it.
+
+  it("Q5: killed at `restarting` with the host still DOWN - the recovery run activates the swapped bytes and completes, instead of calling this attempt's own swap a changed install", async () => {
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    const crashed = await crashAtRestarting("2.0.0");
+    // The two facts that together produced the field failure: the install is
+    // at the target because THIS attempt put it there, and the baseline still
+    // names what was installed when the attempt was claimed.
+    expect(world.installedVersion).toBe("2.0.0");
+    expect(crashed.claim).toMatchObject({ installedVersion: "1.0.0" });
+    // The host is DOWN, which is the real wedge: `restarting` is written after
+    // the cooperative stop, so a run killed there has already taken the old
+    // host away and never brought the new one up. `crashAtRestarting` leaves
+    // the pre-update host in the mock world, so this states the field shape
+    // explicitly rather than inheriting a host the real box did not have.
+    world.runningVersion = null;
+    // The crash fixture's OWN apply is not the recovery run's, so it must not
+    // be counted against the "nothing was re-applied" assertion below.
+    mocks.applyHostWithAttempt.mockClear();
+    mocks.assertHostNotBusy.mockClear();
+
+    const outcome = await runUpdate({
+      versionRequest: "2.0.0",
+      ackNonce: "nonce-abcdefgh",
+    });
+
+    // Completed on the SAME attempt - not terminalized, not superseded.
+    const record = await requireRecord();
+    expect(record.attemptId).toBe(crashed.attemptId);
+    expect(record.phase).toBe("complete");
+    expect(record.execution).toBe("terminal");
+    expect(record.error).toBeNull();
+    // ...and the host is UP on the target, which is the outcome the field
+    // failure denied. The stop/relaunch is the activation arm's, reached only
+    // because the re-validation let this attempt through.
+    expect(world.runningVersion).toBe("2.0.0");
+    expect(mocks.relaunchHostAfterRestartWithAttempt).toHaveBeenCalledTimes(1);
+    expect(outcome.legacy.version).toBe("2.0.0");
+    // A host that is GONE has no live work to protect, so the arm takes the
+    // `no-live-host` reading and never consults the busy gate - the branch the
+    // real box was on, and a different one from the `debt` reading an
+    // out-of-band host that is still up would produce.
+    expect(mocks.assertHostNotBusy).not.toHaveBeenCalled();
+    // No bytes were re-applied: the swap already happened, so this run only
+    // activates what is on disk.
+    expect(mocks.applyHostWithAttempt).not.toHaveBeenCalled();
+    expect(await readAck("nonce-abcdefgh")).toMatchObject({
+      kind: "claimed",
+      attemptId: crashed.attemptId,
+    });
+  });
+
+  it("Q5 defect 2: `--intent continue` on the wedged attempt RECOVERS it - a present record whose holder is dead is not `refused-attempt-gone`", async () => {
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    const crashed = await crashAtRestarting("2.0.0");
+    // The exact id the verb will name is ON DISK, active, at `restarting`.
+    // Calling that "attempt gone" was the defect: the reconciler and the
+    // dispatching host both stop naming an attempt they are told is absent,
+    // and on a CLI-only install nothing else ever runs the recovery.
+    expect(crashed.phase).toBe("restarting");
+    expect(crashed.execution).toBe("active");
+    mocks.applyHostWithAttempt.mockClear();
+    mocks.writes.length = 0;
+
+    const outcome = await runUpdate({
+      intent: "continue",
+      expectAttempt: crashed.attemptId,
+      versionRequest: "2.0.0",
+      registryClient: unreachableRegistry(),
+      ackNonce: "nonce-abcdefgh",
+    });
+
+    // CLAIMED, not released: the ACK names the attempt rather than reporting
+    // it gone, which is the half the dispatcher acts on.
+    expect(outcome.releasedReason).toBeNull();
+    expect(await readAck("nonce-abcdefgh")).toMatchObject({
+      kind: "claimed",
+      attemptId: crashed.attemptId,
+    });
+    // ...and the record does not sit at `restarting` for ever.
+    const record = await requireRecord();
+    expect(record.attemptId).toBe(crashed.attemptId);
+    expect(record.phase).toBe("complete");
+    expect(record.execution).toBe("terminal");
+    expect(world.runningVersion).toBe("2.0.0");
+    expect(mocks.applyHostWithAttempt).not.toHaveBeenCalled();
+  });
+
+  it("Q5 defect 2 control: `--intent continue` naming an attempt that really IS gone still answers refused-attempt-gone", async () => {
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    const crashed = await crashAtRestarting("2.0.0");
+    // The same host-down wedge as the pin above.
+    world.runningVersion = null;
+    mocks.writes.length = 0;
+
+    // Same wedge, a DIFFERENT id. Record presence is what the fix keys on, so
+    // the negative has to move exactly that fact and nothing else.
+    await expect(
+      runUpdate({
+        intent: "continue",
+        expectAttempt: `${crashed.attemptId}-not-this-one`,
+        versionRequest: "2.0.0",
+        registryClient: unreachableRegistry(),
+        ackNonce: "nonce-abcdefgh",
+      }),
+    ).rejects.toMatchObject({
+      // No host is running behind the wedge, so the release exits non-zero
+      // (defect 3) - the reason it carries is still the gone one.
+      code: CLI_ERROR_CODES.HOST_NOT_RUNNING,
+      details: { reason: "refused-attempt-gone" },
+    });
+    await expectAck("nonce-abcdefgh", {
+      kind: "no-attempt",
+      reason: "refused-attempt-gone",
+    });
+    // The wedged record is left exactly as it was: a verb that named someone
+    // else's attempt may not reconcile this one.
+    const record = await requireRecord();
+    expect(record.attemptId).toBe(crashed.attemptId);
+    expect(record.phase).toBe("restarting");
+  });
+
+  it("Q5 defect 2 control: `--intent activate` carries its OWN action, so it cannot resume an apply the caller never named", async () => {
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    world.latest = "2.0.0";
+    // A wedge whose evidence offers `resume-apply`, not `activate`: the stage
+    // is on disk and the install never moved.
+    mocks.applyHostWithAttempt.mockImplementationOnce(
+      async (
+        _capability: unknown,
+        _contenderOptions: unknown,
+        options: ApplyMockOptions,
+      ) => {
+        options.onProgress(progress("service-stop", null));
+        await options.hooks.beforeSwapCommit();
+        throw new AbortSignalError();
+      },
+    );
+    mocks.refuseFailedWrites = true;
+    await expect(runUpdate({})).rejects.toThrow("simulated crash");
+    mocks.refuseFailedWrites = false;
+    const crashed = await requireRecord();
+    expect(crashed.phase).toBe("applying");
+    expect(world.stagedVersion).toBe("2.0.0");
+    mocks.applyHostWithAttempt.mockClear();
+    mocks.writes.length = 0;
+
+    // `activate` claims with `action: "activate"`, so the core's own
+    // `actionMayResume` refuses the `resume-apply` continuation recovery
+    // derives. Claiming with `continue` here - the shape `resumeSelection`
+    // uses - would have applied a stage this verb never named.
+    await expect(
+      runUpdate({
+        intent: "activate",
+        expectAttempt: crashed.attemptId,
+        versionRequest: "2.0.0",
+        registryClient: unreachableRegistry(),
+        ackNonce: "nonce-abcdefgh",
+      }),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_UPDATE_ATTEMPT_ACTIVE,
+    });
+    expect(mocks.applyHostWithAttempt).not.toHaveBeenCalled();
+    expect(world.installedVersion).toBe("1.0.0");
+  });
+
+  it("Q5 control: an install moved to a THIRD version under an activation park is STILL the foreign change it always was", async () => {
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    const crashed = await crashAtRestarting("2.0.0");
+    // Park it through the real verifier, so the baseline is refreshed to the
+    // target exactly as production leaves it.
+    await verifyHostUpdateAttempt(ENVIRONMENT, {
+      attemptId: crashed.attemptId,
+      generation: crashed.generation,
+      sequence: crashed.sequence,
+      targetVersion: "2.0.0",
+    });
+    const parked = await requireRecord();
+    expect(parked.phase).toBe("waiting-to-activate");
+    expect(parked.claim).toMatchObject({ installedVersion: "2.0.0" });
+
+    // A FOREIGN actor now installs something else entirely. The record still
+    // carries the `activate` continuation, so this is the case that
+    // discriminates the fix from "any activation continuation may proceed":
+    // the install is neither the baseline nor this attempt's target.
+    world.installId = "install-foreign";
+    await seedInstalled("3.0.0");
+    mocks.writes.length = 0;
+
+    await expect(
+      runUpdate({
+        intent: "activate",
+        expectAttempt: crashed.attemptId,
+        registryClient: unreachableRegistry(),
+        ackNonce: "nonce-abcdefgh",
+      }),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_INSTALL_RECORD_INVALID,
+    });
+
+    const record = await requireRecord();
+    expect(record.phase).toBe("failed");
+    expect(record.error).toMatchObject({
+      code: "install-changed",
+      phase: "preparing",
+    });
+    // Terminal and untouched bytes, exactly as before the fix.
+    expect(record.execution).toBe("terminal");
+    expect(world.installedVersion).toBe("3.0.0");
+    expect(mocks.stopHostForRestartWithAttempt).not.toHaveBeenCalled();
+    expect(await readAck("nonce-abcdefgh")).toMatchObject({
+      kind: "claimed",
+      attemptId: crashed.attemptId,
+    });
+  });
+
+  it("Q5 control: killed BEFORE the swap - the install is still at the baseline, and the resumed apply runs exactly as it did", async () => {
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    world.latest = "2.0.0";
+    // Dies after `applying` is written but BEFORE the swap: the stage is
+    // still on disk and the install record has not moved, so nothing about
+    // this attempt is "past the swap".
+    mocks.applyHostWithAttempt.mockImplementationOnce(
+      async (
+        _capability: unknown,
+        _contenderOptions: unknown,
+        options: ApplyMockOptions,
+      ) => {
+        options.onProgress(progress("service-stop", null));
+        await options.hooks.beforeSwapCommit();
+        throw new AbortSignalError();
+      },
+    );
+    mocks.refuseFailedWrites = true;
+    await expect(runUpdate({})).rejects.toThrow("simulated crash");
+    mocks.refuseFailedWrites = false;
+    const crashed = await requireRecord();
+    expect(crashed.phase).toBe("applying");
+    expect(world.installedVersion).toBe("1.0.0");
+    expect(world.stagedVersion).toBe("2.0.0");
+    mocks.writes.length = 0;
+    mocks.applyHostWithAttempt.mockClear();
+
+    const outcome = await runUpdate({ versionRequest: "2.0.0" });
+
+    // The stage is what recovery finds, so the continuation is `resume-apply`
+    // and the apply genuinely re-runs. The identity re-validation passed on
+    // its ORIGINAL arm - the baseline still equals the live record - which is
+    // what makes this a control rather than a second copy of the pin above.
+    expect(mocks.applyHostWithAttempt).toHaveBeenCalledTimes(1);
+    const record = await requireRecord();
+    expect(record.attemptId).toBe(crashed.attemptId);
+    expect(record.phase).toBe("complete");
+    expect(outcome.legacy.version).toBe("2.0.0");
   });
 
   it("a waiting-to-activate park written by the REAL update-verify recovery is resumed by `activate` and completes", async () => {
