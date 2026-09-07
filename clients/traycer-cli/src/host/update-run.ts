@@ -2912,16 +2912,38 @@ async function verifyUnderClaim(
   }
   const committed = await input.complete();
   if (committed.kind !== "committed") {
-    const message = `host update: the completion write for ${target} was refused`;
+    // The update WORKED. Reaching this line is only possible past the loop's
+    // `break`, whose condition is the strictest in the file - installed
+    // verified AT the target, running verified AT the target, host-home-bound
+    // - so the host is demonstrably serving the new version right now, and
+    // what failed is that we could not write down that it concluded (Q11).
+    //
+    // This used to report `E_HOST_UPDATE_HEALTH_CHECK_FAILED` with a
+    // `verify-timeout` record, and every part of that was false: nothing timed
+    // out, and the health check is the thing that had just PASSED. A client
+    // routing it to a failure card told the operator their update failed while
+    // their host ran the new version.
+    //
+    // The exit stays non-zero: the attempt did not durably conclude, and a
+    // reconciler polling the record must not read this as done. Non-zero here
+    // means "unfinished bookkeeping", which is why it needs its own code
+    // rather than a shared one.
+    const message = `host update: ${target} is installed and the host is running it, but the completion write for the attempt record was refused. The update itself is done; only Traycer's record of it is incomplete.`;
     await writer.fail({
-      code: "verify-timeout",
+      code: "record-not-concluded",
       message,
       phase: "verifying",
     });
     throw cliError({
-      code: CLI_ERROR_CODES.HOST_UPDATE_HEALTH_CHECK_FAILED,
+      code: CLI_ERROR_CODES.HOST_UPDATE_RECORD_NOT_CONCLUDED,
       message,
-      details: { environment: args.environment, version: target },
+      details: {
+        environment: args.environment,
+        version: target,
+        // WHY the write was refused, which is the only thing about this
+        // failure the operator cannot see for themselves.
+        refusal: committed.kind,
+      },
       exitCode: 1,
     });
   }
@@ -3641,6 +3663,23 @@ function createMarkerMirror(
   }
 
   async function failed(record: HostUpdateAttemptRecord): Promise<void> {
+    // The one terminal `failed` that must NOT stamp `failed` (Q11).
+    //
+    // `record-not-concluded` is written only past the verify loop's success
+    // condition, so the host is running the target and is healthy. The marker
+    // is the operator- and daemon-facing signal about THE HOST, and its
+    // vocabulary is `updating` / `failed` / absent - there is no "the update
+    // worked but our paperwork did not". Absent is the one that is TRUE here:
+    // it is what a successful update leaves, and it lets the daemon derive the
+    // state from the version it can already see.
+    //
+    // Stamping `failed` would be the same misreport the error code carried,
+    // one layer down and more durable: the record's error is read by whoever
+    // debugs the attempt, but the marker is what the GUI renders at a glance.
+    if (record.error?.code === "record-not-concluded") {
+      await complete();
+      return;
+    }
     const cause =
       record.error?.message ?? record.error?.code ?? "update failed";
     // The evidence loop's deadline is the ONE failure that must be reported
