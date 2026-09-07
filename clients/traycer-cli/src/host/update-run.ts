@@ -869,6 +869,10 @@ async function selectDebtStart(
       action: "start",
       expected: null,
       newAttemptId: randomUUID(),
+      // `preparing` is not a choice beside the continuation below, it is the
+      // only phase an `activate` birth has: the bytes are already placed, so
+      // there is nothing to download or apply, and `ExecutorClaimRequest`'s
+      // union admits the pair only in this shape (Codex #1773).
       initialPhase: "preparing",
       // Without it a busy host at the activation gate has no legal park:
       // `waiting-to-activate` may be born only from `applying`, or re-parked

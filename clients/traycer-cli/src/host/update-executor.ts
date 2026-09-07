@@ -40,25 +40,41 @@ import {
 } from "./update-recovery-evidence";
 
 /** Clock-free request carried into the executor. The executor stamps its own write. */
-export interface ExecutorClaimRequest {
+interface ExecutorClaimRequestBase {
   readonly targetVersion: string;
   readonly trigger: HostUpdateTrigger;
   readonly action: AttemptClaimRequest["action"];
   readonly expected: HostUpdateAttemptIdentity | null;
   readonly newAttemptId: string;
-  readonly initialPhase: AttemptClaimRequest["initialPhase"];
   /**
-   * The continuation a created attempt is already executing (D5), and the
-   * claim baseline `createdRecord` writes verbatim (D19).
+   * The claim baseline `createdRecord` writes verbatim (D19).
    *
-   * Both are facts read UNDER the lock, which is exactly why the request is
-   * now produced by a selector rather than fixed before it: the pre-lock
-   * plan is advisory, and a baseline copied from it could name an install
-   * generation another actor has since replaced.
+   * Like the continuation below it is a fact read UNDER the lock, which is
+   * exactly why the request is now produced by a selector rather than fixed
+   * before it: the pre-lock plan is advisory, and a baseline copied from it
+   * could name an install generation another actor has since replaced.
    */
-  readonly initialContinuation: AttemptClaimRequest["initialContinuation"];
   readonly claim: AttemptClaimRequest["claim"];
 }
+
+/**
+ * The birth phase and the birth continuation (D5), carrying the SAME dependent
+ * union `AttemptClaimRequest` declares - not two indexed accesses, which
+ * re-admit the pairs that type exists to forbid. This request is handed
+ * straight to the transition core, so a shape the selector can build is a
+ * record the core can be asked to write.
+ */
+export type ExecutorClaimRequest = ExecutorClaimRequestBase &
+  (
+    | {
+        readonly initialPhase: "preparing";
+        readonly initialContinuation: "activate";
+      }
+    | {
+        readonly initialPhase: AttemptClaimRequest["initialPhase"];
+        readonly initialContinuation: null;
+      }
+  );
 
 /**
  * What the caller's selector decided when it saw the record under the lock.
@@ -735,7 +751,7 @@ async function recoverInterruptedAttempt(
       // Preserve the core's two durable facts. A crash after the recovery
       // terminalization leaves the old attempt safely superseded; only this
       // next call may mint the requested replacement.
-      return createAfterSupersede(capability, options);
+      return createAfterSupersede(capability, options, committed.record);
   }
 }
 
@@ -904,6 +920,7 @@ function claimRefreshFrom(
 async function createAfterSupersede(
   capability: UpdateMutationCapability,
   options: RunAttemptExecutorClaimOptions,
+  superseded: HostUpdateAttemptRecord,
 ): Promise<ExecutorClaimOutcome> {
   const current = await readUpdateAttemptRecord(
     options.contender.hostHomeDir ?? hostHomeDir(options.contender.environment),
@@ -914,7 +931,13 @@ async function createAfterSupersede(
   // from a request minted before the record moved.
   const selection = await options.request(current);
   if (selection.kind === "release") {
-    return { kind: "released", reason: selection.reason, outcome: null };
+    // The record this run just SUPERSEDED, not `null` (CodeRabbit T3). `null`
+    // means "a plain release wrote nothing", and that is a different fact: the
+    // supersede above is durable, and a caller told only "released" would
+    // report a generic nothing-to-do over an attempt this segment ended. It is
+    // the same reason the recovery reselect arm carries its terminal record -
+    // a decline AFTER a terminal write must still name the attempt that ran.
+    return { kind: "released", reason: selection.reason, outcome: superseded };
   }
   const next = {
     ...claimRequestAtExecutor(selection.request, options.nowIso()),
@@ -962,7 +985,7 @@ async function commitSupersedeThenCreate(
   // The second write is intentionally a normal core `create`; do not fold it
   // into recovery or a synthetic transition. A crash above leaves the old
   // record durably superseded, which is the exact two-write invariant.
-  return createAfterSupersede(capability, options);
+  return createAfterSupersede(capability, options, committed.record);
 }
 
 async function commitClaimMutation(

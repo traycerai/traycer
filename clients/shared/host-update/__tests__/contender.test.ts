@@ -98,7 +98,7 @@ function record(
 function baseCreateRequest(
   overrides: Partial<AttemptClaimRequest>,
 ): AttemptClaimRequest {
-  return {
+  const { initialPhase, initialContinuation, ...rest } = {
     targetVersion: "1.2.3",
     trigger: "manual",
     action: "start",
@@ -109,7 +109,18 @@ function baseCreateRequest(
     claim: null,
     nowIso: "2026-01-01T00:00:00.000Z",
     ...overrides,
-  };
+  } as const;
+  // The dependent union, honoured rather than routed around: a fixture must
+  // not be able to build a pair production cannot. `Partial<AttemptClaimRequest>`
+  // distributes over the union, so a spread alone would re-admit
+  // `downloading` + `activate`.
+  if (initialContinuation === "activate") {
+    if (initialPhase !== "preparing") {
+      throw new Error("fixture: `activate` may be born only at `preparing`");
+    }
+    return { ...rest, initialPhase, initialContinuation };
+  }
+  return { ...rest, initialPhase, initialContinuation };
 }
 
 async function writeRecord(

@@ -1988,6 +1988,68 @@ describe("runAttemptExecutorSegment - lock-scoped claim selection, reselect-vs-r
     }
   });
 
+  it("A5 twin: a RELEASE on the post-supersede reselect still names the attempt this run superseded (CodeRabbit T3)", async () => {
+    // The same two-call shape as A5, with the second call declining: the world
+    // moved between the two reads under the lock (the supersede is durable by
+    // then, so the selector's own live reads can legitimately answer "nothing
+    // left to do").
+    //
+    // This arm used to return `outcome: null`, which the type documents as
+    // "a plain release wrote nothing" - a generic nothing-to-do reported over
+    // an attempt this segment terminalized. The recovery reselect arm carries
+    // its terminal record for exactly this reason.
+    // Falsification (the ablation): return `outcome: null` from
+    // `createAfterSupersede`'s release arm and the `attemptId` assertion
+    // reddens.
+    mockCohortEligible("linux");
+    const hostHomeDir = await freshHome();
+    await seedParkedActivateRecord(hostHomeDir, "attempt-a5t-old", "1.2.3");
+
+    let calls = 0;
+    const selector: ExecutorClaimSelector = async () => {
+      calls += 1;
+      return calls === 1
+        ? {
+            kind: "claim",
+            request: {
+              targetVersion: "9.9.9",
+              trigger: "manual",
+              action: "start",
+              expected: null,
+              newAttemptId: "attempt-a5t-new",
+              initialPhase: "downloading",
+              initialContinuation: null,
+              claim: null,
+            },
+          }
+        : { kind: "release", reason: "install-changed-under-lock" };
+    };
+
+    const outcome = await runAttemptExecutorSegment(
+      claimOptions(hostHomeDir, { request: selector }),
+      async () => {},
+      async () => "must-not-run",
+    );
+
+    expect(calls).toBe(2);
+    expect(outcome.kind).toBe("released");
+    if (outcome.kind === "released") {
+      expect(outcome.reason).toBe("install-changed-under-lock");
+      expect(outcome.outcome).not.toBeNull();
+      expect(outcome.outcome?.attemptId).toBe("attempt-a5t-old");
+      expect(outcome.outcome?.phase).toBe("superseded");
+      expect(outcome.outcome?.execution).toBe("terminal");
+    }
+    // The supersede stands and NO replacement was minted: the decline is a
+    // decline, not a half-finished two-write sequence.
+    const onDisk = await readUpdateAttemptRecord(hostHomeDir);
+    expect(onDisk.kind).toBe("valid");
+    if (onDisk.kind === "valid") {
+      expect(onDisk.value.attemptId).toBe("attempt-a5t-old");
+      expect(onDisk.value.phase).toBe("superseded");
+    }
+  });
+
   function startSelectionFor(
     targetVersion: string,
     newAttemptId: string,

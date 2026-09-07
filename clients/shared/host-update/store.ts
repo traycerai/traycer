@@ -617,17 +617,32 @@ function normalizeClaimRequest(value: unknown): AttemptClaimRequest | null {
   const normalizedExpected =
     expected === null ? null : normalizeIdentity(expected);
   if (normalizedExpected === null && expected !== null) return null;
-  return {
+  const phase = initialPhase as AttemptClaimRequest["initialPhase"];
+  const base = {
     targetVersion,
     trigger: trigger as HostUpdateTrigger,
     action: action as AttemptClaimRequest["action"],
     expected: normalizedExpected,
     newAttemptId,
-    initialPhase: initialPhase as AttemptClaimRequest["initialPhase"],
-    initialContinuation,
     claim,
     nowIso,
   };
+  // The birth phase and the birth continuation are dependent, and this is the
+  // one entry where the type that says so has already disappeared - the
+  // intent arrives at `commitAttemptMutation` as a plain JavaScript value, so
+  // an `as` cast, a plugin, or plain JS could hand over a pair the type makes
+  // unconstructible. `createdRecord` writes both verbatim: `downloading` +
+  // `activate` is born durably ACTIVE and refused by
+  // `continuationPhaseOrderRejected` on every advance, and `applying` +
+  // `activate` can park `waiting-to-activate` over bytes that were never
+  // placed. Rejecting here is the decoder's ordinary answer for malformed
+  // input, not a new claim refusal: `decideAttemptClaim` gains no reason and
+  // no consumer switch changes.
+  if (initialContinuation === "activate") {
+    if (phase !== "preparing") return null;
+    return { ...base, initialPhase: phase, initialContinuation };
+  }
+  return { ...base, initialPhase: phase, initialContinuation };
 }
 
 function normalizeAdvance(value: unknown): AttemptAdvance | null {

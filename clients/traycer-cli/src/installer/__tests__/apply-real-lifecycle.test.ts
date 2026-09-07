@@ -565,8 +565,18 @@ describe("createBytesOnlyInstallLifecycle forwarding, through the real commit", 
 
     expect(record.version).toBe("2.0.0");
     expect(order).toEqual(["hooks.beforeSwapCommit", "hooks.afterSwap"]);
-    // This lifecycle asks for no start of its own on POSIX.
-    expect(harness.order).toEqual([]);
+    // This lifecycle asks for no START of its own on any platform. What it
+    // does ask for is platform-dependent, so the assertion is too
+    // (CodeRabbit T4): `createBytesOnlyInstallLifecycle.beforeSwap` returns
+    // immediately off win32, and on win32 stops the service because a running
+    // host holds the executable open against the swap rename. Asserting `[]`
+    // unconditionally made this suite fail on a Windows developer's machine.
+    // No CI job runs vitest on Windows - `test-windows-cli-exit` builds the
+    // SEA and runs the two smokes - so nothing here was red; the suite simply
+    // could not be trusted where the branch it covers actually executes.
+    expect(harness.order).toEqual(
+      process.platform === "win32" ? ["controller.stop"] : [],
+    );
     // Falsification: replace either forwarding in
     // `createBytesOnlyInstallLifecycle` with an async no-op, or drop an
     // await around it, and one of the three gates above reddens.

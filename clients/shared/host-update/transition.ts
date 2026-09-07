@@ -60,7 +60,12 @@ export type AttemptClaimAction =
   | "continue"
   | "defer";
 
-export interface AttemptClaimRequest {
+/**
+ * Everything about a claim request that does not depend on which continuation
+ * it is born into. The two fields that DO depend on each other are added by
+ * `AttemptClaimRequest`'s union below.
+ */
+interface AttemptClaimRequestBase {
   readonly targetVersion: string;
   readonly trigger: HostUpdateTrigger;
   /** The exact operation this request may perform. */
@@ -81,19 +86,6 @@ export interface AttemptClaimRequest {
    * the executor, which §1.2 makes the sole minter, is visibly the minter.
    */
   readonly newAttemptId: string;
-  /** The phase a newly created attempt commits before its first side effect. */
-  readonly initialPhase: ActiveHostUpdateAttemptPhase;
-  /**
-   * The continuation a newly created attempt is already executing, or `null`
-   * for the ordinary case that has none yet.
-   *
-   * `"activate"` exists for one situation: an attempt CREATED to activate
-   * bytes that are already placed (the activation-debt arm). Without it such an
-   * attempt is born with no continuation, and a busy host at the activation
-   * gate has no legal park to write - `waiting-to-activate` may be born only
-   * from `applying`, or re-parked from an `activate` segment.
-   */
-  readonly initialContinuation: "activate" | null;
   /**
    * The claim baseline (D19), written verbatim by `createdRecord`, or `null`
    * for a claimant with nothing to record.
@@ -105,6 +97,48 @@ export interface AttemptClaimRequest {
   readonly claim: HostUpdateAttemptClaimBaseline | null;
   readonly nowIso: string;
 }
+
+/**
+ * The birth phase and the birth continuation, which are NOT independent.
+ *
+ * `createdRecord` writes both verbatim, so any pair the type admits is a
+ * record this module can put on disk. Declaring them as two free fields
+ * admitted two that nothing can execute:
+ *
+ *  - `downloading` + `activate` is born durably ACTIVE and cannot progress:
+ *    `continuationPhaseOrderRejected` refuses every successor an `activate`
+ *    continuation is allowed, because none of them is reachable from
+ *    `downloading`. The attempt is stuck until something supersedes it.
+ *  - `applying` + `activate` can park `waiting-to-activate` with no bytes
+ *    placed - the park says a restart is owed for an install that never
+ *    happened.
+ *
+ * `"activate"` exists for exactly one situation, and that situation has
+ * exactly one phase: an attempt CREATED to activate bytes that are ALREADY
+ * placed (the activation-debt arm), which starts at `preparing` because there
+ * is nothing left to download or apply. Without the continuation such an
+ * attempt is born with none, and a busy host at the activation gate has no
+ * legal park to write - `waiting-to-activate` may be born only from
+ * `applying`, or re-parked from an `activate` segment.
+ *
+ * Pairing them here rather than adding a refusal to `decideAttemptClaim` is
+ * deliberate: an ill-formed request becomes unconstructible without a cast,
+ * which is a stronger guarantee than a runtime reason, and a new reason would
+ * ripple into every consumer's switch. The untyped entry - `store.ts`'s
+ * `normalizeClaimRequest`, where types have disappeared - enforces the same
+ * rule at runtime.
+ */
+export type AttemptClaimRequest = AttemptClaimRequestBase &
+  (
+    | {
+        readonly initialPhase: "preparing";
+        readonly initialContinuation: "activate";
+      }
+    | {
+        readonly initialPhase: ActiveHostUpdateAttemptPhase;
+        readonly initialContinuation: null;
+      }
+  );
 
 export interface AttemptClaimContext {
   /** The record as just decoded, in whatever state the decoder found it. */

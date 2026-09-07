@@ -43,10 +43,19 @@ function makeRecord(
   };
 }
 
+/**
+ * The type gate itself, as a value: passing a request through it is a
+ * compile-time assertion that the request is well-formed. Used by the
+ * `@ts-expect-error` pin, which needs the error reported on ONE line.
+ */
+function accepts(request: AttemptClaimRequest): AttemptClaimRequest {
+  return request;
+}
+
 function baseRequest(
   overrides: Partial<AttemptClaimRequest>,
 ): AttemptClaimRequest {
-  return {
+  const { initialPhase, initialContinuation, ...rest } = {
     targetVersion: "1.2.3",
     trigger: "manual",
     action: "start",
@@ -57,7 +66,18 @@ function baseRequest(
     claim: null,
     nowIso: "2026-01-01T00:10:00.000Z",
     ...overrides,
-  };
+  } as const;
+  // The dependent union, honoured rather than routed around: a fixture must
+  // not be able to build a pair production cannot. `Partial<AttemptClaimRequest>`
+  // distributes over the union, so a spread alone would re-admit
+  // `downloading` + `activate`.
+  if (initialContinuation === "activate") {
+    if (initialPhase !== "preparing") {
+      throw new Error("fixture: `activate` may be born only at `preparing`");
+    }
+    return { ...rest, initialPhase, initialContinuation };
+  }
+  return { ...rest, initialPhase, initialContinuation };
 }
 
 const HELD: AttemptClaimHolderDisposition = { kind: "held-by-self" };
@@ -124,6 +144,30 @@ describe("decideAttemptClaim - create", () => {
     expect(parked.record.phase).toBe("waiting-to-activate");
     expect(parked.record.execution).toBe("parked");
     expect(parked.record.continuation).toBe("activate");
+  });
+
+  it("makes every OTHER 'activate' birth unconstructible at the type level (Codex #1773)", () => {
+    // A COMPILE-TIME pin, and it is a real one: `@traycer-clients/shared`'s
+    // `compile` target is `tsgo --noEmit` over `include: ["."]`, so this file
+    // is type-checked by the repo's own gate. If the union is ever flattened
+    // back into two free fields, the directives below become unused and
+    // `compile` fails - the pin cannot silently rot into a comment.
+    //
+    // Both pairs write a record nothing can execute: `downloading` is refused
+    // by `continuationPhaseOrderRejected` on every successor `activate`
+    // allows, and `applying` can park `waiting-to-activate` over bytes that
+    // were never placed.
+    const wellFormed = baseRequest({
+      initialPhase: "preparing",
+      initialContinuation: "activate",
+    });
+    // @ts-expect-error `activate` may be born only at `preparing`.
+    accepts({ ...wellFormed, initialPhase: "downloading" });
+    // @ts-expect-error `activate` may be born only at `preparing`.
+    accepts({ ...wellFormed, initialPhase: "applying" });
+    // ...and the one legal pair still type-checks, so the union is not simply
+    // refusing everything.
+    expect(accepts(wellFormed).initialContinuation).toBe("activate");
   });
 
   it("writes the claim baseline verbatim when the request carries one, and omits the key entirely for null (byte-identical to today)", () => {

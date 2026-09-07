@@ -49,7 +49,7 @@ const execFileAsync = promisify(execFile);
 function baseCreateRequest(
   overrides: Partial<AttemptClaimRequest>,
 ): AttemptClaimRequest {
-  return {
+  const { initialPhase, initialContinuation, ...rest } = {
     targetVersion: "1.2.3",
     trigger: "manual",
     action: "start",
@@ -60,7 +60,18 @@ function baseCreateRequest(
     claim: null,
     nowIso: "2026-01-01T00:00:00.000Z",
     ...overrides,
-  };
+  } as const;
+  // The dependent union, honoured rather than routed around: a fixture must
+  // not be able to build a pair production cannot. `Partial<AttemptClaimRequest>`
+  // distributes over the union, so a spread alone would re-admit
+  // `downloading` + `activate`.
+  if (initialContinuation === "activate") {
+    if (initialPhase !== "preparing") {
+      throw new Error("fixture: `activate` may be born only at `preparing`");
+    }
+    return { ...rest, initialPhase, initialContinuation };
+  }
+  return { ...rest, initialPhase, initialContinuation };
 }
 
 const dirs: string[] = [];
@@ -802,6 +813,74 @@ describe("commitAttemptMutation - byte authority and round trips", () => {
     });
     expect(await readFile(updateAttemptRecordPath(dir), "utf8")).toBe(before);
   });
+
+  it("rejects an 'activate' birth at any phase but 'preparing' (Codex #1773)", async () => {
+    // `AttemptClaimRequest` pairs the birth phase and the birth continuation,
+    // so this is unconstructible in TypeScript - hence the directive below,
+    // which is itself a second assertion: it fails the build the moment the
+    // union stops rejecting the pair. This decoder is the SAME rule where the
+    // type is gone, because `commitAttemptMutation` takes its intent as a
+    // plain JavaScript value.
+    //
+    // `createdRecord` writes both fields verbatim, so accepting the pair puts
+    // a record on disk that is durably ACTIVE and cannot progress:
+    // `continuationPhaseOrderRejected` refuses every successor `activate`
+    // allows, none of which is reachable from `downloading`.
+    // Falsification (the ablation): delete the
+    // `initialContinuation === "activate"` clause from
+    // `normalizeClaimRequest` and this reddens - the create commits.
+    const dir = await freshDir();
+    const handle = await acquireHandle(dir, "activate-birth-phase");
+    const outcome = await commitAttemptMutation({
+      handle,
+      intent: {
+        kind: "create",
+        request: {
+          ...baseCreateRequest({}),
+          initialPhase: "downloading",
+          // @ts-expect-error the type forbids this pair; plain JavaScript can
+          // still hand it to the public entry, which is what the decoder is
+          // for.
+          initialContinuation: "activate",
+        },
+      },
+    });
+    expect(outcome).toMatchObject({
+      kind: "rejected",
+      reason: "intent-invalid",
+    });
+    await expect(stat(updateAttemptRecordPath(dir))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it.each([
+    ["the one legal 'activate' birth", "preparing", "activate"],
+    ["an ordinary birth with no continuation", "downloading", null],
+  ] as const)(
+    "still commits %s (Codex #1773 positive control)",
+    async (label, initialPhase, initialContinuation) => {
+      // The controls that keep the clause above from being a blanket refusal:
+      // both of these are what production actually builds.
+      const dir = await freshDir();
+      const handle = await acquireHandle(dir, `activate-control-${label}`);
+      const outcome = await commitAttemptMutation({
+        handle,
+        intent: {
+          kind: "create",
+          request: baseCreateRequest(
+            initialContinuation === "activate"
+              ? { initialPhase: "preparing", initialContinuation }
+              : { initialPhase, initialContinuation },
+          ),
+        },
+      });
+      expect(outcome.kind).toBe("committed");
+      if (outcome.kind !== "committed") return;
+      expect(outcome.record.phase).toBe(initialPhase);
+      expect(outcome.record.continuation).toBe(initialContinuation);
+    },
+  );
 
   it("snapshots proxy-shaped progress values and writes exactly the validated snapshot", async () => {
     const dir = await freshDir();
