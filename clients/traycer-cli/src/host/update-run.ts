@@ -6,6 +6,7 @@ import {
 import { encodeInstallGeneration } from "@traycer-clients/shared/host-version/install-generation";
 import {
   attemptIdentityOf,
+  isLegalPhaseTransition,
   isParkedPhase,
   isTerminalPhase,
   readUpdateAttemptRecord,
@@ -255,13 +256,18 @@ export async function runHostUpdate(
   const mirror = createMarkerMirror(environment, logger);
   const writerRef: { current: AttemptRecordWriter | null } = { current: null };
   const onProgress = (info: ProgressInfo): void => {
-    // The stop is ISSUED here, not succeeded: `commitInstallFromSource` emits
-    // `service-stop` immediately before the stop and `swap` before the rename,
-    // and past either the host's state is this run's doing. A FLAG, never a
-    // phase - `onProgress` writes no phases (CLI wiring, "One writer").
-    if (info.stage === "service-stop" || info.stage === "swap") {
-      mirror.markDisturbed();
-    }
+    // Deliberately NOT a disturbance seam (#1752 rounds 10/11, cold review B
+    // C2). The `service-stop` and `swap` labels are emitted by
+    // `commitInstallFromSource` BEFORE the lifecycle's status and authority
+    // checks, so a refusal in those checks - a capability denied, a service
+    // controller that will not answer - arrives with the label already
+    // printed and NOTHING stopped. Marking `disturbed` from the label made
+    // that refusal overwrite a live displaced writer's `updating` marker with
+    // this run's `failed`, which is the marker theft round 10 removed. The
+    // flag now has exactly three sources, all of them reports FROM the
+    // actuator that is about to act: `onWillDisruptHost` on the apply and
+    // downgrade arms, and the pre-stop callback inside
+    // `stopHostForRestartWithAttempt` on the activation arm.
     writerRef.current?.progress(downloadTick(info));
     args.onProgress(info);
   };
@@ -1117,6 +1123,11 @@ class AttemptRecordWriter {
     return this.phaseNow;
   }
 
+  /** The continuation as of the last committed advance, not the claim's. */
+  get continuation(): HostUpdateAttemptContinuation {
+    return this.continuationNow;
+  }
+
   /** Whether the record has already reached a park or a terminal. */
   get settled(): boolean {
     return isTerminalPhase(this.phaseNow) || isParkedPhase(this.phaseNow);
@@ -1795,13 +1806,13 @@ async function applyArm(
           // cooperative stop, so a denial there must still park from
           // `preparing`, and the coarse marker is record-driven now.
           onWillCommitStaged: null,
-          // The disruption boundary, reported by the ACTUATORS (the
-          // lifecycle's pre-stop check and the commit's pre-swap check), never
-          // inferred from the `service-stop` / `swap` progress lines, which
-          // precede both (#1752 rounds 10/11). `onProgress` still marks the
-          // flag for the arms that have no actuator seam of their own; here
-          // the seam is the truth and the progress line is a redundant,
-          // strictly-earlier approximation of it.
+          // The disruption boundary, and the ONLY one on this arm: reported
+          // by the ACTUATORS (the lifecycle's pre-stop check and the commit's
+          // pre-swap check), never inferred from the `service-stop` / `swap`
+          // progress lines, which precede both and precede the authority
+          // checks that can still refuse (#1752 rounds 10/11, cold review B
+          // C2). The progress-derived rule that used to shadow this callback
+          // is gone; nothing else marks the flag here.
           onWillDisruptHost: () => input.mirror.markDisturbed(),
           hooks: {
             beforeSwapCommit: () => writer.phaseWrite("applying"),
@@ -1845,6 +1856,26 @@ async function applyArm(
     );
   }
   if (outcome.outcome === "stage-fingerprint-mismatch") {
+    // A null actual fingerprint is not a REPLACED stage, it is an ABSENT one -
+    // the same world the `no-op` arm above describes, reported under a
+    // different name only because a pinned fingerprint is checked first
+    // (`installer/apply.ts`: the fingerprint test precedes the no-stage
+    // answer, so a consumed stage never reaches `no-op` when this attempt
+    // pinned one). Cold review B, C3: every resumed park pins a fingerprint,
+    // so before this branch existed the whole D-46 / D-47 / D-47b settlement
+    // was unreachable in production for the case it was written for - a stage
+    // another actor consumed and committed - and all three answers came out
+    // as `failed` / `E_UNEXPECTED` instead.
+    if (outcome.actualStageFingerprint === null) {
+      return settleDeliveredByAnotherActor(
+        input,
+        writer,
+        `host update: the stage for ${target} was gone when the apply ran`,
+      );
+    }
+    // A DIFFERENT fingerprint is a stage that is present and is not this
+    // claim's: bytes someone else promoted, which this attempt was never
+    // authorized to commit. That stays the refusal (F1's family).
     throw cliError({
       code: CLI_ERROR_CODES.UNEXPECTED,
       message: "host update: staged handoff changed unexpectedly",
@@ -1918,66 +1949,133 @@ async function settleDeliveredByAnotherActor(
 ): Promise<LegacyHostUpdateResult> {
   const { args } = input;
   const target = input.claim.record.targetVersion;
-  const reading = await readActivationState(args.environment);
-  refuseReadingAgainstRequest(reading, requestedVersion(args));
-  if (
-    reading.kind === "activated" &&
-    reading.installedVersion === target &&
-    canReachVerifying(input, writer)
-  ) {
-    await verifyUnderClaim(input, writer);
-    const installed = await readHostInstallRecord(args.environment);
-    if (installed === null) throw hostNotInstalled(args.environment);
-    return projectNoOp(installed);
+  const contenderOptions = mutationContenderOptions(
+    args.environment,
+    "host-update-settle",
+  );
+  // ONE coherent observation, taken under the SAME lock a writer that could
+  // move the record has to hold, with the terminal decided inside it (cold
+  // review B, C1). Before this, the reading and the record the projection
+  // returned were two unlocked reads: a competing installer committing 3.0.0
+  // between them let an explicit `--version 2.0.0` exit 0 reporting 3.0.0 -
+  // the exact "a request for X is never answered with Y" rule this ticket
+  // exists to enforce, defeated inside the arm that enforces it. The lock is
+  // taken here rather than held from the caller because the actuators release
+  // theirs before answering: `applyHostWithAttempt` returns after its own
+  // span, so there is nothing to inherit and nothing to re-enter.
+  const settled = await withCliAttemptMutation(
+    input.capability,
+    contenderOptions,
+    async (): Promise<DeliverySettlement> => {
+      const observed = await readHostInstallRecord(args.environment);
+      // Nothing installed at all is the genuinely bad world, and it names no
+      // record for the request to be held to.
+      if (observed === null) {
+        await writer.fail({
+          code: "stage-missing",
+          message: failureMessage,
+          phase: writer.phase,
+        });
+        return { kind: "not-delivered" };
+      }
+      const reading = await classifyActivationAgainst(
+        args.environment,
+        observed,
+      );
+      refuseReadingAgainstRequest(reading, requestedVersion(args));
+      if (
+        reading.kind === "activated" &&
+        reading.installedVersion === target &&
+        canReachVerifying(input, writer)
+      ) {
+        return { kind: "verify-and-complete", observed };
+      }
+      // The request WAS delivered - the install record names exactly the
+      // target - so nothing failed, whatever this segment is still allowed to
+      // write. The pre-disruption cut is `writeFailure`'s, for its reason:
+      // past the stop a host that is not running the target may be THIS run's
+      // doing, and a run that left a host down reports a failure rather than
+      // someone else's success.
+      if (reading.installedVersion === target && !input.mirror.disturbed) {
+        await writer.supersede();
+        if (reading.kind !== "activated") {
+          return { kind: "restart-owed", reading };
+        }
+        // D-47b: the request is delivered AND RUNNING, and only the RECORD
+        // stands in the way - a `resume-apply` continuation that never wrote
+        // `applying` may not write `complete`. That is a record-shape limit,
+        // not a missing verification: this run read the live host UNDER THIS
+        // LOCK and saw it serving the requested string, which is the same
+        // evidence the exit-0 answer above acts on. A non-zero exit for a host
+        // that runs exactly what was asked would be a lie in the other
+        // direction from the RCA's finding 3. `superseded` is the honest
+        // record - someone else finished this - and the run reports the no-op
+        // it truthfully is, projecting the record it just validated.
+        args.logger.info(
+          "Host update was delivered by another actor: the requested version is installed and running",
+          {
+            environment: args.environment,
+            targetVersion: target,
+            runningVersion: reading.installedVersion,
+          },
+        );
+        return { kind: "delivered-and-running", observed };
+      }
+      await writer.fail({
+        code: "stage-missing",
+        message: failureMessage,
+        phase: writer.phase,
+      });
+      return { kind: "not-delivered" };
+    },
+  );
+  switch (settled.kind) {
+    case "verify-and-complete":
+      // Verified outside the lock, as every other arm verifies: the evidence
+      // loop polls a live host and must not hold the mutation boundary while
+      // it waits. The PROJECTION is still the record validated above, never a
+      // re-read.
+      await verifyUnderClaim(input, writer);
+      return projectNoOp(settled.observed);
+    case "delivered-and-running":
+      return projectNoOp(settled.observed);
+    case "restart-owed":
+      throw deliveredByAnotherActorError(input, settled.reading, target);
+    case "not-delivered":
+      throw cliError({
+        code: CLI_ERROR_CODES.UNEXPECTED,
+        message: failureMessage,
+        details: { environment: args.environment, targetVersion: target },
+        exitCode: 1,
+      });
   }
-  // The request WAS delivered - the install record names exactly the target -
-  // so nothing failed, whatever this segment is still allowed to write. The
-  // pre-disruption cut is `writeFailure`'s, for its reason: past the stop a
-  // host that is not running the target may be THIS run's doing, and a run
-  // that left a host down reports a failure rather than someone else's
-  // success.
-  if (
-    reading.kind !== "no-install" &&
-    reading.installedVersion === target &&
-    !input.mirror.disturbed
-  ) {
-    await writer.supersede();
-    if (reading.kind !== "activated") {
-      throw deliveredByAnotherActorError(input, reading, target);
-    }
-    // D-47b: the request is delivered AND RUNNING, and only the RECORD stands
-    // in the way - a `resume-apply` continuation that never wrote `applying`
-    // may not write `complete`. That is a record-shape limit, not a missing
-    // verification: this run read the live host under its own lock and saw it
-    // serving the requested string, which is the same evidence the exit-0
-    // answer above acts on. A non-zero exit for a host that runs exactly what
-    // was asked would be a lie in the other direction from the RCA's finding
-    // 3. `superseded` is the honest record - someone else finished this - and
-    // the run reports the no-op it truthfully is.
-    args.logger.info(
-      "Host update was delivered by another actor: the requested version is installed and running",
-      {
-        environment: args.environment,
-        targetVersion: target,
-        runningVersion: reading.installedVersion,
-      },
-    );
-    const delivered = await readHostInstallRecord(args.environment);
-    if (delivered === null) throw hostNotInstalled(args.environment);
-    return projectNoOp(delivered);
-  }
-  await writer.fail({
-    code: "stage-missing",
-    message: failureMessage,
-    phase: writer.phase,
-  });
-  throw cliError({
-    code: CLI_ERROR_CODES.UNEXPECTED,
-    message: failureMessage,
-    details: { environment: args.environment, targetVersion: target },
-    exitCode: 1,
-  });
 }
+
+/**
+ * What the settlement decided under its lock, so the answer can be ACTED on
+ * after the lock is released without re-reading anything.
+ *
+ * `observed` is the install record the decision was made against and the one
+ * the caller projects. Carrying it is the whole point: a second
+ * `readHostInstallRecord` after the lock is exactly the unbound read C1 was.
+ */
+type DeliverySettlement =
+  | {
+      readonly kind: "verify-and-complete";
+      readonly observed: HostInstallRecord;
+    }
+  | {
+      readonly kind: "delivered-and-running";
+      readonly observed: HostInstallRecord;
+    }
+  | {
+      readonly kind: "restart-owed";
+      readonly reading: Exclude<
+        ActivationReading,
+        { readonly kind: "no-install" | "activated" }
+      >;
+    }
+  | { readonly kind: "not-delivered" };
 
 /**
  * What the terminal user is told when another actor delivered the request but
@@ -2034,12 +2132,33 @@ function canReachVerifying(
   input: RunArmInput,
   writer: AttemptRecordWriter,
 ): boolean {
-  if (input.claim.record.continuation !== "resume-apply") return true;
-  return (
-    writer.phase === "applying" ||
-    writer.phase === "restarting" ||
-    writer.phase === "verifying"
-  );
+  // The generic successor rule, asked of the transition core rather than
+  // restated here.
+  if (!isLegalPhaseTransition(writer.phase, "verifying")) return false;
+  // ...and the continuation rules on top of it, which the successor table
+  // cannot express because it is keyed on phase alone. Both say the same
+  // thing in their own domain: a segment may claim a verification only for
+  // work it actually did.
+  //
+  //  - `resume-apply` may not verify before it has written the `applying`
+  //    that says the committed bytes are its own;
+  //  - `activate` may not verify before it has written the `restarting` that
+  //    says the restart was its own. That is the case cold review B's C4
+  //    reaches: the debt cleared under the arm's own lock, so nothing was
+  //    restarted, and this segment must not report a verification for another
+  //    actor's activation. It takes the `superseded` answer instead.
+  const continuation = writer.continuation;
+  if (continuation === "resume-apply") {
+    return (
+      writer.phase === "applying" ||
+      writer.phase === "restarting" ||
+      writer.phase === "verifying"
+    );
+  }
+  if (continuation === "activate") {
+    return writer.phase === "restarting" || writer.phase === "verifying";
+  }
+  return true;
 }
 
 async function downgradeArm(
@@ -2125,6 +2244,7 @@ async function activationArm(
   );
   if (live === null) throw hostNotInstalled(args.environment);
   let installed = live;
+  let restarted = false;
   // ONE lock span across the gate, the stop and the relaunch, exactly as the
   // legacy arm holds one: a window between the stop and the relaunch is a
   // window in which another CLI can act on a host this run just took down.
@@ -2145,11 +2265,36 @@ async function activationArm(
     if (mismatch !== null) throw mismatch;
     installed = underLock;
     selection.installedUnderLock = underLock;
+    // ...and the RUNNING half of the same reading, under the same lock (cold
+    // review B, C4). Re-reading only `install.json` here left the DEBT half
+    // decided by the selector, several seconds and a different lock earlier:
+    // a service-manager start that finishes in that gap - no competing
+    // installer needed - left this arm gating and restarting a host that was
+    // ALREADY serving the target, or parking `waiting-to-activate` over it on
+    // a busy refusal. Main re-reads the whole activation state inside this
+    // same lock (`591a7966a:commands/host-update.ts:1478`) and returns
+    // without gate or stop when the debt has cleared; this is that read.
+    const readingUnderLock = await classifyActivationAgainst(
+      args.environment,
+      underLock,
+    );
+    if (readingUnderLock.kind === "debt") {
+      // The freshest "before" there is: what the host was serving at the
+      // moment this arm decided to replace it.
+      selection.underLockRunningVersion = readingUnderLock.runningVersion;
+    }
+    if (readingUnderLock.kind === "activated") {
+      // Nothing is owed any more. Leave the gate unasked and the host alone;
+      // the claim still settles, through the evidence loop below, because the
+      // world it was created for is the world in front of it.
+      return;
+    }
     try {
       // A host that is GONE has no live work to protect, so the gate is not
       // asked on the `no-live-host` reading - the stop reports an absent
-      // host as a forced recycle and the relaunch repairs it.
-      if (!args.force && selection.debtReading !== "no-live-host") {
+      // host as a forced recycle and the relaunch repairs it. The reading is
+      // this arm's own, not the selector's.
+      if (!args.force && readingUnderLock.kind !== "no-live-host") {
         await assertHostNotBusy(args.environment);
       }
       const controller = createServiceController();
@@ -2175,6 +2320,7 @@ async function activationArm(
         label,
         stopped,
       );
+      restarted = true;
     } catch (err) {
       if (err instanceof CliError && err.code === CLI_ERROR_CODES.HOST_BUSY) {
         throw await parkForActivation(input, writer, err);
@@ -2182,6 +2328,21 @@ async function activationArm(
       throw err;
     }
   });
+  // The debt cleared under this arm's own lock and nothing was touched. That
+  // is the already-delivered world by another route, so it settles through
+  // the same closure the other three arms do - which takes its own lock, holds
+  // the record to the request, and picks between completing and `superseded`
+  // by what this segment is allowed to write. Doing it here rather than
+  // verifying inline matters: an activation claim that never restarted has
+  // written no phase from which `verifying` is legal, and the record would
+  // refuse the write.
+  if (!restarted) {
+    return settleDeliveredByAnotherActor(
+      input,
+      writer,
+      `host update: ${installed.version} was activated by another actor while this update ran`,
+    );
+  }
   await verifyUnderClaim(input, writer);
   // Projected as an UPDATE, not a no-op: `previousVersion` is what was
   // serving, which is what actually happened from the operator's seat. On the
@@ -2547,6 +2708,29 @@ async function readActivationState(
 ): Promise<ActivationReading> {
   const installed = await readHostInstallRecord(environment);
   if (installed === null) return { kind: "no-install" };
+  return classifyActivationAgainst(environment, installed);
+}
+
+/**
+ * The same reading, taken against an install record the CALLER already holds.
+ *
+ * Two sites need this rather than `readActivationState`: the settlement and
+ * the activation arm both decide UNDER a mutation lock, and both must decide
+ * against ONE record - the one they validated and will project - rather than
+ * against whatever a second read finds. `readActivationState` reads the record
+ * itself, so using it there would reintroduce the very gap the lock was taken
+ * to close (cold review B, C1): the record can move between the read the
+ * decision used and the read the projection used, and the run then reports a
+ * version nobody asked for.
+ *
+ * The classification is byte-for-byte the one above; only the source of
+ * `installed` differs, and `no-install` is excluded from the return because
+ * the caller has already answered that question.
+ */
+async function classifyActivationAgainst(
+  environment: Environment,
+  installed: HostInstallRecord,
+): Promise<Exclude<ActivationReading, { readonly kind: "no-install" }>> {
   const running = await readHostPidMetadata(environment);
   if (running === null) {
     return { kind: "no-live-host", installedVersion: installed.version };

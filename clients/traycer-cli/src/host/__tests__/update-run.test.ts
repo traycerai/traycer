@@ -91,6 +91,15 @@ const mocks = vi.hoisted(() => ({
   createUpdateProgressMarkerIfAbsent: vi.fn(),
   updateProgressRecordHasProvenLiveWriter: vi.fn(),
   readHostPidMetadata: vi.fn(),
+  // The seam a test needs to change the world in the gap BETWEEN two lock
+  // spans. Called with the reason of the mutation lock that is about to be
+  // acquired, and a no-op by default, so every existing pin is unaffected.
+  // Nothing else can reach that window: the common re-validation and the
+  // arm's own re-read are consecutive statements with no other mocked call
+  // between them, which is exactly why a pin that injected its race at an
+  // EARLIER seam could pass while the arm's own check did nothing (cold
+  // review B, C5).
+  beforeAttemptMutation: vi.fn(),
   identityVerdict: vi.fn(),
   assertHostNotBusy: vi.fn(),
   applyHostWithAttempt: vi.fn(),
@@ -277,6 +286,25 @@ vi.mock("../update-mutation", async (importOriginal) => {
     stopHostForRestartWithAttempt: mocks.stopHostForRestartWithAttempt,
     relaunchHostAfterRestartWithAttempt:
       mocks.relaunchHostAfterRestartWithAttempt,
+  };
+});
+// The REAL contender, with one seam in front of it. Every lock this file
+// exercises is the real cross-process CLI lock on a real sandbox path - that
+// is what makes the settlement's mutual exclusion pinnable at all - and the
+// only thing added is a hook that runs immediately before the acquisition,
+// named by the lock's reason.
+vi.mock("../update-contender", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../update-contender")>();
+  return {
+    ...actual,
+    withCliAttemptMutation: async <T>(
+      capability: Parameters<typeof actual.withCliAttemptMutation<T>>[0],
+      options: Parameters<typeof actual.withCliAttemptMutation<T>>[1],
+      run: Parameters<typeof actual.withCliAttemptMutation<T>>[2],
+    ): Promise<T> => {
+      await mocks.beforeAttemptMutation(options.reason);
+      return actual.withCliAttemptMutation(capability, options, run);
+    },
   };
 });
 // SAFETY, and the reason the shell pins below can exist at all: a
@@ -865,6 +893,8 @@ function armWorld(): void {
     world.runningVersion === null ? null : pidMetadata(world.runningVersion),
   );
   mocks.identityVerdict.mockResolvedValue("current");
+  // A no-op by default: the seam exists, and nothing happens in it.
+  mocks.beforeAttemptMutation.mockResolvedValue(undefined);
   mocks.assertHostNotBusy.mockResolvedValue(undefined);
   mocks.observeAttemptRecoveryEvidence.mockImplementation(async () =>
     observationOfWorld(),
@@ -903,13 +933,30 @@ function armWorld(): void {
       options: ApplyMockOptions,
     ) => {
       const target = world.stagedVersion;
+      // PRODUCTION ORDER, and it matters (cold review B, C3): `installer/
+      // apply.ts` tests the pinned fingerprint FIRST, then the absent stage,
+      // then the version. The fixture used to answer `no-op` for an absent
+      // stage before looking at the fingerprint, so a consumed stage under a
+      // pinned resume - the case every one of the settlement's answers exists
+      // for - reached the settlement in the tests and `stage-fingerprint-
+      // mismatch {actualStageFingerprint: null}` in production. Three pins
+      // asserted answers the real boundary never produced.
+      if (
+        options.expectedStageFingerprint !== null &&
+        options.expectedStageFingerprint !== world.stageId
+      ) {
+        return {
+          outcome: "stage-fingerprint-mismatch" as const,
+          installedVersion: world.installedVersion ?? target ?? "0.0.0",
+          expectedStageFingerprint: options.expectedStageFingerprint,
+          actualStageFingerprint: world.stageId,
+        };
+      }
       if (target === null) return { outcome: "no-op" as const };
       // The ONE version binding, modelled (`installer/apply.ts`, #1752 round
       // 10): an explicit `expectedStagedVersion` that does not name the stage
       // actually on disk is refused BEFORE the busy gate and before
-      // `onWillCommitStaged`, having consumed and announced nothing. Checked
-      // ahead of the fingerprint so the coarser, better-worded refusal wins
-      // when both would fire - which is the order production decides them in.
+      // `onWillCommitStaged`, having consumed and announced nothing.
       if (
         options.expectedStagedVersion !== null &&
         options.expectedStagedVersion !== target
@@ -921,29 +968,18 @@ function armWorld(): void {
           actualStagedVersion: target,
         };
       }
-      // The REAL refusal, modelled (`installer/apply.ts`): a non-null expected
-      // fingerprint that does not name the stage actually on disk is a
-      // replaced handoff, and the installer answers
-      // `stage-fingerprint-mismatch` rather than committing it. Without this
-      // the fixture ignored `expectedStageFingerprint` entirely, so which
-      // fingerprint the runner chose to pass had no observable consequence
-      // and either choice could be inverted with every test still green.
-      if (
-        options.expectedStageFingerprint !== null &&
-        options.expectedStageFingerprint !== world.stageId
-      ) {
-        return {
-          outcome: "stage-fingerprint-mismatch" as const,
-          installedVersion: world.installedVersion ?? target,
-          expectedStageFingerprint: options.expectedStageFingerprint,
-          actualStageFingerprint: world.stageId,
-        };
-      }
       const previous = world.installedVersion ?? target;
       // Production passes none; the fixture fires it when present so an
       // implementation that wrote a phase here would be observable.
       await options.onWillCommitStaged?.(target);
       options.onProgress(progress("service-stop", null));
+      // The disruption boundary where PRODUCTION reports it: the label above
+      // is emitted by `commitInstallFromSource` before the lifecycle runs its
+      // status and authority checks, and this callback fires inside the
+      // lifecycle once those checks have passed and the stop is about to be
+      // issued. A fixture that emitted only the label modelled a world in
+      // which every refusal looked like a disruption (cold review B, C2).
+      options.onWillDisruptHost?.();
       await options.hooks.beforeSwapCommit();
       options.onProgress(progress("swap", null));
       await seedInstalled(target);
@@ -958,6 +994,7 @@ function armWorld(): void {
     async (input: {
       readonly version: string;
       readonly onProgress: (info: ProgressInfo) => void;
+      readonly onWillDisruptHost: () => void;
       readonly beforeExtract: () => Promise<void>;
       readonly hooks: ApplyMockOptions["hooks"];
     }) => {
@@ -974,6 +1011,9 @@ function armWorld(): void {
         };
       }
       input.onProgress(progress("service-stop", null));
+      // Same seam as the apply mock: the label precedes the lifecycle's
+      // checks, this callback follows them (cold review B, C2).
+      input.onWillDisruptHost();
       await input.hooks.beforeSwapCommit();
       input.onProgress(progress("swap", null));
       await seedInstalled(input.version);
@@ -3218,6 +3258,10 @@ describe("ported: update-progress marker (T16)", () => {
         options: ApplyMockOptions,
       ) => {
         options.onProgress(progress("service-stop", null));
+        // The ACTUATOR's report, not the label: the label alone no longer
+        // marks disruption (cold review B, C2), and this pin is about what
+        // happens PAST a real stop.
+        options.onWillDisruptHost?.();
         await options.hooks.beforeSwapCommit();
         // An out-of-band actor lands the announced target WHILE this run's
         // own stop is already in flight - but the stop disturbed the host
@@ -4009,6 +4053,10 @@ describe("ported: reassertMarkerUnderLock under the lock", () => {
         options: ApplyMockOptions,
       ) => {
         options.onProgress(progress("service-stop", null));
+        // Past the actuator's own report: the stop was ISSUED and then
+        // failed, which is this run's doing and stamps. Contrast the pin
+        // below, where the refusal comes BEFORE this callback.
+        options.onWillDisruptHost?.();
         throw cliError({
           code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
           message: "could not stop the service",
@@ -4973,5 +5021,396 @@ describe("ported: the activation arm's under-lock re-read (#1752 round 14)", () 
     expect(String(rejection)).toMatch(/Host 4\.0\.0 stays staged/);
     const record = await requireRecord();
     expect(record.phase).toBe("waiting-to-activate");
+  });
+});
+
+// The five findings cold review B raised against `f924514ec`, each pinned at
+// the boundary the review's own probe used. Every one of these was GREEN
+// before the fix: the defects live in windows the committed suite could not
+// reach, which is the point of keeping the probes rather than paraphrasing
+// them.
+describe("fixup: cold review B", () => {
+  /** A modern park with a PINNED stage fingerprint, as every resume has. */
+  async function parkWithPinnedStage(target: string): Promise<string> {
+    world.latest = target;
+    mocks.applyHostWithAttempt.mockRejectedValueOnce(busyError());
+    await expect(runUpdate({})).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_BUSY,
+    });
+    const record = await requireRecord();
+    expect(record.phase).toBe("waiting-for-work");
+    // The premise of C3: a resume is pinned, so the apply's fingerprint test
+    // is the one that answers first when the stage is gone.
+    expect(record.claim?.stageFingerprint).not.toBeNull();
+    mocks.writes.length = 0;
+    mocks.downloadAndStageHostInSegment.mockClear();
+    mocks.applyHostWithAttempt.mockClear();
+    mocks.ackWrites.length = 0;
+    return record.attemptId;
+  }
+
+  /** The armed default, so a test can consume a stage and then delegate. */
+  function applyFixture(): (
+    capability: unknown,
+    contenderOptions: unknown,
+    options: ApplyMockOptions,
+  ) => Promise<unknown> {
+    const armed = mocks.applyHostWithAttempt.getMockImplementation();
+    if (armed === undefined) throw new Error("the apply fixture is not armed");
+    return armed;
+  }
+
+  it("C1: the settlement's observation and its projection are INSIDE the mutation lock", async () => {
+    // The blocker. The reading and the record the success projected used to be
+    // two unlocked reads, and a competing installer that took the real CLI
+    // lock between them made `--version 2.0.0` exit 0 reporting 3.0.0.
+    // Falsification (the ablation): take the observation outside the lock
+    // again and `concurrentWriterAcquired` flips to true and `legacy.version`
+    // reads 3.0.0 - a version nobody asked for, reported as success.
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    const attemptId = await parkWithPinnedStage("2.0.0");
+    const locks = await import("../../store/cli-lock");
+    let concurrentWriterAcquired = false;
+    const delegate = applyFixture();
+    mocks.applyHostWithAttempt.mockImplementationOnce(
+      async (
+        capability: unknown,
+        contenderOptions: unknown,
+        options: ApplyMockOptions,
+      ) => {
+        // Another actor consumed this park's stage under the apply's own lock
+        // and committed it, so the settlement is reached legitimately.
+        await seedInstalled("2.0.0");
+        world.runningVersion = "2.0.0";
+        await seedStaged(null);
+        // ...and while the settlement's activation read is pending, a
+        // CLI-lock-respecting writer tries to move the record again. It must
+        // not get in: the settlement holds that lock now.
+        mocks.readHostPidMetadata.mockImplementationOnce(async () => {
+          const observed = pidMetadata("2.0.0");
+          await locks
+            .withCliLock(
+              {
+                environment: ENVIRONMENT,
+                reason: "fixup-competing-install",
+                waitMs: 0,
+                pollIntervalMs: 10,
+              },
+              async () => {
+                concurrentWriterAcquired = true;
+                await seedInstalled("3.0.0");
+                world.runningVersion = "3.0.0";
+              },
+            )
+            .catch(() => undefined);
+          return observed;
+        });
+        return delegate(capability, contenderOptions, options);
+      },
+    );
+
+    const outcome = await runUpdate({
+      intent: "continue",
+      expectAttempt: attemptId,
+      versionRequest: "2.0.0",
+      ackNonce: "nonce-abcdefgh",
+    });
+
+    // Mutual exclusion, observed rather than assumed.
+    expect(concurrentWriterAcquired).toBe(false);
+    // The bound projection: the record the decision was made against, never a
+    // later read.
+    expect(outcome.legacy.version).toBe("2.0.0");
+    expect(world.installedVersion).toBe("2.0.0");
+    const record = await requireRecord();
+    expect(record.phase).toBe("superseded");
+    expect(record.error).toBeNull();
+    expect(mocks.disk.current).toBeNull();
+    expect(mocks.ackWrites).toEqual(["claimed"]);
+  });
+
+  it("C1: a record ALREADY moved above the request when the settlement takes its lock is the D-46 refusal, never a success", async () => {
+    // The other half of the same rule: the lock closes the window, and a move
+    // that happened BEFORE it is caught by the request binding inside it.
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    const attemptId = await parkWithPinnedStage("2.0.0");
+    const delegate = applyFixture();
+    mocks.applyHostWithAttempt.mockImplementationOnce(
+      async (
+        capability: unknown,
+        contenderOptions: unknown,
+        options: ApplyMockOptions,
+      ) => {
+        await seedInstalled("3.0.0");
+        world.runningVersion = "3.0.0";
+        await seedStaged(null);
+        return delegate(capability, contenderOptions, options);
+      },
+    );
+
+    await expect(
+      runUpdate({
+        intent: "continue",
+        expectAttempt: attemptId,
+        versionRequest: "2.0.0",
+      }),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_UPDATE_NOT_NEWER,
+    });
+
+    const record = await requireRecord();
+    expect(record.phase).toBe("superseded");
+    expect(record.error).toBeNull();
+    expect(mocks.disk.current).toBeNull();
+  });
+
+  it("C1: the SUCCESS projects the record the settlement validated, not a later read", async () => {
+    // The other half of the binding. The lock closes the window against
+    // writers that RESPECT it (the pin above); this one models a writer that
+    // does not - it moves `install.json` from inside the marker write the
+    // supersede triggers, so the record on disk is 3.0.0 by the time the arm
+    // returns. The projection must still name the record the decision was
+    // made against, because that is the only record this run ever validated
+    // against the request.
+    // Falsification (the ablation): re-read the install record in the
+    // `delivered-and-running` arm and this reports 3.0.0 for a request that
+    // was about 2.0.0.
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    const attemptId = await parkWithPinnedStage("2.0.0");
+    const delegate = applyFixture();
+    mocks.applyHostWithAttempt.mockImplementationOnce(
+      async (
+        capability: unknown,
+        contenderOptions: unknown,
+        options: ApplyMockOptions,
+      ) => {
+        await seedInstalled("2.0.0");
+        world.runningVersion = "2.0.0";
+        await seedStaged(null);
+        return delegate(capability, contenderOptions, options);
+      },
+    );
+    let moved = false;
+    const deleteMarker =
+      mocks.deleteUpdateProgressMarkerIfUnchanged.getMockImplementation();
+    if (deleteMarker === undefined) throw new Error("marker fixture not armed");
+    mocks.deleteUpdateProgressMarkerIfUnchanged.mockImplementation(
+      async (environment: string, expected: HostUpdateProgress) => {
+        const outcome = await deleteMarker(environment, expected);
+        if (!moved) {
+          moved = true;
+          await seedInstalled("3.0.0");
+        }
+        return outcome;
+      },
+    );
+
+    const outcome = await runUpdate({
+      intent: "continue",
+      expectAttempt: attemptId,
+      versionRequest: "2.0.0",
+    });
+
+    expect(moved).toBe(true);
+    expect(world.installedVersion).toBe("3.0.0");
+    expect(outcome.legacy.version).toBe("2.0.0");
+    expect((await requireRecord()).phase).toBe("superseded");
+  });
+
+  it.each([
+    ["apply", "1.0.0", false],
+    ["downgrade", "3.0.0", true],
+  ] as const)(
+    "C2: a %s refusal BEFORE the actuator reports disruption restores the displaced writer instead of stamping over it",
+    async (arm, installedVersion, allowDowngrade) => {
+      // `commitInstallFromSource` emits `service-stop` before the lifecycle's
+      // status and authority checks, so a refusal in those checks arrives with
+      // the label printed and NOTHING stopped. Inferring disruption from the
+      // label made this run steal a live writer's marker.
+      // Falsification (the ablation): put the label rule back in `onProgress`
+      // and both arms stamp `failed {2.0.0}` over the foreign `updating`.
+      await seedInstalled(installedVersion);
+      world.runningVersion = installedVersion;
+      const foreign: HostUpdateProgress = {
+        state: "updating",
+        error: null,
+        targetVersion: "4.0.0",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        writerId: "foreign-writer",
+        writerStartIdentity: null,
+      };
+      mocks.disk.current = foreign;
+      const refuse = async (input: {
+        readonly onProgress: (info: ProgressInfo) => void;
+      }): Promise<never> => {
+        input.onProgress(progress("service-stop", null));
+        throw cliError({
+          code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+          message: "authority refused before controller.stop",
+          details: null,
+          exitCode: 1,
+        });
+      };
+      if (arm === "apply") {
+        mocks.applyHostWithAttempt.mockImplementation(
+          async (
+            _capability: unknown,
+            _contenderOptions: unknown,
+            options: ApplyMockOptions,
+          ) => refuse(options),
+        );
+      } else {
+        mocks.installHostDowngradeInSegment.mockImplementation(refuse);
+      }
+
+      await expect(
+        runUpdate({ versionRequest: "2.0.0", allowDowngrade }),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+      });
+
+      expect(mocks.disk.current).toEqual(foreign);
+    },
+  );
+
+  it.each([
+    ["D-46", "3.0.0", "3.0.0"],
+    ["D-47", "2.0.0", "1.0.0"],
+    ["D-47b", "2.0.0", "2.0.0"],
+  ] as const)(
+    "C3: a CONSUMED pinned stage reaches the settlement, not the fingerprint refusal: %s",
+    async (label, installedVersion, runningVersion) => {
+      // Every resume pins a fingerprint, and `installer/apply.ts` tests the
+      // fingerprint BEFORE its no-stage answer - so an absent stage under a
+      // resume is `stage-fingerprint-mismatch {actualStageFingerprint: null}`,
+      // not `no-op`. All three settlement answers were unreachable in
+      // production for the very case they were written for, and came out
+      // `failed` / `E_UNEXPECTED` instead.
+      // Falsification (the ablation): route a null actual fingerprint back to
+      // the refusal and all three of these redden together.
+      await seedInstalled("1.0.0");
+      world.runningVersion = "1.0.0";
+      const attemptId = await parkWithPinnedStage("2.0.0");
+      const delegate = applyFixture();
+      const outcomes: unknown[] = [];
+      mocks.applyHostWithAttempt.mockImplementationOnce(
+        async (
+          capability: unknown,
+          contenderOptions: unknown,
+          options: ApplyMockOptions,
+        ) => {
+          await seedInstalled(installedVersion);
+          world.runningVersion = runningVersion;
+          await seedStaged(null);
+          const outcome = await delegate(capability, contenderOptions, options);
+          outcomes.push(outcome);
+          return outcome;
+        },
+      );
+
+      const settled = await runUpdate({
+        intent: "continue",
+        expectAttempt: attemptId,
+        versionRequest: "2.0.0",
+      }).then(
+        (value) => ({ value, error: null }),
+        (error: unknown) => ({ value: null, error }),
+      );
+
+      // The fixture answered what production answers, and the arm still
+      // reached the settlement.
+      expect(outcomes).toEqual([
+        {
+          outcome: "stage-fingerprint-mismatch",
+          installedVersion,
+          expectedStageFingerprint: expect.any(String),
+          actualStageFingerprint: null,
+        },
+      ]);
+      const record = await requireRecord();
+      expect(record.phase).toBe("superseded");
+      expect(record.error).toBeNull();
+      expect(mocks.disk.current).toBeNull();
+      if (label === "D-47b") {
+        expect(settled.error).toBeNull();
+      } else {
+        expect(settled.error).toMatchObject({
+          code:
+            label === "D-46"
+              ? CLI_ERROR_CODES.HOST_UPDATE_NOT_NEWER
+              : CLI_ERROR_CODES.HOST_NOT_RUNNING,
+        });
+      }
+    },
+  );
+
+  it("C4: the debt clears between selection and the activation lock: no busy gate, no stop, exit 0", async () => {
+    // A pending service-manager start finishing in the gap - no competing
+    // installer needed. The arm re-read only `install.json`, so it gated and
+    // restarted a host that was ALREADY serving the target, or parked
+    // `waiting-to-activate` over it when the gate refused.
+    // Falsification (the ablation): drop the arm's under-lock activation read
+    // and branch on `selection.debtReading` again.
+    await seedInstalled("2.0.0");
+    world.runningVersion = "1.0.0";
+    // Armed to REFUSE, so consulting it at all is visible.
+    mocks.assertHostNotBusy.mockRejectedValue(busyError());
+    mocks.beforeAttemptMutation.mockImplementation((reason: string) => {
+      if (reason === "host-update-activate") world.runningVersion = "2.0.0";
+    });
+
+    const outcome = await runUpdate({ versionRequest: "2.0.0" });
+
+    expect(outcome.legacy.version).toBe("2.0.0");
+    expect(mocks.assertHostNotBusy).not.toHaveBeenCalled();
+    expect(mocks.stopHostForRestartWithAttempt).not.toHaveBeenCalled();
+    expect(mocks.relaunchHostAfterRestartWithAttempt).not.toHaveBeenCalled();
+    // `superseded`, not `complete`: an `activate` continuation may verify only
+    // once it has written the `restarting` that says the restart was its own,
+    // and this segment restarted nothing. Someone else finished the work, so
+    // the record says so and the run reports the truthful no-op.
+    const record = await requireRecord();
+    expect(record.phase).toBe("superseded");
+    expect(record.error).toBeNull();
+    expect(mocks.disk.current).toBeNull();
+  });
+
+  it("C5: the activation arm's OWN request check, raced after the common re-validation", async () => {
+    // The pin this replaces injected its race during entry-marker creation,
+    // which runs BEFORE `revalidateInstallIdentity` - so it exercised the
+    // common re-validation and passed with the arm's own check deleted. This
+    // one injects at the arm's lock acquisition, after that re-validation, so
+    // only the arm's check can catch it.
+    // Falsification (the ablation): delete the arm's `installedVersionMismatch`
+    // and this reddens - the run restarts the host onto 3.0.0 under a request
+    // for 2.0.0 and fails its health check afterwards.
+    await seedInstalled("2.0.0");
+    world.runningVersion = "1.0.0";
+    let moved = false;
+    mocks.beforeAttemptMutation.mockImplementation(async (reason: string) => {
+      if (reason !== "host-update-activate" || moved) return;
+      moved = true;
+      await seedInstalled("3.0.0");
+    });
+
+    await expect(runUpdate({ versionRequest: "2.0.0" })).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_UPDATE_NOT_NEWER,
+      details: {
+        expectedInstalledVersion: "2.0.0",
+        actualInstalledVersion: "3.0.0",
+      },
+    });
+
+    expect(moved).toBe(true);
+    // Before the gate and before the stop, which is what makes "nothing was
+    // restarted" true in the message.
+    expect(mocks.assertHostNotBusy).not.toHaveBeenCalled();
+    expect(mocks.stopHostForRestartWithAttempt).not.toHaveBeenCalled();
+    const record = await requireRecord();
+    expect(record.phase).toBe("superseded");
+    expect(mocks.disk.current).toBeNull();
   });
 });
