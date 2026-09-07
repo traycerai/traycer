@@ -3856,6 +3856,52 @@ describe("Scheduled Task XML identity", () => {
       else process.env.USERNAME = prevUser;
     }
   });
+
+  it("suppresses a second instance, which is what lets the post-swap relaunch converge with a waiting supervisor", () => {
+    // The Windows half of the convergence conjunct (Q13).
+    //
+    // Once the update's stop stops disarming the service manager, the manager
+    // relaunches a supervisor while the update is still running. That
+    // supervisor contends for the attempt lock and WAITS on it, so it is
+    // occupying the task's instance slot at the moment the executor finishes
+    // its swap and calls `relaunchAfterRestart` - which on Windows is
+    // `startService`, i.e. `schtasks /Run`.
+    //
+    // `IgnoreNew` is what makes that a no-op instead of a second host: Task
+    // Scheduler drops the new run request while an instance is already
+    // running. The waiter launches the host, the executor's verify leg sees
+    // it, and one host exists throughout. Under `Parallel` the same sequence
+    // would start a SECOND supervisor beside the waiter, and both would go on
+    // to launch a host from the same data dir - the exact duplication the
+    // incumbent check cannot serialise, since it runs once as a gate before
+    // the wait and is never re-asked after admission.
+    //
+    // This file already depends on the suppression from the other direction:
+    // `runTaskAndVerifyStart` is documented as verifying its own `/Run` so
+    // callers "never baseline after it and mistake IgnoreNew's suppressed
+    // second run for a failed repair".
+    const prevDomain = process.env.USERDOMAIN;
+    const prevUser = process.env.USERNAME;
+    process.env.USERDOMAIN = "TESTBOX";
+    process.env.USERNAME = "testuser";
+    try {
+      const xml = buildScheduledTaskXml({
+        label: serviceLabelFor("staging"),
+        cli: {
+          command: "C:\\Users\\test\\.traycer\\cli\\bin\\traycer.exe",
+          args: [],
+        },
+      });
+      expect(xml).toContain(
+        "<MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>",
+      );
+    } finally {
+      if (prevDomain === undefined) delete process.env.USERDOMAIN;
+      else process.env.USERDOMAIN = prevDomain;
+      if (prevUser === undefined) delete process.env.USERNAME;
+      else process.env.USERNAME = prevUser;
+    }
+  });
 });
 
 describe("parseSchtasksLastRunResult", () => {

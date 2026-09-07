@@ -34,6 +34,7 @@ import {
 } from "../linux";
 import { CLI_ERROR_CODES } from "../../../runner/errors";
 import type { ServiceLabel } from "../../label";
+import type { ServiceController } from "../../index";
 
 /**
  * The systemd emitter had NO test file at all: `buildUnit` was covered only by
@@ -345,7 +346,8 @@ describe("systemd unit — scaffolding and the token guard", () => {
     const SYSTEMD_DEFAULT_START_LIMIT_INTERVAL_S = 10;
     const SYSTEMD_DEFAULT_START_LIMIT_BURST = 5;
     expect(Number(restartSec)).toBeGreaterThan(
-      SYSTEMD_DEFAULT_START_LIMIT_INTERVAL_S / SYSTEMD_DEFAULT_START_LIMIT_BURST,
+      SYSTEMD_DEFAULT_START_LIMIT_INTERVAL_S /
+        SYSTEMD_DEFAULT_START_LIMIT_BURST,
     );
   });
 
@@ -363,7 +365,7 @@ describe("systemd unit — scaffolding and the token guard", () => {
 
 describe("Q13: stopForRestart signals the unit instead of stopping it", () => {
   function recordingController(): {
-    controller: ReturnType<typeof createLinuxController>;
+    controller: ServiceController;
     commands: string[][];
   } {
     const commands: string[][] = [];
@@ -501,5 +503,72 @@ describe("Q13: stopForRestart signals the unit instead of stopping it", () => {
     const flat = commands.map((c) => c.join(" "));
     expect(flat.some((c) => /systemctl --user stop\b/.test(c))).toBe(true);
     expect(flat.some((c) => c.includes("kill --signal="))).toBe(false);
+  });
+
+  it("the post-swap relaunch is a START, which converges with a waiting supervisor instead of racing it", async () => {
+    // Convergence, the half that is pinnable here.
+    //
+    // Leaving the unit armed means the executor is no longer the only thing
+    // that can start a host. Two triggers now aim at the same unit: systemd's
+    // own `Restart=on-failure` relaunch `RestartSec` after the signal, and
+    // this call at the end of the swap. The supervisor systemd starts arrives
+    // while the executor still holds the attempt lock and WAITS on it, so at
+    // the moment this relaunch runs, the unit's slot is already occupied by a
+    // process that intends to launch the host as soon as it is admitted.
+    //
+    // `start` is what makes that safe: systemd no-ops a start job against an
+    // active unit, so the executor's relaunch does not produce a second
+    // supervisor beside the waiter - the waiter launches the host, the
+    // executor's verify leg sees it, and exactly one host exists throughout.
+    //
+    // `restart` would tear the waiter down mid-wait and start another one
+    // from scratch, throwing away a wait that was about to be admitted and
+    // re-entering the loop this round exists to remove. A direct spawn would
+    // be worse: a host the manager does not own, beside a supervisor that is
+    // still going to launch its own.
+    const { controller, commands } = recordingController();
+
+    await controller.relaunchAfterRestart(labelFor("ai.traycer.host.dev"), {
+      forcedRecycle: false,
+    });
+
+    const flat = commands.map((c) => c.join(" "));
+    expect(flat.some((c) => /systemctl --user start\b/.test(c))).toBe(true);
+    expect(flat.some((c) => /systemctl --user restart\b/.test(c))).toBe(false);
+    expect(flat.some((c) => c.includes("kill --signal="))).toBe(false);
+  });
+
+  it("the Linux relaunch ignores forcedRecycle - the flag is computed for a contract macOS owns", async () => {
+    // Stated so it is not mistaken for protection it does not provide.
+    // `forcedRecycle` has exactly one consumer, `kickstartDesktopAgent` on
+    // macOS, which uses it to choose `kickstart -k` over a plain `kickstart`
+    // that would silently no-op. Linux and Windows both route
+    // `relaunchAfterRestart` to `startService` and never read it.
+    //
+    // So the inverted default this round introduced is INERT on Linux today.
+    // It is still computed honestly rather than hard-coded, because
+    // `RestartStop` is the cross-platform contract and this is the one field
+    // whose entire purpose is naming "we could not tell" - a Linux `false`
+    // would be a lie in it, inert until the day something reads it
+    // generically. Windows hard-codes `false` and says why; Linux cannot,
+    // because its stop genuinely may fail to prove the instance gone.
+    const { controller, commands } = recordingController();
+
+    await controller.relaunchAfterRestart(labelFor("ai.traycer.host.dev"), {
+      forcedRecycle: true,
+    });
+
+    expect(commands.map((c) => c.join(" "))).toEqual(
+      (
+        await (async () => {
+          const second = recordingController();
+          await second.controller.relaunchAfterRestart(
+            labelFor("ai.traycer.host.dev"),
+            { forcedRecycle: false },
+          );
+          return second.commands;
+        })()
+      ).map((c) => c.join(" ")),
+    );
   });
 });
