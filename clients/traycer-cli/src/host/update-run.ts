@@ -2018,6 +2018,14 @@ async function settleDeliveredByAnotherActor(
         // it left running carried out to the operator. `E_HOST_NOT_RUNNING`
         // would be false twice over - the host IS running, and there is
         // nothing for `traycer host restart` to fix.
+        //
+        // This is the ONLY place the foreign string is recorded (recheck E1).
+        // `reading` is the observation this lock span took, the same one the
+        // terminal write above was decided from, so the sentence the operator
+        // reads and the record they can inspect describe one world. Four of
+        // the five routes into this closure never touch the activation arm at
+        // all, and the fifth - the arm's own cleared-debt continuation - hands
+        // its decision to this read on purpose.
         if (reading.kind === "foreign-runtime") {
           input.selection.foreignRuntimeVersion = reading.runningVersion;
           args.logger.info(
@@ -2343,13 +2351,22 @@ async function activationArm(
     // and wrong for `foreign-runtime`, which only became reachable here when
     // C4 made the arm take its own reading under its own lock. It sent the
     // busy gate, a stop and a relaunch at a host running a developer's build.
+    //
+    // What this branch does NOT do is record the foreign string (recheck E1).
+    // It is read under THIS lock and the operator is told under the NEXT one:
+    // `restarted` is still false here, so every reading that lands in this
+    // branch continues into `settleDeliveredByAnotherActor` below, which
+    // re-reads the activation state under its own lock and writes the fact
+    // from THAT reading. Capturing it here as well was the C1 shape in
+    // miniature - a fact from lock A rendered beside a decision from lock B.
+    // If the host went back to a release build in the gap, the settlement
+    // answers `delivered-and-running` and says nothing, and a value written
+    // here would have survived to tell the operator about a build that is no
+    // longer running.
     if (
       readingUnderLock.kind !== "debt" &&
       readingUnderLock.kind !== "no-live-host"
     ) {
-      if (readingUnderLock.kind === "foreign-runtime") {
-        selection.foreignRuntimeVersion = readingUnderLock.runningVersion;
-      }
       return;
     }
     try {

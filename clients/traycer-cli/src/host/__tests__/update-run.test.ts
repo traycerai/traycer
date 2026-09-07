@@ -5588,4 +5588,117 @@ describe("fixup: cold review B", () => {
     expect(record.phase).toBe("superseded");
     expect(mocks.disk.current).toBeNull();
   });
+
+  /**
+   * The D-51 world reached WITHOUT the activation arm: a resume whose stage
+   * another actor consumed and committed, onto a host that is now running a
+   * developer's build. Four of the five routes into
+   * `settleDeliveredByAnotherActor` look like this, and none of them passes
+   * through the activation arm - so the settlement's own write is the only
+   * thing that can carry the fact out on any of them.
+   */
+  async function consumedStageOntoForeignRuntime(): Promise<string> {
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    const attemptId = await parkWithPinnedStage("2.0.0");
+    const delegate = applyFixture();
+    mocks.applyHostWithAttempt.mockImplementationOnce(
+      async (
+        capability: unknown,
+        contenderOptions: unknown,
+        options: ApplyMockOptions,
+      ) => {
+        await seedInstalled("2.0.0");
+        world.runningVersion = "staging.1750000000.abc1234";
+        await seedStaged(null);
+        return delegate(capability, contenderOptions, options);
+      },
+    );
+    return attemptId;
+  }
+
+  it("E1: D-51 is reached through the APPLY arm too, and the settlement is what says so", async () => {
+    // The committed D-51 pins both drive the ACTIVATION arm, where a second,
+    // redundant write of the same fact used to stand. It masked the only write
+    // that matters: this route never touches that arm.
+    // Falsification (the ablation): delete the settlement's
+    // `input.selection.foreignRuntimeVersion` write and this reddens on the
+    // very first assertion, with the arm's write restored or not.
+    const attemptId = await consumedStageOntoForeignRuntime();
+
+    const outcome = await runUpdate({
+      intent: "continue",
+      expectAttempt: attemptId,
+      versionRequest: "2.0.0",
+      ackNonce: "nonce-abcdefgh",
+    });
+
+    expect(outcome.foreignRuntimeVersion).toBe("staging.1750000000.abc1234");
+    expect(outcome.legacy.version).toBe("2.0.0");
+    // Nothing was stopped and nothing was gated: the same catalog-domain
+    // answer the activation arm gives, arrived at from the other side.
+    expect(mocks.assertHostNotBusy).not.toHaveBeenCalled();
+    expect(mocks.stopHostForRestartWithAttempt).not.toHaveBeenCalled();
+    const record = await requireRecord();
+    expect(record.phase).toBe("superseded");
+    expect(record.error).toBeNull();
+    expect(mocks.disk.current).toBeNull();
+  });
+
+  it("E1: the shell renders the foreign sentence on that route as well", async () => {
+    const attemptId = await consumedStageOntoForeignRuntime();
+
+    const result = await buildHostUpdateCommand({
+      force: false,
+      allowDowngrade: false,
+      versionRequest: "2.0.0",
+      ackNonce: null,
+      intent: "continue",
+      expectAttempt: attemptId,
+    })(shellContext());
+
+    expect(result.human).toBe(
+      "host already at 2.0.0 (no-op); the running host is staging.1750000000.abc1234, not a release build, so nothing was activated",
+    );
+    expect(result.exitCode).toBe(0);
+  });
+
+  it("E1: the host is a RELEASE build again by the settlement's lock - no foreign sentence", async () => {
+    // The negative, and the reason the arm's write had to go: the arm reads
+    // under `host-update-activate` and the settlement decides under
+    // `host-update-settle`. A host that went foreign and came back between the
+    // two is `activated` when the answer is chosen, so there is no foreign
+    // fact to report - and a value captured at the earlier lock would have
+    // been rendered anyway, telling the operator about a build that is no
+    // longer running while the record says `superseded` for another reason.
+    // Falsification (the ablation): put the arm's write back and this reddens
+    // on the sentence.
+    await seedInstalled("2.0.0");
+    world.runningVersion = "1.0.0";
+    mocks.beforeAttemptMutation.mockImplementation((reason: string) => {
+      if (reason === "host-update-activate") {
+        world.runningVersion = "staging.1750000000.abc1234";
+      }
+      if (reason === "host-update-settle") world.runningVersion = "2.0.0";
+    });
+
+    const result = await buildHostUpdateCommand({
+      force: false,
+      allowDowngrade: false,
+      versionRequest: "2.0.0",
+      ackNonce: null,
+      intent: null,
+      expectAttempt: null,
+    })(shellContext());
+
+    expect(result.human).not.toMatch(/not a release build/);
+    expect(result.exitCode).toBe(0);
+    // The world the operator is told about is the world the decision was made
+    // in: a release host serving the target, settled as someone else's work.
+    expect(world.runningVersion).toBe("2.0.0");
+    expect(mocks.stopHostForRestartWithAttempt).not.toHaveBeenCalled();
+    const record = await requireRecord();
+    expect(record.phase).toBe("superseded");
+    expect(record.error).toBeNull();
+  });
 });
