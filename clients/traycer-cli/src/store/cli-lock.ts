@@ -4,12 +4,19 @@ import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import { cliLockPath, ensureCliInstallHomeDir } from "./paths";
 import {
   acquireLock,
+  EMPTY_LOCK_GRACE_MS,
+  probeLockBreakArbitration,
+  probeLockFileAgeMs,
+  readLockHolder,
+  verifyLockHolderLiveness,
   withLock,
   type AcquireLockOptions,
+  type LockBreakArbitrationProbe,
   type LockHandle,
   type LockMetadata,
   type WithLockOutcome,
 } from "@traycer-clients/shared/host-lock/cross-process-lock";
+import type { ProcessIdentityVerdict } from "@traycer-clients/shared/host-lock/process-identity";
 
 // Re-exported for existing callers (`host/busy-check.ts`, service
 // controllers, doctor) - the liveness probe lives in
@@ -175,3 +182,69 @@ export async function withCliLock<T>(
   }
   return outcome.result;
 }
+
+/**
+ * What a READER can establish about a scoped lock file without contending
+ * for it. `absent` is the only arm that proves nobody holds the lock;
+ * `unparseable` is an empty or corrupt file, which a holder still inside
+ * its create-then-write gap also produces; `read-error` proves nothing. A
+ * `held` arm carries the holder's own liveness verdict (`alive-same` /
+ * `alive-different` / `dead` / `indeterminate`) from the same identity
+ * check the acquisition path breaks stale holders with.
+ */
+export type CliScopedFileLockProbe =
+  | { readonly kind: "absent" }
+  | {
+      readonly kind: "held";
+      readonly holder: LockMetadata;
+      readonly liveness: ProcessIdentityVerdict;
+    }
+  | { readonly kind: "unparseable" }
+  | { readonly kind: "read-error" };
+
+/**
+ * Read-only probe of a scoped lock file (`host doctor` reports a wedged
+ * progress-marker lock with it). Never acquires, never breaks, never writes:
+ * a diagnostic that took the lock to see who holds it would itself be one
+ * more holder. Through this facade for the same reason as the writer above -
+ * the shared protocol keeps a single CLI importer.
+ */
+export async function probeCliScopedFileLock(
+  lockPath: string,
+): Promise<CliScopedFileLockProbe> {
+  const probe = await readLockHolder(lockPath);
+  if (probe.kind !== "held") return probe;
+  return {
+    kind: "held",
+    holder: probe.holder,
+    liveness: verifyLockHolderLiveness(probe.holder),
+  };
+}
+
+export type CliScopedFileLockArbitration = LockBreakArbitrationProbe;
+
+/**
+ * Read-only probe of the break-arbitration file behind a scoped lock: whether
+ * a stale lock at `lockPath` can actually be broken by the next acquisition,
+ * or is wedged behind a breaker that is alive, unverifiable, or dated in the
+ * future. Same facade rule as above.
+ */
+export async function probeCliScopedFileLockArbitration(
+  lockPath: string,
+): Promise<CliScopedFileLockArbitration> {
+  return probeLockBreakArbitration(lockPath);
+}
+
+/** The lock file's age by mtime (`null` when it cannot be stat'd). */
+export async function cliScopedFileLockAgeMs(
+  lockPath: string,
+): Promise<number | null> {
+  return probeLockFileAgeMs(lockPath);
+}
+
+/**
+ * How old an empty or corrupt scoped lock file must be before an acquisition
+ * age-breaks it (a holder mid-creation writes its metadata within
+ * milliseconds; anything older has no live owner).
+ */
+export const CLI_SCOPED_FILE_LOCK_EMPTY_GRACE_MS: number = EMPTY_LOCK_GRACE_MS;

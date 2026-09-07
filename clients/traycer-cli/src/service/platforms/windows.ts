@@ -12,6 +12,7 @@ import {
   HOST_CAPABILITY_SERVICE_LABEL,
 } from "../../host/capabilities";
 import {
+  publishedHostProcessGone,
   readHostPidMetadata,
   removeHostPidMetadata,
 } from "../../host/pid-metadata";
@@ -33,7 +34,6 @@ import {
   WINDOWS_START_SPAWN_VERIFY_MS,
 } from "@traycer/protocol/host/lifecycle-constants";
 import { CLI_ERROR_CODES, cliError } from "../../runner/errors";
-import { isProcessAlive } from "../../store/cli-lock";
 import type { CliInvocation } from "../cli-binary";
 import { escapeXml } from "../escape-xml";
 import { windowsTaskName, type ServiceLabel } from "../label";
@@ -374,7 +374,7 @@ async function statusService(label: ServiceLabel): Promise<ServiceStatus> {
     return statusNotInstalled();
   }
   const pidMetadata = await readHostPidMetadata(label.environment);
-  if (pidMetadata !== null && isProcessAlive(pidMetadata.pid)) {
+  if (pidMetadata !== null && !publishedHostProcessGone(pidMetadata)) {
     return {
       state: "running",
       version: pidMetadata.version,

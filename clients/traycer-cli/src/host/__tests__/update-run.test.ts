@@ -100,6 +100,9 @@ const mocks = vi.hoisted(() => ({
   // EARLIER seam could pass while the arm's own check did nothing (cold
   // review B, C5).
   beforeAttemptMutation: vi.fn(),
+  // This run's own writer-start stamp, as `ownProcessStartIdentity` supplies
+  // it in production.
+  writerStartIdentity: "test-writer-start:1",
   identityVerdict: vi.fn(),
   assertHostNotBusy: vi.fn(),
   applyHostWithAttempt: vi.fn(),
@@ -215,10 +218,15 @@ vi.mock("../update-progress-marker", () => ({
     ...fields,
     updatedAt: new Date().toISOString(),
     writerId: "test-writer",
-    // Stamped by the real `progressRecord` from `ownProcessStartIdentity`
-    // (#1752 round 13). `null` here is the shape an older CLI's record has,
-    // which is exactly what the fail-open/proven split above must handle.
-    writerStartIdentity: null,
+    // BOTH stamps, as the real `progressRecord` writes them from
+    // `ownProcessStartIdentity` (#1752 round 13). It matters that this run's
+    // own records carry the identity: the host daemon suppresses an
+    // `updating` marker whose stamp does not match the live pid's, and a
+    // record written with a NULL stamp falls back to pid-only fail-open -
+    // which pins "Updating..." on screen forever once that pid is recycled
+    // (#1763 / internal #5536). Records that model an OLDER CLI's marker are
+    // seeded by the tests that need them, with an explicit null.
+    writerStartIdentity: mocks.writerStartIdentity,
   }),
   // The REAL comparator (not a `vi.fn()`), so the "is this marker still ours"
   // decisions under test compare the way production does.
@@ -3937,8 +3945,13 @@ describe("ported: reassertMarkerUnderLock under the lock", () => {
     expect(own).toMatchObject({
       state: "updating",
       targetVersion: "2.0.0",
+      // BOTH stamps, on every record this run writes (#1763 contract): the
+      // host daemon suppresses an `updating` whose `writerStartIdentity` does
+      // not match the live pid's, and a NULL stamp there falls back to
+      // pid-only fail-open - which pins "Updating..." on screen forever once
+      // that pid is recycled onto something else.
       writerId: "test-writer",
-      writerStartIdentity: null,
+      writerStartIdentity: mocks.writerStartIdentity,
     });
     // 2. the RESTORE: this run's own record back to the VERY record it
     // displaced - not a reconstruction of it, and never a blind write.
@@ -5376,6 +5389,36 @@ describe("fixup: cold review B", () => {
     expect(record.phase).toBe("superseded");
     expect(record.error).toBeNull();
     expect(mocks.disk.current).toBeNull();
+  });
+
+  it("#1763: every marker this run writes carries BOTH the writer id and the writer-start stamp", async () => {
+    // The host daemon suppresses an `updating` marker whose
+    // `writerStartIdentity` does not match the live pid's (internal #5536). A
+    // record written with a NULL stamp falls back to pid-only fail-open, so
+    // once that pid is recycled onto an unrelated process the banner says
+    // "Updating..." forever. Both the entry mirror's create and the failure
+    // stamp go through `progressRecord`, which stamps both.
+    // Falsification: drop `writerStartIdentity` from `progressRecord` and
+    // both assertions below go null.
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    mocks.downloadAndStageHostInSegment.mockImplementation(async () => {
+      throw new Error("download lost");
+    });
+
+    await expect(runUpdate({})).rejects.toThrow("download lost");
+
+    const created = mocks.createUpdateProgressMarkerIfAbsent.mock.calls[0]?.[1];
+    expect(created).toMatchObject({
+      state: "updating",
+      writerId: "test-writer",
+      writerStartIdentity: mocks.writerStartIdentity,
+    });
+    expect(mocks.disk.current).toMatchObject({
+      state: "failed",
+      writerId: "test-writer",
+      writerStartIdentity: mocks.writerStartIdentity,
+    });
   });
 
   it("C5: the activation arm's OWN request check, raced after the common re-validation", async () => {

@@ -15,6 +15,7 @@ import {
 import { withCliScopedFileLock } from "../store/cli-lock";
 import {
   ensureHostHomeDir,
+  hostUpdateProgressMarkerLockPath,
   hostUpdateProgressMarkerPath,
 } from "../store/paths";
 
@@ -272,10 +273,6 @@ async function stageMarkerFile(
 const MARKER_LOCK_WAIT_MS = 2_000;
 const MARKER_LOCK_POLL_MS = 25;
 
-function markerLockPath(environment: Environment): string {
-  return `${hostUpdateProgressMarkerPath(environment)}.lock`;
-}
-
 /**
  * Run `fn` holding the marker lock. `null` when the lock could not be
  * held - busy past the bounded wait, or the acquisition itself failed -
@@ -291,7 +288,7 @@ async function underMarkerLock<T>(
     await ensureHostHomeDir(environment);
     const outcome = await withCliScopedFileLock(
       {
-        lockPath: markerLockPath(environment),
+        lockPath: hostUpdateProgressMarkerLockPath(environment),
         reason: `host-update-progress-marker-${operation}`,
         waitMs: MARKER_LOCK_WAIT_MS,
         pollIntervalMs: MARKER_LOCK_POLL_MS,
@@ -304,7 +301,7 @@ async function underMarkerLock<T>(
         {
           environment,
           operation,
-          lockFile: basename(markerLockPath(environment)),
+          lockFile: basename(hostUpdateProgressMarkerLockPath(environment)),
           holderPid: outcome.holder?.pid ?? null,
           holderReason: outcome.holder?.reason ?? null,
         },

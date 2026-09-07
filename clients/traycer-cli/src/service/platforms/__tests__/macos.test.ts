@@ -2078,6 +2078,33 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       });
     });
 
+    it("stopForRestart forces a recycle when the published pid is gone - the child exited or lost its pid, but launchd's job may still be up", async () => {
+      // `publishedHostProcessGone` made this outcome reachable for a LIVE pid
+      // that now belongs to an unrelated process; before that a recycled pid
+      // dialled the dead endpoint and arrived here as `unreachable`, which
+      // already recycled. Either way `no-host` is a fact about the CHILD, and
+      // a plain kickstart of a job launchd still considers running is a
+      // no-op - the restart would report success having done nothing.
+      const { calls, controller } = stageDesktopManagedRunner();
+      MOCKS.requestCooperativeShutdown.mockResolvedValue({ kind: "no-host" });
+
+      await expect(
+        controller.stopForRestart(label, { force: false }),
+      ).resolves.toEqual({
+        forcedRecycle: true,
+      });
+      expect(calls.map((c) => c.args[0])).toEqual(["print"]);
+    });
+
+    it("restart of a host whose published pid is gone recycles the job with kickstart -k", async () => {
+      const { calls, controller } = stageDesktopManagedRunner();
+      MOCKS.requestCooperativeShutdown.mockResolvedValue({ kind: "no-host" });
+
+      await expect(controller.restart(label)).resolves.toBeUndefined();
+      expect(calls.map((c) => c.args[0])).toEqual(["print", "kickstart"]);
+      expect(calls[1]?.args).toEqual(["kickstart", "-k", agentTarget]);
+    });
+
     it("stopForRestart reports no forced recycle when the host really stood down", async () => {
       const { controller } = stageDesktopManagedRunner();
       MOCKS.requestCooperativeShutdown.mockResolvedValue({ kind: "stopped" });
@@ -2781,7 +2808,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       [
         "no-host",
         { kind: "no-host" } as const,
-        "names a host that has already exited",
+        "names a host that is gone - exited, or a pid that now belongs to an unrelated process",
       ],
     ] as const)(
       "rejects with SERVICE_INSTALL_FAILED ('%s') and never boots out when a running Desktop-managed agent's claim can find no endpoint to ask",
@@ -3529,7 +3556,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       expect(calls.some((c) => c.args[0] === "bootout")).toBe(false);
     });
 
-    it("rejects with SERVICE_INSTALL_FAILED a distinct message, and never boots out, when launchd's pid names a host that already exited (no-host)", async () => {
+    it("rejects with SERVICE_INSTALL_FAILED a distinct message, and never boots out, when launchd's pid names a host that is gone (no-host)", async () => {
       const { calls, controller } = stageStandDownRunner({ pid: 4242 });
       MOCKS.requestCooperativeShutdown.mockResolvedValue({
         kind: "no-host",
@@ -3540,7 +3567,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       ).rejects.toMatchObject({
         code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
         message: expect.stringContaining(
-          "names a host that has already exited",
+          "names a host that is gone - exited, or a pid that now belongs to an unrelated process",
         ),
       });
       expect(calls.some((c) => c.args[0] === "bootout")).toBe(false);

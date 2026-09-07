@@ -70,14 +70,18 @@ export const NO_LEGACY_UPDATE_FACTS: LegacyUpdateFacts = {
  * | `runtimeVersion` set    | equal to the stamp                              | no   |
  * | `runtimeVersion` set    | anything else (either direction, SemVer or not) | yes  |
  * | no `runtimeVersion`     | not valid SemVer (a foreign runtime)            | no   |
- * | no `runtimeVersion`     | comparable to `version` and unequal             | yes  |
- * | no `runtimeVersion`     | equal, or incomparable                          | no   |
+ * | no `runtimeVersion`     | comparable to `version` and a different string  | yes  |
+ * | no `runtimeVersion`     | the same string, or incomparable                | no   |
  * | `unmanaged` / no record | anything                                        | no   |
  *
- * The runtime-stamp domain is EQUALITY, never ordering: a staging host's stamp
- * is `staging.<epoch>.<sha>`, and a SemVer guard in front of that comparison
- * would classify every staging host as foreign. The catalog-version fallback
- * (a record with no stamp yet) keeps the CLI's release-version policy, under
+ * BOTH domains are string EQUALITY, never ordering: a staging host's stamp is
+ * `staging.<epoch>.<sha>`, and a SemVer guard in front of that comparison
+ * would classify every staging host as foreign; and in the catalog-version
+ * fallback (a record with no stamp yet) a release host publishes exactly its
+ * catalog version, so another build of the same release (`1.3.0+a` running
+ * beside a `1.3.0+b` record) is debt even though the build-metadata-blind
+ * comparator calls the pair equal - the comparator only keeps an INCOMPARABLE
+ * pair out of debt. That fallback keeps the CLI's release-version policy, under
  * which `0.0.0-dev` IS valid SemVer and a dev host beside a `1.3.0` record reads
  * as debt — the same answer the CLI gives, stated here so nobody "fixes" it on
  * one side only.
@@ -126,6 +130,12 @@ function isActivationDebt(
     return runningVersion !== installed.runtimeVersion;
   }
   if (!isValidHostVersion(runningVersion)) return false;
-  const comparison = compareHostVersions(runningVersion, installed.version);
-  return comparison.comparable && comparison.ordering !== "equal";
+  // Identity is the STRING, as the CLI's `readActivationState` reads it: a
+  // release host publishes exactly its catalog version, so a running
+  // `1.3.0+a` beside a recorded `1.3.0+b` is another build of the release,
+  // not the recorded install - debt. The comparator is build-metadata-blind
+  // and is consulted only to keep an INCOMPARABLE pair (a `local-*` pin
+  // beside a release) out of debt, never for ordering or equality.
+  if (runningVersion === installed.version) return false;
+  return compareHostVersions(runningVersion, installed.version).comparable;
 }
