@@ -102,6 +102,8 @@ not ship the verb change without it.
 | RW-13k | the Linux relaunch made to consume `forcedRecycle` | the inertness pin alone                                     |
 | RW-13l | `kickstart -k` applied unconditionally (macOS)     | the no-`-k` pin ALONE — see below                           |
 | RW-13m | plain `kickstart` applied unconditionally (macOS)  | the `-k` pin plus one pre-existing test                     |
+| RW-13n | the busy refusal reverted to `logger.warn`         | the cadence pin alone                                       |
+| RW-13o | the `busy` reason string made to interpolate       | the cadence pin alone                                       |
 
 **RW-13h initially came back GREEN** and that is the finding: the ordering the
 whole confirmation rests on was unpinned, because the mock answered the same
@@ -156,11 +158,38 @@ and waits); Linux cannot, because its stop genuinely may fail to prove the
 instance gone. But "inert today" is the accurate claim, and it is now pinned as
 such rather than left to be mistaken for live protection.
 
+## The logging cadence, and the half of it I did not build — `47ed81417`
+
+Asked for: one INFO per attempt id on a `busy` refusal, DEBUG thereafter, no
+account ids on INFO+.
+
+**Built the level change, not the dedup tier, because the tier's premise is
+gone.** The dozen WARN lines per update were a symptom of `waitMs: 0` — one per
+`RestartSec` for the length of the segment. The waiting supervisor removed
+them: an ordinary update now logs **none** of these, and a slow download about
+one a minute. What was left was a routine, expected, self-healing condition
+logging at WARN.
+
+The dedup tier is not in-process state. Each refusal is a **separate
+short-lived process** that logs once and exits, so "first for this attempt id"
+would need a cross-process marker written on an error path purely to choose a
+log level. The bootstrap markers cannot carry it: `host-start.ts:904` states
+their phases all describe a spawn attempt, and this is a refusal. So it is a
+new persisted artifact, with its own lifecycle and cleanup, to pick between
+INFO and DEBUG on a line that now fires roughly never.
+
+Flagged to the coordinator rather than silently dropped. If they still want it
+after the volume argument, the honest implementation is an `O_EXCL` create
+keyed by attempt id, and it needs a sweep.
+
+The no-account-ids half is pinned as a **property**, not a coincidence: the pin
+asserts the exact `busy` reason literal, because the neighbouring arms of
+`describeHostStartAdmission` do interpolate record contents and a future arm
+folded into this branch is the realistic way an identifier reaches an INFO line.
+
 ## Still owed
 
 - macOS and Windows verb changes, once the lanes verify the disarm assumptions.
-- The `busy`-refusal logging cadence: one INFO per attempt id, DEBUG after, no
-  account ids.
 - The `StartLimit` numbers: **hold until the lane measures** the per-update
   supervisor start count.
 
