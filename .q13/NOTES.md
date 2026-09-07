@@ -97,18 +97,62 @@ not ship the verb change without it.
 | RW-13f | the SIGKILL escalation removed                | the escalation pin alone                                    |
 | RW-13g | an unprovable instance treated as gone        | the Q14-shape pin alone                                     |
 | RW-13h | the instance captured AFTER the signal        | the ordering pin alone                                      |
+| RW-13i | the Linux relaunch uses `restart`, not `start` | the convergence pin alone                                  |
+| RW-13j | `IgnoreNew` → `Parallel` in the task XML      | the Windows convergence pin alone                           |
+| RW-13k | the Linux relaunch made to consume `forcedRecycle` | the inertness pin alone                                |
 
 **RW-13h initially came back GREEN** and that is the finding: the ordering the
 whole confirmation rests on was unpinned, because the mock answered the same
 instance whenever it was asked. The pin now gives the manager a replacement
 host that appears once the unit is signalled.
 
+## Convergence (coordinator's pin 1) — `364759e53`
+
+Leaving the manager armed means the executor stops being the only thing that
+can start a host. At the moment the swap finishes and calls
+`relaunchAfterRestart`, a supervisor the manager relaunched is already sitting
+in the job's instance slot, WAITING on the attempt lock.
+
+The incumbent check cannot arbitrate that. `host-start.ts:927` calls it a gate
+that "runs exactly once", before the relaunch loop, and the admission callback
+at `:1472` spawns without re-asking — so a supervisor admitted after a 60s wait
+does not re-check whether a host appeared meanwhile. Convergence therefore
+rests **entirely** on the relaunch verb no-opping against a live job:
+
+| Platform | Relaunch verb | Why one host |
+| --- | --- | --- |
+| Linux | `systemctl --user start` | systemd no-ops a start job on an active unit. **Pinned.** |
+| Windows | `schtasks /Run` | `MultipleInstancesPolicy: IgnoreNew` drops the second run. **Pinned.** |
+| macOS | `kickstart` / `kickstart -k` by `forcedRecycle` | plain kickstart no-ops; `-k` recycles the waiter and launchd replaces it. Both single-instance. **Not yet pinned.** |
+
+dc84fa8b relays that reviewer B found this same conjunct sitting under **Q9's**
+three admit rows, where it was citation only and named as falsifiable by an
+ordinary in-repo edit (`kickstart -k` unconditionally). Two thirds of it are
+now pinned; the macOS third is the one B's falsifier actually names, so it is
+the one still worth writing.
+
+### `forcedRecycle` is inert on Linux, and the note should not imply otherwise
+
+`forcedRecycle` has exactly one consumer: `kickstartDesktopAgent` on macOS
+(`macos.ts:1804`, `:2534`, `:2537`). Linux and Windows both route
+`relaunchAfterRestart` to `startService` and never read it. So B's H1 ruling —
+which I implemented, inverting the default so an unprovable instance recycles —
+is **correct but currently unread on the only platform I changed**.
+
+Computing it honestly is still right: `RestartStop` is the cross-platform
+contract, and this is the one field whose entire purpose is naming "we could
+not tell". Windows can hard-code `false` and says why (its stop kills the tree
+and waits); Linux cannot, because its stop genuinely may fail to prove the
+instance gone. But "inert today" is the accurate claim, and it is now pinned as
+such rather than left to be mistaken for live protection.
+
 ## Still owed
 
-- **Pin 1 (coordinator):** the executor's post-swap start with a WAITING
-  supervisor already present converges within the verify budget, and the two do
-  not both launch a host. Not written.
+- **macOS half of pin 1**: `relaunchAfterRestart` picks plain `kickstart` when
+  the instance was proven gone and `-k` when it was not. B's named falsifier.
 - macOS and Windows verb changes, once the lanes verify the disarm assumptions.
+- The `busy`-refusal logging cadence: one INFO per attempt id, DEBUG after, no
+  account ids.
 - The `StartLimit` numbers: **hold until the lane measures** the per-update
   supervisor start count. Reviewer B's point — the calculation is what produced
   the bound/traffic collision in the first place, and there are now two sources
