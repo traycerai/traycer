@@ -899,12 +899,7 @@ async function attestedGenerationFromCurrentRecord(
 ): Promise<string | null> {
   const record = await readHostInstallRecord(environment);
   if (record === null) return null;
-  return encodeInstallGeneration({
-    installId: record.installId,
-    installedAt: record.installedAt,
-    archiveSha256: record.archiveSha256,
-    version: record.version,
-  });
+  return encodeInstallGeneration(record);
 }
 
 async function readProvisionState(

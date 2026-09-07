@@ -4849,3 +4849,75 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
     });
   });
 });
+
+describe("Q13 convergence: the post-swap relaunch against a waiting supervisor", () => {
+  // The macOS third of the convergence conjunct. Its Linux and Windows halves
+  // are pinned in their own platform suites; this is the one reviewer B named
+  // as falsifiable by an ordinary in-repo edit - applying `kickstart -k`
+  // unconditionally - which is why it is worth a pin rather than a citation.
+  //
+  // The setting: with the update's stop no longer disarming the manager, a
+  // supervisor launchd relaunched is already occupying the job and WAITING on
+  // the attempt lock when the swap finishes and calls `relaunchAfterRestart`.
+  // Whether that produces one host or two is decided entirely here, because
+  // the incumbent check is a once-only gate that runs before the wait and is
+  // never re-asked after admission (`host-start.ts:927`).
+  //
+  // A plain-success runner leaves `probeDesktopAgentOwnership` reporting no
+  // SMAppService agent, so these exercise the CLI-owned arm - the one an
+  // update on a CLI install actually takes.
+  const cliOwnedLabel = serviceLabelFor("production");
+
+  function recordingRunner(): {
+    runner: ProcessRunner;
+    calls: RecordedCall[];
+  } {
+    const calls: RecordedCall[] = [];
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      return buildSuccessResult();
+    };
+    return { runner, calls };
+  }
+
+  it("kickstarts WITHOUT -k when the stop proved the old instance gone", async () => {
+    // The no-op branch, and the one that converges most cheaply: a plain
+    // kickstart of a job launchd already considers running is treated as
+    // satisfied and does nothing, so the waiter goes on to launch the host
+    // and the executor's verify leg sees it. Exactly one host, and the wait
+    // that was about to be admitted is not thrown away.
+    const { runner, calls } = recordingRunner();
+    const controller = createMacosController(runner);
+
+    await controller.relaunchAfterRestart(cliOwnedLabel, {
+      forcedRecycle: false,
+    });
+
+    const kickstarts = calls.filter((c) => c.args[0] === "kickstart");
+    expect(kickstarts).toHaveLength(1);
+    expect(kickstarts[0]?.args).not.toContain("-k");
+  });
+
+  it("recycles with -k when the stop could NOT prove it gone, which converges by replacement", async () => {
+    // The other branch, and the reason a plain kickstart is not always
+    // correct: if the old host may still be running, a kickstart that no-ops
+    // would leave it up on the pre-swap bytes after a "successful" restart.
+    //
+    // `-k` converges differently rather than not at all - it kills whatever
+    // holds the job, the waiter included, and launchd starts a replacement
+    // that contends against a lock the executor has since released. Still one
+    // host. What it costs is the waiter's progress plus the plist's
+    // `ThrottleInterval` before the replacement appears, which is why this
+    // branch is reserved for the case that needs it.
+    const { runner, calls } = recordingRunner();
+    const controller = createMacosController(runner);
+
+    await controller.relaunchAfterRestart(cliOwnedLabel, {
+      forcedRecycle: true,
+    });
+
+    const kickstarts = calls.filter((c) => c.args[0] === "kickstart");
+    expect(kickstarts).toHaveLength(1);
+    expect(kickstarts[0]?.args).toContain("-k");
+  });
+});

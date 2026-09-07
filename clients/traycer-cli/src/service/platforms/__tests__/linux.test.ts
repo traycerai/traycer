@@ -3,11 +3,38 @@ import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { extractExecStartTokens } from "@traycer-clients/shared/host-lifecycle";
-import { buildSystemdUnit } from "../linux";
+const pidMetadata = vi.hoisted(() => ({
+  metadata: null as { pid: number } | null,
+  gone: false,
+  goneCalls: 0,
+  // When set, `readHostPidMetadata` answers with this instead once the unit
+  // has been signalled - the armed manager's replacement host.
+  replacement: null as { pid: number } | null,
+  signalled: false,
+  goneFor: null as number | null,
+}));
+vi.mock("../../../host/pid-metadata", () => ({
+  readHostPidMetadata: async () =>
+    pidMetadata.signalled && pidMetadata.replacement !== null
+      ? pidMetadata.replacement
+      : pidMetadata.metadata,
+  publishedHostProcessGone: (m: { pid: number }) => {
+    pidMetadata.goneCalls += 1;
+    if (pidMetadata.goneFor !== null) return m.pid === pidMetadata.goneFor;
+    return pidMetadata.gone;
+  },
+}));
+
+import {
+  buildSystemdUnit,
+  createLinuxController,
+  setRestartStopGracesForTests,
+} from "../linux";
 import { CLI_ERROR_CODES } from "../../../runner/errors";
 import type { ServiceLabel } from "../../label";
+import type { ServiceController } from "../../index";
 
 /**
  * The systemd emitter had NO test file at all: `buildUnit` was covered only by
@@ -281,6 +308,49 @@ describe("systemd unit — scaffolding and the token guard", () => {
     expect(unit).not.toContain("ConditionFileIsExecutable");
   });
 
+  it("Q13: the shipped unit's restart policy stays outside systemd's start-limit arithmetic", () => {
+    // Two numbers the supervisor's design depends on, neither of them stated
+    // in the unit, so both are asserted from the emitted artifact.
+    //
+    // 1. `Restart=on-failure` + `RestartSec=5`, with NO `StartLimitBurst` or
+    //    `StartLimitIntervalSec`, so systemd's defaults apply: burst 5 within
+    //    a 10s interval. A restart every 5s puts at most two starts in any
+    //    window, so the limit never trips and the unit never lands in
+    //    `failed`. Cut `RestartSec` below `10 / 5 = 2` seconds and an ordinary
+    //    sequence of restarts starts failing the unit outright - which is the
+    //    outage this whole area exists to prevent, arriving by arithmetic
+    //    rather than by a code change.
+    // 2. `Type=simple` with no `TimeoutStartSec`. The supervisor now WAITS on
+    //    the attempt lock for up to `SUPERVISOR_ADMISSION_WAIT_MS` before it
+    //    spawns anything, and that is only safe while systemd imposes no
+    //    start deadline it could cross. `Type=simple` is considered started
+    //    as soon as it forks; adding `TimeoutStartSec`, or moving to
+    //    `Type=notify`, would make a healthy wait fail the unit.
+    const unit = buildSystemdUnit({
+      label: labelFor("ai.traycer.host.dev"),
+      cli: { command: "/home/test/.traycer/cli/bin/traycer", args: [] },
+    });
+
+    expect(unit).toContain("\nRestart=on-failure\n");
+    expect(unit).toContain("\nRestartSec=5\n");
+    expect(unit).toContain("\nType=simple\n");
+    expect(unit).not.toContain("StartLimitBurst");
+    expect(unit).not.toContain("StartLimitIntervalSec");
+    expect(unit).not.toContain("StartLimitInterval=");
+    expect(unit).not.toContain("TimeoutStartSec");
+
+    // The arithmetic itself, read back off the artifact rather than restated:
+    // whatever `RestartSec` says must leave the default burst unreachable.
+    const restartSec = /\nRestartSec=(\d+)\n/.exec(unit)?.[1];
+    expect(restartSec).toBeDefined();
+    const SYSTEMD_DEFAULT_START_LIMIT_INTERVAL_S = 10;
+    const SYSTEMD_DEFAULT_START_LIMIT_BURST = 5;
+    expect(Number(restartSec)).toBeGreaterThan(
+      SYSTEMD_DEFAULT_START_LIMIT_INTERVAL_S /
+        SYSTEMD_DEFAULT_START_LIMIT_BURST,
+    );
+  });
+
   it("refuses to emit a unit when a CLI path carries a character systemd would mis-parse", () => {
     expect(() =>
       buildSystemdUnit({
@@ -290,5 +360,233 @@ describe("systemd unit — scaffolding and the token guard", () => {
     ).toThrowError(
       expect.objectContaining({ code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED }),
     );
+  });
+});
+
+describe("Q13: stopForRestart signals the unit instead of stopping it", () => {
+  function recordingController(): {
+    controller: ServiceController;
+    commands: string[][];
+  } {
+    const commands: string[][] = [];
+    const controller = createLinuxController(async (command, args) => {
+      commands.push([command, ...args]);
+      if (args.includes("kill")) pidMetadata.signalled = true;
+      return { stdout: "", stderr: "", exitCode: 0 };
+    });
+    return { controller, commands };
+  }
+
+  beforeEach(() => {
+    pidMetadata.metadata = null;
+    pidMetadata.gone = false;
+    pidMetadata.goneCalls = 0;
+    pidMetadata.replacement = null;
+    pidMetadata.signalled = false;
+    pidMetadata.goneFor = null;
+    // Production graces are the host's own force-exit watchdog plus a 10s
+    // kill window; letting them elapse is what makes the exhausted-ladder
+    // case untestable at real timing.
+    setRestartStopGracesForTests({ sigtermMs: 20, sigkillMs: 20 });
+  });
+
+  afterEach(() => {
+    setRestartStopGracesForTests(null);
+  });
+
+  it("never issues the manager's stop verb, and never asks the unit whether it is down", async () => {
+    // The whole outage in one assertion. `systemctl stop` puts the unit in
+    // `inactive`, and `Restart=` does not apply to a unit stopped that way -
+    // this file relies on that in `cancelScheduledAutoRestart`, which uses a
+    // stop BECAUSE it cancels a scheduled relaunch. So the update's pre-swap
+    // stop disarmed the service manager, and the only thing that re-armed it
+    // was the CLI that had just promised the restart.
+    //
+    // `is-active` is pinned absent for the second half of the same fact: with
+    // the manager armed the unit never settles to `inactive`, so a
+    // confirmation read from unit state would either never complete or answer
+    // about a supervisor the manager started, not the host we signalled.
+    pidMetadata.metadata = { pid: 4242 };
+    pidMetadata.gone = true;
+    const { controller, commands } = recordingController();
+
+    await controller.stopForRestart(labelFor("ai.traycer.host.dev"), {
+      force: false,
+    });
+
+    const flat = commands.map((c) => c.join(" "));
+    expect(flat.some((c) => c.includes("kill --signal=SIGTERM"))).toBe(true);
+    expect(flat.some((c) => /systemctl --user stop\b/.test(c))).toBe(false);
+    expect(flat.some((c) => c.includes("is-active"))).toBe(false);
+  });
+
+  it("escalates to SIGKILL when the signalled instance is not provably gone, and says so", async () => {
+    // The ladder is the SOLE deadline on this path: `systemctl kill` runs no
+    // stop job, so `TimeoutStopSec` does not apply and nothing but this
+    // escalates. Remove the escalation and a host that ignores SIGTERM is
+    // never killed and never confirmed.
+    pidMetadata.metadata = { pid: 4242 };
+    pidMetadata.gone = false;
+    const { controller, commands } = recordingController();
+
+    const stopped = await controller.stopForRestart(
+      labelFor("ai.traycer.host.dev"),
+      { force: false },
+    );
+
+    const flat = commands.map((c) => c.join(" "));
+    expect(flat.some((c) => c.includes("kill --signal=SIGTERM"))).toBe(true);
+    expect(flat.some((c) => c.includes("kill --signal=SIGKILL"))).toBe(true);
+    // Cold review B's one token, and it makes H2 direct instead of
+    // incidental. Without it, swapping the confirmation for a health probe
+    // still reddens this row - but on `forcedRecycle`, i.e. "you got the wrong
+    // answer", not "you asked the wrong question". Asserting the identity
+    // predicate was consulted at all means any substitution of the
+    // confirmation MECHANISM reddens here, which is what instance-binding is
+    // about. The null-identity row below already asserts the mirror
+    // (`goneCalls === 0`); this is the same shape on the other side.
+    expect(pidMetadata.goneCalls).toBeGreaterThan(0);
+    // Not proven gone, so the relaunch must RECYCLE rather than kickstart: a
+    // kickstart of an already-running job is treated as satisfied and no-ops,
+    // which would leave the host up on the old bytes after a "successful"
+    // restart.
+    expect(stopped.forcedRecycle).toBe(true);
+  });
+
+  it("a host that published no identity is UNPROVABLE, never silently gone", async () => {
+    // The Q14 shape: a pre-stamp `pid.json`, or a platform whose identity
+    // probe returned nothing. There is no instance to prove anything about,
+    // so this must fall to the safe side. A needless recycle costs a restart;
+    // a false "gone" activates over a host that is still running.
+    pidMetadata.metadata = null;
+    const { controller } = recordingController();
+
+    const stopped = await controller.stopForRestart(
+      labelFor("ai.traycer.host.dev"),
+      { force: false },
+    );
+
+    expect(stopped.forcedRecycle).toBe(true);
+    // And it did not consult the identity predicate at all - there was
+    // nothing to consult it about.
+    expect(pidMetadata.goneCalls).toBe(0);
+  });
+
+  it("confirms the instance it SIGNALLED, not whatever the armed manager started in its place", async () => {
+    // The hazard this design creates, and the reason the confirmation cannot
+    // be a fresh read. With the unit left armed, systemd starts a replacement
+    // supervisor `RestartSec` after the signal - so by the time the stop is
+    // confirming, `pid.json` may already name a DIFFERENT live host. Reading
+    // the instance after signalling would ask "is that replacement gone",
+    // answer no, escalate SIGKILL at it, and report a forced recycle over a
+    // host that came up exactly as intended.
+    //
+    // The old host (4242) is gone; the replacement (5353) is live.
+    pidMetadata.metadata = { pid: 4242 };
+    pidMetadata.replacement = { pid: 5353 };
+    pidMetadata.goneFor = 4242;
+    const { controller, commands } = recordingController();
+
+    const stopped = await controller.stopForRestart(
+      labelFor("ai.traycer.host.dev"),
+      { force: false },
+    );
+
+    // Proven gone from the identity captured BEFORE the signal.
+    expect(stopped.forcedRecycle).toBe(false);
+    const flat = commands.map((c) => c.join(" "));
+    expect(flat.some((c) => c.includes("kill --signal=SIGKILL"))).toBe(false);
+  });
+
+  it("the user-facing `host stop` still uses the manager's stop verb - this round does not change that path", async () => {
+    // Repointed from a vacuous assertion (cold review B): the absent
+    // `TimeoutStopSec` is not a ceiling the update's ladder sits under, since
+    // `systemctl kill` runs no stop job. It IS a live dependency of the plain
+    // `host stop` path, which keeps `systemctl stop` and therefore keeps
+    // depending on systemd's 90s default. Pinning that the two paths diverged
+    // is the true proposition.
+    const { controller, commands } = recordingController();
+
+    await controller.stop(labelFor("ai.traycer.host.dev"), { force: false });
+
+    const flat = commands.map((c) => c.join(" "));
+    expect(flat.some((c) => /systemctl --user stop\b/.test(c))).toBe(true);
+    expect(flat.some((c) => c.includes("kill --signal="))).toBe(false);
+  });
+
+  it("the post-swap relaunch is a START, which converges with a waiting supervisor instead of racing it", async () => {
+    // Convergence, the half that is pinnable here.
+    //
+    // Leaving the unit armed means the executor is no longer the only thing
+    // that can start a host. Two triggers now aim at the same unit: systemd's
+    // own `Restart=on-failure` relaunch `RestartSec` after the signal, and
+    // this call at the end of the swap. The supervisor systemd starts arrives
+    // while the executor still holds the attempt lock and WAITS on it, so at
+    // the moment this relaunch runs, the unit's slot is already occupied by a
+    // process that intends to launch the host as soon as it is admitted.
+    //
+    // `start` is what makes that safe: systemd no-ops a start job against an
+    // active unit, so the executor's relaunch does not produce a second
+    // supervisor beside the waiter - the waiter launches the host, the
+    // executor's verify leg sees it, and exactly one host exists throughout.
+    //
+    // `restart` would tear the waiter down mid-wait and start another one
+    // from scratch, throwing away a wait that was about to be admitted and
+    // re-entering the loop this round exists to remove. A direct spawn would
+    // be worse: a host the manager does not own, beside a supervisor that is
+    // still going to launch its own.
+    const { controller, commands } = recordingController();
+
+    await controller.relaunchAfterRestart(labelFor("ai.traycer.host.dev"), {
+      forcedRecycle: false,
+    });
+
+    const flat = commands.map((c) => c.join(" "));
+    expect(flat.some((c) => /systemctl --user start\b/.test(c))).toBe(true);
+    expect(flat.some((c) => /systemctl --user restart\b/.test(c))).toBe(false);
+    expect(flat.some((c) => c.includes("kill --signal="))).toBe(false);
+  });
+
+  it("RECYCLES rather than starts when the stop could not prove the old instance gone", async () => {
+    // Cold review B found the failure this closes, and it is on the one
+    // platform this round changed.
+    //
+    // A plain `systemctl --user start` no-ops against a unit systemd still
+    // considers active - the same no-op `forcedRecycle` was invented to name
+    // on macOS. So a stop that reported `forcedRecycle: true` (SIGKILL could
+    // not prove the instance gone, or `systemctl kill` itself failed, which
+    // this path cannot see because `killUnit` tolerates a non-zero exit and
+    // never reads it) would issue a start that does nothing, and the update
+    // would proceed to ACTIVATION over a host still serving the pre-swap
+    // bytes.
+    //
+    // Before this, `forcedRecycle` had exactly one consumer in the tree -
+    // `kickstartDesktopAgent` on macOS - so the value the Linux stop computes
+    // so carefully was read by nobody.
+    const { controller, commands } = recordingController();
+
+    await controller.relaunchAfterRestart(labelFor("ai.traycer.host.dev"), {
+      forcedRecycle: true,
+    });
+
+    const flat = commands.map((c) => c.join(" "));
+    expect(flat.some((c) => /systemctl --user restart\b/.test(c))).toBe(true);
+    expect(flat.some((c) => /systemctl --user start\b/.test(c))).toBe(false);
+  });
+
+  it("but never leaves the unit INACTIVE - the recycle is a restart job, not a stop", async () => {
+    // The recycle has to undo the old instance without recreating the very
+    // hazard this round exists to remove. `systemctl restart` is a stop job
+    // followed by a start job and the unit ends ACTIVE, so `Restart=` is never
+    // left disarmed. A `stop` here - or a `kill` with no follow-up - would
+    // reintroduce Q13 on the recovery path, where it would be hardest to see.
+    const { controller, commands } = recordingController();
+
+    await controller.relaunchAfterRestart(labelFor("ai.traycer.host.dev"), {
+      forcedRecycle: true,
+    });
+
+    const flat = commands.map((c) => c.join(" "));
+    expect(flat.some((c) => /systemctl --user stop\b/.test(c))).toBe(false);
   });
 });

@@ -89,6 +89,7 @@ import {
   observeAttemptRecoveryEvidence,
   type AttemptRecoveryEvidenceObservation,
 } from "./update-recovery-evidence";
+import { VERIFY_BUDGET_MS } from "./update-budget";
 import { currentInstallPlatform } from "../installer/install";
 
 // `traycer host update`, on the schema-v2 attempt executor (Plan D1).
@@ -254,7 +255,8 @@ const CONTENDER_WAIT_MS = 30_000;
 const CONTENDER_POLL_INTERVAL_MS = 100;
 
 /** The evidence loop's own budget, matching the health probe it replaces. */
-const VERIFY_BUDGET_MS = 45_000;
+// Shared with the supervisor's start admission, which sizes its wait against
+// this. See `host/update-budget.ts` for why they must not drift.
 const VERIFY_POLL_INTERVAL_MS = 500;
 /**
  * Consecutive authenticated-RPC refusals that end the verify leg early (Q19).
@@ -1318,12 +1320,10 @@ function baselineFrom(
 }
 
 function installGenerationOf(record: HostInstallRecord): string {
-  return encodeInstallGeneration({
-    installId: record.installId,
-    installedAt: record.installedAt,
-    archiveSha256: record.archiveSha256,
-    version: record.version,
-  });
+  // The RECORD, not a rebuilt literal: this string is compared byte-for-byte
+  // against the one `host start`'s relaunch admission computes, and a
+  // per-site field mapping is what could drift between them silently.
+  return encodeInstallGeneration(record);
 }
 
 // ---------------------------------------------------------------------------
@@ -1402,13 +1402,32 @@ class AttemptRecordWriter {
     });
   }
 
-  phaseWrite(phase: HostUpdateAttemptPhase): Promise<void> {
+  /**
+   * `claimRefresh` is REQUIRED, and that is the point (Q12).
+   *
+   * It used to be hard-coded `null` here, which silently made every advance a
+   * carry-the-prior-baseline write - including `applying -> restarting`, the
+   * one advance after which the prior baseline is guaranteed to be WRONG. The
+   * swap has just replaced the install tree, so a baseline describing the
+   * pre-swap install survives as the record's account of "what was installed
+   * when this attempt was authorized", and every later reader that compares
+   * against it is comparing against a world that no longer exists.
+   *
+   * Making the parameter required rather than defaulted means each of the
+   * call sites below states which it is. Most genuinely carry - they advance
+   * within one installed state and have nothing new to say - and that is now
+   * visible instead of inherited.
+   */
+  phaseWrite(
+    phase: HostUpdateAttemptPhase,
+    claimRefresh: AttemptClaimRefresh | null,
+  ): Promise<void> {
     return this.barrier({
       phase,
       continuation: this.continuationNow,
       progress: null,
       error: null,
-      claimRefresh: null,
+      claimRefresh,
       nowIso: new Date().toISOString(),
     });
   }
@@ -2017,7 +2036,7 @@ async function resumedApplyArm(
     // sidecar and bytes). The ordinary commit-time reconciliation still runs
     // (`reconcileHostStageWithAttempt`) and may remove a stale or invalid
     // stage - that is the reconcile rule's decision, not a transfer over it.
-    await writer.phaseWrite("downloading");
+    await writer.phaseWrite("downloading", null);
     return downgradeArm(input, writer);
   }
   if (staged !== null) {
@@ -2150,7 +2169,7 @@ async function transferUnderClaim(
       // SHA and signature live inside `downloadAndVerify`, so this fires with
       // VERIFIED bytes on disk and an unbuilt tree - which is what `preparing`
       // means (Plan D3).
-      beforeExtract: () => writer.phaseWrite("preparing"),
+      beforeExtract: () => writer.phaseWrite("preparing", null),
       // This run IS the attempt the promote-time guard would otherwise yield
       // to; a foreign nonterminal record still wins (Plan D6).
       ownAttempt: input.claim.identity,
@@ -2168,7 +2187,7 @@ async function applyArm(
 ): Promise<LegacyHostUpdateResult> {
   const { args } = input;
   const target = input.claim.record.targetVersion;
-  if (writer.phase !== "preparing") await writer.phaseWrite("preparing");
+  if (writer.phase !== "preparing") await writer.phaseWrite("preparing", null);
   const contenderOptions = mutationContenderOptions(
     args.environment,
     "host-update-apply",
@@ -2207,8 +2226,12 @@ async function applyArm(
           // is gone; nothing else marks the flag here.
           onWillDisruptHost: () => input.mirror.markDisturbed(),
           hooks: {
-            beforeSwapCommit: () => writer.phaseWrite("applying"),
-            afterSwap: () => writer.phaseWrite("restarting"),
+            beforeSwapCommit: () => writer.phaseWrite("applying", null),
+            afterSwap: async () =>
+              writer.phaseWrite(
+                "restarting",
+                await generationWrittenBySwap(input.args.environment),
+              ),
           },
         });
       } catch (err) {
@@ -2628,10 +2651,14 @@ async function downgradeArm(
         // the commit's pre-swap check, never the progress lines that precede
         // both.
         onWillDisruptHost: () => input.mirror.markDisturbed(),
-        beforeExtract: () => writer.phaseWrite("preparing"),
+        beforeExtract: () => writer.phaseWrite("preparing", null),
         hooks: {
-          beforeSwapCommit: () => writer.phaseWrite("applying"),
-          afterSwap: () => writer.phaseWrite("restarting"),
+          beforeSwapCommit: () => writer.phaseWrite("applying", null),
+          afterSwap: async () =>
+            writer.phaseWrite(
+              "restarting",
+              await generationWrittenBySwap(input.args.environment),
+            ),
         },
       },
       input.capability,
@@ -2774,7 +2801,17 @@ async function activationArm(
         // around this call (#1752 round 8).
         () => input.mirror.markDisturbed(),
       );
-      await writer.phaseWrite("restarting");
+      // CARRY, not refresh - this arm places no bytes.
+      //
+      // The activation arm stops the host and relaunches it onto an install
+      // an EARLIER segment already placed, so there is no swap here whose
+      // generation could be recorded and `generationWrittenBySwap` would be
+      // a lie about where the value came from. The baseline is already
+      // correct: both births of an `activate` continuation refresh it - the
+      // busy park through `parkForActivation`, and the recovery resume
+      // through its own park - so carrying is what preserves that work
+      // rather than re-reading the same record to restate it.
+      await writer.phaseWrite("restarting", null);
       await relaunchHostAfterRestartWithAttempt(
         input.capability,
         contenderOptions,
@@ -2876,6 +2913,39 @@ async function parkForActivation(
   });
 }
 
+/**
+ * The generation the SWAP itself wrote (Q12).
+ *
+ * Called from `afterSwap`, where `readHostInstallRecord` is guaranteed to
+ * return the new tree's record: `atomicSwap` is two renames and the install
+ * record lives INSIDE the install directory, so it moves with the tree rather
+ * than being rewritten beside it. There is no window here in which the
+ * directory is the target's and the record is still the old one.
+ *
+ * Why this advance and not the others: every other `phaseWrite` moves within
+ * one installed state and has nothing new to say, so carrying the prior
+ * baseline is right. `applying -> restarting` is the single advance that
+ * crosses a change of installed bytes, and it was carrying a baseline the
+ * swap had just falsified.
+ *
+ * Returns `null` when the install record cannot be read, which carries the
+ * prior baseline unchanged - the same fail-open choice `readClaimRefresh`
+ * makes for a park, and for the same reason: a baseline minted from a read
+ * that saw no install record is worse than a stale one.
+ *
+ * NOTE the asymmetry this cannot fix. `refreshedClaimBaseline` IGNORES a
+ * refresh on a record that carries no claim at all, deliberately - "a legacy
+ * continuation cannot gain an authorization nobody ever granted it". So on a
+ * claimless record this writes nothing however specific the refresh is, and
+ * any consumer relying on the recorded generation has to gate on the claim
+ * being present rather than assume this ran.
+ */
+async function generationWrittenBySwap(
+  environment: Environment,
+): Promise<AttemptClaimRefresh | null> {
+  return (await readClaimRefresh(environment)).refresh;
+}
+
 async function readClaimRefresh(environment: Environment): Promise<{
   readonly refresh: AttemptClaimRefresh | null;
   readonly stagedVersion: string | null;
@@ -2974,7 +3044,7 @@ async function verifyUnderClaim(
   postSwapError: string | null,
 ): Promise<void> {
   const { args } = input;
-  await writer.phaseWrite("verifying");
+  await writer.phaseWrite("verifying", null);
   const home = hostHomeDir(args.environment);
   const target = input.claim.record.targetVersion;
   const budgetMs = verifyBudgetFor(postSwapError, args.verifyBudgetMs ?? null);

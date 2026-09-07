@@ -259,6 +259,14 @@ interface Recorded {
     message: string;
     fields: Record<string, unknown>;
   }>;
+  readonly loggerInfos: Array<{
+    message: string;
+    fields: Record<string, unknown>;
+  }>;
+  readonly loggerWarns: Array<{
+    message: string;
+    fields: Record<string, unknown>;
+  }>;
 }
 
 /**
@@ -325,6 +333,8 @@ function makeRunStubs(
     lastStderrTee: null,
     stderrTees: [],
     loggerErrors: [],
+    loggerInfos: [],
+    loggerWarns: [],
   };
   // The stub implements only the surface `runHostStart` touches; route it
   // to `ChildProcess` through an explicit `unknown` intermediate rather than a
@@ -333,8 +343,12 @@ function makeRunStubs(
   const childAsProcess: ChildProcess = childAsUnknown as ChildProcess;
   const spyLogger: ILogger = {
     debug: () => undefined,
-    info: () => undefined,
-    warn: () => undefined,
+    info: (message, fields) => {
+      recorded.loggerInfos.push({ message, fields: { ...fields } });
+    },
+    warn: (message, fields) => {
+      recorded.loggerWarns.push({ message, fields: { ...fields } });
+    },
     error: (message, fields, _error) => {
       recorded.loggerErrors.push({
         message,
@@ -370,7 +384,7 @@ function makeRunStubs(
     //   - unset, `sleep` is a REAL timer, and one exhausted budget costs
     //     1+5+15+30+60 = 111s of wall clock, which no 10s test timeout
     //     survives.
-    hasStopIntent: async () => false,
+    hasStopIntent: async () => null,
     // Same hazard as `hasStopIntent` above, and easier to miss because it is
     // read ONCE at startup rather than per attempt: unset, the `Partial`
     // default falls through to the real `readStopIntentIdentity`, which reads
@@ -2349,6 +2363,65 @@ describe("runHostStart - crash relaunch loop", () => {
     expect(term.recorded.exited).toBe(0);
   });
 
+  it.each([
+    ["restart", 77],
+    ["stop", 0],
+    ["uninstall", 0],
+    ["install-swap", 0],
+  ] as const)(
+    "Q13: a %s stop intent ends the supervisor with exit %i",
+    async (stopReason, expected) => {
+      // The exit code is how the supervisor answers the service manager, and
+      // for one of these four the old answer left machines down. `restart` is
+      // what every update's pre-swap stop announces (`stopForRestart` ->
+      // `announceStop(env, "restart", ...)`), and the protocol defines it as
+      // the ONLY reason that promises a comeback. Exiting 0 told systemd and
+      // launchd the job had finished successfully; on a CLI-only install, if
+      // the CLI that promised the restart then died, nothing brought the host
+      // back.
+      //
+      // The other three keep exit 0 and must: `stop` and `uninstall` mean do
+      // not bring this back, and `install-swap` "deliberately promises no
+      // comeback, because a CLI swap's relaunch is unbounded" - so re-arming
+      // a manager for it would contradict what it announces. Its name is the
+      // trap here, which is why it is pinned rather than assumed.
+      const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+      const originalSpawn = deps.spawn;
+      if (originalSpawn === undefined) {
+        throw new Error("test spawn dependency missing");
+      }
+      let stopLanded = false;
+
+      await runUntilExit(
+        () =>
+          runHostStart(
+            { environment: "production", cwd: null },
+            {
+              ...deps,
+              maxRelaunches: 5,
+              hasStopIntent: async () => (stopLanded ? stopReason : null),
+              spawn: (command, args, options) => {
+                originalSpawn(command, args, options);
+                stopLanded = true;
+                const child = makeStubChild();
+                setImmediate(() => {
+                  child.emit("exit", 0, null);
+                });
+                return asChildProcess(child);
+              },
+            },
+          ),
+        recorded,
+      );
+
+      expect(recorded.exited).toBe(expected);
+      // Whatever the code, the supervisor does NOT relaunch in-process: a
+      // stop that was requested is honoured here and handed to the manager,
+      // never worked around by spawning again ourselves.
+      expect(recorded.spawnCalls).toHaveLength(1);
+    },
+  );
+
   it("escalates a raced stop to SIGKILL when the child ignores SIGTERM", async () => {
     // Without this the supervisor awaits `childEnding` with no deadline, and
     // nothing else intervenes: the stop announced itself on disk, `host stop`
@@ -2370,7 +2443,7 @@ describe("runHostStart - crash relaunch loop", () => {
           {
             ...deps,
             maxRelaunches: 5,
-            hasStopIntent: async () => stopLanded,
+            hasStopIntent: async () => (stopLanded ? ("stop" as const) : null),
             // Fire the escalation immediately instead of after 30s.
             escalateAfter: (_ms, run) => {
               setImmediate(run);
@@ -2462,7 +2535,7 @@ describe("runHostStart - crash relaunch loop", () => {
             },
             hasStopIntent: async () => {
               intentChecks += 1;
-              return stopRequested;
+              return stopRequested ? ("stop" as const) : null;
             },
           },
         ),
@@ -2734,7 +2807,8 @@ describe("runHostStart - relaunch loop, guards re-checked across the backoff", (
           {
             ...scripted.deps,
             maxRelaunches: 5,
-            hasStopIntent: async () => stopRequested,
+            hasStopIntent: async () =>
+              stopRequested ? ("stop" as const) : null,
             // The stop happens WHILE we are backing off.
             sleep: async () => {
               stopRequested = true;
@@ -2820,7 +2894,8 @@ describe("runHostStart - a stop exits 0 wherever it is honoured", () => {
             // The install record never comes back, so every attempt fails to
             // resolve a target and the loop keeps retrying.
             readInstallRecord: async () => null,
-            hasStopIntent: async () => stopRequested,
+            hasStopIntent: async () =>
+              stopRequested ? ("stop" as const) : null,
             sleep: async () => {
               stopRequested = true;
             },
@@ -2884,7 +2959,8 @@ describe("runHostStart - a stop exits 0 wherever it is honoured", () => {
               originalSpawn(command, args, options);
               throw new Error("EBUSY: install swap in progress");
             },
-            hasStopIntent: async () => stopRequested,
+            hasStopIntent: async () =>
+              stopRequested ? ("stop" as const) : null,
             sleep: async () => {
               stopRequested = true;
             },
@@ -2925,7 +3001,8 @@ describe("runHostStart - a stop exits 0 wherever it is honoured", () => {
               });
               return asChildProcess(child);
             },
-            hasStopIntent: async () => stopRequested,
+            hasStopIntent: async () =>
+              stopRequested ? ("stop" as const) : null,
             sleep: async () => {
               stopRequested = true;
             },
@@ -3191,7 +3268,7 @@ describe("runHostStart - relaunch loop, per-attempt isolation", () => {
             closeLogFd: async (fd) => {
               closed.push(fd);
             },
-            hasStopIntent: async () => true,
+            hasStopIntent: async () => "stop" as const,
           },
         ),
       recorded,
@@ -3568,7 +3645,7 @@ describe("runHostStart - stop signals outside the child-running window", () => {
               // The record on disk IS the one this supervisor started with, so
               // its own start already answered it. Deliberately no clock here:
               // that is the whole point of the identity rule.
-              return servedAtStartup === null;
+              return servedAtStartup === null ? ("stop" as const) : null;
             },
           },
         ),
@@ -3606,7 +3683,8 @@ describe("runHostStart - stop signals outside the child-running window", () => {
               stopRequested = true;
               return 42;
             },
-            hasStopIntent: async () => stopRequested,
+            hasStopIntent: async () =>
+              stopRequested ? ("stop" as const) : null,
           },
         ),
       recorded,
@@ -3647,7 +3725,8 @@ describe("runHostStart - stop signals outside the child-running window", () => {
               if (attempts === 2) stopRequested = true;
               return 42;
             },
-            hasStopIntent: async () => stopRequested,
+            hasStopIntent: async () =>
+              stopRequested ? ("stop" as const) : null,
           },
         ),
       recorded,
@@ -3691,7 +3770,7 @@ describe("runHostStart - a stop that lands INSIDE the pre-spawn read", () => {
             maxRelaunches: 5,
             hasStopIntent: async () => {
               process.emit("SIGTERM");
-              return false;
+              return null;
             },
           },
         ),
@@ -3838,6 +3917,73 @@ describe("runHostStart - a SERVICE launch refused as busy exits non-zero so it i
     expect(recorded.spawnCalls).toHaveLength(0);
   });
 
+  it("Q13: the busy refusal is an INFO keyed by attempt id, carrying no account identifiers", async () => {
+    // Two requirements in one line, both from the support-report side.
+    //
+    // LEVEL. A supervisor that arrives while an update segment holds the
+    // attempt lock is not an error - the non-zero exit IS the recovery, and
+    // the manager retries on its own. It was a WARN because under `waitMs: 0`
+    // it fired roughly a dozen times per healthy update, which reads like a
+    // fault when a dozen of them land in a log. The wait removed the volume;
+    // this drops the level to match what the line actually reports.
+    //
+    // FIELDS. INFO and above must stay free of account and user identifiers,
+    // so the line is keyed by attempt id and environment. `reason` is pinned
+    // as the fixed `busy` literal rather than merely "present": it is built by
+    // `describeHostStartAdmission`, and the neighbouring arms in that switch
+    // DO interpolate record contents, so a future arm folded into this branch
+    // is the realistic way an identifier reaches this line.
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const refused: Partial<RunHostStartDeps> = {
+      ...deps,
+      admitHostStartSpawn: async () => busy,
+    };
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          {
+            environment: "production",
+            cwd: null,
+            serviceLabel: "ai.traycer.host.agent",
+          },
+          refused,
+        ),
+      recorded,
+    );
+
+    const retryLine = recorded.loggerInfos.find((entry) =>
+      entry.message.includes("so the service manager retries"),
+    );
+    expect(retryLine).toBeDefined();
+    // The whole bag, exactly. Cold review B: my first cut asserted the three
+    // fields individually, which leaves the bag OPEN - adding `accountId` to
+    // the call passes every one of those assertions. And the field bag is the
+    // route this file actually uses for identifiers: the incumbent-decline
+    // line a few hundred lines up logs `incumbentPid`, `incumbentVersion` and
+    // `incumbentWebsocketUrl` as fields, not interpolated. So the likelier
+    // leak was the unwatched one.
+    //
+    // `toEqual` reddens on ANY added key whatever it is called, and still
+    // pins the reason literal inside it - which is the separate hazard, since
+    // `describeHostStartAdmission`'s neighbouring arms DO interpolate record
+    // contents into that string.
+    expect(retryLine?.fields).toEqual({
+      environment: "production",
+      attemptId: expect.any(String),
+      reason:
+        "another update execution segment currently owns the restart boundary",
+    });
+    // And pin the level by where the line ISN'T. Without this a future edit
+    // that emits BOTH an info and a warn passes, because the assertion above
+    // only looks in one sink.
+    expect(
+      recorded.loggerWarns.filter((entry) =>
+        entry.message.includes("so the service manager retries"),
+      ),
+    ).toHaveLength(0);
+  });
+
   it("INTERACTIVE launch + busy -> still exit 0, unchanged", async () => {
     // The scoping half. An interactive or Desktop-driven start has a caller
     // watching that can decide for itself, so its exit semantics must not move;
@@ -3887,5 +4033,75 @@ describe("runHostStart - a SERVICE launch refused as busy exits non-zero so it i
 
     expect(recorded.exited).toBe(0);
     expect(recorded.spawnCalls).toHaveLength(0);
+  });
+
+  it("Q9: a relaunch admitted BESIDE a durable attempt announces it once, on the injected logger", async () => {
+    // The supervisor now admits an interrupted record whose own next act is
+    // starting the host, and leaves that record untouched for recovery. The
+    // host simply comes up, so without this line nothing distinguishes "the
+    // host is up" from "the host is up and an update is still outstanding" -
+    // and the record is cleared only by the `host update` claim path, which
+    // nobody has run yet.
+    //
+    // The INJECTED logger is half the assertion. Emitting from inside the
+    // admission would have to build a logger of its own, which writes to the
+    // real `~/.traycer/cli/cli.log`; routing the announcement out through a
+    // callback is what keeps it observable here and inside the sandbox.
+    const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const standing = {
+      schemaVersion: 2 as const,
+      attemptId: "attempt-wedged",
+      generation: 1,
+      sequence: 9,
+      trigger: "manual" as const,
+      targetVersion: "2.0.0",
+      phase: "restarting" as const,
+      execution: "active" as const,
+      continuation: "activate" as const,
+      progress: null,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      completedAt: null,
+      error: null,
+    };
+    const admitted: Partial<RunHostStartDeps> = {
+      ...withChildExit(deps, child, 0, null),
+      admitHostStartSpawn: async (_options, run, onAdmittedBeside) => {
+        onAdmittedBeside(standing);
+        return { kind: "ran" as const, result: await run() };
+      },
+    };
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          {
+            environment: "production",
+            cwd: null,
+            serviceLabel: "ai.traycer.host.agent",
+          },
+          admitted,
+        ),
+      recorded,
+    );
+
+    const announcements = recorded.loggerInfos.filter((entry) =>
+      entry.message.includes("durable update attempt"),
+    );
+    expect(announcements).toHaveLength(1);
+    expect(announcements[0]?.fields).toMatchObject({
+      attemptId: "attempt-wedged",
+      phase: "restarting",
+      execution: "active",
+      continuation: "activate",
+      targetVersion: "2.0.0",
+      // Says what the supervisor did NOT do. It holds no capability that
+      // could advance or terminalize a record, and the line must not read as
+      // though the update were handled.
+      leftForRecovery: true,
+    });
+    // The spawn still happened: the announcement is a note beside an admitted
+    // relaunch, never a substitute for one.
+    expect(recorded.spawnCalls.length).toBeGreaterThan(0);
   });
 });

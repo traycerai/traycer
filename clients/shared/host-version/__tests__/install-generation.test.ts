@@ -25,17 +25,21 @@ const MIGRATED_CALLERS: readonly string[] = [
   // having one: the first version of these lists was hand-written and this
   // caller was in neither (cold review B).
   "clients/traycer-cli/src/host/update-executor.ts",
-];
-
-const PENDING_LITERAL_CALLERS: readonly string[] = [
-  // Owned by `bafc226ec` on the Q13/Q3/Q9 line, which migrates all four in one
-  // change. Deliberately NOT migrated here: both branches edit these files, and
-  // duplicating the same edit buys a merge conflict for no behaviour. Delete
-  // these entries when that change lands and the pin tightens by itself.
+  // The four `bafc226ec` owned, migrated on its own branch and promoted here
+  // when it merged. The register worked as a register: it went RED in both
+  // directions at the merge - the debt list still naming four sites that no
+  // longer hold a literal - rather than needing anyone to remember.
   "clients/traycer-cli/src/host/provision.ts",
   "clients/traycer-cli/src/host/attested-install-runtime.ts",
   "clients/traycer-cli/src/host/stamp-runtime.ts",
   "clients/traycer-cli/src/host/update-run.ts",
+  // Arrived with the same merge, in neither list, and was caught by the
+  // discovery scan rather than by anyone reading the diff. This is the exact
+  // case cold review B added that scan for, on its first real outing.
+  "clients/traycer-cli/src/commands/host-start.ts",
+];
+
+const PENDING_LITERAL_CALLERS: readonly string[] = [
   // Desktop main's own capture, out of this package's scope.
   "clients/desktop/src/electron-main/host/host-state.ts",
 ];
@@ -165,6 +169,38 @@ describe("encodeInstallGeneration", () => {
       version: "1.0.0",
     });
     expect(legacy).not.toBe(minted);
+  });
+
+  it("agrees with itself whether handed a bare identity or a whole install record", () => {
+    // Carried forward from `377e882df`'s own F1 register, which this merge
+    // otherwise replaces with the discovery-backed one below. This assertion
+    // survived the swap because neither of mine makes it, and it is the one
+    // that makes "pass the record" SAFE advice rather than merely tidy: a
+    // record carries far more than the four identity fields, so if any extra
+    // property changed the fingerprint, every migrated call site would need
+    // its own projection back and the register would be pushing callers
+    // toward the exact drift it exists to prevent.
+    const identity = {
+      installId: null,
+      installedAt: "2026-01-01T00:00:00.000Z",
+      archiveSha256: "d".repeat(64),
+      version: "1.3.0-rc.1",
+    } as const;
+    const record = {
+      ...identity,
+      runtimeVersion: "1.3.0-rc.1",
+      platform: "darwin",
+      arch: "arm64",
+      signatureVerifiedAt: "2026-01-01T00:00:01.000Z",
+      signatureKeyId: "key-1",
+      sizeBytes: 1234,
+      executablePath: "bin/traycer-host",
+      executableSha256: null,
+    };
+
+    expect(encodeInstallGeneration(record)).toBe(
+      encodeInstallGeneration(identity),
+    );
   });
 });
 

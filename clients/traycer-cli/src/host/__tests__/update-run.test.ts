@@ -2594,6 +2594,31 @@ describe("ported: buildHostUpdateCommand composite", () => {
     expect(mocks.writes.length).toBeGreaterThan(0);
   });
 
+  it("Q12: the downgrade arm records the generation ITS swap wrote, not the one it replaced", async () => {
+    // The downgrade arm is the second of the two arms that actually swap, and
+    // it was the one Q12 left unwatched. Found by ablating each `restarting`
+    // writer INDIVIDUALLY rather than all three together: nulling this site
+    // alone left the whole 163-test suite green, so two thirds of the change
+    // had no pin behind it.
+    //
+    // Downgrade is the sharpest case for the property, because here the two
+    // versions cannot be confused for one another by accident. The claim is
+    // taken against 2.0.0, the swap installs 1.0.0, and the baseline must end
+    // up describing what the swap wrote. Before Q12 it kept saying 2.0.0 - an
+    // account of the install this attempt had just deleted.
+    await seedInstalled("2.0.0");
+    world.runningVersion = "2.0.0";
+
+    await runUpdate({ versionRequest: "1.0.0", allowDowngrade: true });
+
+    const record = await requireRecord();
+    expect(record.claim).toMatchObject({ installedVersion: "1.0.0" });
+    // Consent is COPIED across a refresh, never restated from it - the
+    // refresh shape cannot even carry `allowDowngrade`. A downgrade whose
+    // record came back without consent would be a park nothing could resume.
+    expect(record.claim).toMatchObject({ allowDowngrade: true });
+  });
+
   it("REFUSES an explicit lower target without consent, and takes the owned installer with it", async () => {
     // This pin used to read "keeps an explicit lower target on the monotonic
     // stage path" and assert a `nothing-to-do` release - exit 0 for a request
@@ -5300,11 +5325,22 @@ describe("acceptance: cells with no legacy ancestor", () => {
     await seedInstalled("1.0.0");
     world.runningVersion = "1.0.0";
     const crashed = await crashAtRestarting("2.0.0");
-    // The two facts that together produced the field failure: the install is
-    // at the target because THIS attempt put it there, and the baseline still
-    // names what was installed when the attempt was claimed.
+    // The install is at the target because THIS attempt put it there.
     expect(world.installedVersion).toBe("2.0.0");
-    expect(crashed.claim).toMatchObject({ installedVersion: "1.0.0" });
+    // The second half of the field failure - a baseline still naming the
+    // PRE-swap install - is no longer what this fixture produces. Q12
+    // refreshes the baseline at `afterSwap`, so a crash at `restarting` now
+    // leaves a record whose claim already names the swapped install, and this
+    // pin reaches `revalidateInstallIdentity`'s primary equality check rather
+    // than the forgiveness clause it was written to exercise.
+    //
+    // The assertion is updated rather than deleted because the value is the
+    // premise the rest of the test rests on: what is asserted below is that
+    // recovery ACTIVATES the swapped bytes instead of calling them a foreign
+    // change, and that outcome must hold on both baselines. The pre-swap
+    // baseline still occurs - a swap-time read that fails carries it through -
+    // and it is pinned separately.
+    expect(crashed.claim).toMatchObject({ installedVersion: "2.0.0" });
     // The host is DOWN, which is the real wedge: `restarting` is written after
     // the cooperative stop, so a run killed there has already taken the old
     // host away and never brought the new one up. `crashAtRestarting` leaves
@@ -5569,10 +5605,19 @@ describe("acceptance: cells with no legacy ancestor", () => {
     await seedInstalled("1.0.0");
     world.runningVersion = "1.0.0";
     const crashed = await crashAtRestarting("2.0.0");
-    // The seed's baseline names the PRE-apply install record; the live one is
-    // the target now. Only the refresh the recovery park writes makes them
-    // equal, which is what this pin exists to prove end to end.
-    expect(crashed.claim).toMatchObject({ installedVersion: "1.0.0" });
+    // Q12 CHANGED THIS ASSERTION, and the change is the deliverable.
+    //
+    // It used to read `installedVersion: "1.0.0"` - the pre-apply install -
+    // because nothing refreshed the baseline across `applying -> restarting`,
+    // so a crash at `restarting` left a record whose claim described a world
+    // the swap had already replaced. The old comment here said "only the
+    // refresh the recovery park writes makes them equal", and that was
+    // exactly the defect: the record spent the whole interval between the
+    // swap and the recovery unable to say what its own swap had installed.
+    //
+    // The swap now writes it. So the baseline is already at the target at the
+    // moment of the crash, before any recovery has run.
+    expect(crashed.claim).toMatchObject({ installedVersion: "2.0.0" });
 
     const report = await verifyHostUpdateAttempt(ENVIRONMENT, {
       attemptId: crashed.attemptId,
