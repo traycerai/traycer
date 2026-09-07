@@ -268,6 +268,21 @@ export function hostCredentialPath(
  * adopt/refresh, so its PRESENCE is the whole verdict; the contents are
  * diagnostics. Doctor reads only whether it is there and, when it is, the
  * `reason`/`recordedAt` it carries.
+ *
+ * ABSENCE IS A REAL VERDICT HERE, and that is now proven rather than assumed
+ * (Q25, dc84fa8b's host-writer column at
+ * `epics/9f080b75-0fa7-426c-a3ae-eba2c891662f/artifacts/host-rc2-update-rca/host-update-executor-cutover-plan/q25-cli-path-ownership/host-writer-column/index.md`).
+ * The host's AUTH plane is slot-scoped - it resolves this marker under its own
+ * host home - and the string that host home is built from is the one THIS
+ * MODULE computed: `commands/host-start.ts` spawns the host with
+ * `--host-data-dir <hostHomeDir(environment)>` and the host takes it verbatim.
+ * So the CLI is not guessing at the host's answer; it supplied it, and a
+ * missing file under it means the host has not burned a credential.
+ *
+ * Note WHY they agree, because it is not the reassuring reason. The host's own
+ * `hostHomeDir` has no concept of a dev-run slot at all; the two functions
+ * agree because of the flag, not because anyone keeps them in step. See
+ * {@link hostIdentityNeedsReauthPath} for the plane where that stops holding.
  */
 export function hostNeedsReauthPath(
   environment: Environment | undefined,
@@ -290,6 +305,17 @@ export function hostNeedsReauthPath(
  * participant and simply looks elsewhere for one that is - which is why the
  * probe reading it is never allowed to report the identity plane "clean", and
  * defers to the host's own `host.doctor` (see `doctor/engine.ts`).
+ *
+ * THE ASYMMETRY WITH {@link hostNeedsReauthPath} IS PROVEN, not cautious, and
+ * the comment used to understate it as something the CLI "cannot verify". Read
+ * at the host source (Q25, dc84fa8b's host-writer column at
+ * `epics/9f080b75-0fa7-426c-a3ae-eba2c891662f/artifacts/host-rc2-update-rca/host-update-executor-cutover-plan/q25-cli-path-ownership/host-writer-column/index.md`):
+ * the host's AUTH plane is SLOT-scoped and its IDENTITY plane is
+ * IDENTITY-scoped. For a dev-pool participant those are two different
+ * directories on disk. So clean-on-absence for the auth marker and
+ * never-clean for this one is not a pair of conservative choices that could
+ * be tightened later - it is the only correct pair, and matching the two
+ * planes' treatment in either direction would be a defect.
  *
  * Distinct from {@link hostNeedsReauthPath}, which is the AUTH plane's marker
  * of the same filename under `auth/`. Different plane, different recovery.
@@ -314,6 +340,22 @@ export function hostIdentityNeedsReauthPath(
  * the slot-aware helper would look for the pool inside a single run's tree and
  * conclude there is none - the failure direction that turns "cannot verify"
  * back into a false "clean".
+ *
+ * The other half, which is why this is worth a paragraph rather than a line:
+ * THE HOST'S OWN `hostHomeDir` IS NOT SLOT-AWARE - it has no `dev-runs`
+ * concept at all - and the host's `identityPoolRoot()` depends on exactly
+ * that. So the same literal expression is correct on the host for the reason
+ * it is WRONG here, and the two comments arrive at the same path from opposite
+ * premises. The host side now says so too (`3d68c298c5` on
+ * `traycer/q18-rollback-provisioning`), so the pair is symmetric.
+ *
+ * The exposure this closes is a plausible edit, not a hypothetical: the host's
+ * module docblock describes itself as mirroring this file. Anyone who acts on
+ * that sentence and teaches the host about `dev-runs` moves its
+ * `identityPoolRoot()` to `~/.traycer/host/dev-runs/<slot>/identities` with no
+ * other change, and the pool silently becomes per-slot. Q25, dc84fa8b's
+ * host-writer column at
+ * `epics/9f080b75-0fa7-426c-a3ae-eba2c891662f/artifacts/host-rc2-update-rca/host-update-executor-cutover-plan/q25-cli-path-ownership/host-writer-column/index.md`.
  *
  * Read for EXISTENCE only. What it can establish is narrow and negative: with
  * no pool on this machine, no host here can have an overridden identity home,
