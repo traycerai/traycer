@@ -100,11 +100,21 @@ not ship the verb change without it.
 | RW-13i | the Linux relaunch uses `restart`, not `start`     | the convergence pin alone                                   |
 | RW-13j | `IgnoreNew` → `Parallel` in the task XML           | the Windows convergence pin alone                           |
 | RW-13k | the Linux relaunch made to consume `forcedRecycle` | the inertness pin alone                                     |
+| RW-13l | `kickstart -k` applied unconditionally (macOS)     | the no-`-k` pin ALONE — see below                           |
+| RW-13m | plain `kickstart` applied unconditionally (macOS)  | the `-k` pin plus one pre-existing test                     |
 
 **RW-13h initially came back GREEN** and that is the finding: the ordering the
 whole confirmation rests on was unpinned, because the mock answered the same
 instance whenever it was asked. The pin now gives the manager a replacement
 host that appears once the unit is signalled.
+
+**RW-13l is the one that justifies the macOS pin existing.** Reviewer B named
+`kickstart -k` applied unconditionally as the ordinary in-repo edit that
+falsifies this conjunct. Running that edit reddens **only my new test**. The
+suite already covered the other direction — `forcedRecycle: true → -k`, caught
+by a pre-existing test in RW-13m — so the asymmetry was real: the branch B
+named as the hazard was the unguarded one. A conjunct can be half-pinned and
+look covered.
 
 ## Convergence (coordinator's pin 1) — `364759e53`
 
@@ -148,11 +158,31 @@ such rather than left to be mistaken for live protection.
 
 ## Still owed
 
-- **macOS half of pin 1**: `relaunchAfterRestart` picks plain `kickstart` when
-  the instance was proven gone and `-k` when it was not. B's named falsifier.
 - macOS and Windows verb changes, once the lanes verify the disarm assumptions.
 - The `busy`-refusal logging cadence: one INFO per attempt id, DEBUG after, no
   account ids.
+- The `StartLimit` numbers: **hold until the lane measures** the per-update
+  supervisor start count.
+
+## Carried in from other lanes, for Q12 and the merge
+
+- **ea8ce20c's merge (`traycer/cli-final-merged`, head `9f3c1eeb`)** carries my
+  `dd90537ab` / `a1d561d13` / `699acc53f` as cherry-picks, so
+  `git merge-base --is-ancestor` answers **no** on an equivalent tree. Check by
+  content, not ancestry.
+- **A debt register now cites my commit.** Their new
+  `install-generation.test.ts` pin has a `PENDING_LITERAL_CALLERS` list naming
+  the four sites `bafc226ec` migrates, and asserts the union reduces to exactly
+  that list. **When `bafc226ec` lands I must delete those four entries or the
+  assertion reddens** — deliberately, so the debt cannot be paid and left
+  recorded.
+- **Q11 changed an assumption Q12 was going to lean on.** A refused *completion*
+  write over a verified-healthy host now writes NOTHING and throws
+  `E_HOST_UPDATE_RECORD_NOT_CONCLUDED`, so "a run that threw past the claim
+  leaves a terminal record" has an exception. And the reconciler that concludes
+  such a record is `decideAttemptRecovery`'s `terminalize-complete`
+  (`transition.ts:385`), **not** `recoveryContinuation`'s `activate` arm —
+  worth having straight before Q12 touches the `applying → restarting` edge.
 - The `StartLimit` numbers: **hold until the lane measures** the per-update
   supervisor start count. Reviewer B's point — the calculation is what produced
   the bound/traffic collision in the first place, and there are now two sources
