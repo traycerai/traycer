@@ -5539,6 +5539,120 @@ describe("acceptance: cells with no legacy ancestor", () => {
     expect(mocks.disk.current).toMatchObject({ state: "failed" });
   });
 
+  // ---- Q26: the aftercare a `-stale-attempt-closed` release skips ----------
+  //
+  // REACHABILITY FIRST, no fix. `44d4b9615` gave the decline path a new job -
+  // it now closes an interrupted attempt it would otherwise strand (Codex
+  // #1773) - and renamed its reason to `nothing-to-do-stale-attempt-closed`.
+  // Both marker aftercare arms downstream match the OLD reason by exact
+  // string equality (`update-run.ts:3516`, `:3550`), so a release that
+  // successfully closes a record now falls through both.
+  //
+  // The shared setup is Codex's own scenario: an attempt for A is interrupted,
+  // another actor installs and runs B, and a plain `host update` finds nothing
+  // to do for B. What differs between the two rows is only which marker the
+  // world left behind, because the two arms answer to different rules.
+
+  it("Q26: a `failed` marker naming the RUNNING version survives a release that closed a stale attempt", async () => {
+    // The REGRESSION half. Without the interrupted record this is exactly the
+    // pin above - "no work owed and the running host is OBSERVED at the
+    // installed version: a `failed` marker NAMING that version is cleared" -
+    // which passes on `nothing-to-do`. Adding a stale attempt for an
+    // UNRELATED target changes only the reason string, and the marker rule
+    // has nothing to do with attempts.
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    const crashed = await crashAtRestarting("2.0.0");
+    // Another actor moves the host past this attempt entirely: it installs
+    // and runs 3.0.0, so the plan is a no-op for 3.0.0 while the record still
+    // names 2.0.0. That inequality is what routes this through the no-op arm
+    // rather than a same-target resume.
+    await seedInstalled("3.0.0");
+    world.latest = "3.0.0";
+    world.runningVersion = "3.0.0";
+    // That actor's own failure, over a host now healthy at the version it
+    // names - which is the whole definition of a stale `failed` marker. It
+    // replaces the marker the crashed run left, as a later writer would.
+    mocks.disk.current = {
+      state: "failed",
+      error: "the other actor's run failed",
+      targetVersion: "3.0.0",
+      updatedAt: "2026-01-02T00:00:00.000Z",
+      writerId: null,
+      writerStartIdentity: null,
+    };
+
+    const outcome = await runUpdate({});
+
+    // The premise: this really is the closing path, and it really did close.
+    expect(outcome.releasedReason).toBe("nothing-to-do-stale-attempt-closed");
+    const record = await requireRecord();
+    expect(record.attemptId).toBe(crashed.attemptId);
+    expect(record.execution).toBe("terminal");
+    // The claim under test. Cleared is what `nothing-to-do` does on this exact
+    // marker; anything else means the reason rename took the aftercare with it.
+    expect(mocks.disk.current).toBeNull();
+  });
+
+  it("Q26: an `updating` marker is LEFT ALONE when the closed record settled `failed`", async () => {
+    // THE ROW THAT CHANGED SIDES, and it is the reason arm 2 is keyed on the
+    // record rather than the reason string (cold review C).
+    //
+    // Written first as "the marker is cleared", on the theory that a release
+    // which concludes a record owes the same aftercare as `recovered-complete`.
+    // That is wrong, and the run says so: this closure settles the record
+    // `failed`. Q16 admits only a conclusion of DONE - "a `recovered-failed`
+    // marker is not contradicted by anything read here" - and the suffix
+    // carries no outcome at all, so a suffix-aware STRING predicate would have
+    // cleared this marker and this pin would have asserted that as correct.
+    //
+    // Falsification: key arm 2 on any suffix-aware string test and this
+    // reddens.
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    const crashed = await crashAtRestarting("2.0.0");
+    await seedInstalled("3.0.0");
+    world.latest = "3.0.0";
+    world.runningVersion = "3.0.0";
+    // Names 3.0.0, the version now RUNNING, so the work it describes is
+    // demonstrably concluded - Q16's positive case.
+    //
+    // The writer is declared DEAD, and the first draft of this row got that
+    // wrong in the way the Q16 pins above warn about: it used `writerId: null`
+    // on the strength of the real predicate, where a null id reads as NOT
+    // proven live. This suite's default mock inverts exactly that case
+    // (`record.writerId === null || !deadWriterIds.has(...)`), so a null id is
+    // spared here, and the row failed on the liveness guard while claiming to
+    // test the reason guard. Declaring the writer dead is what leaves the
+    // reason guard as the only thing this row can be measuring.
+    mocks.deadWriterIds.add("the-other-actor");
+    mocks.disk.current = {
+      state: "updating",
+      error: null,
+      targetVersion: "3.0.0",
+      updatedAt: "2026-01-02T00:00:00.000Z",
+      writerId: "the-other-actor",
+      writerStartIdentity: null,
+    };
+
+    const outcome = await runUpdate({});
+
+    expect(outcome.releasedReason).toBe("nothing-to-do-stale-attempt-closed");
+    // The premise, and the whole point of the row: the closure really did
+    // conclude, and it concluded FAILED. A run that reached 3.0.0 by another
+    // route never carried this attempt's 2.0.0 to done.
+    const closed = await requireRecord();
+    expect(closed.attemptId).toBe(crashed.attemptId);
+    expect(closed.execution).toBe("terminal");
+    expect(closed.phase).toBe("failed");
+    // So the marker stands. It describes an update to the version now running,
+    // published by someone else, and nothing this run concluded contradicts it.
+    expect(mocks.disk.current).toMatchObject({
+      state: "updating",
+      targetVersion: "3.0.0",
+    });
+  });
+
   // ---- Q5 / Linux E6L: killed after the swap, host never came back ---------
   //
   // The same crash as the pin above, minus the one thing that made that pin

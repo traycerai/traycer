@@ -25,6 +25,7 @@ import {
   decideHostStampPolicy,
   HOST_START_STAMP_FLOOR,
 } from "@traycer-clients/shared/host-update";
+import { baseDispatchAckReason } from "@traycer/protocol/config/host-update-ack-reason";
 import { installHostDowngradeInSegment } from "../commands/host-update-downgrade";
 import type { ApplyHostOutcome } from "../installer/apply";
 import {
@@ -3507,13 +3508,19 @@ async function projectSegment(
       exitCode: 1,
     });
   }
-  // A release changed nothing. The one aftercare it owes is the stale-`failed`
-  // reconciliation: a marker outlives the failure it reported, and only a
-  // no-work run that has OBSERVED the running host at the installed version
-  // may clear it. Run outside the attempt lock, as the legacy's is - it is a
-  // compare-and-delete, so nothing depends on the lock.
+  // A release changed nothing to the HOST. The one aftercare it owes is the
+  // stale-`failed` reconciliation: a marker outlives the failure it reported,
+  // and only a no-work run that has OBSERVED the running host at the installed
+  // version may clear it. Run outside the attempt lock, as the legacy's is -
+  // it is a compare-and-delete, so nothing depends on the lock.
+  //
+  // Read through the closure suffix (Q26). "No work was owed" is the whole of
+  // this arm's premise, and whether the same release also closed a stranded
+  // attempt is a fact about a RECORD - one that cannot bear on whether some
+  // other run's failure marker is stale. Matching `nothing-to-do` exactly
+  // silently dropped this clear the moment that suffix existed.
   if (
-    reason === "nothing-to-do" &&
+    baseDispatchAckReason(reason) === "nothing-to-do" &&
     selection.planActivationReading !== null &&
     selection.planActivationReading.kind === "activated"
   ) {
@@ -3545,9 +3552,41 @@ async function projectSegment(
   // over, and it is the one Q11 leaves behind by design: that arm deliberately
   // writes nothing, so the marker it left is THIS path's to clear.
   //
-  // Only on `recovered-complete`. A `recovered-failed` marker is not
-  // contradicted by anything read here, and `nothing-to-do` is the arm above.
-  if (reason === "recovered-complete" && runningVersion !== null) {
+  // THIS ARM DECIDES FROM THE FACT, THE ARM ABOVE FROM THE LABEL, and the
+  // asymmetry is the finding rather than an inconsistency (Q26, cold review C).
+  //
+  // The old enumeration read "only on `recovered-complete`; a
+  // `recovered-failed` marker is not contradicted by anything read here, and
+  // `nothing-to-do` is the arm above". It was complete when written and false
+  // the moment a DECLINE grew the ability to conclude a record - the reason
+  // vocabulary is GENERATED, not enumerated, so `staleAttemptClosedReason`
+  // produces `<base>-stale-attempt-closed` for every base and an `===` against
+  // a literal stops matching silently.
+  //
+  // But the repair is NOT to make this a suffix-aware string test, which was
+  // the first attempt. The question here is "did the record conclude as DONE",
+  // and the suffix carries no outcome: the same 21 characters are appended
+  // whether the recovery settled `complete` or `failed`. A string predicate
+  // would therefore clear an `updating` marker over a FAILED record - exactly
+  // what the old text was right to refuse - and its pin would assert that
+  // wrong behaviour with a straight face.
+  //
+  // The fact is already typed one field over, so it is read there. `released`
+  // carries the terminal record a recovery wrote just before the decline
+  // (`null` for a plain release), `terminalized` carries the outcome directly,
+  // and `recovered-complete` is simply the terminalized segment's SPELLING of
+  // the same fact rather than a second rule.
+  //
+  // Arm 1 stays on the label because no such fact exists for it: "this run
+  // owed no work" is a property of the decision, not of any record, so the
+  // base reason is the only place it is written down.
+  const concludedRecordComplete =
+    segment.kind === "terminalized"
+      ? segment.outcome === "complete"
+      : segment.kind === "released" &&
+        segment.outcome !== null &&
+        segment.outcome.phase === "complete";
+  if (concludedRecordComplete && runningVersion !== null) {
     await clearConcludedUpdatingMarker(
       args.logger,
       args.environment,

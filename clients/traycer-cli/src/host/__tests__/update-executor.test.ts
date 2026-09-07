@@ -1855,6 +1855,60 @@ describe("runAttemptExecutorSegment - lock-scoped claim selection, reselect-vs-r
     },
   );
 
+  it("Q26: the released `outcome` carries the closure's VERDICT - a stale attempt closed as `complete`", async () => {
+    // The field `update-run.ts`'s Q16 guard reads, and the reason it reads a
+    // record rather than the reason string: the suffix is identical over a
+    // closure that settled `complete` and one that settled `failed`, so only
+    // this field can tell them apart.
+    //
+    // The twin is the P2 row above, whose evidence (installed and running
+    // 3.0.0 against a 1.2.3 record) settles `failed`. Here the evidence says
+    // the interrupted attempt's own target IS installed and running, so the
+    // recovery concludes it DONE - and the decline still declines, carrying
+    // that verdict out with it.
+    mockCohortEligible("linux");
+    const hostHomeDir = await freshHome();
+    await seedInterruptedActiveRecordAt(
+      hostHomeDir,
+      "attempt-q26-complete",
+      "1.2.3",
+      null,
+    );
+
+    const outcome = await runAttemptExecutorSegment(
+      claimOptions(hostHomeDir, {
+        request: async () => ({
+          kind: "release",
+          boundAttemptId: null,
+          reason: "nothing-to-do",
+        }),
+        readRecoveryEvidence: () =>
+          Promise.resolve(
+            observation({
+              installed: { kind: "verified", version: "1.2.3" },
+              staged: { kind: "absent" },
+              running: {
+                kind: "verified",
+                version: "1.2.3",
+                owner: "host-home-bound",
+              },
+            }),
+          ),
+      }),
+      async () => {},
+      async () => "must-not-run",
+    );
+
+    expect(outcome.kind).toBe("released");
+    if (outcome.kind === "released") {
+      expect(outcome.reason).toBe("nothing-to-do-stale-attempt-closed");
+      // Non-null and `complete`: exactly the shape the CLI guard narrows on.
+      expect(outcome.outcome).not.toBeNull();
+      expect(outcome.outcome?.attemptId).toBe("attempt-q26-complete");
+      expect(outcome.outcome?.phase).toBe("complete");
+    }
+  });
+
   it("P2 control: a BOUND decline that named ANOTHER attempt leaves this one alone", async () => {
     // "You may close what you could have named" (cold review + ticket-02
     // owner). #1773's justification is that the record is unreferenced DEBRIS,

@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { isValidUpdateDispatchAckReason } from "./host-update-ack-reason";
 
 /**
  * The dispatch ACK: "the child this dispatch spawned made a durable claim, and
@@ -139,27 +140,16 @@ export function isValidUpdateDispatchAckNonce(value: string): boolean {
   return ACK_NONCE_PATTERN.test(value);
 }
 
-/**
- * Reasons a `no-attempt` result may carry.
- *
- * A closed grammar rather than free text, and — unlike the nonce pattern above
- * — an EXPORTED one. The reason crosses a repository boundary: the CLI writes
- * it and the host re-checks it before it reaches a log line or an RPC
- * response, and that re-check has to be against this exact grammar rather than
- * some wider "safe characters" predicate on the host's side. A superset would
- * accept values this contract can never produce, which makes it a check that
- * can never refuse anything — and the one thing worth refusing here is a
- * reason no producer in this contract could have written.
- *
- * Lowercase kebab, 1–64 characters. Long enough for `refused-e-host-not-installed`,
- * closed enough that a reason can be pasted into a log, a URL or a JSX label
- * without escaping.
- */
-export const UPDATE_DISPATCH_ACK_REASON_PATTERN = /^[a-z0-9-]{1,64}$/;
-
-export function isValidUpdateDispatchAckReason(value: string): boolean {
-  return UPDATE_DISPATCH_ACK_REASON_PATTERN.test(value);
-}
+// The reason vocabulary lives in a browser-safe leaf (see its header): this
+// module imports `node:path`, and the GUI renders sentences from these
+// reasons. Re-exported so no importer of this module moves.
+export {
+  UPDATE_DISPATCH_ACK_REASON_PATTERN,
+  isValidUpdateDispatchAckReason,
+  STALE_ATTEMPT_CLOSED_SUFFIX,
+  baseDispatchAckReason,
+  dispatchAckReasonClosedStaleAttempt,
+} from "./host-update-ack-reason";
 
 /**
  * Decode ACK bytes. Total: every malformed input maps to a named defect rather

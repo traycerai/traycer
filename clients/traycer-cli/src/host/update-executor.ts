@@ -20,6 +20,7 @@ import {
   type UpdateMutationCapability,
 } from "@traycer-clients/shared/host-update";
 import { isValidUpdateDispatchAckReason } from "@traycer/protocol/config/host-update-ack";
+import { STALE_ATTEMPT_CLOSED_SUFFIX } from "@traycer/protocol/config/host-update-ack-reason";
 import { encodeInstallGeneration } from "@traycer-clients/shared/host-version/install-generation";
 import type { AttemptMutationIntent } from "@traycer-clients/shared/host-update/store";
 import {
@@ -703,7 +704,7 @@ async function claimUnderExecutorCapability(
  * the reason it would have sent anyway.
  */
 function staleAttemptClosedReason(reason: string): string {
-  const suffixed = `${reason}-stale-attempt-closed`;
+  const suffixed = `${reason}${STALE_ATTEMPT_CLOSED_SUFFIX}`;
   return isValidUpdateDispatchAckReason(suffixed) ? suffixed : reason;
 }
 
