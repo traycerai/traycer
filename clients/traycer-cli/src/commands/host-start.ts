@@ -302,6 +302,31 @@ const SERVICE_RELAUNCH_BUSY_EXIT_CODE = 76;
  */
 const RESTART_OWED_EXIT_CODE = 77;
 
+/**
+ * A stop announced itself while this supervisor sat in the admission wait.
+ *
+ * Thrown from INSIDE the admission callback, immediately before `spawn()`,
+ * rather than reported after `admitHostStartSpawn` returns - because the
+ * difference between the two is whether a host process exists at all. The
+ * unadmitted branch below has to kill a child it already created; this never
+ * creates one.
+ *
+ * Throwing out of that callback is an established path, not a new one: the
+ * `resolveHostStartTarget` inside it already throws `CliError` and the catch
+ * already documents preserving its contract. This rides the same unwind and is
+ * tested for FIRST, because a stop is not a spawn failure - it is the answer
+ * the supervisor was asked for, and it carries its own exit code.
+ */
+class StopAnnouncedDuringAdmission extends Error {
+  readonly reason: StopIntentReason | null;
+
+  constructor(reason: StopIntentReason | null) {
+    super("a stop was requested while the supervisor waited for admission");
+    this.name = "StopAnnouncedDuringAdmission";
+    this.reason = reason;
+  }
+}
+
 export interface ResolveHostStartTargetDeps {
   readonly readInstallRecord: (
     environment: Environment,
@@ -1390,9 +1415,17 @@ export async function runHostStart(
     // the spawn proceed, and the post-spawn guard could not catch it either:
     // that one is gated on `!shuttingDown`, which is true by then. The result
     // was a child created after a stop, never signalled, still serving.
-    // Reading the latch AFTER the await is what closes it; from here to
-    // `currentChild = child` is unbroken synchronous code, so no signal can
-    // land in between.
+    // Reading the latch AFTER the await is what closes it.
+    //
+    // This guard used to add "and from here to `currentChild = child` is
+    // unbroken synchronous code, so no signal can land in between". Q13
+    // falsified that in the same change that introduced it: the admission
+    // wait now sits between this read and the spawn, and it is bounded at
+    // `SUPERVISOR_ADMISSION_WAIT_MS` - a minute of real time in which a stop
+    // can arrive. What holds the window shut is the second read inside the
+    // admission callback, immediately before `spawn()`; this one only decides
+    // whether to enter the wait at all. Keep them in step: a check added here
+    // and not there covers the smaller half of the gap.
     // The REASON, not a boolean: it decides this branch's exit code below,
     // and `hasStopIntent` is bound to `actionableStopIntentReason` precisely
     // so one read answers both questions (its docblock: "a boolean followed
@@ -1509,6 +1542,32 @@ export async function runHostStart(
           // it only after the admitted install-record re-read so a Windows
           // path with spaces and a just-promoted target stay one invocation.
           const launch = resolveSpawnInvocation(target.executable, hostArgs);
+          // The stop window the pre-spawn guard cannot see. That guard runs
+          // BEFORE `admitHostStartSpawn`, whose wait is bounded at
+          // `SUPERVISOR_ADMISSION_WAIT_MS` (`host/update-budget.ts`) - so
+          // between the two sits up to a minute in which `host stop` writes
+          // its intent, scans for a host, finds no child to kill because this
+          // one does not exist yet, and returns successfully. The host then
+          // comes up after a stop that reported success, and nothing is
+          // watching: the stopper has already returned.
+          //
+          // Read here rather than after admission returns, and this is the
+          // whole point of the placement - the next statement is `spawn()`,
+          // so no child is created. The post-admission ownership branch below
+          // can only kill one that already exists.
+          //
+          // The latch is read the same way and for the same reason as in the
+          // pre-spawn guard: a forwarded POSIX signal writes no file, so an
+          // intent read alone would miss `launchctl bootout` and `systemctl
+          // stop` entirely.
+          const announcedDuringAdmission = await deps.hasStopIntent(
+            opts.environment,
+            Date.now(),
+            servedStopIntentAtStartup,
+          );
+          if (shuttingDown || announcedDuringAdmission !== null) {
+            throw new StopAnnouncedDuringAdmission(announcedDuringAdmission);
+          }
           childSpawnedAtMs = Date.now();
           spawnedWhileAdmitting.child = deps.spawn(
             launch.command,
@@ -1700,6 +1759,51 @@ export async function runHostStart(
       }
       child = admission.result;
     } catch (cause) {
+      // FIRST, ahead of the `CliError` arm: a stop that landed during the
+      // admission wait is not a spawn failure. It is the answer this
+      // supervisor was asked for, it wrote nothing, and it carries its own
+      // exit code - so it must not reach the relaunch decision the
+      // target-resolution arm makes, which would treat it as a failure with
+      // budget left and start the whole attempt again.
+      if (cause instanceof StopAnnouncedDuringAdmission) {
+        logger.info(
+          "Host supervisor not spawning - a stop landed during admission",
+          {
+            environment: opts.environment,
+            attemptId,
+            attemptNumber,
+            viaSignal: shuttingDown,
+            stopReason: cause.reason,
+          },
+        );
+        // Same unpaired-marker obligation as the pre-spawn guard: this
+        // attempt's `starting` marker is already on disk, and returning
+        // without a terminal one leaves `spawn-evidence.ts` reading a cleanly
+        // stopped host as an attempt still in progress.
+        await writeMarkerBestEffort(
+          deps,
+          logger,
+          opts.environment,
+          "failed-to-spawn",
+          markerFields(
+            attemptId,
+            supervisorPid,
+            {
+              shell: undefined,
+              args: undefined,
+              bundle: target.executable,
+              exitCode: undefined,
+              signal: undefined,
+              error: "stop requested during admission",
+            },
+            null,
+          ),
+        );
+        await deps.closeLogFd(logFd);
+        return exitSupervisor(
+          cause.reason === "restart" ? RESTART_OWED_EXIT_CODE : 0,
+        );
+      }
       // The fresh record resolution happens inside admission. Preserve the
       // supervisor's existing target-resolution contract if it fails there:
       // a missing/invalid record is not a generic OS spawn failure, and its

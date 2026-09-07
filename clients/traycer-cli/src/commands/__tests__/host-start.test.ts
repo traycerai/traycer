@@ -2466,6 +2466,91 @@ describe("runHostStart - crash relaunch loop", () => {
     },
   );
 
+  it.each([
+    ["restart", 77],
+    ["stop", 0],
+    ["uninstall", 0],
+    ["install-swap", 0],
+  ] as const)(
+    "Q13: a %s stop that lands DURING the admission wait is honoured, exit %i",
+    async (stopReason, expected) => {
+      // The gap the two tables above cannot reach. The pre-spawn guard runs
+      // BEFORE `admitHostStartSpawn`, whose wait is bounded at
+      // `SUPERVISOR_ADMISSION_WAIT_MS` - 60s of real time - and the ending
+      // path only exists once a child does. A stop arriving in between was
+      // seen by neither: `host stop` wrote its intent, scanned, found no
+      // child to kill because this supervisor had not spawned one yet, and
+      // returned SUCCESSFULLY - and then the host came up.
+      //
+      // So the stop is landed here at the one moment that reproduces it: the
+      // guard has already read `null`, and the callback that spawns has not
+      // been invoked.
+      const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+      const originalSpawn = deps.spawn;
+      if (originalSpawn === undefined) {
+        throw new Error("test spawn dependency missing");
+      }
+      let stopLanded = false;
+      let admissionEntered = false;
+      const stopDuringAdmission: Partial<RunHostStartDeps> = {
+        ...deps,
+        hasStopIntent: async () => (stopLanded ? stopReason : null),
+        // Never reached while the re-check holds - and that is exactly why it
+        // is scripted. Delete the re-check and the supervisor spawns here; a
+        // child with no terminal event would then hang `await childEnding` and
+        // the row would fail on the 5s timeout, which is a red that proves
+        // only that something changed. With an ending, the ablated run
+        // completes normally and fails on `spawnCalls`, naming the defect.
+        spawn: (command, args, options) => {
+          originalSpawn(command, args, options);
+          const child = makeStubChild();
+          setImmediate(() => {
+            child.emit("exit", 0, null);
+          });
+          return asChildProcess(child);
+        },
+        admitHostStartSpawn: async (_environment, run) => {
+          admissionEntered = true;
+          // The wait itself. Nothing here is a spawn: `run()` below is what
+          // creates the child, and it is invoked only after the stop is on
+          // disk.
+          await new Promise<void>((resolve) => {
+            setImmediate(resolve);
+          });
+          stopLanded = true;
+          return { kind: "ran", result: await run() };
+        },
+      };
+
+      await runUntilExit(
+        () =>
+          runHostStart(
+            { environment: "production", cwd: null },
+            stopDuringAdmission,
+          ),
+        recorded,
+      );
+
+      // The run really did get past the pre-spawn guard and into the wait -
+      // otherwise this would be the previous table again, passing for the
+      // wrong reason.
+      expect(admissionEntered).toBe(true);
+      // And still never spawned. This is the assertion that distinguishes the
+      // fix from the weaker one: the re-check sits immediately before
+      // `spawn()` inside the admission callback, so no host process is ever
+      // created. Killing one after the fact would leave this at 1.
+      expect(recorded.spawnCalls).toHaveLength(0);
+      expect(recorded.exited).toBe(expected);
+      expect(
+        recorded.markers.some(
+          (marker) =>
+            marker.phase === "failed-to-spawn" &&
+            String(marker.fields.error) === "stop requested during admission",
+        ),
+      ).toBe(true);
+    },
+  );
+
   it("escalates a raced stop to SIGKILL when the child ignores SIGTERM", async () => {
     // Without this the supervisor awaits `childEnding` with no deadline, and
     // nothing else intervenes: the stop announced itself on disk, `host stop`
