@@ -88,6 +88,7 @@ import {
   observeAttemptRecoveryEvidence,
   type AttemptRecoveryEvidenceObservation,
 } from "./update-recovery-evidence";
+import { VERIFY_BUDGET_MS } from "./update-budget";
 import { currentInstallPlatform } from "../installer/install";
 
 // `traycer host update`, on the schema-v2 attempt executor (Plan D1).
@@ -242,7 +243,8 @@ const CONTENDER_WAIT_MS = 30_000;
 const CONTENDER_POLL_INTERVAL_MS = 100;
 
 /** The evidence loop's own budget, matching the health probe it replaces. */
-const VERIFY_BUDGET_MS = 45_000;
+// Shared with the supervisor's start admission, which sizes its wait against
+// this. See `host/update-budget.ts` for why they must not drift.
 const VERIFY_POLL_INTERVAL_MS = 500;
 
 /** Download ticks coalesce below these thresholds (CLI wiring, "One writer"). */

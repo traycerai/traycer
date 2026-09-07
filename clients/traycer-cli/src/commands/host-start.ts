@@ -86,6 +86,7 @@ import {
   type UpdateContenderOutcome,
 } from "@traycer-clients/shared/host-update";
 import { encodeInstallGeneration } from "@traycer-clients/shared/host-version/install-generation";
+import { SUPERVISOR_ADMISSION_WAIT_MS } from "../host/update-budget";
 import { createCliLogger, errorFromUnknown, type ILogger } from "../logger";
 
 // `traycer host start` is the long-running supervisor invoked by the OS
@@ -587,7 +588,23 @@ const defaultRunDeps: RunHostStartDeps = {
       {
         hostHomeDir: hostHomeDir(options.environment),
         reason: "host-supervisor-spawn",
-        waitMs: 0,
+        // NOT zero (Q13). A relaunched supervisor now arrives while the
+        // update that stopped the host may still be running, and an instant
+        // `busy` refusal would exit, be restarted `RestartSec` later, and be
+        // refused again - about ten spurious starts per healthy update, which
+        // is also what makes a start-limit unusable. One start, one wait, one
+        // admission. See `host/update-budget.ts`.
+        //
+        // WAITING IS ONLY SAFE BECAUSE TARGET RESOLUTION IS INSIDE THIS
+        // CALLBACK. A supervisor that sleeps through a swap must not spawn the
+        // bytes it resolved before the swap - and it does not, because
+        // `resolveHostStartTarget` is called again below, after admission is
+        // granted. The earlier resolve above the loop is the pre-admission
+        // read, and its answer is deliberately not the one that gets spawned.
+        // Hoist that inner call out for a "cheap early read" and the waiting
+        // design breaks silently, with a supervisor launching the pre-swap
+        // install. (Cold review B, Q13-H3.)
+        waitMs: SUPERVISOR_ADMISSION_WAIT_MS,
         pollIntervalMs: 50,
         // Read UNDER the attempt lock, and only for a record whose phase could
         // admit this relaunch. `resolveHostStartTarget` read the same record
