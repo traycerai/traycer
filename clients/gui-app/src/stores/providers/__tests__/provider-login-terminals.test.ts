@@ -146,6 +146,118 @@ describe("useProviderLoginTerminalsStore", () => {
     expect(useProviderLoginTerminalsStore.getState().revision).toBe(2);
   });
 
+  it("writes nothing back, and does not bump `revision`, for a peer payload that adds no record - the same set in the peer's order", () => {
+    recordProviderLoginTerminal({
+      hostId: HOST_A,
+      sessionId: "session-a",
+      providerId: "reasonix",
+    });
+    recordProviderLoginTerminal({
+      hostId: HOST_B,
+      sessionId: "session-b",
+      providerId: "copilot",
+    });
+    const before = useProviderLoginTerminalsStore.getState();
+    const onDisk = window.localStorage.getItem(PERSIST_KEY);
+    expect(before.recentKeys).toEqual([
+      `${HOST_B}:session-b`,
+      `${HOST_A}:session-a`,
+    ]);
+
+    // The peer holds the identical two records with ITS own record first.
+    // Merging keeps this window's order, so the result equals what is already
+    // here - and a `setState` on it would go through persist, write the whole
+    // payload, and fire the peer's `storage` event in turn: the peer would
+    // merge, keep ITS order, write, and fire ours. Two windows would trade
+    // orders forever, bumping `revision` and re-running reconciliation on
+    // every hop.
+    window.dispatchEvent(
+      new StorageEvent("storage", {
+        key: PERSIST_KEY,
+        newValue: JSON.stringify({
+          state: {
+            providerBySessionKey: {
+              [`${HOST_A}:session-a`]: "reasonix",
+              [`${HOST_B}:session-b`]: "copilot",
+            },
+            recentKeys: [`${HOST_A}:session-a`, `${HOST_B}:session-b`],
+          },
+          version: CURRENT_PERSIST_VERSION,
+        }),
+      }),
+    );
+
+    const after = useProviderLoginTerminalsStore.getState();
+    expect(after).toBe(before);
+    expect(after.revision).toBe(before.revision);
+    expect(window.localStorage.getItem(PERSIST_KEY)).toBe(onDisk);
+  });
+
+  it("republishes the union, without bumping `revision`, when a peer writes a strict SUBSET of it", () => {
+    recordProviderLoginTerminal({
+      hostId: HOST_A,
+      sessionId: "session-a",
+      providerId: "reasonix",
+    });
+    recordProviderLoginTerminal({
+      hostId: HOST_B,
+      sessionId: "session-b",
+      providerId: "copilot",
+    });
+    const before = useProviderLoginTerminalsStore.getState();
+
+    // A stale concurrent write: the peer wrote from a memory that predates
+    // this window's second record. Nothing to learn here - but left on disk,
+    // that subset is what a window opened LATER hydrates, and it would
+    // recreate the omitted live session as a bare shell.
+    const stale = persistedPayload({ [`${HOST_A}:session-a`]: "reasonix" });
+    window.localStorage.setItem(PERSIST_KEY, stale);
+    window.dispatchEvent(
+      new StorageEvent("storage", { key: PERSIST_KEY, newValue: stale }),
+    );
+
+    const after = useProviderLoginTerminalsStore.getState();
+    expect(after.revision).toBe(before.revision);
+    expect(after.providerBySessionKey).toEqual(before.providerBySessionKey);
+    const republished = JSON.parse(
+      window.localStorage.getItem(PERSIST_KEY) ?? "{}",
+    ) as { state: { providerBySessionKey: Record<string, string> } };
+    expect(republished.state.providerBySessionKey).toEqual({
+      [`${HOST_A}:session-a`]: "reasonix",
+      [`${HOST_B}:session-b`]: "copilot",
+    });
+  });
+
+  it("does not republish at the bound when the peer's set is one this window cannot absorb - the loop by another name", () => {
+    // 32 records here, 32 different ones from the peer: the merge keeps this
+    // window's own and evicts every one of the peer's, so "the peer lacks
+    // records" is true of BOTH windows forever. Republishing on "differs"
+    // would trade the two sets until one window closed.
+    for (let index = 0; index < 32; index += 1) {
+      recordProviderLoginTerminal({
+        hostId: HOST_A,
+        sessionId: `session-${index}`,
+        providerId: "reasonix",
+      });
+    }
+    const before = useProviderLoginTerminalsStore.getState();
+    const onDisk = window.localStorage.getItem(PERSIST_KEY);
+    const peerRecords: Record<string, string> = {};
+    for (let index = 0; index < 32; index += 1) {
+      peerRecords[`${HOST_B}:peer-${index}`] = "copilot";
+    }
+
+    window.dispatchEvent(
+      new StorageEvent("storage", {
+        key: PERSIST_KEY,
+        newValue: persistedPayload(peerRecords),
+      }),
+    );
+
+    expect(useProviderLoginTerminalsStore.getState()).toBe(before);
+    expect(window.localStorage.getItem(PERSIST_KEY)).toBe(onDisk);
+  });
+
   it("does not persist `revision`, and hydration does not reset it", async () => {
     recordProviderLoginTerminal({
       hostId: HOST_A,

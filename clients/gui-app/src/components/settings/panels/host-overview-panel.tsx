@@ -24,11 +24,11 @@ import {
   HostOverviewHeaderActions,
   HostOverviewNameAction,
   HostOverviewNotice,
-  HostOverviewUpdateProgress,
 } from "@/components/settings/panels/host-overview-status-card";
 import { HostOverviewOperationCard } from "@/components/settings/panels/host-overview-operation-card";
 import { HostOverviewUpdatesRegion } from "@/components/settings/panels/host-overview-updates";
 import { useHostOverviewUpdates } from "@/components/settings/panels/host-overview-updates-state";
+import { useDesktopAppUpdates } from "@/hooks/runner/use-desktop-app-updates";
 import { useOverviewOsService } from "@/components/settings/panels/host-overview-os-service";
 import { HostOverviewAdvancedDisclosure } from "@/components/settings/panels/host-overview-advanced";
 import {
@@ -47,6 +47,7 @@ import {
   settledHostBusy,
 } from "@/components/settings/panels/my-hosts-model";
 import { persistedDraftFromIdentity } from "@/components/settings/panels/host-settings-panel-model";
+import { HostImportMigrationSection } from "@/components/settings/panels/host-import-migration-section";
 import { LocalPackageManagerUpgradeHint } from "@/components/settings/panels/host-settings-package-manager-upgrade-hint";
 import { useRunnerConvergeReady } from "@/hooks/runner/use-runner-converge-ready-mutation";
 import { useRunnerHostRemovalStateQuery } from "@/hooks/runner/use-runner-host-removal-state-query";
@@ -75,10 +76,15 @@ import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import {
   holdsLifecycleGate,
+  isQuietUpdateView,
   projectFleetUpdateView,
   UNKNOWN_FLEET_UPDATE_VIEW,
 } from "@/lib/host/fleet-update/fleet-update-view";
-import { observationFromCanonicalRead } from "@/lib/host/fleet-update/canonical-status-observation";
+import {
+  canonicalReadIsLive,
+  observationFromCanonicalRead,
+} from "@/lib/host/fleet-update/canonical-status-observation";
+import { deriveLegacyUpdateFacts } from "@/lib/host/fleet-update/legacy-update-facts";
 import { useActiveUpdatePollAccelerator } from "@/hooks/host/use-active-update-poll-accelerator";
 import {
   toastHostRestartDeclined,
@@ -215,7 +221,16 @@ export function HostOverviewPanel(props: {
     props.hasLocalBridge;
 
   const [doctorOpen, setDoctorOpen] = useState(false);
-  const [restartConfirmOpen, setRestartConfirmOpen] = useState(false);
+  // Which dispatch leg the open restart confirm is armed for - captured at
+  // OPEN, never re-derived at confirm. The cooperative `host.restart` needs
+  // the scope's client and is withdrawn with it (the `!usable` rule below);
+  // the bridge respawn (`restartViaForceFallback`: a host whose handshake
+  // refused `host.restart`, on a machine with a bridge) needs no client and
+  // survives the scope going unusable. `null` is "no confirm open".
+  const [restartConfirm, setRestartConfirm] = useState<
+    "cooperative" | "bridge" | null
+  >(null);
+  const closeRestartConfirm = (): void => setRestartConfirm(null);
   // The id of a restart whose DISPATCH OUTCOME IS UNKNOWN - the transport threw
   // after the host may already have granted the claim. `host.restart` is
   // claim-gated, so the retry has to carry that same id to adopt the claim it
@@ -272,6 +287,13 @@ export function HostOverviewPanel(props: {
     maintenanceFallback: scope.localMaintenanceFallback,
     restartForceRoute: forceRestartLocalHostId !== null,
   });
+  // Every surface that opens the restart confirm - the header's Restart, the
+  // card's Restart and its attempt-park Force, the Doctor sheet's bridge
+  // restart - arms it for the route the page routes Restart to at that
+  // moment. The dialog's dispatch and its close rules read the armed route,
+  // not the live fact, so the two cannot tear under an open dialog.
+  const openRestartConfirm = (): void =>
+    setRestartConfirm(restartViaForceFallback ? "bridge" : "cooperative");
 
   const statusQuery = useHostOverviewStatusQuery({
     client,
@@ -288,7 +310,11 @@ export function HostOverviewPanel(props: {
   });
   const installationQuery = useHostInstallationInfoQuery({
     client,
+    // The record leg's liveness rule (`installationLive` below) reads the
+    // support half of this (`installInfoDegrade`) and deliberately not the
+    // `usable` half - see the note there.
     enabled: usable && installInfoDegrade === null,
+    runningVersion: statusQuery.data?.hostVersion ?? null,
   });
 
   const identitySet = useHostIdentitySet(client);
@@ -299,19 +325,29 @@ export function HostOverviewPanel(props: {
   // verbs live in exactly the window that write exists to make exclusive.
   const policyMutation = useHostRegistryUpdateMutation(scope.hostId);
 
+  // The status read's HEALTH, carried beside its value to every consumer
+  // that DISPATCHES on it: the drain count (`liveBusySessionCount`), the
+  // operation observation's deadline, and the record-derived offers below.
+  // One object, so those three cannot drift onto different liveness rules.
+  // Not every reader is held to it: the updates summary's comparison
+  // baseline (`hostVersion`, the debt's installed version) reads the
+  // retained payload as EVIDENCE - which version the catalog is compared
+  // against - and the install it leads to is revalidated by the host.
+  // `usable` is the health's source: an unusable scope is a read with no
+  // live source behind it, whatever the cache still holds.
+  const statusHealth = {
+    isError: statusQuery.isError,
+    fetchStatus: statusQuery.fetchStatus,
+    isStale: statusQuery.isStale,
+    hasLiveSource: usable,
+  };
+  const statusLive = canonicalReadIsLive(statusHealth);
   const view = useOverviewDisplay({
     scope,
     host,
     identity: identityQuery.data ?? null,
     status: statusQuery.data ?? null,
-    // The drain count is only as trustworthy as the read behind it, so the
-    // read's HEALTH travels with its value. See `liveBusySessionCount`.
-    statusHealth: {
-      isError: statusQuery.isError,
-      fetchStatus: statusQuery.fetchStatus,
-      isStale: statusQuery.isStale,
-      hasLiveSource: usable,
-    },
+    statusHealth,
   });
   const { identity, displayName } = view;
 
@@ -381,7 +417,7 @@ export function HostOverviewPanel(props: {
       // fallback confirm (a capability-`false` host's Restart dispatches the
       // respawn from the confirm dialog itself) closes for the same reason.
       setForceRestartOffer(null);
-      setRestartConfirmOpen(false);
+      closeRestartConfirm();
       // `declined` survives even a forced respawn (removed-by-user, another
       // process holds the management lock) - informational, not an error.
       if (result.kind === "declined") {
@@ -392,7 +428,7 @@ export function HostOverviewPanel(props: {
     },
     onError: (error) => {
       setForceRestartOffer(null);
-      setRestartConfirmOpen(false);
+      closeRestartConfirm();
       toastFromRunnerError(error, "Couldn't restart host");
     },
   });
@@ -527,20 +563,94 @@ export function HostOverviewPanel(props: {
   // `observationFromCanonicalRead` now carries those conditions with the fact,
   // and it is the same function the landing banner and the fleet's coalesced
   // reads use, so a fourth staleness rule cannot appear here by accident.
+  //
+  // The parks the legacy updater leaves behind WITHOUT a marker - bytes
+  // installed under a host still running the old version, a stage waiting
+  // for a busy host to go idle - are derived from the install and staged
+  // records beside the same status read. This is the one leg that derives
+  // them: the banner keeps its desktop-status debt arm and the fleet legs
+  // read no installation info. `null` until both reads have answered, which
+  // the projector treats as "not observed", never as "no park".
+  //
+  // Two reads, one snapshot: the installation query is keyed by the running
+  // version the status read reported (`useHostInstallationInfoQuery`), so a
+  // record fetched under the previous version is never compared against the
+  // new one - it is a different key with no data yet. And the record leg is
+  // held to the SAME liveness rule the status leg is projected under
+  // (`canonicalReadIsLive` - not "has not failed" alone, and not a second
+  // staleness rule with its own timestamp arithmetic): a read that has
+  // failed, is paused, or has aged past its own staleness keeps its last
+  // payload in the cache, and a comparison built on it would carry the
+  // status read's freshness while the record leg is anyone's guess - a park
+  // derived from a record the host has since consumed or purged, still
+  // offering Force for a stage that is gone. Such a read yields NO facts:
+  // the parks it fed are withdrawn, the offers keyed on them with them,
+  // and the projector falls through to whatever the status leg says. The
+  // demotion is scoped to the record leg on purpose. Expiring the whole
+  // observation instead would demote a live attempt the status leg is
+  // reporting - progress bar, lifecycle gate, fast poll - on one failed
+  // `host.getInstallationInfo` poll, which is likeliest exactly during the
+  // swap; the record leg feeds only the two record-derived rows, so only
+  // those go. An in-flight refetch is live under the shared rule, and a
+  // request whose response never arrives ends as an error rather than as
+  // an indefinitely retained payload - each attempt is bounded by the
+  // transport's 30 s response timeout (`DEFAULT_HOST_RPC_FRAME_TIMEOUT_MS`
+  // on the local leg, `UNARY_RESPONSE_TIMEOUT_MS` on the remote one) and
+  // the query client retries once, so a silent poll withdraws after about
+  // a minute. (`paused` is part of the shared rule; this app's queries run
+  // with `networkMode: "always"`, so it does not arise here.) The source
+  // here is the support flip alone (`installInfoDegrade`), deliberately NOT
+  // `usable`: an unusable scope is demoted through the status leg already,
+  // and that demotion KEEPS the record-derived park as a qualified "Last
+  // seen: …" sentence with its controls withdrawn. Erasing the facts here
+  // on `!usable` would drop the card outright instead (the lifecycle-gate
+  // suite pins the retained sentence). The support flip still has to be
+  // here, because it disables the query over a cached payload, and a
+  // disabled query never ages (`isStale` is false while `enabled` is) - so
+  // without it that payload would read as live forever.
+  const installationLive = canonicalReadIsLive({
+    isError: installationQuery.isError,
+    fetchStatus: installationQuery.fetchStatus,
+    isStale: installationQuery.isStale,
+    hasLiveSource: installInfoDegrade === null,
+  });
+  // The facts as READ - from the last successful record response, live or
+  // not. Liveness is applied where each consumer needs it rather than by
+  // erasing the facts: every OFFER and the projector's park take the live
+  // facts below, while the catalog's comparison baseline keeps the read
+  // debt (`activationDebt.live`). Erasing the facts on one failed poll
+  // dropped the baseline, and the region then re-offered the version that
+  // is already installed as "available" with a live Update now - for bytes
+  // on disk that a failed poll did not change.
+  const legacyFactsRead =
+    statusQuery.data === undefined || installationQuery.data === undefined
+      ? null
+      : deriveLegacyUpdateFacts({
+          installation: installationQuery.data,
+          runningVersion: statusQuery.data.hostVersion,
+          // The RAW read, not the live-source-demoted snapshot: the facts must
+          // describe one instant of one response, and staleness is already
+          // the observation deadline's job below.
+          busy: statusQuery.data.busy,
+          busySessionCount: statusQuery.data.busySessionCount,
+        });
+  const legacyFacts = installationLive ? legacyFactsRead : null;
+  // Built whenever there IS a status read - including for a pre-@1.3 peer
+  // whose `updateOperation` is `null`. This used to bail to `null` for that
+  // peer and render the coarse marker through a separate notice; the
+  // projector already has an arm for exactly that observation (coarse first,
+  // then the record-derived parks, then `unknown`), and routing the old peer
+  // through it is what lets its parks reach the card too.
   const operationObservation =
-    view.updateOperation === null || statusQuery.data === undefined
+    statusQuery.data === undefined
       ? null
       : observationFromCanonicalRead({
           hostId: scope.hostId ?? "",
           status: statusQuery.data,
           dataUpdatedAt: statusQuery.dataUpdatedAt,
-          health: {
-            isError: statusQuery.isError,
-            fetchStatus: statusQuery.fetchStatus,
-            isStale: statusQuery.isStale,
-            hasLiveSource: usable,
-          },
+          health: statusHealth,
           source: "selected",
+          legacyFacts,
         });
   const operationView =
     operationObservation === null
@@ -584,12 +694,25 @@ export function HostOverviewPanel(props: {
   //
   // `holdsLifecycleGate` answers the narrower question (`execution === "active"`)
   // that this gate actually wants. For a pre-@1.3 peer `updateOperation` is
-  // `null`, the projection is `unknown`, and we fall back to the coarse field —
-  // which is exactly the behaviour those hosts ship with today, so no host
-  // regresses and only the ones that CAN tell us more get the fix.
+  // `null` and we fall back to the coarse marker — the behaviour those hosts
+  // ship with, so no host regresses and only the ones that CAN tell us more
+  // get the fix. Keyed on the PEER's field rather than on whether a projection
+  // exists: the projection is now built for that peer too (so its parks reach
+  // the card), and its `updating` kind is deliberately fail-open in
+  // `holdsLifecycleGate`, which would have quietly dropped the gate those
+  // hosts ship with.
+  //
+  // The coarse fallback reads the PROJECTED kind, not the raw wire field. The
+  // two agree while the read is healthy; they part when it is not, and that
+  // is the case that matters: `projectFleetUpdateView` demotes a retained,
+  // failed, paused or aged read to `unknown`, while the raw `updateProgress`
+  // on the retained response still says `updating`. A pre-@1.3 host whose
+  // updater crashed mid-swap leaves that marker behind with nothing to clear
+  // it, and holding the gate on it would lock Restart — the one action that
+  // recovers the host — for as long as the response was retained.
   const updateInFlight =
-    operationView === null
-      ? view.updateProgress?.state === "updating"
+    view.updateOperation === null || operationView === null
+      ? operationView?.kind === "updating"
       : holdsLifecycleGate(operationView);
   const corePending =
     restart.isPending ||
@@ -684,6 +807,7 @@ export function HostOverviewPanel(props: {
   // drain gate and the auto-update switch write through. Two instances would
   // each track their own `isPending`, so one control would stay live while the
   // other's write was still going.
+  const desktopUpdates = useDesktopAppUpdates();
   const updates = useHostOverviewUpdates({
     client,
     hostName: displayName,
@@ -691,8 +815,36 @@ export function HostOverviewPanel(props: {
     // swap the scoped host under a mounted subtree, and an override carried
     // across that swap would apply one machine's decision to another.
     hostId: scope.hostId,
-    installedVersion: view.hostVersion,
+    runningVersion: view.hostVersion,
+    // From the facts as READ, qualified by the record leg's liveness - see
+    // `legacyFactsRead`.
+    activationDebt:
+      legacyFactsRead?.activationDebt === undefined ||
+      legacyFactsRead.activationDebt === null
+        ? null
+        : {
+            installedVersion: legacyFactsRead.activationDebt.installedVersion,
+            // BOTH legs: the debt is the record's installed version read
+            // against the status read's running version, so a status read
+            // that failed or aged (the host may already have restarted
+            // onto the installed version) makes the sentence "last known"
+            // exactly as a failed record read does. `statusLive` carries
+            // `usable` too. The region renders only under `usable`, so an
+            // unusable scope never reaches this sentence at all.
+            live: installationLive && statusLive,
+          },
     platformKey: host?.platform ?? null,
+    // Deliberately NOT held to `installationLive`: the manifest describes
+    // the CLI installed on the host - a property of the installation, not
+    // of its stage - and the floor remedy it feeds belongs to Update now as
+    // much as to Force. The Force offer itself is gated through
+    // `stagedVersion`, which comes from the observed record leg only.
+    cliManifest:
+      managedInstallation(installationQuery.data)?.cliManifest ?? null,
+    isLocalMachine: host?.isLocalMachine ?? false,
+    desktopUpdate:
+      desktopUpdates.bridge === null ? null : desktopUpdates.snapshot,
+    stagedVersion: legacyFacts?.stagedWait?.stagedVersion ?? null,
     // The check reads on its own now, so this gate is load-bearing rather than
     // cosmetic: without it the page would spawn a CLI process on the host from
     // a scope that has not resolved, and cache the answer under this page's key.
@@ -702,6 +854,91 @@ export function HostOverviewPanel(props: {
     busy: updateGatePending,
   });
   const anyPending = updateGatePending || updates.summary.installing;
+
+  // The staged-wait force, as the OFFER it is: a newer host is staged, the
+  // running host is busy, and "Force update…" on the card opens this before
+  // anything is dispatched — the ellipsis is a promise, and the count the
+  // dialog states is the count captured when the offer was made, not
+  // whatever the page shows when the button is pressed. Confirming dispatches
+  // `host.update.install {version: staged, force: true}` through the page's
+  // one install mutation, so the accepted latch, the invalidations and the
+  // outcome toasts are the ones every other install here gets.
+  const [forceUpdateOffer, setForceUpdateOffer] = useState<{
+    readonly stagedVersion: string;
+    readonly blockingSessionCount: number | null;
+  } | null>(null);
+  // Same stale-open rule as the restart confirm: close for every arming of
+  // the page-wide gate EXCEPT this offer's own dispatch, which keeps the
+  // dialog up to show its spinner. Adjust-during-render so the close lands in
+  // the arming commit.
+  if (forceUpdateOffer !== null && anyPending && !updates.summary.installing) {
+    setForceUpdateOffer(null);
+  }
+  // And when the region the offer belongs to retires under it: a handshake
+  // that withdraws `host.update.install`, or a discovered refusal
+  // (externally managed, unsupported install method), is the same fact the
+  // header and the region already act on, and an offer left answerable past
+  // it would dispatch a method the page knows it cannot perform.
+  if (forceUpdateOffer !== null && updates.degrade !== null) {
+    setForceUpdateOffer(null);
+  }
+  // And when the fact it describes is gone - the stage was applied by another
+  // actor, or the host went idle and the next run is about to take it. A
+  // force over a stage that no longer waits would install something the
+  // dialog never described.
+  // "Gone" means OBSERVED gone: a record leg that is not live (`legacyFacts`
+  // null - not answered yet, failed, or aged) says nothing about the stage,
+  // and an open confirm closing itself on a poll that merely aged is the
+  // defect `canonicalReadIsLive` was written against. The one window this
+  // leaves - the running version moved, which re-keys the installation
+  // query and is itself evidence the stage was consumed - is closed by the
+  // `!usable` rule below: a restarted host drops reachability first.
+  if (
+    forceUpdateOffer !== null &&
+    legacyFacts !== null &&
+    (legacyFacts.stagedWait?.stagedVersion ?? null) !==
+      forceUpdateOffer.stagedVersion
+  ) {
+    setForceUpdateOffer(null);
+  }
+  // And when the route to the host is gone. `usable` withdraws the controls
+  // that OPEN these two confirms (`onRestart` / `onForceUpdate` are `null`
+  // below), but a confirm opened while the route was up is not withdrawn by
+  // that: answered, it would dispatch over a client the scope no longer
+  // vouches for, and it cannot be re-opened either, so closing it is the
+  // same withdrawal one commit late. Adjust-during-render like the gate rule
+  // above, so no unusable render ever commits an answerable dialog and the
+  // handlers need no guard of their own. NOT a restart confirm armed for the
+  // BRIDGE route, and NOT the force-restart offer below: both dispatch the
+  // bridge respawn, which needs no client — the one action that stays
+  // legitimate, and is most needed, while this machine's host is
+  // unreachable. The route is the one captured at OPEN (`restartConfirm`),
+  // so a fallback confirm keeps its dispatch leg however the handshake fact
+  // it was armed from moves underneath; it closes on its own settlement
+  // (`forceRestart`'s callbacks) and, below, when this page's host stops
+  // being this machine's.
+  if (!usable && restartConfirm === "cooperative") {
+    closeRestartConfirm();
+  }
+  if (!usable && forceUpdateOffer !== null) {
+    setForceUpdateOffer(null);
+  }
+  // A cooperative confirm armed while `host.restart`'s support was still
+  // unknown (the handshake tri-state's `null`, under which Restart is live)
+  // must not dispatch the cooperative leg once the handshake lands `false`:
+  // the page now routes Restart to the bridge, and a dialog armed for the
+  // other leg closes rather than switching legs under an answer nobody
+  // gave to the bridge respawn's consequences. Re-opening arms the bridge.
+  if (restartConfirm === "cooperative" && restartViaForceFallback) {
+    closeRestartConfirm();
+  }
+  // The DIALOGS are deliberately not held to `statusLive`, unlike the
+  // controls that open them: the Force offer's stage fact comes from the
+  // record leg (live by construction of `legacyFacts`) and its dispatch
+  // revalidates against the current catalog, and `host.restart` is
+  // claim-gated on the host. A dialog that closed itself on a poll that
+  // merely failed once would be the stale-open defect `canonicalReadIsLive`
+  // was written against, arriving from the other direction.
 
   // Which write IS this dialog's own dispatch: the cooperative `host.restart`
   // ordinarily, the bridge respawn when the fallback routes Restart to the
@@ -713,9 +950,14 @@ export function HostOverviewPanel(props: {
   // cache-wide `forceRestartInFlight` also counts a menu/tray respawn — which
   // must close this confirm like any competing write, not impersonate its
   // spinner and hand back an answerable dialog when the external settle lands.
-  const restartDialogOwnDispatch = restartViaForceFallback
-    ? forceRestart.isPending
-    : restart.isPending;
+  // The ARMED route while a confirm is open; the page's current routing
+  // otherwise (the header item's pending state has no dialog to read).
+  const restartDialogRoute =
+    restartConfirm ?? (restartViaForceFallback ? "bridge" : "cooperative");
+  const restartDialogOwnDispatch =
+    restartDialogRoute === "bridge"
+      ? forceRestart.isPending
+      : restart.isPending;
   // The restart confirmation has the same stale-open window the OS-service
   // confirms do (`host-overview-advanced.tsx`): opened while idle, it stays
   // answerable while an automatic install or another lifecycle write arms the
@@ -723,8 +965,18 @@ export function HostOverviewPanel(props: {
   // dispatch — this dialog deliberately stays open through its own dispatch
   // to show its spinner (and, on the cooperative leg, route the busy
   // verdict). Adjust-during-render so the close lands in the arming commit.
-  if (restartConfirmOpen && anyPending && !restartDialogOwnDispatch) {
-    setRestartConfirmOpen(false);
+  if (restartConfirm !== null && anyPending && !restartDialogOwnDispatch) {
+    closeRestartConfirm();
+  }
+  // A COOPERATIVE confirm answers a `host.restart` the handshake can withdraw
+  // while it is open (`restartDegrade`, the header's own gate); the bridge
+  // route needs no method and is unaffected.
+  if (
+    restartConfirm === "cooperative" &&
+    restartDegrade !== null &&
+    !restartDialogOwnDispatch
+  ) {
+    closeRestartConfirm();
   }
   // The force offer has the same window and a sharper reason to close in it: no
   // lifecycle write on this page may dispatch beside a bridge respawn, and an
@@ -753,6 +1005,13 @@ export function HostOverviewPanel(props: {
     forceRestartOffer.hostId !== forceRestartLocalHostId
   ) {
     setForceRestartOffer(null);
+  }
+  // A restart confirm armed for the bridge goes the same way, for the same
+  // reason: with no local bridge behind this page's host there is no respawn
+  // to dispatch, and the dialog survived `!usable` above only because there
+  // was one.
+  if (restartConfirm === "bridge" && forceRestartLocalHostId === null) {
+    closeRestartConfirm();
   }
 
   // The name edits in place, exactly as a tab title does — same hook, so Enter
@@ -852,7 +1111,7 @@ export function HostOverviewPanel(props: {
             : () => submitRename(null)
         }
         resetNameDegrade={renameDegrade}
-        onRestart={() => setRestartConfirmOpen(true)}
+        onRestart={() => openRestartConfirm()}
         onOpenDoctor={() => setDoctorOpen(true)}
         onMakeActive={() => scope.makeActive(host.hostId)}
         activateBusy={scope.isActivating}
@@ -929,23 +1188,109 @@ export function HostOverviewPanel(props: {
             below rather than sitting beside it — two update lines describing one
             operation in different vocabularies is the drift the shared
             projection exists to prevent. A pre-@1.3 peer has no attempt to
-            show and keeps the coarse notice unchanged. */}
-        {operationView === null ? null : (
+            show and keeps the coarse notice unchanged.
+
+            A QUIET view renders nothing. `idle` used to render as "Host is up
+            to date" — a sentence about the catalog from a projection that
+            knows only the attempt record — directly above the updates region
+            saying "v1.3.0-rc.2 is available." about the same host. The card is
+            for an operation; when there is none, the updates region below is
+            the whole answer. Same predicate the landing banner hides on. */}
+        {operationView === null || isQuietUpdateView(operationView) ? null : (
           <HostOverviewOperationCard
             view={operationView}
             hostName={displayName}
-            onForceRestart={() => {
-              // Same route as the overflow Restart: re-ask the host about live
-              // work, then the EXISTING confirmation. This never restarts on
-              // the first click and never consumes update-force authorization.
-              setRestartConfirmOpen(true);
-            }}
-          />
-        )}
-        {operationView !== null || view.updateProgress === null ? null : (
-          <HostOverviewUpdateProgress
-            state={view.updateProgress.state}
-            error={view.updateProgress.error}
+            // Restart cannot activate a stage. A floor gate must not turn a
+            // staged wait's Force update into a different, ineffective force
+            // - and a record leg that is not live does not vouch that no
+            // stage waits, so it offers nothing either. Gated on a LIVE
+            // status read like its two siblings (`statusLive`, which
+            // subsumes `usable`): an offer made off a failed or aged read
+            // would act on a park the host may have left. (The projection
+            // withholds the whole force control under a demoted view
+            // already, but the dispatch gate belongs here, not in the
+            // card's layout.) The confirm it opens is armed for whichever
+            // route the page routes Restart to, like the header's.
+            onForceRestart={
+              statusLive &&
+              restartDegrade === null &&
+              !anyPending &&
+              legacyFacts !== null &&
+              legacyFacts.stagedWait === null
+                ? () => {
+                    // Attempt parks keep the existing cooperative restart
+                    // confirmation and its fresh live-work check.
+                    openRestartConfirm();
+                  }
+                : null
+            }
+            // Keyed on the FACT, not the view kind: a retained `failed`
+            // marker beside real debt keeps its failure text and still gets
+            // the way forward. Same confirm the header's Restart opens, so
+            // the transition id, the busy verdict and the force/defer dialog
+            // are all the existing ones.
+            onRestart={
+              !statusLive ||
+              restartDegrade !== null ||
+              anyPending ||
+              (legacyFacts?.activationDebt ?? null) === null
+                ? null
+                : () => openRestartConfirm()
+            }
+            // The card's three controls sit behind the SAME capability and
+            // page-wide gates as the header's Restart and the region's
+            // Update now (`restartDegrade`, `updates.degrade`, `anyPending`):
+            // a method the handshake declined is not offered from the card
+            // either, and a control whose confirm the render-time rules
+            // would close in the same commit is not a control. That last
+            // case was the card's state under `anyPending` before this
+            // gate: the button rendered and its confirm closed as it
+            // opened - including for a pre-@1.3 peer whose stuck `updating`
+            // marker holds the gate while its read is healthy (see
+            // `updateInFlight`), where the header's Restart is disabled by
+            // the same gate. The gate makes that inertness visible; it
+            // withdraws nothing that could dispatch.
+            // All three controls need a LIVE status read behind the facts
+            // they act on - `statusLive`, not `usable` alone. `usable` is
+            // the gate the header's Restart is withheld under, and
+            // `statusLive` subsumes it (an unusable scope is a read with no
+            // live source); it ALSO withdraws them when the read has failed
+            // or aged with a payload still in the cache. `legacyFacts` keeps
+            // that payload on purpose, so the projection renders the park
+            // qualified ("last known"), but a Restart or Force offered off
+            // an old `hostVersion` or `busy` would dispatch against a host
+            // that may already have moved - the evidence stays, the dispatch
+            // does not. The record leg holds the same rule from the other
+            // side (`installationLive`).
+            onForceUpdate={
+              !statusLive ||
+              updates.degrade !== null ||
+              anyPending ||
+              legacyFacts === null ||
+              legacyFacts.stagedWait === null ||
+              // ONE gate, shared with the dispatch's revalidation: the
+              // catalog still lists the staged version, not withdrawn, no
+              // CLI floor, a usable asset for this platform.
+              !updates.stagedEntryOfferable
+                ? null
+                : () => {
+                    if (legacyFacts.stagedWait === null) return;
+                    setForceUpdateOffer({
+                      stagedVersion: legacyFacts.stagedWait.stagedVersion,
+                      // The count the card's control was offered on
+                      // (`offersForceRestart(view)`), so the dialog names
+                      // the same number - not the raw status read's, which
+                      // can differ when an attempt park and a staged wait
+                      // coexist and the view is the attempt's. The `??` arm
+                      // is the view type's null, unreachable here because
+                      // the control renders only when the view names a
+                      // positive count.
+                      blockingSessionCount:
+                        operationView.blockingSessionCount ??
+                        legacyFacts.stagedWait.blockingSessionCount,
+                    });
+                  }
+            }
           />
         )}
         {/* The update ANSWER, on the card that describes the host — not under a
@@ -958,6 +1303,8 @@ export function HostOverviewPanel(props: {
           <HostOverviewUpdatesRegion
             summary={updates.summary}
             degrade={updates.degrade}
+            desktopBridge={desktopUpdates.bridge}
+            onInstallationHelp={() => setDoctorOpen(true)}
           />
         )}
         {/* Stays OUT of Advanced, deliberately. This is the only control on the
@@ -1013,6 +1360,18 @@ export function HostOverviewPanel(props: {
         }
       />
 
+      {/* Everything about this host's OWN local data: the sessions on its disk
+          waiting to be imported, and the SQLite tasks and epics still to reach
+          cloud. Both moved off General, which is app-wide and so could only
+          ever speak for whichever host the window pointed at.
+
+          Gated on `usable` for the reason every host read on this page is - a
+          hook mounted under a non-ready scope fires against the ambient host
+          regardless of what the gate hides. The section applies a second,
+          narrower check of its own: the stream beneath it must already name
+          this host. */}
+      {!usable ? null : <HostImportMigrationSection hostId={scope.hostId} />}
+
       {/* Local machine only, by the nature of the fact rather than a scope
           rule: the hint is Desktop's launch-time comparison of ITS bundled CLI
           against THIS machine's package-manager CLI, recorded in Desktop-local
@@ -1031,9 +1390,9 @@ export function HostOverviewPanel(props: {
       <HostDangerZone scope={scope} />
 
       <RestartHostConfirmDialog
-        open={restartConfirmOpen}
+        open={restartConfirm !== null}
         onOpenChange={(open) => {
-          if (!open) setRestartConfirmOpen(false);
+          if (!open) closeRestartConfirm();
         }}
         isPending={restartDialogOwnDispatch}
         onConfirm={() => {
@@ -1044,10 +1403,11 @@ export function HostOverviewPanel(props: {
           // fallback route the confirm IS the force consent: same click-time
           // identity guard and same shared mutation key as the busy-offer
           // dialog's Force, so menu/tray/Settings respawns keep deduping.
-          if (restartViaForceFallback) {
+          // The route ARMED at open, not the live fact: see `restartConfirm`.
+          if (restartConfirm === "bridge") {
             const liveHostId = liveLocalHostIdNow();
             if (liveHostId !== null && liveHostId !== forceRestartLocalHostId) {
-              setRestartConfirmOpen(false);
+              closeRestartConfirm();
               toast.info("Host changed", {
                 description: HOST_CHANGED_DESCRIPTION,
               });
@@ -1066,7 +1426,7 @@ export function HostOverviewPanel(props: {
             { transitionId },
             {
               onSuccess: (response) => {
-                setRestartConfirmOpen(false);
+                closeRestartConfirm();
                 // A definitive answer ends this action: accepted means the
                 // claim is spent, busy means it was refused outright. Either
                 // way the next confirm is a NEW action and must not adopt it.
@@ -1098,7 +1458,7 @@ export function HostOverviewPanel(props: {
                 toastHostRestartRequested();
               },
               onError: (error) => {
-                setRestartConfirmOpen(false);
+                closeRestartConfirm();
                 // Deliberately NOT cleared: a transport failure says nothing
                 // about whether the host granted the claim, so the id stays
                 // armed for the retry that adopts it.
@@ -1116,6 +1476,7 @@ export function HostOverviewPanel(props: {
           The amber band with an inline one-press Force that used to sit on the
           card is gone; see `host-overview-status-card.tsx`. */}
       <HostBusyForceDeferDialog
+        purpose="restart"
         open={forceRestartOffer !== null}
         message={
           forceRestartOffer === null
@@ -1149,6 +1510,38 @@ export function HostOverviewPanel(props: {
           forceRestart.mutate();
         }}
         onDefer={() => setForceRestartOffer(null)}
+      />
+      {/* The staged-wait force's confirmation - the same busy/force/defer
+          dialog, because the decision is the same shape: live work stands
+          between the person and the update, and they choose whether to end
+          it. What "force" DOES differs and is named on the button: this one
+          re-runs the updater with `--force` against the kept stage; the one
+          above respawns the host process. */}
+      <HostBusyForceDeferDialog
+        purpose="update"
+        open={forceUpdateOffer !== null}
+        message={
+          forceUpdateOffer === null
+            ? ""
+            : forceUpdateMessage(
+                displayName,
+                forceUpdateOffer.stagedVersion,
+                forceUpdateOffer.blockingSessionCount,
+              )
+        }
+        isForcing={updates.summary.installing}
+        forceLabel="Force update"
+        onForce={() => {
+          if (forceUpdateOffer === null) return;
+          // Closed on the ANSWER, whatever it is: an accepted force is now
+          // reported by the card and the toasts, and a refused one by the
+          // inline failure notice - leaving the dialog up over either would
+          // re-offer a decision already made.
+          updates.installForce(forceUpdateOffer.stagedVersion, () =>
+            setForceUpdateOffer(null),
+          );
+        }}
+        onDefer={() => setForceUpdateOffer(null)}
       />
       <DoctorSheet
         open={doctorOpen}
@@ -1201,7 +1594,7 @@ export function HostOverviewPanel(props: {
                 // dispatch here was the one surface skipping all three.
                 onBridgeRestart: () => {
                   if (anyPending) return;
-                  setRestartConfirmOpen(true);
+                  openRestartConfirm();
                 },
                 bridgeRestartPending: forceRestartInFlight || anyPending,
                 // `diagnostics.logs.tail` is absent from every released host
@@ -1219,6 +1612,30 @@ export function HostOverviewPanel(props: {
       />
     </div>
   );
+}
+
+/**
+ * What the staged-wait force dialog says. The count is the one the card's
+ * sentence named when the offer was made; `null` (a busy host that counts no
+ * session) keeps the sentence unquantified rather than inventing a number.
+ */
+function forceUpdateMessage(
+  hostName: string,
+  stagedVersion: string,
+  blockingSessionCount: number | null,
+): string {
+  let work = "the work in progress";
+  if (blockingSessionCount === 1) {
+    work = "1 session";
+  } else if (blockingSessionCount !== null) {
+    work = `${String(blockingSessionCount)} sessions`;
+  }
+  // Defer keeps the stage; it does NOT schedule anything. The parked bytes
+  // install on the next update run - the host's own automatic check where
+  // one is enabled, or the next Update now - once the host is idle, so the
+  // sentence names that rather than promising a continuation this page has
+  // no evidence of.
+  return `v${stagedVersion} is downloaded and waiting. Installing it now ends ${work} on ${hostName} and restarts the host. Defer to keep it waiting; it installs on the next update once the host is idle, or select Update now again then.`;
 }
 
 /**

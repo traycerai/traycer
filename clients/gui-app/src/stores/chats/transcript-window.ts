@@ -4159,24 +4159,30 @@ export function applyIndexChange(
  * sibling slice holding the same turn's records is the case where it is not.
  * See {@link recordSharingOrdinals}.
  *
- * ## Why the echo test alone, when the store also asks whether the copy is HELD
+ * ## The echo test alone, on both halves of the decision
  *
- * The store gates its half of this decision - whether to supersede in-flight
- * hydration - on {@link holdsActiveTurnAssistantMessage} as well, because an
- * unheld copy is not being rewritten by the deltas and an answer generated
- * before them carries blocks the client can never recover. That conjunct is
- * absent here, and the two still agree, for a reason worth stating rather than
- * rediscovering: this half is a NO-OP whenever the conjunct would differ.
- * {@link dropSpansForUpdatedOrdinals} drops by ordinal containment, every
- * ordinal it is given names an `assistant:` row of the active turn (the entry
- * test in {@link isActiveTurnStreamingEcho}, widened along the same axis by
- * {@link recordSharingOrdinals}), and a span covering such an ordinal was
- * served the records backing it - so "no span holds the turn's assistant
- * message" already implies "no span contains one of these ordinals", and there
- * is nothing for the skip to keep. Adding the scan here would buy no
- * behavioural change and would put an O(records held) walk on the per-token
- * path, which is exactly what the store's own `outstandingHydrationRequests`
- * gate exists to avoid.
+ * The store's half - whether to supersede in-flight hydration - asks exactly
+ * this same question and nothing more. It once carried a second conjunct,
+ * {@link holdsActiveTurnAssistantMessage}, on the reasoning that an unheld copy
+ * is not being rewritten so an answer generated before those deltas must be
+ * discarded. That conjunct was the starvation loop it was meant to prevent:
+ * unheld is precisely the state each supersede re-created, so every echo of a
+ * long turn discarded the answer for its own row and the row never hydrated.
+ * The store now supersedes on the echo test alone and repairs the trailing body
+ * a different way - see `chat-session-store`'s dropped-write mark, which asks
+ * whether the ANSWER predates a write this client dropped rather than whether a
+ * copy happens to be held at fold time.
+ *
+ * Holding is still what decides whether such a write was dropped at all, so the
+ * scan survives in the store on that path. It is deliberately absent HERE, and
+ * would be a no-op if added: {@link dropSpansForUpdatedOrdinals} drops by
+ * ordinal containment, every ordinal it is given names an `assistant:` row of
+ * the active turn (the entry test in {@link isActiveTurnStreamingEcho}, widened
+ * along the same axis by {@link recordSharingOrdinals}), and a span covering
+ * such an ordinal was served the records backing it - so "no span holds the
+ * turn's assistant message" already implies "no span contains one of these
+ * ordinals". Adding the scan would buy no behavioural change and would put an
+ * O(records held) walk on the per-token path.
  */
 function reconcileUpdatedBodies(
   window: TranscriptWindow,
@@ -4192,6 +4198,39 @@ function reconcileUpdatedBodies(
   return dropSpansForUpdatedOrdinals(
     window,
     recordSharingOrdinals(window, invalidated),
+  );
+}
+
+/**
+ * Retire the fresh spans holding `ordinals` into the stale tier so the planner
+ * asks for those rows once more - the catch-up behind the streaming-echo
+ * exemption.
+ *
+ * The exemption lets a `range` answer for the active turn's row seat even when
+ * the client held no copy of that turn while the answer was in flight. Such an
+ * answer was sliced BEFORE writes this client dropped (dropped because nothing
+ * held the row to apply them to), so the body it seats can trail the host by
+ * exactly those blocks - and nothing re-asks for a row that is hydrated. So the
+ * store retires the span here: the body stays renderable from the stale tier,
+ * the ordinal reads as a gap again, and the request the planner then sends is
+ * sliced after every write the first one missed.
+ *
+ * Which answers get this treatment is the store's decision and rests on the
+ * ANSWER's provenance, never on what happens to be held when it lands - see the
+ * dropped-write mark in `chat-session-store`. Seating is also what ends the
+ * condition: once any span or the ledger holds the turn's records, later deltas
+ * are applied rather than dropped, so no further write goes missing.
+ *
+ * The same transition a non-echo `updated` performs - deliberately, so this
+ * introduces no second way for a span to leave the fresh tier.
+ */
+export function refreshSeatedRows(
+  window: TranscriptWindow,
+  ordinals: readonly number[],
+): TranscriptWindow {
+  return dropSpansForUpdatedOrdinals(
+    window,
+    recordSharingOrdinals(window, ordinals),
   );
 }
 
@@ -4320,11 +4359,14 @@ function heldMessageCopy(
  * Does the window hold the active turn's assistant message ANYWHERE - live,
  * fresh span, or stale span?
  *
- * The precondition for skipping the in-flight supersede on a streaming echo:
- * the skip is sound because the delta stream rewrites the held copy in place,
- * and a copy that is not held is not being rewritten - deltas for it are
- * dropped, so an answer generated before them carries blocks the client can
- * never recover and MUST be discarded and re-asked.
+ * Not a precondition for the streaming-echo exemption - that gate was the
+ * starvation loop and is gone. What this answers now is whether a delta the
+ * echo reports was APPLIED or DROPPED: the stream rewrites a held copy in
+ * place, while a write for a row nothing holds has nowhere to land. So the
+ * store reads it to decide whether a dropped write happened at all, and an
+ * answer sliced before one owes a catch-up (see `chat-session-store`'s
+ * dropped-write mark). Because it counts the stale tier too, one seat is enough
+ * to end the condition - a demoted body still receives the deltas that follow.
  *
  * O(records the window holds); the caller gates it on there being an
  * outstanding request at all, so it never runs on the bare per-token path.
@@ -4334,15 +4376,117 @@ export function holdsActiveTurnAssistantMessage(
   activeTurnId: string | null,
 ): boolean {
   if (activeTurnId === null) return false;
-  const matches = (message: Message): boolean =>
-    message.role === "assistant" && assistantTurnKey(message) === activeTurnId;
-  if (window.liveMessages.some(matches)) return true;
+  if (window.liveMessages.some(assistantMessageOfTurn(activeTurnId))) {
+    return true;
+  }
   // The ledger IS the span tiers' holdings, fresh and stale alike.
   for (const entry of window.records.messages.values()) {
-    if (matches(entry.record)) return true;
+    if (assistantMessageOfTurn(activeTurnId)(entry.record)) return true;
   }
   return false;
 }
+
+/**
+ * Will this range answer SEAT the active turn's own assistant records?
+ *
+ * The question the store asks of an answer that predates a dropped write, and
+ * it is about RECORDS rather than ordinals deliberately. A dropped write can
+ * only have staled the turn it was written for, so a scrollback answer from the
+ * same era is current and must not be re-fetched. Conversely a turn's records
+ * are shared by every row it produces - its slices and the steer bubbles
+ * between them - so an answer serving any one of those rows carries the stale
+ * copy even when the echo named a different ordinal. Matching on the records
+ * catches both, where matching on the echoed ordinal catches neither.
+ *
+ * "Will seat" and not "carries", because {@link applyRangeResponse} can WITHHOLD
+ * the very records the raw answer carries: a row the host declared incomplete
+ * takes its whole turn's records out of the fold, so an answer that carries the
+ * turn and lists one of its rows in `incompleteRowIds` seats none of it. Reading
+ * `response.messages` alone there let a mixed answer - one historical row served
+ * complete beside an incomplete active row - retire the COMPLETE row and re-ask
+ * for it, discarding valid hydration to chase a body the fold had already
+ * refused. So the withholding rule is applied here, exactly as the fold applies
+ * it, before the records are looked at.
+ */
+export function rangeSeatsActiveTurn(
+  response: ChatRangeResponse,
+  activeTurnId: string | null,
+): boolean {
+  if (activeTurnId === null) return false;
+  // The fold collects the TURN KEYS of every withheld row and filters by turn,
+  // so one incomplete row of the active turn withholds all of it - including
+  // the copy a sibling row in the same answer would otherwise have seated.
+  for (const rowId of incompleteRowIdsToWithhold(response.incompleteRowIds)) {
+    if (assistantRowTurnKey(rowId) === activeTurnId) return false;
+  }
+  return response.messages.some(assistantMessageOfTurn(activeTurnId));
+}
+
+/**
+ * The ordinals this answer served for the ACTIVE turn's own rows.
+ *
+ * A range can serve a settled row and the streaming row in one answer. Only the
+ * streaming turn's rows are what a write staled, so only they are retired and
+ * only they are what a repair request is for - retiring every ordinal the answer
+ * happened to carry threw away a complete historical row's hydration, and
+ * recording every ordinal as repair work let a later visit to that historical
+ * row be charged against the streaming row's repair budget.
+ *
+ * Sibling slices need no special handling: {@link refreshSeatedRows} widens
+ * whatever it is given along the turn's shared records.
+ *
+ * This reads the answer's row ids, not what the fold will seat, so it also
+ * counts a row the fold withholds. That is safe only because withholding is
+ * per turn and wholesale: an answer that withholds any row of the active turn
+ * fails {@link rangeSeatsActiveTurn}, and nothing downstream of that gate
+ * reads these ordinals.
+ */
+export function activeTurnOrdinalsOf(
+  response: ChatRangeResponse,
+  activeTurnId: string | null,
+): readonly number[] {
+  if (activeTurnId === null) return [];
+  const ordinals: number[] = [];
+  response.rowIds.forEach((rowId, offset) => {
+    if (assistantRowTurnKey(rowId) === activeTurnId) {
+      ordinals.push(response.fromOrdinal + offset);
+    }
+  });
+  return ordinals;
+}
+
+/**
+ * Did the fold actually INSTALL this answer's copies of the active turn?
+ *
+ * Seating an answer is not the same as its records reaching the ledger:
+ * {@link preferFresherHeldMessages} can substitute a held copy for a served one,
+ * and then the window holds the body that was already there. A request's mark
+ * dates what the answer could contain and cannot see that - so certifying the
+ * turn on the mark alone declared the row current while the copy on screen was
+ * the torn one the answer had been sent to replace.
+ *
+ * Identity is the exact test, and it is available because the seat stores the
+ * message objects it was handed by reference (`seatLedgerRecords`); a
+ * substituted copy is a different object.
+ */
+export function rangeRecordsInstalled(
+  window: TranscriptWindow,
+  messages: readonly Message[],
+  activeTurnId: string | null,
+): boolean {
+  if (activeTurnId === null) return false;
+  const served = messages.filter(assistantMessageOfTurn(activeTurnId));
+  if (served.length === 0) return false;
+  return served.every(
+    (message) =>
+      window.records.messages.get(message.messageId)?.record === message,
+  );
+}
+
+const assistantMessageOfTurn =
+  (turnId: string) =>
+  (message: Message): boolean =>
+    message.role === "assistant" && assistantTurnKey(message) === turnId;
 
 /**
  * While a turn streams, the held copy of its assistant message outranks any
@@ -4382,6 +4526,23 @@ export function holdsActiveTurnAssistantMessage(
  * {@link hydratedRecords} renders rather than the first one found - see
  * {@link heldMessageCopy}. Comparing the served body against some OTHER held
  * copy decides the seat on a record the reader is not looking at.
+ *
+ * ## The arm is chosen by the CALLER, and a provisional body forfeits it
+ *
+ * `activeTurnId` is the only thing that selects the active arm, and the store
+ * passes `null` for it deliberately when the held copy is one IT seated
+ * provisionally - a body it accepted knowing the answer predated a write the
+ * client dropped (see `chat-session-store`'s provisional-seat ledger). The
+ * active arm's premise is that the held copy has every delta applied; for that
+ * body the client itself recorded that it does not, so the premise is false and
+ * the arm must not run. Under the settled arm the catch-up's copy seats unless
+ * the held one is demonstrably ahead, which is the correct default for a record
+ * whose incompleteness the client has already established.
+ *
+ * Without that, a catch-up requested precisely to repair the provisional body
+ * was substituted away by the body it was sent to replace, and the row went on
+ * rendering content the client knew to be short of the host with no gap left to
+ * re-request it.
  */
 function preferFresherHeldMessages(
   window: TranscriptWindow,

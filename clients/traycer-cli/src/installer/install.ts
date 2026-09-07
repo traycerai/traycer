@@ -194,6 +194,7 @@ export async function installHost(
     onProgress: opts.onProgress,
     lifecycle: opts.lifecycle,
     verifyMutationCapability: legacyMutationVerifier,
+    onWillSwap: null,
   });
   logger.info("Host install completed", {
     environment: opts.environment,
@@ -379,6 +380,8 @@ export interface CommitHostInstallSourceOptions {
    * authority-checked one.
    */
   readonly verifyMutationCapability: () => Promise<void>;
+  /** See `CommitInstallFromSourceOptions.onWillSwap`. */
+  readonly onWillSwap: (() => void) | null;
 }
 
 export interface CommitHostInstallSourceResult {
@@ -429,6 +432,7 @@ export async function commitHostInstallSource(
       onProgress: opts.onProgress,
       lifecycle: opts.lifecycle,
       verifyMutationCapability: opts.verifyMutationCapability,
+      onWillSwap: opts.onWillSwap,
       onCommitted: () => {
         swapped = true;
       },
@@ -563,6 +567,17 @@ export interface CommitInstallFromSourceOptions {
   readonly onCommitted: () => void;
   /** See `CommitHostInstallSourceOptions.verifyMutationCapability`. */
   readonly verifyMutationCapability: () => Promise<void>;
+  /**
+   * Runs once the pre-swap mutation-capability check has passed and
+   * immediately before the rename replaces `install/`: the point at which
+   * this commit disturbs a host the lifecycle did not stop (a stopped or
+   * unregistered service on POSIX, or no lifecycle at all). The `swap`
+   * progress line precedes the check and says nothing about it. A stop
+   * that happened first already reported the boundary
+   * (`CreateServiceInstallLifecycleOptions.onWillStopHost`); a caller
+   * tracking it treats the two as one edge. `null` when no caller is.
+   */
+  readonly onWillSwap: (() => void) | null;
 }
 
 export interface CommitInstallFromSourceResult {
@@ -658,6 +673,7 @@ export async function commitInstallFromSource(
     workUnits: null,
   });
   await verifyMutationCapability();
+  if (opts.onWillSwap !== null) opts.onWillSwap();
   await atomicSwap({
     environment: opts.environment,
     stagingDir: opts.sourceDir,
@@ -1050,10 +1066,12 @@ export const SWAP_RENAME_DELAYS_MS: readonly number[] = [
 ];
 
 // Wall-clock ceiling for one swap rename INCLUDING its re-kill hooks. The
-// schedule above sums to ~24s of sleeps, but each Windows re-kill pass can
-// legitimately spend a 10s WMI scan plus a 30s taskkill on a degraded
-// machine - seven such passes would keep the service down and the
-// environment cli-lock held for ~5 minutes. Healthy re-kills run in a
+// schedule above sums to ~24s of sleeps, but each Windows re-kill pass is a
+// bounded scan-then-kill loop whose every PowerShell step carries a 30s
+// ceiling (`WINDOWS_RESTART_SEQUENCE_TIMEOUT_MS` derives the worst case), so
+// one pass can legitimately spend minutes on a degraded machine - seven
+// such passes would keep the service down and the environment cli-lock
+// held far longer than that. Healthy re-kills run in a
 // couple of seconds, so this ceiling never truncates the schedule where
 // the retries can actually work; it only stops the pathological machines
 // from wedging every other host mutation while they fail.

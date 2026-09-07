@@ -88,6 +88,10 @@ vi.mock("../../app/host-login-item", () => ({
   ),
   hasUnappliedPendingLoginItemRevision: vi.fn(async () => false),
   readHostLoginItemStatus: vi.fn(() => "enabled"),
+  readParkedRegistrationTakeover: vi.fn(async () => ({
+    kind: "no-takeover",
+    reason: "primary-manageable",
+  })),
 }));
 
 vi.mock("../host-readiness", async (importOriginal) => {
@@ -247,6 +251,7 @@ import {
   hasUnappliedPendingLoginItemRevision,
   hostManagesHostLoginItem,
   readHostLoginItemStatus,
+  readParkedRegistrationTakeover,
   registerHostLoginItem,
   unregisterHostLoginItemGuarded,
 } from "../../app/host-login-item";
@@ -324,6 +329,10 @@ beforeEach(() => {
   });
   vi.mocked(hasUnappliedPendingLoginItemRevision).mockResolvedValue(false);
   vi.mocked(readHostLoginItemStatus).mockReturnValue("enabled");
+  vi.mocked(readParkedRegistrationTakeover).mockResolvedValue({
+    kind: "no-takeover",
+    reason: "primary-manageable",
+  });
   vi.mocked(registerHostLoginItem).mockResolvedValue("enabled");
   vi.mocked(unregisterHostLoginItemGuarded).mockResolvedValue(true);
   vi.mocked(probeHostActivityBusy).mockResolvedValue(false);
@@ -3328,6 +3337,605 @@ describe("platform matrix", () => {
     }
   });
 
+  // `activateAroundParkedRegistration` - the cooperative-restart fallback for
+  // a `registerHostLoginItem` cycle that parked (production: `parked` is a
+  // dedicated arm rather than the prior primary status, and this cycle asks
+  // the RUNNING host to restart through the CLI instead of reporting a
+  // registration failure for bytes that already committed).
+  describe("activateAroundParkedRegistration - the parked SMAppService register fallback", () => {
+    it("restarts the running host through the CLI (--if-idle) and confirms readiness AFTER that spawn, never before it", async () => {
+      vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+      const controller = newController("production");
+      writeInstallRecord("production", {
+        version: "1.7.0",
+        runtimeVersion: "1.7.0",
+      });
+      writePidMetadata("production", { version: "1.7.0", pid: process.pid });
+      vi.mocked(registerHostLoginItem).mockResolvedValue("parked");
+      vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({ data: {} });
+      vi.mocked(waitForHostReady).mockResolvedValue({
+        ready: true,
+        version: "1.7.0",
+        pid: process.pid,
+        startedAt: "2026-01-01T00:00:00.000Z",
+        reason: "ready",
+      });
+
+      const outcome = await controller.installVersion("1.8.0", false);
+
+      expect(outcome.kind).toBe("ok");
+      const restartCallIndex = vi
+        .mocked(streamBundledTraycerCliJson)
+        .mock.calls.findIndex(
+          ([opts]) =>
+            Array.isArray(opts.args) &&
+            opts.args[0] === "host" &&
+            opts.args[1] === "restart",
+        );
+      expect(restartCallIndex).toBeGreaterThanOrEqual(0);
+      expect(
+        vi.mocked(streamBundledTraycerCliJson).mock.calls[restartCallIndex][0]
+          .args,
+      ).toEqual(["host", "restart", "--if-idle", "--defer-if-parked"]);
+
+      // Call-order proof: `waitForHostReady` must run strictly AFTER the
+      // restart spawn, never before it - `completeServiceStart` (which calls
+      // `waitForHostReady`) only runs once the restart has been dispatched.
+      const restartOrder = vi.mocked(streamBundledTraycerCliJson).mock
+        .invocationCallOrder[restartCallIndex];
+      const readyOrder =
+        vi.mocked(waitForHostReady).mock.invocationCallOrder[0];
+      expect(readyOrder).toBeGreaterThan(restartOrder);
+    });
+
+    it("with no running host and a login item that is not enabled, and no takeover is possible, fails immediately naming the parked registration and never spawns a restart", async () => {
+      vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+      const controller = newController("production");
+      writeInstallRecord("production", {
+        version: "1.7.0",
+        runtimeVersion: "1.7.0",
+      });
+      // No `writePidMetadata` call: no running host, so `prePid` resolves
+      // `null` and there is nothing to restart onto.
+      vi.mocked(registerHostLoginItem).mockResolvedValue("parked");
+      vi.mocked(readHostLoginItemStatus).mockReturnValue("not-found");
+      // The legacy label holds a BTM record, so a raw LaunchAgent may not be
+      // installed beside it - `readParkedRegistrationTakeover` reports
+      // `no-takeover` (reason `legacy-registered`) even though the primary
+      // status alone looks takeover-eligible.
+      vi.mocked(readParkedRegistrationTakeover).mockResolvedValue({
+        kind: "no-takeover",
+        reason: "legacy-registered",
+      });
+      vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({ data: {} });
+
+      const outcome = await controller.installVersion("1.8.0", false);
+
+      expect(outcome.kind).toBe("failed");
+      if (outcome.kind === "failed") {
+        expect(outcome.message).toContain("no host is running to restart");
+      }
+      expect(readParkedRegistrationTakeover).toHaveBeenCalled();
+      const restartCallIndex = vi
+        .mocked(streamBundledTraycerCliJson)
+        .mock.calls.findIndex(
+          ([opts]) => Array.isArray(opts.args) && opts.args[1] === "restart",
+        );
+      expect(restartCallIndex).toBe(-1);
+      const serviceInstallCallIndex = vi
+        .mocked(streamBundledTraycerCliJson)
+        .mock.calls.findIndex(
+          ([opts]) =>
+            Array.isArray(opts.args) &&
+            opts.args[0] === "host" &&
+            opts.args[1] === "service" &&
+            opts.args[2] === "install",
+        );
+      expect(serviceInstallCallIndex).toBe(-1);
+      expect(waitForHostReady).not.toHaveBeenCalled();
+    });
+
+    // Contrasts with the immediately-preceding test: when the legacy label
+    // ALSO carries no registration, `readParkedRegistrationTakeover` reports
+    // `takeover` and the down-host park is finished through the CLI-owned
+    // LaunchAgent instead of failing outright (2026-09-06 field RCA: this is
+    // the exact state `host uninstall` followed by a reinstall leaves an
+    // ad-hoc-signed build in).
+    it("with no running host and no registration SMAppService can ever manage, finishes the park through the CLI-owned LaunchAgent takeover", async () => {
+      vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+      const controller = newController("production");
+      writeInstallRecord("production", {
+        version: "1.7.0",
+        runtimeVersion: "1.7.0",
+      });
+      // No `writePidMetadata` call: no running host, so `prePid` resolves
+      // `null`.
+      vi.mocked(registerHostLoginItem).mockResolvedValue("parked");
+      vi.mocked(readHostLoginItemStatus).mockReturnValue("not-found");
+      vi.mocked(readParkedRegistrationTakeover).mockResolvedValue({
+        kind: "takeover",
+        status: "not-found",
+      });
+      // The recovered host must publish the runtime the committed install
+      // expects - the beforeEach default (1.0.0) would rightly be rejected.
+      vi.mocked(waitForHostReady).mockResolvedValue({
+        ready: true,
+        version: "1.7.0",
+        pid: 1,
+        startedAt: "2026-01-01T00:00:00.000Z",
+        reason: "ready",
+      });
+
+      const outcome = await controller.installVersion("1.8.0", false);
+
+      expect(outcome.kind).toBe("ok");
+      const takeoverCalls = vi
+        .mocked(streamBundledTraycerCliJson)
+        .mock.calls.filter(
+          ([opts]) =>
+            Array.isArray(opts.args) && opts.args.includes("--takeover"),
+        );
+      expect(takeoverCalls).toHaveLength(1);
+      expect(takeoverCalls[0][0].args).toEqual([
+        "host",
+        "service",
+        "install",
+        "--takeover",
+      ]);
+      const restartCallIndex = vi
+        .mocked(streamBundledTraycerCliJson)
+        .mock.calls.findIndex(
+          ([opts]) => Array.isArray(opts.args) && opts.args[1] === "restart",
+        );
+      expect(restartCallIndex).toBe(-1);
+
+      // Call-order proof, mirroring the sibling test above: `waitForHostReady`
+      // must run strictly AFTER the takeover spawn, never before it.
+      const takeoverCallIndex = vi
+        .mocked(streamBundledTraycerCliJson)
+        .mock.calls.findIndex(
+          ([opts]) =>
+            Array.isArray(opts.args) && opts.args.includes("--takeover"),
+        );
+      const takeoverOrder = vi.mocked(streamBundledTraycerCliJson).mock
+        .invocationCallOrder[takeoverCallIndex];
+      const readyOrder =
+        vi.mocked(waitForHostReady).mock.invocationCallOrder[0];
+      expect(readyOrder).toBeGreaterThan(takeoverOrder);
+    });
+
+    // The takeover fallback is down-host-only: with a host RUNNING under the
+    // CLI label, the cooperative `host restart` is the right route even when
+    // no registration SMAppService can ever manage - restarting makes the
+    // shutdown claim a busy host can deny, whereas the takeover's install
+    // boots the label out with no claim at all.
+    it("with a RUNNING host, never takes over even when no registration SMAppService can manage - restarts through the CLI instead", async () => {
+      vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+      const controller = newController("production");
+      writeInstallRecord("production", {
+        version: "1.7.0",
+        runtimeVersion: "1.7.0",
+      });
+      writePidMetadata("production", { version: "1.7.0", pid: process.pid });
+      vi.mocked(registerHostLoginItem).mockResolvedValue("parked");
+      vi.mocked(readHostLoginItemStatus).mockReturnValue("not-found");
+      vi.mocked(readParkedRegistrationTakeover).mockResolvedValue({
+        kind: "takeover",
+        status: "not-found",
+      });
+      vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({ data: {} });
+      vi.mocked(waitForHostReady).mockResolvedValue({
+        ready: true,
+        version: "1.7.0",
+        pid: process.pid,
+        startedAt: "2026-01-01T00:00:00.000Z",
+        reason: "ready",
+      });
+
+      const outcome = await controller.installVersion("1.8.0", false);
+
+      expect(outcome.kind).toBe("ok");
+      const restartCallIndex = vi
+        .mocked(streamBundledTraycerCliJson)
+        .mock.calls.findIndex(
+          ([opts]) =>
+            Array.isArray(opts.args) &&
+            opts.args[0] === "host" &&
+            opts.args[1] === "restart",
+        );
+      expect(restartCallIndex).toBeGreaterThanOrEqual(0);
+      expect(
+        vi.mocked(streamBundledTraycerCliJson).mock.calls[restartCallIndex][0]
+          .args,
+      ).toEqual(["host", "restart", "--if-idle", "--defer-if-parked"]);
+      const takeoverCallIndex = vi
+        .mocked(streamBundledTraycerCliJson)
+        .mock.calls.findIndex(
+          ([opts]) =>
+            Array.isArray(opts.args) && opts.args.includes("--takeover"),
+        );
+      expect(takeoverCallIndex).toBe(-1);
+    });
+
+    // The takeover call itself can fail (e.g. the fallback CLI install
+    // throws) - that must surface as the takeover's own failure, never as
+    // the generic "no host is running to restart" message the down-host
+    // no-takeover case reports.
+    it("with no running host and a takeover verdict, a failing CLI takeover surfaces its own failure rather than the generic no-restart message", async () => {
+      vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+      const controller = newController("production");
+      writeInstallRecord("production", {
+        version: "1.7.0",
+        runtimeVersion: "1.7.0",
+      });
+      // No `writePidMetadata` call: no running host.
+      vi.mocked(registerHostLoginItem).mockResolvedValue("parked");
+      vi.mocked(readHostLoginItemStatus).mockReturnValue("not-found");
+      vi.mocked(readParkedRegistrationTakeover).mockResolvedValue({
+        kind: "takeover",
+        status: "not-found",
+      });
+      vi.mocked(streamBundledTraycerCliJson).mockRejectedValue(
+        new Error("takeover exploded"),
+      );
+
+      const outcome = await controller.installVersion("1.8.0", false);
+
+      expect(outcome.kind).not.toBe("ok");
+      if (outcome.kind === "failed" || outcome.kind === "deferred") {
+        expect(outcome.message).not.toContain("no host is running to restart");
+      }
+    });
+
+    // `takeOverParkedRegistrationIfDown` deliberately does not thread
+    // `force`: `host service install` has no force flag and the takeover is
+    // cooperative by construction, so a `busy` refusal from the CLI (a host
+    // appeared between the verdict and the CLI's own probe) must not be
+    // reported as `busy` - that outcome advertises a Force affordance, and
+    // Force would just re-run the same forceless command against the same
+    // host. It is remapped to `deferred` instead, with no continuation.
+    it("with no running host and a takeover verdict, an E_HOST_BUSY from the CLI takeover is reported deferred, never busy", async () => {
+      vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+      const controller = newController("production");
+      writeInstallRecord("production", {
+        version: "1.7.0",
+        runtimeVersion: "1.7.0",
+      });
+      // No `writePidMetadata` call: no running host.
+      vi.mocked(registerHostLoginItem).mockResolvedValue("parked");
+      vi.mocked(readHostLoginItemStatus).mockReturnValue("not-found");
+      vi.mocked(readParkedRegistrationTakeover).mockResolvedValue({
+        kind: "takeover",
+        status: "not-found",
+      });
+      // Only the TAKEOVER spawn (`--takeover`) must reject with the busy
+      // error - the preceding bytes-only `host install` call (packaged-macOS
+      // installVersion's first streamed command) must still succeed, or the
+      // takeover/park cycle is never reached at all.
+      vi.mocked(streamBundledTraycerCliJson).mockImplementation(
+        async (options) =>
+          options.args.includes("--takeover")
+            ? Promise.reject(new TraycerCliError("E_HOST_BUSY", "host busy"))
+            : { data: {} },
+      );
+
+      const outcome = await controller.installVersion("1.8.0", false);
+
+      expect(outcome.kind).toBe("deferred");
+      expect(outcome.kind).not.toBe("busy");
+      if (outcome.kind === "deferred") {
+        expect(outcome.message).toContain("work in progress");
+      }
+    });
+
+    // An enabled login item is not "down" in the way the failure branch
+    // above is - launchd can restart an enabled agent without a live pid to
+    // distinguish readiness from, so this falls through to the same CLI
+    // restart cycle a running host uses instead of failing immediately.
+    it("with no running host but an ENABLED login item, kickstarts it through the CLI restart and reports activated", async () => {
+      vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+      const controller = newController("production");
+      writeInstallRecord("production", {
+        version: "1.7.0",
+        runtimeVersion: "1.7.0",
+      });
+      // No `writePidMetadata` call: no running host, so `prePid` resolves
+      // `null` - but the login item still reads `enabled`.
+      vi.mocked(registerHostLoginItem).mockResolvedValue("parked");
+      vi.mocked(readHostLoginItemStatus).mockReturnValue("enabled");
+      vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+        data: { restarted: true },
+      });
+      vi.mocked(waitForHostReady).mockResolvedValue({
+        ready: true,
+        version: "1.7.0",
+        pid: process.pid,
+        startedAt: "2026-01-01T00:00:00.000Z",
+        reason: "ready",
+      });
+
+      const outcome = await controller.installVersion("1.8.0", false);
+
+      expect(outcome.kind).toBe("ok");
+      if (outcome.kind === "ok") {
+        expect(outcome.value.runningActivated).toBe(true);
+      }
+      const restartCallIndex = vi
+        .mocked(streamBundledTraycerCliJson)
+        .mock.calls.findIndex(
+          ([opts]) => Array.isArray(opts.args) && opts.args[1] === "restart",
+        );
+      expect(restartCallIndex).toBeGreaterThanOrEqual(0);
+      expect(
+        vi.mocked(streamBundledTraycerCliJson).mock.calls[restartCallIndex][0]
+          .args,
+      ).toEqual(["host", "restart", "--if-idle", "--defer-if-parked"]);
+      expect(waitForHostReady).toHaveBeenCalled();
+    });
+
+    it("with no running host but an ENABLED login item, force:true restarts with --force instead of --if-idle", async () => {
+      vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+      const controller = newController("production");
+      writeInstallRecord("production", {
+        version: "1.7.0",
+        runtimeVersion: "1.7.0",
+      });
+      // No `writePidMetadata` call: no running host, so `prePid` resolves
+      // `null` - but the login item still reads `enabled`.
+      vi.mocked(registerHostLoginItem).mockResolvedValue("parked");
+      vi.mocked(readHostLoginItemStatus).mockReturnValue("enabled");
+      vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+        data: { restarted: true },
+      });
+      vi.mocked(waitForHostReady).mockResolvedValue({
+        ready: true,
+        version: "1.7.0",
+        pid: process.pid,
+        startedAt: "2026-01-01T00:00:00.000Z",
+        reason: "ready",
+      });
+
+      const outcome = await controller.installVersion("1.8.0", true);
+
+      expect(outcome.kind).toBe("ok");
+      const restartCallIndex = vi
+        .mocked(streamBundledTraycerCliJson)
+        .mock.calls.findIndex(
+          ([opts]) => Array.isArray(opts.args) && opts.args[1] === "restart",
+        );
+      expect(restartCallIndex).toBeGreaterThanOrEqual(0);
+      expect(
+        vi.mocked(streamBundledTraycerCliJson).mock.calls[restartCallIndex][0]
+          .args,
+      ).toEqual(["host", "restart", "--force", "--defer-if-parked"]);
+    });
+
+    // A host that is DOWN because its login item is toggled off is a
+    // DIFFERENT failure from "no host is running to restart": `host doctor`
+    // cannot fix a login item macOS is refusing to run, only re-enabling it
+    // in System Settings can. The park guard names that condition directly
+    // instead of pointing at the wrong remedy.
+    it("with no running host and a login item that requires approval, fails with the System Settings approval guidance instead of pointing at host doctor", async () => {
+      vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+      const controller = newController("production");
+      writeInstallRecord("production", {
+        version: "1.7.0",
+        runtimeVersion: "1.7.0",
+      });
+      // No `writePidMetadata` call: no running host, so `prePid` resolves
+      // `null` and there is nothing to restart onto.
+      vi.mocked(registerHostLoginItem).mockResolvedValue("parked");
+      vi.mocked(readHostLoginItemStatus).mockReturnValue("requires-approval");
+      vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({ data: {} });
+
+      const outcome = await controller.installVersion("1.8.0", false);
+
+      expect(outcome.kind).toBe("failed");
+      if (outcome.kind === "failed") {
+        // `approvalRequiredMessage()` (host-controller.ts) is the sole
+        // canonical copy for this state and is not exported, so this is the
+        // exact literal it returns - asserted in full so the "no host is
+        // running" message text (a substring match would let through) is
+        // provably absent, not merely unmatched.
+        expect(outcome.message).toBe(
+          "Traycer's background host is registered but disabled by macOS. " +
+            "Open System Settings → General → Login Items & Extensions and turn on " +
+            'Traycer under "Allow in the Background", then click Retry.',
+        );
+        expect(outcome.message).not.toContain("host doctor");
+      }
+      const restartCallIndex = vi
+        .mocked(streamBundledTraycerCliJson)
+        .mock.calls.findIndex(
+          ([opts]) => Array.isArray(opts.args) && opts.args[1] === "restart",
+        );
+      expect(restartCallIndex).toBe(-1);
+      expect(waitForHostReady).not.toHaveBeenCalled();
+    });
+
+    it("force:true restarts with the CLI's --force (skips the cooperative shutdown claim a busy host would deny), never merely without --if-idle", async () => {
+      vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+      const controller = newController("production");
+      writeInstallRecord("production", {
+        version: "1.7.0",
+        runtimeVersion: "1.7.0",
+      });
+      writePidMetadata("production", { version: "1.7.0", pid: process.pid });
+      vi.mocked(registerHostLoginItem).mockResolvedValue("parked");
+      vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({ data: {} });
+      vi.mocked(waitForHostReady).mockResolvedValue({
+        ready: true,
+        version: "1.7.0",
+        pid: process.pid,
+        startedAt: "2026-01-01T00:00:00.000Z",
+        reason: "ready",
+      });
+
+      const outcome = await controller.installVersion("1.8.0", true);
+
+      expect(outcome.kind).toBe("ok");
+      const restartCallIndex = vi
+        .mocked(streamBundledTraycerCliJson)
+        .mock.calls.findIndex(
+          ([opts]) => Array.isArray(opts.args) && opts.args[1] === "restart",
+        );
+      expect(restartCallIndex).toBeGreaterThanOrEqual(0);
+      expect(
+        vi.mocked(streamBundledTraycerCliJson).mock.calls[restartCallIndex][0]
+          .args,
+      ).toEqual(["host", "restart", "--force", "--defer-if-parked"]);
+    });
+
+    it("the CLI defers for a concurrently parked activation: reports deferred and never waits for readiness of a host it did not relaunch", async () => {
+      vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+      const controller = newController("production");
+      writeInstallRecord("production", {
+        version: "1.7.0",
+        runtimeVersion: "1.7.0",
+      });
+      writePidMetadata("production", { version: "1.7.0", pid: process.pid });
+      vi.mocked(registerHostLoginItem).mockResolvedValue("parked");
+      vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) =>
+        Array.isArray(opts.args) && opts.args[1] === "restart"
+          ? {
+              data: {
+                restarted: false,
+                deferredForParkedActivation: true,
+              },
+            }
+          : { data: {} },
+      );
+
+      const outcome = await controller.installVersion("1.8.0", false);
+
+      expect(outcome.kind).toBe("deferred");
+      expect(waitForHostReady).not.toHaveBeenCalled();
+    });
+
+    // `registerService` promises a REGISTERED login item, which is a different
+    // promise from the activation cycle's "the committed bytes are running".
+    // A park attempted nothing, so the item is whatever it was before; only
+    // an item that already reads `enabled` can honestly be reported as
+    // registered, and nothing else may be restarted on the way to a failure.
+    it("registerService: a park over an ENABLED login item restarts the running host and reports registered", async () => {
+      vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+      const controller = newController("production");
+      writeInstallRecord("production", {
+        version: "1.7.0",
+        runtimeVersion: "1.7.0",
+      });
+      writePidMetadata("production", { version: "1.7.0", pid: process.pid });
+      vi.mocked(registerHostLoginItem).mockResolvedValue("parked");
+      vi.mocked(readHostLoginItemStatus).mockReturnValue("enabled");
+      vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({ data: {} });
+      vi.mocked(waitForHostReady).mockResolvedValue({
+        ready: true,
+        version: "1.7.0",
+        pid: process.pid,
+        startedAt: "2026-01-01T00:00:00.000Z",
+        reason: "ready",
+      });
+
+      const outcome = await controller.registerService({ kind: "background" });
+
+      expect(outcome).toEqual({ kind: "ok", value: { registered: true } });
+      expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
+        expect.objectContaining({
+          args: ["host", "restart", "--if-idle", "--defer-if-parked"],
+        }),
+      );
+    });
+
+    it("registerService: a park over a REQUIRES-APPROVAL login item fails with the approval message and restarts nothing", async () => {
+      vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+      const controller = newController("production");
+      writeInstallRecord("production", {
+        version: "1.7.0",
+        runtimeVersion: "1.7.0",
+      });
+      writePidMetadata("production", { version: "1.7.0", pid: process.pid });
+      vi.mocked(registerHostLoginItem).mockResolvedValue("parked");
+      vi.mocked(readHostLoginItemStatus).mockReturnValue("requires-approval");
+      vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({ data: {} });
+
+      const outcome = await controller.registerService({ kind: "background" });
+
+      expect(outcome.kind).toBe("failed");
+      if (outcome.kind === "failed") {
+        expect(outcome.message).toMatch(/System Settings|approv/i);
+      }
+      expect(streamBundledTraycerCliJson).not.toHaveBeenCalled();
+      expect(waitForHostReady).not.toHaveBeenCalled();
+    });
+
+    it("registerService: a park over a NOT-FOUND login item fails naming the status and restarts nothing", async () => {
+      vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+      const controller = newController("production");
+      writeInstallRecord("production", {
+        version: "1.7.0",
+        runtimeVersion: "1.7.0",
+      });
+      writePidMetadata("production", { version: "1.7.0", pid: process.pid });
+      vi.mocked(registerHostLoginItem).mockResolvedValue("parked");
+      vi.mocked(readHostLoginItemStatus).mockReturnValue("not-found");
+      vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({ data: {} });
+
+      const outcome = await controller.registerService({ kind: "background" });
+
+      expect(outcome.kind).toBe("failed");
+      if (outcome.kind === "failed") {
+        expect(outcome.message).toContain("status=not-found");
+      }
+      expect(streamBundledTraycerCliJson).not.toHaveBeenCalled();
+    });
+
+    // Contrasts with the test immediately above: with NO running host and a
+    // takeover verdict, `registerService`'s promise ("registered") can still
+    // be kept - the CLI-owned LaunchAgent becomes the only registration this
+    // machine can have, which is exactly what installing it accomplishes.
+    it("registerService: a park over a NOT-FOUND login item with NO running host and a takeover verdict succeeds via the CLI takeover", async () => {
+      vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+      const controller = newController("production");
+      writeInstallRecord("production", {
+        version: "1.7.0",
+        runtimeVersion: "1.7.0",
+      });
+      // No `writePidMetadata` call: no running host.
+      vi.mocked(registerHostLoginItem).mockResolvedValue("parked");
+      vi.mocked(readHostLoginItemStatus).mockReturnValue("not-found");
+      vi.mocked(readParkedRegistrationTakeover).mockResolvedValue({
+        kind: "takeover",
+        status: "not-found",
+      });
+      // The recovered host must publish the runtime the committed install
+      // expects - the beforeEach default (1.0.0) would rightly be rejected.
+      vi.mocked(waitForHostReady).mockResolvedValue({
+        ready: true,
+        version: "1.7.0",
+        pid: 1,
+        startedAt: "2026-01-01T00:00:00.000Z",
+        reason: "ready",
+      });
+
+      const outcome = await controller.registerService({ kind: "background" });
+
+      expect(outcome).toEqual({ kind: "ok", value: { registered: true } });
+      const takeoverCalls = vi
+        .mocked(streamBundledTraycerCliJson)
+        .mock.calls.filter(
+          ([opts]) =>
+            Array.isArray(opts.args) && opts.args.includes("--takeover"),
+        );
+      expect(takeoverCalls).toHaveLength(1);
+      expect(takeoverCalls[0][0].args).toEqual([
+        "host",
+        "service",
+        "install",
+        "--takeover",
+      ]);
+    });
+  });
+
   // Fixup B6: `convergeReadyPackagedMac`'s "already reachable, skip
   // activation" fast-path used to key off reachability ALONE - a live OLD
   // process still answering pings made "reachable" true regardless of what
@@ -3397,6 +4005,34 @@ describe("platform matrix", () => {
     expect(streamBundledTraycerCliJson).not.toHaveBeenCalled();
     expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
     expect(waitForHostReady).toHaveBeenCalledTimes(1);
+  });
+
+  it("deregisterService streams `host service uninstall` on non-macOS rather than running it under the flat JSON timeout", async () => {
+    // On Windows the uninstall stops the host through the bounded
+    // scan-then-kill loop, whose worst case is several 30 s scans and kill
+    // scripts plus `schtasks /End` before `/Delete`. The run path's flat
+    // 45 s budget would SIGKILL the CLI mid-loop and leave the host
+    // half-stopped with its task still registered; the streaming path's idle
+    // timeout (re-armed by output, ten minutes) is what `host restart`
+    // already relies on for the same loop.
+    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(false);
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+
+    const outcome = await controller.deregisterService();
+
+    expect(outcome).toEqual({ kind: "ok", value: { registered: false } });
+    expect(runBundledTraycerCliJson).not.toHaveBeenCalled();
+    expect(streamBundledTraycerCliJson).toHaveBeenCalledTimes(1);
+    expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
+      expect.objectContaining({ args: ["host", "service", "uninstall"] }),
+    );
+
+    // Ablation: route the call back through `this.runBundled` → this test
+    // reddens on both mock assertions.
   });
 
   // ---- user-repair reprovision intent -------------------------------------
@@ -3826,11 +4462,11 @@ describe("platform matrix", () => {
         return true;
       },
     );
-    vi.mocked(runBundledTraycerCliJson).mockImplementation(async (args) => {
-      if (args.includes("uninstall")) {
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
+      if (opts.args.includes("uninstall")) {
         sentinelWasSetWhenUninstallRan.push(await isHostRemovedByUser());
       }
-      return { removedInstallDir: true, serviceUninstalled: true };
+      return { data: { removedInstallDir: true, serviceUninstalled: true } };
     });
 
     expect(await isHostRemovedByUser()).toBe(false);
@@ -3840,6 +4476,14 @@ describe("platform matrix", () => {
     expect(sentinelWasSetWhenUnregisterRan).toEqual([true]);
     expect(sentinelWasSetWhenUninstallRan).toEqual([true]);
     expect(await isHostRemovedByUser()).toBe(true);
+    // Route pin: the removal streams `host uninstall --all` (the Windows
+    // kill loop can outlive the run path's flat timeout) and never runs it.
+    expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
+      expect.objectContaining({ args: ["host", "uninstall", "--all"] }),
+    );
+    expect(runBundledTraycerCliJson).not.toHaveBeenCalledWith(
+      expect.arrayContaining(["uninstall"]),
+    );
   });
 
   // P3: the signal must reach the real download child, and removal must wait
@@ -3859,10 +4503,7 @@ describe("platform matrix", () => {
       if (args.includes("available")) {
         return availableSnapshotFixture("1.8.0", ["1.8.0"]);
       }
-      if (args.includes("uninstall")) {
-        uninstallCalls += 1;
-      }
-      return { removedInstallDir: true, serviceUninstalled: true };
+      return {};
     });
     // Signals that the download is genuinely in flight WITH its abort
     // listener attached. Without this handshake the test has no in-flight
@@ -3903,6 +4544,13 @@ describe("platform matrix", () => {
         await downloadGate.promise;
         return { data: {} };
       }
+      if (opts.args.includes("uninstall")) {
+        // `host uninstall --all` is streamed too (the Windows kill loop can
+        // outlive the run path's flat timeout), so the removal's uninstall
+        // is counted here, on the same mock the download lane uses.
+        uninstallCalls += 1;
+        return { data: { removedInstallDir: true, serviceUninstalled: true } };
+      }
       return { data: {} };
     });
 
@@ -3941,13 +4589,20 @@ describe("platform matrix", () => {
       version: "1.7.0",
       runtimeVersion: "1.7.0",
     });
-    vi.mocked(runBundledTraycerCliJson).mockResolvedValue({
-      removedInstallDir: true,
-      serviceUninstalled: true,
+    vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+      data: { removedInstallDir: true, serviceUninstalled: true },
     });
 
     await controller.uninstallHost(true);
     expect(await isHostRemovedByUser()).toBe(false);
+    // Route pin: `uninstallHost` streams `host uninstall --all` for the same
+    // reason `deregisterService` and `removeTraycer` do.
+    expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
+      expect.objectContaining({ args: ["host", "uninstall", "--all"] }),
+    );
+    expect(runBundledTraycerCliJson).not.toHaveBeenCalledWith(
+      expect.arrayContaining(["uninstall"]),
+    );
   });
 });
 
@@ -4722,6 +5377,49 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
     });
     expect(controller.isPendingRevisionRefreshQuarantined()).toBe(true);
     expect(waitForHostReady).not.toHaveBeenCalled();
+  });
+
+  // Contrasts with the requires-approval post-cycle case above: "parked"
+  // is a healthy converge (the host this call already confirmed reachable
+  // is untouched, nothing needs restarting) rather than a failure - but the
+  // park is not transient, so it still quarantines for the session.
+  it("registerHostLoginItem returning parked post-cycle returns null (healthy converge), quarantines the refresh for the session, and a second attempt never re-runs the cycle", async () => {
+    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+    const reachabilityProbe = vi.fn(async () => true);
+    const controller = newControllerWithReachability(
+      "production",
+      reachabilityProbe,
+    );
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writePidMetadata("production", { version: "1.7.0", pid: process.pid });
+    vi.mocked(hasUnappliedPendingLoginItemRevision).mockResolvedValue(true);
+    vi.mocked(registerHostLoginItem).mockResolvedValue("parked");
+
+    const outcome =
+      await controller.applyPendingLoginItemRevisionIfIdle("outside-lane");
+
+    expect(outcome).toBeNull();
+    expect(controller.isPendingRevisionRefreshQuarantined()).toBe(true);
+    expect(waitForHostReady).not.toHaveBeenCalled();
+    expect(streamBundledTraycerCliJson).not.toHaveBeenCalled();
+    expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
+
+    // Quarantined for the rest of the session - a second attempt (e.g. the
+    // monitor's next tick) never re-runs the disruptive cycle, including the
+    // reachability probe: the quarantine check now runs before
+    // `readRunningRuntimeVersion`, so a quarantined tick performs no probe.
+    const reachabilityCallsBeforeSecondAttempt =
+      reachabilityProbe.mock.calls.length;
+    const second =
+      await controller.applyPendingLoginItemRevisionIfIdle("outside-lane");
+    expect(second).toBeNull();
+    expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
+    expect(reachabilityProbe.mock.calls.length).toBe(
+      reachabilityCallsBeforeSecondAttempt,
+    );
   });
 
   // Field RCA 2026-07-28: this cycle's leading bootout had just torn down a
@@ -7133,6 +7831,45 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
       // spawned argv no longer contained `--attempt-adoption` at all
       // (`flagIndex` was `-1`). Reverted before committing anything;
       // `host-controller.ts` was never touched.
+    });
+
+    // Sibling of the test above, for the OTHER `needs-takeover` producer:
+    // `registerActuator`'s `parked` arm (not `register-failed`). With no
+    // running host and `readParkedRegistrationTakeover` reporting `takeover`,
+    // the continuation finishes the park through the same minted-adoption CLI
+    // takeover rather than reporting the generic "could not be re-registered
+    // right now" deferral.
+    it("a parked registration with no running host and a takeover verdict shells --takeover with --attempt-adoption <nonce>", async () => {
+      eligibleDesktopCohort();
+      stageCliWithVerification({ outcome: "complete" });
+      const controller = stagePackagedMacRestartWorldHostDown();
+      writeOwnedSmAppServiceSubstrate();
+      await seedParkedActivationAttempt("2.0.0");
+      // Drives `runMacActivationStepWithCapability` to `phase: "parked"`
+      // with `prePid === null` (no running host, per
+      // `stagePackagedMacRestartWorldHostDown`).
+      vi.mocked(registerHostLoginItem).mockResolvedValueOnce("parked");
+      vi.mocked(readHostLoginItemStatus).mockReturnValue("not-found");
+      vi.mocked(readParkedRegistrationTakeover).mockResolvedValue({
+        kind: "takeover",
+        status: "not-found",
+      });
+
+      const outcome = await controller.respawn({ kind: "background" });
+
+      expect(outcome).toEqual({ kind: "ok", value: { activated: true } });
+      const argv = takeoverCallArgv();
+      expect(argv).toBeDefined();
+      // Match the first four: adoption args may be appended after them.
+      expect(argv?.slice(0, 4)).toEqual([
+        "host",
+        "service",
+        "install",
+        "--takeover",
+      ]);
+      const flagIndex = argv?.indexOf("--attempt-adoption") ?? -1;
+      expect(flagIndex).toBeGreaterThanOrEqual(0);
+      expect(argv?.[flagIndex + 1]).toMatch(UUID_PATTERN);
     });
 
     // Ruling (round 5, F3): terminal-with-diagnostics is correct for a

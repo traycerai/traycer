@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/dialog";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { CLI_NPM_PACKAGE_NAME } from "@traycer-clients/shared/cli-install/package-manager-upgrade-command";
 import {
   HostGlyph,
   HostPresenceDot,
@@ -44,7 +45,7 @@ import { toast } from "sonner";
 // This is the terminal path only. A machine someone installs the desktop app on
 // registers its own host at sign-in and never needs these instructions — and
 // the download page it would point at is on THAT screen, not this one.
-const CLI_NPM_COMMAND = "npm install -g @traycerai/cli";
+const CLI_NPM_COMMAND = `npm install -g ${CLI_NPM_PACKAGE_NAME}`;
 const CLI_HOMEBREW_COMMAND = "brew install traycerai/traycer/traycer";
 const LOGIN_COMMAND = "traycer login";
 const HOST_ENSURE_COMMAND = "traycer host ensure";

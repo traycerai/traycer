@@ -1,19 +1,17 @@
 /**
- * Pins `FileTreeRowContextMenu`'s row recovery, directory/file labeling, and
- * gating:
+ * Pins `FileTreeRowContextMenu`'s row recovery, menu order, and gating:
  *
  * - The row under a right-click is recovered from the event's composed path,
  *   not from a per-row element the tree hands the menu directly - a
  *   right-click that hits no tagged row must not open an empty menu.
- * - A row is a directory by either of two independent tells (a trailing
- *   separator, or absence from the openable-file map); a file row shows
- *   "Reveal in Finder", a directory row "Open in Finder".
+ * - Finder is listed as the last row of the open group, labelled the same for
+ *   a file and a folder: the host picks reveal-vs-open from the path itself.
  * - The absolute path handed to the host strips a directory row's trailing
  *   separator; the copied relative path is the workspace-relative tree path
  *   with the same separator stripped.
- * - The Finder item and the editor items are independently gated (Finder's
- *   own availability probe; the editor items on the host directory entry
- *   being local) while the two Copy items are unconditional.
+ * - Finder and the editors are independently gated (Finder's own availability
+ *   probe; the editors on the host directory entry being local) while the two
+ *   Copy items are unconditional.
  */
 import {
   afterEach,
@@ -135,23 +133,14 @@ vi.mock("sonner", () => ({
   },
 }));
 
-const FILE_NAME_BY_PATH = new Map<string, string>([
-  ["src/index.ts", "index.ts"],
-]);
-
 const FILE_ROW_PATH = "src/index.ts";
-// Directory tell #1: a trailing separator.
+// A directory row, marked by the trailing separator the tree gives folders.
 const DIR_ROW_TRAILING_SLASH_PATH = "src/lib/";
-// Directory tell #2: absent from `fileNameByPath`, no trailing separator.
-const DIR_ROW_ABSENT_PATH = "src/assets";
+const DIR_ROW_PLAIN_PATH = "src/assets";
 
 function renderTree(hostId: string | null) {
   return render(
-    <FileTreeRowContextMenu
-      hostId={hostId}
-      workspacePath="/repo"
-      fileNameByPath={FILE_NAME_BY_PATH}
-    >
+    <FileTreeRowContextMenu hostId={hostId} workspacePath="/repo">
       <div data-testid="tree">
         <div
           data-testid="row-file"
@@ -166,8 +155,8 @@ function renderTree(hostId: string | null) {
           lib
         </div>
         <div
-          data-testid="row-dir-absent"
-          {...{ [PIERRE_ITEM_PATH_ATTR]: DIR_ROW_ABSENT_PATH }}
+          data-testid="row-dir-plain"
+          {...{ [PIERRE_ITEM_PATH_ATTR]: DIR_ROW_PLAIN_PATH }}
         >
           assets
         </div>
@@ -178,11 +167,7 @@ function renderTree(hostId: string | null) {
 
 function renderTreeWithChildren(hostId: string | null, children: ReactElement) {
   return render(
-    <FileTreeRowContextMenu
-      hostId={hostId}
-      workspacePath="/repo"
-      fileNameByPath={FILE_NAME_BY_PATH}
-    >
+    <FileTreeRowContextMenu hostId={hostId} workspacePath="/repo">
       {children}
     </FileTreeRowContextMenu>,
   );
@@ -211,34 +196,34 @@ describe("<FileTreeRowContextMenu />", () => {
     cleanup();
   });
 
-  it("labels the Finder item 'Reveal in Finder' for a file row", () => {
+  it("lists Finder last in the open group, after every editor", () => {
     renderTree("host-1");
 
     fireEvent.contextMenu(screen.getByTestId("row-file"));
 
-    expect(screen.getByTestId("epic-file-tree-row-finder").textContent).toBe(
-      "Reveal in Finder",
-    );
+    // The whole menu in order: Finder closes the open group, and the two Copy
+    // rows stay below it.
+    expect(
+      screen.getAllByRole("menuitem").map((item) => item.textContent),
+    ).toEqual([
+      "VS Code",
+      "Cursor",
+      "Windsurf",
+      "Zed",
+      "Finder",
+      "Copy Path",
+      "Copy Relative Path",
+    ]);
   });
 
-  it("labels the Finder item 'Open in Finder' for a directory row marked by a trailing slash", () => {
+  it("labels Finder identically for a directory row", () => {
+    // The host chooses `open -R` for a file and `open` for a folder, so the
+    // row does not have to say which it is.
     renderTree("host-1");
 
     fireEvent.contextMenu(screen.getByTestId("row-dir-trailing"));
 
-    expect(screen.getByTestId("epic-file-tree-row-finder").textContent).toBe(
-      "Open in Finder",
-    );
-  });
-
-  it("labels the Finder item 'Open in Finder' for a directory row absent from fileNameByPath", () => {
-    renderTree("host-1");
-
-    fireEvent.contextMenu(screen.getByTestId("row-dir-absent"));
-
-    expect(screen.getByTestId("epic-file-tree-row-finder").textContent).toBe(
-      "Open in Finder",
-    );
+    screen.getByRole("menuitem", { name: "Finder" });
   });
 
   // One select per render: a second launch inside the same menu instance is
@@ -247,7 +232,7 @@ describe("<FileTreeRowContextMenu />", () => {
     renderTree("host-1");
 
     fireEvent.contextMenu(screen.getByTestId("row-file"));
-    fireEvent.click(screen.getByTestId("epic-file-tree-row-finder"));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Finder" }));
 
     expect(menuState.mutate).toHaveBeenLastCalledWith({
       editorId: "finder",
@@ -259,7 +244,7 @@ describe("<FileTreeRowContextMenu />", () => {
     renderTree("host-1");
 
     fireEvent.contextMenu(screen.getByTestId("row-dir-trailing"));
-    fireEvent.click(screen.getByTestId("epic-file-tree-row-finder"));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Finder" }));
 
     expect(menuState.mutate).toHaveBeenLastCalledWith({
       editorId: "finder",
@@ -271,14 +256,14 @@ describe("<FileTreeRowContextMenu />", () => {
     renderTree("host-1");
 
     fireEvent.contextMenu(screen.getByTestId("row-dir-trailing"));
-    fireEvent.click(screen.getByTestId("epic-file-tree-row-copy-path"));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Copy Path" }));
 
     expect(copyCalls).toEqual(["/repo/src/lib"]);
     expect(toast.success).toHaveBeenLastCalledWith("Copied path");
 
     fireEvent.contextMenu(screen.getByTestId("row-dir-trailing"));
     fireEvent.click(
-      screen.getByTestId("epic-file-tree-row-copy-relative-path"),
+      screen.getByRole("menuitem", { name: "Copy Relative Path" }),
     );
 
     expect(copyCalls).toEqual(["/repo/src/lib", "src/lib"]);
@@ -291,7 +276,7 @@ describe("<FileTreeRowContextMenu />", () => {
     const wasNotPrevented = fireEvent.contextMenu(screen.getByTestId("tree"));
 
     expect(wasNotPrevented).toBe(false);
-    expect(screen.queryByTestId("epic-file-tree-row-menu")).toBeNull();
+    expect(screen.queryByRole("menu")).toBeNull();
   });
 
   it("hides the Finder item when the gate is closed, keeping both Copy items", () => {
@@ -300,9 +285,9 @@ describe("<FileTreeRowContextMenu />", () => {
 
     fireEvent.contextMenu(screen.getByTestId("row-file"));
 
-    expect(screen.queryByTestId("epic-file-tree-row-finder")).toBeNull();
-    screen.getByTestId("epic-file-tree-row-copy-path");
-    screen.getByTestId("epic-file-tree-row-copy-relative-path");
+    expect(screen.queryByRole("menuitem", { name: "Finder" })).toBeNull();
+    screen.getByRole("menuitem", { name: "Copy Path" });
+    screen.getByRole("menuitem", { name: "Copy Relative Path" });
   });
 
   it("renders no editor items when the host entry is not local, while both Copy items still render", () => {
@@ -311,10 +296,10 @@ describe("<FileTreeRowContextMenu />", () => {
 
     fireEvent.contextMenu(screen.getByTestId("row-file"));
 
-    expect(screen.queryByTestId("epic-file-tree-row-open-vscode")).toBeNull();
-    expect(screen.queryByTestId("epic-file-tree-row-open-cursor")).toBeNull();
-    screen.getByTestId("epic-file-tree-row-copy-path");
-    screen.getByTestId("epic-file-tree-row-copy-relative-path");
+    expect(screen.queryByRole("menuitem", { name: "VS Code" })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: "Cursor" })).toBeNull();
+    screen.getByRole("menuitem", { name: "Copy Path" });
+    screen.getByRole("menuitem", { name: "Copy Relative Path" });
   });
 
   // Radix arms a 700ms long-press timer on a touch/pen pointerdown and opens
@@ -342,9 +327,7 @@ describe("<FileTreeRowContextMenu />", () => {
 
       // `toContain`, not `toBe`: the spinner glyph shares the item's
       // textContent. A label swapped to "Opening…" still fails this.
-      expect(
-        screen.getByTestId("epic-file-tree-row-finder").textContent,
-      ).toContain("Reveal in Finder");
+      screen.getByRole("menuitem", { name: "Finder" });
     });
 
     it("labels a directory row correctly through the same path", () => {
@@ -357,9 +340,7 @@ describe("<FileTreeRowContextMenu />", () => {
         vi.advanceTimersByTime(700);
       });
 
-      expect(screen.getByTestId("epic-file-tree-row-finder").textContent).toBe(
-        "Open in Finder",
-      );
+      screen.getByRole("menuitem", { name: "Finder" });
     });
 
     it("opens nothing when the long-press hits no row", () => {
@@ -373,7 +354,7 @@ describe("<FileTreeRowContextMenu />", () => {
       });
 
       expect(notPrevented).toBe(false);
-      expect(screen.queryByTestId("epic-file-tree-row-menu")).toBeNull();
+      expect(screen.queryByRole("menu")).toBeNull();
     });
 
     it("ignores a mouse pointerdown, leaving that path to contextMenu", () => {
@@ -386,7 +367,7 @@ describe("<FileTreeRowContextMenu />", () => {
         vi.advanceTimersByTime(700);
       });
 
-      expect(screen.queryByTestId("epic-file-tree-row-menu")).toBeNull();
+      expect(screen.queryByRole("menu")).toBeNull();
     });
   });
 
@@ -402,22 +383,22 @@ describe("<FileTreeRowContextMenu />", () => {
 
       expect(
         screen
-          .getByTestId("epic-file-tree-row-open-vscode")
+          .getByRole("menuitem", { name: "VS Code" })
           .getAttribute("data-disabled"),
       ).not.toBeNull();
       expect(
         screen
-          .getByTestId("epic-file-tree-row-finder")
+          .getByRole("menuitem", { name: "Finder" })
           .getAttribute("data-disabled"),
       ).not.toBeNull();
       expect(
         screen
-          .getByTestId("epic-file-tree-row-copy-path")
+          .getByRole("menuitem", { name: "Copy Path" })
           .getAttribute("data-disabled"),
       ).toBeNull();
       expect(
         screen
-          .getByTestId("epic-file-tree-row-copy-relative-path")
+          .getByRole("menuitem", { name: "Copy Relative Path" })
           .getAttribute("data-disabled"),
       ).toBeNull();
     });
@@ -432,15 +413,11 @@ describe("<FileTreeRowContextMenu />", () => {
       // dead item, and the label must not become "Opening…" - the spinner is
       // the only channel that moves.
       screen.getByTestId("epic-file-tree-row-open-vscode-spinner");
-      screen.getByTestId("epic-file-tree-row-finder-spinner");
-      expect(
-        screen.getByTestId("epic-file-tree-row-open-vscode").textContent,
-      ).toContain("VS Code");
+      screen.getByTestId("epic-file-tree-row-open-finder-spinner");
+      screen.getByRole("menuitem", { name: "VS Code" });
       // `toContain`, not `toBe`: the spinner glyph shares the item's
       // textContent. A label swapped to "Opening…" still fails this.
-      expect(
-        screen.getByTestId("epic-file-tree-row-finder").textContent,
-      ).toContain("Reveal in Finder");
+      screen.getByRole("menuitem", { name: "Finder" });
 
       // The Copy items neither disable nor spin - they touch no host.
       expect(
@@ -457,7 +434,7 @@ describe("<FileTreeRowContextMenu />", () => {
         screen.queryByTestId("epic-file-tree-row-open-vscode-spinner"),
       ).toBeNull();
       expect(
-        screen.queryByTestId("epic-file-tree-row-finder-spinner"),
+        screen.queryByTestId("epic-file-tree-row-open-finder-spinner"),
       ).toBeNull();
     });
 
@@ -466,7 +443,7 @@ describe("<FileTreeRowContextMenu />", () => {
       renderTree("host-1");
 
       fireEvent.contextMenu(screen.getByTestId("row-file"));
-      fireEvent.click(screen.getByTestId("epic-file-tree-row-finder"));
+      fireEvent.click(screen.getByRole("menuitem", { name: "Finder" }));
 
       expect(menuState.mutate).not.toHaveBeenCalled();
     });
@@ -478,11 +455,11 @@ describe("<FileTreeRowContextMenu />", () => {
       renderTree("host-1");
 
       fireEvent.contextMenu(screen.getByTestId("row-file"));
-      fireEvent.click(screen.getByTestId("epic-file-tree-row-finder"));
+      fireEvent.click(screen.getByRole("menuitem", { name: "Finder" }));
       expect(menuState.mutate).toHaveBeenCalledTimes(1);
 
       fireEvent.contextMenu(screen.getByTestId("row-file"));
-      fireEvent.click(screen.getByTestId("epic-file-tree-row-finder"));
+      fireEvent.click(screen.getByRole("menuitem", { name: "Finder" }));
 
       expect(menuState.mutate).toHaveBeenCalledTimes(1);
     });
@@ -503,6 +480,6 @@ describe("<FileTreeRowContextMenu />", () => {
 
     fireEvent.contextMenu(screen.getByTestId("row-file"));
 
-    screen.getByTestId("epic-file-tree-row-menu");
+    screen.getByRole("menu");
   });
 });

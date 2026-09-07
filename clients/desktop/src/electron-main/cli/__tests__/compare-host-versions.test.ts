@@ -1,5 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 
+// `cli-discovery.ts` imports the desktop logger, whose `electron` dependency
+// otherwise boots Vitest's real Electron runtime. These tests exercise only a
+// pure comparator, so keep the suite independent of a downloaded Electron
+// binary and the app lifecycle.
+vi.mock("electron", () => ({
+  app: { getPath: (): string => "/tmp/desktop-app" },
+}));
+
 // `cli-discovery.ts` imports `app/logger` (which imports `electron-log`).
 // Stub it so the module loads under vitest.
 vi.mock("electron-log", () => ({
@@ -16,9 +24,9 @@ vi.mock("electron-log", () => ({
 }));
 
 // `compareHostVersions` drives the host "update available?" decision in
-// `buildUpdateState`. Unlike `compareSemver` (CLI bundled-vs-PATH trust, which
-// strips pre-release suffixes by design), this comparator MUST order a
-// pre-release below its GA so a `1.0.0-rc.1` host upgrades to `1.0.0`.
+// `buildUpdateState` and supplies SemVer precedence for CLI reconciliation.
+// A pre-release must sort below its GA so a `1.0.0-rc.1` host upgrades to
+// `1.0.0`.
 describe("compareHostVersions", () => {
   it("returns 0 for unparseable input so no spurious update is advertised", async () => {
     const { compareHostVersions } = await import("../cli-discovery");

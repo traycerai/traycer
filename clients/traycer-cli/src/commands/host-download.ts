@@ -32,6 +32,10 @@ export function buildHostDownloadCommand(args: HostDownloadArgs): CommandFn {
       automatic: args.automatic,
       onProgress: (info) => ctx.progress(info),
       registryClient: null,
+      // No marker to publish from here: `host download` never touches the
+      // running host, so there is no in-flight update for a remote client to
+      // be told about.
+      onWillDownload: null,
     });
     ctx.runtime.logger.info("Host download command completed", {
       environment: ctx.runtime.environment,

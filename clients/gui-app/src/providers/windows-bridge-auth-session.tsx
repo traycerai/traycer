@@ -103,21 +103,14 @@ export function WindowsBridgeAuthSessionBridge(
       });
     };
 
-    const sessionSubscription = auth.onSessionSnapshotChange(writeOutbound);
     const inboundSubscription = bridge.authSession.onChange(ingestInbound);
-
-    // Capture the identity generation BEFORE the delayed get so a stale
-    // initial snapshot cannot overwrite a newer local mutation (or reconcile)
-    // that landed while the get was in flight. ingestProjectedSessionSnapshot
-    // fences its own validation await; this fences the pre-ingest await.
-    void (async () => {
-      const generationAtRead = auth.getIdentityGeneration();
-      const initial = await bridge.authSession.get();
-      if (auth.getIdentityGeneration() !== generationAtRead) {
-        return;
-      }
-      ingestInbound(initial);
-    })();
+    // HostRuntimeProvider has already awaited auth.start(), restoring the
+    // shared credentials file. Subscribing synchronously replays that session
+    // to main. Do not read main's initial projection back: its signed-in write
+    // awaits bearer verification, so a concurrent get can still return the
+    // default signed-out snapshot and undo the restore until verification ends.
+    // Listen first so subsequent cross-window transitions remain observable.
+    const sessionSubscription = auth.onSessionSnapshotChange(writeOutbound);
 
     return () => {
       sessionSubscription.dispose();

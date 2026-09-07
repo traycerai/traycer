@@ -1,9 +1,9 @@
-import { type ReactNode, useEffect } from "react";
+import { type ReactNode } from "react";
 import { DiffWorkerPoolProvider } from "@/components/diff-worker-pool-provider";
-import { BrowserOverlayCoordinatorBridge } from "@/components/epic-canvas/browser-overlay-coordinator-bridge";
 import { RootDndProvider } from "@/components/epic-canvas/dnd/root-dnd-provider";
 import { TileFindOwnerBridge } from "@/components/epic-canvas/tile-find/tile-find-owner-bridge";
 import { TileSelectAllBridge } from "@/components/epic-canvas/tile-select-all-bridge";
+import { ReservedBrowserChordsBridge } from "@/components/layout/bridges/reserved-browser-chords-bridge";
 import { QuitInterceptBridge } from "@/components/layout/bridges/quit-intercept-bridge";
 import { MigrationBlockingModalHost } from "@/components/layout/dialogs/migration-blocking-modal-host";
 import { AppHeader } from "@/components/layout/header/app-header";
@@ -13,6 +13,7 @@ import { useDragToDismissKeyboard } from "@/components/layout/shell/use-drag-to-
 import { SessionConnectivityStrip } from "@/components/layout/session-connectivity-strip";
 import { ClockSkewBanner } from "@/components/layout/clock-skew-banner";
 import { useMobileHistorySwipes } from "@/components/layout/shell/use-mobile-history-swipes";
+import { useSystemBack } from "@/components/layout/shell/use-system-back";
 import { TopLevelTabHost } from "@/components/layout/top-level-tab-host";
 import { TopLevelSurfaceActivationProvider } from "@/components/layout/top-level-surface-activation-provider";
 import { HostScopeReady } from "@/components/layout/host-readiness-controller";
@@ -57,32 +58,11 @@ export function AppShell(props: AppShellProps) {
   // mobile-app product flag, so desktop attaches nothing and keeps its arrows.
   // Renders nothing until a swipe is actually in flight.
   const historySwipeTransition = useMobileHistorySwipes();
-  // Dev-only: flags a portal that painted outside the browser-overlay
-  // registry (browser-overlay-coexistence epic, ticket 02). Mounted here
-  // rather than inside `BrowserOverlayCoordinatorBridge` below - that file
-  // is owned by ticket 04 - and gated by a dynamic `import()` behind
-  // `import.meta.env.DEV`, the codebase's existing dev-only-module idiom
-  // (`src/dev/seed-canvas-fixture.ts`'s own gate in `traycer-app.tsx`), so a
-  // production build tree-shakes the whole module out, not just the call.
-  useEffect(() => {
-    if (!import.meta.env.DEV) return;
-    let dispose: (() => void) | undefined;
-    let cancelled = false;
-    void import("@/lib/browser-view/tiles/unregistered-portal-tripwire")
-      .then((module) => {
-        if (cancelled) return;
-        const appRoot = document.getElementById("root");
-        if (appRoot === null) return;
-        dispose = module.installUnregisteredPortalTripwire(appRoot);
-      })
-      // A dev-only diagnostic that fails to load stays silent rather than
-      // surfacing as an unhandled rejection in the app it is watching.
-      .catch(() => undefined);
-    return () => {
-      cancelled = true;
-      dispose?.();
-    };
-  }, []);
+  // The OS back request, where the shell raises one (Android's key and system
+  // gesture, which never reach the swipe above as a touch). Walks the same
+  // history through the same `goBack`. Self-gated on the shell capability, so
+  // every other shell attaches nothing.
+  useSystemBack();
 
   return (
     <PrimaryFocusCoordinatorProvider>
@@ -135,7 +115,7 @@ export function AppShell(props: AppShellProps) {
                     <LandingTerminalHost />
                   </HostScopeReady>
                 </div>
-                <BrowserOverlayCoordinatorBridge />
+                <ReservedBrowserChordsBridge />
                 <TileFindOwnerBridge />
                 <TileSelectAllBridge />
               </main>

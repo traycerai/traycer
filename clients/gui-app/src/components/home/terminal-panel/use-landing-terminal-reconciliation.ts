@@ -38,8 +38,11 @@ import {
   type LandingTerminalPendingKill,
 } from "@/stores/home/landing-terminal-store";
 import {
+  adoptListedProviderLoginSessions,
   reconcileHostAuthoritativeLandingTerminalTabs,
   reconcileLandingTerminalTabs,
+  retiredProviderLoginPredecessors,
+  type LandingTerminalReconciliationInput,
 } from "./landing-terminal-reconciliation";
 import type { LandingTerminalAvailability } from "./landing-terminal-availability";
 import type { LandingTerminalAuthorityEntry } from "./landing-terminal-authority-fleet";
@@ -285,6 +288,22 @@ export function useLandingTerminalReconciliation(
       const initial = useLandingTerminalStore.getState();
 
       if (plainAuthority.authority.capability.status === "capable") {
+        // From `terminal.list`, which the capable pass below never reads: a
+        // host-created sign-in session has no plain-terminal row, so the
+        // projection cannot adopt it, and a sign-in started in another window
+        // - whose record reached this one through the shared registry - would
+        // otherwise have no tab here. FIRST, ahead of the plain authority's
+        // own gates: the list that just answered is all this needs, and a
+        // sign-in is short-lived - one that exits while the stream is
+        // read-only or non-fresh could never be adopted afterwards (running
+        // sessions only), and its restart surface with it. Only for the
+        // selected host: the bound host fleet reconciles other hosts from
+        // their projections alone and fetches no list for them.
+        adoptListedSignInSessions({
+          activeHostId,
+          landingPageId,
+          sessions: freshSessions,
+        });
         // A read-only authority is a reconnecting list stream, not a failed
         // fetch. `onError` clears the picker's selected target and reports
         // "The terminal directory could not be opened.", which is simply
@@ -409,6 +428,56 @@ export function useLandingTerminalReconciliation(
     provenanceRevision,
     queryClient,
   ]);
+}
+
+/**
+ * Adds a tab for every registry-claimed sign-in session the host lists that
+ * has none, keeping the current selection. See
+ * `adoptListedProviderLoginSessions` for why the capable arm needs this.
+ */
+function adoptListedSignInSessions(args: {
+  readonly activeHostId: string;
+  readonly landingPageId: string;
+  readonly sessions: LandingTerminalReconciliationInput["sessions"];
+}): void {
+  const { activeHostId } = args;
+  const current = useLandingTerminalStore.getState();
+  const adopted = adoptListedProviderLoginSessions({
+    tabs: current.tabs,
+    activeHostId,
+    sessions: args.sessions,
+    excludedSessionKeys: new Set(
+      current.pendingKills
+        .filter((pending) => pending.hostId === activeHostId)
+        .map((pending) =>
+          terminalSessionKey(pending.hostId, pending.sessionId),
+        ),
+    ),
+    mintInstanceId: () => `landing-terminal-${uuidv4()}`,
+    providerLoginProviderFor: (sessionId) =>
+      providerLoginTerminalProviderId(activeHostId, sessionId),
+  });
+  // The predecessors the listing supersedes - a restart another window
+  // pressed killed them, and only that window retired its tab. Independent of
+  // what this pass adopted: the successor may already be a tab here.
+  const retired = new Set(
+    retiredProviderLoginPredecessors({
+      tabs: current.tabs,
+      activeHostId,
+      sessions: args.sessions,
+      providerLoginProviderFor: (sessionId) =>
+        providerLoginTerminalProviderId(activeHostId, sessionId),
+    }),
+  );
+  if (adopted.length === 0 && retired.size === 0) return;
+  current.applyReconciliation(
+    args.landingPageId,
+    [...current.tabs.filter((tab) => !retired.has(tab.instanceId)), ...adopted],
+    current.activeInstanceId,
+    // Retirement is a removal: a pass that retires the last tab must collapse
+    // the panel, or the settlement's empty-panel path spawns a plain shell.
+    retired.size > 0,
+  );
 }
 
 /**

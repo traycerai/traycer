@@ -82,6 +82,19 @@ vi.mock("@/lib/host/runtime", async (importOriginal) => ({
   useHostClient: () => runtime.client,
   // The SPINE, a separate export since redesign P2.1.
   useHostRuntimeClient: () => runtime.client,
+  useHostBinding: () =>
+    runtime.client === null
+      ? null
+      : { hostClient: runtime.client, hostId: null },
+}));
+vi.mock("@/lib/host", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host")>()),
+  useHostBinding: () =>
+    runtime.client === null
+      ? null
+      : { hostClient: runtime.client, hostId: null },
+  useHostClient: () => runtime.client,
+  useHostRuntimeClient: () => runtime.client,
 }));
 
 interface Fixture {
@@ -456,6 +469,7 @@ describe("the other record mutations refresh the list too", () => {
     result.current.mutate({
       epicId: EPIC_ID,
       chatId: "chat-1",
+      hostId: HOST_ID,
       archived: true,
     });
 
@@ -471,7 +485,11 @@ describe("the other record mutations refresh the list too", () => {
     const result = renderChannel(() => useEpicDeleteChat());
     await settleFirstRead();
 
-    result.current.mutate({ epicId: EPIC_ID, chatId: "chat-1" });
+    result.current.mutate({
+      epicId: EPIC_ID,
+      chatId: "chat-1",
+      hostId: HOST_ID,
+    });
 
     await waitFor(() => {
       expect(

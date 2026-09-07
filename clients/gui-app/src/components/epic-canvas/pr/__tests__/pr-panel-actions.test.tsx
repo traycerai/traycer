@@ -72,7 +72,11 @@ describe("PrPanelActions staleness hint", () => {
       <QueryClientProvider client={queryClient}>
         <TooltipProvider>
           <StreamRuntimeContext.Provider
-            value={{ wsStreamClient: mockWsStreamClient, hostId: null }}
+            value={{
+              wsStreamClient: mockWsStreamClient,
+              hostId: null,
+              retain: null,
+            }}
           >
             <PrPanelActions
               epicId={props.epicId}

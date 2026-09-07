@@ -11,6 +11,7 @@ import {
   providerPackPreparingLabel,
   type ProviderPackPreparing,
 } from "@/components/providers/provider-pack-readiness";
+import type { ProviderTerminalLoginScopeSupport } from "@/hooks/providers/use-provider-terminal-login-scope-support";
 
 /**
  * What the picker says and does for a provider whose sign-in has to happen in
@@ -20,10 +21,20 @@ import {
  * (`resolveProviderTerminalSetup`): the host declares it for exactly the
  * providers whose headless login cannot work (Copilot prints its device code
  * where only a terminal shows it; Reasonix's `setup` exits 0 without a
- * credential). WHAT the action says is copy, decided here: a generic sign-in
- * framing by default, overridden per provider where that framing is wrong.
+ * credential; Qwen, Droid, OMP and OpenCode have no login command at all, so
+ * the host launches the CLI itself and the sign-in is a step inside it). WHAT
+ * the action says is copy, decided here: a generic sign-in framing by
+ * default, overridden per provider where that framing is wrong.
  *
- * Reasonix is the override. The generic surfaces describe a sign-in: "Sign in
+ * Two kinds of override. `TERMINAL_SIGN_IN_COPY` re-words the generic
+ * sign-in for the launch-the-CLI providers: the default says the terminal
+ * "prints a sign-in code", but what actually opens is the CLI's own UI, and
+ * a user left in front of a TUI with no instruction is where that flow
+ * stalls - so the first step names the thing to type. It stays the GENERIC
+ * guidance in every other respect (no manual command, the same labels), so
+ * an old host that declares no capability still shows nothing for them.
+ *
+ * Reasonix is the full override. The generic surfaces describe a sign-in: "Sign in
  * from a terminal", "prints a sign-in code". For a provider that owns its own
  * credential store that framing is wrong in a way that costs the user real
  * time - Reasonix's own startup warning names an environment variable
@@ -60,6 +71,13 @@ export interface ProviderSetupGuidance {
    */
   readonly noSurfaceStep: string;
   /**
+   * The first step on a start page whose host can open the terminal only
+   * from an Epic (it negotiated the pre-scope `providers.startTerminalLogin`
+   * major), naming that route. Distinct from `noSurfaceStep`, which also
+   * names the start page - the one surface this host cannot open it from.
+   */
+  readonly epicOnlyStep: string;
+  /**
    * The command a self-installed CLI runs to do the same thing; rendered as
    * code, always beside the caveat that it targets whatever binary and home
    * that shell resolves. `null` when the renderer has nothing truthful to
@@ -85,6 +103,8 @@ const PROVIDER_SETUP_GUIDANCE: {
     ],
     noSurfaceStep:
       "Choose “Set up in terminal” from a chat's model picker or the start page's. It opens Reasonix's setup wizard on the host that composer runs on.",
+    epicOnlyStep:
+      "Open a chat and choose “Set up in terminal” from its model picker. This host's version can open Reasonix's setup wizard from a chat, but not from the start page.",
     manualCommand: "reasonix setup",
     terminalActionLabel: "Set up in terminal",
     terminalHint:
@@ -101,26 +121,104 @@ export function providerSetupGuidance(
 }
 
 /**
- * The generic terminal sign-in copy - the same sentences the composer banner
- * uses for a provider without an override, so the picker and the banner
- * describe one flow the same way.
+ * The sentences that differ for a provider whose sign-in terminal opens the
+ * CLI itself rather than a login command. Each names the step the user takes
+ * INSIDE that CLI, which is the one thing the generic copy cannot say.
+ */
+interface TerminalSignInCopy {
+  readonly summary: string;
+  /** Replaces the generic "Complete the sign-in in that terminal." step. */
+  readonly firstStep: string;
+  readonly terminalHint: string;
+}
+
+const TERMINAL_SIGN_IN_COPY: {
+  readonly [k in ProviderId]?: TerminalSignInCopy;
+} = {
+  qwen: {
+    summary: "Qwen Code signs in from inside its own terminal UI.",
+    firstStep:
+      "Type /auth in that terminal, choose a sign-in method and finish in the browser.",
+    terminalHint:
+      "Qwen Code opens in that terminal. Type /auth and complete the sign-in there, then use Refresh above.",
+  },
+  droid: {
+    summary: "Droid signs in from inside its own terminal UI.",
+    firstStep: "Follow the sign-in prompt Droid shows when it starts.",
+    terminalHint:
+      "Droid opens in that terminal and prompts you to sign in. Complete it there, then use Refresh above.",
+  },
+  omp: {
+    summary:
+      "Oh My Pi signs in from inside its own terminal UI, one provider account at a time.",
+    firstStep:
+      "Type login followed by the provider (for example login anthropic) in that terminal and follow the prompts.",
+    terminalHint:
+      "Oh My Pi opens in that terminal. Run login <provider> and complete the sign-in there, then use Refresh above.",
+  },
+  opencode: {
+    summary:
+      "OpenCode signs in from a terminal, one provider account at a time.",
+    firstStep:
+      "Pick the provider and sign-in method in that terminal and follow the prompts.",
+    terminalHint:
+      "OpenCode asks for the provider and sign-in method in that terminal. Complete it there, then use Refresh above.",
+  },
+};
+
+/**
+ * The generic terminal sign-in copy for a provider with no override. Reached
+ * only through `providerTerminalGuidance`, which is what keeps the picker and
+ * the banner describing one flow the same way. The launch-the-CLI providers re-word the
+ * three sentences that would otherwise describe a sign-in code nothing prints
+ * (`TERMINAL_SIGN_IN_COPY`) and keep everything else.
  */
 export function defaultTerminalSignInGuidance(
   providerId: ProviderId,
 ): ProviderSetupGuidance {
   const name = PROVIDER_DISPLAY_NAMES[providerId];
+  const copy = TERMINAL_SIGN_IN_COPY[providerId] ?? null;
   return {
-    summary: `${name} signs in from a terminal: it prints a sign-in code that only exists there.`,
+    summary:
+      copy?.summary ??
+      `${name} signs in from a terminal: it prints a sign-in code that only exists there.`,
     stepsAfterAction: [
-      "Complete the sign-in in that terminal.",
+      copy?.firstStep ?? "Complete the sign-in in that terminal.",
       "Refresh this list.",
     ],
     noSurfaceStep:
       "Choose “Sign in from a terminal” from a chat's model picker or the start page's. It opens the sign-in on the host that composer runs on.",
+    epicOnlyStep: `Open a chat and choose “Sign in from a terminal” from its model picker. This host's version can open the ${name} sign-in from a chat, but not from the start page.`,
     manualCommand: null,
     terminalActionLabel: "Sign in from a terminal",
-    terminalHint: `${name} prints a sign-in code that only exists in the terminal. Complete the sign-in there, then use Refresh above.`,
+    terminalHint:
+      copy?.terminalHint ??
+      `${name} prints a sign-in code that only exists in the terminal. Complete the sign-in there, then use Refresh above.`,
   };
+}
+
+/**
+ * THE copy for a provider's terminal flow: its override if the table has one,
+ * the generic sign-in copy otherwise.
+ *
+ * Every surface that renders a terminal action resolves through this - the
+ * picker's setup CTA (via `resolveProviderTerminalSetup` below) and the
+ * composer banner's `TerminalLoginRow`. The banner used to fall back to its
+ * OWN inline copy of the generic sentences when the override table returned
+ * `null`, which is the same two sentences written twice, and the copy
+ * diverged the moment a provider needed different ones:
+ * `TERMINAL_SIGN_IN_COPY` reached the picker and the banner went on telling a
+ * Qwen user to read a sign-in code that nothing prints. A provider with no
+ * terminal sign-in at all never reaches either surface - the capability gate
+ * (`providerSupportsTerminalLogin`) decides that, not the copy.
+ */
+export function providerTerminalGuidance(
+  providerId: ProviderId,
+): ProviderSetupGuidance {
+  return (
+    providerSetupGuidance(providerId) ??
+    defaultTerminalSignInGuidance(providerId)
+  );
 }
 
 /**
@@ -170,7 +268,7 @@ export function resolveProviderTerminalSetup(
       : { guidance: override, canStartTerminal: false, packPreparing: null };
   }
   return {
-    guidance: override ?? defaultTerminalSignInGuidance(providerId),
+    guidance: providerTerminalGuidance(providerId),
     canStartTerminal: true,
     packPreparing: providerTerminalLoginPackBlock(state),
   };
@@ -201,8 +299,21 @@ export type ProviderSetupActionPlacement =
   | "here"
   /** A button, but on another surface (a fork dialog's picker). */
   | "other-surface"
-  /** No button anywhere on this host - the manual command is the route. */
+  /**
+   * No button this copy can vouch for: the host declares no terminal
+   * sign-in, or there is no host to ask / its manifest is not recorded yet.
+   * The manual command is the route; no claim is made about the machine.
+   */
   | "unsupported-host"
+  /**
+   * A button on this host, but only in an Epic: the host negotiated the
+   * pre-scope `providers.startTerminalLogin` major, which cannot carry the
+   * scope the start page needs. The steps lead with that route - the
+   * post-action steps alone would tell the user to finish in a terminal
+   * nothing here can open, and the generic guidance has no manual command to
+   * fall back on.
+   */
+  | "unsupported-scope"
   /**
    * A button here in principle, but the provider's pack cannot spawn yet. The
    * preparing label stands where the button would; the steps read as they do
@@ -215,23 +326,28 @@ export type ProviderSetupActionPlacement =
  * so the auth line and the model list cannot classify the same state
  * differently - the reason they were wrong about old hosts in the first place.
  *
- * `scopeSupported` is the third because the first two cannot see it: the
+ * `scopeSupport` is the third because the first two cannot see it: the
  * provider row says this provider HAS a terminal sign-in, and the surface says
  * where a button would go, but neither knows whether this host's negotiated
  * `providers.startTerminalLogin` can carry the scope that surface needs. On the
  * release just before the scope bump it cannot, and only for the landing
  * surface - so the same provider on the same host is `here` in an Epic and
- * `unsupported-host` on the start page. See
+ * `unsupported-scope` on the start page. See
  * `useProviderTerminalLoginScopeSupported`.
  */
 export function providerSetupActionPlacement(
   setup: ProviderTerminalSetup,
   hasSurface: boolean,
-  scopeSupported: boolean,
+  scopeSupport: ProviderTerminalLoginScopeSupport,
 ): ProviderSetupActionPlacement {
   // Permanent reasons first: a pack that will finish downloading does not
   // change a host that can never carry this scope.
-  if (!setup.canStartTerminal || !scopeSupported) return "unsupported-host";
+  if (!setup.canStartTerminal) return "unsupported-host";
+  // `unsupported-scope` leads the steps with "this host's version can open
+  // the sign-in from a chat" - a claim only a RECORDED pre-scope manifest
+  // proves. An unknown manifest, or no host at all, gets the claim-free copy.
+  if (scopeSupport === "unknown") return "unsupported-host";
+  if (scopeSupport === "unsupported") return "unsupported-scope";
   if (setup.packPreparing !== null) return "preparing";
   return hasSurface ? "here" : "other-surface";
 }
@@ -249,6 +365,9 @@ export function providerSetupSteps(
 ): ReadonlyArray<string> {
   if (placement === "other-surface") {
     return [guidance.noSurfaceStep, ...guidance.stepsAfterAction];
+  }
+  if (placement === "unsupported-scope") {
+    return [guidance.epicOnlyStep, ...guidance.stepsAfterAction];
   }
   return guidance.stepsAfterAction;
 }

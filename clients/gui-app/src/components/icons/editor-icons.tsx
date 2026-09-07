@@ -180,6 +180,70 @@ export function VSCodiumIcon({ className, ...props }: EditorIconProps) {
   );
 }
 
+/**
+ * The macOS Finder face: one rounded square split down the middle, the left
+ * half blue and the right half near-white, with the smile crossing both. The
+ * smile is stroked twice under per-half clips because a single colour is
+ * invisible on one side or the other; ids are `useId`-scoped so several
+ * instances cannot collide on them. Kept to flat shapes so the split still
+ * reads at 14px.
+ */
+export function FinderIcon({ className, ...props }: EditorIconProps) {
+  const id = useId();
+  const squareId = `${id}-finder-a`;
+  const leftId = `${id}-finder-b`;
+  const rightId = `${id}-finder-c`;
+  return (
+    <svg {...props} viewBox="0 0 24 24" className={cn(className)}>
+      <defs>
+        <clipPath id={squareId}>
+          <rect x="1" y="1" width="22" height="22" rx="5" />
+        </clipPath>
+        <clipPath id={leftId}>
+          <rect x="1" y="1" width="11" height="22" />
+        </clipPath>
+        <clipPath id={rightId}>
+          <rect x="12" y="1" width="11" height="22" />
+        </clipPath>
+      </defs>
+      <g clipPath={`url(#${squareId})`}>
+        <rect x="1" y="1" width="11" height="22" fill="#2E8BF2" />
+        <rect x="12" y="1" width="11" height="22" fill="#EDF4FE" />
+        <ellipse cx="7.4" cy="9" rx="1.05" ry="1.7" fill="#FFFFFF" />
+        <ellipse cx="16.6" cy="9" rx="1.05" ry="1.7" fill="#31415C" />
+        <g clipPath={`url(#${leftId})`}>
+          <path
+            d="M6 13.7c1.55 2.7 3.65 4.05 6 4.05s4.45-1.35 6-4.05"
+            fill="none"
+            stroke="#FFFFFF"
+            strokeWidth="1.5"
+            strokeLinecap="round"
+          />
+        </g>
+        <g clipPath={`url(#${rightId})`}>
+          <path
+            d="M6 13.7c1.55 2.7 3.65 4.05 6 4.05s4.45-1.35 6-4.05"
+            fill="none"
+            stroke="#31415C"
+            strokeWidth="1.5"
+            strokeLinecap="round"
+          />
+        </g>
+      </g>
+      <rect
+        x="1"
+        y="1"
+        width="22"
+        height="22"
+        rx="5"
+        fill="none"
+        stroke="#31415C"
+        strokeOpacity="0.22"
+      />
+    </svg>
+  );
+}
+
 export function ZedIcon({ className, ...props }: EditorIconProps) {
   return (
     <svg

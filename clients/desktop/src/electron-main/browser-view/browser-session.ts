@@ -65,6 +65,16 @@ type BrowserDisplayMediaRequestHandler = (
   callback: (streams: object) => void,
 ) => void;
 
+interface BrowserViewBeforeRequestDetails {
+  readonly url: string;
+  readonly webContentsId?: number;
+}
+
+type BrowserViewBeforeRequestListener = (
+  details: BrowserViewBeforeRequestDetails,
+  callback: (response: { readonly cancel?: boolean }) => void,
+) => void;
+
 interface BrowserViewPolicySession {
   setPermissionRequestHandler(
     handler: BrowserPermissionRequestHandler | null,
@@ -90,6 +100,9 @@ interface BrowserViewPolicySession {
     handler: BrowserDisplayMediaRequestHandler | null,
   ): void;
   on(event: "will-download", listener: BrowserDownloadListener): void;
+  readonly webRequest: {
+    onBeforeRequest(listener: BrowserViewBeforeRequestListener): void;
+  };
 }
 
 interface BrowserViewTrackedWebContents {
@@ -161,6 +174,13 @@ const BROWSER_ALLOWED_PERMISSIONS: ReadonlySet<string> = new Set([
 
 const installedPolicySessions = new WeakSet<BrowserViewPolicySession>();
 const browserWebContentsIds = new Set<number>();
+/**
+ * Exact webview guests whose non-`about:blank` requests stay cancelled until
+ * main finishes policy/seed/CDP. One process set; each session policy installs
+ * the same `onBeforeRequest` listener once.
+ */
+const gatedGuestWebContentsIds = new Set<number>();
+const BLANK_GUEST_REQUEST_URL = "about:blank";
 const browserDownloadListeners = new Set<
   (change: BrowserSessionDownloadChange) => void
 >();
@@ -192,6 +212,35 @@ export function ensureBrowserViewSession(
   return ensureBrowserViewSessionForPartition(
     partitionForProfile(request.profile, request.sessionId),
   );
+}
+
+/**
+ * A plain desktop Chrome User-Agent for guest partitions, carrying NO
+ * `Electron/<ver>` token and NO Traycer product token - exactly the shape a
+ * real Chrome sends. Guests are browser tabs, and providers (Google's
+ * `disallowed_useragent`, others) refuse sign-in for any UA containing
+ * "Electron", which broke OAuth completing inside a guest/popup. The Chrome
+ * version tracks the runtime; the platform token is the standard per-OS string
+ * a real Chrome reports (macOS reports Intel even on Apple Silicon, matching
+ * Chrome). Traycer's own host/renderer comms keep their branded UA via
+ * `configureUserAgent()` on the default session.
+ *
+ * Guests get this clean UA too, but not via a session-level `setUserAgent`
+ * call here: guest partition sessions are never the default session, so with
+ * no explicit session UA they fall through to `app.userAgentFallback`, which
+ * `configureUserAgent()` sets to this same value. That one lever covers both
+ * guests and their popups (popups share the opener's partition session) -
+ * exported for `configureUserAgent()` to consume.
+ */
+export function guestBrowserUserAgent(): string {
+  const platformToken = guestBrowserPlatformToken();
+  return `Mozilla/5.0 (${platformToken}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${process.versions.chrome} Safari/537.36`;
+}
+
+function guestBrowserPlatformToken(): string {
+  if (process.platform === "darwin") return "Macintosh; Intel Mac OS X 10_15_7";
+  if (process.platform === "win32") return "Windows NT 10.0; Win64; x64";
+  return "X11; Linux x86_64";
 }
 
 /** The named jar, bypassing the saved-logins pref. */
@@ -386,9 +435,34 @@ function installBrowserViewSessionPolicy(
   target.setDisplayMediaRequestHandler((_request, callback) => {
     callback({});
   });
+  target.webRequest.onBeforeRequest((details, callback) => {
+    const webContentsId = details.webContentsId;
+    if (
+      webContentsId !== undefined &&
+      gatedGuestWebContentsIds.has(webContentsId) &&
+      details.url !== BLANK_GUEST_REQUEST_URL
+    ) {
+      callback({ cancel: true });
+      return;
+    }
+    callback({});
+  });
   target.on("will-download", (_event, item, webContents) => {
     handleBrowserViewDownload(item, webContents);
   });
+}
+
+/**
+ * Cancel this guest's non-`about:blank` requests until the disposer runs.
+ * Called once for each guest birth; the returned disposer is idempotent.
+ */
+export function gateBrowserViewGuestRequests(
+  webContentsId: number,
+): () => void {
+  gatedGuestWebContentsIds.add(webContentsId);
+  return () => {
+    gatedGuestWebContentsIds.delete(webContentsId);
+  };
 }
 
 function isBrowserPermissionAllowed(permission: string): boolean {

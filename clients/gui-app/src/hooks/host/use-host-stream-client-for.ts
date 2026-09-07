@@ -107,6 +107,30 @@ export interface HostStreamClientBinding {
   readonly unpin: () => void;
 }
 
+/**
+ * The lease as a `StreamRuntimeBinding.retain`: pin now, hand back a release
+ * that is safe to call more than once.
+ *
+ * The idempotence is the whole point of the wrapper. `unpin` is a decrement,
+ * so a consumer whose teardown can run twice - a React cleanup replayed under
+ * StrictMode, a run that errors and is then unmounted - would return a
+ * reference it never took and close a transport its siblings are still
+ * reading from.
+ */
+export function streamTransportRetain(
+  binding: HostStreamClientBinding,
+): () => () => void {
+  return () => {
+    binding.pin();
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      binding.unpin();
+    };
+  };
+}
+
 export function hostStreamTransportKeyFor(
   target: HostDirectoryEntry | null,
   userId: string | null,

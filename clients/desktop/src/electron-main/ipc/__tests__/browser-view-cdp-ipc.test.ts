@@ -46,10 +46,7 @@ const SIGNED_OUT: AuthSnapshot = {
 
 type BrowserViewManagerFactoryOptions = {
   readonly createDevToolsWindow: (windowId: string) => unknown;
-  readonly createPopupWindowOptions: (request: {
-    readonly profile: string;
-    readonly sessionId: string;
-  }) => BrowserWindowConstructorOptions;
+  readonly createPopupWindowOptions: () => BrowserWindowConstructorOptions;
 };
 
 const captured = vi.hoisted(() => ({
@@ -79,13 +76,6 @@ vi.mock("electron", () => {
       captured.browserWindowOptions.push(options);
     }
   }
-  class WebContentsView {
-    readonly webContents = {
-      id: 1,
-      once: () => undefined,
-    };
-    constructor(_options: unknown) {}
-  }
   return {
     app: {
       getPath: (_key: string): string => "/tmp/traycer-desktop-test",
@@ -95,7 +85,6 @@ vi.mock("electron", () => {
       exit: (_code: number): void => undefined,
     },
     BrowserWindow,
-    WebContentsView,
     dialog: {
       showSaveDialogSync: () => undefined,
       // The destructive handlers ask asynchronously; nothing here raises one.
@@ -163,7 +152,6 @@ vi.mock("../../app/cert-trust", () => ({
 }));
 
 vi.mock("../../browser-view/browser-view-manager", () => ({
-  BOUNDS_STREAM_LOG_INTERVAL_MS: 1_000,
   BrowserViewManager: class {
     constructor(options: BrowserViewManagerFactoryOptions) {
       captured.managerOptions = options;
@@ -389,15 +377,14 @@ describe("native browser tab IPC", () => {
     );
   });
 
-  it("creates a top-level secure popup with the opener's browser session", async () => {
+  it("creates a top-level popup whose options are chrome-only for adoption", async () => {
     const { registerBrowserViewIpc } = await import("../browser-view-ipc");
 
     registerBrowserViewIpc(makeBridge() as never);
     const managerOptions = captured.managerOptions;
     if (managerOptions === null) throw new Error("manager was not registered");
 
-    const request = { profile: "isolated", sessionId: "popup-session" };
-    const popupOptions = managerOptions.createPopupWindowOptions(request);
+    const popupOptions = managerOptions.createPopupWindowOptions();
 
     expect(popupOptions).toEqual(
       expect.objectContaining({
@@ -412,8 +399,11 @@ describe("native browser tab IPC", () => {
       }),
     );
     expect(popupOptions).not.toHaveProperty("parent");
-    expect(popupOptions.webPreferences).toEqual({ request });
-    expect(captured.webPreferencesRequests).toEqual([request]);
+    // The popup adopts the opener's pre-created contents, which already carry
+    // its hardened prefs and session - so no webPreferences travels here, and
+    // no per-popup web-preferences request is made.
+    expect(popupOptions).not.toHaveProperty("webPreferences");
+    expect(captured.webPreferencesRequests).toEqual([]);
   });
 
   // The renderer-facing CDP dispatch and ensure-tab invoke channels

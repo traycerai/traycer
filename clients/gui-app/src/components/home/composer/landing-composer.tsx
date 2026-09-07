@@ -711,10 +711,8 @@ export function LandingComposer(props: LandingComposerProps) {
         // will create on.
         .getGlobalRunSettings(activeHostId),
     );
-    // `createDraftWithId` has non-composer callers and therefore seeds from
-    // the app-wide active host. This unbound composer can be pinned to a
-    // different placement host, so replace that seed synchronously before
-    // publishing the new draft id or accepting a submit.
+    // Keep the workspace aligned with the caller's captured placement, which
+    // supplied the settings above, before accepting a submit.
     useLandingDraftStore
       .getState()
       .restoreDraftWorkspaceForHost(createdDraftId, activeHostId);

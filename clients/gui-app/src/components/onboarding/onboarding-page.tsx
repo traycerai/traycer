@@ -2,6 +2,7 @@ import {
   type MouseEvent,
   type ReactNode,
   type RefObject,
+  use,
   useCallback,
   useEffect,
   useEffectEvent,
@@ -30,6 +31,8 @@ import {
   type OnboardingAgentGuideState,
 } from "@/components/onboarding/onboarding-agent-guide-pane";
 import { OnboardingDetectedAgents } from "@/components/onboarding/onboarding-detected-agents";
+import type { OnboardingHostPicker } from "@/components/onboarding/onboarding-host-picker-model";
+import { OnboardingHostPickerBar } from "@/components/onboarding/onboarding-host-picker";
 import { OnboardingDiorama } from "@/components/onboarding/onboarding-diorama";
 import {
   OnboardingPhoneDiorama,
@@ -50,6 +53,14 @@ import { browserMutationKeys } from "@/lib/query-keys";
 import { getClientAppVersionLabel } from "@/lib/app-version";
 import { shortcutHintsVisible } from "@/lib/keybindings/shortcut-hints";
 import { useOpenLink } from "@/lib/links/open-link";
+import { HostRuntimeContext, useHostBinding } from "@/lib/host";
+import {
+  useHostScopeFor,
+  type HostScope,
+} from "@/components/settings/host-scope/use-host-scope";
+import { isHostScopeUsable } from "@/components/settings/host-scope/host-scope-status";
+import { useScopedHostBinding } from "@/components/settings/host-scope/use-scoped-host-binding";
+import { useScopedStreamBinding } from "@/components/settings/host-scope/use-scoped-stream-binding";
 import { isMobileApp } from "@/lib/mobile-app";
 import { readSafeAreaInsets } from "@/lib/safe-area-insets";
 import {
@@ -58,7 +69,15 @@ import {
   useOnboardingStore,
 } from "@/stores/onboarding/onboarding-store";
 import { useOnboardingTourOpenStore } from "@/stores/onboarding/onboarding-tour-open-store";
-import { useSessionImportRunStore } from "@/stores/session-import/session-import-run-store";
+import {
+  StreamRuntimeContext,
+  useStreamHostId,
+  useStreamRuntimeBinding,
+} from "@/lib/host/stream-runtime-context";
+import {
+  sessionImportIsRunning,
+  useSessionImportRun,
+} from "@/stores/session-import/session-import-run-store";
 import { useFeatureAnnouncementsStore } from "@/stores/settings/feature-announcements-store";
 import { cn } from "@/lib/utils";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
@@ -645,21 +664,32 @@ function OnboardingMiniatureColumn(props: {
   readonly addon: OnboardingAct["addon"];
   readonly miniature: OnboardingMiniature;
   readonly agentGuide: OnboardingAgentGuideState;
+  readonly hostPicker: OnboardingHostPicker;
   readonly sessionImportScan: SessionImportScanHandle;
 }) {
-  const { actId, addon, miniature, agentGuide, sessionImportScan } = props;
+  const { actId, addon, miniature, agentGuide, hostPicker, sessionImportScan } =
+    props;
   if (miniature.kind === "none") return null;
   const phone = miniature.kind === "phone";
   let content: ReactNode;
   if (miniature.kind === "phone") {
     content = <OnboardingPhoneDiorama scene={miniature.scene} />;
   } else if (miniature.kind === "session-import") {
-    content = <OnboardingSessionImportStage scan={sessionImportScan} />;
+    content = (
+      <OnboardingSessionImportStage
+        scan={sessionImportScan}
+        hostPicker={hostPicker}
+      />
+    );
   } else if (miniature.kind === "login-import") {
     content = <OnboardingLoginImportStage />;
   } else {
     content = (
-      <OnboardingDiorama actId={miniature.actId} agentGuide={agentGuide} />
+      <OnboardingDiorama
+        actId={miniature.actId}
+        agentGuide={agentGuide}
+        hostPicker={hostPicker}
+      />
     );
   }
   return (
@@ -712,8 +742,9 @@ function ActCopy(props: {
   readonly act: OnboardingAct;
   readonly eyebrow: string;
   readonly agentGuide: OnboardingAgentGuideState;
+  readonly hostPicker: OnboardingHostPicker;
 }) {
-  const { act, eyebrow, agentGuide } = props;
+  const { act, eyebrow, agentGuide, hostPicker } = props;
   const headingRef = useRef<HTMLHeadingElement | null>(null);
   // Both addons that own the rest of the rail rather than sitting under the
   // body: the providers list, and the mobile tour's agent-guide editor.
@@ -761,7 +792,17 @@ function ActCopy(props: {
           stretched layout leaves it. */}
       {act.addon === "agent-guide" ? (
         <div className="flex min-h-0 w-full flex-1 flex-col self-stretch overflow-hidden pt-1 text-left">
-          <OnboardingAgentGuidePane agentGuide={agentGuide} />
+          {/* The phone rail has no mini-app window to carry the picker as its
+              title, so the editor is headed with the same bar here. */}
+          <OnboardingHostPickerBar
+            picker={hostPicker}
+            trafficLights={false}
+            className="rounded-t-lg"
+          />
+          <OnboardingAgentGuidePane
+            agentGuide={agentGuide}
+            hostPicker={hostPicker}
+          />
         </div>
       ) : null}
       {act.addon === "theme" ? (
@@ -844,15 +885,211 @@ function useOnboardingSessionImportScan(
   const tourShowsSessionImport = acts.some(
     (act) => act.id === "session-import",
   );
-  const sessionImportRunInFlight = useSessionImportRunStore(
-    (state) => state.status === "starting" || state.status === "running",
-  );
+  // The run on the host the tour is streaming against: another machine
+  // importing is no reason to hold this one's scan back.
+  const streamHostId = useStreamHostId();
+  const sessionImportRun = useSessionImportRun(streamHostId);
+  const sessionImportRunInFlight = sessionImportIsRunning(sessionImportRun);
   return useSessionImportScan(
     tourShowsSessionImport && !sessionImportRunInFlight,
   );
 }
 
+/**
+ * The tour, scoped to ONE host of the user's choosing.
+ *
+ * Both host-dependent acts read a real machine - the session scan lists what
+ * is on it, the agent guide is stored on it - and a person with several hosts
+ * should not have to replay the tour once per machine. The pick is held here,
+ * in page state rather than a store, because it belongs to this tour: it must
+ * not leak into Settings' own scope or outlive the tour.
+ *
+ * Both runtimes are re-provided, and both are needed: the guide draft is a
+ * unary host RPC (`HostRuntimeContext`), while the session scan and every run
+ * started from the wizard ride the STREAM (`StreamRuntimeContext`). Swapping
+ * only one is how a surface reads host B's sessions over host A's transport.
+ * They wrap `OnboardingTour` rather than sitting inside it because the hooks
+ * that must move - the scan gate, the guide query and its mutation - are the
+ * tour's own.
+ *
+ * Rendering both providers UNCONDITIONALLY is load-bearing (the pattern
+ * `ResourceMonitorPopover` documents): mounting them only once a pick resolves
+ * changes the element type at this position, so React would remount the whole
+ * tour - and reset the act the user is on - the instant a host was chosen.
+ *
+ * Safe to re-provide here because the tour contains no composer and therefore
+ * no microphone path: `useDictationAvailability` / `useVoiceDictation` are
+ * app-wide by design (see `useScopedHostBinding`), and a grep of the
+ * onboarding and session-import trees finds neither.
+ */
 export function OnboardingPage(props: { readonly replay: boolean }) {
+  const [scopedHostId, setScopedHostId] = useState<string | null>(null);
+  const scope = useHostScopeFor({ scopedHostId, setScopedHostId });
+  // The tour this shell can run, not the full catalog: the installed app plays
+  // the phone tour, an AMBIENT host that cannot scan sessions never reaches the
+  // session-import act, whose stage is the live wizard, and a machine that
+  // cannot import logins (no browser bridge, or saving off) never reaches the
+  // login-import act, whose stage is the live import flow. Everything below
+  // counts acts off this list, so an omitted act is unreachable rather than
+  // merely blank.
+  //
+  // Read HERE, above the re-providers, so the tour's length is a fact about
+  // this app and not about the machine the picker happens to point at. Read
+  // below them it would move with a pick, retiring the act a user is standing
+  // on - the displacement the act re-seating in `OnboardingTour` exists to
+  // stop. The cost of that choice is that the act can outlive its capability
+  // on a PICKED host, so the session-import stage asks the same question again
+  // of the client the import would run on and refuses there.
+  const sessionImportAvailable = useSessionImportAvailable();
+  const loginImportAvailable = useLoginImportAvailable();
+  const acts = useMemo(
+    () => onboardingActsFor({ sessionImportAvailable, loginImportAvailable }),
+    [loginImportAvailable, sessionImportAvailable],
+  );
+  const scopedBinding = useScopedHostBinding(scope);
+  const ambientBinding = useHostBinding();
+  const scopedStreamBinding = useScopedStreamBinding(scope);
+  const ambientStreamBinding = use(StreamRuntimeContext);
+  return (
+    <HostRuntimeContext.Provider value={scopedBinding ?? ambientBinding}>
+      <StreamRuntimeContext.Provider
+        value={scopedStreamBinding ?? ambientStreamBinding}
+      >
+        <OnboardingTour
+          replay={props.replay}
+          acts={acts}
+          scope={scope}
+          scopedHostId={scopedHostId}
+          setScopedHostId={setScopedHostId}
+        />
+      </StreamRuntimeContext.Provider>
+    </HostRuntimeContext.Provider>
+  );
+}
+
+/**
+ * The tour's host pick as the stages see it, and the one way to change it.
+ *
+ * Save FIRST, then commit the pick. The mutation `saveAgentGuideDraft` calls is
+ * bound to the host the tour is on at this moment, so a pick committed ahead
+ * of it would write the departing host's draft onto the arriving one. A failed
+ * save keeps the current host selected and leaves the pane's own "Not saved"
+ * status showing, rather than silently dropping an edit.
+ */
+function useOnboardingHostPicker(input: {
+  readonly scope: HostScope;
+  /** `null` while the tour follows the host it opened on. */
+  readonly scopedHostId: string | null;
+  readonly setScopedHostId: (hostId: string) => void;
+  readonly saveAgentGuideDraft: () => Promise<boolean>;
+  /**
+   * Whether there is an edit to carry AND a host to carry it to. A save that
+   * cannot succeed must not be the thing standing between the user and the
+   * pick: a host that went away mid-tour would otherwise refuse every write,
+   * and with it every attempt to leave it.
+   */
+  readonly hasDraftToSaveBeforeSwitch: () => boolean;
+  readonly resetAgentGuideDraftForNextHost: () => void;
+}): OnboardingHostPicker {
+  const {
+    scope,
+    scopedHostId,
+    setScopedHostId,
+    saveAgentGuideDraft,
+    hasDraftToSaveBeforeSwitch,
+    resetAgentGuideDraftForNextHost,
+  } = input;
+  // The host a settling guide save should land the tour on, and whether one is
+  // already carrying a pick - see `selectHost`.
+  const pendingHostPickRef = useRef<string | null>(null);
+  const hostPickSaveInFlightRef = useRef(false);
+
+  const selectHost = useCallback(
+    (hostId: string): void => {
+      // Naming the host already being read changes nothing to carry over; it
+      // only pins the tour to it.
+      if (hostId === scopedHostId || hostId === scope.hostId) {
+        // Latest pick wins here too: a destination an earlier pick recorded
+        // must not land after the user came back to this host.
+        pendingHostPickRef.current = null;
+        setScopedHostId(hostId);
+        return;
+      }
+      // LATEST PICK WINS. `saveAgentGuideDraft` reports `false` for two
+      // opposite things - the write was refused, and a write is already in
+      // flight - and treating both as "stay put" dropped the second pick of
+      // any B-then-C pair: the tour landed on B, which the user had already
+      // moved off. The destination is a ref the settling save reads, so a
+      // pick made mid-write REPLACES the one being carried instead of
+      // starting a second write of the same draft.
+      pendingHostPickRef.current = hostId;
+      if (hostPickSaveInFlightRef.current) return;
+      if (!hasDraftToSaveBeforeSwitch()) {
+        // Nothing to carry, or nowhere reachable to carry it: switch now.
+        pendingHostPickRef.current = null;
+        resetAgentGuideDraftForNextHost();
+        setScopedHostId(hostId);
+        return;
+      }
+      hostPickSaveInFlightRef.current = true;
+      void saveAgentGuideDraft().then((saved) => {
+        hostPickSaveInFlightRef.current = false;
+        const destination = pendingHostPickRef.current;
+        pendingHostPickRef.current = null;
+        // A REFUSED write keeps the tour where it is - moving on would leave
+        // the edit nowhere - and the pane's own "Not saved" status says so.
+        if (!saved || destination === null) return;
+        resetAgentGuideDraftForNextHost();
+        setScopedHostId(destination);
+      });
+    },
+    [
+      hasDraftToSaveBeforeSwitch,
+      resetAgentGuideDraftForNextHost,
+      saveAgentGuideDraft,
+      scope.hostId,
+      scopedHostId,
+      setScopedHostId,
+    ],
+  );
+
+  // Read INSIDE the providers, so it is the transport the stages actually use.
+  // `useScopedStreamBinding` fills its binding in an effect, so the scope can
+  // say `ready` for host B while this still names host A - the stages must not
+  // render live content through that gap. The UNARY half needs no twin: under
+  // an explicit pick `deriveHostScopeStatus` only answers `ready` once the
+  // transient client exists, and that client is built synchronously by
+  // `useHostClientFor`'s `useMemo`, so there is no commit where the scope is
+  // usable and `HostRuntimeContext` is still the ambient binding.
+  const streamBinding = useStreamRuntimeBinding();
+  const streamOnPickedHost =
+    streamBinding !== null && streamBinding.hostId === scope.hostId;
+  // Memoised because it is threaded through four layers - the miniature
+  // column, the diorama, its scene and the guide pane - and a fresh object per
+  // render defeats any memo one of them grows later. (It cannot hold its
+  // identity yet: `useHostScopeFor` builds a new `scope` every render, so this
+  // memo only starts paying once the scope is memoised at its source.)
+  return useMemo<OnboardingHostPicker>(
+    () => ({
+      scope,
+      onSelectHost: selectHost,
+      hasExplicitPick: scopedHostId !== null,
+      streamOnPickedHost,
+    }),
+    [scope, selectHost, scopedHostId, streamOnPickedHost],
+  );
+}
+
+function OnboardingTour(props: {
+  readonly replay: boolean;
+  /** The tour being played - see `OnboardingPage` for why it is decided there. */
+  readonly acts: ReadonlyArray<OnboardingAct>;
+  readonly scope: HostScope;
+  /** `null` while the tour follows the host it opened on. */
+  readonly scopedHostId: string | null;
+  readonly setScopedHostId: (hostId: string) => void;
+}) {
+  const { acts, scope, scopedHostId, setScopedHostId } = props;
   // Draft + provider-derived default live in one state object so the
   // query-sync effect mirrors them through a single trailing setState call
   // (React's effect-sync rule only permits the final statement to set state).
@@ -876,19 +1113,6 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
   const navigate = useNavigate();
   const router = useRouter();
   const { replay } = props;
-  // The tour this shell can run, not the full catalog: the installed app plays
-  // the phone tour, a host that cannot scan sessions never reaches the
-  // session-import act, whose stage is the live wizard, and a machine that
-  // cannot import logins (no browser bridge, or saving off) never reaches the
-  // login-import act, whose stage is the live import flow. Everything below
-  // counts acts off this list, so an omitted act is unreachable rather than
-  // merely blank.
-  const sessionImportAvailable = useSessionImportAvailable();
-  const loginImportAvailable = useLoginImportAvailable();
-  const acts = useMemo(
-    () => onboardingActsFor({ sessionImportAvailable, loginImportAvailable }),
-    [loginImportAvailable, sessionImportAvailable],
-  );
   const sessionImportScan = useOnboardingSessionImportScan(acts);
   // An import the login-import act started is a desktop write that may be
   // sitting on a keystore prompt; Continue holds until it settles so the
@@ -1030,6 +1254,13 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
 
   const saveAgentGuideDraft = useCallback(async (): Promise<boolean> => {
     if (agentGuideSaving) return false;
+    // A picked host that cannot be reached has nothing to save to. The
+    // providers above fall back to the ambient binding in that state, so a
+    // write here would land the picked host's draft on the ambient host's
+    // guide. Report success so Skip and Finish can still leave the tour.
+    if (scopedHostId !== null && !isHostScopeUsable(scope.status)) {
+      return true;
+    }
     // The guide is optional. When it has not loaded, or still reflects an
     // in-flight generated default with no saved content yet, there is no
     // stable draft to persist. Report success so Skip/Escape and the final
@@ -1065,8 +1296,36 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
     agentGuideQueryData,
     agentGuideSaving,
     agentGuideWaitingForProviderSettlement,
+    scope.status,
+    scopedHostId,
     setAgentGuideGlobal,
   ]);
+
+  const resetAgentGuideDraftForNextHost = useCallback((): void => {
+    // The arriving host's query must initialise the editor from ITS OWN
+    // content, so every ref the sync effect reads goes back to cold.
+    agentGuideInitializedRef.current = false;
+    agentGuideDirtyRef.current = false;
+    agentGuideAutoDefaultRef.current = false;
+    agentGuideLastDefaultRef.current = "";
+    agentGuideDraftRef.current = null;
+  }, []);
+  // Read at switch time, not render time: the dirty bit is a ref the editor
+  // flips on every keystroke, and whether the departing host can still take
+  // a write is `scope.status` as of the click.
+  const scopeStatus = scope.status;
+  const hasDraftToSaveBeforeSwitch = useCallback(
+    (): boolean => agentGuideDirtyRef.current && isHostScopeUsable(scopeStatus),
+    [scopeStatus],
+  );
+  const hostPicker = useOnboardingHostPicker({
+    scope,
+    scopedHostId,
+    setScopedHostId,
+    saveAgentGuideDraft,
+    hasDraftToSaveBeforeSwitch,
+    resetAgentGuideDraftForNextHost,
+  });
 
   const agentGuideState: OnboardingAgentGuideState = {
     value: agentGuideDraft ?? agentGuideDefault,
@@ -1107,7 +1366,9 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
         // no act; an act the list held can be dropped again before it is
         // reached; and on a shell with no bridge the toast never shows, so
         // consuming costs nothing. Before `complete()`, which is what makes
-        // the toast eligible.
+        // the toast eligible. `session-import` is deliberately NOT consumed
+        // here: its toast exists to reach the user who never saw the import
+        // act, and the wizard consumes the id itself on mount.
         consumeAnnouncement("login-import");
         complete();
         if (replay) {
@@ -1283,6 +1544,7 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
                       act={act}
                       eyebrow={actEyebrow(act, step)}
                       agentGuide={agentGuideState}
+                      hostPicker={hostPicker}
                     />
                   </AnimatePresence>
                 </div>
@@ -1293,6 +1555,7 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
                 addon={act.addon}
                 miniature={miniature}
                 agentGuide={agentGuideState}
+                hostPicker={hostPicker}
                 sessionImportScan={sessionImportScan}
               />
             </div>

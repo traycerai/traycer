@@ -18,7 +18,6 @@ import {
 import { cn } from "@/lib/utils";
 import { useFindInPageStore } from "@/stores/find-in-page/find-in-page-store";
 import { useTerminalFindStore } from "@/stores/find-in-page/terminal-find-store";
-import { useRegisterBrowserOverlay } from "@/lib/browser-view/tiles/use-register-browser-overlay";
 
 const LIVE_SEARCH_DEBOUNCE_MS = 140;
 
@@ -54,7 +53,6 @@ export function FindInPageBar() {
 
   const inputRef = useRef<HTMLInputElement | null>(null);
   const engineRef = useRef<FindEngine | null>(null);
-  const registerOverlayRef = useRegisterBrowserOverlay<HTMLElement>();
   const supported = useMemo(() => isFindEngineSupported(), []);
   const terminalSearchActive = terminalFindController !== null;
   const runSearch = useCallback(
@@ -219,7 +217,6 @@ export function FindInPageBar() {
 
   return (
     <search
-      ref={registerOverlayRef}
       {...{ [getFindSkipAttribute()]: "" }}
       className={cn(
         "pointer-events-auto absolute right-3 top-3 z-30 flex items-center gap-1 rounded-md border border-border bg-popover px-2 py-1 shadow-md",

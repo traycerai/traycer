@@ -4,6 +4,7 @@ import type {
   ProviderLoginCapability,
 } from "@traycer/protocol/host/provider-schemas";
 import {
+  defaultTerminalSignInGuidance,
   providerSetupActionPlacement,
   providerSetupGuidance,
   providerSetupPreparingLabel,
@@ -121,6 +122,28 @@ describe("providerSetupSteps", () => {
     expect(steps).toEqual(guidance.stepsAfterAction);
     expect(steps).not.toContain(guidance.noSurfaceStep);
   });
+
+  it("leads with the epic-only step for 'unsupported-scope' - the post-action steps alone would say to finish in a terminal nothing here opened", () => {
+    const guidance = providerSetupGuidance("reasonix");
+    expect(guidance).not.toBeNull();
+    if (guidance === null) return;
+    const steps = providerSetupSteps(guidance, "unsupported-scope");
+    expect(steps).toEqual([
+      guidance.epicOnlyStep,
+      ...guidance.stepsAfterAction,
+    ]);
+    // Not the no-surface sentence: that one names the start page as a place
+    // the button exists, which on this host it does not.
+    expect(steps).not.toContain(guidance.noSurfaceStep);
+  });
+
+  it("gives the generic guidance an epic-only step too, so a provider with no manual command (copilot) still has a route", () => {
+    const guidance = defaultTerminalSignInGuidance("copilot");
+    expect(guidance.manualCommand).toBeNull();
+    expect(providerSetupSteps(guidance, "unsupported-scope")[0]).toBe(
+      "Open a chat and choose “Sign in from a terminal” from its model picker. This host's version can open the Copilot sign-in from a chat, but not from the start page.",
+    );
+  });
 });
 
 describe("resolveProviderTerminalSetup", () => {
@@ -153,10 +176,13 @@ describe("resolveProviderTerminalSetup", () => {
     expect(setup?.guidance.terminalActionLabel).toBe("Set up in terminal");
   });
 
-  it("preserves reasonix's guidance with canStartTerminal: false when the capability is absent (oauthArgs empty) - the fix for old hosts losing Reasonix's manual instructions", () => {
+  it("preserves reasonix's guidance with canStartTerminal: false when the capability is absent (terminalLogin null) - the fix for old hosts losing Reasonix's manual instructions", () => {
     const setup = resolveProviderTerminalSetup(
       "reasonix",
-      stateWith(capabilityWithTerminalLogin([])),
+      stateWith({
+        ...capabilityWithTerminalLogin(["setup"]),
+        terminalLogin: null,
+      }),
     );
     expect(setup).not.toBeNull();
     expect(setup?.canStartTerminal).toBe(false);
@@ -173,11 +199,82 @@ describe("resolveProviderTerminalSetup", () => {
     expect(setup?.guidance.manualCommand).toBe("reasonix setup");
   });
 
-  it("returns null for copilot when the capability is absent (oauthArgs empty) - no copy-table override to fall back on", () => {
+  it("returns null for copilot when the capability is absent (terminalLogin null) - no copy-table override to fall back on", () => {
     expect(
       resolveProviderTerminalSetup(
         "copilot",
-        stateWith(capabilityWithTerminalLogin([])),
+        stateWith({
+          ...capabilityWithTerminalLogin(["login"]),
+          terminalLogin: null,
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  // The launch-the-CLI providers declare `terminalLogin` with `oauthArgs:
+  // null` (no headless command; the host launches the CLI itself). They get
+  // the terminal action on that capability alone, with the generic guidance
+  // re-worded to name the step inside the CLI - and, like copilot, nothing at
+  // all on a host that declares no capability.
+  it.each([{ oauthArgs: null }, { oauthArgs: [] }])(
+    "gives a launch-the-CLI provider (qwen, no oauthArgs %o) the terminal action with copy naming the in-CLI step",
+    ({ oauthArgs }) => {
+      const setup = resolveProviderTerminalSetup(
+        "qwen",
+        stateWith(capabilityWithTerminalLogin(oauthArgs)),
+      );
+      expect(setup).not.toBeNull();
+      expect(setup?.canStartTerminal).toBe(true);
+      expect(setup?.guidance.terminalActionLabel).toBe(
+        "Sign in from a terminal",
+      );
+      expect(setup?.guidance.manualCommand).toBeNull();
+      expect(setup?.guidance.summary).toBe(
+        "Qwen Code signs in from inside its own terminal UI.",
+      );
+      expect(setup?.guidance.stepsAfterAction).toEqual([
+        "Type /auth in that terminal, choose a sign-in method and finish in the browser.",
+        "Refresh this list.",
+      ]);
+      expect(setup?.guidance.terminalHint).toContain("Type /auth");
+      expect(setup?.guidance.summary).not.toContain("sign-in code");
+    },
+  );
+
+  it("names the in-CLI step for each launch-the-CLI provider and keeps the generic labels", () => {
+    for (const [providerId, step] of [
+      ["droid", "Follow the sign-in prompt Droid shows when it starts."],
+      [
+        "omp",
+        "Type login followed by the provider (for example login anthropic) in that terminal and follow the prompts.",
+      ],
+      [
+        "opencode",
+        "Pick the provider and sign-in method in that terminal and follow the prompts.",
+      ],
+    ] as const) {
+      const guidance = defaultTerminalSignInGuidance(providerId);
+      expect(guidance.stepsAfterAction, providerId).toEqual([
+        step,
+        "Refresh this list.",
+      ]);
+      expect(guidance.terminalActionLabel, providerId).toBe(
+        "Sign in from a terminal",
+      );
+      expect(guidance.summary, providerId).not.toContain("sign-in code");
+      expect(guidance.terminalHint, providerId).not.toContain("sign-in code");
+      expect(guidance.manualCommand, providerId).toBeNull();
+    }
+  });
+
+  it("returns null for a launch-the-CLI provider on a host that declares no capability", () => {
+    expect(
+      resolveProviderTerminalSetup(
+        "droid",
+        stateWith({
+          ...capabilityWithTerminalLogin(null),
+          terminalLogin: null,
+        }),
       ),
     ).toBeNull();
   });
@@ -187,15 +284,18 @@ describe("providerSetupActionPlacement", () => {
   it("returns 'unsupported-host' whenever canStartTerminal is false, regardless of hasSurface", () => {
     const setup = resolveProviderTerminalSetup(
       "reasonix",
-      stateWith(capabilityWithTerminalLogin([])),
+      stateWith({
+        ...capabilityWithTerminalLogin(["setup"]),
+        terminalLogin: null,
+      }),
     );
     expect(setup).not.toBeNull();
     if (setup === null) return;
     expect(setup.canStartTerminal).toBe(false);
-    expect(providerSetupActionPlacement(setup, true, true)).toBe(
+    expect(providerSetupActionPlacement(setup, true, "supported")).toBe(
       "unsupported-host",
     );
-    expect(providerSetupActionPlacement(setup, false, true)).toBe(
+    expect(providerSetupActionPlacement(setup, false, "supported")).toBe(
       "unsupported-host",
     );
   });
@@ -207,10 +307,10 @@ describe("providerSetupActionPlacement", () => {
     );
     expect(setup).not.toBeNull();
     if (setup === null) return;
-    expect(providerSetupActionPlacement(setup, true, true)).toBe("here");
+    expect(providerSetupActionPlacement(setup, true, "supported")).toBe("here");
   });
 
-  it("returns 'unsupported-host' when the host cannot carry this surface's scope, even with a surface and the capability", () => {
+  it("returns 'unsupported-scope' when the host cannot carry this surface's scope, even with a surface and the capability", () => {
     const setup = resolveProviderTerminalSetup(
       "reasonix",
       stateWith(capabilityWithTerminalLogin(["setup"])),
@@ -219,8 +319,29 @@ describe("providerSetupActionPlacement", () => {
     if (setup === null) return;
     // The provider row says yes and the surface exists; only the host's
     // negotiated `providers.startTerminalLogin` major says no. Reporting
-    // 'here' would lead the steps with a button that can only ever fail.
-    expect(providerSetupActionPlacement(setup, true, false)).toBe(
+    // 'here' would lead the steps with a button that can only ever fail, and
+    // 'unsupported-host' would lead with nothing - but this host DOES draw
+    // the button, in an Epic, and the steps have to say so.
+    expect(providerSetupActionPlacement(setup, true, "unsupported")).toBe(
+      "unsupported-scope",
+    );
+  });
+
+  it("returns 'unsupported-host', not 'unsupported-scope', while the host's scope support is unknown", () => {
+    const setup = resolveProviderTerminalSetup(
+      "reasonix",
+      stateWith(capabilityWithTerminalLogin(["setup"])),
+    );
+    expect(setup).not.toBeNull();
+    if (setup === null) return;
+    // No manifest recorded, or no host at all: the button stays hidden, but
+    // the epic-only sentence claims this host negotiated the pre-scope major,
+    // which nothing has proven. The claim-free copy leads with the manual
+    // route instead.
+    expect(providerSetupActionPlacement(setup, true, "unknown")).toBe(
+      "unsupported-host",
+    );
+    expect(providerSetupActionPlacement(setup, false, "unknown")).toBe(
       "unsupported-host",
     );
   });
@@ -237,9 +358,13 @@ describe("providerSetupActionPlacement", () => {
     if (setup === null) return;
     expect(setup.canStartTerminal).toBe(true);
     expect(setup.packPreparing).not.toBeNull();
-    expect(providerSetupActionPlacement(setup, true, true)).toBe("preparing");
+    expect(providerSetupActionPlacement(setup, true, "supported")).toBe(
+      "preparing",
+    );
     // A transient wait never becomes "the button is on another surface".
-    expect(providerSetupActionPlacement(setup, false, true)).toBe("preparing");
+    expect(providerSetupActionPlacement(setup, false, "supported")).toBe(
+      "preparing",
+    );
     // The wait reads as the same sentence every other gated surface shows.
     expect(providerSetupPreparingLabel(setup, "reasonix")).toBe(
       "Preparing Reasonix… 30%",
@@ -270,10 +395,10 @@ describe("providerSetupActionPlacement", () => {
     if (setup === null) return;
     expect(setup.packPreparing).toBeNull();
     expect(providerSetupPreparingLabel(setup, "reasonix")).toBeNull();
-    expect(providerSetupActionPlacement(setup, true, true)).toBe("here");
+    expect(providerSetupActionPlacement(setup, true, "supported")).toBe("here");
   });
 
-  it("permanent reasons outrank the transient one: an unsupported scope on a preparing pack is 'unsupported-host'", () => {
+  it("permanent reasons outrank the transient one: an unsupported scope on a preparing pack is 'unsupported-scope'", () => {
     const setup = resolveProviderTerminalSetup(
       "reasonix",
       providerState(capabilityWithTerminalLogin(["setup"]), {
@@ -283,8 +408,8 @@ describe("providerSetupActionPlacement", () => {
     );
     expect(setup).not.toBeNull();
     if (setup === null) return;
-    expect(providerSetupActionPlacement(setup, true, false)).toBe(
-      "unsupported-host",
+    expect(providerSetupActionPlacement(setup, true, "unsupported")).toBe(
+      "unsupported-scope",
     );
   });
 
@@ -295,7 +420,7 @@ describe("providerSetupActionPlacement", () => {
     );
     expect(setup).not.toBeNull();
     if (setup === null) return;
-    expect(providerSetupActionPlacement(setup, false, true)).toBe(
+    expect(providerSetupActionPlacement(setup, false, "supported")).toBe(
       "other-surface",
     );
   });

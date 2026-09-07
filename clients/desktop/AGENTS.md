@@ -88,8 +88,8 @@ failures.
   is unaffected. Everything else still crosses as plain wire types through
   `src/ipc-contracts/`; do not read this as licence to move feature logic into
   preload.
-- **Keyboard input while a native browser tile has focus is ONE declarative
-  policy, not a pile of accidents.** With a `WebContentsView` guest focused,
+- **Keyboard input while a browser guest has focus is ONE declarative
+  policy, not a pile of accidents.** With a `<webview>` guest focused,
   keys go guest `before-input-event` → macOS app-menu accelerator → the page;
   the app renderer's keybinding registry is never in the chain. So a menu item
   with a custom `click` is focus-BLIND (Cmd+W once closed the app's task tab
@@ -105,16 +105,12 @@ failures.
   there; do not add a focus check to a menu item instead. Electron ROLE items
   (reload, cut/copy/paste, select-all) already act on the focused web contents
   and are correct as they are - leave them alone.
-- **Browser-tile occlusion coordinator invariants** (`docs/adr/0001-browser-tile-rendering.md`,
-  `browser-view-overlay.ts`). Both swap edges are two-phase and pixel-atomic:
-  hide waits for the entry paint-ack before parking; restore keeps the stand-in
-  mounted until the un-parked view's first composited frame (the restore ack,
-  same shape as `paintAck`, with a frame-budget liveness escape for a view
-  that never delivers one). The stand-in's pixel source is `capturePage`,
-  gated by paint-ack; the rolling frame cache (`tile-frame-cache.ts`) is only
-  the deadline fallback, never the primary source. A tile must never be
-  un-parked while any registered rect still intersects it, including across
-  ownership handoff between two overlays - occlude before release, always.
+- **Local browser tiles are renderer-owned `<webview>` guests.** Main admits
+  the guest through the one-use attach grant, seeds cookies, and runs
+  capabilities on the registered `webContents`. Placement is CSS
+  `position-anchor` on a persistent DOM host. DOM overlays stack with ordinary
+  z-index; there is no native-view occlusion coordinator, bounds IPC, or
+  snapshot stand-in. See `docs/adr/0001-browser-tile-rendering.md`.
 - **Login import** (`electron-main/browser-view/storage/login-import/`)
   reads other browsers' cookie jars on this machine into the durable
   `persist:traycer-browser` partition. Every reader is a pure function over
