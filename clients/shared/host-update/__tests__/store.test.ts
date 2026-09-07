@@ -24,8 +24,13 @@ import { updateAttemptLockPath, updateAttemptRecordPath } from "../paths";
 import type {
   HostUpdateAttemptClaimBaseline,
   HostUpdateAttemptIdentity,
+  HostUpdateAttemptPhase,
 } from "../record";
-import { TERMINAL_ATTEMPT_RETENTION_MS } from "../record";
+import {
+  HOST_UPDATE_ATTEMPT_PHASES,
+  TERMINAL_ATTEMPT_RETENTION_MS,
+  isActivePhase,
+} from "../record";
 import {
   __sameRecordFileIdentityForTest,
   __setBeforeRecordOpenHookForTest,
@@ -42,9 +47,24 @@ import {
   type ExecutorOnlyAttemptMutationIntent,
   type PublicAttemptMutationIntent,
 } from "../store";
-import type { AttemptClaimRequest } from "../transition";
+import type {
+  ActiveHostUpdateAttemptPhase,
+  AttemptClaimRequest,
+} from "../transition";
 
 const execFileAsync = promisify(execFile);
+
+/**
+ * A narrowing form of the same condition `AttemptClaimRequest`'s union states:
+ * active, and not the one phase an `activate` birth is legal at. The body is
+ * the source predicates, so the derived list stays derived - this only tells
+ * the compiler what the filter already guarantees.
+ */
+function isIllegalActivateBirthPhase(
+  phase: HostUpdateAttemptPhase,
+): phase is Exclude<ActiveHostUpdateAttemptPhase, "preparing"> {
+  return isActivePhase(phase) && phase !== "preparing";
+}
 
 function baseCreateRequest(
   overrides: Partial<AttemptClaimRequest>,
@@ -814,45 +834,68 @@ describe("commitAttemptMutation - byte authority and round trips", () => {
     expect(await readFile(updateAttemptRecordPath(dir), "utf8")).toBe(before);
   });
 
-  it("rejects an 'activate' birth at any phase but 'preparing' (Codex #1773)", async () => {
-    // `AttemptClaimRequest` pairs the birth phase and the birth continuation,
-    // so this is unconstructible in TypeScript - hence the directive below,
-    // which is itself a second assertion: it fails the build the moment the
-    // union stops rejecting the pair. This decoder is the SAME rule where the
-    // type is gone, because `commitAttemptMutation` takes its intent as a
-    // plain JavaScript value.
-    //
-    // `createdRecord` writes both fields verbatim, so accepting the pair puts
-    // a record on disk that is durably ACTIVE and cannot progress:
-    // `continuationPhaseOrderRejected` refuses every successor `activate`
-    // allows, none of which is reachable from `downloading`.
-    // Falsification (the ablation): delete the
-    // `initialContinuation === "activate"` clause from
-    // `normalizeClaimRequest` and this reddens - the create commits.
-    const dir = await freshDir();
-    const handle = await acquireHandle(dir, "activate-birth-phase");
-    const outcome = await commitAttemptMutation({
-      handle,
-      intent: {
-        kind: "create",
-        request: {
-          ...baseCreateRequest({}),
-          initialPhase: "downloading",
-          // @ts-expect-error the type forbids this pair; plain JavaScript can
-          // still hand it to the public entry, which is what the decoder is
-          // for.
-          initialContinuation: "activate",
-        },
-      },
-    });
-    expect(outcome).toMatchObject({
-      kind: "rejected",
-      reason: "intent-invalid",
-    });
-    await expect(stat(updateAttemptRecordPath(dir))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+  /**
+   * Every active birth phase EXCEPT the one legal one, derived from the source
+   * constants rather than typed out (CodeRabbit round 2). A phase added to
+   * `HOST_UPDATE_ATTEMPT_PHASES` is covered here the day it lands, which a
+   * hand-written array cannot promise.
+   */
+  const ILLEGAL_ACTIVATE_BIRTH_PHASES = HOST_UPDATE_ATTEMPT_PHASES.filter(
+    isIllegalActivateBirthPhase,
+  );
+
+  it("covers every active phase but 'preparing' (the list is derived, not typed)", () => {
+    // The `it.each` below is only as good as this list, and an empty or
+    // accidentally-narrowed one would pass silently.
+    expect(ILLEGAL_ACTIVATE_BIRTH_PHASES.length).toBeGreaterThan(0);
+    expect(ILLEGAL_ACTIVATE_BIRTH_PHASES).not.toContain("preparing");
+    for (const phase of ILLEGAL_ACTIVATE_BIRTH_PHASES) {
+      expect(isActivePhase(phase)).toBe(true);
+    }
   });
+
+  it.each(ILLEGAL_ACTIVATE_BIRTH_PHASES)(
+    "rejects an 'activate' birth at '%s' (Codex #1773)",
+    async (initialPhase) => {
+      // `AttemptClaimRequest` pairs the birth phase and the birth continuation,
+      // so this is unconstructible in TypeScript - hence the directive below,
+      // which is itself a second assertion: it fails the build the moment the
+      // union stops rejecting the pair. This decoder is the SAME rule where the
+      // type is gone, because `commitAttemptMutation` takes its intent as a
+      // plain JavaScript value.
+      //
+      // `createdRecord` writes both fields verbatim, so accepting the pair puts
+      // a record on disk that is durably ACTIVE and cannot progress:
+      // `continuationPhaseOrderRejected` refuses every successor `activate`
+      // allows, none of which is reachable from `downloading`.
+      // Falsification (the ablation): delete the
+      // `initialContinuation === "activate"` clause from
+      // `normalizeClaimRequest` and this reddens - the create commits.
+      const dir = await freshDir();
+      const handle = await acquireHandle(dir, `activate-birth-${initialPhase}`);
+      const outcome = await commitAttemptMutation({
+        handle,
+        intent: {
+          kind: "create",
+          request: {
+            ...baseCreateRequest({}),
+            initialPhase,
+            // @ts-expect-error the type forbids this pair; plain JavaScript can
+            // still hand it to the public entry, which is what the decoder is
+            // for.
+            initialContinuation: "activate",
+          },
+        },
+      });
+      expect(outcome).toMatchObject({
+        kind: "rejected",
+        reason: "intent-invalid",
+      });
+      await expect(stat(updateAttemptRecordPath(dir))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    },
+  );
 
   it.each([
     ["the one legal 'activate' birth", "preparing", "activate"],
