@@ -16,6 +16,12 @@ import {
   registerComposerFocus,
 } from "@/lib/composer/composer-focus-registry";
 import { usePaneActivationFocusIntent } from "@/components/epic-canvas/pane-activation";
+import { chatTileCatalogActivity } from "@/components/epic-canvas/renderers/chat-tile-surface-activity";
+import { useTabBodySelected } from "@/components/epic-canvas/canvas/tab-body-selected-context";
+import {
+  usePaneFocused,
+  usePaneFocusProbe,
+} from "@/components/epic-tabs/pane-visibility-context";
 import { isEditableEventTarget } from "@/lib/keybindings/editable-target";
 import {
   readInterviewDraftSnapshot,
@@ -118,6 +124,21 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
   const composerSurfaceId = useId();
   const total = questions.length;
   const paneActivationFocusIntent = usePaneActivationFocusIntent();
+  // The card stands in for the Tiptap composer, so it owns focus on exactly
+  // the composer's own terms - the tile's `isActive` AND pane focus AND tab
+  // selection (`chatComposerFocused` -> `chatTileCatalogActivity`). The tile
+  // flag alone deliberately excludes top-level tab focus, so a hosted body in
+  // a BACKGROUND top-level tab still reports `isActive`, and a card trusting
+  // it registers as an active composer from behind whatever the user is
+  // actually looking at.
+  const paneFocused = usePaneFocused();
+  const tabSelected = useTabBodySelected();
+  const isPaneFocusedNow = usePaneFocusProbe();
+  const focusActive = chatTileCatalogActivity(
+    paneFocused,
+    tabSelected,
+    isActive,
+  );
 
   // The persisted row for THIS (chat, block) is the canonical draft state.
   // Subscribing (rather than reading it once) keeps duplicate live views of the
@@ -544,19 +565,23 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
 
   // Auto-focus the card when active, on appear and on every question change, so
   // number keys work with zero clicks. Skipped while inactive so a pending
-  // interview in a background pane never steals focus; refocuses when the tab
-  // becomes active (isActive is a dependency). Free-text and Other inputs focus
-  // themselves via their callback ref, so the card yields to them.
+  // interview in a background pane or top-level tab never steals focus;
+  // refocuses when the tab becomes active (`focusActive` is a dependency).
+  // Free-text and Other inputs focus themselves via their callback ref, so the
+  // card yields to them.
   const wantsFieldFocus = freeTextQuestion || draft.otherSelected;
   useEffect(() => {
-    if (!isActive || wantsFieldFocus) return;
+    if (!focusActive || wantsFieldFocus) return;
     if (paneActivationFocusIntent.shouldYieldAutoFocus()) return;
     focusActiveComposer();
-  }, [safeIndex, isActive, paneActivationFocusIntent, wantsFieldFocus]);
+  }, [safeIndex, focusActive, paneActivationFocusIntent, wantsFieldFocus]);
 
   // Join the composer focus registry so the active-pane focus flow and the
   // "focus editor" shortcut reach this card - it stands in for the Tiptap
   // composer it replaced. Prefer the open text field, else the card itself.
+  // The live pane probe rides along because this registration is a render-time
+  // value: a surface that becomes focused restores focus before a backgrounded
+  // card has re-rendered, so selection has to be able to re-ask.
   useLayoutEffect(() => {
     return registerComposerFocus(
       composerSurfaceId,
@@ -572,12 +597,17 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
           containerRef.current?.contains(activeElement) === true,
         isEligible: () => containerRef.current?.isConnected === true,
       },
-      isActive,
+      focusActive,
+      isPaneFocusedNow,
     );
-  }, [composerSurfaceId, isActive]);
+  }, [composerSurfaceId, focusActive, isPaneFocusedNow]);
 
   return {
     containerRef,
+    // The one focus-ownership answer for this card, for the field-level
+    // autofocus in `QuestionPage` as much as for the card itself - never a
+    // second boolean that means something slightly different.
+    focusActive,
     total,
     safeIndex,
     question,
