@@ -281,6 +281,48 @@ describe("systemd unit — scaffolding and the token guard", () => {
     expect(unit).not.toContain("ConditionFileIsExecutable");
   });
 
+  it("Q13: the shipped unit's restart policy stays outside systemd's start-limit arithmetic", () => {
+    // Two numbers the supervisor's design depends on, neither of them stated
+    // in the unit, so both are asserted from the emitted artifact.
+    //
+    // 1. `Restart=on-failure` + `RestartSec=5`, with NO `StartLimitBurst` or
+    //    `StartLimitIntervalSec`, so systemd's defaults apply: burst 5 within
+    //    a 10s interval. A restart every 5s puts at most two starts in any
+    //    window, so the limit never trips and the unit never lands in
+    //    `failed`. Cut `RestartSec` below `10 / 5 = 2` seconds and an ordinary
+    //    sequence of restarts starts failing the unit outright - which is the
+    //    outage this whole area exists to prevent, arriving by arithmetic
+    //    rather than by a code change.
+    // 2. `Type=simple` with no `TimeoutStartSec`. The supervisor now WAITS on
+    //    the attempt lock for up to `SUPERVISOR_ADMISSION_WAIT_MS` before it
+    //    spawns anything, and that is only safe while systemd imposes no
+    //    start deadline it could cross. `Type=simple` is considered started
+    //    as soon as it forks; adding `TimeoutStartSec`, or moving to
+    //    `Type=notify`, would make a healthy wait fail the unit.
+    const unit = buildSystemdUnit({
+      label: labelFor("ai.traycer.host.dev"),
+      cli: { command: "/home/test/.traycer/cli/bin/traycer", args: [] },
+    });
+
+    expect(unit).toContain("\nRestart=on-failure\n");
+    expect(unit).toContain("\nRestartSec=5\n");
+    expect(unit).toContain("\nType=simple\n");
+    expect(unit).not.toContain("StartLimitBurst");
+    expect(unit).not.toContain("StartLimitIntervalSec");
+    expect(unit).not.toContain("StartLimitInterval=");
+    expect(unit).not.toContain("TimeoutStartSec");
+
+    // The arithmetic itself, read back off the artifact rather than restated:
+    // whatever `RestartSec` says must leave the default burst unreachable.
+    const restartSec = /\nRestartSec=(\d+)\n/.exec(unit)?.[1];
+    expect(restartSec).toBeDefined();
+    const SYSTEMD_DEFAULT_START_LIMIT_INTERVAL_S = 10;
+    const SYSTEMD_DEFAULT_START_LIMIT_BURST = 5;
+    expect(Number(restartSec)).toBeGreaterThan(
+      SYSTEMD_DEFAULT_START_LIMIT_INTERVAL_S / SYSTEMD_DEFAULT_START_LIMIT_BURST,
+    );
+  });
+
   it("refuses to emit a unit when a CLI path carries a character systemd would mis-parse", () => {
     expect(() =>
       buildSystemdUnit({
