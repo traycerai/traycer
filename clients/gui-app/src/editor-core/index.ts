@@ -17,6 +17,7 @@ export {
   ArtifactToolbar,
   type ArtifactToolbarProps,
   type ArtifactCommentAction,
+  type ArtifactQuoteAction,
 } from "./toolbar/artifact-toolbar";
 export { updateArtifactToolbarPosition } from "./toolbar/artifact-toolbar-position";
 

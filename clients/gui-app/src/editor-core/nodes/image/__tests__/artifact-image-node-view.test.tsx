@@ -224,6 +224,7 @@ describe("ArtifactImageNodeView", () => {
           className={undefined}
           scrollTarget={null}
           commentAction={null}
+          quoteAction={null}
           suppressBubbleMenu={false}
         />
       </EditorContext.Provider>,
