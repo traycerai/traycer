@@ -611,6 +611,7 @@ function pidMetadata(version: string): HostPidMetadata {
     websocketUrl: "ws://127.0.0.1:1",
     startedAt: "2026-01-01T00:00:00.000Z",
     processStartIdentity: null,
+    processStartIdentityRead: "absent",
     layer0: null,
     layer0Slot: null,
   };

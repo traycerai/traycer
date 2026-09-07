@@ -58,6 +58,13 @@ export type RunningEvidenceDiagnosis =
   | "pid-metadata-unreadable"
   /** The record carries no `processStartIdentity` (#1763's stamp). */
   | "pid-start-stamp-missing"
+  /**
+   * The record HAS a stamp this build cannot parse - a different thing to fix
+   * than a missing one, and deliberately NOT eligible for Q1's version-only
+   * fallback: something wrote a stamp, so its unreadability is not evidence
+   * that none exists.
+   */
+  | "pid-start-stamp-unrecognized"
   /** The recorded websocket endpoint is not a valid local host URL. */
   | "pid-endpoint-invalid"
   /** The recorded pid names no live process. */
@@ -450,8 +457,32 @@ async function readRunningObservation(
   // floor - keeps full verification in practice: a host built from current
   // source writes the stamp.
   const stamp = metadata.processStartIdentity;
-  if (stamp === null && stampPolicy === "identity-required") {
-    return unreadableRunning("pid-start-stamp-missing");
+  // PROVEN absence, not merely "the reader produced null" (cold review C, V1).
+  //
+  // The decoder maps a stamp that is present-but-unparseable to the same
+  // `null` that a genuinely old pid.json produces. Before Q1 that collapse was
+  // harmless, because both failed closed here. Q1 gives `null` a second
+  // meaning - "you may skip the identity comparison" - so without this
+  // distinction a TAMPERED or torn stamp would earn the fallback exactly as a
+  // 1.1.8-era host does, and the weakening would be as wide as
+  // unparseability rather than as wide as absence.
+  //
+  // An unrecognized stamp therefore keeps the STRONG rule under either policy:
+  // something wrote a stamp, and this build cannot read it, which is not
+  // evidence that no stamp exists. It is also the shape a platform
+  // disagreement takes - the identity is platform-tagged - so failing closed
+  // here is what keeps a cross-platform record from silently buying a weaker
+  // check.
+  const stampProvenAbsent = metadata.processStartIdentityRead === "absent";
+  if (
+    stamp === null &&
+    !(stampPolicy === "version-only" && stampProvenAbsent)
+  ) {
+    return unreadableRunning(
+      metadata.processStartIdentityRead === "unrecognized"
+        ? "pid-start-stamp-unrecognized"
+        : "pid-start-stamp-missing",
+    );
   }
   if (!isValidLocalHostWebsocketUrl(metadata.websocketUrl)) {
     return unreadableRunning("pid-endpoint-invalid");
