@@ -1,6 +1,9 @@
 import { useEffect, useId, useMemo } from "react";
+import type { UseQueryResult } from "@tanstack/react-query";
+import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { History, Search } from "lucide-react";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
+import type { SessionImportStatusResponse } from "@traycer/protocol/host/session-import/contracts";
 import type {
   SessionImportGroup,
   SessionImportSelection,
@@ -40,7 +43,11 @@ import {
 } from "@/components/session-import/session-import-group";
 import { SessionImportProgress } from "@/components/session-import/session-import-progress";
 import type { SessionImportScanHandle } from "@/components/session-import/use-session-import-scan";
-import { startSessionImportRun } from "@/components/session-import/session-import-run-handle";
+import {
+  attachSessionImportRun,
+  startSessionImportRun,
+} from "@/components/session-import/session-import-run-handle";
+import { useSessionImportCheckStatus } from "@/hooks/session-import/use-session-import-check-status-query";
 import { useStreamRuntimeBinding } from "@/lib/host/stream-runtime-context";
 import {
   sessionImportTone,
@@ -92,6 +99,24 @@ export function SessionImportWizard(props: {
   const hostId = streamBinding?.hostId ?? null;
   const runStatus = useSessionImportRun(hostId).status;
   const runIdle = runStatus === "idle";
+  const statusQuery = useSessionImportCheckStatus(streamBinding, runIdle);
+  const activeRun = statusQuery.isSuccess ? statusQuery.data.active : null;
+  const canSubmit = sessionImportHostIsIdle(statusQuery);
+  const checkingStatus = !statusQuery.isError && !canSubmit;
+  // The controller only probes the app's host on its own. A wizard on any
+  // other host checks through Query first and attaches without selections.
+  // Submission stays disabled until an idle answer arrives, including when
+  // the onboarding scan was populated before this wizard mounted.
+  useEffect(() => {
+    if (!runIdle || !statusQuery.isSuccess || statusQuery.isFetching) return;
+    if (activeRun !== null) attachSessionImportRun(streamBinding, activeRun);
+  }, [
+    activeRun,
+    runIdle,
+    statusQuery.isFetching,
+    statusQuery.isSuccess,
+    streamBinding,
+  ]);
   // Meeting the wizard on any surface - the tour act, the Settings dialog,
   // the release toast's own dialog - is the announcement: the id is consumed
   // on mount so the toast never follows for a user who has already opened
@@ -134,7 +159,7 @@ export function SessionImportWizard(props: {
   const submit = (): void => {
     // A run already under way owns the screen, and the button is not rendered
     // then - this guards a click that raced the store.
-    if (!runIdle) return;
+    if (!runIdle || !canSubmit) return;
     const submission = buildSessionImportSubmission(state);
     if (submission.selections.length === 0) return;
     Analytics.getInstance().track(AnalyticsEvent.SessionImportStarted, {
@@ -298,9 +323,27 @@ export function SessionImportWizard(props: {
         />
       </div>
 
+      {statusQuery.isError ? (
+        <div role="alert" className="flex items-center gap-2 px-4 py-2">
+          <p className={cn("text-ui-xs", tone.muted)}>
+            Traycer could not check whether an import is already running.
+          </p>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={statusQuery.isFetching}
+            onClick={() => void statusQuery.refetch()}
+          >
+            Try again
+          </Button>
+        </div>
+      ) : null}
       <SessionImportFooter
         tone={tone}
         view={view}
+        canSubmit={canSubmit}
+        checkingStatus={checkingStatus}
         secondaryAction={secondaryAction}
         onSubmit={submit}
       />
@@ -336,6 +379,13 @@ function SessionImportEmptyState(props: {
       ) : null}
     </div>
   );
+}
+
+/** A pending, failed, or refetching status cannot authorize a new import. */
+function sessionImportHostIsIdle(
+  query: UseQueryResult<SessionImportStatusResponse, HostRpcError>,
+): boolean {
+  return query.isSuccess && !query.isFetching && query.data.active === null;
 }
 
 /**
@@ -544,10 +594,13 @@ function ScanWindowSelect(props: {
 function SessionImportFooter(props: {
   readonly tone: SessionImportTone;
   readonly view: SessionImportWizardView;
+  readonly canSubmit: boolean;
+  readonly checkingStatus: boolean;
   readonly secondaryAction: SessionImportSecondaryAction | null;
   readonly onSubmit: () => void;
 }) {
-  const { tone, view, secondaryAction, onSubmit } = props;
+  const { tone, view, canSubmit, checkingStatus, secondaryAction, onSubmit } =
+    props;
   return (
     <div
       className={cn(
@@ -569,9 +622,16 @@ function SessionImportFooter(props: {
         type="button"
         size="sm"
         data-testid="session-import-submit"
-        disabled={view.selectedCount === 0}
+        disabled={!canSubmit || view.selectedCount === 0}
         onClick={onSubmit}
       >
+        {checkingStatus ? (
+          <AgentSpinningDots
+            className={tone.muted}
+            testId="session-import-status-spinner"
+            variant={undefined}
+          />
+        ) : null}
         Import {view.selectedCount}{" "}
         {view.selectedCount === 1 ? "task" : "tasks"}
       </Button>

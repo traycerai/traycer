@@ -28,6 +28,7 @@ import type {
   SessionImportScanCallbacks,
   SessionImportScanClientOptions,
 } from "@traycer-clients/shared/host-transport/session-import-scan-client";
+import type { SessionImportStatusResponse } from "@traycer/protocol/host/session-import/contracts";
 import type { SessionImportRunRequest } from "@/components/session-import/session-import-run-handle";
 import type { SessionImportSurface } from "@/components/session-import/session-import-tone";
 import type { StreamRuntimeBinding } from "@/lib/host/stream-runtime-context";
@@ -64,6 +65,18 @@ const startSessionImportRunMock = vi.hoisted(() =>
     ) => void
   >(),
 );
+const attachSessionImportRunMock = vi.hoisted(() => vi.fn());
+const sessionImportCheckStatusMock = vi.hoisted(() => ({
+  data: {
+    active: null,
+    lastCompleted: null,
+  } as SessionImportStatusResponse | undefined,
+  isError: false,
+  isFetching: false,
+  isPending: false,
+  isSuccess: true,
+  refetch: vi.fn(),
+}));
 const analyticsTrackMock = vi.hoisted(() => vi.fn());
 const taskOpenedMock = vi.hoisted(() => vi.fn());
 
@@ -116,6 +129,7 @@ vi.mock("@/lib/host/stream-runtime-context", () => ({
 }));
 
 vi.mock("@/components/session-import/session-import-run-handle", () => ({
+  attachSessionImportRun: attachSessionImportRunMock,
   startSessionImportRun: startSessionImportRunMock,
 }));
 
@@ -131,6 +145,10 @@ vi.mock("@/components/session-import/session-import-open-task-button", () => ({
       Open task
     </button>
   ),
+}));
+
+vi.mock("@/hooks/session-import/use-session-import-check-status-query", () => ({
+  useSessionImportCheckStatus: () => sessionImportCheckStatusMock,
 }));
 
 vi.mock("@/lib/analytics", () => ({
@@ -354,6 +372,16 @@ beforeEach(() => {
   scanClient.updatedAfter = undefined;
   scanClient.close.mockClear();
   startSessionImportRunMock.mockClear();
+  attachSessionImportRunMock.mockClear();
+  sessionImportCheckStatusMock.data = {
+    active: null,
+    lastCompleted: null,
+  };
+  sessionImportCheckStatusMock.isError = false;
+  sessionImportCheckStatusMock.isFetching = false;
+  sessionImportCheckStatusMock.isPending = false;
+  sessionImportCheckStatusMock.isSuccess = true;
+  sessionImportCheckStatusMock.refetch.mockClear();
   analyticsTrackMock.mockClear();
   taskOpenedMock.mockClear();
   useSessionImportRunStore.setState({ runs: new Map() });
@@ -905,6 +933,115 @@ describe("<SessionImportWizard />", () => {
     expect(startSessionImportRunMock.mock.calls[0][0].selections).toEqual([
       { harness: "claude", nativeSessionId: "s1" },
     ]);
+  });
+
+  it("keeps a populated onboarding scan blocked while the status check is pending", () => {
+    sessionImportCheckStatusMock.data = undefined;
+    sessionImportCheckStatusMock.isPending = true;
+    sessionImportCheckStatusMock.isFetching = true;
+    sessionImportCheckStatusMock.isSuccess = false;
+
+    const onImportStarted = vi.fn();
+    render(
+      <TestWizard
+        surface="onboarding"
+        onImportStarted={onImportStarted}
+        secondaryAction={null}
+      />,
+    );
+    const callbacks = requireCallbacks();
+    act(() => {
+      callbacks.onGroup(
+        folderGroup({
+          path: "/repo/a",
+          sessions: [importableCandidate("claude", "s1", "Onboarding session")],
+        }),
+      );
+    });
+
+    const submit = screen.getByTestId("session-import-submit");
+    expect(submit.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(submit);
+    expect(startSessionImportRunMock).not.toHaveBeenCalled();
+    expect(onImportStarted).not.toHaveBeenCalled();
+    expect(screen.getByTestId("session-import-status-spinner")).toBeTruthy();
+  });
+
+  it("attaches an active host run without submitting the scan selections", () => {
+    const activeRun = { runId: "run-active", done: 1, total: 2 };
+    sessionImportCheckStatusMock.data = {
+      active: activeRun,
+      lastCompleted: null,
+    };
+
+    const onImportStarted = vi.fn();
+    renderWizard(onImportStarted);
+    const callbacks = requireCallbacks();
+    act(() => {
+      callbacks.onGroup(
+        folderGroup({
+          path: "/repo/a",
+          sessions: [importableCandidate("claude", "s1", "Existing selection")],
+        }),
+      );
+    });
+
+    expect(attachSessionImportRunMock).toHaveBeenCalledWith(
+      expect.objectContaining({ hostId: "host-a" }),
+      activeRun,
+    );
+    const submit = screen.getByTestId("session-import-submit");
+    expect(submit.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(submit);
+    expect(startSessionImportRunMock).not.toHaveBeenCalled();
+    expect(onImportStarted).not.toHaveBeenCalled();
+  });
+
+  it("allows an idle status answer to submit the populated selection", () => {
+    const onImportStarted = vi.fn();
+    renderWizard(onImportStarted);
+    const callbacks = requireCallbacks();
+    act(() => {
+      callbacks.onGroup(
+        folderGroup({
+          path: "/repo/a",
+          sessions: [importableCandidate("claude", "s1", "Idle session")],
+        }),
+      );
+    });
+
+    const submit = screen.getByTestId("session-import-submit");
+    expect(submit.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(submit);
+    expect(startSessionImportRunMock).toHaveBeenCalledTimes(1);
+    expect(onImportStarted).toHaveBeenCalledTimes(1);
+  });
+
+  it("blocks on a status error and offers a retry", () => {
+    sessionImportCheckStatusMock.data = undefined;
+    sessionImportCheckStatusMock.isError = true;
+    sessionImportCheckStatusMock.isSuccess = false;
+
+    renderWizard(vi.fn());
+    const callbacks = requireCallbacks();
+    act(() => {
+      callbacks.onGroup(
+        folderGroup({
+          path: "/repo/a",
+          sessions: [importableCandidate("claude", "s1", "Retry session")],
+        }),
+      );
+    });
+
+    expect(screen.getByRole("alert").textContent).toContain(
+      "could not check whether an import is already running",
+    );
+    expect(
+      screen.getByTestId("session-import-submit").hasAttribute("disabled"),
+    ).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(sessionImportCheckStatusMock.refetch).toHaveBeenCalledTimes(1);
+    expect(startSessionImportRunMock).not.toHaveBeenCalled();
   });
 
   it("shows an inline provider-failure notice without blocking groups delivered after it", () => {
