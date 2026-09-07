@@ -84,6 +84,7 @@ not ship the verb change without it.
 | no start deadline the wait can cross                                                | the shipped unit / plist / task XML                | **pinned for systemd only** (`Type=simple`, no `TimeoutStartSec`)                                                                                                                                 |
 | the plain `host stop` still uses `systemctl stop`, so its 90s default is still live | `linux.ts`                                         | **pinned** — the true proposition, replacing a vacuous "the ladder sits under 90s"                                                                                                                |
 | a supervisor that waits re-resolves its target after admission                      | `host-start.ts:1466` inside the admission callback | **citation at the call site**; the hoist it warns against is a call-site edit                                                                                                                     |
+| the `busy` refusal volume is bounded by the WAIT, not by dedup                       | `host/update-budget.ts` + the relaunch loop           | **reasoned, not pinned.** With the wait in, a refusal needs a segment outlasting `SUPERVISOR_ADMISSION_WAIT_MS`; worst case is about one line a minute on a slow download, and zero on an ordinary update. This is why there is no DEBUG tier — coordinator accepted |
 
 ## Red-watches
 
