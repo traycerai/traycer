@@ -12,6 +12,7 @@ import {
   LOCK_AWARE_DESKTOP_FLOOR,
   SHIPPED_COMPATIBILITY_FLOORS,
   decideCompatibilityFence,
+  decideHostStampPolicy,
   decideLegacyMarkerConcurrency,
   resolveCohortPolicy,
   type CompatibilityFloors,
@@ -594,5 +595,78 @@ describe("compatibility fence — the call-site contract", () => {
       .sort();
 
     expect(callSites).toEqual([...ALLOWED_CALL_SITES]);
+  });
+});
+
+describe("decideHostStampPolicy — Q1's verify-leg fallback gate", () => {
+  // The floor this suite compares against is a LOCAL literal, never the
+  // shipped constant. The shipped one is the sentinel today, so a suite that
+  // read it would exercise only the unpinned arm and would go quietly vacuous
+  // the day the release cut pins it - the failure mode this file's own
+  // `PINNED` constant already exists to avoid.
+  const FLOOR = "1.3.0-rc.1";
+
+  it.each([
+    ["1.0.0", "the oldest released line"],
+    ["1.1.11", "the last pre-client-floor release"],
+    ["1.2.0", "the E8v representative and Mac item 6's neighbour"],
+  ])("%s degrades to version-only (%s)", (target) => {
+    expect(decideHostStampPolicy(target, FLOOR)).toBe("version-only");
+  });
+
+  it.each([
+    ["1.3.0-rc.1", "the floor itself"],
+    ["1.3.0-rc.3", "a later rc, ordered ABOVE rc.1 by pre-release rank"],
+    ["1.3.0", "the release, which outranks every rc of the same core"],
+    ["1.4.2", "the version the matrix installs"],
+  ])("%s keeps identity-required (%s)", (target) => {
+    expect(decideHostStampPolicy(target, FLOOR)).toBe("identity-required");
+  });
+
+  it("an rc floor admits its own rc line — which is why the floor is not 1.3.0", () => {
+    // A floor of "1.3.0" would push all three rcs onto the degraded arm even
+    // though they DO write the stamp. Semver ranks a pre-release below its
+    // release, so pinning at rc.1 is what keeps the rc line on the strong rule.
+    // This is the pin for that reasoning, not a restatement of the rows above.
+    expect(decideHostStampPolicy("1.3.0-rc.2", "1.3.0")).toBe("version-only");
+    expect(decideHostStampPolicy("1.3.0-rc.2", FLOOR)).toBe(
+      "identity-required",
+    );
+  });
+
+  it("an UNPINNED floor keeps the STRONG rule — the opposite of the fence, deliberately", () => {
+    // `decideCompatibilityFence` refuses everything on the sentinel; this
+    // returns the strong rule, which is today's shipped behaviour. Both are
+    // fail-closed in their own direction: refusing to ADMIT is safe, refusing
+    // to VERIFY is the Q1 bug itself. A sentinel floor must not silently
+    // switch verification to the weak arm either.
+    expect(decideHostStampPolicy("1.0.0", COMPATIBILITY_FLOOR_UNPINNED)).toBe(
+      "identity-required",
+    );
+    // And the same input DOES degrade once the floor is pinned, so the row
+    // above is a pin on the sentinel and not on the version.
+    expect(decideHostStampPolicy("1.0.0", FLOOR)).toBe("version-only");
+  });
+
+  it.each([
+    ["not-a-version", "unparseable"],
+    ["1.2", "a two-part string semver rejects"],
+    ["", "empty"],
+  ])("an INCOMPARABLE target keeps identity-required (%s: %s)", (target) => {
+    // "Cannot tell how old it is" is not evidence that it is old. Note this
+    // arm agrees with the fence's `*-version-incomparable` refusals in spirit
+    // even though the verdicts differ: neither waives a check it could not
+    // justify.
+    expect(decideHostStampPolicy(target, FLOOR)).toBe("identity-required");
+  });
+
+  it("a 0.0.0-local target DEGRADES, and that is the accepted cost", () => {
+    // Not exempted by name. A host built from current source does write the
+    // stamp, so this is a weaker check than necessary on a dev machine - but
+    // it is RECORDED as weaker, and the alternative (exempting the sentinel)
+    // would fail a dev host that genuinely predates the stamp, which is the
+    // failure this gate exists to remove. Pinned so the choice is visible
+    // rather than incidental.
+    expect(decideHostStampPolicy("0.0.0-local", FLOOR)).toBe("version-only");
   });
 });

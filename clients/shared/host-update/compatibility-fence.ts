@@ -398,6 +398,90 @@ function actorVerdict(
   return null;
 }
 
+// ---- Q1: verifying a host too old to carry the #1763 start stamp -----------
+
+/**
+ * How the verify leg is allowed to prove a host is the one it just installed.
+ *
+ * `identity-required` is the shipped rule and the strong one: `pid.json` must
+ * carry `processStartIdentity` and that stamp must still name the live
+ * process. `version-only` drops THAT comparison and nothing else - endpoint
+ * validity, `host.status` readiness, the version agreement, the host-home
+ * binding and the before/after re-read all remain.
+ */
+export type HostStampPolicy = "identity-required" | "version-only";
+
+/**
+ * May the verify leg fall back to version-only health for this TARGET?
+ *
+ * ## The bug this exists to close (Q1)
+ *
+ * No released host through 1.3.0-rc.3 writes `processStartIdentity`, so
+ * `readRunningObservation` answers `unreadable("pid-start-stamp-missing")` for
+ * every one of them, the verify leg polls a condition that can never become
+ * true, and after the whole 45s budget a CORRECT install of a HEALTHY host is
+ * recorded `failed` and exits `E_HOST_UPDATE_HEALTH_CHECK_FAILED`. It is
+ * reached by `--allow-downgrade` rollbacks and by Desktop rollback - the paths
+ * people take when an update has already gone wrong, so the failure lands at
+ * the worst possible moment. It is not reached by ordinary forward updates,
+ * which is why it survived to the matrix.
+ *
+ * ## Why the gate is on the TARGET, not on the observation
+ *
+ * "The stamp is missing" is a fact about the host we are looking at, which is
+ * exactly what an accident or an attacker influences; "the target is below the
+ * floor" is a fact about the version this run was asked to install, decided
+ * before any of it ran. Gating on the target makes it STRUCTURALLY impossible
+ * for a post-floor target to take the weak arm - a stamp-less post-floor host
+ * still fails, loudly, as it does today. That is the constraint, and gating
+ * this way enforces it rather than relying on care.
+ *
+ * ## Why a degrade and never a refusal
+ *
+ * A pre-download refusal would block rollback, and answering a question about
+ * the target's AGE with a user override (`--force`) would overload a flag that
+ * already means something else here. This is the mirror of the fence's own
+ * hard constraint this round - it must not refuse the upgrade path - applied
+ * to the target side.
+ *
+ * ## The three fail-safe directions, all pointing the same way
+ *
+ * Every uncertainty resolves to `identity-required`, which is today's shipped
+ * behaviour, so no input can make this function a regression:
+ *
+ *  - an UNPINNED floor keeps the strong rule. Note this is the OPPOSITE of
+ *    {@link decideCompatibilityFence}, which refuses everything on the
+ *    sentinel, and both are fail-closed in their own direction: refusing to
+ *    ADMIT is safe, while refusing to VERIFY is precisely the Q1 bug. An
+ *    unpinned floor must not silently switch verification to the weak arm
+ *    either, so it holds the strong one;
+ *  - an INCOMPARABLE target keeps the strong rule. "Cannot tell how old it is"
+ *    is not evidence that it is old;
+ *  - anything at or above the floor keeps the strong rule.
+ *
+ * Known and accepted consequence: a `0.0.0-local` target compares BELOW any
+ * pinned floor and therefore degrades, even though a host built from current
+ * source does write the stamp. Deliberately not exempted by name - the cost is
+ * a weaker check on a dev build that is RECORDED as weaker, whereas exempting
+ * it would fail a dev host that genuinely predates the stamp, which is the
+ * failure this whole function exists to remove.
+ *
+ * Takes the floor as a parameter rather than reading module scope, for the
+ * same reason {@link decideCompatibilityFence} takes `floors`: a gate that can
+ * only be exercised in its shipped configuration can only ever prove its
+ * shipped configuration, and the interesting behaviour is what happens once
+ * the floor IS pinned.
+ */
+export function decideHostStampPolicy(
+  targetVersion: string,
+  floor: string,
+): HostStampPolicy {
+  if (floor === COMPATIBILITY_FLOOR_UNPINNED) return "identity-required";
+  const target = compareHostVersions(targetVersion, floor);
+  if (!target.comparable) return "identity-required";
+  return target.ordering === "less" ? "version-only" : "identity-required";
+}
+
 /**
  * What the detective half does when it sees a lock-blind actor acting.
  *
