@@ -3029,14 +3029,39 @@ describe("execute()'s complete() closure - fault points around the terminal writ
     }
   }
 
+  /**
+   * `targetVersion` is explicit rather than defaulted because the Q1 rows and
+   * every pre-existing row here disagree about it, and the disagreement is
+   * load-bearing: `claimOptions` writes the target into the CLAIM record while
+   * `seedGenuineVerifiedProof*` writes the host's own version into the install
+   * record, `pid.json` and the RPC snapshot. The completion refuses a mismatch
+   * between the two, so a row that moves the fixture's version without moving
+   * the target here is rejected for a version mismatch and never reaches the
+   * stamp arm it means to exercise - green or red for the wrong reason. Lint
+   * bans a default value, which is the right ban here: every caller says which
+   * side of the stamp floor it is on.
+   */
   async function runToVerifyingThenComplete(
     hostHomeDir: string,
     reason: string,
     faults: UpdateExecutorFaults,
+    targetVersion: string,
   ) {
     mockCohortEligible("linux");
     return runLocalAttemptExecutorSegment(
-      claimOptions(hostHomeDir, { faults }),
+      claimOptions(hostHomeDir, {
+        faults,
+        request: fixedSelection({
+          targetVersion,
+          trigger: "manual",
+          action: "start",
+          expected: null,
+          newAttemptId: "attempt-1",
+          initialPhase: "downloading",
+          initialContinuation: null,
+          claim: null,
+        }),
+      }),
       async () => {},
       async (capability, claim, complete) => {
         await advanceToVerifying(capability, claim, hostHomeDir, reason);
@@ -3134,6 +3159,7 @@ describe("execute()'s complete() closure - fault points around the terminal writ
       hostHomeDir,
       "complete-genuine",
       NO_UPDATE_EXECUTOR_FAULTS,
+      "1.2.3",
     );
 
     expect(outcome.kind).toBe("executed");
@@ -3151,15 +3177,28 @@ describe("execute()'s complete() closure - fault points around the terminal writ
     // green and is then refused `intent-not-legal` at the commit - reported to
     // the user as a verify-timeout on a machine that is up and serving.
     //
-    // 1.2.3 is below `HOST_START_STAMP_FLOOR`, and no host at that version
+    // 1.1.5 is below `HOST_START_STAMP_FLOOR`, and no host at that version
     // writes `processStartIdentity`. This is Linux E8v leg 1 in miniature.
+    //
+    // The version is <= 1.1.8 deliberately, and that bound is chosen against
+    // the OBSERVATION rather than against today's constant. Three lines are in
+    // play and only one of them is stable: the shipped
+    // `HOST_START_STAMP_FLOOR` is the err-high proven line (1.1.11), and it
+    // drops to `HOST_START_STAMP_WRITER_FLOOR` (1.1.9) when the Linux
+    // 1.1.9/1.1.10 rows land. <= 1.1.8 is the band where raw `pid.json`
+    // readings show NO stamp, so it is below every line the constant can take,
+    // and this row keeps asserting the arm it names across that move. The
+    // floor has moved twice already; a row pinned to whatever it is today goes
+    // green for the wrong mechanism on the third move, and 1.1.11 and 1.2.0
+    // additionally fail verify for a different, still-open reason (Q15).
     const hostHomeDir = await freshHome();
-    await seedGenuineVerifiedProofWithStamp(hostHomeDir, "1.2.3", null);
+    await seedGenuineVerifiedProofWithStamp(hostHomeDir, "1.1.5", null);
 
     const outcome = await runToVerifyingThenComplete(
       hostHomeDir,
       "complete-q1-prestamp",
       NO_UPDATE_EXECUTOR_FAULTS,
+      "1.1.5",
     );
 
     expect(outcome.kind).toBe("executed");
@@ -3196,7 +3235,7 @@ describe("execute()'s complete() closure - fault points around the terminal writ
     const hostHomeDir = await freshHome();
     await seedGenuineVerifiedProofWithStamp(
       hostHomeDir,
-      "1.2.3",
+      "1.1.5",
       "linux:boot-a 4242",
     );
 
@@ -3204,6 +3243,7 @@ describe("execute()'s complete() closure - fault points around the terminal writ
       hostHomeDir,
       "complete-q1-belowfloor-stamped",
       NO_UPDATE_EXECUTOR_FAULTS,
+      "1.1.5",
     );
 
     expect(outcome.kind).toBe("executed");
@@ -3215,7 +3255,7 @@ describe("execute()'s complete() closure - fault points around the terminal writ
     expect(rpcMocks.identityVerdict).toHaveBeenCalled();
   });
 
-  it("CONTROL: an AT-floor target whose host carries no stamp is still REJECTED at the terminal write", async () => {
+  it("CONTROL: an ABOVE-floor target whose host carries no stamp is still REJECTED at the terminal write", async () => {
     // The gate is on the TARGET, so a post-floor host that fails to write the
     // stamp is a real fault and must still fail. Without this row the fix
     // above is indistinguishable from "stop checking identity".
@@ -3226,6 +3266,7 @@ describe("execute()'s complete() closure - fault points around the terminal writ
       hostHomeDir,
       "complete-q1-postfloor",
       NO_UPDATE_EXECUTOR_FAULTS,
+      "1.2.3",
     );
 
     expect(outcome.kind).toBe("executed");
@@ -3243,7 +3284,7 @@ describe("execute()'s complete() closure - fault points around the terminal writ
     const hostHomeDir = await freshHome();
     await seedGenuineVerifiedProofWithStamp(
       hostHomeDir,
-      "1.2.3",
+      "1.1.5",
       "linux:boot-a 4242",
     );
     rpcMocks.identityVerdict.mockResolvedValue("mismatch");
@@ -3252,6 +3293,7 @@ describe("execute()'s complete() closure - fault points around the terminal writ
       hostHomeDir,
       "complete-q1-recycled",
       NO_UPDATE_EXECUTOR_FAULTS,
+      "1.1.5",
     );
 
     expect(outcome.kind).toBe("executed");
@@ -3365,6 +3407,7 @@ describe("execute()'s complete() closure - fault points around the terminal writ
       hostHomeDir,
       "complete-wrong-version",
       NO_UPDATE_EXECUTOR_FAULTS,
+      "1.2.3",
     );
 
     expect(outcome.kind).toBe("executed");
@@ -3424,6 +3467,7 @@ describe("execute()'s complete() closure - fault points around the terminal writ
       hostHomeDir,
       "complete-collision",
       NO_UPDATE_EXECUTOR_FAULTS,
+      "1.2.3",
     );
 
     expect(outcome.kind).toBe("executed");
@@ -3455,7 +3499,12 @@ describe("execute()'s complete() closure - fault points around the terminal writ
     };
 
     await expect(
-      runToVerifyingThenComplete(hostHomeDir, "complete-fault-before", faults),
+      runToVerifyingThenComplete(
+        hostHomeDir,
+        "complete-fault-before",
+        faults,
+        "1.2.3",
+      ),
     ).rejects.toThrow("injected before-terminal-write fault");
 
     const onDisk = await readUpdateAttemptRecord(hostHomeDir);
@@ -3486,6 +3535,7 @@ describe("execute()'s complete() closure - fault points around the terminal writ
         hostHomeDir,
         "complete-fault-post-evidence",
         faults,
+        "1.2.3",
       ),
     ).rejects.toThrow("injected after-terminal-evidence-before-write fault");
 
@@ -3514,7 +3564,12 @@ describe("execute()'s complete() closure - fault points around the terminal writ
     };
 
     await expect(
-      runToVerifyingThenComplete(hostHomeDir, "complete-fault-after", faults),
+      runToVerifyingThenComplete(
+        hostHomeDir,
+        "complete-fault-after",
+        faults,
+        "1.2.3",
+      ),
     ).rejects.toThrow("injected after-terminal-write fault");
 
     const onDisk = await readUpdateAttemptRecord(hostHomeDir);

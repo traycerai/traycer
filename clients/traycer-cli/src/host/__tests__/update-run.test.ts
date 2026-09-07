@@ -7443,11 +7443,17 @@ describe("E13: the verify leg says WHY the host never became healthy", () => {
     // it can prove - and the only place that proves it - is which policy the
     // leg computed and handed over.
     //
-    // Below the floor: `version-only`. The target is 1.2.0, which no released
-    // host stamps.
+    // Below the floor: `version-only`. The target is 1.1.5, chosen against the
+    // OBSERVATION and not against today's constant: <= 1.1.8 is the band where
+    // raw `pid.json` readings show no stamp, so it stays below the shipped
+    // err-high line (`HOST_START_STAMP_FLOOR`, 1.1.11) and below the writer's
+    // own tag (`HOST_START_STAMP_WRITER_FLOOR`, 1.1.9) that it drops to when
+    // the Linux 1.1.9/1.1.10 rows land. 1.1.11 and 1.2.0 are ABOVE the floor
+    // and fail verify for a different, still-open reason (Q15); a row written
+    // against those would go green for the wrong mechanism.
     await seedInstalled("1.0.0");
-    world.latest = "1.2.0";
-    world.runningVersion = "1.2.0";
+    world.latest = "1.1.5";
+    world.runningVersion = "1.1.5";
     world.identityCompared = false;
 
     await runUpdate({});
