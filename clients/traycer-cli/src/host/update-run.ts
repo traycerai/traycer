@@ -6,7 +6,6 @@ import {
 import { encodeInstallGeneration } from "@traycer-clients/shared/host-version/install-generation";
 import {
   attemptIdentityOf,
-  isLegalPhaseTransition,
   isParkedPhase,
   isTerminalPhase,
   readUpdateAttemptRecord,
@@ -215,6 +214,13 @@ export interface HostUpdateRunOutcome {
    * value out of the ACK file.
    */
   readonly releasedReason: string | null;
+  /**
+   * The non-release version a live host was publishing when this run decided
+   * to leave it alone, or `null` when no arm made that decision (D-51). The
+   * shell renders it; a machine reader gets the same string here rather than
+   * having to parse the sentence.
+   */
+  readonly foreignRuntimeVersion: string | null;
 }
 
 // Matches `projectInstallResult`'s own fallback when `serviceLifecycle` is
@@ -281,6 +287,7 @@ export async function runHostUpdate(
     underLockRunningVersion: null,
     lastSeenRunningVersion: null,
     planActivationReading: null,
+    foreignRuntimeVersion: null,
   };
 
   // The ONE settlement point every exit in the table above funnels through.
@@ -520,6 +527,16 @@ interface SelectionFacts {
   lastSeenRunningVersion: string | null;
   /** The PLAN's activation reading, the stale-`failed` clear's precondition. */
   planActivationReading: ActivationReading | null;
+  /**
+   * The non-release string a live host was publishing when an arm decided to
+   * leave it alone (D-51). The one fact in here written by an ARM rather than
+   * the selector, and it is here because this is the run-scoped channel
+   * `projectSegment` already receives: the attempt record has nowhere to put
+   * it (a `superseded` write carries no `error` by D-46's design), and the
+   * operator has to be told which build was running and that nothing was
+   * activated.
+   */
+  foreignRuntimeVersion: string | null;
 }
 
 /**
@@ -1121,11 +1138,6 @@ class AttemptRecordWriter {
 
   get phase(): HostUpdateAttemptPhase {
     return this.phaseNow;
-  }
-
-  /** The continuation as of the last committed advance, not the claim's. */
-  get continuation(): HostUpdateAttemptContinuation {
-    return this.continuationNow;
   }
 
   /** Whether the record has already reached a park or a terminal. */
@@ -1998,6 +2010,26 @@ async function settleDeliveredByAnotherActor(
       // someone else's success.
       if (reading.installedVersion === target && !input.mirror.disturbed) {
         await writer.supersede();
+        // D-51: a live host publishing a NON-RELEASE string is outside the
+        // activation domain. The catalog-domain rule #1752 rounds 9-16 settled
+        // is that this command does not reason about a developer's build - and
+        // it certainly does not stop one to install over it. So the claim ends
+        // quietly: no restart owed, no remedy to name, exit 0, and the string
+        // it left running carried out to the operator. `E_HOST_NOT_RUNNING`
+        // would be false twice over - the host IS running, and there is
+        // nothing for `traycer host restart` to fix.
+        if (reading.kind === "foreign-runtime") {
+          input.selection.foreignRuntimeVersion = reading.runningVersion;
+          args.logger.info(
+            "Host update left a non-release host running: nothing was activated",
+            {
+              environment: args.environment,
+              installedVersion: reading.installedVersion,
+              runningVersion: reading.runningVersion,
+            },
+          );
+          return { kind: "left-foreign-runtime", observed };
+        }
         if (reading.kind !== "activated") {
           return { kind: "restart-owed", reading };
         }
@@ -2038,6 +2070,7 @@ async function settleDeliveredByAnotherActor(
       await verifyUnderClaim(input, writer);
       return projectNoOp(settled.observed);
     case "delivered-and-running":
+    case "left-foreign-runtime":
       return projectNoOp(settled.observed);
     case "restart-owed":
       throw deliveredByAnotherActorError(input, settled.reading, target);
@@ -2069,10 +2102,14 @@ type DeliverySettlement =
       readonly observed: HostInstallRecord;
     }
   | {
+      readonly kind: "left-foreign-runtime";
+      readonly observed: HostInstallRecord;
+    }
+  | {
       readonly kind: "restart-owed";
       readonly reading: Exclude<
         ActivationReading,
-        { readonly kind: "no-install" | "activated" }
+        { readonly kind: "no-install" | "activated" | "foreign-runtime" }
       >;
     }
   | { readonly kind: "not-delivered" };
@@ -2101,7 +2138,7 @@ function deliveredByAnotherActorError(
   input: RunArmInput,
   reading: Exclude<
     ActivationReading,
-    { readonly kind: "no-install" | "activated" }
+    { readonly kind: "no-install" | "activated" | "foreign-runtime" }
   >,
   target: string,
 ): CliError {
@@ -2112,6 +2149,9 @@ function deliveredByAnotherActorError(
     details: {
       environment,
       targetVersion: target,
+      // `debt` names what is running; `no-live-host` has nothing to name, and
+      // that null is honest rather than missing - the remedy is the same
+      // restart either way. `foreign-runtime` never reaches here (D-51).
       runningVersion: reading.kind === "debt" ? reading.runningVersion : null,
     },
     exitCode: 1,
@@ -2132,13 +2172,9 @@ function canReachVerifying(
   input: RunArmInput,
   writer: AttemptRecordWriter,
 ): boolean {
-  // The generic successor rule, asked of the transition core rather than
-  // restated here.
-  if (!isLegalPhaseTransition(writer.phase, "verifying")) return false;
-  // ...and the continuation rules on top of it, which the successor table
-  // cannot express because it is keyed on phase alone. Both say the same
-  // thing in their own domain: a segment may claim a verification only for
-  // work it actually did.
+  // The two continuation rules, and ONLY them. Both say the same thing in
+  // their own domain: a segment may claim a verification only for work it
+  // actually did.
   //
   //  - `resume-apply` may not verify before it has written the `applying`
   //    that says the committed bytes are its own;
@@ -2147,7 +2183,22 @@ function canReachVerifying(
   //    reaches: the debt cleared under the arm's own lock, so nothing was
   //    restarted, and this segment must not report a verification for another
   //    actor's activation. It takes the `superseded` answer instead.
-  const continuation = writer.continuation;
+  //
+  // A generic `isLegalPhaseTransition(writer.phase, "verifying")` guard stood
+  // here briefly and was removed as UNPINNABLE rather than left standing
+  // unpinned (recheck D3): every route into the settlement is at `preparing`
+  // or later - the claim's own `initialPhase` is `preparing` for every
+  // resume and for the activation start, and the two arms born at
+  // `downloading` reach it only after `beforeExtract` has written
+  // `preparing` - so the generic rule never decides anything the two rules
+  // below do not already decide. If a future arm can settle from
+  // `downloading` or from a park, restore the guard AND pin it; the
+  // reachability argument, not the guard, is what makes this safe.
+  //
+  // `input.claim.record.continuation` rather than the writer's for the same
+  // reason: the only advances that change a writer's continuation are parks
+  // and terminal writes, and this question is never asked after either.
+  const continuation = input.claim.record.continuation;
   if (continuation === "resume-apply") {
     return (
       writer.phase === "applying" ||
@@ -2283,10 +2334,22 @@ async function activationArm(
       // moment this arm decided to replace it.
       selection.underLockRunningVersion = readingUnderLock.runningVersion;
     }
-    if (readingUnderLock.kind === "activated") {
-      // Nothing is owed any more. Leave the gate unasked and the host alone;
-      // the claim still settles, through the evidence loop below, because the
-      // world it was created for is the world in front of it.
+    // MAIN's predicate, not a paraphrase of it (cold review B recheck, D2).
+    // Only `debt` and `no-live-host` are this command's to act on; every
+    // other reading is a no-op, and `selectDebtStart` 1,400 lines above uses
+    // exactly this test with exactly this comment. The first port returned
+    // early on `activated` alone and gated on `kind !== "no-live-host"`,
+    // which is the same thing for the two readings the SELECTOR can produce -
+    // and wrong for `foreign-runtime`, which only became reachable here when
+    // C4 made the arm take its own reading under its own lock. It sent the
+    // busy gate, a stop and a relaunch at a host running a developer's build.
+    if (
+      readingUnderLock.kind !== "debt" &&
+      readingUnderLock.kind !== "no-live-host"
+    ) {
+      if (readingUnderLock.kind === "foreign-runtime") {
+        selection.foreignRuntimeVersion = readingUnderLock.runningVersion;
+      }
       return;
     }
     try {
@@ -2294,7 +2357,7 @@ async function activationArm(
       // asked on the `no-live-host` reading - the stop reports an absent
       // host as a forced recycle and the relaunch repairs it. The reading is
       // this arm's own, not the selector's.
-      if (!args.force && readingUnderLock.kind !== "no-live-host") {
+      if (!args.force && readingUnderLock.kind === "debt") {
         await assertHostNotBusy(args.environment);
       }
       const controller = createServiceController();
@@ -2522,7 +2585,11 @@ async function projectSegment(
 ): Promise<HostUpdateRunOutcome> {
   const { args, segment, selection } = input;
   if (segment.kind === "executed") {
-    return { legacy: segment.result, releasedReason: null };
+    return {
+      legacy: segment.result,
+      releasedReason: null,
+      foreignRuntimeVersion: selection.foreignRuntimeVersion,
+    };
   }
   // `terminalized` is `update-verify`'s exit and never this command's: under
   // `afterRecovery: "reselect"` a terminalizing recovery re-selects and
@@ -2563,7 +2630,11 @@ async function projectSegment(
     selection.installedUnderLock ??
     (await readHostInstallRecord(args.environment));
   if (installed === null) throw hostNotInstalled(args.environment);
-  return { legacy: projectNoOp(installed), releasedReason: reason };
+  return {
+    legacy: projectNoOp(installed),
+    releasedReason: reason,
+    foreignRuntimeVersion: selection.foreignRuntimeVersion,
+  };
 }
 
 export function projectNoOp(
@@ -2680,7 +2751,18 @@ interface ActivationDebt {
 type ActivationReading =
   | { readonly kind: "no-install" }
   | { readonly kind: "no-live-host"; readonly installedVersion: string }
-  | { readonly kind: "foreign-runtime"; readonly installedVersion: string }
+  | {
+      readonly kind: "foreign-runtime";
+      readonly installedVersion: string;
+      /**
+       * The non-release string the live host publishes. Main's reading does
+       * not carry it because main's only answer for this cell is a silent
+       * no-op; the executor has to SAY what it left alone (D-51), and a
+       * `runningVersion: null` in that sentence is the one thing the decision
+       * ruled out.
+       */
+      readonly runningVersion: string;
+    }
   | { readonly kind: "activated"; readonly installedVersion: string }
   | ActivationDebt;
 
@@ -2762,7 +2844,11 @@ async function classifyActivationAgainst(
   // release-version policy applies. A running version that is not a release
   // version is not a host this command reasons about.
   if (!isValidHostVersion(running.version)) {
-    return { kind: "foreign-runtime", installedVersion: installed.version };
+    return {
+      kind: "foreign-runtime",
+      installedVersion: installed.version,
+      runningVersion: running.version,
+    };
   }
   // A release host publishes exactly its catalog version (the build stamps
   // `src/config.ts`'s version into the binary and into the archive's

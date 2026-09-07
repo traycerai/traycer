@@ -5421,6 +5421,138 @@ describe("fixup: cold review B", () => {
     });
   });
 
+  it("D2: a FOREIGN runtime under the arm's lock is left alone - no gate, no stop, no relaunch (D-51)", async () => {
+    // The cell C4 opened. The arm re-reads under its own lock now, so it can
+    // see a reading the SELECTOR never produces - and the first port gated on
+    // `kind !== "no-live-host"`, which sent the busy gate, a stop and a
+    // relaunch at a host running a developer's build. Main's predicate is
+    // "only `debt` and `no-live-host` are mine", and `selectDebtStart` 1,400
+    // lines above already uses it.
+    // Falsification (the ablation): reinstate `kind !== "no-live-host"` and
+    // this run stops and restarts a non-release host.
+    await seedInstalled("2.0.0");
+    world.runningVersion = "1.0.0";
+    mocks.beforeAttemptMutation.mockImplementation((reason: string) => {
+      if (reason === "host-update-activate") {
+        world.runningVersion = "staging.1750000000.abc1234";
+      }
+    });
+
+    const outcome = await runUpdate({ versionRequest: "2.0.0" });
+
+    expect(mocks.assertHostNotBusy).not.toHaveBeenCalled();
+    expect(mocks.stopHostForRestartWithAttempt).not.toHaveBeenCalled();
+    expect(mocks.relaunchHostAfterRestartWithAttempt).not.toHaveBeenCalled();
+    // Untouched: the developer's build is still the one serving.
+    expect(world.runningVersion).toBe("staging.1750000000.abc1234");
+    // Exit 0, and the string it left running is carried out - NOT
+    // `E_HOST_NOT_RUNNING` (the host IS running) and NOT a null
+    // `runningVersion` (which is where main's predicate alone would land).
+    expect(outcome.legacy.version).toBe("2.0.0");
+    expect(outcome.foreignRuntimeVersion).toBe("staging.1750000000.abc1234");
+    const record = await requireRecord();
+    expect(record.phase).toBe("superseded");
+    expect(record.error).toBeNull();
+    expect(mocks.disk.current).toBeNull();
+    expect(logger.info).toHaveBeenCalledWith(
+      "Host update left a non-release host running: nothing was activated",
+      expect.objectContaining({
+        installedVersion: "2.0.0",
+        runningVersion: "staging.1750000000.abc1234",
+      }),
+    );
+  });
+
+  it("D2: the shell says what is running and that nothing was activated", async () => {
+    // The operator-facing half of D-51. A bare "(no-op)" would hide the only
+    // fact that explains it.
+    // Falsification: drop the `foreignRuntimeVersion` arm from `humanSummary`
+    // and the line collapses to the ordinary no-op sentence.
+    await seedInstalled("2.0.0");
+    world.runningVersion = "1.0.0";
+    mocks.beforeAttemptMutation.mockImplementation((reason: string) => {
+      if (reason === "host-update-activate") {
+        world.runningVersion = "staging.1750000000.abc1234";
+      }
+    });
+
+    const result = await buildHostUpdateCommand({
+      force: false,
+      allowDowngrade: false,
+      versionRequest: "2.0.0",
+      ackNonce: null,
+      intent: null,
+      expectAttempt: null,
+    })(shellContext());
+
+    expect(result.human).toBe(
+      "host already at 2.0.0 (no-op); the running host is staging.1750000000.abc1234, not a release build, so nothing was activated",
+    );
+    expect(result.exitCode).toBe(0);
+  });
+
+  it("D2: the host DIES in the gap - main's other arm, unchanged: no gate, one stop, complete", async () => {
+    // The sibling cell, pinned so main's predicate cannot be over-applied:
+    // `no-live-host` IS this command's to act on. The gate is skipped because
+    // a host that is gone has no live work to protect, and the stop reports a
+    // forced recycle that the relaunch repairs.
+    await seedInstalled("2.0.0");
+    world.runningVersion = "1.0.0";
+    mocks.beforeAttemptMutation.mockImplementation((reason: string) => {
+      if (reason === "host-update-activate") world.runningVersion = null;
+    });
+
+    const outcome = await runUpdate({ versionRequest: "2.0.0" });
+
+    expect(mocks.assertHostNotBusy).not.toHaveBeenCalled();
+    expect(mocks.stopHostForRestartWithAttempt).toHaveBeenCalledTimes(1);
+    expect(mocks.relaunchHostAfterRestartWithAttempt).toHaveBeenCalledTimes(1);
+    expect(outcome.foreignRuntimeVersion).toBeNull();
+    expect((await requireRecord()).phase).toBe("complete");
+  });
+
+  it("D1: the downgrade actuator callback marks disruption even without a progress label", async () => {
+    // The twin of the apply pin. Production threads `onWillDisruptHost` into
+    // both `onWillStopHost` and `onWillSwap`, but nothing caught its removal:
+    // replacing just this callback with a no-op left 151/151 green.
+    // Falsification (the ablation): `onWillDisruptHost: () => {}` on the
+    // downgrade arm and the displaced writer is RESTORED instead of stamped.
+    await seedInstalled("3.0.0");
+    world.runningVersion = "3.0.0";
+    mocks.disk.current = {
+      state: "updating",
+      error: null,
+      targetVersion: "4.0.0",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      writerId: "foreign-writer",
+      writerStartIdentity: null,
+    };
+    mocks.installHostDowngradeInSegment.mockImplementation(
+      async (input: { readonly onWillDisruptHost: () => void }) => {
+        // Past the actuator's own report: the stop was ISSUED and then
+        // failed, which is this run's doing and stamps.
+        input.onWillDisruptHost();
+        throw cliError({
+          code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+          message: "controller.stop failed after issuance",
+          details: null,
+          exitCode: 1,
+        });
+      },
+    );
+
+    await expect(
+      runUpdate({ versionRequest: "2.0.0", allowDowngrade: true }),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+    });
+
+    expect(mocks.disk.current).toMatchObject({
+      state: "failed",
+      targetVersion: "2.0.0",
+    });
+  });
+
   it("C5: the activation arm's OWN request check, raced after the common re-validation", async () => {
     // The pin this replaces injected its race during entry-marker creation,
     // which runs BEFORE `revalidateInstallIdentity` - so it exercised the

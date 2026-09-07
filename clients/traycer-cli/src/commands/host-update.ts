@@ -97,6 +97,14 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
 
 function humanSummary(outcome: HostUpdateRunOutcome): string {
   const legacy = outcome.legacy;
+  // D-51, before every other reading: the run left a NON-RELEASE host alone.
+  // It is a no-op, so it must not read as one of the update sentences - but a
+  // bare "no-op" would hide the only fact that explains it, which is that the
+  // process serving is not the artifact the record names and this command
+  // does not replace a developer's build.
+  if (outcome.foreignRuntimeVersion !== null) {
+    return `host already at ${legacy.version} (no-op); the running host is ${outcome.foreignRuntimeVersion}, not a release build, so nothing was activated`;
+  }
   if (outcome.releasedReason !== null) {
     return outcome.releasedReason === "nothing-to-do"
       ? `host already at ${legacy.version} (no-op)`
