@@ -32,6 +32,40 @@ import {
 // The `PATH`-invoked old CLI is a NAMED RESIDUAL: nothing we ship can prevent
 // it, because a lock-blind CLI leaves no lock and no record to detect while it
 // runs. It is detective-only, and it is retired solely by the floor rising.
+//
+// ## The residual, stated as protection the user actually has
+//
+// What an already-shipped binary does when it runs is physically outside any
+// patch in this repository, and it is worth saying what remains rather than
+// implying a constant closes it.
+//
+// A CLI at 1.0.0-1.1.11 consults NO floor of ours. `requiredCliVersion` is
+// parse-only in every one of those releases ("Intentionally parse-only ... do
+// not act on it"), so even a manifest that floors the cutover is ignored by
+// them, and the floors pinned below are not in their binaries to read. Those
+// versions install whatever the registry offers, silently. That is the whole
+// fleet below 1.2.0.
+//
+// So the protection is layered and each layer has a real edge:
+//
+//  1. `requiredCliVersion` in the PUBLISHED MANIFEST, enforced by
+//     `evaluateHostClientFloor` (`registry/client-floor.ts`, called inside
+//     `resolveAsset`, so `install` and `download-stage` both pass through it).
+//     This is the only lever that can refuse an old CLI at all, it is
+//     publisher policy rather than a shipped constant, and it bites 1.2.0 and
+//     later ONLY.
+//  2. Below 1.2.0: the preventive fence here, which refuses a NEW attempt on a
+//     machine whose installed CLI is below the floor — but only where a
+//     Desktop exists to ask, and it cannot see a CLI invoked from elsewhere on
+//     `PATH`.
+//  3. Below that: evidence. A lock-blind run leaves the legacy marker and its
+//     own install record, which is what the detective half is for and what
+//     recovery reconciles afterwards.
+//
+// Nothing in this list refuses a 1.0.0 CLI invoked by hand on a machine with
+// no Desktop. That case is closed by the fleet aging past the floor and by
+// nothing else, and a release that needs it closed sooner needs a published
+// manifest floor, not a code change here.
 
 /**
  * The value both floors carry until the release cut assigns real ones.
@@ -412,6 +446,23 @@ export interface CohortPolicyResolution {
  * Callers must consult this at boot/admission only, never mid-segment — the
  * same rule the static gate follows, for the same reason: a policy re-read
  * inside a held segment would abandon an adopted attempt.
+ *
+ * ## DELIBERATELY UNWIRED, unlike the preventive half beside it
+ *
+ * Not an oversight and not the same omission the floors were. This function
+ * resolves a SIGNED REMOTE policy, and nothing in this repository produces a
+ * `SignedCohortPolicy`: there is no fetch, no signature verification, no
+ * freshness clock, and no key. Wiring it today could only ever pass `null`,
+ * which by its own contract degrades to the static default — so the call would
+ * add a branch that provably cannot change an outcome, while reading as though
+ * a kill switch were live.
+ *
+ * That reads worse than absence. An operator who finds `resolveCohortPolicy`
+ * called at admission will reasonably believe a remote disable exists and can
+ * be reached in an incident; discovering mid-incident that the channel was
+ * never built is the expensive way to learn it. The switch becomes real when
+ * its transport does — the four O4 conditions, signature verified BEFORE the
+ * policy is consulted — and it is one call site away when that lands.
  */
 export function resolveCohortPolicy(
   policy: SignedCohortPolicy | null,
