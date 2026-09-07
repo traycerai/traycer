@@ -3285,6 +3285,78 @@ describe("ported: update-progress marker (T16)", () => {
     expect((await requireRecord()).phase).toBe("complete");
   });
 
+  it("ticket 07 detective half: a takeover BEATEN on all three attempts arms the detector, without ever owning the marker", async () => {
+    // The second way a foreign updater becomes observable, and the one the
+    // first wiring of this latch missed (cold review C).
+    //
+    // `takeOver` exits with `own === null` two OPPOSITE ways. One is an
+    // I/O-failed write - evidence of our own write not landing, and of
+    // nothing else. The other is THIS: three consecutive lock-held writes
+    // each lost a race. Under the lock the only other writer of
+    // `update-progress.json` is another CLI (the host is a reader), so
+    // losing three times is a concurrent lock-blind updater caught in the
+    // act - and the run that hits it is the run most likely to have one.
+    //
+    // The exhaustion path was already logging that conclusion and throwing
+    // it away, which left the detector disarmed exactly there.
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    mocks.disk.current = {
+      state: "updating",
+      error: null,
+      targetVersion: "9.9.9",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      writerId: "foreign-writer",
+      writerStartIdentity: null,
+    };
+    // Always "changed", never "replaced": `own` therefore stays null for the
+    // whole run, so the transition arm (a read that turns foreign AFTER ours
+    // landed) can never fire here. Exhaustion is the only thing left that can
+    // arm the latch, which is what makes this pin attribute to it.
+    mocks.replaceUpdateProgressMarkerIfUnchanged.mockResolvedValue("changed");
+
+    await expect(runUpdate({})).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_UPDATE_CONCURRENT_LEGACY_UPDATER,
+    });
+
+    // Exhaustion, not an early exit: the loop is bounded at three.
+    expect(mocks.replaceUpdateProgressMarkerIfUnchanged).toHaveBeenCalledTimes(
+      3,
+    );
+  });
+
+  it("...and the I/O-failed twin of that exit leaves the detector DISARMED, however foreign the marker looks", async () => {
+    // The other null-`own` exit, held apart from the one above. Same visible
+    // state at the call site - no marker of ours, a stranger's marker on disk
+    // - and the opposite meaning, so the fence must not fire.
+    //
+    // Arming here would abort updates on a disk error, which is the failure
+    // the "best-effort marker never fails an update" contract exists to
+    // prevent. Both directions of that pair are pinned: the row above dies
+    // if exhaustion stops arming, this one dies if `failed` starts.
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    mocks.disk.current = {
+      state: "updating",
+      error: null,
+      targetVersion: "9.9.9",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      writerId: "foreign-writer",
+      writerStartIdentity: null,
+    };
+    mocks.replaceUpdateProgressMarkerIfUnchanged.mockResolvedValue("failed");
+
+    const outcome = await runUpdate({});
+
+    expect(outcome.legacy.version).toBe("2.0.0");
+    expect((await requireRecord()).phase).toBe("complete");
+    // Stopped on the FIRST attempt: an I/O failure is never retried, so this
+    // run never even reaches the exhaustion the row above turns on.
+    expect(mocks.replaceUpdateProgressMarkerIfUnchanged).toHaveBeenCalledTimes(
+      1,
+    );
+  });
+
   it("a lost download after a deferred claim lands its failure into the path the other writer has since cleared", async () => {
     await seedInstalled("1.0.0");
     world.runningVersion = "1.0.0";

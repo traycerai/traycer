@@ -4008,10 +4008,14 @@ function createMarkerMirror(
    * Every `null` return below is a deliberate NON-observation rather than a
    * negative finding, and each one is a mistake the withdrawn wiring made:
    *
-   *  - `own === null` means this run's own write never landed. A foreign
-   *    marker then is evidence of OUR FAILED WRITE, not of another actor -
-   *    the I/O-failed-CAS case, where the takeover deliberately did not land
-   *    and the marker on disk is simply the one that was always there.
+   *  - `own === null` because a write FAILED on I/O. A foreign marker then is
+   *    evidence of our own write not landing, and of nothing else.
+   *
+   * `own === null` is NOT uniformly a non-observation, and reading it that
+   * way was the hole cold review C found: `takeOver` also exits with a null
+   * `own` by EXHAUSTING its retries, which means a lock-held CAS was beaten
+   * three times and is positive evidence of a concurrent writer. That path
+   * arms the latch itself, so it never reaches this guard.
    *  - an empty path is nobody driving anything.
    *
    * The discriminator is identity, not equality with `own`: a `null`
@@ -4109,6 +4113,27 @@ function createMarkerMirror(
       // "exists": a marker landed between the read and the create; the next
       // iteration reads it and takes it over.
     }
+    // EXHAUSTION IS POSITIVE EVIDENCE, and it is the opposite of the `failed`
+    // exits above even though both leave `own === null` (cold review C).
+    //
+    // Reaching here means three consecutive iterations LOST A RACE. Both
+    // continue paths are that same loss wearing different names: `changed` is
+    // a lock-HELD compare-and-swap beaten between our read and our write, and
+    // `exists` is a marker that appeared between our read and our create. A
+    // run can reach here by either, or by any mixture; what it cannot reach
+    // here by is `failed`, since both `failed` exits return above.
+    //
+    // Under the lock the only other writer of `update-progress.json` is
+    // another CLI - the host is a reader - so this is not "we could not
+    // tell", it is a concurrent lock-blind updater caught in the act.
+    //
+    // The log line below was already saying exactly that and throwing it
+    // away. Arming the latch here is what stops the detector from being
+    // disarmed on precisely the run most likely to have something to detect.
+    //
+    // Never armed by the `failed` exits: an I/O error is evidence of our own
+    // write not landing and of nothing else at all.
+    foreignTakeoverObserved = true;
     logger.warn(
       "Host update could not establish ownership of the progress marker under the lock; proceeding without re-asserting it",
       { environment, targetVersion },

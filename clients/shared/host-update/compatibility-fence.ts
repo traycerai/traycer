@@ -527,31 +527,35 @@ const POST_TOMBSTONE_PHASES: ReadonlySet<HostUpdateAttemptPhase> = new Set([
  * be a caller bug, and the disposition it returns for `applying` (`park`)
  * assumes the caller waited for the boundary rather than interrupting one.
  *
- * ## STILL UNWIRED, and the reason is a finding rather than an omission
+ * ## WIRED, mirror-owned, and the reason it could not live at the claim
  *
  * `legacyMarkerPresent` is not "a marker exists". The executor MIRRORS its own
  * writes onto that marker, and its entry mirror deliberately TAKES OVER any
  * record it finds — so at claim time a foreign marker is ambiguous between a
  * stale file (common, benign, and what the takeover exists to absorb) and a
- * live lock-blind updater. Wiring the check there aborts good updates on stale
- * markers.
+ * live lock-blind updater. A check there aborts good updates on stale markers,
+ * which is why the first attempt at `runArm`'s entry was withdrawn.
  *
- * This function's own contract already says the right thing — a marker
+ * This function's own contract already said the right thing — a marker
  * "appearing WHILE a schema-v2 attempt is live" — and appearing is the word
- * that carries the weight: the evidence is a marker that becomes foreign AFTER
- * our takeover landed, which only the mirror can observe, because only it
- * knows whether its own write succeeded. A takeover that failed on I/O is not
- * evidence of a concurrent actor; it is evidence of a failed write, and the
- * legacy marker is best-effort by contract — a marker read that throws must
- * never fail an update.
+ * that carries the weight: the evidence is a TRANSITION, and only the mirror
+ * can see one, because only it knows whether its own write landed.
  *
- * So the caller this needs is a MIRROR-owned boundary that can distinguish
- * "our write landed and something replaced it" from "our write never landed".
- * Attempted at `runArm`'s entry and withdrawn: it reddened two existing pins,
- * both correctly (a marker read that rejects must not fail the update; a
- * deliberately-failed takeover is not a concurrent updater). Documented rather
- * than shipped half-right, because a detective gate that fires on stale
- * markers would be retired by whoever it first interrupted.
+ * The caller is therefore `MarkerMirror.foreignTakeoverObserved`, latched from
+ * inside the segment, and it arms on exactly two facts:
+ *
+ *  - a read finds a marker that is not ours AFTER ours landed;
+ *  - the entry takeover EXHAUSTED its retries, meaning three consecutive
+ *    lock-held writes lost a race to someone else's. Under the lock the only
+ *    other writer of this file is another CLI, so that is a concurrent
+ *    updater caught in the act.
+ *
+ * It never arms on a write that failed on I/O: that is evidence of our own
+ * write not landing and of nothing else, and the legacy marker is best-effort
+ * by contract — a marker read that throws must never fail an update. Those two
+ * null-`own` exits look identical at the call site and mean opposite things;
+ * conflating them (cold review C) disarmed the detector on precisely the run
+ * most likely to have something to detect.
  */
 export function decideLegacyMarkerConcurrency(
   input: LegacyMarkerConcurrencyInput,
