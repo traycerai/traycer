@@ -6974,11 +6974,16 @@ describe("E13: the verify leg says WHY the host never became healthy", () => {
     "Q21 fixup: the remedy is era-neutral - %s",
     async (_label, refusal, expected, forbidden) => {
       // The first version of this message said "the host has to be
-      // re-enrolled", which is FALSE for the 1.1.9-1.1.12 era: those hosts have
-      // no coordination subsystem at all (`traycer-host/src/coordination` is
-      // empty until `host-v1.2.0-rc.1`), so it named a plane that does not
-      // exist on the operator's machine. And for hosts that DO have one, the
-      // Q18 host fix stops the refusal occurring.
+      // re-enrolled", which is FALSE for an older host: it has no coordination
+      // subsystem at all, so the sentence named a plane that does not exist on
+      // the operator's machine. And for hosts that DO have one, the Q18 host
+      // fix stops the refusal occurring.
+      //
+      // The era is a BRACKET on purpose - absent at `host-v1.1.10`, present at
+      // `host-v1.2.0-rc.1`, nothing in between established from source. An
+      // earlier version of this comment said "1.1.9-1.1.12", which named a
+      // version that is not a release. These rows do not care: the gate keys on
+      // what the refusal PROVES, so a bracket that moves cannot redden them.
       //
       // So the sentence may only claim a credential plane when the refusal
       // proves one answered - a key set was consulted - and must otherwise say

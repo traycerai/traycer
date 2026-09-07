@@ -2904,11 +2904,24 @@ async function readClaimRefresh(environment: Environment): Promise<{
  * A refusal naming a key set says a token was checked against one, which only a
  * coordination subsystem does. Anything else - a refusal at the handshake, a
  * bare `FORBIDDEN` - proves the host said no, not WHO said it, and the
- * difference is the whole reason this predicate exists: hosts in the
- * 1.1.9-1.1.12 era have no coordination subsystem at all
- * (`traycer-host/src/coordination` is empty until `host-v1.2.0-rc.1`), so
- * telling their operator to re-enrol names a plane that does not exist on their
- * machine.
+ * difference is the whole reason this predicate exists: an older host may have
+ * no coordination subsystem at all, so telling its operator to re-enrol names a
+ * plane that does not exist on their machine.
+ *
+ * The era is stated as a BRACKET, deliberately, because a tighter number was
+ * asserted and retracted: `traycer-host/src/coordination` is absent at
+ * `host-v1.1.10` and present at `host-v1.2.0-rc.1`, and nothing between those
+ * two is established from source. (The retracted claim named 1.1.12, which is
+ * not a release at all - no such tag exists. It came from a check whose failure
+ * mode against a non-resolving tag was indistinguishable from its success
+ * value.) `host-v1.1.11` is the same commit as `host-v1.1.10` in OSS - an
+ * identical tree, verified here - which is why 1.1.11 behaves like 1.1.10 in
+ * the field, but the coordination path lives outside this repository so that
+ * identity is evidence rather than proof.
+ *
+ * None of which this predicate depends on, and that is the point of writing it
+ * this way: it keys on what a refusal PROVES, never on a version. A bracket
+ * that later moves cannot make it wrong.
  *
  * Matching host TEXT is not something this file does elsewhere and it is worth
  * saying why it is acceptable here: the string steers one sentence of prose and
