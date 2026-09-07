@@ -595,6 +595,7 @@ describe("CommGraphCloudSubscriptionManager", () => {
     expect(readCommGraphTimelineEpicState("epic-1")).toEqual({
       cursor: null,
       playing: false,
+      returnCursor: null,
       speed: 1,
     });
 
