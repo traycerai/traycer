@@ -38,12 +38,20 @@ export interface CommGraphTimelineEpicState {
   readonly cursor: CommGraphTimeCursor | null;
   readonly playing: boolean;
   readonly speed: number;
+  /**
+   * Where the cursor sat when "Live" was last pressed, so the same button can
+   * take the person back. Only meaningful while `cursor` is `null`; a manual
+   * seek replaces it the next time Live is pressed. Never cleared by an
+   * arriving row - the position it names is a row, and rows are not removed.
+   */
+  readonly returnCursor: CommGraphTimeCursor | null;
 }
 
 const DEFAULT_EPIC_STATE: CommGraphTimelineEpicState = {
   cursor: null,
   playing: false,
   speed: DEFAULT_SPEED,
+  returnCursor: null,
 };
 
 interface CommGraphTimelineStore {
@@ -55,6 +63,10 @@ interface CommGraphTimelineStore {
     cursor: CommGraphTimeCursor | null,
   ) => void;
   readonly setPlaying: (epicId: string, playing: boolean) => void;
+  readonly setReturnCursor: (
+    epicId: string,
+    returnCursor: CommGraphTimeCursor | null,
+  ) => void;
   readonly cycleSpeed: (epicId: string) => void;
 }
 
@@ -97,6 +109,13 @@ export const useCommGraphTimelineStore = create<CommGraphTimelineStore>(
           current.playing === playing ? null : { ...current, playing },
         ),
 
+      setReturnCursor: (epicId, returnCursor) =>
+        patch(epicId, (current) =>
+          current.returnCursor === returnCursor
+            ? null
+            : { ...current, returnCursor },
+        ),
+
       cycleSpeed: (epicId) =>
         patch(epicId, (current) => {
           const index = COMM_GRAPH_PLAYBACK_SPEEDS.indexOf(current.speed);
@@ -122,6 +141,14 @@ export function useCommGraphPlaying(epicId: string): boolean {
 
 export function useCommGraphSpeed(epicId: string): number {
   return useCommGraphTimelineStore((s) => readEpicState(s, epicId).speed);
+}
+
+export function useCommGraphReturnCursor(
+  epicId: string,
+): CommGraphTimeCursor | null {
+  return useCommGraphTimelineStore(
+    (s) => readEpicState(s, epicId).returnCursor,
+  );
 }
 
 /** Imperative read for callbacks that must not subscribe (playback ticks). */

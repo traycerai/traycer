@@ -40,6 +40,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import { CommGraphOfficeCanvas } from "@/components/epic-canvas/comm-graph/office/comm-graph-office-canvas";
+import { useCommGraphTimelineStore } from "@/stores/epics/comm-graph-timeline-store";
 import {
   commGraphPairId,
   type CommGraphAgentNode,
@@ -88,6 +89,7 @@ interface OfficeRenderOptions {
   readonly events: ReadonlyArray<CommGraphEvent>;
   readonly pulse: CommGraphPulse | null;
   readonly pulseKey: string | null;
+  readonly playing?: boolean;
 }
 
 const STATIC_OFFICE: OfficeRenderOptions = {
@@ -109,7 +111,7 @@ function officeElement(
       events={options.events}
       hosts={[]}
       initialHistoryCaughtUp={false}
-      playing={false}
+      playing={options.playing ?? false}
       pulse={options.pulse}
       pulseKey={options.pulseKey}
       modeToggle={null}
@@ -241,6 +243,7 @@ afterEach(() => {
   cleanup();
   registerFindAdapterMock.mockClear();
   vi.restoreAllMocks();
+  useCommGraphTimelineStore.setState({ stateByEpicId: {} });
 });
 
 /**
@@ -453,5 +456,44 @@ describe("CommGraphOfficeCanvas", () => {
     expect(screen.getByTestId("comm-graph-office-zoom-in")).toBeDefined();
     expect(screen.getByTestId("comm-graph-office-zoom-out")).toBeDefined();
     expect(screen.getByTestId("comm-graph-office-fit")).toBeDefined();
+  });
+
+  it("shows no cursor chip when there is no cursor", () => {
+    renderOffice(new Set([ORCHESTRATOR.id, REVIEWER.id]));
+
+    expect(screen.queryByTestId("comm-graph-office-cursor-chip")).toBeNull();
+  });
+
+  it("shows a Paused chip once the epic's cursor is set", () => {
+    renderOffice(new Set([ORCHESTRATOR.id, REVIEWER.id]));
+
+    act(() => {
+      useCommGraphTimelineStore
+        .getState()
+        .setCursor("epic-1", { timestamp: 1_000, hostId: "host-1", id: 1 });
+    });
+
+    const chip = screen.getByTestId("comm-graph-office-cursor-chip");
+    expect(chip.textContent).toMatch(/^Paused at/);
+  });
+
+  it("shows a Replaying chip when the cursor is set and playback is running", () => {
+    render(
+      withQueryClient(
+        officeElement(new Set([ORCHESTRATOR.id, REVIEWER.id]), {
+          ...STATIC_OFFICE,
+          playing: true,
+        }),
+      ),
+    );
+
+    act(() => {
+      useCommGraphTimelineStore
+        .getState()
+        .setCursor("epic-1", { timestamp: 1_000, hostId: "host-1", id: 1 });
+    });
+
+    const chip = screen.getByTestId("comm-graph-office-cursor-chip");
+    expect(chip.textContent).toMatch(/^Replaying/);
   });
 });

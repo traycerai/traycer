@@ -1503,6 +1503,70 @@ describe("comm-graph transport", () => {
     expect(
       screen.getByTestId("comm-graph-transport-play").hasAttribute("disabled"),
     ).toBe(true);
+    // No live badge, no elapsed fill, and the empty track says so in words.
+    const empty = screen.getByTestId("comm-graph-transport-empty");
+    expect(empty.textContent).toBe("No events yet");
+    expect(screen.queryByTestId("comm-graph-transport-follow-live")).toBeNull();
+    expect(screen.queryByTestId("comm-graph-transport-elapsed")).toBeNull();
+  });
+
+  it("toggles Live: pressing it goes live, pressing it again returns to the saved position", async () => {
+    await renderWithEvents(3);
+    const track = screen.getByTestId("comm-graph-transport-track");
+    fireEvent.keyDown(track, { key: "Home" });
+    await waitFor(() => {
+      expect(following()).toBe("false");
+    });
+
+    fireEvent.click(screen.getByTestId("comm-graph-transport-follow-live"));
+    await waitFor(() => {
+      expect(following()).toBe("true");
+    });
+    expect(
+      screen
+        .getByTestId("comm-graph-transport-follow-live")
+        .getAttribute("data-can-return"),
+    ).toBe("true");
+
+    fireEvent.click(screen.getByTestId("comm-graph-transport-follow-live"));
+    await waitFor(() => {
+      expect(following()).toBe("false");
+    });
+    expect(track.getAttribute("aria-valuenow")).toBe("0");
+  });
+
+  it("stays live, with nothing to return to, when Live is pressed while live", async () => {
+    await renderWithEvents(3);
+    expect(following()).toBe("true");
+
+    fireEvent.click(screen.getByTestId("comm-graph-transport-follow-live"));
+
+    expect(following()).toBe("true");
+    expect(
+      screen
+        .getByTestId("comm-graph-transport-follow-live")
+        .getAttribute("data-can-return"),
+    ).toBe("false");
+  });
+
+  it("does not erase the saved return position when Live is pressed while already live", async () => {
+    await renderWithEvents(3);
+    const track = screen.getByTestId("comm-graph-transport-track");
+    fireEvent.keyDown(track, { key: "Home" });
+    fireEvent.keyDown(track, { key: "ArrowRight" });
+    await waitFor(() => {
+      expect(track.getAttribute("aria-valuenow")).toBe("1");
+    });
+
+    fireEvent.click(screen.getByTestId("comm-graph-transport-follow-live"));
+    await waitFor(() => {
+      expect(following()).toBe("true");
+    });
+    fireEvent.click(screen.getByTestId("comm-graph-transport-follow-live"));
+
+    await waitFor(() => {
+      expect(track.getAttribute("aria-valuenow")).toBe("1");
+    });
   });
 
   /**
