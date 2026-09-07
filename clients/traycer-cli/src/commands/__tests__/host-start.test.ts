@@ -2422,6 +2422,50 @@ describe("runHostStart - crash relaunch loop", () => {
     },
   );
 
+  it.each([
+    ["restart", 77],
+    ["stop", 0],
+    ["uninstall", 0],
+    ["install-swap", 0],
+  ] as const)(
+    "Q13: a %s stop already on disk ends the PRE-SPAWN guard with exit %i",
+    async (stopReason, expected) => {
+      // The same four rows against the OTHER exit. The table above lands its
+      // stop after the spawn, so it only ever exercised the ending path's
+      // mapping; the pre-spawn guard has an exit of its own and had its own
+      // answer, reducing the reason to `!== null` and returning 0 for all
+      // four. An update's `restart` stop that landed while this supervisor
+      // was still in setup - incumbent probe, target resolution, log
+      // rotation, marker write, fd open - therefore told the manager the job
+      // had finished successfully, which is exactly the case
+      // `RESTART_OWED_EXIT_CODE` exists for.
+      //
+      // `install-swap` is the row that keeps this honest: it reads like the
+      // one an update announces, and it is the one that must stay 0.
+      const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+
+      await runUntilExit(
+        () =>
+          runHostStart(
+            { environment: "production", cwd: null },
+            {
+              ...deps,
+              maxRelaunches: 5,
+              hasStopIntent: async () => stopReason,
+            },
+          ),
+        recorded,
+      );
+
+      // Nothing was spawned at all. This is what makes the assertion below an
+      // assertion about the PRE-spawn guard: on the ending path the child has
+      // to exist first, so a run that reaches this line with zero spawns can
+      // only have exited from the guard.
+      expect(recorded.spawnCalls).toHaveLength(0);
+      expect(recorded.exited).toBe(expected);
+    },
+  );
+
   it("escalates a raced stop to SIGKILL when the child ignores SIGTERM", async () => {
     // Without this the supervisor awaits `childEnding` with no deadline, and
     // nothing else intervenes: the stop announced itself on disk, `host stop`

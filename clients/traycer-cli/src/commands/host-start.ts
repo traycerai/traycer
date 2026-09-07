@@ -1393,18 +1393,24 @@ export async function runHostStart(
     // Reading the latch AFTER the await is what closes it; from here to
     // `currentChild = child` is unbroken synchronous code, so no signal can
     // land in between.
-    const stopAnnounced =
-      (await deps.hasStopIntent(
-        opts.environment,
-        Date.now(),
-        servedStopIntentAtStartup,
-      )) !== null;
-    if (shuttingDown || stopAnnounced) {
+    // The REASON, not a boolean: it decides this branch's exit code below,
+    // and `hasStopIntent` is bound to `actionableStopIntentReason` precisely
+    // so one read answers both questions (its docblock: "a boolean followed
+    // by a second read for the reason could straddle a record that changed in
+    // between, and decide the refusal from one stop and the exit code from
+    // another"). Reducing it here re-opened that in a single expression.
+    const stopAnnounced = await deps.hasStopIntent(
+      opts.environment,
+      Date.now(),
+      servedStopIntentAtStartup,
+    );
+    if (shuttingDown || stopAnnounced !== null) {
       logger.info("Host supervisor not spawning - a stop was requested", {
         environment: opts.environment,
         attemptId,
         attemptNumber,
         viaSignal: shuttingDown,
+        stopReason: stopAnnounced,
       });
       // This attempt already wrote its `starting` marker above. Returning
       // without a terminal one leaves `spawn-evidence.ts` pairing a
@@ -1431,7 +1437,18 @@ export async function runHostStart(
         ),
       );
       await deps.closeLogFd(logFd);
-      return exitSupervisor(0);
+      // Same mapping as every other site that exits on an announced stop (the
+      // ending path's `standing === "restart"` test, and `decideRelaunch`'s
+      // `refused`): `"restart"` is the one reason that PROMISES a comeback, so
+      // exiting 0 for it tells the service manager the job finished and, on a
+      // CLI-only install, nothing brings the host back if the CLI that
+      // promised the restart dies first. `stop`, `uninstall` and - despite its
+      // name - `install-swap` all mean "do not bring this back" and keep this
+      // branch's 0. A forwarded POSIX signal reads `null` and takes 0 too: no
+      // record was consulted, so it asks for nothing.
+      return exitSupervisor(
+        stopAnnounced === "restart" ? RESTART_OWED_EXIT_CODE : 0,
+      );
     }
 
     // Captured BEFORE the spawn: a loader-phase crash can write its diagnostic
