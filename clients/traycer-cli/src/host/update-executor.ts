@@ -790,11 +790,18 @@ async function releaseAfterClosingStaleAttempt(
   // interrupted record (`update-run.ts`). `refused-attempt-moved` cannot, and
   // cannot STRUCTURALLY rather than incidentally: it is minted precisely
   // because the generation or sequence moved, which is the condition this
-  // guard now refuses to close over. The rest never arrive - `recovered-
-  // complete` / `recovered-failed` ride the `terminalized` outcome and never
-  // enter this function at all, and every remaining release reason is stopped
-  // either by the validity-and-active test above (a parked, absent or
-  // undecodable record has nothing to close) or by this guard's id test.
+  // guard now refuses to close over. The rest never arrive: `recovered-
+  // complete` / `recovered-failed` are emitted by `afterTerminalizingRecovery`
+  // (:1099-1112), which RETURNS rather than routing through the decline path
+  // that calls this function - under `report` as a `terminalized` outcome and
+  // under the run's own `reselect` (`update-run.ts:431`) as a `released` one.
+  // So it is the direct return that keeps them out, NOT the outcome kind:
+  // `released` is exactly the kind this function's callers produce, and an
+  // earlier version of this comment said the two kinds were mutually
+  // exclusive, which is false for the disposition the run actually uses.
+  // Every remaining release reason is stopped either by the
+  // validity-and-active test above (a parked, absent or undecodable record has
+  // nothing to close) or by this guard's id test.
   //
   // Split three ways rather than tidied into "everything else is caught
   // above", because the reasons are stopped by DIFFERENT tests
