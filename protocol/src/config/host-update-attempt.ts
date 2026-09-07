@@ -205,7 +205,58 @@ export type HostUpdateAttemptRecord = {
    * resumable only as an upgrade park (D19).
    */
   readonly claim?: HostUpdateAttemptClaimBaseline;
+  /**
+   * How the verify leg proved the host is the one this attempt installed (Q1).
+   *
+   * Additive and optional like `recovery` and `claim`, and terminal-only like
+   * `recovery` - it records a conclusion, and the only moment that conclusion
+   * is settled is the terminal write.
+   *
+   * ## Written POSITIVELY, and that is the whole design
+   *
+   * Every build carrying this key writes it, including the ordinary strong
+   * path (`mode: "identity"`). So absence means exactly one thing - the record
+   * was written before this key existed - and NEVER "verified fully".
+   *
+   * The rejected alternative was "present only when degraded", which reads
+   * more economically and is the same defect this key exists to record: Q1 is
+   * `processStartIdentity === null` being treated as a verdict rather than as
+   * "cannot tell". A field whose absence had to mean "the strong path ran"
+   * would have reproduced that shape one layer up, where a writer that
+   * degrades and forgets to say so is indistinguishable from one that did not.
+   * Here, forgetting is impossible to confuse with succeeding.
+   */
+  readonly verification?: HostUpdateAttemptVerification;
 };
+
+/**
+ * The verification a terminal attempt record reports about its own verify leg.
+ *
+ * A discriminated union rather than a bare string so `floor` and `reason`
+ * exist only where they refer to something. A `floor` sitting beside an
+ * identity verification would be a field with no referent, and a later reader
+ * would mine it for a meaning it never had.
+ */
+export type HostUpdateAttemptVerification =
+  /** `pid.json` carried the #1763 stamp and it named the live process. */
+  | { readonly mode: "identity" }
+  /**
+   * The stamp was absent and the TARGET was below the stamp floor, so the
+   * identity comparison could not be performed and the leg fell back to
+   * version-only health (Q1). Everything except the identity comparison still
+   * held: endpoint validity, `host.status` readiness, version agreement, the
+   * host-home binding and the before/after re-read.
+   */
+  | {
+      readonly mode: "version-only";
+      readonly reason: "pid-start-stamp-missing";
+      /**
+       * The floor the target was compared against, as the run read it - never
+       * a literal. A blank one is corrupt rather than absent: it is the value
+       * the decision turned on, so an empty string is actively misleading.
+       */
+      readonly floor: string;
+    };
 
 // ---- Phase classification ---------------------------------------------------
 
@@ -574,6 +625,16 @@ function parseAttemptFields(
   const claim = parseClaimBaseline(obj.claim);
   if (claim === "invalid") return null;
 
+  const verification = parseVerification(obj.verification);
+  if (verification === "invalid") return null;
+  // Terminal-only, on `recovery`'s reasoning rather than by analogy: it
+  // reports how the verify leg CONCLUDED, so a partial or crashed writer must
+  // not be able to leave it on a live segment and make a running attempt look
+  // as though it had already been verified - or, worse, verified weakly.
+  if (verification !== undefined && executionForPhase(phase) !== "terminal") {
+    return null;
+  }
+
   return {
     schemaVersion,
     attemptId,
@@ -591,7 +652,55 @@ function parseAttemptFields(
     error,
     ...(recovery === undefined ? {} : { recovery }),
     ...(claim === undefined ? {} : { claim }),
+    ...(verification === undefined ? {} : { verification }),
   };
+}
+
+/**
+ * Parse the optional verification report (Q1).
+ *
+ * ## The one place this decoder is deliberately NOT like its siblings
+ *
+ * `parseRecovery` and `parseClaimBaseline` are exact: anything that is not
+ * their shape corrupts the record. This one splits that into two cases, and
+ * the split is the forward-compatibility contract for the whole key:
+ *
+ *  - a MALFORMED value corrupts, exactly as they do. A non-object, a missing
+ *    `reason`, a non-string or empty `floor` - none of those can be produced
+ *    by any writer, so they mean the file is damaged;
+ *  - an UNKNOWN but well-formed `mode` DROPS the key and leaves the record
+ *    valid. A newer build recording a verification mode this one has never
+ *    heard of has not damaged anything; it has said something in a vocabulary
+ *    this reader does not have yet.
+ *
+ * Get that backwards and the first `mode` anyone adds makes every record
+ * written by a newer build unreadable to every deployed older one - a
+ * diagnostic bricking the thing it was added to explain. A field that exists
+ * to describe a conclusion must never be able to invalidate it.
+ *
+ * The asymmetry costs one real check: `mode` is validated against the KNOWN
+ * set rather than "is a string", so a genuinely damaged `mode` (a number, an
+ * object) still corrupts.
+ */
+function parseVerification(
+  value: unknown,
+): HostUpdateAttemptVerification | undefined | "invalid" {
+  if (value === undefined) return undefined;
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return "invalid";
+  }
+  const raw = value as Record<string, unknown>;
+  if (typeof raw.mode !== "string") return "invalid";
+  if (raw.mode === "identity") return { mode: "identity" };
+  if (raw.mode === "version-only") {
+    if (raw.reason !== "pid-start-stamp-missing") return "invalid";
+    const floor = nonEmptyString(raw.floor);
+    if (floor === null) return "invalid";
+    return { mode: "version-only", reason: "pid-start-stamp-missing", floor };
+  }
+  // Well-formed and unknown: a newer writer's vocabulary. Drop the key, keep
+  // the record.
+  return undefined;
 }
 
 function isTrigger(value: unknown): value is HostUpdateTrigger {

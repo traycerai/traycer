@@ -609,4 +609,108 @@ describe("decodeHostUpdateAttempt", () => {
       kind: "corrupt",
     });
   });
+  // ---- verification report (Q1) ------------------------------------------
+
+  const VERSION_ONLY = {
+    mode: "version-only" as const,
+    reason: "pid-start-stamp-missing" as const,
+    floor: "1.3.0-rc.1",
+  };
+
+  function terminalJson(overrides: Record<string, unknown>): string {
+    return JSON.stringify({
+      ...VALID_ACTIVE,
+      phase: "complete",
+      execution: "terminal",
+      completedAt: "2026-01-01T00:05:00.000Z",
+      ...overrides,
+    });
+  }
+
+  it("decodes an identity verification on a terminal record", () => {
+    const result = decodeHostUpdateAttempt(
+      bytes(terminalJson({ verification: { mode: "identity" } })),
+    );
+    expect(result.kind).toBe("valid");
+    if (result.kind !== "valid") return;
+    expect(result.value.verification).toEqual({ mode: "identity" });
+  });
+
+  it("decodes a version-only verification, carrying its reason and floor", () => {
+    const result = decodeHostUpdateAttempt(
+      bytes(terminalJson({ verification: VERSION_ONLY })),
+    );
+    expect(result.kind).toBe("valid");
+    if (result.kind !== "valid") return;
+    expect(result.value.verification).toEqual(VERSION_ONLY);
+  });
+
+  it("a record with NO verification is valid, and the key is absent - a pre-Q1 writer", () => {
+    // The positive-write design's other half: absence means "written before
+    // this key existed", so it must decode cleanly and must NOT be filled in
+    // with a default. A decoder that substituted `identity` here would invent
+    // the exact claim the key exists to stop anyone inventing.
+    const result = decodeHostUpdateAttempt(bytes(terminalJson({})));
+    expect(result.kind).toBe("valid");
+    if (result.kind !== "valid") return;
+    expect(result.value.verification).toBeUndefined();
+    expect("verification" in result.value).toBe(false);
+  });
+
+  it("FORWARD COMPAT: an UNKNOWN but well-formed mode drops the key and keeps the record VALID", () => {
+    // The rule the whole key rests on. A newer build recording a mode this
+    // reader has never heard of has not damaged anything - it has spoken in a
+    // vocabulary this reader does not have yet. If this reported corrupt, the
+    // first `mode` anyone adds would make every record written by a newer
+    // build unreadable to every deployed older one: a diagnostic bricking the
+    // thing it was added to explain.
+    const result = decodeHostUpdateAttempt(
+      bytes(
+        terminalJson({
+          verification: { mode: "attested-by-something-later" },
+        }),
+      ),
+    );
+    expect(result.kind).toBe("valid");
+    if (result.kind !== "valid") return;
+    expect(result.value.verification).toBeUndefined();
+  });
+
+  it("reports corrupt when verification is attached to a live (non-terminal) phase", () => {
+    // Same reasoning as `recovery`: it reports how the verify leg CONCLUDED,
+    // so a partial or crashed writer must not be able to leave it on a live
+    // segment and make a running attempt look already verified.
+    expect(
+      decodeHostUpdateAttempt(
+        bytes(json({ verification: { mode: "identity" } })),
+      ),
+    ).toEqual({ kind: "corrupt" });
+  });
+
+  it.each([
+    ["a non-string mode", { mode: 7 }],
+    ["a missing mode", { reason: "pid-start-stamp-missing", floor: "1.3.0" }],
+    ["version-only with no reason", { mode: "version-only", floor: "1.3.0" }],
+    [
+      "version-only with an unknown reason",
+      { mode: "version-only", reason: "some-other-reason", floor: "1.3.0" },
+    ],
+    ["version-only with no floor", { ...VERSION_ONLY, floor: undefined }],
+    ["version-only with an EMPTY floor", { ...VERSION_ONLY, floor: "" }],
+    ["version-only with a non-string floor", { ...VERSION_ONLY, floor: 130 }],
+    ["not an object", "nope"],
+    ["an array", []],
+    ["null", null],
+  ])(
+    "reports corrupt for a MALFORMED verification: %s",
+    (_label, verification) => {
+      // The other side of the asymmetry above. These shapes cannot be produced
+      // by any writer, so they mean the file is damaged - unlike an unknown
+      // mode, which means the writer is newer. An empty `floor` is corrupt
+      // rather than absent because it is the value the decision turned on.
+      expect(
+        decodeHostUpdateAttempt(bytes(terminalJson({ verification }))),
+      ).toEqual({ kind: "corrupt" });
+    },
+  );
 });
