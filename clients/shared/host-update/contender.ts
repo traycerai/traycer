@@ -1252,12 +1252,25 @@ async function supervisorRelaunchDisposition(
  * whole, the version is known, and admitting here puts two actors on the same
  * activation.
  *
- * A supervisor cannot rule that out. By the time this runs THIS contender
- * holds the attempt lock, but the lock is taken in short spans, so winning it
- * says nothing about a segment between spans - which is exactly what
- * `decideAttemptRecovery`'s `holder-not-proven-absent` exists for. An active
- * record is a claim that someone means to come back, and nothing available
- * here can falsify it.
+ * A supervisor cannot rule that out, and it does not try. What it DOES have,
+ * and what stands in for a liveness probe here, is the lock it is already
+ * holding: a live executor segment holds this same attempt lock for its whole
+ * span - `withCliAttemptExecutorCompletion` wraps `execute` in
+ * `traycer-cli`'s `host/update-executor.ts` - and the supervisor contends with
+ * `waitMs: 0`, so a live holder returns `busy` from
+ * `withUpdateContenderInternal` before any disposition is consulted.
+ *
+ * That is why this function must NOT probe the holder itself. By the time it
+ * runs, this contender owns the lock, so `probeAttemptHolder` would observe
+ * US and report `holder-live` - a probe that refuses everything while looking
+ * like a safety check. The contention IS the read, and it happens earlier and
+ * proves more.
+ *
+ * What contention cannot exclude is a holder that is alive but momentarily
+ * outside the lock, which is what `decideAttemptRecovery`'s
+ * `holder-not-proven-absent` exists for. An active record is a claim that
+ * someone means to come back, and nothing available here can falsify it -
+ * hence a criterion that does not need it falsified.
  *
  * So the question is not "is the holder gone" but: **if the holder IS alive
  * and resumes, does this supervisor having started the host change the

@@ -64,6 +64,7 @@ carving into it: dead by the decoder, but it would have blocked this arm.
 | `installed === null` is also the swap's absent window | `atomicSwap`'s two renames, `cli/installer/install.ts` | citation + the absent-window pin (RW-Q5) |
 | the claim baseline is STALE post-swap, so no generation test here | `applying → restarting` passes `claimRefresh: null`, `cli/host/update-run.ts` | the generation-drift pin (RW-Q6) |
 | the install-generation string is byte-comparable across producers | `encodeInstallGeneration`, `shared/host-version/install-generation.ts` | pinned by dc84fa8b across five callers in `install-generation.test.ts` |
+| no LIVE executor segment exists when this arm runs | the attempt lock: `withCliAttemptExecutorCompletion` wraps `execute` (`cli/host/update-executor.ts:472`) so a live segment holds it for its whole span, and the supervisor contends with `waitMs: 0` | **structural, not a probe.** `withUpdateContenderInternal` returns `busy` before any disposition is consulted. A `probeAttemptHolder` call inside `dispositionFor` would observe THIS contender and report `holder-live`, refusing everything while looking like a safety check. |
 | `{restarting, verifying}` equals `POST_TOMBSTONE_PHASES` | `shared/host-update/compatibility-fence.ts` | **deliberately NOT shared.** Same membership, opposite polarity (there: cannot walk back to a park, must terminalize). Named as a coincidence, not aliased. |
 
 ## Red-watches (all run; restored via `git checkout` on COMMITTED files)
