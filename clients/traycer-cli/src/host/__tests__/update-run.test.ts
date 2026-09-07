@@ -3573,7 +3573,10 @@ describe("ported: update-progress marker (T16)", () => {
     expect((await requireRecord()).phase).toBe("verifying");
 
     // The next run, over the record the first one left, with the write medium
-    // working again.
+    // working again. The first run's process is gone - it exited non-zero -
+    // so its marker's writer is dead, as `crashAtRestarting` declares for the
+    // same reason.
+    mocks.deadWriterIds.add("test-writer");
     mocks.refuseCompletion = null;
     const outcome = await runUpdate({});
 
@@ -3581,20 +3584,45 @@ describe("ported: update-progress marker (T16)", () => {
     const concluded = await requireRecord();
     expect(concluded.phase).toBe("complete");
     expect(concluded.execution).toBe("terminal");
-    // The MARKER, pinned as it actually behaves rather than as one would
-    // wish. A run that reconciles and releases never enters `runArm`, so the
-    // marker mirror never runs and the `updating` stamp the FIRST run wrote
-    // survives its own conclusion. That is the module's existing shape for
-    // every recovery-only run - the `crashAtRestarting` pin below reconciles
-    // the same way - and not something this arm introduced, so it is recorded
-    // here rather than quietly fixed under a Q11 commit. What keeps it benign
-    // is that a coarse `updating` is projected only BESIDE a `none` attempt,
-    // and this attempt is terminal and retained; the next update takes the
-    // marker over. Flagged to the round as a standalone gap.
-    expect(mocks.disk.current).toMatchObject({
-      state: "updating",
-      targetVersion: "2.0.0",
+    // ...and the MARKER the first run left is cleared with it (Q16). This is
+    // the half that does not come for free: a run that reconciles and releases
+    // never enters `runArm`, so the mirror's `complete()` - which is what
+    // clears the marker on the executed path - never runs. Before Q16 this
+    // assertion read `{state: "updating"}`, which is a Desktop card saying an
+    // update is in flight beside a record that says `complete`.
+    expect(mocks.disk.current).toBeNull();
+  });
+
+  it("Q11: the arm's silence survives `runArm`'s catch one frame up", async () => {
+    // Pinned as its own case at the round's request, because it is the thing
+    // that would have undone the ruling and nothing about the throw site shows
+    // it. `runArm` catches every error and does:
+    //
+    //     if (!writer.settled) await writeFailure(writer, err, ...)
+    //
+    // `writer.settled` is FALSE here - the write that was refused belonged to
+    // the executor's completion session, not to the writer - so the generic
+    // path stamped `failed` at `phase: "verifying"` immediately after the arm
+    // had carefully declined to. The record ended up in exactly the state the
+    // ruling exists to prevent, one frame above the code that prevents it.
+    //
+    // Falsification: remove `writeFailure`'s early return on
+    // `HOST_UPDATE_RECORD_NOT_CONCLUDED` and this reddens on the phase, with
+    // `error.code` coming back as the CLI error code itself.
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    mocks.refuseCompletion = "rejected";
+
+    await expect(runUpdate({})).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_UPDATE_RECORD_NOT_CONCLUDED,
     });
+
+    const record = await requireRecord();
+    expect(record.phase).toBe("verifying");
+    expect(record.execution).toBe("active");
+    expect(record.error).toBeNull();
+    // The trace is the direct evidence: no `failed` write was even attempted.
+    expect(phaseTrace()).not.toContain("failed");
   });
 
   it("Q11 control: a GENUINE verification timeout still stamps `failed`", async () => {
@@ -4938,6 +4966,13 @@ describe("acceptance: cells with no legacy ancestor", () => {
     const record = await requireRecord();
     expect(record.phase).toBe("restarting");
     expect(record.execution).toBe("active");
+    // The writer this run left behind is DEAD - that is what "crashed" means,
+    // and the marker it published names it. Declaring it closes a fidelity gap
+    // the helper had: every run in this file writes `writerId: "test-writer"`
+    // from one live process, so without this a crashed run's marker still
+    // probes as its author's live work, and no pin about what a LATER run may
+    // do to that marker can mean anything. Production reads a dead pid here.
+    mocks.deadWriterIds.add("test-writer");
     mocks.writes.length = 0;
     return record;
   }
@@ -5033,6 +5068,112 @@ describe("acceptance: cells with no legacy ancestor", () => {
       kind: "no-attempt",
       reason: "recovered-complete",
     });
+    // Q16, on the PRE-EXISTING recovery path rather than on Q11's: the marker
+    // the crashed run published is cleared along with the record it described.
+    // This pin is the reason Q16 is not a Q11 detail - the defect predates that
+    // arm and is reachable by any interrupted update, which is also why it is
+    // asserted here on the oldest recovery pin in the file.
+    expect(mocks.disk.current).toBeNull();
+  });
+
+  // ---- Q16: the marker a concluded recovery leaves behind -------------------
+  //
+  // A run that recovers and RELEASES never enters `runArm`, so the mirror's
+  // `complete()` - the thing that clears the marker on the executed path -
+  // never runs. The three pins below are the rule and its two refusals; the
+  // positive case is asserted on both recovery pins above.
+  it("Q16: an `updating` marker for ANOTHER target survives the clear", async () => {
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    await crashAtRestarting("2.0.0");
+    world.runningVersion = "2.0.0";
+    // A third updater's marker, published while this run was away, for work
+    // that is still to come. It names 2.1.0 - NOT what is running - so nothing
+    // this run observed contradicts it.
+    //
+    // Its writer is declared DEAD deliberately, which reads backwards until
+    // you try it the other way: with a live writer the liveness guard refuses
+    // the delete first and this pin passes no matter what the version test
+    // does. The first version of this pin left it live and its ablation came
+    // back GREEN - the assertion was true for a reason that had nothing to do
+    // with what it claims to guard. Killing the writer strips that cover and
+    // leaves the version test as the only thing standing between this marker
+    // and deletion, which is what the pin is for.
+    //
+    // Falsification (run): drop the `targetVersion` test in
+    // `clearConcludedUpdatingMarker` and this reddens, taking out the only
+    // progress signal for someone else's whole download.
+    mocks.deadWriterIds.add("third-updater");
+    mocks.disk.current = {
+      state: "updating",
+      error: null,
+      targetVersion: "2.1.0",
+      updatedAt: "2026-01-02T00:00:00.000Z",
+      writerId: "third-updater",
+      writerStartIdentity: null,
+    };
+
+    const outcome = await runUpdate({});
+
+    expect(outcome.releasedReason).toBe("recovered-complete");
+    expect((await requireRecord()).phase).toBe("complete");
+    expect(mocks.disk.current).toMatchObject({
+      state: "updating",
+      targetVersion: "2.1.0",
+    });
+  });
+
+  it("Q16: an `updating` marker whose writer is PROVEN live survives the clear", async () => {
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    await crashAtRestarting("2.0.0");
+    world.runningVersion = "2.0.0";
+    // The hard case, and the one the version test alone cannot catch: a third
+    // updater republished THIS target and is alive on it. The CAS below proves
+    // only that the bytes did not change between the read and the delete - it
+    // says nothing about whose live work they are.
+    // Falsification: drop the `updateProgressRecordHasProvenLiveWriter` guard
+    // and this reddens while the two positive pins stay green.
+    mocks.disk.current = {
+      state: "updating",
+      error: null,
+      targetVersion: "2.0.0",
+      updatedAt: "2026-01-02T00:00:00.000Z",
+      writerId: "live-third-updater",
+      writerStartIdentity: mocks.writerStartIdentity,
+    };
+
+    const outcome = await runUpdate({});
+
+    expect(outcome.releasedReason).toBe("recovered-complete");
+    expect(mocks.disk.current).toMatchObject({
+      state: "updating",
+      writerId: "live-third-updater",
+    });
+  });
+
+  it("Q16: a `failed` marker is NOT this clear's business", async () => {
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    await crashAtRestarting("2.0.0");
+    world.runningVersion = "2.0.0";
+    // The stale-`failed` reconciliation is a separate arm with a separate rule
+    // (it runs only on `nothing-to-do`), and widening this one to cover
+    // `failed` would silently move that decision.
+    // Falsification: relax `marker.state !== "updating"` to accept any state
+    // and this reddens.
+    mocks.disk.current = {
+      state: "failed",
+      error: "an earlier update failed",
+      targetVersion: "2.0.0",
+      updatedAt: "2026-01-02T00:00:00.000Z",
+      writerId: "earlier-updater",
+      writerStartIdentity: null,
+    };
+
+    await runUpdate({});
+
+    expect(mocks.disk.current).toMatchObject({ state: "failed" });
   });
 
   // ---- Q5 / Linux E6L: killed after the swap, host never came back ---------

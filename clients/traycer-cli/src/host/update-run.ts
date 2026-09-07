@@ -3143,6 +3143,28 @@ async function projectSegment(
   // about bytes (Q5 defect 3).
   const reading = await classifyActivationAgainst(args.environment, installed);
   const runningVersion = runningVersionOf(reading);
+  // Q16, the sibling aftercare to the stale-`failed` clear above and owed for
+  // the same reason: a release CONCLUDED a record, and the coarse marker
+  // describing that work is still saying `updating`.
+  //
+  // Why it is reachable at all: a run that recovers and releases never enters
+  // `runArm`, so the marker mirror - whose `complete()` is what clears the
+  // marker on the executed path - never runs. The record ends `complete` and
+  // the marker keeps announcing an update in flight, over a host that is
+  // serving the target. That is the same "a client renders a state the durable
+  // truth contradicts" defect as a `failed` over a healthy host, one field
+  // over, and it is the one Q11 leaves behind by design: that arm deliberately
+  // writes nothing, so the marker it left is THIS path's to clear.
+  //
+  // Only on `recovered-complete`. A `recovered-failed` marker is not
+  // contradicted by anything read here, and `nothing-to-do` is the arm above.
+  if (reason === "recovered-complete" && runningVersion !== null) {
+    await clearConcludedUpdatingMarker(
+      args.logger,
+      args.environment,
+      runningVersion,
+    );
+  }
   // A BOUND verb that declined its work over a host that is not running has
   // not left things "as they are" - it has left an outage, and exit 0 makes
   // that reading authoritative to the dispatching host, the reconciler and
@@ -4017,6 +4039,81 @@ async function clearStaleFailedMarker(
   } else {
     logger.info(
       "Host update left the progress marker alone - it changed under the stale-failure check",
+      { environment, outcome },
+    );
+  }
+}
+
+/**
+ * Remove an `updating` progress marker for work that has demonstrably
+ * CONCLUDED (Q16).
+ *
+ * The executed path clears its own marker through the mirror's `complete()`.
+ * The recovery path has no mirror to run: it terminalizes the interrupted
+ * record and releases before `runArm` is ever entered, so the marker the
+ * INTERRUPTED run published outlives the record it described. Left alone it is
+ * rendered forever - the coarse marker carries no liveness, and the host
+ * daemon's dead-writer suppression needs a pid a marker may not carry - which
+ * is a Desktop card reading "updating" beside a record that says `complete`.
+ *
+ * Three conditions, each of which is a way of being wrong if dropped:
+ *
+ *  - the marker is `updating`. A `failed` is the sibling function's business
+ *    and answers to a different rule;
+ *  - it names the version now RUNNING. That is what makes it concluded rather
+ *    than in flight, and it is the same string-identity test at the same
+ *    artifact grain the stale-`failed` clear uses;
+ *  - no writer is PROVEN live on it. The version test alone would be a race:
+ *    the CAS below only proves the bytes did not change between the read and
+ *    the delete, not that they are nobody's live work. A third updater that
+ *    republished this exact target while this run recovered still owns its
+ *    marker, and erasing it would take out the only progress signal for a
+ *    whole download → swap → restart. Fail-CLOSED here, unlike the takeover's
+ *    fail-open reading: leaving a stale marker costs a wrong card until the
+ *    next update, deleting a live one costs a blind one.
+ */
+async function clearConcludedUpdatingMarker(
+  logger: ILogger,
+  environment: Environment,
+  observedRunningVersion: string,
+): Promise<void> {
+  const marker = await readUpdateProgressMarker(environment);
+  if (marker === null || marker.state !== "updating") return;
+  if (marker.targetVersion !== observedRunningVersion) {
+    logger.info(
+      "Host update left the updating progress marker alone - it names a target the running host has not been observed at",
+      {
+        environment,
+        markerTargetVersion: marker.targetVersion,
+        observedRunningVersion,
+      },
+    );
+    return;
+  }
+  if (updateProgressRecordHasProvenLiveWriter(marker)) {
+    logger.info(
+      "Host update left the updating progress marker alone - another updater is proven to be acting on it",
+      { environment, markerTargetVersion: marker.targetVersion },
+    );
+    return;
+  }
+  const outcome = await deleteUpdateProgressMarkerIfUnchanged(
+    environment,
+    marker,
+  );
+  if (outcome === "cleared") {
+    logger.info(
+      "Host update cleared the progress marker for an update it concluded on the recovery path",
+      { environment, targetVersion: marker.targetVersion },
+    );
+  } else if (outcome === "failed") {
+    logger.info(
+      "Host update left the progress marker alone - the concluded-update clear could not be written",
+      { environment, outcome },
+    );
+  } else {
+    logger.info(
+      "Host update left the progress marker alone - it changed under the concluded-update check",
       { environment, outcome },
     );
   }
