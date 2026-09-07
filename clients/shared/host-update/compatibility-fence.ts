@@ -184,23 +184,48 @@ export const LOCK_AWARE_DESKTOP_FLOOR: string = FIRST_LOCK_AWARE_RELEASE;
  * verification, and the record says it did. Too LOW reproduces Q1 as a hard
  * failure on every rollback into the band. **Err high.**
  *
- * `1.1.9` is the writer's first tag. The rows for 1.1.9 and 1.1.10 are still
- * running; until they land, the PROVEN-present floor is `1.1.11`, and
- * `HOST_START_STAMP_PROVEN_FLOOR` below is the err-high fallback to switch to
- * if those rows surprise us. One line to flip, deliberately.
+ * ## Which of the two numbers SHIPS, and why it is the higher one
+ *
+ * Source history says `1.1.9`; raw readings prove `1.1.11`. The 1.1.9 and
+ * 1.1.10 rows have not run, so that band is inferred, not observed — and it is
+ * exactly the band where being wrong is the bad direction. A target there
+ * treated as at-or-above the floor keeps the identity check MANDATORY, so if
+ * those releases turn out not to stamp, Q1 reproduces as a hard failure on
+ * every rollback into them. Shipping `1.1.11` instead costs only a recorded
+ * version-only verification for two releases.
+ *
+ * So the SHIPPED floor is the proven one. `HOST_START_STAMP_WRITER_FLOOR`
+ * below carries the writer-history value with its evidence, and replaces this
+ * the moment the Linux 1.1.9/1.1.10 rows land.
  */
-export const HOST_START_STAMP_FLOOR: string = "1.1.9";
+export const HOST_START_STAMP_FLOOR: string = "1.1.11";
 
 /**
- * The lowest host version whose stamp has been OBSERVED in a raw `pid.json`,
- * as opposed to inferred from the writer's source history.
+ * The lowest host version whose stamp has been OBSERVED in a raw `pid.json`.
  *
- * Not consumed today. It exists so the err-high fallback is a named value with
- * its evidence attached rather than a number someone has to re-derive under
- * time pressure: if the 1.1.9/1.1.10 rows come back unstamped, point
- * `HOST_START_STAMP_FLOOR` at this instead.
+ * The invariant the suite pins: the SHIPPED floor is never below this. A floor
+ * under the proven line is a claim that a version stamps when nobody has seen
+ * it do so, and that claim fails in the Q1 direction — mandatory identity
+ * verification against a host that cannot supply an identity.
  */
 export const HOST_START_STAMP_PROVEN_FLOOR = "1.1.11";
+
+/**
+ * The writer's first tag, from source history: `host-v1.1.9`, where the three
+ * `format*ProcessStartIdentity` functions first exist (absent at 1.1.8) and
+ * where internal #4655 landed in `pid-metadata.ts` / `layer0-lock.ts`.
+ *
+ * Not shipped, and the distinction is the point rather than bookkeeping.
+ * Source history says a version CAN write the stamp; a raw reading says one
+ * DID. Between them sit the failure modes source cannot see — a writer that
+ * calls the formatter with an argument it cannot obtain (Linux's boot id), or
+ * one that writes a shape today's reader rejects, which the pid-metadata
+ * decoder reports as `null` indistinguishably from absence.
+ *
+ * This becomes `HOST_START_STAMP_FLOOR` when the Linux 1.1.9/1.1.10 rows land
+ * and prove it. Until then it is evidence, not a floor.
+ */
+export const HOST_START_STAMP_WRITER_FLOOR = "1.1.9";
 
 export interface CompatibilityFloors {
   readonly cli: string;

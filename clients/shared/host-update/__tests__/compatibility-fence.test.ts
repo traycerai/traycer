@@ -7,6 +7,7 @@ import {
   FIRST_LOCK_AWARE_RELEASE,
   HOST_START_STAMP_FLOOR,
   HOST_START_STAMP_PROVEN_FLOOR,
+  HOST_START_STAMP_WRITER_FLOOR,
   LOCK_AWARE_CLI_FLOOR,
   LOCK_AWARE_DESKTOP_FLOOR,
   SHIPPED_COMPATIBILITY_FLOORS,
@@ -58,10 +59,11 @@ describe("compatibility fence — the SHIPPED floors", () => {
   it.each([
     // The readings the floor is derived from, as an ordering matrix. These are
     // raw `pid.json` observations on BOTH platforms, not the reader's verdict.
+    // 1.1.11 is EQUAL because the shipped floor is the proven line itself.
     ["1.0.0", "less"],
     ["1.1.5", "less"],
     ["1.1.8", "less"],
-    ["1.1.11", "greater"],
+    ["1.1.11", "equal"],
     ["1.2.0", "greater"],
     ["1.3.0-rc.3", "greater"],
   ] as const)(
@@ -74,17 +76,40 @@ describe("compatibility fence — the SHIPPED floors", () => {
     },
   );
 
-  it("the err-high fallback is a real version ABOVE the shipped stamp floor", () => {
-    // If the 1.1.9/1.1.10 rows come back unstamped, the floor moves to this.
-    // Pinned as strictly greater so the fallback can only ever tighten - a
-    // fallback that sat below the shipped floor would loosen on the one path
-    // that must not loosen.
+  it("the SHIPPED stamp floor is never BELOW the proven one", () => {
+    // The load-bearing invariant, and the reason the shipped value is the
+    // higher of the two candidates. A floor under the proven line claims a
+    // version stamps when nobody has observed it doing so, and that claim
+    // fails in the Q1 direction: mandatory identity verification against a
+    // host that cannot supply an identity, which is a hard failure on every
+    // rollback into the band rather than a recorded degradation.
+    //
+    // Written as "not less" rather than "equal" on purpose - the two are equal
+    // today and must be allowed to diverge upward when a later reading proves
+    // a higher line, but never downward.
+    const shippedVsProven = compareHostVersions(
+      HOST_START_STAMP_FLOOR,
+      HOST_START_STAMP_PROVEN_FLOOR,
+    );
+    // Incomparable is a failure too: two floors that cannot be ordered cannot
+    // satisfy an invariant about their order.
+    expect(shippedVsProven.comparable).toBe(true);
+    if (!shippedVsProven.comparable) return;
+    expect(shippedVsProven.ordering).not.toBe("less");
+  });
+
+  it("the writer-history floor is BELOW the shipped one - it is evidence, not a floor", () => {
+    // Source history says a version CAN write the stamp; a raw reading says
+    // one DID. Between them sit failure modes source cannot see, so the
+    // writer's first tag is deliberately not shipped. When the 1.1.9/1.1.10
+    // rows land and prove it, this becomes the floor and the two converge.
+    expect(HOST_START_STAMP_WRITER_FLOOR).toBe("1.1.9");
     expect(
       compareHostVersions(
-        HOST_START_STAMP_PROVEN_FLOOR,
+        HOST_START_STAMP_WRITER_FLOOR,
         HOST_START_STAMP_FLOOR,
       ),
-    ).toEqual({ comparable: true, ordering: "greater" });
+    ).toEqual({ comparable: true, ordering: "less" });
   });
 
   it("admits a machine at the shipped floors rather than refusing floor-unpinned", () => {
