@@ -1657,6 +1657,22 @@ function registerHostCommands(program: Command): void {
           "Internal: the attempt id the bound intent is bound to",
         ).hideHelp(),
       )
+      // The other two thirds of the identity the dispatcher observed (P1
+      // window B). TWO options rather than one packed `id:gen:seq`, so a
+      // malformed component is reported as the wrong component rather than
+      // silently splitting into a field that happens to parse.
+      .addOption(
+        new Option(
+          "--expect-generation <generation>",
+          "Internal: the attempt generation the dispatcher observed",
+        ).hideHelp(),
+      )
+      .addOption(
+        new Option(
+          "--expect-sequence <sequence>",
+          "Internal: the attempt sequence the dispatcher observed",
+        ).hideHelp(),
+      )
       .addHelpText(
         "after",
         [
@@ -1703,6 +1719,19 @@ function registerHostCommands(program: Command): void {
           intent: typeof opts.intent === "string" ? opts.intent : null,
           expectAttempt:
             typeof opts.expectAttempt === "string" ? opts.expectAttempt : null,
+          // RAW like their sibling above, and for the SAME reason: Commander
+          // accepts any string here, so a malformed value must be refused
+          // inside the run - after the dispatch-ACK settlement exists - not
+          // thrown out here where a host that passed `--ack-nonce` would wait
+          // to its deadline for a refusal the CLI knew instantly.
+          expectGeneration:
+            typeof opts.expectGeneration === "string"
+              ? opts.expectGeneration
+              : null,
+          expectSequence:
+            typeof opts.expectSequence === "string"
+              ? opts.expectSequence
+              : null,
         })(ctx);
       };
     },

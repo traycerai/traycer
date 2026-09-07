@@ -159,6 +159,8 @@ describe("buildHostUpdateCommand — illegal ack nonce refuses before anything i
       ackNonce: "bad",
       intent: null,
       expectAttempt: null,
+      expectGeneration: null,
+      expectSequence: null,
     });
 
     await expect(command(fakeCtx())).rejects.toThrow(
@@ -185,6 +187,8 @@ describe("buildHostUpdateCommand — illegal ack nonce refuses before anything i
       ackNonce: "nonce-abcdefgh",
       intent: null,
       expectAttempt: null,
+      expectGeneration: null,
+      expectSequence: null,
     });
 
     await expect(command(fakeCtx())).rejects.toThrow(
@@ -218,6 +222,8 @@ describe("buildHostUpdateCommand — the bound-intent pairing is refused, and st
       // BOUND one: it is what the absence of the option means.
       intent: "install",
       expectAttempt: "attempt-1",
+      expectGeneration: null,
+      expectSequence: null,
     });
 
     await expect(command(fakeCtx())).rejects.toMatchObject({
@@ -241,6 +247,8 @@ describe("buildHostUpdateCommand — the bound-intent pairing is refused, and st
       ackNonce: "nonce-abcdefgh",
       intent: "activate",
       expectAttempt: null,
+      expectGeneration: null,
+      expectSequence: null,
     });
 
     // Running it as a plain install would be exactly the broader
@@ -266,6 +274,8 @@ describe("buildHostUpdateCommand — the bound-intent pairing is refused, and st
       ackNonce: "nonce-abcdefgh",
       intent: null,
       expectAttempt: "attempt-1",
+      expectGeneration: null,
+      expectSequence: null,
     });
 
     await expect(command(fakeCtx())).rejects.toMatchObject({
@@ -292,6 +302,8 @@ describe("buildHostUpdateCommand — the bound-intent pairing is refused, and st
       ackNonce: null,
       intent: "continue",
       expectAttempt: "attempt-1",
+      expectGeneration: null,
+      expectSequence: null,
     });
 
     await expect(command(fakeCtx())).rejects.toThrow(

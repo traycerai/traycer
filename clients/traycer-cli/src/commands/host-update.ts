@@ -45,6 +45,15 @@ export interface HostUpdateArgs {
   readonly intent: string | null;
   /** The attempt id a bound intent is bound to. */
   readonly expectAttempt: string | null;
+  /**
+   * The generation and sequence the DISPATCHER observed, raw like `intent`
+   * and for the same reason - `runHostUpdate` refuses a malformed value on
+   * the far side of its dispatch-ACK stamper, so the refusal still reaches
+   * the host that spawned this. Both or neither; absent means a dispatcher
+   * that predates them, which keeps today's behaviour.
+   */
+  readonly expectGeneration: string | null;
+  readonly expectSequence: string | null;
 }
 
 export type {
@@ -74,6 +83,8 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
         // waiting on it, and a refusal thrown out here could not.
         intent: args.intent,
         expectAttempt: args.expectAttempt,
+        expectGeneration: args.expectGeneration,
+        expectSequence: args.expectSequence,
         registryClient: null,
         verifyBudgetMs: null,
         verifyPollIntervalMs: null,

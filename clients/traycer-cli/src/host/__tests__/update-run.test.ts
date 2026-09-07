@@ -728,6 +728,8 @@ function fakeLogger(): ILogger {
 }
 
 interface RunOverrides {
+  readonly expectGeneration?: string | null;
+  readonly expectSequence?: string | null;
   readonly versionRequest?: string | null;
   readonly allowDowngrade?: boolean;
   readonly force?: boolean;
@@ -757,6 +759,8 @@ function runArgs(overrides: RunOverrides): HostUpdateRunArgs {
     ackNonce: overrides.ackNonce ?? null,
     intent: overrides.intent ?? null,
     expectAttempt: overrides.expectAttempt ?? null,
+    expectGeneration: overrides.expectGeneration ?? null,
+    expectSequence: overrides.expectSequence ?? null,
     registryClient:
       overrides.registryClient === undefined
         ? fakeRegistry()
@@ -1374,6 +1378,180 @@ describe("runHostUpdate - bound intents", () => {
     mocks.transferStageIds.length = 0;
     return record.attemptId;
   }
+
+  // ---- P1 window B: the dispatcher's observed position ---------------------
+  //
+  // `attemptId` does not identify a PARK. An attempt that advances and parks
+  // again keeps its id and moves its generation/sequence, so a bound verb
+  // dispatched against park N still matches park N+1 and resumes work the user
+  // never confirmed. The host closes its own two reads by comparing the id
+  // (`observeBoundDispatchTarget`); these flags close the window between the
+  // host's dispatch and this CLI taking the executor lock, which nothing else
+  // can see.
+
+  it("P1: a bound continue whose observed identity MATCHES the record proceeds", async () => {
+    // The control, and the row that keeps the refusal below honest: without
+    // it, a comparison that refused everything would look like a working fix.
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    const attemptId = await parkUpgrade("2.0.0");
+    const parked = await requireRecord();
+
+    const outcome = await runUpdate({
+      intent: "continue",
+      expectAttempt: attemptId,
+      expectGeneration: String(parked.generation),
+      expectSequence: String(parked.sequence),
+      versionRequest: "2.0.0",
+    });
+
+    expect(outcome.legacy.version).toBe("2.0.0");
+    expect((await requireRecord()).phase).toBe("complete");
+  });
+
+  it("P1: a bound continue whose observed GENERATION has moved is refused", async () => {
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    const attemptId = await parkUpgrade("2.0.0");
+    const parked = await requireRecord();
+
+    const outcome = await runUpdate({
+      intent: "continue",
+      expectAttempt: attemptId,
+      // The dispatcher saw the generation before this one - the attempt has
+      // been resumed since, and what the user confirmed is no longer what is
+      // on disk.
+      expectGeneration: String(parked.generation + 1),
+      expectSequence: String(parked.sequence),
+      versionRequest: "2.0.0",
+    });
+
+    // NOT `refused-attempt-gone`: the attempt is present and is the one named.
+    // Collapsing the two would report a consent failure as a routine no-op,
+    // and the GUI copy has to differ - "confirm again" against "nothing to do".
+    expect(outcome.releasedReason).toBe("refused-attempt-moved");
+    // Nothing resumed: the park is exactly as it was found.
+    const after = await requireRecord();
+    expect(after.attemptId).toBe(attemptId);
+    expect(after.execution).toBe("parked");
+    expect(mocks.applyHostWithAttempt).not.toHaveBeenCalled();
+  });
+
+  it("P1: a bound continue whose observed SEQUENCE has moved is refused", async () => {
+    // The second component, pinned separately: a comparison that read only the
+    // generation would pass the row above and fail here, and the two move on
+    // different events.
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    const attemptId = await parkUpgrade("2.0.0");
+    const parked = await requireRecord();
+
+    const outcome = await runUpdate({
+      intent: "continue",
+      expectAttempt: attemptId,
+      expectGeneration: String(parked.generation),
+      expectSequence: String(parked.sequence + 1),
+      versionRequest: "2.0.0",
+    });
+
+    expect(outcome.releasedReason).toBe("refused-attempt-moved");
+    expect((await requireRecord()).execution).toBe("parked");
+    expect(mocks.applyHostWithAttempt).not.toHaveBeenCalled();
+  });
+
+  it("P1: a bound continue with NEITHER flag keeps today's behaviour", async () => {
+    // Row 4 of the artifact's list, and the one it says is most likely to be
+    // skipped. Absence is the compatibility mechanism - a dispatcher that
+    // predates these flags sends neither and must be unaffected - so without
+    // this row "optional" is a type fact with nothing pinning it, and a
+    // comparison that treated a missing flag as a mismatch would refuse every
+    // dispatch from an un-upgraded host while all three rows above passed.
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    const attemptId = await parkUpgrade("2.0.0");
+
+    const outcome = await runUpdate({
+      intent: "continue",
+      expectAttempt: attemptId,
+      versionRequest: "2.0.0",
+    });
+
+    expect(outcome.legacy.version).toBe("2.0.0");
+    expect((await requireRecord()).phase).toBe("complete");
+  });
+
+  it("P1: a malformed component is a usage error, and nothing runs", async () => {
+    // Two flags rather than one packed `id:gen:seq` exists so a bad value can
+    // name WHICH value is bad, and so a typo is a usage error rather than a
+    // number that silently fails to match every record forever.
+    //
+    // Positive integers, not non-negative: the record decoder itself uses
+    // `positiveInteger` (`host-update-attempt.ts:552`) and a fresh attempt
+    // starts at 1 (`transition.ts:820`), so `0` can never appear in a record.
+    // Accepting it would turn a typo into a permanent silent refusal.
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    const attemptId = await parkUpgrade("2.0.0");
+    const before = await requireRecord();
+
+    await expect(
+      runUpdate({
+        intent: "continue",
+        expectAttempt: attemptId,
+        expectGeneration: "abc",
+        expectSequence: "1",
+        versionRequest: "2.0.0",
+      }),
+    ).rejects.toMatchObject({ code: CLI_ERROR_CODES.INVALID_ARGUMENT });
+
+    for (const bad of ["0", "-1", "1.5", "3abc", " 3", ""]) {
+      await expect(
+        runUpdate({
+          intent: "continue",
+          expectAttempt: attemptId,
+          expectGeneration: bad,
+          expectSequence: "1",
+          versionRequest: "2.0.0",
+        }),
+      ).rejects.toMatchObject({ code: CLI_ERROR_CODES.INVALID_ARGUMENT });
+    }
+
+    // Untouched by all seven refusals: a usage error must not advance, park,
+    // or terminalize the attempt it names.
+    const after = await requireRecord();
+    expect(after.generation).toBe(before.generation);
+    expect(after.sequence).toBe(before.sequence);
+    expect(after.execution).toBe("parked");
+    expect(mocks.applyHostWithAttempt).not.toHaveBeenCalled();
+  });
+
+  it("P1: exactly ONE of the two flags is a usage error, not a refusal", async () => {
+    // `refused-attempt-moved` would be the wrong answer here - nothing has
+    // moved, the caller sent half an identity - and it would also be an
+    // ANSWER, letting a broken dispatcher look like a working one that keeps
+    // being refused.
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    const attemptId = await parkUpgrade("2.0.0");
+
+    await expect(
+      runUpdate({
+        intent: "continue",
+        expectAttempt: attemptId,
+        expectGeneration: "1",
+        versionRequest: "2.0.0",
+      }),
+    ).rejects.toMatchObject({ code: CLI_ERROR_CODES.INVALID_ARGUMENT });
+
+    await expect(
+      runUpdate({
+        intent: "continue",
+        expectAttempt: attemptId,
+        expectSequence: "1",
+        versionRequest: "2.0.0",
+      }),
+    ).rejects.toMatchObject({ code: CLI_ERROR_CODES.INVALID_ARGUMENT });
+  });
 
   it("continue on an upgrade park resumes from the stage already on disk and completes", async () => {
     await seedInstalled("1.0.0");
@@ -2424,6 +2602,8 @@ describe("runHostUpdate - the dispatch ACK and the trigger", () => {
         ackNonce: "nonce-abcdefgh",
         intent: "activate",
         expectAttempt: null,
+        expectGeneration: null,
+        expectSequence: null,
       })(shellContext()),
     ).rejects.toMatchObject({ code: CLI_ERROR_CODES.INVALID_ARGUMENT });
 
@@ -2852,6 +3032,8 @@ describe("ported: buildHostUpdateCommand composite", () => {
       ackNonce: null,
       intent: null,
       expectAttempt: null,
+      expectGeneration: null,
+      expectSequence: null,
     })(shellContext());
 
     expect(result.human).toBe("updated host 1.0.0 → 2.0.0");
@@ -2873,6 +3055,8 @@ describe("ported: buildHostUpdateCommand composite", () => {
       ackNonce: null,
       intent: null,
       expectAttempt: null,
+      expectGeneration: null,
+      expectSequence: null,
     })(shellContext());
 
     expect(result.human).toBe("host already at 2.0.0 (no-op)");
@@ -2911,6 +3095,8 @@ describe("ported: buildHostUpdateCommand composite", () => {
       ackNonce: null,
       intent: null,
       expectAttempt: null,
+      expectGeneration: null,
+      expectSequence: null,
     })(shellContext());
 
     // The no-rollback contract: the bytes ARE installed, so this is a warning
@@ -2938,6 +3124,8 @@ describe("ported: buildHostUpdateCommand composite", () => {
       ackNonce: null,
       intent: "activate",
       expectAttempt: parked.attemptId,
+      expectGeneration: null,
+      expectSequence: null,
     })(shellContext());
 
     // The sentence names the RUNNING host, not the installed version (Q5
@@ -7032,6 +7220,8 @@ describe("fixup: cold review B", () => {
       ackNonce: null,
       intent: null,
       expectAttempt: null,
+      expectGeneration: null,
+      expectSequence: null,
     })(shellContext());
 
     expect(result.human).toBe(
@@ -7204,6 +7394,8 @@ describe("fixup: cold review B", () => {
       ackNonce: null,
       intent: "continue",
       expectAttempt: attemptId,
+      expectGeneration: null,
+      expectSequence: null,
     })(shellContext());
 
     expect(result.human).toBe(
@@ -7238,6 +7430,8 @@ describe("fixup: cold review B", () => {
       ackNonce: null,
       intent: null,
       expectAttempt: null,
+      expectGeneration: null,
+      expectSequence: null,
     })(shellContext());
 
     expect(result.human).not.toMatch(/not a release build/);

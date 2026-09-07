@@ -118,6 +118,8 @@ describe("buildHostUpdateCommand — dispatch ACK stamper is installed as the FI
       ackNonce: "nonce-abcdefgh",
       intent: null,
       expectAttempt: null,
+      expectGeneration: null,
+      expectSequence: null,
     });
 
     await expect(command(fakeCtx())).rejects.toThrow(
@@ -145,6 +147,8 @@ describe("buildHostUpdateCommand — dispatch ACK stamper is installed as the FI
       ackNonce: null,
       intent: null,
       expectAttempt: null,
+      expectGeneration: null,
+      expectSequence: null,
     });
 
     await expect(command(fakeCtx())).rejects.toThrow(

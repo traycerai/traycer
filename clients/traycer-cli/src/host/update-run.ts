@@ -184,6 +184,22 @@ export interface HostUpdateRunArgs {
   readonly intent: string | null;
   /** The attempt a bound intent is bound to; required with `intent`. */
   readonly expectAttempt: string | null;
+  /**
+   * The other two thirds of the identity the DISPATCHER observed, raw from
+   * argv (P1 window B).
+   *
+   * `attemptId` alone does not identify a park. An attempt that advances and
+   * parks AGAIN keeps its id and moves its generation/sequence, so a bound
+   * verb dispatched against park N still matches park N+1 and resumes work
+   * the user never saw. These carry the position, so the CLI can tell the two
+   * apart.
+   *
+   * Raw strings, validated in the run body: Commander accepts anything here,
+   * and a refusal has to happen where it can be reported as a CLI error.
+   * Both or neither, and only with a bound `intent`.
+   */
+  readonly expectGeneration: string | null;
+  readonly expectSequence: string | null;
   /** Test seam, as `DownloadAndStageHostOptions.registryClient`. */
   readonly registryClient: RegistryClient | null;
   /** `null` uses the production evidence-loop budget. */
@@ -389,13 +405,24 @@ export async function runHostUpdate(
     refuseEmptyVersionRequest(args.versionRequest);
     const intent: "install" | HostUpdateBoundIntent =
       parseBoundIntent(args.intent, args.expectAttempt) ?? "install";
+    // Parsed ONCE, here, beside the intent it qualifies: both are argv
+    // authority, and both must be refused before anything is read or written.
+    const expectedIdentity = parseBoundExpectedIdentity(args, intent);
     const plan = await resolvePlan(args, intent, selection);
     const segment = await runLocalAttemptExecutorSegment(
       {
         platform: currentInstallPlatform(),
         contender: executorContenderOptions(environment),
         request: (current) =>
-          selectClaim({ args, intent, trigger, plan, selection, current }),
+          selectClaim({
+            args,
+            intent,
+            expectedIdentity,
+            trigger,
+            plan,
+            selection,
+            current,
+          }),
         // This caller performs the activation itself, so a recovered
         // `activate` continuation is handed to `execute` rather than re-parked.
         recoveredActivation: "execute",
@@ -884,6 +911,8 @@ function planTargetVersion(plan: RunPlan): string | null {
 interface SelectClaimInput {
   readonly args: HostUpdateRunArgs;
   readonly intent: "install" | HostUpdateBoundIntent;
+  /** The dispatcher's observed position, parsed once; `null` when unsent. */
+  readonly expectedIdentity: BoundExpectedIdentity | null;
   readonly trigger: HostUpdateTrigger;
   readonly plan: RunPlan;
   readonly selection: SelectionFacts;
@@ -1070,6 +1099,105 @@ function resumeSelection(
  * `activate` / `continue`: a bound intent resumes exactly the park it names,
  * or it releases with the reason the ACK reports. It never starts anything.
  */
+/**
+ * The dispatcher's observed attempt position, parsed from argv.
+ *
+ * ## Why the CLI checks a fact the host already checked
+ *
+ * The host compares the `attemptId` it observed before it spawns
+ * (`observeBoundDispatchTarget`), and that check is real - but it closes only
+ * the window between the host's own two reads. Between the host's dispatch and
+ * this CLI taking the executor lock, the SAME attempt can advance and park
+ * again: `attemptId` is unchanged, so every id-keyed guard in the chain stays
+ * silent, and the bound verb resumes a park nobody confirmed. The position is
+ * the only thing that differs, so it is the only thing that can refuse.
+ */
+interface BoundExpectedIdentity {
+  readonly generation: number;
+  readonly sequence: number;
+}
+
+/**
+ * Both flags or neither, positive integers, and only on a bound verb.
+ *
+ * Refused HERE rather than by Commander, per the argv convention at the option
+ * site: the parser accepts any string, and a value rejected out there escapes
+ * before the dispatch-ACK settlement exists, leaving a host that passed
+ * `--ack-nonce` waiting to its deadline for a refusal this CLI knew instantly.
+ *
+ * ABSENCE IS NOT AN ERROR, and that is the compatibility mechanism rather than
+ * a leniency: a dispatcher that predates these flags sends neither, and gets
+ * exactly today's behaviour with no branch of its own. A CLI too old to know
+ * them takes the opposite path and exits on an unknown option, which is what
+ * the host's `boundIntentCliIsTooOld` is for.
+ */
+function parseBoundExpectedIdentity(
+  args: HostUpdateRunArgs,
+  intent: "install" | HostUpdateBoundIntent,
+): BoundExpectedIdentity | null {
+  const { expectGeneration, expectSequence, environment } = args;
+  if (expectGeneration === null && expectSequence === null) return null;
+  if (expectGeneration === null || expectSequence === null) {
+    throw cliError({
+      code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+      message:
+        "host update: --expect-generation and --expect-sequence must be passed together; they are two thirds of one attempt identity.",
+      details: { environment, expectGeneration, expectSequence },
+      exitCode: 1,
+    });
+  }
+  if (intent === "install") {
+    // They qualify an authorization, and a plain `install` carries none: a
+    // position with nothing bound to it would be checked against a record this
+    // run is free to supersede anyway.
+    throw cliError({
+      code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+      message:
+        "host update: --expect-generation and --expect-sequence are only meaningful with --intent; they qualify a bound attempt.",
+      details: { environment, expectGeneration, expectSequence },
+      exitCode: 1,
+    });
+  }
+  return {
+    generation: parseBoundIdentityComponent(
+      args,
+      "--expect-generation",
+      expectGeneration,
+    ),
+    sequence: parseBoundIdentityComponent(
+      args,
+      "--expect-sequence",
+      expectSequence,
+    ),
+  };
+}
+
+/**
+ * One component, named in its own error.
+ *
+ * The whole argument for two flags over a packed `id:gen:seq` is that a bad
+ * value can say WHICH value is bad; a shared parser that reported "malformed
+ * identity" would give that back.
+ */
+function parseBoundIdentityComponent(
+  args: HostUpdateRunArgs,
+  flag: string,
+  raw: string,
+): number {
+  // `Number.parseInt` would accept "3abc" and a bare `Number()` accepts "3.0",
+  // " 3" and "". A position is a positive integer or it is a typo.
+  const value = /^[0-9]+$/.test(raw) ? Number(raw) : Number.NaN;
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw cliError({
+      code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+      message: `host update: ${flag} must be a positive integer, not ${JSON.stringify(raw)}.`,
+      details: { environment: args.environment, flag, value: raw },
+      exitCode: 1,
+    });
+  }
+  return value;
+}
+
 async function selectBoundResume(
   input: SelectClaimInput,
   record: HostUpdateAttemptRecord | null,
@@ -1081,6 +1209,30 @@ async function selectBoundResume(
       kind: "release",
       boundAttemptId: expect,
       reason: "refused-attempt-gone",
+    };
+  }
+  // PRESENT, NAMED, AND MOVED - a third answer this binding site could not
+  // give before (P1 window B).
+  //
+  // `refused-attempt-moved` is deliberately not folded into
+  // `refused-attempt-gone` above. The attempt is here and it is the one the
+  // dispatcher named; what changed is its position, so the two need different
+  // copy - "re-read and confirm again" against "there is nothing to do" - and
+  // collapsing them would report a consent failure as a routine no-op.
+  //
+  // Checked BEFORE the parked/active split below, because the split does not
+  // bear on it: resuming a moved park and recovering a moved interrupted
+  // record are equally unauthorized, and `interruptedResume` is a resume too.
+  const expectedIdentity = input.expectedIdentity;
+  if (
+    expectedIdentity !== null &&
+    (record.generation !== expectedIdentity.generation ||
+      record.sequence !== expectedIdentity.sequence)
+  ) {
+    return {
+      kind: "release",
+      boundAttemptId: expect,
+      reason: "refused-attempt-moved",
     };
   }
   if (record.execution !== "parked") {

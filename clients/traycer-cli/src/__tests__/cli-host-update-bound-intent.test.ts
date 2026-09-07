@@ -122,6 +122,29 @@ describe("an rc-era parser exits on --intent with nothing executed", () => {
     expect(action).not.toHaveBeenCalled();
   });
 
+  it.each(["--expect-generation", "--expect-sequence"])(
+    "rejects `%s` the same way - this is the too-old exit the host relies on",
+    async (flag) => {
+      // The CLI half of the host's `boundIntentCliIsTooOld` contract (P1
+      // window B). A CLI that predates these flags must EXIT rather than
+      // silently ignore them: ignoring an identity it cannot check would
+      // resume a park nobody confirmed while reporting success.
+      const action = vi.fn();
+      const { program, stderr } = buildPreCutoverProgram(action);
+
+      const err = await program
+        .parseAsync(["host", "update", flag, "3"], { from: "user" })
+        .then(
+          () => null,
+          (thrown: unknown) => thrown,
+        );
+
+      expect(err).toBeInstanceOf(CommanderError);
+      expect(stderr.join("")).toContain(`unknown option '${flag}'`);
+      expect(action).not.toHaveBeenCalled();
+    },
+  );
+
   it("positive control: the same fixture accepts the options it did register", async () => {
     const action = vi.fn();
     const { program } = buildPreCutoverProgram(action);
@@ -185,6 +208,75 @@ describe("the shipped parser forwards the bound intent RAW to the command body",
       intent: "continue",
       expectAttempt: "attempt-7",
       versionRequest: "2.0.0",
+    });
+  });
+
+  it("THIS CLI accepts the two identity flags and passes them through RAW", async () => {
+    // The other side of the pin above: the flags must parse here, or the host
+    // emitting them would take the too-old exit against a current CLI and
+    // window B would be closed by breaking every bound dispatch instead.
+    //
+    // Raw, like `--intent`: `<generation>` and `<sequence>` accept any string
+    // at the parser, and the positive-integer check lives in the body, which
+    // is the only place that can report it on the far side of the dispatch-ACK
+    // stamper. A parser-level `argParser` would exit before that ACK exists
+    // and leave the host waiting to its deadline.
+    const spy = vi
+      .spyOn(hostUpdateModule, "buildHostUpdateCommand")
+      .mockImplementation(() => async () => ({
+        data: { ok: true },
+        human: "ok",
+        exitCode: 0,
+      }));
+
+    await parseHostUpdate([
+      "host",
+      "update",
+      "--intent",
+      "continue",
+      "--expect-attempt",
+      "attempt-7",
+      "--expect-generation",
+      "4",
+      "--expect-sequence",
+      "9",
+      "--json",
+    ]);
+
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy.mock.calls[0][0]).toMatchObject({
+      expectAttempt: "attempt-7",
+      expectGeneration: "4",
+      expectSequence: "9",
+    });
+  });
+
+  it("hands a MALFORMED identity component to the body verbatim, like an illegal intent", async () => {
+    const spy = vi
+      .spyOn(hostUpdateModule, "buildHostUpdateCommand")
+      .mockImplementation(() => async () => ({
+        data: { ok: true },
+        human: "ok",
+        exitCode: 0,
+      }));
+
+    await parseHostUpdate([
+      "host",
+      "update",
+      "--intent",
+      "continue",
+      "--expect-attempt",
+      "attempt-7",
+      "--expect-generation",
+      "abc",
+      "--expect-sequence",
+      "0",
+      "--json",
+    ]);
+
+    expect(spy.mock.calls[0][0]).toMatchObject({
+      expectGeneration: "abc",
+      expectSequence: "0",
     });
   });
 
