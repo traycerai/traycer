@@ -810,17 +810,29 @@ describe("projectFleetUpdateView — a host that refused the authenticated check
     expect(view.kind).toBe("failed");
   });
 
-  it("routes here whether or not the running version matches — it is ORDERED before Q11's state route", () => {
-    // Q11's route is derived from state (`verifying` + version match); this one
-    // is decided by code and sits above it. Both versions are exercised because
-    // the matching one is the case that would collide if the order were ever
-    // inverted, and the non-matching one is the case that must not fall through
-    // to `failed`.
+  it("survives a WIDENED finalizing-record phase set, at either running version", () => {
+    // What this row actually holds, measured rather than assumed — the title
+    // used to claim it pinned the ORDER, and reviewer C showed it does not:
     //
-    // `concludesAsFinalizingRecord` also refuses a `failed` phase today, so the
-    // routes cannot collide whatever their order — but that is a property of
-    // one predicate's phase set, not a guarantee, and this pins the position
-    // rather than the coincidence.
+    //   - reorder alone (demote this route below Q11's, phase set untouched):
+    //     fully green. Q11's predicate refuses a `failed` phase, so today the
+    //     two cannot collide whichever way round they sit.
+    //   - widen `FINALIZING_RECORD_PHASES` to include `failed`, shipped order
+    //     kept: 1 red, and it is the "DIFFERENT code" row, not this one. The
+    //     shipped order does exactly what the production comment claims — the
+    //     widening cannot reach the refusal case.
+    //   - widen AND demote: this row reddens, on the `2.1.0` iteration.
+    //
+    // So it is CONTINGENT, not vacuous: it fires on the composite of a widened
+    // phase set and a lost ordering, which is precisely the pair the production
+    // comment says the position defends against.
+    //
+    // Both running versions are exercised, and the wider loop is load-bearing:
+    // under widen-and-demote it is the `2.1.0` iteration that fails. The
+    // narrower "target ≠ running" case stays GREEN there, because a mismatched
+    // version cannot reach `finalizing-record` however wide its phase set is.
+    // The non-matching iteration still earns its place — it is the one that
+    // must not fall through to `failed`.
     for (const runningVersion of ["2.1.0", "2.0.0"]) {
       const view = projectFleetUpdateView({
         observation: observation({
@@ -852,6 +864,32 @@ describe("projectFleetUpdateView — a host that refused the authenticated check
       connected: true,
     });
     expect(view.kind).toBe("downloading");
+  });
+
+  it("a STALE read carrying the code is not this state — freshness is a precondition", () => {
+    // Symmetric with the terminal-phase row above, and the same class of gap
+    // Y1 was: the route sits BELOW the stale arm, and nothing held it there.
+    // Reviewer C hoisted it above and all 140/41/41 stayed green.
+    //
+    // Why the position is load-bearing rather than incidental: the sentence
+    // this kind renders says the host **is running** — present tense — and a
+    // read we can no longer refresh does not establish that. Hoisted, a host
+    // that went unreachable after refusing would keep asserting it is up and
+    // serving, unqualified, with no surface able to add "last seen".
+    const view = projectFleetUpdateView({
+      observation: observation({
+        operation: refusedAttempt({}),
+        runningVersion: "2.1.0",
+        freshUntilMs: NOW_MS - 1,
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(view.kind).toBe("unknown");
+    expect(view.kind).not.toBe("verification-refused");
+    expect(view.qualified).toBe(true);
+    // The phase survives as history so a surface can still say "last seen".
+    expect(view.lastKnownKind).toBe("failed");
   });
 
   it("holds no lifecycle gate and earns no fast poll, and is not quiet", () => {

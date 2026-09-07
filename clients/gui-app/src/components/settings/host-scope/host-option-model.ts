@@ -300,12 +300,21 @@ const RETAINED_BADGE_WORD: Record<FleetUpdateViewKind, string | null> = {
   // Terminal and durable: the host still holds this record, so it remains true
   // after we lose contact rather than becoming merely old.
   failed: "update failed",
-  // Unreachable in practice — both are only ever reached from a LIVE frame
-  // (`finalizing-record` needs the running version from the same read;
-  // `verification-refused` is decided before the stale arm can retain it), so
-  // neither can be the retained phase of a host we have lost contact with. Kept
-  // because the table is exhaustive, and `null` is the answer either would want
-  // anyway: same reasoning as the live badge.
+  // Unreachable, and for a reason that does not depend on where the projector
+  // happens to put either route: `retainedBadgeWord` is only ever called with a
+  // `lastKnownKind`, `lastKnownKind` is only ever produced by `phaseKind`, and
+  // `phaseKind`'s codomain contains neither of these kinds — both are minted by
+  // arms of their own, downstream of it.
+  //
+  // The earlier wording here said `verification-refused` "is decided before the
+  // stale arm can retain it", which is BACKWARDS — the stale arm returns first
+  // and the refusal route is reached only when the read is NOT stale. Worse, it
+  // would have licensed hoisting that route above the stale arm, since the
+  // comment would still have read as true afterwards. Stated as the structural
+  // fact instead, so it cannot be used to justify a change that breaks it.
+  //
+  // Kept because the table is exhaustive, and `null` is the answer either would
+  // want anyway: same reasoning as the live badge.
   "finalizing-record": null,
   "verification-refused": null,
   complete: null,
