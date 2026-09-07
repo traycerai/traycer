@@ -75,7 +75,6 @@ describe("host-start parent adoption", () => {
     const hostHomeDir = await freshHome();
     homeRef.current = hostHomeDir;
     let callbackCalls = 0;
-    let beside = 0;
 
     const outcome = await withUpdateContender(
       {
@@ -105,14 +104,9 @@ describe("host-start parent adoption", () => {
             child.unref();
             return child;
           },
-          () => {
-            beside += 1;
-          },
+          () => undefined,
         );
         expect(admission.kind).toBe("ran");
-        // No durable attempt stands here, so the supervisor has nothing to
-        // announce and must stay silent rather than log an empty line.
-        expect(beside).toBe(0);
         return admission;
       },
     );
@@ -146,6 +140,12 @@ describe("host-start parent adoption", () => {
     );
     expect(admission.kind).toBe("ran");
     expect(callbackCalls).toBe(1);
+    // No durable attempt stands here, so the supervisor has nothing to
+    // announce and must stay silent rather than log a line about a record that
+    // does not exist. This is the counter's only load-bearing assertion: the
+    // adoption-grant test above returns before the contender runs, so a
+    // counter there would watch nothing.
+    expect(beside).toBe(0);
   });
 
   it("rejects a forged, wrong-home, expired, or stale-token adoption instead of spawning", async () => {
