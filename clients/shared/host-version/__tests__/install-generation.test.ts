@@ -87,6 +87,16 @@ function sourceOf(repoRelativePath: string): string {
  * here - without it a caller added in a BRAND-NEW file is invisible until
  * someone stages it, which is exactly the window in which the pin is supposed
  * to speak.
+ *
+ * The `-- clients` pathspec is a real narrowing and needs its justification in
+ * the file rather than in someone's head (dc84fa8b): nothing outside
+ * `clients/` can call this encoder, because `protocol/` may not import from
+ * `clients/` at all (`internal-import-boundary.test.ts` enforces it) and the
+ * one mention of the encoder in `protocol/src/config/host-update-attempt.ts:166`
+ * is a docblock, not a call. What invalidates that: a caller under `scripts/`
+ * or any new top-level package, or the import boundary being relaxed - each
+ * would be silently omitted from the census while every assertion here still
+ * passed. Widen the pathspec at the same time as any of those, not after.
  */
 function discoveredCallers(): readonly string[] {
   const out = execFileSync(
