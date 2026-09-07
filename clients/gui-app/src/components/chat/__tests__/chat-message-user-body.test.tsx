@@ -24,6 +24,10 @@ import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-sto
 import type { ChatMessageUserActions } from "@/components/chat/chat-message";
 import { useSetA2AReceivedOpen } from "@/stores/chats/a2a-open-store-context";
 import {
+  chatTranscriptJumpKey,
+  useChatTranscriptJumpStore,
+} from "@/stores/chats/chat-transcript-jump-store";
+import {
   useChatCollapsibleTileInstanceId,
   useSetChatFindForcedOpen,
 } from "@/stores/chats/chat-find-force-store-context";
@@ -112,16 +116,37 @@ function render(ui: ReactNode) {
 }
 
 vi.mock("@/lib/epic-selectors", () => ({
-  useEpicArtifact: (artifactId: string | null) =>
-    artifactId === "agent-sender-1"
-      ? {
-          id: "agent-sender-1",
-          parentId: null,
-          title: "Review Agent",
-          hostId: "host-1",
-        }
-      : null,
+  useEpicArtifact: (artifactId: string | null) => {
+    if (artifactId === "agent-sender-1") {
+      return {
+        id: "agent-sender-1",
+        parentId: null,
+        title: "Review Agent",
+        hostId: "host-1",
+      };
+    }
+    // A terminal-agent (TUI) sender: distinguished from a chat/artifact node
+    // by carrying `harnessId` - see `AgentMessageDisplayView`'s `openTarget`
+    // resolution in chat-message-user-body.tsx.
+    if (artifactId === "agent-sender-terminal") {
+      return {
+        id: "agent-sender-terminal",
+        harnessId: "claude",
+        hostId: "host-2",
+        title: "Terminal Agent",
+      };
+    }
+    return null;
+  },
   useOpenEpicId: () => "epic-1",
+}));
+
+const tileNavigationMocks = vi.hoisted(() => ({
+  openTile: vi.fn(() => null),
+}));
+
+vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
+  useEpicTileNavigation: () => ({ openTile: tileNavigationMocks.openTile }),
 }));
 
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
@@ -291,6 +316,8 @@ describe("<UserMessageBody /> agent messages", () => {
 
     composerPickerMocks.useComposerPickerItems.mockClear();
     useWorkspaceFoldersStore.setState({ byHost: {} });
+    tileNavigationMocks.openTile.mockClear();
+    useChatTranscriptJumpStore.setState({ requestsByChatId: {} });
   });
 
   it("reveals the action chip for keyboard focus", () => {
@@ -892,6 +919,47 @@ describe("<UserMessageBody /> agent messages", () => {
         .closest(".md-prose")
         ?.hasAttribute("data-quotable"),
     ).toBe(false);
+  });
+
+  it("parks a receipt jump for the sender's chat tile when the sender name is clicked", () => {
+    const message = agentMessage("Investigate this failure.");
+    render(<UserMessageBody actions={null} message={message} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Review Agent" }));
+
+    expect(tileNavigationMocks.openTile).toHaveBeenCalledTimes(1);
+    const state = useChatTranscriptJumpStore.getState();
+    const key = chatTranscriptJumpKey("host-1", "agent-sender-1");
+    expect(state.requestsByChatId[key]?.target).toEqual({
+      kind: "receipt",
+      messageId: message.id,
+    });
+  });
+
+  it("opens the tile but parks no jump when the sender resolves to a terminal agent", () => {
+    const message: ChatMessageModel = {
+      ...agentMessage("Investigate this failure."),
+      agentSenderInfo: {
+        agentId: "agent-sender-terminal",
+        senderTitle: "Terminal Agent",
+        expectReply: true,
+        responseId: "response-1",
+      },
+      agentMessage: {
+        kind: "agent",
+        content: AGENT_CONTENT,
+        fromAgentId: "agent-sender-terminal",
+        senderTitle: "Terminal Agent",
+        senderHarnessId: "claude",
+        reply: { expectsReply: true, responseId: "response-1" },
+      },
+    };
+    render(<UserMessageBody actions={null} message={message} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Terminal Agent" }));
+
+    expect(tileNavigationMocks.openTile).toHaveBeenCalledTimes(1);
+    expect(useChatTranscriptJumpStore.getState().requestsByChatId).toEqual({});
   });
 
   it("opens received A2A cards through the provider store", () => {

@@ -148,6 +148,7 @@ import {
   coldJumpOrdinal,
   hostLocatorForJumpTarget,
   messageIdForBlock,
+  landingBlockIdForJumpTarget,
   messageIdForTranscriptTarget,
   sentMessageAnchorId,
 } from "@/components/epic-canvas/renderers/chat-tile-jump-logic";
@@ -954,6 +955,10 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
       requestTranscriptOrdinal(null);
       return;
     }
+    // A block or receipt target names a CARD, not a row: resolved once, up
+    // front, because the landing below scrolls to that card rather than to
+    // its owning row.
+    const landingBlockId = landingBlockIdForJumpTarget(view.messages, target);
     const resolveTargetMessageId = (): string | null => {
       if (target.kind === "message") {
         return messageIdForTranscriptTarget(view.messages, target.messageId);
@@ -987,7 +992,9 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
           view.messages.find((message) => message.id === firstRowId)?.id ?? null
         );
       }
-      return messageIdForBlock(view.messages, target.blockId);
+      return landingBlockId === null
+        ? null
+        : messageIdForBlock(view.messages, landingBlockId);
     };
     const messageId = resolveTargetMessageId();
     if (messageId === null) {
@@ -1000,19 +1007,19 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
       //
       // Only for a target whose ROW ID is derivable client-side - a user
       // message and an event anchor, whose row ids are the message id and
-      // `chatTranscriptEventRowId`. A block or a sent-message anchor is
-      // identified by walking rendered models, which a cold row has none of,
+      // `chatTranscriptEventRowId`. A block, sent-message or receipt anchor
+      // is identified by walking rendered models, which a cold row has none of,
       // and resolving those needs the host to locate the row.
       requestTranscriptOrdinal(
         coldJumpOrdinal(view.transcriptWindow, target, hostLocatedOrdinal),
       );
       return;
     }
-    if (target.kind === "block") {
+    if (landingBlockId !== null) {
       scrollToBlock(
-        target.blockId,
+        landingBlockId,
         transcriptJumpCardKind(
-          target.blockId,
+          landingBlockId,
           view.lower.backgroundItems ?? [],
         ),
       );
