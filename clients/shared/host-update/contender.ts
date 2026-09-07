@@ -1203,30 +1203,12 @@ async function supervisorRelaunchDisposition(
   record: HostUpdateAttemptRecord,
   readInstalledIdentity: SupervisorRelaunchIdentityReader | null,
 ): Promise<ActiveAttemptDisposition> {
-  // ACTIVE (or interrupted-active) is the whole point of the refusal and is
-  // checked first: a segment that died mid-activation leaves `preparing/
-  // activate` or `applying`, and relaunching into those would activate bytes
-  // outside the continuation that owns them.
-  //
-  // The sound reason is NOT "a live segment owns the continuation" - by the
-  // time this runs, THIS contender holds the attempt lock. It is that a
-  // supervisor cannot prove the holder ABSENT: the lock is taken in short
-  // spans, so winning it says nothing about a segment between spans, which is
-  // exactly what `decideAttemptRecovery`'s `holder-not-proven-absent` exists
-  // for. An active record is a claim that someone means to come back, and
-  // nothing available here can falsify it.
-  //
-  // IMPLIED, not an independent conjunct: the decoder derives `execution`
-  // from the phase and refuses any record that disagrees, so the two phase
-  // tests below already carry it. It is spelled out anyway so the refusal a
-  // reader must not weaken is the first line of the function rather than an
-  // inference about a phase set. Ticket 07's reconciler predicate omits the
-  // same field for the same reason, and says so.
-  if (record.execution !== "parked") return "refuse";
   // The decoder refuses a park whose continuation is not its phase's own
   // (`continuationLegalFor`), so the phase alone identifies the shape here.
   if (record.phase === "waiting-for-work") return "allow";
-  if (record.phase !== "waiting-to-activate") return "refuse";
+  if (record.phase !== "waiting-to-activate") {
+    return supervisorRelaunchOverActive(record, readInstalledIdentity);
+  }
   const claim = record.claim;
   // TWO DIFFERENT NULLS, and they are not the same failure:
   //
@@ -1246,4 +1228,132 @@ async function supervisorRelaunchDisposition(
     installed.installGeneration === claim.installGeneration
     ? "allow"
     : "refuse";
+}
+
+/**
+ * A NON-parked record: the interrupted-attempt half of the same admission.
+ *
+ * ## Why refusing all of these was its own outage
+ *
+ * A CLI killed after its swap leaves `restarting` with `execution: "active"`,
+ * the host stopped for that swap and never brought back. Refusing here exits
+ * 0, no service manager relaunches on a zero exit, and the box stays down -
+ * the parked outage this admission already fixes, one phase over, and the
+ * shape the Linux matrix wedged on. It is the worse half: a park at least has
+ * a reconciler that would resume it, while the reconciler for this record
+ * lives inside the host that is not running.
+ *
+ * ## The criterion is IDEMPOTENCE, not whole bytes
+ *
+ * The tempting test - "is the install directory a complete tree of a known
+ * version" - is necessary and not sufficient, and the case it cannot see is
+ * the one that matters. A LIVE `applying` segment between lock spans may have
+ * finished its swap and be about to restart the host itself: the directory is
+ * whole, the version is known, and admitting here puts two actors on the same
+ * activation.
+ *
+ * A supervisor cannot rule that out. By the time this runs THIS contender
+ * holds the attempt lock, but the lock is taken in short spans, so winning it
+ * says nothing about a segment between spans - which is exactly what
+ * `decideAttemptRecovery`'s `holder-not-proven-absent` exists for. An active
+ * record is a claim that someone means to come back, and nothing available
+ * here can falsify it.
+ *
+ * So the question is not "is the holder gone" but: **if the holder IS alive
+ * and resumes, does this supervisor having started the host change the
+ * outcome?** Where the answer is no, admitting is safe without proving
+ * anything about the holder at all.
+ *
+ * ## Which phases answer no, and why each one does
+ *
+ * Only the shapes whose own next act IS starting the host:
+ *
+ *  - `restarting` - the record has placed the target's bytes and stopped the
+ *    host for them; the holder's next act is the relaunch. Supervisor and
+ *    holder are performing the same act on the same bytes and it does not
+ *    matter which wins.
+ *  - `verifying` - the bytes are placed and the record is waiting for the
+ *    host to come up. Starting it is what the verification is waiting FOR, so
+ *    a supervisor start converges the record rather than racing it.
+ *  - `preparing` with an `activate` continuation - the recovery-resume shape.
+ *    `resumedRecord` normalizes every recovery resume to `preparing`, so the
+ *    phase alone cannot tell this from a fresh start; the continuation is what
+ *    still says "bytes are already placed, do not re-apply". Same act as
+ *    `restarting`, wearing the phase a resume was normalized to.
+ *
+ * Everything else refuses, and the refusals are not symmetry:
+ *
+ *  - `applying` is the phase that MOVES bytes. A live holder is between
+ *    `rename(install -> trash)` and `rename(stage -> install)`, and a host
+ *    started from that directory is one the swap then renames out from under
+ *    (or fails against, on Windows). Nothing about a whole directory makes
+ *    that safe, which is the whole reason the criterion above is idempotence.
+ *  - `downloading`, and `preparing` with a `null` or `resume-apply`
+ *    continuation, have placed nothing. Starting the host is not this
+ *    record's next act - its next act is to STOP the host and swap - so a
+ *    supervisor start can turn an update that would have applied into one
+ *    that hits a busy host and parks. Benign, but a changed outcome, which is
+ *    what the criterion forbids. These are also the phases where the host is
+ *    normally still up, so the admission buys least where it costs most.
+ *
+ * ## The identity test differs from the parked arm's, and must
+ *
+ * The parked arm proves the install is the attempt's own by matching the
+ * claim baseline, which `parkForActivation` refreshed at the park. **No such
+ * baseline exists here.** The claim still names the PRE-swap install: nothing
+ * refreshes it across `applying -> restarting`, which is the Q5 defect on the
+ * executor side (`installedByThisAttempt` in `host/update-run.ts` forgives
+ * exactly this staleness for exactly this reason). Comparing generations here
+ * would refuse every genuine post-swap record - the E6L wedge above all.
+ *
+ * So the target-version equality carries it alone, and this arm is knowingly
+ * weaker than the parked one: a foreign install that happens to land the same
+ * version is admitted as if it were this attempt's. The mitigation is not
+ * local - it is recording the generation the swap itself wrote - and until
+ * that exists the trade is deliberate. What is admitted is still a complete,
+ * signed install of the version this record is trying to reach, being started
+ * on a machine whose supervisor asked for a host; the alternative is leaving
+ * that machine down.
+ */
+async function supervisorRelaunchOverActive(
+  record: HostUpdateAttemptRecord,
+  readInstalledIdentity: SupervisorRelaunchIdentityReader | null,
+): Promise<ActiveAttemptDisposition> {
+  if (!startsWhatThisRecordPlaced(record)) return "refuse";
+  // The same two nulls, refused for the same two reasons as the parked arm.
+  // `installed === null` also happens to be the swap's absent window - the
+  // instant between the two renames when there is no install directory at all
+  // - so the one state a torn read could produce is refused before the
+  // version test ever runs.
+  if (readInstalledIdentity === null) return "refuse";
+  const installed = await readInstalledIdentity();
+  if (installed === null) return "refuse";
+  return installed.installedVersion === record.targetVersion
+    ? "allow"
+    : "refuse";
+}
+
+/**
+ * Is starting the host this record's OWN next act?
+ *
+ * CROSS-PACKAGE, and no test in this module can watch it: `LEGAL_SUCCESSORS`
+ * (`transition.ts`) is what makes `restarting` and `verifying` mean "the
+ * target's bytes are placed". Both are reachable only from `preparing`,
+ * `applying` or `waiting-to-activate`, each of which has placed them. Admit a
+ * pre-placement phase into either successor set and this predicate silently
+ * starts a host from bytes nobody placed, with nothing here reddening.
+ *
+ * The set `{restarting, verifying}` also equals `POST_TOMBSTONE_PHASES` in
+ * `compatibility-fence.ts`, and that is a COINCIDENCE worth naming rather than
+ * an alias worth taking. Both sets mean "the record has promised a return",
+ * but they use it with opposite polarity - there, past the tombstone means a
+ * record can no longer walk back to a park and must terminalize; here, it
+ * means a supervisor start is the promised act and may proceed. Sharing the
+ * constant would let an edit made for one rule silently change the other.
+ */
+function startsWhatThisRecordPlaced(record: HostUpdateAttemptRecord): boolean {
+  if (record.phase === "restarting" || record.phase === "verifying") {
+    return true;
+  }
+  return record.phase === "preparing" && record.continuation === "activate";
 }

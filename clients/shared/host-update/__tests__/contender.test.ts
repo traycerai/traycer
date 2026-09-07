@@ -1244,20 +1244,15 @@ describe("withSupervisorRelaunchContender - the parked-record admission exemptio
       }),
     ],
     [
-      "preparing-activate",
+      "preparing",
+      record({ phase: "preparing", execution: "active", claim: claim({}) }),
+    ],
+    [
+      "preparing-resume-apply",
       record({
         phase: "preparing",
         execution: "active",
-        continuation: "activate",
-        claim: claim({}),
-      }),
-    ],
-    [
-      "verifying-activate",
-      record({
-        phase: "verifying",
-        execution: "active",
-        continuation: "activate",
+        continuation: "resume-apply",
         claim: claim({}),
       }),
     ],
@@ -1277,20 +1272,85 @@ describe("withSupervisorRelaunchContender - the parked-record admission exemptio
       expect(outcome.disposition).toBe("refuse");
       expect(outcome.admission).toBe("supervisor-relaunch-maintenance");
       expect(callbackCalls).toBe(0);
-      // Execution class decides before any evidence is read: an active record
-      // must not even be compared against the install tree, or a future edit
-      // could make "the evidence lines up" enough to admit one.
+      // The phase decides before any evidence is read: a record that has
+      // placed nothing must not even be compared against the install tree, or
+      // a future edit could make "the evidence lines up" enough to admit one.
+      // These are all PRE-placement, so a supervisor start is not this
+      // record's own next act - its next act is to STOP the host and swap.
       expect(readerCalls).toBe(0);
     },
   );
 
-  it("refuses a crash relaunch that lands in the middle of a LEGITIMATE activation - restarting/activate matches the install tree exactly, and that is precisely why it must not be re-entered", async () => {
+  it.each([
+    [
+      "restarting-activate",
+      record({
+        phase: "restarting",
+        execution: "active",
+        continuation: "activate",
+        claim: claim({}),
+      }),
+    ],
+    [
+      "verifying-activate",
+      record({
+        phase: "verifying",
+        execution: "active",
+        continuation: "activate",
+        claim: claim({}),
+      }),
+    ],
+    [
+      "preparing-activate",
+      record({
+        phase: "preparing",
+        execution: "active",
+        continuation: "activate",
+        claim: claim({}),
+      }),
+    ],
+  ] as const)(
+    "admits a relaunch over an interrupted %s record: starting the host is that record's OWN next act",
+    async (_label, current) => {
+      // These three refused until Q9, on the argument that a live segment owns
+      // the continuation. The argument was sound and the conclusion was still
+      // an outage: a CLI killed after its swap leaves `restarting` with the
+      // host stopped for that swap, a refusal exits 0, no service manager
+      // relaunches on a zero exit, and the box stays down - with the
+      // reconciler that would resume the record living inside the host that is
+      // not running. That is the Linux E6L wedge.
+      //
+      // What replaced the argument is not "the holder is gone" - a supervisor
+      // still cannot prove that - but IDEMPOTENCE. In all three shapes the
+      // record's own next act IS starting the host, so a live holder and this
+      // supervisor are performing the same act on the same bytes and it does
+      // not matter which wins. `preparing-activate` is in the set because
+      // `resumedRecord` normalizes every recovery resume to `preparing`: the
+      // continuation, not the phase, is what says the bytes are placed.
+      const hostHomeDir = await freshHome();
+      await writeRecord(hostHomeDir, current);
+
+      const { outcome, callbackCalls, readerCalls } = await relaunch(
+        hostHomeDir,
+        installed({}),
+      );
+
+      expect(outcome).toEqual({ kind: "ran", result: "host-spawned" });
+      expect(callbackCalls).toBe(1);
+      // Read UNDER the lock, and read at all: the admission is only sound
+      // against live evidence, never against the phase alone.
+      expect(readerCalls).toBe(1);
+      // Left for recovery, byte for byte. A supervisor holds no capability
+      // that could advance, terminalize or complete a record, and must not
+      // appear to.
+      await expect(
+        readFile(updateAttemptRecordPath(hostHomeDir), "utf8"),
+      ).resolves.toBe(`${JSON.stringify(current)}\n`);
+    },
+  );
+
+  it("refuses an interrupted restarting record whose install is NOT the target - a supervisor may start the bytes this attempt placed, never someone else's", async () => {
     const hostHomeDir = await freshHome();
-    // The bytes are placed, the installed version IS the target, the claim
-    // still matches: every equality the parked arm checks would hold here. The
-    // only thing separating this from an admitted park is that a live segment
-    // owns the continuation, and re-entering it would run a second activation
-    // against a record whose generation this supervisor does not hold.
     const midActivation = record({
       phase: "restarting",
       execution: "active",
@@ -1299,18 +1359,80 @@ describe("withSupervisorRelaunchContender - the parked-record admission exemptio
     });
     await writeRecord(hostHomeDir, midActivation);
 
+    // The install moved to a version this record never targeted, so starting
+    // it is no longer the record's own next act - it is a different act
+    // wearing the same phase.
     const { outcome, callbackCalls, readerCalls } = await relaunch(
       hostHomeDir,
-      installed({}),
+      installed({ installedVersion: "9.9.9" }),
     );
 
     expect(outcome.kind).toBe("nonterminal-attempt");
     if (outcome.kind !== "nonterminal-attempt") return;
     expect(outcome.disposition).toBe("refuse");
-    expect(outcome.admission).toBe("supervisor-relaunch-maintenance");
     expect(outcome.record).toEqual(midActivation);
     expect(callbackCalls).toBe(0);
-    expect(readerCalls).toBe(0);
+    expect(readerCalls).toBe(1);
+  });
+
+  it("refuses an interrupted restarting record when there is NO readable install record - the swap's absent window is not a whole tree", async () => {
+    const hostHomeDir = await freshHome();
+    await writeRecord(
+      hostHomeDir,
+      record({
+        phase: "restarting",
+        execution: "active",
+        continuation: "activate",
+        claim: claim({}),
+      }),
+    );
+
+    // `atomicSwap` renames the old install aside before renaming the new one
+    // in, so between those two renames there is no install directory at all.
+    // A reader that finds nothing is that window (or a broken install), and
+    // either way there is nothing to start.
+    const { outcome, callbackCalls, readerCalls } = await relaunch(
+      hostHomeDir,
+      null,
+    );
+
+    expect(outcome.kind).toBe("nonterminal-attempt");
+    if (outcome.kind !== "nonterminal-attempt") return;
+    expect(outcome.disposition).toBe("refuse");
+    expect(callbackCalls).toBe(0);
+    expect(readerCalls).toBe(1);
+  });
+
+  it("refuses an interrupted restarting record whose install matches only by GENERATION drift - the parked arm's claim test is deliberately not applied here", async () => {
+    const hostHomeDir = await freshHome();
+    await writeRecord(
+      hostHomeDir,
+      record({
+        phase: "restarting",
+        execution: "active",
+        continuation: "activate",
+        // The claim baseline still names the PRE-swap install, because nothing
+        // refreshes it across `applying -> restarting`. That staleness is the
+        // Q5 defect, and it is why this arm cannot use the parked arm's
+        // generation equality: applying it here would refuse every genuine
+        // post-swap record, E6L included.
+        claim: claim({
+          installedVersion: "1.0.0",
+          installGeneration: "id:pre-swap-generation",
+        }),
+      }),
+    );
+
+    // Target-equal, but the claim disagrees with the live install in both
+    // fields. The parked arm would refuse this; this arm admits it, and that
+    // asymmetry is the point of the pin.
+    const { outcome, callbackCalls } = await relaunch(
+      hostHomeDir,
+      installed({}),
+    );
+
+    expect(outcome).toEqual({ kind: "ran", result: "host-spawned" });
+    expect(callbackCalls).toBe(1);
   });
 
   it.each([

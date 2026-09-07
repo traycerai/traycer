@@ -256,11 +256,16 @@ const FORWARDED_SHUTDOWN_SIGNALS = [
  * shapes a relaunch legally continues - so what still exits 0 here is the set
  * a retry genuinely cannot clear.
  *
- * "Cannot clear" is the honest claim; "somebody else will" is not. An
- * interrupted-active record on a headless CLI-only install has no actor left
- * to end it either, because the reconciler that would is inside the host this
- * exit keeps down. That residual is Q9, and it is narrower than what stood
- * before this change, not gone.
+ * "Cannot clear" is the honest claim; "somebody else will" is not. That is
+ * why the interrupted-ACTIVE records whose own next act is starting the host
+ * -`restarting`, `verifying`, and the `preparing`/`activate` a recovery
+ * resume normalizes to - are admitted here as well: on a headless CLI-only
+ * install nothing else would ever end them, because the reconciler that would
+ * is inside the host this exit keeps down.
+ *
+ * What still exits 0 is `applying` and the pre-placement phases, and for
+ * those "cannot clear" is literal: `applying` may be mid-swap, and starting a
+ * host from a directory a live segment is about to rename is not a recovery.
  *
  * The value only has to be non-zero and unambiguous: launchd assigns no meaning
  * to particular codes, and with `KeepAlive.SuccessfulExit = false` any non-zero
@@ -542,11 +547,13 @@ const defaultRunDeps: RunHostStartDeps = {
         reason: "host-supervisor-spawn",
         waitMs: 0,
         pollIntervalMs: 50,
-        // Read UNDER the attempt lock, and only for a park whose phase could
+        // Read UNDER the attempt lock, and only for a record whose phase could
         // admit this relaunch. `resolveHostStartTarget` read the same record
         // before we contended, and deliberately is not reused: an install
         // that moved between that read and this lock is exactly the case the
-        // baseline comparison exists to catch.
+        // baseline comparison exists to catch. That reuse would be sharpest
+        // for the interrupted-active arm, whose window is exactly when a live
+        // holder is most likely to be moving.
         readInstalledIdentity: async () => {
           const record = await readHostInstallRecord(options.environment);
           if (record === null) return null;
@@ -564,7 +571,34 @@ const defaultRunDeps: RunHostStartDeps = {
           };
         },
       },
-      async () => run(),
+      async (_capability, context) => {
+        // ONE line, and only when a record actually stood. An admitted
+        // relaunch over a durable attempt is invisible otherwise: the host
+        // simply comes up, and the record it came up beside stays open for a
+        // recovery this supervisor is not performing and holds no capability
+        // to perform. Whoever reads this log next has to be able to tell "the
+        // host is up and an update is still outstanding" from "the host is
+        // up"; the phases below are the ones where starting it was the
+        // record's own next act, never a step taken on the record's behalf.
+        const standing = context.activeAttempt;
+        if (standing !== null) {
+          createCliLogger(options.environment).info(
+            "Supervisor relaunch admitted beside a durable update attempt",
+            {
+              environment: options.environment,
+              attemptId: standing.attemptId,
+              phase: standing.phase,
+              execution: standing.execution,
+              continuation: standing.continuation,
+              targetVersion: standing.targetVersion,
+              // The record is untouched and stays that way: recovery is the
+              // `host update` claim path's, never this command's.
+              leftForRecovery: true,
+            },
+          );
+        }
+        return run();
+      },
     );
   },
   spawn: (cmd, args, options) => nodeSpawn(cmd, args.slice(), options),
@@ -1517,20 +1551,22 @@ export async function runHostStart(
         // genuinely cannot clear the records that still reach here, and
         // admitting one mid-`applying` would run half-placed bytes.
         //
-        // What that does NOT mean is that the remainder is somebody else's
-        // job. An INTERRUPTED-ACTIVE record - holder dead, phase `applying`/
-        // `restarting`/`verifying` - is cleared only by
-        // `recoverInterruptedAttempt`, which sits on the `host update` claim
-        // path, and the reconciler that would trigger one lives inside the
-        // host this refusal keeps down. On a headless CLI-only install that is
-        // the SAME deadlock the parked exemption fixes, one phase over, with
-        // no actor available to end it. This patch NARROWS the class; it does
-        // not close it. The remainder is tracked as Q9.
+        // The interrupted-ACTIVE records that used to reach it no longer do.
+        // `restarting`, `verifying` and the `preparing`/`activate` a recovery
+        // resume normalizes to are admitted upstream, because for those a
+        // supervisor start IS the record's own next act - the same reasoning
+        // that admits the two parked shapes, applied one phase over. That
+        // matters most exactly where it used to fail worst: such a record is
+        // otherwise cleared only by `recoverInterruptedAttempt` on the `host
+        // update` claim path, and the reconciler that would trigger one lives
+        // inside the host this refusal kept down.
         //
         // So this bounds the outage to the transfer's length for the `busy`
         // case (`ThrottleInterval: 10` in the same plist paces the retries),
-        // and removes it for the two parked shapes. The interrupted-active
-        // wedge is still open and is deliberately not widened here.
+        // and removes it for the parked shapes and for the interrupted ones
+        // whose next act is the start. What remains is `applying` and the
+        // pre-placement phases, where a relaunch is not a continuation of
+        // anything and refusing is the correct answer rather than a residue.
         const retryableServiceRefusal =
           serviceStarted && admission.kind === "busy";
         if (retryableServiceRefusal) {
