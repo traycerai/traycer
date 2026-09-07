@@ -52,8 +52,3 @@ fn(x = 1)                      fn(x: number)  // caller passes explicitly
 as any / as unknown / chained  // narrow or define a real type
 ReturnType<typeof fn>          // name the concrete type
 ```
-
-## Skills
-
-Use a skill when the task matches.
-GUI skills: `clients/gui-app/AGENTS.md`.
