@@ -1261,8 +1261,18 @@ async function supervisorRelaunchDisposition(
  *
  * So the question is not "is the holder gone" but: **if the holder IS alive
  * and resumes, does this supervisor having started the host change the
- * outcome?** Where the answer is no, admitting is safe without proving
- * anything about the holder at all.
+ * DELIVERED END STATE?** Where the answer is no, admitting is safe without
+ * proving anything about the holder at all.
+ *
+ * "Delivered end state", not "outcome", and the difference decides a real
+ * row. Admitting `preparing`/`activate` can change the record's terminal
+ * LABEL: the resuming segment may find the target already installed and
+ * running, never write `restarting`, fail `canReachVerifying` (which for an
+ * `activate` continuation requires `restarting` or `verifying`), and settle
+ * `superseded` at exit 0 instead of `complete`. The update is still
+ * DELIVERED - target installed, target running - so nothing the machine
+ * needed was left undone. The refusals below are the opposite case: work not
+ * done at all.
  *
  * ## Which phases answer no, and why each one does
  *
@@ -1292,9 +1302,12 @@ async function supervisorRelaunchDisposition(
  *    continuation, have placed nothing. Starting the host is not this
  *    record's next act - its next act is to STOP the host and swap - so a
  *    supervisor start can turn an update that would have applied into one
- *    that hits a busy host and parks. Benign, but a changed outcome, which is
- *    what the criterion forbids. These are also the phases where the host is
- *    normally still up, so the admission buys least where it costs most.
+ *    that hits a busy host and parks. That is a changed DELIVERED state -
+ *    bytes that would have been placed are not - which is what the criterion
+ *    forbids, and it is the distinction that separates these from the
+ *    relabelled `preparing`/`activate` case above. These are also the phases
+ *    where the host is normally still up, so the admission buys least where
+ *    it costs most.
  *
  * ## The identity test differs from the parked arm's, and must
  *
