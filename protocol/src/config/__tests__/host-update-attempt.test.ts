@@ -103,9 +103,12 @@ describe("decodeHostUpdateAttempt (protocol module, imported directly)", () => {
 
   describe("claim baseline", () => {
     it("decodes a claim baseline attached to an ACTIVE record", () => {
-      const result = decodeHostUpdateAttempt(bytes(json({ claim: VALID_CLAIM })));
+      const result = decodeHostUpdateAttempt(
+        bytes(json({ claim: VALID_CLAIM })),
+      );
       expect(result.kind).toBe("valid");
-      if (result.kind === "valid") expect(result.value.claim).toEqual(VALID_CLAIM);
+      if (result.kind === "valid")
+        expect(result.value.claim).toEqual(VALID_CLAIM);
     });
 
     it("decodes a claim baseline attached to a PARKED record", () => {
@@ -113,7 +116,8 @@ describe("decodeHostUpdateAttempt (protocol module, imported directly)", () => {
         bytes(JSON.stringify({ ...VALID_PARKED, claim: VALID_CLAIM })),
       );
       expect(result.kind).toBe("valid");
-      if (result.kind === "valid") expect(result.value.claim).toEqual(VALID_CLAIM);
+      if (result.kind === "valid")
+        expect(result.value.claim).toEqual(VALID_CLAIM);
     });
 
     it("decodes a claim baseline attached to a TERMINAL record", () => {
@@ -121,7 +125,8 @@ describe("decodeHostUpdateAttempt (protocol module, imported directly)", () => {
         bytes(completeTerminalJson({ claim: VALID_CLAIM })),
       );
       expect(result.kind).toBe("valid");
-      if (result.kind === "valid") expect(result.value.claim).toEqual(VALID_CLAIM);
+      if (result.kind === "valid")
+        expect(result.value.claim).toEqual(VALID_CLAIM);
     });
 
     it("decodes with no claim key at all when claim is omitted, never inventing a claim", () => {
@@ -135,7 +140,11 @@ describe("decodeHostUpdateAttempt (protocol module, imported directly)", () => {
       // downgrade by version order - yet the claim on record says consent
       // was withheld. The decoder must carry that value through unchanged,
       // not infer consent from the version comparison.
-      const claim = { ...VALID_CLAIM, installedVersion: "9.9.9", allowDowngrade: false };
+      const claim = {
+        ...VALID_CLAIM,
+        installedVersion: "9.9.9",
+        allowDowngrade: false,
+      };
       const result = decodeHostUpdateAttempt(
         bytes(json({ claim, targetVersion: "1.0.0" })),
       );
@@ -198,17 +207,21 @@ describe("decodeHostUpdateAttempt (protocol module, imported directly)", () => {
 
     it("reports corrupt when recovery is attached to a PARKED (non-terminal) phase", () => {
       const result = decodeHostUpdateAttempt(
-        bytes(JSON.stringify({ ...VALID_PARKED, recovery: VALID_COMPLETE_RECOVERY })),
+        bytes(
+          JSON.stringify({
+            ...VALID_PARKED,
+            recovery: VALID_COMPLETE_RECOVERY,
+          }),
+        ),
       );
       expect(result).toEqual({ kind: "corrupt" });
     });
 
     it("decodes with no recovery key at all when recovery is omitted", () => {
-      const result = decodeHostUpdateAttempt(
-        bytes(completeTerminalJson({})),
-      );
+      const result = decodeHostUpdateAttempt(bytes(completeTerminalJson({})));
       expect(result.kind).toBe("valid");
-      if (result.kind === "valid") expect("recovery" in result.value).toBe(false);
+      if (result.kind === "valid")
+        expect("recovery" in result.value).toBe(false);
     });
   });
 
@@ -216,7 +229,9 @@ describe("decodeHostUpdateAttempt (protocol module, imported directly)", () => {
 
   describe("claim vs. recovery: phase legality is asymmetric by design", () => {
     it("accepts claim but rejects recovery on the very same active record", () => {
-      const withClaim = decodeHostUpdateAttempt(bytes(json({ claim: VALID_CLAIM })));
+      const withClaim = decodeHostUpdateAttempt(
+        bytes(json({ claim: VALID_CLAIM })),
+      );
       expect(withClaim.kind).toBe("valid");
 
       const withRecovery = decodeHostUpdateAttempt(
@@ -228,7 +243,10 @@ describe("decodeHostUpdateAttempt (protocol module, imported directly)", () => {
     it("accepts both claim and recovery together once the phase is terminal, since only recovery was ever phase-restricted", () => {
       const result = decodeHostUpdateAttempt(
         bytes(
-          completeTerminalJson({ claim: VALID_CLAIM, recovery: VALID_COMPLETE_RECOVERY }),
+          completeTerminalJson({
+            claim: VALID_CLAIM,
+            recovery: VALID_COMPLETE_RECOVERY,
+          }),
         ),
       );
       expect(result.kind).toBe("valid");
@@ -244,7 +262,11 @@ describe("decodeHostUpdateAttempt (protocol module, imported directly)", () => {
   describe("forward compatibility of fields added without a schema bump", () => {
     it("decodes a schemaVersion-2 record that predates both claim and recovery (neither key present) exactly as before", () => {
       const result = decodeHostUpdateAttempt(bytes(json({})));
-      expect(result).toEqual({ kind: "valid", version: 2, value: VALID_ACTIVE });
+      expect(result).toEqual({
+        kind: "valid",
+        version: 2,
+        value: VALID_ACTIVE,
+      });
     });
 
     it("decodes a schemaVersion-2 record carrying recovery - the field grown without a version bump - as valid, not corrupt", () => {
@@ -281,7 +303,9 @@ describe("decodeHostUpdateAttempt (protocol module, imported directly)", () => {
       );
       expect(result.kind).toBe("valid");
       if (result.kind === "valid") {
-        expect("someFutureFieldNoDecoderKnowsAboutYet" in result.value).toBe(false);
+        expect("someFutureFieldNoDecoderKnowsAboutYet" in result.value).toBe(
+          false,
+        );
       }
     });
 

@@ -182,6 +182,7 @@ export {
   LOCK_AWARE_DESKTOP_FLOOR,
   SHIPPED_COMPATIBILITY_FLOORS,
   decideCompatibilityFence,
+  decideHostStampPolicy,
   decideLegacyMarkerConcurrency,
   resolveCohortPolicy,
 } from "./compatibility-fence";
@@ -193,6 +194,7 @@ export type {
   CompatibilityRefusalReason,
   CohortPolicyResolution,
   CohortPolicySource,
+  HostStampPolicy,
   LegacyMarkerAbortDisposition,
   LegacyMarkerConcurrencyInput,
   LegacyMarkerConcurrencyVerdict,

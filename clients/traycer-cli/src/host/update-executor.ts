@@ -387,6 +387,11 @@ async function completeAttemptExecutorSegment(
   const observation = await observeAttemptRecoveryEvidence(
     options.environment,
     home,
+    // The recovery path is not a verify leg and has no target version of its
+    // own to gate on: it reconciles whatever the crashed run left behind, so
+    // it takes the STRONG rule unconditionally. Q1's fallback belongs to the
+    // segment that knows which version it was asked to install.
+    "identity-required",
   );
   const evidence = observation.evidence;
   if (
@@ -846,7 +851,11 @@ export async function runLocalAttemptExecutorSegment<T>(
     {
       ...options,
       readRecoveryEvidence: () =>
-        observeAttemptRecoveryEvidence(options.contender.environment, home),
+        observeAttemptRecoveryEvidence(
+          options.contender.environment,
+          home,
+          "identity-required",
+        ),
     },
     acknowledge,
     execute,

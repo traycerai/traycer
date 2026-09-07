@@ -3152,6 +3152,9 @@ async function verifyUnderClaim(
     const observation = await observeAttemptRecoveryEvidence(
       args.environment,
       home,
+      // Q1 step 3 replaces this constant with the target-gated policy. Strict
+      // here keeps this commit behaviour-identical to the one before it.
+      "identity-required",
     );
     const { installed, running } = observation.evidence;
     if (

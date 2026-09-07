@@ -515,6 +515,13 @@ const world = {
    * models the same split rather than deriving one from the other.
    */
   runningRefusal: null as string | null,
+  /**
+   * Whether the running leg COMPARED the #1763 start stamp. `true` is the
+   * shipped world every pre-Q1 row models - a stamped host, identity checked -
+   * so leaving it alone keeps those rows meaning what they meant. Q1's rows
+   * set it false to model a host too old to carry the stamp.
+   */
+  identityCompared: true,
   latest: "2.0.0",
 };
 
@@ -639,6 +646,11 @@ function observationOfWorld(): AttemptRecoveryEvidenceObservation {
     // a refusal reading. Every other observation carries `null`, exactly as
     // production does.
     runningRefusal: running === null ? world.runningRefusal : null,
+    // Tracks the running leg, exactly as production does: a leg that read
+    // nothing compared nothing. Every existing row models a stamped host, so
+    // a verified leg here reports a real identity comparison; the Q1 rows
+    // override `identityCompared` on the world.
+    identityCompared: running === null ? false : world.identityCompared,
     fingerprint: JSON.stringify(evidence),
     installIdentity:
       installed === null
@@ -1184,6 +1196,11 @@ beforeEach(async () => {
   world.runningVersion = null;
   world.runningDiagnosis = "pid-metadata-absent";
   world.runningRefusal = null;
+  // Reset with the rest of the world. A Q1 row that leaves this false would
+  // silently hand every LATER test a host with no start stamp, and they would
+  // still pass - the fallback verifies - while no longer testing the identity
+  // path they were written for.
+  world.identityCompared = true;
   world.latest = "2.0.0";
   logger = fakeLogger();
   armWorld();

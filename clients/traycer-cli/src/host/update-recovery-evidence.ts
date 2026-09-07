@@ -8,6 +8,7 @@ import type {
   AttemptRecoveryEvidence,
   AttemptRecoveryRunningEvidence,
 } from "@traycer-clients/shared/host-update";
+import type { HostStampPolicy } from "@traycer-clients/shared/host-update";
 import { isValidHostVersion } from "@traycer-clients/shared/host-version/compare-host-versions";
 import type { InstallGenerationIdentity } from "@traycer-clients/shared/host-version/install-generation";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -113,6 +114,22 @@ export interface AttemptRecoveryEvidenceObservation {
    */
   readonly runningRefusal: string | null;
   /**
+   * Whether the #1763 start stamp was actually COMPARED against the live
+   * process, so a caller can record HOW it verified rather than choosing a
+   * value it would have to be careful to get right.
+   *
+   * This is the answer to the hazard the positive-write record shape creates:
+   * with `verification` written on every terminal record, `mode: "identity"`
+   * is now a claim that can be confidently FALSE if a caller picks it, which
+   * is worse than the honest ambiguity of an absent field. So the leg that
+   * knows reports it and the caller copies it - never the other way round.
+   *
+   * `false` for every non-classified reading too: those compared nothing.
+   * Deliberately NOT part of `evidence` or `fingerprint`, on the same terms as
+   * `runningDiagnosis` - it explains a reading, it never participates in one.
+   */
+  readonly identityCompared: boolean;
+  /**
    * The install record's generation inputs exactly as this observation read
    * them, or `null` when no record could be read at all.
    *
@@ -147,8 +164,16 @@ export async function readAttemptRecoveryEvidence(
   environment: Environment,
   canonicalHostHomeDir: string,
 ): Promise<AttemptRecoveryEvidence> {
+  // Always the STRONG rule. This helper exposes the pure algebra's facts and
+  // has no target version to gate on, so it cannot make the Q1 decision; a
+  // caller that needs the fallback calls `observeAttemptRecoveryEvidence`
+  // directly and passes the policy its own target earned.
   return (
-    await observeAttemptRecoveryEvidence(environment, canonicalHostHomeDir)
+    await observeAttemptRecoveryEvidence(
+      environment,
+      canonicalHostHomeDir,
+      "identity-required",
+    )
   ).evidence;
 }
 
@@ -160,6 +185,7 @@ export async function readAttemptRecoveryEvidence(
 export async function observeAttemptRecoveryEvidence(
   environment: Environment,
   canonicalHostHomeDir: string,
+  stampPolicy: HostStampPolicy,
 ): Promise<AttemptRecoveryEvidenceObservation> {
   if (resolve(hostHomeDir(environment)) !== resolve(canonicalHostHomeDir)) {
     return unreadableObservation();
@@ -172,12 +198,14 @@ export async function observeAttemptRecoveryEvidence(
   const runningBefore = await readRunningObservation(
     environment,
     installed.runtime,
+    stampPolicy,
   );
   // A host restart while collecting evidence is itself an ambiguity. Re-read
   // the live RPC/metadata proof rather than comparing just the release string.
   const runningAfter = await readRunningObservation(
     environment,
     installed.runtime,
+    stampPolicy,
   );
   const flapped = runningBefore.fingerprint !== runningAfter.fingerprint;
   const running = flapped
@@ -197,6 +225,9 @@ export async function observeAttemptRecoveryEvidence(
     // belongs to: the observation no longer claims the host refused us, so it
     // must not carry the words either.
     runningRefusal: flapped ? null : runningAfter.refusal,
+    // A flap means the running leg is `unreadable`, so nothing was verified
+    // and nothing may claim identity held.
+    identityCompared: flapped ? false : runningAfter.identityCompared,
     fingerprint: JSON.stringify({
       installed: installed.fingerprint,
       staged: staged.fingerprint,
@@ -385,11 +416,22 @@ type RunningObservation = {
   readonly diagnosis: RunningEvidenceDiagnosis;
   /** Host-reported refusal text, or `null`. See `runningRefusal` above. */
   readonly refusal: string | null;
+  /**
+   * Whether the #1763 start stamp was actually COMPARED against the live
+   * process on this read. `false` only on the Q1 fallback arm; every
+   * non-classified outcome reports `false` because it compared nothing.
+   *
+   * Reported rather than inferred from the policy, because the policy says
+   * what this run MAY fall back to and this says what it DID - a below-floor
+   * target whose host carries a stamp is identity-checked and reports `true`.
+   */
+  readonly identityCompared: boolean;
 };
 
 async function readRunningObservation(
   environment: Environment,
   installed: InstalledRuntimeFacts | null,
+  stampPolicy: HostStampPolicy,
 ): Promise<RunningObservation> {
   const metadata = await readHostPidMetadata(environment);
   if (metadata === null) {
@@ -400,25 +442,35 @@ async function readRunningObservation(
       ? absentRunning("pid-metadata-absent")
       : unreadableRunning("pid-metadata-unreadable");
   }
-  if (metadata.processStartIdentity === null) {
+  // The Q1 fallback, and note what it is NOT: `version-only` does not turn the
+  // identity comparison off, it authorises SKIPPING one that cannot be made.
+  // A host that carries the stamp is identity-checked whatever the policy
+  // says, so the weakening is exactly as wide as the absence that causes it.
+  // That is also why a `0.0.0-local` target - which compares below any pinned
+  // floor - keeps full verification in practice: a host built from current
+  // source writes the stamp.
+  const stamp = metadata.processStartIdentity;
+  if (stamp === null && stampPolicy === "identity-required") {
     return unreadableRunning("pid-start-stamp-missing");
   }
   if (!isValidLocalHostWebsocketUrl(metadata.websocketUrl)) {
     return unreadableRunning("pid-endpoint-invalid");
   }
-  const identity = await getPublishedProcessIdentityVerdict(
-    metadata.pid,
-    metadata.processStartIdentity,
-  );
-  // Both are `absent` to every DECISION - there is no live host this record
-  // vouches for either way - and the two are told apart only here, for the
-  // person reading the failure. A recycled pid is the case the #1763 stamp
-  // exists to catch, and "the pid now belongs to another process" is exactly
-  // what the legacy health probe used to print.
-  if (identity === "dead") return absentRunning("host-process-dead");
-  if (identity === "mismatch") return absentRunning("host-process-recycled");
-  if (identity !== "current") {
-    return unreadableRunning("pid-identity-indeterminate");
+  if (stamp !== null) {
+    const identity = await getPublishedProcessIdentityVerdict(
+      metadata.pid,
+      stamp,
+    );
+    // Both are `absent` to every DECISION - there is no live host this record
+    // vouches for either way - and the two are told apart only here, for the
+    // person reading the failure. A recycled pid is the case the #1763 stamp
+    // exists to catch, and "the pid now belongs to another process" is exactly
+    // what the legacy health probe used to print.
+    if (identity === "dead") return absentRunning("host-process-dead");
+    if (identity === "mismatch") return absentRunning("host-process-recycled");
+    if (identity !== "current") {
+      return unreadableRunning("pid-identity-indeterminate");
+    }
   }
 
   let status;
@@ -456,14 +508,34 @@ async function readRunningObservation(
   if (!sameRunningMetadata(metadata, after)) {
     return unreadableRunning("host-restarted-during-probe");
   }
-  const afterIdentity = await getPublishedProcessIdentityVerdict(
-    metadata.pid,
-    metadata.processStartIdentity,
-  );
-  if (afterIdentity !== "current") {
-    return unreadableRunning("host-restarted-during-probe");
+  if (stamp !== null) {
+    const afterIdentity = await getPublishedProcessIdentityVerdict(
+      metadata.pid,
+      stamp,
+    );
+    if (afterIdentity !== "current") {
+      return unreadableRunning("host-restarted-during-probe");
+    }
   }
+  // What the FALLBACK actually costs, stated once so nobody has to reconstruct
+  // it from the branches above. Without a stamp this run loses exactly one
+  // thing: detection of a RECYCLED pid. It does not lose liveness (a dead
+  // process fails the `host.status` call above as `host-rpc-unreachable`), the
+  // endpoint binding, the version agreement, the host-home binding, or the
+  // before/after re-read. So the surviving hole is a pid that now belongs to a
+  // DIFFERENT Traycer host answering on the same recorded endpoint and
+  // reporting the same version - and on a host too old to write the stamp,
+  // which is the population that has no identity evidence to offer under any
+  // policy.
+  //
+  // `sameRunningMetadata` compares `processStartIdentity` too; with the stamp
+  // absent that term is `null === null` and carries no information. The
+  // re-read still detects a rewritten pid.json - it just cannot detect a
+  // restart that reproduced every recorded field. Left in place deliberately,
+  // and said out loud because a later reader would otherwise count it as
+  // protection this arm does not have.
   return {
+    identityCompared: stamp !== null,
     diagnosis: "classified",
     refusal: null,
     evidence: classifyRunningIdentity(status.hostVersion, installed),
@@ -725,11 +797,15 @@ const REFUSAL_REASON_MAX_CHARS = 200;
 function absentRunning(
   diagnosis: RunningEvidenceDiagnosis,
 ): RunningObservation {
+  // `identityCompared: false` - nothing was verified here, so nothing may
+  // report that identity held. These arms never reach a terminal success, but
+  // the field must not be able to say otherwise if one ever does.
   return {
     evidence: { kind: "absent" },
     fingerprint: "absent",
     diagnosis,
     refusal: null,
+    identityCompared: false,
   };
 }
 
@@ -741,6 +817,7 @@ function unreadableRunning(
     fingerprint: "unreadable",
     diagnosis,
     refusal: null,
+    identityCompared: false,
   };
 }
 
@@ -757,6 +834,7 @@ function refusedRunning(reason: string): RunningObservation {
     fingerprint: "unreadable",
     diagnosis: "host-refuses-authenticated-rpc",
     refusal: reason,
+    identityCompared: false,
   };
 }
 
@@ -771,6 +849,7 @@ function unreadableObservation(): AttemptRecoveryEvidenceObservation {
     // The one diagnosis that is not about the host at all: this observation was
     // asked for a home that is not this environment's canonical one.
     runningDiagnosis: "host-home-mismatch",
+    identityCompared: false,
     // Nothing was read, so there is no identity to report. A caller refreshing
     // a claim baseline from this observation carries the record's prior
     // baseline unchanged rather than inventing one.

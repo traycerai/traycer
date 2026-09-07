@@ -184,6 +184,10 @@ function observationOf(
     // The same contract, and the same reason it is safe to pin at a constant
     // here: a `classified` reading is by definition one the host answered.
     runningRefusal: null,
+    // The recovery path always takes the STRONG rule - it has no target
+    // version to gate Q1's fallback on - so its surrogate reports a real
+    // identity comparison.
+    identityCompared: true,
     fingerprint: JSON.stringify({
       evidence,
       installIdentity,
