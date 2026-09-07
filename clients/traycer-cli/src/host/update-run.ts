@@ -1343,7 +1343,6 @@ function installGenerationOf(record: HostInstallRecord): string {
  * an arm can never pass a barrier that did not land and go on to actuate.
  */
 class AttemptRecordWriter {
-  private abortingForConcurrency = false;
   private held: HostUpdateAttemptIdentity;
   private phaseNow: HostUpdateAttemptPhase;
   private continuationNow: HostUpdateAttemptContinuation;
@@ -1581,23 +1580,17 @@ class AttemptRecordWriter {
    * thing that knows whether its own write landed. A claim-time check sees
    * one sample and cannot tell a stale marker from a live updater.
    *
-   * Terminal writes are exempt so an abort cannot recurse into the failure
-   * write that reports it - and `decideLegacyMarkerConcurrency` returns
-   * `clear` for terminal phases anyway, so this only avoids asking a question
-   * whose answer is fixed.
+   * Re-entrancy needs no guard, and that is a property of WHERE this runs
+   * rather than luck: only `phaseWrite` calls it, and the park/fail it issues
+   * go through `barrier`/`commit`, which do not. An earlier cut ran this
+   * inside `commit` and did need a latch - deleting that latch now changes
+   * no test, which is the definition of documentation rather than a guard, so
+   * it is gone.
    */
   private async abortOnConcurrentLegacyUpdater(
     phase: HostUpdateAttemptPhase,
   ): Promise<void> {
     if (!this.mirror.foreignTakeoverObserved) return;
-    // Re-entrancy guard, and it is load-bearing rather than defensive: the
-    // abort's own park/fail write goes through `commit`, which mirrors and
-    // arrives back here with the latch still set. Exempting only TERMINAL
-    // writes is not enough - `park` writes `waiting-for-work`, which is not
-    // terminal, so the park re-aborts and parks again forever. The pin below
-    // found this as a hang rather than a wrong answer.
-    if (this.abortingForConcurrency) return;
-    this.abortingForConcurrency = true;
     const verdict = decideLegacyMarkerConcurrency({
       legacyMarkerPresent: true,
       attemptPhase: phase,
