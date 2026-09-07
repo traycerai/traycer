@@ -594,6 +594,51 @@ describe("projectFleetUpdateView — a refused completion write is not a failure
     expect(view.targetVersion).toBe("2.1.0");
   });
 
+  it("a LIVE executor at the target is still VERIFYING — a dead executor is a precondition, not a detail", () => {
+    // The window this guards is on the HAPPY path, not an edge. Every
+    // successful update passes through a moment where the record says
+    // `verifying`, the host has already restarted into the target, and the
+    // executor is alive still running its evidence loop. `host.status` then
+    // reports the exact two facts `concludesAsFinalizingRecord` tests, and only
+    // the enclosing `liveness === "interrupted"` guard stops the card
+    // announcing "Updated … Finalizing the update record." over an operation
+    // that is still running and can still fail.
+    //
+    // Found by reviewer C hoisting the route above that guard: all 173 stayed
+    // green, because every `finalizing-record` fixture here is interrupted and
+    // every live `verifying` row uses a non-matching version, so "live +
+    // verifying + already at target" existed in neither suite.
+    const view = projectFleetUpdateView({
+      observation: observation({
+        operation: abandonedVerify({ liveness: "active" }),
+        runningVersion: "2.1.0",
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(view.kind).toBe("verifying");
+    expect(view.kind).not.toBe("finalizing-record");
+    expect(view.qualified).toBe(false);
+  });
+
+  it("an INDETERMINATE executor at the target stays verifying AND qualified", () => {
+    // The sibling, and it holds something the row above cannot: `indeterminate`
+    // means the host could not establish whether the executor is alive, so the
+    // phase is shown QUALIFIED. Routing it to `finalizing-record` would not
+    // merely mislabel the state — it would drop the qualification an
+    // unconfirmed reading is owed and present a guess as a settled success.
+    const view = projectFleetUpdateView({
+      observation: observation({
+        operation: abandonedVerify({ liveness: "indeterminate" }),
+        runningVersion: "2.1.0",
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(view.kind).toBe("verifying");
+    expect(view.qualified).toBe(true);
+  });
+
   it("host running the OLD version keeps the existing interrupted failure", () => {
     const view = projectFleetUpdateView({
       observation: observation({
