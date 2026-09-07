@@ -959,6 +959,7 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
           onForceRestart={() => undefined}
           onRestart={null}
           onForceUpdate={null}
+          cliFloorBlocked={false}
         />,
       );
       const card = screen.getByTestId("host-overview-operation-card");

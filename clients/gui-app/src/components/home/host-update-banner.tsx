@@ -295,6 +295,13 @@ function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
   const operationCopy = describeUpdateOperation({
     view: localUpdate.view,
     hostName: localHostName,
+    // This surface has no CLI-floor lane. The floor is the update REGION's
+    // finding — it comes out of the Overview's summary walk over the available
+    // manifest, which this banner never performs — and the substituted sentence
+    // points at a `Show installation help` affordance that exists only there.
+    // Naming a way forward that is nowhere on this screen is the dead end the
+    // Overview card's own header warns about, so the banner keeps the count.
+    cliFloorBlocked: false,
   });
 
   // THE RENDERED BRANCH, AS A VALUE — computed once and read by the markup, the

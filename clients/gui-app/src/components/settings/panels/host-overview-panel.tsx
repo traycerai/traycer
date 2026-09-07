@@ -1513,6 +1513,15 @@ export function HostOverviewPanel(props: {
           <HostOverviewOperationCard
             view={operationView}
             hostName={displayName}
+            // Exactly the predicate the region renders its remedy row on:
+            // `remedy` is `describeCliFloorRemedy(...)` for a non-null
+            // `cliFloor` and `null` otherwise, so this is true when — and only
+            // when — `Show installation help` is on screen for the sentence to
+            // point at. Not narrowed to `repairable`: an unreadable floor is
+            // still a floor, still withholds Update now, and still renders the
+            // help action; what `repairable` decides is which REMEDY copy the
+            // row gets, not whether the park is CLI-blocked.
+            cliFloorBlocked={updates.cliFloor !== null}
             // Restart cannot activate a stage. A floor gate must not turn a
             // staged wait's Force update into a different, ineffective force
             // - and a record leg that is not live does not vouch that no

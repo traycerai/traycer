@@ -33,6 +33,7 @@ describe("describeUpdateOperation — retained last-known phase copy", () => {
     const copy = describeUpdateOperation({
       view: retainedView({}),
       hostName: "host-a",
+      cliFloorBlocked: false,
     });
     expect(copy.primary).toBe("Last seen: Downloading update to v1.9.0");
   });
@@ -41,6 +42,7 @@ describe("describeUpdateOperation — retained last-known phase copy", () => {
     const copy = describeUpdateOperation({
       view: retainedView({}),
       hostName: "host-a",
+      cliFloorBlocked: false,
     });
     expect(copy.needsQualifiedMarker).toBe(false);
   });
@@ -52,6 +54,7 @@ describe("describeUpdateOperation — retained last-known phase copy", () => {
         qualified: true,
       },
       hostName: "host-a",
+      cliFloorBlocked: false,
     });
     expect(copy.primary).toBe("Update state unknown");
     expect(copy.needsQualifiedMarker).toBe(true);
@@ -66,6 +69,7 @@ describe("describeUpdateOperation — retained last-known phase copy", () => {
         targetVersion: "1.9.0",
       },
       hostName: "host-a",
+      cliFloorBlocked: false,
     });
     expect(copy.primary).toBe("Downloading update to v1.9.0");
     expect(copy.needsQualifiedMarker).toBe(true);
@@ -75,6 +79,7 @@ describe("describeUpdateOperation — retained last-known phase copy", () => {
     const copy = describeUpdateOperation({
       view: retainedView({ lastKnownKind: "idle", targetVersion: null }),
       hostName: "host-a",
+      cliFloorBlocked: false,
     });
     expect(copy.primary).toBe("Last seen: Host is up to date");
   });
@@ -83,6 +88,7 @@ describe("describeUpdateOperation — retained last-known phase copy", () => {
     const copy = describeUpdateOperation({
       view: retainedView({ lastKnownKind: "unknown" }),
       hostName: "host-a",
+      cliFloorBlocked: false,
     });
     expect(copy.primary).toBe("Update state unknown");
   });
@@ -102,6 +108,7 @@ describe("describeUpdateOperation — the coarse 'updating' kind", () => {
         progress: { kind: "indeterminate", bytes: null, totalBytes: null },
       },
       hostName: "host-a",
+      cliFloorBlocked: false,
     });
     expect(copy.primary).toBe("Updating host");
   });
@@ -116,6 +123,7 @@ describe("describeUpdateOperation — the coarse 'updating' kind", () => {
         progress: { kind: "indeterminate", bytes: null, totalBytes: null },
       },
       hostName: "host-a",
+      cliFloorBlocked: false,
     });
     expect(copy.primary).toBe("Updating host to v2.1.0");
   });
@@ -247,5 +255,127 @@ describe("showsProgressBar", () => {
       },
     };
     expect(showsProgressBar(view)).toBe(true);
+  });
+});
+
+/**
+ * The CLI-FLOOR substitution on a work park, observed on real hardware: an
+ * rc-era CLI in the slot, the host sitting `Online · Idle`, and the card
+ * reading "Update waits for 0 sessions to finish" while the host's reconciler
+ * refused the resume every tick. Nothing was finishing because nothing was
+ * running — the park was waiting for a CLI that could carry the release.
+ *
+ * This is the copy TABLE's half. Whether a given surface passes `true` is a
+ * separate fact about that surface, pinned where it is decided:
+ * `host-overview-operation-card.test.tsx` for the Overview (which reads the
+ * region's own floor finding) and the banner's suites for the `false` it
+ * always passes.
+ */
+describe("describeUpdateOperation — a work park under an unmet CLI floor", () => {
+  function parkView(blockingSessionCount: number | null): FleetUpdateView {
+    return {
+      ...UNKNOWN_FLEET_UPDATE_VIEW,
+      kind: "waiting-for-work",
+      qualified: false,
+      targetVersion: "1.3.0-rc.3",
+      blockingSessionCount,
+    };
+  }
+
+  it("names the command-line tools and points at installation help, NOT the session count", () => {
+    const copy = describeUpdateOperation({
+      view: parkView(0),
+      hostName: "host-a",
+      cliFloorBlocked: true,
+    });
+    expect(copy.primary).toBe(
+      "Update waits for Traycer's command-line tools to be updated — see installation help",
+    );
+    // The half that is the actual defect. A sentence naming the tools would
+    // pass the assertion above even if it still also claimed a session count,
+    // and "waits for 0 sessions" is the specific claim that sent people
+    // looking for work to finish that did not exist.
+    expect(copy.primary).not.toContain("session");
+    // The accessible label is built from the same sentence, so a screen reader
+    // gets the substitution too rather than the one rendering that quietly
+    // kept reading the old branch.
+    expect(copy.accessibleLabel).toBe(`host-a: ${copy.primary}`);
+  });
+
+  it("a positive session count does NOT keep the count sentence — the floor outranks it", () => {
+    // Deliberate, and the one place this decision is visible. Even with real
+    // live work, finishing it does not resume this park: no CLI on that
+    // machine can carry the release. Naming the sessions would send someone to
+    // close them for nothing, and the sentence would then flip to the tools
+    // one anyway the moment the last session ended.
+    expect(
+      describeUpdateOperation({
+        view: parkView(2),
+        hostName: "host-a",
+        cliFloorBlocked: true,
+      }).primary,
+    ).toBe(
+      "Update waits for Traycer's command-line tools to be updated — see installation help",
+    );
+  });
+
+  it("with the floor MET, the count sentence is untouched", () => {
+    expect(
+      describeUpdateOperation({
+        view: parkView(0),
+        hostName: "host-a",
+        cliFloorBlocked: false,
+      }).primary,
+    ).toBe("Update waits for 0 sessions to finish");
+    expect(
+      describeUpdateOperation({
+        view: parkView(null),
+        hostName: "host-a",
+        cliFloorBlocked: false,
+      }).primary,
+    ).toBe("Update waits for work to finish");
+  });
+
+  it("substitutes on the WORK park only — an unmet floor annotates no other phase", () => {
+    // The guard on the flag becoming a general "this host is floored" marker.
+    // A download in flight is not blocked by a floor the summary walk found on
+    // some other candidate, and `waiting-to-activate` names a RESTART into
+    // bytes that are already placed — which no CLI upgrade unblocks, so
+    // substituting there would trade one wrong sentence for another.
+    expect(
+      describeUpdateOperation({
+        view: { ...parkView(0), kind: "downloading" },
+        hostName: "host-a",
+        cliFloorBlocked: true,
+      }).primary,
+    ).toBe("Downloading update to v1.3.0-rc.3");
+    expect(
+      describeUpdateOperation({
+        view: { ...parkView(0), kind: "waiting-to-activate" },
+        hostName: "host-a",
+        cliFloorBlocked: true,
+      }).primary,
+    ).toBe("Update installed — restart host to finish");
+  });
+
+  it("a RETAINED work park carries the substitution too, under the last-seen prefix", () => {
+    // `phaseSentence` is shared by the live and retained paths on purpose, so
+    // this needs no arm of its own — but it is worth a pin, because the
+    // alternative (substituting only live) is the kind of split that lets one
+    // of two renderings of the same fact drift.
+    expect(
+      describeUpdateOperation({
+        view: {
+          ...parkView(0),
+          kind: "unknown",
+          lastKnownKind: "waiting-for-work",
+          qualified: true,
+        },
+        hostName: "host-a",
+        cliFloorBlocked: true,
+      }).primary,
+    ).toBe(
+      "Last seen: Update waits for Traycer's command-line tools to be updated — see installation help",
+    );
   });
 });

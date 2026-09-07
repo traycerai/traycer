@@ -50,9 +50,27 @@ export interface UpdateOperationCopy {
 export function describeUpdateOperation(input: {
   readonly view: FleetUpdateView;
   readonly hostName: string;
+  /**
+   * Whether this surface's CLI-FLOOR lane is active — the executing CLI on that
+   * machine is below the projected release's floor, so the region is rendering
+   * the remedy row and its `Show installation help` instead of Update now.
+   *
+   * It changes exactly one sentence: a work park's. See
+   * {@link waitingForWorkSentence}. Everything else about a floor-blocked host
+   * is already said by the remedy row itself, and this must never become a
+   * general "the floor is unmet" annotation on unrelated phases — a download in
+   * flight is not blocked by a floor the summary walk found on some other
+   * candidate.
+   *
+   * `false` from the landing banner, and that is not an oversight: the banner
+   * has no floor lane and no installation-help affordance, so the substituted
+   * sentence would name a way forward that is nowhere on that screen. The
+   * count sentence is at least honest there, and Settings is one click away.
+   */
+  readonly cliFloorBlocked: boolean;
 }): UpdateOperationCopy {
   const { view, hostName } = input;
-  const primary = primarySentence(view);
+  const primary = primarySentence(view, input.cliFloorBlocked);
   return {
     primary,
     accessibleLabel: `${hostName}: ${primary}`,
@@ -70,7 +88,10 @@ function carriesQualificationInline(view: FleetUpdateView): boolean {
   return view.kind === "unknown" && view.lastKnownKind !== null;
 }
 
-function primarySentence(view: FleetUpdateView): string {
+function primarySentence(
+  view: FleetUpdateView,
+  cliFloorBlocked: boolean,
+): string {
   if (view.kind === "unknown") {
     const lastKnown = view.lastKnownKind;
     // Nothing retained: say only what is true, which is nothing.
@@ -82,9 +103,9 @@ function primarySentence(view: FleetUpdateView): string {
     // experience contract's offline row asks for the last known state, and
     // before the view carried it the only available answer was the generic
     // unknown above.
-    return `Last seen: ${phaseSentence(lastKnown, view)}`;
+    return `Last seen: ${phaseSentence(lastKnown, view, cliFloorBlocked)}`;
   }
-  return phaseSentence(view.kind, view);
+  return phaseSentence(view.kind, view, cliFloorBlocked);
 }
 
 /**
@@ -96,6 +117,7 @@ function primarySentence(view: FleetUpdateView): string {
 function phaseSentence(
   kind: FleetUpdateViewKind,
   view: FleetUpdateView,
+  cliFloorBlocked: boolean,
 ): string {
   const target = view.targetVersion;
   // Every phase that names a version uses this, and it is empty when the host
@@ -114,7 +136,7 @@ function phaseSentence(
     case "applying":
       return `Installing update${to}`;
     case "waiting-for-work":
-      return waitingForWorkSentence(view.blockingSessionCount);
+      return waitingForWorkSentence(view.blockingSessionCount, cliFloorBlocked);
     case "waiting-to-activate":
       // The plan names this string explicitly (§3.1): a parked activation must
       // NOT keep saying "Updating". It is placed, it is waiting for a restart,
@@ -151,7 +173,31 @@ function phaseSentence(
  * it legible. A `null` count keeps the sentence deliberately unquantified
  * rather than saying "0".
  */
-function waitingForWorkSentence(blockingSessionCount: number | null): string {
+function waitingForWorkSentence(
+  blockingSessionCount: number | null,
+  cliFloorBlocked: boolean,
+): string {
+  // The FLOOR outranks the count, because on a floor-blocked host the count is
+  // not merely uninformative — it is false. Observed on real hardware: an
+  // rc-era CLI in the slot, a host sitting `Online · Idle`, and the card
+  // reading "Update waits for 0 sessions to finish" while the host's
+  // reconciler refused the resume every tick. Nothing was finishing because
+  // nothing was running; what the park was waiting for was a CLI that could
+  // carry the release at all.
+  //
+  // It points at the affordance rather than restating the fix: the remedy row
+  // is already on screen with its own sentence and its own `Show installation
+  // help`, and the floor gate withholds Force and Restart on this card
+  // precisely so that row is the only way forward. Two full remedies for one
+  // blocker is the layered narration this page keeps deleting — hence the same
+  // shape as `Update status unavailable — see Diagnostics` above.
+  //
+  // Only the WORK park. `waiting-to-activate` names a restart, and a restart
+  // into bytes that are already placed is not something a CLI upgrade unblocks;
+  // substituting there would trade one wrong sentence for another.
+  if (cliFloorBlocked) {
+    return "Update waits for Traycer's command-line tools to be updated — see installation help";
+  }
   // "Waits", not "will continue": the park is a fact about the stage, and
   // what resumes it is the next update run - a host's own automatic check
   // where one is enabled, or the next Update now - which this sentence has

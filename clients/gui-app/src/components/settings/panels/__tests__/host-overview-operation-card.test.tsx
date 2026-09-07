@@ -810,9 +810,19 @@ describe("HostOverviewOperationCard — record-derived parks", () => {
     // The negatives below are half a pin on their own: a card rendered in some
     // other view would also have no force controls. Anchor them to the
     // staged-wait phase they are about.
+    //
+    // The anchor is the TOOLS sentence, not the count, and that is the point
+    // of the substitution rather than a weakening of this pin: this fixture is
+    // a park under an unmet floor, and the two sessions it names are not what
+    // is holding the update. Closing them would resume nothing — the floored
+    // stage is unreachable to this host's CLI at any session count, which is
+    // exactly why the two force controls below are withheld. See
+    // `host-update-operation-copy.test.ts` for the rule and its floor-met half.
     expect(
       screen.getByTestId("host-overview-operation-phase").textContent,
-    ).toBe("Update waits for 2 sessions to finish");
+    ).toBe(
+      "Update waits for Traycer's command-line tools to be updated — see installation help",
+    );
     // Removing `!updates.stagedEntryOfferable` from the panel's Force gate
     // would expose Force update for this CLI-floor refusal (the floored
     // staged version is not offerable); this negative affordance pin must
@@ -1818,5 +1828,106 @@ describe("HostOverviewOperationCard — capability gates", () => {
     expect(
       screen.queryByTestId("host-overview-operation-force-update"),
     ).toBeNull();
+  });
+});
+
+/**
+ * The WIRING for the CLI-floor park sentence, from a matrix run on real
+ * hardware: an rc-era CLI in the slot (below the projected release's floor), a
+ * host sitting `Online · Idle`, and an attempt parked at `waiting-for-work`
+ * with a claim. The card read "Update waits for 0 sessions to finish" — a
+ * sentence naming a blocker that did not exist, while the host's reconciler
+ * refused the resume every tick for the one that did.
+ *
+ * `host-update-operation-copy.test.ts` pins the substitution RULE against the
+ * copy table directly. What that cannot see is whether this surface passes the
+ * flag at all, or passes a constant: `describeUpdateOperation` is handed a
+ * boolean and will honour `false` for a floored host exactly as faithfully as
+ * it honours `true`. So this mounts the real panel and lets the region's own
+ * summary walk find the floor, which is the fact `cliFloorBlocked` claims.
+ */
+describe("HostOverviewOperationCard — a work park under an unmet CLI floor", () => {
+  function floorParkFixture(
+    manifest: HostAvailableManifest,
+  ): OverviewHostFixture {
+    return buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.3.0-rc.2",
+      installation: managedInstallation(
+        installRecord("1.3.0-rc.2", "1.3.0-rc.2"),
+        stagedRecord("1.3.0-rc.3"),
+      ),
+      overrideHandlers: {
+        // The observed shape: NOT busy, zero blocking sessions, and an attempt
+        // parked with a claim. `busy: false` is load-bearing — it is what makes
+        // the count sentence a lie rather than merely unhelpful.
+        "host.status": () =>
+          statusWithBusy(
+            "1.3.0-rc.2",
+            attemptOperation({
+              phase: "waiting-for-work",
+              execution: "active",
+              liveness: "active",
+              targetVersion: "1.3.0-rc.3",
+              busySessionCount: 0,
+            }),
+            false,
+            0,
+          ),
+        "host.update.check": () => ({
+          outcome: "ok" as const,
+          effectiveIncludePreReleases: true,
+          includePreReleasesSource: "explicit-include" as const,
+          manifest,
+        }),
+      },
+    });
+  }
+
+  it("reads the command-line-tools sentence, not the zero-session count", async () => {
+    const fixture = floorParkFixture(floorStagedManifest("1.3.0-rc.3"));
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    // Wait for the REGION to have found the floor before reading the card:
+    // the remedy row is the observable that says the summary walk finished and
+    // `updates.cliFloor` is populated, and until it is the card is legitimately
+    // still showing the count.
+    await screen.findByText(
+      "Traycer couldn't determine how its command-line tools were installed on host-a.",
+    );
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("host-overview-operation-phase").textContent,
+      ).toBe(
+        "Update waits for Traycer's command-line tools to be updated — see installation help",
+      );
+    });
+    // The affordance the sentence points at is genuinely on screen. Without
+    // this the pin would pass for a sentence sending people to a button the
+    // floor gate never rendered.
+    expect(
+      screen.getByRole("button", { name: "Show installation help" }),
+    ).toBeTruthy();
+  });
+
+  it("positive control — the SAME park with the floor met keeps the count sentence", async () => {
+    // Discriminates on the floor rather than on the park: everything but the
+    // manifest is identical, so a `cliFloorBlocked` hard-wired to `true` (or a
+    // substitution that ignored the flag) turns this red.
+    const fixture = floorParkFixture(clearStagedManifest("1.3.0-rc.3"));
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("host-overview-operation-phase").textContent,
+      ).toBe("Update waits for 0 sessions to finish");
+    });
   });
 });

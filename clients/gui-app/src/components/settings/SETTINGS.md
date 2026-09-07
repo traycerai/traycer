@@ -2366,6 +2366,20 @@ aria-live="polite"` carrying the equivalent text for
       `waiting-for-work` ("Update waits for N sessions to finish")
       kinds, AFTER the coarse marker and before `idle`, and like every park
       they hold no lifecycle gate and earn no fast poll.
+      **While the region's CLI-floor lane is active, a `waiting-for-work` park
+      says so instead of naming a count** ("Update waits for Traycer's
+      command-line tools to be updated — see installation help"). Observed on
+      real hardware: an rc-era CLI in the slot, a host sitting `Online · Idle`,
+      and the card reading "Update waits for 0 sessions to finish" while the
+      host's reconciler refused the resume every tick. The floor outranks the
+      count at ANY count, including a positive one - finishing the work resumes
+      nothing while no CLI on that machine can carry the release - and it
+      points at the remedy row's existing `Show installation help` rather than
+      restating it, the same shape as "Update status unavailable — see
+      Diagnostics". The WORK park only: `waiting-to-activate` names a restart
+      into bytes already placed, which no CLI upgrade unblocks. The landing
+      banner passes `false` and keeps the count, because it has no floor lane
+      and so no affordance for the substituted sentence to point at.
       **A TERMINAL attempt that is not `failed` yields the operation slot to
       BOTH of these parks** (D-49): `complete` and `superseded` let the
       records answer first, so "another actor delivered the version and this

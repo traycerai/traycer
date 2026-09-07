@@ -122,9 +122,24 @@ export function HostOverviewOperationCard(props: {
    * `onRestart`.
    */
   readonly onForceUpdate: (() => void) | null;
+  /**
+   * Whether the region's CLI-floor lane is active — passed straight through to
+   * `describeUpdateOperation`, which is the only thing that reads it.
+   *
+   * A prop rather than something derived here for the reason the header of this
+   * file gives: the card decides nothing. "Is this host's CLI below the
+   * projected release's floor" is a question about the update region's summary
+   * walk, and the region already answers it to choose between Update now and
+   * the remedy row.
+   */
+  readonly cliFloorBlocked: boolean;
 }): ReactNode {
   const { view } = props;
-  const copy = describeUpdateOperation({ view, hostName: props.hostName });
+  const copy = describeUpdateOperation({
+    view,
+    hostName: props.hostName,
+    cliFloorBlocked: props.cliFloorBlocked,
+  });
   const percent = operationProgressPercent(view);
   const bytes = operationProgressBytes(view);
   const showProgress = showsProgressBar(view);
