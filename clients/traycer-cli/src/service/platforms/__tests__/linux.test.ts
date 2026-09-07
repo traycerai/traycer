@@ -3,9 +3,26 @@ import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { extractExecStartTokens } from "@traycer-clients/shared/host-lifecycle";
-import { buildSystemdUnit } from "../linux";
+const pidMetadata = vi.hoisted(() => ({
+  metadata: null as { pid: number } | null,
+  gone: false,
+  goneCalls: 0,
+}));
+vi.mock("../../../host/pid-metadata", () => ({
+  readHostPidMetadata: async () => pidMetadata.metadata,
+  publishedHostProcessGone: () => {
+    pidMetadata.goneCalls += 1;
+    return pidMetadata.gone;
+  },
+}));
+
+import {
+  buildSystemdUnit,
+  createLinuxController,
+  setRestartStopGracesForTests,
+} from "../linux";
 import { CLI_ERROR_CODES } from "../../../runner/errors";
 import type { ServiceLabel } from "../../label";
 
@@ -332,5 +349,118 @@ describe("systemd unit — scaffolding and the token guard", () => {
     ).toThrowError(
       expect.objectContaining({ code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED }),
     );
+  });
+});
+
+describe("Q13: stopForRestart signals the unit instead of stopping it", () => {
+  function recordingController(): {
+    controller: ReturnType<typeof createLinuxController>;
+    commands: string[][];
+  } {
+    const commands: string[][] = [];
+    const controller = createLinuxController(async (command, args) => {
+      commands.push([command, ...args]);
+      return { stdout: "", stderr: "", exitCode: 0 };
+    });
+    return { controller, commands };
+  }
+
+  beforeEach(() => {
+    pidMetadata.metadata = null;
+    pidMetadata.gone = false;
+    pidMetadata.goneCalls = 0;
+    // Production graces are the host's own force-exit watchdog plus a 10s
+    // kill window; letting them elapse is what makes the exhausted-ladder
+    // case untestable at real timing.
+    setRestartStopGracesForTests({ sigtermMs: 20, sigkillMs: 20 });
+  });
+
+  afterEach(() => {
+    setRestartStopGracesForTests(null);
+  });
+
+  it("never issues the manager's stop verb, and never asks the unit whether it is down", async () => {
+    // The whole outage in one assertion. `systemctl stop` puts the unit in
+    // `inactive`, and `Restart=` does not apply to a unit stopped that way -
+    // this file relies on that in `cancelScheduledAutoRestart`, which uses a
+    // stop BECAUSE it cancels a scheduled relaunch. So the update's pre-swap
+    // stop disarmed the service manager, and the only thing that re-armed it
+    // was the CLI that had just promised the restart.
+    //
+    // `is-active` is pinned absent for the second half of the same fact: with
+    // the manager armed the unit never settles to `inactive`, so a
+    // confirmation read from unit state would either never complete or answer
+    // about a supervisor the manager started, not the host we signalled.
+    pidMetadata.metadata = { pid: 4242 };
+    pidMetadata.gone = true;
+    const { controller, commands } = recordingController();
+
+    await controller.stopForRestart(labelFor("ai.traycer.host.dev"), {
+      force: false,
+    });
+
+    const flat = commands.map((c) => c.join(" "));
+    expect(flat.some((c) => c.includes("kill --signal=SIGTERM"))).toBe(true);
+    expect(flat.some((c) => /systemctl --user stop\b/.test(c))).toBe(false);
+    expect(flat.some((c) => c.includes("is-active"))).toBe(false);
+  });
+
+  it("escalates to SIGKILL when the signalled instance is not provably gone, and says so", async () => {
+    // The ladder is the SOLE deadline on this path: `systemctl kill` runs no
+    // stop job, so `TimeoutStopSec` does not apply and nothing but this
+    // escalates. Remove the escalation and a host that ignores SIGTERM is
+    // never killed and never confirmed.
+    pidMetadata.metadata = { pid: 4242 };
+    pidMetadata.gone = false;
+    const { controller, commands } = recordingController();
+
+    const stopped = await controller.stopForRestart(
+      labelFor("ai.traycer.host.dev"),
+      { force: false },
+    );
+
+    const flat = commands.map((c) => c.join(" "));
+    expect(flat.some((c) => c.includes("kill --signal=SIGTERM"))).toBe(true);
+    expect(flat.some((c) => c.includes("kill --signal=SIGKILL"))).toBe(true);
+    // Not proven gone, so the relaunch must RECYCLE rather than kickstart: a
+    // kickstart of an already-running job is treated as satisfied and no-ops,
+    // which would leave the host up on the old bytes after a "successful"
+    // restart.
+    expect(stopped.forcedRecycle).toBe(true);
+  });
+
+  it("a host that published no identity is UNPROVABLE, never silently gone", async () => {
+    // The Q14 shape: a pre-stamp `pid.json`, or a platform whose identity
+    // probe returned nothing. There is no instance to prove anything about,
+    // so this must fall to the safe side. A needless recycle costs a restart;
+    // a false "gone" activates over a host that is still running.
+    pidMetadata.metadata = null;
+    const { controller } = recordingController();
+
+    const stopped = await controller.stopForRestart(
+      labelFor("ai.traycer.host.dev"),
+      { force: false },
+    );
+
+    expect(stopped.forcedRecycle).toBe(true);
+    // And it did not consult the identity predicate at all - there was
+    // nothing to consult it about.
+    expect(pidMetadata.goneCalls).toBe(0);
+  });
+
+  it("the user-facing `host stop` still uses the manager's stop verb - this round does not change that path", async () => {
+    // Repointed from a vacuous assertion (cold review B): the absent
+    // `TimeoutStopSec` is not a ceiling the update's ladder sits under, since
+    // `systemctl kill` runs no stop job. It IS a live dependency of the plain
+    // `host stop` path, which keeps `systemctl stop` and therefore keeps
+    // depending on systemd's 90s default. Pinning that the two paths diverged
+    // is the true proposition.
+    const { controller, commands } = recordingController();
+
+    await controller.stop(labelFor("ai.traycer.host.dev"), { force: false });
+
+    const flat = commands.map((c) => c.join(" "));
+    expect(flat.some((c) => /systemctl --user stop\b/.test(c))).toBe(true);
+    expect(flat.some((c) => c.includes("kill --signal="))).toBe(false);
   });
 });
