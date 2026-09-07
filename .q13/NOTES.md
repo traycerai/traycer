@@ -87,19 +87,19 @@ not ship the verb change without it.
 
 ## Red-watches
 
-| #      | Ablation                                      | Reddened                                                    |
-| ------ | --------------------------------------------- | ----------------------------------------------------------- |
-| RW-13a | the clean-exit gate removed                   | the `restart` exit-code row                                 |
-| RW-13b | the gate keyed on `install-swap`              | TWO rows — `restart` drops to 0, `install-swap` jumps to 77 |
-| RW-13c | `RestartSec=1`                                | the unit-arithmetic pin                                     |
-| RW-13d | `TimeoutStartSec=30` added                    | the same pin, other half                                    |
-| RW-13e | `stopForRestart` reverted to `systemctl stop` | three verb pins                                             |
-| RW-13f | the SIGKILL escalation removed                | the escalation pin alone                                    |
-| RW-13g | an unprovable instance treated as gone        | the Q14-shape pin alone                                     |
-| RW-13h | the instance captured AFTER the signal        | the ordering pin alone                                      |
-| RW-13i | the Linux relaunch uses `restart`, not `start` | the convergence pin alone                                  |
-| RW-13j | `IgnoreNew` → `Parallel` in the task XML      | the Windows convergence pin alone                           |
-| RW-13k | the Linux relaunch made to consume `forcedRecycle` | the inertness pin alone                                |
+| #      | Ablation                                           | Reddened                                                    |
+| ------ | -------------------------------------------------- | ----------------------------------------------------------- |
+| RW-13a | the clean-exit gate removed                        | the `restart` exit-code row                                 |
+| RW-13b | the gate keyed on `install-swap`                   | TWO rows — `restart` drops to 0, `install-swap` jumps to 77 |
+| RW-13c | `RestartSec=1`                                     | the unit-arithmetic pin                                     |
+| RW-13d | `TimeoutStartSec=30` added                         | the same pin, other half                                    |
+| RW-13e | `stopForRestart` reverted to `systemctl stop`      | three verb pins                                             |
+| RW-13f | the SIGKILL escalation removed                     | the escalation pin alone                                    |
+| RW-13g | an unprovable instance treated as gone             | the Q14-shape pin alone                                     |
+| RW-13h | the instance captured AFTER the signal             | the ordering pin alone                                      |
+| RW-13i | the Linux relaunch uses `restart`, not `start`     | the convergence pin alone                                   |
+| RW-13j | `IgnoreNew` → `Parallel` in the task XML           | the Windows convergence pin alone                           |
+| RW-13k | the Linux relaunch made to consume `forcedRecycle` | the inertness pin alone                                     |
 
 **RW-13h initially came back GREEN** and that is the finding: the ordering the
 whole confirmation rests on was unpinned, because the mock answered the same
@@ -119,11 +119,11 @@ at `:1472` spawns without re-asking — so a supervisor admitted after a 60s wai
 does not re-check whether a host appeared meanwhile. Convergence therefore
 rests **entirely** on the relaunch verb no-opping against a live job:
 
-| Platform | Relaunch verb | Why one host |
-| --- | --- | --- |
-| Linux | `systemctl --user start` | systemd no-ops a start job on an active unit. **Pinned.** |
-| Windows | `schtasks /Run` | `MultipleInstancesPolicy: IgnoreNew` drops the second run. **Pinned.** |
-| macOS | `kickstart` / `kickstart -k` by `forcedRecycle` | plain kickstart no-ops; `-k` recycles the waiter and launchd replaces it. Both single-instance. **Not yet pinned.** |
+| Platform | Relaunch verb                                   | Why one host                                                                                                        |
+| -------- | ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| Linux    | `systemctl --user start`                        | systemd no-ops a start job on an active unit. **Pinned.**                                                           |
+| Windows  | `schtasks /Run`                                 | `MultipleInstancesPolicy: IgnoreNew` drops the second run. **Pinned.**                                              |
+| macOS    | `kickstart` / `kickstart -k` by `forcedRecycle` | plain kickstart no-ops; `-k` recycles the waiter and launchd replaces it. Both single-instance. **Not yet pinned.** |
 
 dc84fa8b relays that reviewer B found this same conjunct sitting under **Q9's**
 three admit rows, where it was citation only and named as falsifiable by an
