@@ -6852,13 +6852,13 @@ describe("E13: the verify leg says WHY the host never became healthy", () => {
     });
     // The remedy, pinned because the lane proved retrying is futile: the
     // adopted host id persists on disk across installs and restarts, so this
-    // refusal recurs on every attempt until the host re-enrols. A message that
-    // reads as "transient, try again" would loop the operator forever.
+    // refusal recurs on every attempt. A message reading "transient, try
+    // again" would loop the operator forever.
     expect(failure).toMatchObject({
-      message: expect.stringContaining("does NOT clear by itself"),
+      message: expect.stringContaining("retrying cannot change"),
     });
     expect(failure).toMatchObject({
-      message: expect.stringContaining("re-enrolled"),
+      message: expect.stringContaining("updating forward to a newer host"),
     });
     // NOT `verify-timeout`. Nothing timed out - the leg stopped early because
     // the host gave a definite answer - and a record saying otherwise sends
@@ -6904,6 +6904,65 @@ describe("E13: the verify leg says WHY the host never became healthy", () => {
       expect(failure).toMatchObject({ details: { refusal: reason } });
       expect((await requireRecord()).error).toMatchObject({
         code: "host-refuses-rpc",
+      });
+    },
+  );
+
+  it.each([
+    [
+      "a JWKS refusal proves a credential plane answered",
+      "UNAUTHORIZED: no applicable key found in the JSON Web Key Set",
+      "The host's credential plane answered and rejected this client",
+      "The host at this version cannot authenticate",
+    ],
+    [
+      "a handshake-level refusal proves only that the host said no",
+      "FORBIDDEN: connection rejected",
+      "The host at this version cannot authenticate",
+      "credential plane answered and rejected",
+    ],
+  ])(
+    "Q21 fixup: the remedy is era-neutral - %s",
+    async (_label, refusal, expected, forbidden) => {
+      // The first version of this message said "the host has to be
+      // re-enrolled", which is FALSE for the 1.1.9-1.1.12 era: those hosts have
+      // no coordination subsystem at all (`traycer-host/src/coordination` is
+      // empty until `host-v1.2.0-rc.1`), so it named a plane that does not
+      // exist on the operator's machine. And for hosts that DO have one, the
+      // Q18 host fix stops the refusal occurring.
+      //
+      // So the sentence may only claim a credential plane when the refusal
+      // proves one answered - a key set was consulted - and must otherwise say
+      // the era-neutral thing that is true everywhere.
+      // Falsification: collapse `refusedMessage` to one arm and whichever row
+      // loses its `expected` reddens; drop the `forbidden` check and a
+      // regression to the old over-claim would pass silently.
+      await seedInstalled("1.0.0");
+      world.runningVersion = "1.0.0";
+      applyThenLeaveWorld(() => {
+        world.runningVersion = null;
+        world.runningDiagnosis = "host-refuses-authenticated-rpc";
+        world.runningRefusal = refusal;
+      });
+
+      const failure = await runUpdate({}).then(
+        () => null,
+        (error: unknown) => error,
+      );
+
+      expect(failure).toMatchObject({
+        message: expect.stringContaining(expected),
+      });
+      expect(failure).not.toMatchObject({
+        message: expect.stringContaining(forbidden),
+      });
+      // Never era-specific, on either row: nothing claims re-enrolment.
+      expect(failure).not.toMatchObject({
+        message: expect.stringContaining("re-enrol"),
+      });
+      // ...and both rows still say the update itself landed.
+      expect(failure).toMatchObject({
+        message: expect.stringContaining("and the host is running it"),
       });
     },
   );

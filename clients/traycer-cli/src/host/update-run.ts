@@ -2899,6 +2899,52 @@ async function readClaimRefresh(environment: Environment): Promise<{
 }
 
 /**
+ * Whether a refusal proves the host's CREDENTIAL PLANE evaluated us (Q21 fixup).
+ *
+ * A refusal naming a key set says a token was checked against one, which only a
+ * coordination subsystem does. Anything else - a refusal at the handshake, a
+ * bare `FORBIDDEN` - proves the host said no, not WHO said it, and the
+ * difference is the whole reason this predicate exists: hosts in the
+ * 1.1.9-1.1.12 era have no coordination subsystem at all
+ * (`traycer-host/src/coordination` is empty until `host-v1.2.0-rc.1`), so
+ * telling their operator to re-enrol names a plane that does not exist on their
+ * machine.
+ *
+ * Matching host TEXT is not something this file does elsewhere and it is worth
+ * saying why it is acceptable here: the string steers one sentence of prose and
+ * nothing else. No decision, no record field, no token and no exit code reads
+ * it. A miss costs the weaker of two true messages.
+ */
+function refusalNamesCredentialPlane(refusal: string): boolean {
+  const lowered = refusal.toLowerCase();
+  return lowered.includes("json web key set") || lowered.includes("jwks");
+}
+
+/**
+ * What to tell the operator when a host refused this client's authenticated
+ * call (Q19, remedy corrected per Q21's era finding).
+ *
+ * Era-NEUTRAL by construction. The first version of this said "the host has to
+ * be re-enrolled", which is false twice over: pre-1.2.0 hosts have no
+ * enrolment to redo, and for hosts that do, the Q18 host fix stops the refusal
+ * happening at all. What is true for every era is the part that is always
+ * measurable from here - this host, at this version, will not authenticate this
+ * CLI - so that is what the sentence says, and the recovery it names (update
+ * forward) works in both residual cases.
+ *
+ * What does NOT vary: that the update itself landed, that the bytes are
+ * committed, and that retrying is futile. The lane pinned the futility to a
+ * stale `host-id` file that persists across installs - one on their box
+ * survived five in four hours - so an operator told to try again loops forever.
+ */
+function refusedMessage(target: string, refusal: string): string {
+  const plane = refusalNamesCredentialPlane(refusal)
+    ? `The host's credential plane answered and rejected this client, so retrying cannot change it.`
+    : `The host at this version cannot authenticate this CLI's calls, and retrying cannot change that.`;
+  return `host update: applied ${target} and the host is running it, but it REFUSED this client's authenticated call, so the update could not be verified: ${refusal}. The bytes ARE committed at ${target}. ${plane} Run 'traycer host doctor' to inspect the credential plane; updating forward to a newer host is the recovery.`;
+}
+
+/**
  * `verifying`, then the evidence loop, then the executor's terminal write.
  *
  * The loop is the success contract: exit 0 means installed AND running are
@@ -3003,7 +3049,7 @@ async function verifyUnderClaim(
       // observational; `host ensure` is NOT, and would be the wrong pointer -
       // the "registered" it converges is the OS service, not enrollment.
       const message = refused
-        ? `host update: applied ${target}, and the host is up at its recorded endpoint but REFUSED this client's authenticated call, so the update could not be verified: ${observation.runningRefusal ?? diagnosis}. The bytes ARE committed at ${target}. This is an admission failure, not a slow start, and it does NOT clear by itself: the host has to be re-enrolled before any update can be verified, and every retry until then fails here in the same way. Run 'traycer host doctor' to see the host's enrollment state.`
+        ? refusedMessage(target, observation.runningRefusal ?? diagnosis)
         : postSwapError === null
           ? `host update: applied ${target} but the host did not become healthy at that version: ${diagnosis}`
           : `host update: applied ${target} but the service start failed, so the host never came up: ${postSwapError}. The bytes ARE committed at ${target}; run 'traycer host service install' and then 'traycer host service start'. (probe: ${diagnosis})`;
