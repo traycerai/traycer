@@ -83,6 +83,10 @@ function findButton(toolbar: HTMLElement, name: string): HTMLElement {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  // `restoreAllMocks` does not undo `stubGlobal`, and the layout getters above
+  // are spies precisely so a test that fails early still gives jsdom its own
+  // accessors back rather than leaving the rest of the file measuring wrong.
+  vi.unstubAllGlobals();
 });
 
 describe("ArtifactToolbar actions", () => {
@@ -145,7 +149,7 @@ describe("ArtifactToolbar actions", () => {
     editor.destroy();
   });
 
-  it("hides formatting for a non-editable editor but still shows both actions", () => {
+  it("hides formatting for a non-editable editor but still shows both actions", async () => {
     const editor = mountToolbarEditor();
     editor.setEditable(false);
     editor.commands.setContent("hello world");
@@ -163,6 +167,9 @@ describe("ArtifactToolbar actions", () => {
         />
       </EditorContext.Provider>,
     );
+    // The bubble menu attaches its children during the plugin update cycle, so
+    // query only after it has been through one.
+    await revealBubbleMenu();
 
     const toolbar = screen.getByRole("toolbar", { hidden: true });
     const names = toolbarButtons(toolbar).map((button) => button.name);
@@ -214,21 +221,17 @@ describe("ArtifactToolbar actions", () => {
     // element's offsetWidth/clientWidth by default. Stub both, keyed off a
     // marker on the scroll container and the toolbar's own `role`, so the
     // hook sees a full bar wider than the available space and folds it.
-    Object.defineProperty(HTMLElement.prototype, "offsetWidth", {
-      configurable: true,
-      get(this: HTMLElement) {
+    vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockImplementation(
+      function (this: HTMLElement) {
         if (this.getAttribute("role") === "toolbar") return 400;
-        if (this.dataset.testScroll === "true") return 60;
-        return 0;
+        return this.dataset.testScroll === "true" ? 60 : 0;
       },
-    });
-    Object.defineProperty(HTMLElement.prototype, "clientWidth", {
-      configurable: true,
-      get(this: HTMLElement) {
-        if (this.dataset.testScroll === "true") return 60;
-        return 0;
+    );
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(
+      function (this: HTMLElement) {
+        return this.dataset.testScroll === "true" ? 60 : 0;
       },
-    });
+    );
 
     class StubResizeObserver {
       private readonly cb: ResizeObserverCallback;
@@ -236,7 +239,11 @@ describe("ArtifactToolbar actions", () => {
         this.cb = cb;
       }
       observe(target: Element): void {
-        this.cb([{ target } as unknown as ResizeObserverEntry], this);
+        // `useCompactToolbar` ignores the entries and re-reads the elements,
+        // so an empty batch is a faithful notification - and avoids inventing
+        // a `ResizeObserverEntry` the repo's type rules would not allow.
+        void target;
+        this.cb([], this);
       }
       unobserve(): void {}
       disconnect(): void {}
@@ -276,9 +283,23 @@ describe("ArtifactToolbar actions", () => {
     expect(names).not.toContain("Bold");
     expect(names).toContain("Formatting");
 
+    // The trigger is a `ToolbarActionButton` under `asChild`, so Radix merges
+    // its handlers and ref into that component and the component spreads them
+    // onto the real <button>. Opening the menu here is what proves the
+    // composition survives the tooltip wrapper: a trigger that never received
+    // Radix's props would sit inert and this would find no items.
+    fireEvent.pointerDown(
+      findButton(toolbar, "Formatting"),
+      new MouseEvent("pointerdown", { bubbles: true, button: 0 }),
+    );
+    const menu = await screen.findByRole("menu", { hidden: true });
+    const items = within(menu)
+      .getAllByRole("menuitem", { hidden: true })
+      .map((item) => item.textContent);
+    expect(items).toContain("Bold");
+    expect(items).toContain("Code block");
+
     editor.destroy();
     scrollTarget.remove();
-    Reflect.deleteProperty(HTMLElement.prototype, "offsetWidth");
-    Reflect.deleteProperty(HTMLElement.prototype, "clientWidth");
   });
 });

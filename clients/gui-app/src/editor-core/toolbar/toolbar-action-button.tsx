@@ -1,9 +1,9 @@
-import type { ComponentPropsWithoutRef, ReactNode, Ref } from "react";
+import type { ComponentProps, ReactNode } from "react";
 
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 
 export interface ToolbarActionButtonProps extends Omit<
-  ComponentPropsWithoutRef<"button">,
+  ComponentProps<"button">,
   "children" | "title"
 > {
   readonly icon: ReactNode;
@@ -14,7 +14,6 @@ export interface ToolbarActionButtonProps extends Omit<
    * `null` shows no tooltip; the visible label already says everything.
    */
   readonly tooltip: string | null;
-  readonly ref?: Ref<HTMLButtonElement>;
 }
 
 /**
@@ -27,6 +26,13 @@ export interface ToolbarActionButtonProps extends Omit<
  * than the text get their words on screen. No pressed state: these are
  * commands, not toggles. Menu ARIA (`aria-haspopup`, `aria-expanded`) is the
  * caller's to add when the action opens one.
+ *
+ * `ComponentProps` rather than `ComponentPropsWithoutRef`: React 19 passes a
+ * ref as an ordinary prop, and everything here - handlers, `ref`, the
+ * `data-state` a menu trigger sets - reaches the real `<button>` through the
+ * rest spread. That is what lets a Radix `asChild` trigger compose with this
+ * component; the tooltip wrapper sits outside the button, not between the
+ * trigger and it.
  */
 export function ToolbarActionButton(props: ToolbarActionButtonProps) {
   const { icon, label, tooltip, type, className, ...rest } = props;

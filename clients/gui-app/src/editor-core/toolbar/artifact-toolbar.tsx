@@ -60,7 +60,9 @@ function linkToolbarLabel(): string {
 // The visible word stays "Comment"; only the hover text carries the chord.
 function commentToolbarTooltip(): string | null {
   if (!shortcutHintsVisible()) return null;
-  return "Comment (⌘⌥M)";
+  // Same platform branch as the link label: the chord is `Mod-Alt-m`, so it is
+  // Ctrl+Alt+M everywhere that is not a Mac.
+  return isMac() ? "Comment (⌘⌥M)" : "Comment (Ctrl+Alt+M)";
 }
 
 export interface ArtifactCommentAction {
