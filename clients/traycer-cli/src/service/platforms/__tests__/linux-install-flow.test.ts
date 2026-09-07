@@ -11,7 +11,11 @@ import {
   it,
   vi,
 } from "vitest";
-import { createLinuxController, type ProcessRunner } from "../linux";
+import {
+  createLinuxController,
+  setRestartStopGracesForTests,
+  type ProcessRunner,
+} from "../linux";
 import { serviceManifestPath, type ServiceLabel } from "../../label";
 import { ProcessRunError, type RunResult } from "../../process-runner";
 import { CLI_ERROR_CODES } from "../../../runner/errors";
@@ -29,6 +33,51 @@ const MOCKS = vi.hoisted(() => ({
 }));
 vi.mock("../desktop-agent-shutdown", () => ({
   forceStopHostProcess: MOCKS.forceStopHostProcess,
+}));
+
+// CodeRabbit #1773 round 2 (r3951899621). The SAME isolation argument the unit
+// directory gets below, for the other file this suite reads through the real
+// home: `stopForRestart` reads the host's `pid.json` for environment "dev" on
+// every path, force included, BEFORE the mocked engine above is reached.
+// Unmocked, that is the developer's own `~/.traycer/host/dev/pid.json`, and
+// the `stopForRestart` rows had three different verdicts depending on what was
+// sitting in it:
+//
+//   * absent (this box, and CI) - the ladder falls straight through to the
+//     force finisher and the rows pass, quickly. Which is why nobody saw it.
+//   * present, naming a pid that is dead or recycled - PROVEN gone, so
+//     `stopForRestart` returns `{ forcedRecycle: false }` and never reaches
+//     `forceStopHostProcess` at all: every row that asserts a terminal outcome
+//     FAILS. A stale record from a crashed host is the ordinary case.
+//   * present and live - both graces run (32s + 10s against vitest's 5s
+//     default `testTimeout`), so the rows fail by timeout.
+//
+// A mock rather than a redirected HOME because the module boundary is what is
+// under test: these rows are about which engine `stopForRestart` reaches, not
+// about how a path is resolved. Whole-module factory, so it must supply every
+// symbol `linux.ts` imports from here - `readHostPidMetadataEvidence`
+// included, which the restart ladder now reads.
+const PID = vi.hoisted(() => ({
+  evidence: { kind: "absent" } as
+    | { readonly kind: "absent" }
+    | { readonly kind: "unreadable"; readonly cause: string }
+    | { readonly kind: "read"; readonly metadata: { readonly pid: number } },
+  // Whether the identity captured before the signal is PROVABLY gone.
+  gone: false,
+  // How often the identity predicate was consulted. Only a record that READS
+  // has an identity to ask about, so this separates "fell through with nothing
+  // to check" from "checked and could not prove" - two states whose
+  // `forcedRecycle` answer is identical.
+  goneCalls: 0,
+}));
+vi.mock("../../../host/pid-metadata", () => ({
+  readHostPidMetadata: async () =>
+    PID.evidence.kind === "read" ? PID.evidence.metadata : null,
+  readHostPidMetadataEvidence: async () => PID.evidence,
+  publishedHostProcessGone: () => {
+    PID.goneCalls += 1;
+    return PID.gone;
+  },
 }));
 
 /**
@@ -262,6 +311,13 @@ describe("linux service install flow", () => {
 // the identical wait shape.
 describe("linux service stop --force", () => {
   beforeEach(() => {
+    // The state these rows were silently assuming. Declared now, so the suite
+    // says what it depends on instead of inheriting it from whatever is in the
+    // developer's home.
+    PID.evidence = { kind: "absent" };
+    PID.gone = false;
+    PID.goneCalls = 0;
+    setRestartStopGracesForTests(null);
     MOCKS.forceStopHostProcess.mockReset();
     // Default outcome: no-metadata, which is SUCCESS on this finisher (the
     // unit teardown already ran with positive confirmation, and an absent
@@ -846,5 +902,67 @@ describe("linux service stop --force", () => {
       expect(stopped).toEqual({ forcedRecycle: true });
       expect(MOCKS.forceStopHostProcess).not.toHaveBeenCalled();
     });
+
+    it.each([
+      ["absent", { kind: "absent" } as const, false, true, false],
+      [
+        "unreadable",
+        { kind: "unreadable", cause: "not valid JSON" } as const,
+        false,
+        true,
+        false,
+      ],
+      [
+        "live",
+        { kind: "read", metadata: { pid: 4242 } } as const,
+        false,
+        true,
+        true,
+      ],
+      [
+        "proven gone",
+        { kind: "read", metadata: { pid: 4242 } } as const,
+        true,
+        false,
+        true,
+      ],
+    ])(
+      "the published record these rows read is the MOCK's, not this machine's: %s",
+      async (_name, evidence, gone, reachesFinisher, consultsIdentity) => {
+        // The row that names the defect is the last one. A `pid.json` naming a
+        // dead or recycled pid - what a crashed host leaves behind, and what
+        // sits in plenty of real home directories - is PROVEN gone, so
+        // `stopForRestart` returns `forcedRecycle: false` and never reaches
+        // the finisher. Every sibling row above asserts a terminal outcome
+        // FROM that finisher, so on such a machine they all failed, for a
+        // reason no diff could explain.
+        //
+        // The observable is deliberately "which engine was reached" rather
+        // than a duration: it is what the sibling rows depend on, and it
+        // cannot be satisfied by accident from either direction.
+        PID.evidence = evidence;
+        PID.gone = gone;
+        // The live row would otherwise poll the real ladder - 32s + 10s
+        // against a 5s default `testTimeout`, which is the OTHER way this
+        // suite failed off this box.
+        setRestartStopGracesForTests({ sigtermMs: 5, sigkillMs: 5 });
+        MOCKS.forceStopHostProcess.mockResolvedValue({ kind: "no-host" });
+
+        const stopped = await createLinuxController(
+          settledRunner(),
+        ).stopForRestart(label, { force: true });
+
+        expect(stopped).toEqual({ forcedRecycle: reachesFinisher });
+        expect(MOCKS.forceStopHostProcess.mock.calls.length > 0).toBe(
+          reachesFinisher,
+        );
+        // The second observable, and the one that separates the two rows whose
+        // `forcedRecycle` answer is the same as the absent state's. Only a
+        // record that READS has an identity to ask about; without the mock
+        // this counter stays 0 for every row, because the real reader answers
+        // `absent` on any machine and the predicate is never reached.
+        expect(PID.goneCalls > 0).toBe(consultsIdentity);
+      },
+    );
   });
 });
