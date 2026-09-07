@@ -3980,6 +3980,40 @@ interface MarkerMirror {
  * for the outcomes. Nothing is ever written blind: every replace, clear and
  * create is conditional on what was read.
  */
+/**
+ * How many times the entry takeover may lose a race before it gives up - and
+ * the number the detective latch's soundness rests on, which is why it has a
+ * name (cold review C, D7).
+ *
+ * Exhausting this budget ARMS the fence. That is only sound if a WELL-BEHAVED
+ * peer cannot exhaust it, and the first draft of that argument said "under the
+ * lock the only other writer is a lock-blind CLI", which is false: a
+ * lock-aware 1.3.0+ contender publishes its marker BEFORE it waits for the
+ * lock (`claimUpdateProgressMarkerBeforeLock`), so a perfectly well-behaved
+ * peer does write this path while we hold the lock.
+ *
+ * The conclusion survives because that peer can cost us at most ONE loss:
+ *
+ *  - the pre-lock claim DEFERS rather than overwrites when the marker it
+ *    finds has a live writer (`update-progress-marker.ts`), so once any live
+ *    record is on disk - ours, or the first peer's - every further peer stops
+ *    writing entirely and cannot produce a second loss;
+ *  - so the one loss it can produce is the `exists` on an EMPTY path, after
+ *    which we read its record and take it over on the next iteration.
+ *
+ * Three is therefore a real margin over one, not a round number. Lowering it
+ * to one would arm the fence on a single well-behaved contender - a spurious
+ * abort on healthy traffic - so this budget is load-bearing and a "why retry
+ * three times" simplification is a correctness change.
+ *
+ * NAMED RESIDUAL: three DISTINCT peers racing to replace a marker whose
+ * writer is dead can each cost a loss, since the deferral above only protects
+ * a LIVE record. That exhausts the budget with nobody misbehaving. It needs a
+ * dead writer plus a three-way race, and it costs a park rather than a
+ * corrupted install, so it is accepted rather than closed.
+ */
+const MARKER_TAKEOVER_ATTEMPTS = 3;
+
 function createMarkerMirror(
   environment: Environment,
   logger: ILogger,
@@ -4045,7 +4079,7 @@ function createMarkerMirror(
     // Bounded: each iteration either settles or observed a concurrent write.
     // Only `changed` is re-read; a `failed` write is never retried - the
     // update must not fail, or spin, on its progress signal.
-    for (let attempt = 0; attempt < 3; attempt += 1) {
+    for (let attempt = 0; attempt < MARKER_TAKEOVER_ATTEMPTS; attempt += 1) {
       const onDisk = await readUpdateProgressMarker(environment);
       const fresh = progressRecord({
         state: "updating",
@@ -4124,8 +4158,12 @@ function createMarkerMirror(
     // here by is `failed`, since both `failed` exits return above.
     //
     // Under the lock the only other writer of `update-progress.json` is
-    // another CLI - the host is a reader - so this is not "we could not
-    // tell", it is a concurrent lock-blind updater caught in the act.
+    // another CLI - the host is a reader - and a well-behaved one costs at
+    // most ONE of the three attempts, because the pre-lock claim defers
+    // instead of overwriting a live record. Losing the whole budget is
+    // therefore not "we could not tell": it is more contention than a
+    // lock-respecting peer can generate. See `MARKER_TAKEOVER_ATTEMPTS` for
+    // the argument in full, including the residual it does not cover.
     //
     // The log line below was already saying exactly that and throwing it
     // away. Arming the latch here is what stops the detector from being

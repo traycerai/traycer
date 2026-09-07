@@ -547,8 +547,11 @@ const POST_TOMBSTONE_PHASES: ReadonlySet<HostUpdateAttemptPhase> = new Set([
  *  - a read finds a marker that is not ours AFTER ours landed;
  *  - the entry takeover EXHAUSTED its retries, meaning three consecutive
  *    lock-held writes lost a race to someone else's. Under the lock the only
- *    other writer of this file is another CLI, so that is a concurrent
- *    updater caught in the act.
+ *    other writer of this file is another CLI, and a lock-RESPECTING one can
+ *    cost at most one of those three (its pre-lock claim defers rather than
+ *    overwrite a live record), so losing all three is more contention than a
+ *    well-behaved peer can produce. The budget is load-bearing, and the
+ *    executor's `MARKER_TAKEOVER_ATTEMPTS` carries the argument.
  *
  * It never arms on a write that failed on I/O: that is evidence of our own
  * write not landing and of nothing else, and the legacy marker is best-effort

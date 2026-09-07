@@ -3325,6 +3325,42 @@ describe("ported: update-progress marker (T16)", () => {
     );
   });
 
+  it("...and the OTHER exhaustion route arms it too: a create beaten by `exists` on every attempt", async () => {
+    // The `changed` row above never reaches the create branch - it seeds a
+    // non-null marker, so every iteration takes the CAS path - and the
+    // default mock only answers `exists` when the marker is already
+    // non-null, by which point the read has settled it. So `exists` was
+    // armed in the code and pinned by NOTHING: arm only on `changed` and the
+    // suite stayed fully green (cold review C, ablation F).
+    //
+    // The route is real: the marker keeps disappearing between our read and
+    // our create, which is a peer racing us for an empty path.
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    // Left null throughout: the read finds nothing, so the loop takes the
+    // create branch every time...
+    mocks.disk.current = null;
+    mocks.readUpdateProgressMarker.mockResolvedValue(null);
+    // ...and the create loses every time, without ever publishing.
+    mocks.createUpdateProgressMarkerIfAbsent.mockResolvedValue("exists");
+
+    await expect(runUpdate({})).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_UPDATE_CONCURRENT_LEGACY_UPDATER,
+    });
+
+    // THE BUDGET IS LOAD-BEARING, and this literal pins it deliberately.
+    //
+    // Do not rewrite it as `MARKER_TAKEOVER_ATTEMPTS`: reading the constant
+    // would make this assertion follow any change to it, and the number is
+    // exactly what the latch's soundness rests on. A lock-RESPECTING peer
+    // costs at most one attempt (its pre-lock claim defers rather than
+    // overwrite a live record), so three is a margin over one. Cut it to one
+    // as a "why retry three times" simplification and the fence starts
+    // aborting on healthy contention - which must redden here, with this
+    // comment as the reason.
+    expect(mocks.createUpdateProgressMarkerIfAbsent).toHaveBeenCalledTimes(3);
+  });
+
   it("...and the I/O-failed twin of that exit leaves the detector DISARMED, however foreign the marker looks", async () => {
     // The other null-`own` exit, held apart from the one above. Same visible
     // state at the call site - no marker of ours, a stranger's marker on disk
