@@ -66,8 +66,7 @@ describe("host-agent capability contracts", () => {
           displayName: "Studio",
           platform: "darwin",
           appVersion: "1.2.3",
-          relayAttached: true,
-          busy: false,
+          connectivity: "connectable",
           // A server that volunteers key material must not have it survive
           // into the agent-facing value; the closed schema strips it.
           publicKey: "MUST-NOT-SURVIVE",
@@ -76,6 +75,36 @@ describe("host-agent capability contracts", () => {
     });
     expect(parsed.hosts[0]).not.toHaveProperty("publicKey");
     expect(parsed.hosts[0]?.platform).toBe("darwin");
+  });
+
+  it("carries the cloud's liveness word verbatim, including the legacy tolerance, and has no busy field to fabricate", () => {
+    // `connectivity` is typed by the same schema the GUI status mirror uses,
+    // so every value authn can emit — `local-only` included, which older
+    // servers still send — survives the projection rather than failing the
+    // agent's whole directory read.
+    for (const connectivity of [
+      "connectable",
+      "offline",
+      "unknown",
+      "local-only",
+    ] as const) {
+      const parsed = hostDirectoryListV10.responseSchema.parse({
+        hosts: [
+          {
+            hostId: "host-b",
+            displayName: null,
+            platform: null,
+            appVersion: null,
+            connectivity,
+            // The cloud list carries no drain state; a server that
+            // volunteered one must not reach the agent as a fact.
+            busy: false,
+          },
+        ],
+      });
+      expect(parsed.hosts[0]?.connectivity).toBe(connectivity);
+      expect(parsed.hosts[0]).not.toHaveProperty("busy");
+    }
   });
 
   it("parses a one-off shell result", () => {

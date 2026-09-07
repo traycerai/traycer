@@ -18,6 +18,7 @@
  */
 import { defineRpcContract } from "@traycer/protocol/framework/index";
 import { z } from "zod";
+import { hostConnectivitySchema } from "./host-status";
 
 export const hostResolveRepoPathsRequestSchema = z.object({
   epicId: z.string().min(1),
@@ -88,14 +89,22 @@ export const hostOneOffShellRunV10 = defineRpcContract({
  * target host id, and until this method existed an agent had no supported
  * way to obtain one for any machine but its own.
  *
- * **`relayAttached` is a FACT, not a verdict.** It reports what the cloud
- * last observed, and it is deliberately not named `reachable`: nothing in
- * the dial path gates on it. The router resolves a target and *attempts the
- * dial*, letting a genuine failure surface as `HOST_UNREACHABLE`, precisely
- * so a stale directory reading cannot refuse a machine that would in fact
- * answer. Treat this as a hint for choosing among hosts, never as a
- * precondition to check before calling — a second dialability predicate
- * living here would be a second reading of a rule the dialer already owns.
+ * **`connectivity` is a FACT, not a verdict.** It is the cloud's own liveness
+ * word for the host — the single value `GET /api/v3/hosts` reports, typed here
+ * by the same {@link hostConnectivitySchema} the GUI status mirror uses — and
+ * it is deliberately not named `reachable`: nothing in the dial path gates on
+ * it. The router resolves a target and *attempts the dial* whatever this says,
+ * letting a genuine failure surface as `HOST_UNREACHABLE`, precisely so a stale
+ * directory reading cannot refuse a machine that would in fact answer. Treat it
+ * as a hint for choosing among hosts, never as a precondition to check before
+ * calling — a second dialability predicate living here would be a second
+ * reading of a rule the dialer already owns. `unknown` in particular is *not*
+ * offline; it means the cloud could not read its liveness store.
+ *
+ * There is deliberately **no `busy`**. The cloud host list carries no
+ * drain state at all any more (it described a "right now" a minutes-scale
+ * lease cannot carry), and projecting a fabricated `false` here would tell an
+ * agent a machine is idle when nothing in the system knows that.
  *
  * `publicKey` is **not** projected: it is the dialer's Noise material, not
  * something an agent has any use for.
@@ -111,8 +120,7 @@ export const hostDirectoryEntrySchema = z.object({
   displayName: z.string().nullable(),
   platform: z.string().nullable(),
   appVersion: z.string().nullable(),
-  relayAttached: z.boolean(),
-  busy: z.boolean(),
+  connectivity: hostConnectivitySchema,
 });
 export type HostDirectoryEntrySummary = z.infer<
   typeof hostDirectoryEntrySchema
