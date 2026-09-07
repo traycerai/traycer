@@ -191,6 +191,30 @@ export const DOCTOR_ISSUE_CODES = {
   // verdict for every code in this group, silence included). It is a caption
   // on the report's coverage, not a fault.
   HOST_IDENTITY_HOME_UNVERIFIED: "HOST_IDENTITY_HOME_UNVERIFIED",
+  // The lock `traycer host update` takes beside its progress marker for each
+  // conditional write (`<host home>/update-progress.json.lock`) is held past
+  // the milliseconds such a write takes, by a holder that is still running
+  // or one whose identity cannot be verified and so is never broken. Every
+  // later update then answers `failed` on its marker step after a bounded
+  // wait, with nothing on disk that says why but the lock file itself.
+  //
+  // Warning, not error: the host is not known to be broken, and a stale
+  // lock left by a holder that has EXITED is not reported at all - the next
+  // acquisition breaks it on positive evidence, so it is not a fault.
+  HOST_UPDATE_MARKER_LOCK_HELD: "HOST_UPDATE_MARKER_LOCK_HELD",
+  // The marker lock IS stale - its holder has exited or its pid was recycled,
+  // or it is an empty file past the grace window - but the next acquisition
+  // cannot break it: the break-arbitration file beside it (`<lock>.break`)
+  // is held by a breaker that is alive or cannot be verified, or is dated in
+  // the future. Every marker operation then exhausts its bounded wait for as
+  // long as that file stays. Distinct from HELD because the remedy is the
+  // OTHER file.
+  HOST_UPDATE_MARKER_LOCK_UNBREAKABLE: "HOST_UPDATE_MARKER_LOCK_UNBREAKABLE",
+  // The marker lock file exists and cannot be read (a permission or I/O
+  // error, not a missing file). Its own code because the two states have
+  // different remedies: a held lock has a holder to stop; an unreadable one
+  // has a file to inspect.
+  HOST_UPDATE_MARKER_LOCK_UNREADABLE: "HOST_UPDATE_MARKER_LOCK_UNREADABLE",
 } as const;
 
 export type DoctorIssueCode =

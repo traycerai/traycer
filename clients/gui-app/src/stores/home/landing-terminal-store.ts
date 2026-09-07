@@ -1,6 +1,10 @@
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import type { PlainTerminalProjection } from "@traycer/protocol/host/terminal/plain-schemas";
+import {
+  providerIdSchema,
+  type ProviderId,
+} from "@traycer/protocol/host/provider-schemas";
 import { basePersistOptions, landingTerminalsKey } from "@/lib/persist";
 import { selectPlainTerminalViewModel } from "@/lib/terminals/plain-terminal-authority";
 
@@ -9,6 +13,14 @@ export const MIN_LANDING_TERMINAL_PANEL_WIDTH_FRACTION = 0.22;
 export const MAX_LANDING_TERMINAL_PANEL_WIDTH_FRACTION = 0.72;
 
 export type LandingTerminalTitleSource = "default" | "manual";
+
+/**
+ * The layout key for a start page whose draft has no id yet. Every writer of
+ * a per-page layout (the panel, the gesture provider, the draft surface, a
+ * picker-started sign-in) must key the same way or the panel a gesture opened
+ * is not the panel the user sees.
+ */
+export const UNBOUND_LANDING_PAGE_ID = "unbound-landing-page";
 
 export const LANDING_TERMINAL_SOURCE_STORE_VERSION = 1;
 
@@ -29,6 +41,25 @@ export interface LandingTerminalTabRef {
   readonly pendingCreate?: boolean;
   /** Schema version attached to legacy import evidence. */
   readonly sourceStoreVersion?: number;
+  /**
+   * `"provider-login"` means the HOST created this session, for a provider
+   * sign-in (`providers.startTerminalLogin` with an independent scope). Such a
+   * tab never creates: the session carries the provider's spawn env, and a
+   * `terminal.plain.create` or legacy `terminal.create` under its id would
+   * spawn a bare shell that looks like the sign-in terminal and cannot sign
+   * anyone in. It is also import-exempt - a manager-owned session is not
+   * legacy evidence for `terminal.plain.importLegacy` - and it survives its
+   * session's exit so the user can restart the sign-in from where it ended.
+   * Absent for every terminal this panel created itself.
+   */
+  readonly origin?: "provider-login";
+  /** The provider the sign-in was for; only meaningful with `origin`. */
+  readonly originProviderId?: ProviderId;
+}
+
+/** Whether this tab shows a host-created provider sign-in session. */
+export function isProviderLoginLandingTab(tab: LandingTerminalTabRef): boolean {
+  return tab.origin === "provider-login";
 }
 
 /**
@@ -110,7 +141,51 @@ export interface LandingTerminalStoreState {
    */
   readonly fallbackLayout: LandingTerminalLayout | null;
   readonly pendingKills: ReadonlyArray<LandingTerminalPendingKill>;
+  /**
+   * The tab a programmatic panel open was made to SHOW, or `null`. Not
+   * persisted: it describes one open transition in this window.
+   *
+   * The panel reads a closed-to-open transition as the user's opening gesture
+   * and settles it by re-targeting the launch cwd - reuse a terminal already
+   * running there, else spawn one and focus it. An open made to reveal a tab
+   * that already exists (a host-created sign-in terminal, whose display-only
+   * `"~"` cwd matches no launch cwd) is not that gesture: settling it would
+   * spawn a bare shell and put it in front of the tab the open was for. The
+   * panel consumes this on its next open transition to tell the two apart.
+   */
+  readonly panelReveal: string | null;
   readonly setPanelOpen: (landingPageId: string, open: boolean) => void;
+  /**
+   * Opens the panel to SHOW `instanceId` on each of `landingPageIds`, and
+   * with `everyPage` on EVERY start page as well: each page that has recorded
+   * a layout of its own, and through the fallback every page that has not.
+   * Records `panelReveal` so the panel does not settle the open as a gesture.
+   *
+   * The one caller is the sign-in open. `everyPage` is for a start page
+   * discarded while `providers.startTerminalLogin` was in flight with no
+   * other pane mounted, so no id names a surface the user can see this on.
+   * Whichever start page mounts NEXT then shows the panel, which is where the
+   * tab (tabs are shared across pages) already is. Both halves of that form
+   * are needed: `landingTerminalLayoutFor` gives a page's own layout
+   * precedence over the fallback, so a page that once closed its panel would
+   * ignore a fallback-only write and hide the terminal behind the very layout
+   * it recorded.
+   *
+   * Bounded by the same rule that retires layouts generally:
+   * `collapseLayoutsForEmptyTerminalSet` closes every one of them once the
+   * last tab is gone, so this cannot outlive the terminal it was written for.
+   */
+  readonly revealPanel: (reveal: {
+    readonly landingPageIds: ReadonlyArray<string>;
+    readonly everyPage: boolean;
+    readonly instanceId: string;
+  }) => void;
+  /**
+   * Retires `panelReveal`. The panel calls it on every open or collapse
+   * transition and on a page switch, so a reveal that never saw its
+   * transition (the panel was already open) cannot suppress a later gesture.
+   */
+  readonly clearPanelReveal: () => void;
   readonly setPanelWidthFraction: (
     landingPageId: string,
     fraction: number,
@@ -224,7 +299,23 @@ export function parseLandingTerminalTabRef(
     ...(isNonNegativeInteger(value.sourceStoreVersion)
       ? { sourceStoreVersion: value.sourceStoreVersion }
       : {}),
+    ...parseProviderLoginOrigin(value),
   };
+}
+
+// The origin marker is what keeps a sign-in tab from creating a bare shell
+// under the host's session id, so a persisted one is read back strictly: a
+// marker without a recognizable provider still marks the tab (the tile then
+// shows the ended state without a restart button, exactly as the epic tile
+// does for a ref written before the provider was recorded).
+function parseProviderLoginOrigin(
+  value: Record<string, unknown>,
+): Pick<LandingTerminalTabRef, "origin" | "originProviderId"> {
+  if (value.origin !== "provider-login") return {};
+  const providerId = providerIdSchema.safeParse(value.originProviderId);
+  return providerId.success
+    ? { origin: "provider-login", originProviderId: providerId.data }
+    : { origin: "provider-login" };
 }
 
 export function parsePersistedLandingTerminalState(
@@ -248,12 +339,26 @@ export const useLandingTerminalStore = create<LandingTerminalStoreState>()(
   persist(
     (set, get) => ({
       ...initialLandingTerminalState(),
+      panelReveal: null,
       setPanelOpen: (landingPageId, panelOpen) =>
         set((state) =>
           updateLandingTerminalLayout(state, landingPageId, {
             ...landingTerminalLayoutFor(state, landingPageId),
             panelOpen,
           }),
+        ),
+      revealPanel: ({ landingPageIds, everyPage, instanceId }) =>
+        set((state) => {
+          const opened = everyPage ? openEveryPageLayout(state) : {};
+          return {
+            ...opened,
+            ...openPageLayouts({ ...state, ...opened }, landingPageIds),
+            panelReveal: instanceId,
+          };
+        }),
+      clearPanelReveal: () =>
+        set((state) =>
+          state.panelReveal === null ? state : { panelReveal: null },
         ),
       setPanelWidthFraction: (landingPageId, panelWidthFraction) =>
         set((state) =>
@@ -441,7 +546,8 @@ export const useLandingTerminalStore = create<LandingTerminalStoreState>()(
               : {}),
           };
         }),
-      resetForTests: () => set(initialLandingTerminalState()),
+      resetForTests: () =>
+        set({ ...initialLandingTerminalState(), panelReveal: null }),
     }),
     {
       ...basePersistOptions(landingTerminalsKey(null)),
@@ -460,6 +566,53 @@ export const useLandingTerminalStore = create<LandingTerminalStoreState>()(
     },
   ),
 );
+
+function openPageLayouts(
+  state: Pick<
+    LandingTerminalStoreState,
+    "layoutsByLandingPageId" | "fallbackLayout"
+  >,
+  landingPageIds: ReadonlyArray<string>,
+): Pick<LandingTerminalStoreState, "layoutsByLandingPageId"> {
+  let next = state;
+  for (const landingPageId of landingPageIds) {
+    next = {
+      ...next,
+      ...updateLandingTerminalLayout(next, landingPageId, {
+        ...landingTerminalLayoutFor(next, landingPageId),
+        panelOpen: true,
+      }),
+    };
+  }
+  return { layoutsByLandingPageId: next.layoutsByLandingPageId };
+}
+
+function openEveryPageLayout(
+  state: Pick<
+    LandingTerminalStoreState,
+    "layoutsByLandingPageId" | "fallbackLayout"
+  >,
+): Pick<
+  LandingTerminalStoreState,
+  "layoutsByLandingPageId" | "fallbackLayout"
+> {
+  const layoutsByLandingPageId: Partial<Record<string, LandingTerminalLayout>> =
+    {};
+  for (const [landingPageId, layout] of Object.entries(
+    state.layoutsByLandingPageId,
+  )) {
+    if (layout !== undefined) {
+      layoutsByLandingPageId[landingPageId] = { ...layout, panelOpen: true };
+    }
+  }
+  return {
+    layoutsByLandingPageId,
+    fallbackLayout: {
+      ...(state.fallbackLayout ?? DEFAULT_LANDING_TERMINAL_LAYOUT),
+      panelOpen: true,
+    },
+  };
+}
 
 function updateLandingTerminalLayout(
   state: Pick<LandingTerminalStoreState, "layoutsByLandingPageId">,

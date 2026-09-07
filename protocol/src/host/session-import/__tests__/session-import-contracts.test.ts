@@ -517,29 +517,44 @@ describe("sessionImport.run@1.0 client frames and open request", () => {
     expect(parsed.kind).toBe("ping");
   });
 
-  it("accepts a selection set", () => {
+  it("accepts a selection set with the permission mode the chats continue under", () => {
     const parsed = sessionImportRunV10.openRequestSchema.parse({
       selections: [
         { harness: "claude", nativeSessionId: "session-1" },
         { harness: "codex", nativeSessionId: "thread-1" },
       ],
+      permissionMode: "full_access",
     });
     expect(parsed.selections).toHaveLength(2);
+    expect(parsed.permissionMode).toBe("full_access");
   });
 
   // An empty submission is the re-attach case: a client reconnecting to a run
   // that outlived its socket has nothing new to ask for.
   it("accepts an empty selection set", () => {
     expect(
-      sessionImportRunV10.openRequestSchema.parse({ selections: [] })
-        .selections,
+      sessionImportRunV10.openRequestSchema.parse({
+        selections: [],
+        permissionMode: "supervised",
+      }).selections,
     ).toEqual([]);
+  });
+
+  // The host has no permission default of its own: a request that names none
+  // is a client bug, not a request for "whatever the host thinks".
+  it("rejects a request without a permission mode", () => {
+    expect(() =>
+      sessionImportRunV10.openRequestSchema.parse({
+        selections: [{ harness: "claude", nativeSessionId: "session-1" }],
+      }),
+    ).toThrow();
   });
 
   it("rejects a selection with an empty native session id", () => {
     expect(() =>
       sessionImportRunV10.openRequestSchema.parse({
         selections: [{ harness: "claude", nativeSessionId: "" }],
+        permissionMode: "full_access",
       }),
     ).toThrow();
   });

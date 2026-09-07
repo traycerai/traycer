@@ -1,4 +1,5 @@
 import type { UseMutationResult } from "@tanstack/react-query";
+import { isEditorId } from "@traycer/protocol/host/editor/unary-schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
@@ -49,11 +50,12 @@ export function useEditorOpenForClient(
       mutationKey: editorMutationKeys.openPaths(),
       onSuccess: (_response, variables) => {
         if (intent !== "workspace") return;
-        // "system" (editor.openPaths 1.1) is a FILE-open target - PDF
-        // surfaces routing to the OS default app. A workspace root always
-        // opens in a real editor, so this narrow is a type-level formality
-        // that keeps the analytics contract's editor enum honest.
-        if (variables.editorId === "system") return;
+        // `editor.openPaths` carries OS surfaces alongside editors -
+        // `"system"` (the OS default app for a PDF) and `"finder"`. Neither is
+        // an editor and the analytics `editor` field is the editor enum, so
+        // the guard asks "is this an editor" rather than listing the literals
+        // that exist today: a later target is excluded by construction.
+        if (!isEditorId(variables.editorId)) return;
         Analytics.getInstance().track(AnalyticsEvent.WorkspaceOpenedInEditor, {
           source: "direct_ui",
           editor: variables.editorId,

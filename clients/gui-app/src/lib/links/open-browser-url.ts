@@ -11,7 +11,11 @@ import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { electronTabBinding } from "@/lib/browser-view/sessions/electron-tab-directory";
 import { ignoreError } from "@/lib/browser-view/ignore-error";
 import { useOpenExternalLink } from "@/lib/links/open-external-link";
-import { hashOf, samePageKey } from "@/lib/links/normalize-url";
+import {
+  hashOf,
+  isSecurityUpgrade,
+  samePageKey,
+} from "@/lib/links/normalize-url";
 import type {
   TileOpenIntent,
   TileOpenModifiers,
@@ -102,7 +106,14 @@ export function useOpenBrowserUrl(): (input: OpenBrowserUrlInput) => void {
         : findSamePageTab(hostId, sessions.items, input.url);
       if (match !== null) {
         open(match);
-        if (hashOf(match.url) !== hashOf(input.url)) {
+        // Move the reused tab when the requested page differs by fragment, or
+        // when it is the secure upgrade of an insecure tab {@link samePageKey}
+        // matched across schemes - otherwise focusing an open `http://` tab
+        // would strand a `https://` request on the insecure page.
+        if (
+          hashOf(match.url) !== hashOf(input.url) ||
+          isSecurityUpgrade(match.url, input.url)
+        ) {
           navigateTab(hostId, match, input.url);
         }
         return;
@@ -223,12 +234,14 @@ function findSamePageTab(
     for (const tab of session.tabs) {
       if (tab.status === "closing" || tab.status === "crashed") continue;
       if (samePageKey(tab.url) !== key) continue;
-      // Same page, different fragment, and no way to move it there: focusing
-      // this tab would land the user on the anchor they came FROM, so let the
-      // click open a fresh tab at the fragment it asked for instead
-      // (see {@link navigateTab} for which tabs can be moved).
+      // Same page, but reaching the requested URL needs a navigation this tab
+      // cannot perform - a different fragment, or the secure upgrade of an
+      // insecure tab - and it has no way to move there: focusing it would land
+      // the user on the anchor (or the insecure page) they came FROM, so let
+      // the click open a fresh tab at what it asked for instead (see
+      // {@link navigateTab} for which tabs can be moved).
       if (
-        hashOf(tab.url) !== hash &&
+        (hashOf(tab.url) !== hash || isSecurityUpgrade(tab.url, url)) &&
         electronTabBinding(hostId, session.sessionId, tab.tabId) === null
       ) {
         continue;

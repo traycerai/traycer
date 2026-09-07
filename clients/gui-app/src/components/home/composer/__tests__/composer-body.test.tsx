@@ -180,8 +180,8 @@ function renderComposerBody(options: RenderComposerBodyOptions) {
       onSubmit={vi.fn()}
       onStartTerminal={vi.fn()}
       onDocumentChange={vi.fn()}
-
       onSelectionChange={vi.fn()}
+      terminalLoginSurface={null}
     />,
   );
 }

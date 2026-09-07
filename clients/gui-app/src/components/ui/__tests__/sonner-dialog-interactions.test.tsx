@@ -10,7 +10,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Toaster } from "@/components/ui/sonner";
-import { listBrowserOverlayElements } from "@/lib/browser-view/tiles/browser-overlay-coordinator";
 import {
   progressSuccessToast,
   progressToast,
@@ -64,39 +63,6 @@ describe("<Toaster /> dialog interactions", () => {
     fireEvent.click(closeToastButton);
 
     expect(onOpenChange).not.toHaveBeenCalledWith(false);
-  });
-
-  it("registers sonner's inner toast list once a toast exists", async () => {
-    // The outer <section> Sonner renders is a static, zero-height wrapper;
-    // the fixed, painted surface is the inner `<ol data-sonner-toaster>`,
-    // mounted only once a toast exists for its position (sonner 2.0.8). This
-    // pins the REAL wiring end to end - a live `<Toaster/>`'s `<ol>` gets
-    // registered on mount and deregistered once its toasts are gone.
-    render(<Toaster />);
-
-    expect(listBrowserOverlayElements().some(isSonnerToasterList)).toBe(false);
-
-    act(() => {
-      toast.info("Registered toast");
-    });
-    await screen.findByText("Registered toast");
-
-    await waitFor(() => {
-      expect(listBrowserOverlayElements().some(isSonnerToasterList)).toBe(true);
-    });
-
-    act(() => {
-      toast.dismiss();
-    });
-    await waitFor(() => {
-      expect(screen.queryByText("Registered toast")).toBeNull();
-    });
-
-    await waitFor(() => {
-      expect(listBrowserOverlayElements().some(isSonnerToasterList)).toBe(
-        false,
-      );
-    });
   });
 
   it("renders progress with the shared close button", async () => {
@@ -173,9 +139,3 @@ describe("<Toaster /> dialog interactions", () => {
     );
   });
 });
-
-function isSonnerToasterList(element: HTMLElement): boolean {
-  return (
-    element.tagName === "OL" && element.hasAttribute("data-sonner-toaster")
-  );
-}

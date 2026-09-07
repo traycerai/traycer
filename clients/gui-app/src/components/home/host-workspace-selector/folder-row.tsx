@@ -374,8 +374,9 @@ function RemoveFolderButton(props: {
     <Trash2 className="size-3.5" />
   );
   // Always rendered AND always visible (even for a single folder). The
-  // last-folder / active-owner guard is the per-item `removeDisabled` (with a
-  // tooltip), not a hidden button — so the delete option is always discoverable.
+  // active-owner guard is the per-item `removeDisabled` (with a tooltip), not
+  // a hidden button — so the delete option is always discoverable. There is no
+  // last-folder guard: removing the only folder rebinds the owner folderless.
   const button = (
     <button
       type="button"

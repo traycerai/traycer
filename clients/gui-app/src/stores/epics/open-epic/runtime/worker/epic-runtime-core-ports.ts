@@ -1,3 +1,4 @@
+import type { ConfirmedChatMutation } from "@traycer-clients/shared/replica-runtime/worker/bridge-protocol";
 /**
  * {@link EpicRuntimeCorePorts} over a composed {@link EpicReplicaRuntime}.
  *
@@ -149,6 +150,7 @@ export interface EpicRuntimeCorePortSource {
     issuedAtSeq: number | null,
   ): void;
   applyChatRecordDelta(delta: ChatRecordDelta): void;
+  applyConfirmedChatMutation(mutation: ConfirmedChatMutation): void;
   applyTuiAgentRecords(
     records: readonly TuiAgentRecordSummaryV12[],
     issuedAtSeq: number | null,
@@ -738,6 +740,7 @@ type RecordPlaneCommand = Extract<
     kind:
       | "apply-chat-records"
       | "apply-chat-record-delta"
+      | "apply-confirmed-chat-mutation"
       | "apply-tui-agent-records"
       | "apply-tui-agent-record-delta"
       | "mark-chat-records-authoritative"
@@ -778,6 +781,7 @@ function isRecordPlaneCommand(
 ): command is RecordPlaneCommand {
   switch (command.kind) {
     case "apply-chat-records":
+    case "apply-confirmed-chat-mutation":
     case "apply-chat-record-delta":
     case "apply-tui-agent-records":
     case "apply-tui-agent-record-delta":
@@ -812,6 +816,9 @@ function applyRecordPlaneCommand(
         command.payload.records,
         command.payload.issuedAtSeq,
       );
+      return;
+    case "apply-confirmed-chat-mutation":
+      source.applyConfirmedChatMutation(command.payload.mutation);
       return;
     case "apply-chat-record-delta":
       source.applyChatRecordDelta(command.payload.delta);

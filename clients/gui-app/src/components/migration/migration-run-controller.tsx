@@ -10,103 +10,123 @@ import {
   type ReplayProgressPayload,
   type TaskChainProgressPayload,
 } from "@traycer-clients/shared/host-transport/migration-stream-client";
-import { useHostClient } from "@/lib/host";
-import { useWsStreamClient } from "@/lib/host/stream-runtime-context";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { reportableWarningToast } from "@/lib/reportable-error-toast";
 import { useRunnerHost } from "@/providers/use-runner-host";
-import { useMigrationRunStore } from "@/stores/migration/migration-run-store";
+import {
+  migrationAnyRunning,
+  useMigrationRunStore,
+} from "@/stores/migration/migration-run-store";
 import {
   getMigrationStartHandle,
   setMigrationStartHandle,
+  type MigrationRunTarget,
 } from "@/components/migration/migration-run-handle";
 
+/**
+ * Owns the `migration.run` subscriptions - ONE PER HOST. A migration moves one
+ * machine's local data, so two machines can be migrating at once and each has
+ * its own progress; a second start for a host that is already migrating is
+ * refused, as it always was.
+ *
+ * The target travels with the request (`MigrationRunTarget`) rather than being
+ * read from this component's ambient binding, so a migration started from a
+ * host-scoped panel runs on the host that panel is showing.
+ */
 export function MigrationRunController(): null {
   const queryClient = useQueryClient();
-  const hostClient = useHostClient();
-  const wsStreamClient = useWsStreamClient();
   const runnerHost = useRunnerHost();
-  const clientRef = useRef<MigrationStreamClient | null>(null);
+  const runsRef = useRef<Map<string, HostRun>>(new Map());
 
-  const closeClient = useCallback(() => {
-    const client = clientRef.current;
-    if (client !== null) {
-      clientRef.current = null;
-      client.close();
-    }
+  const closeRun = useCallback((hostId: string) => {
+    const run = runsRef.current.get(hostId);
+    if (run === undefined) return;
+    runsRef.current.delete(hostId);
+    run.client.close();
+    // Returns the transport reference this run took at subscribe. A scoped
+    // transport closes here if nothing else is reading it; the ambient one
+    // has no lease to return.
+    run.release?.();
   }, []);
 
-  const start = useCallback(() => {
-    if (wsStreamClient === null) return;
-    if (clientRef.current !== null) return;
+  const start = useCallback(
+    (target: MigrationRunTarget) => {
+      const hostId = target.hostId;
+      if (runsRef.current.has(hostId)) return;
 
-    const store = useMigrationRunStore.getState();
-    const hostIdAtStart = hostClient.getActiveHostId();
-    store.markRunning();
+      useMigrationRunStore.getState().markRunning(hostId);
 
-    const client = new MigrationStreamClient({
-      wsStreamClient,
-      callbacks: {
-        onStarted: (payload: MigrationStartedPayload) => {
-          useMigrationRunStore.getState().applyStarted({
-            totalTaskChains: payload.totalTaskChains,
-            totalLocalEpics: payload.totalLocalEpics,
-          });
-        },
-        onTaskChainProgress: (payload: TaskChainProgressPayload) => {
-          useMigrationRunStore.getState().incrementTaskChain(payload.outcome);
-        },
-        onEpicProgress: (payload: EpicProgressPayload) => {
-          useMigrationRunStore.getState().incrementEpic(payload.outcome);
-        },
-        onReplayProgress: (payload: ReplayProgressPayload) => {
-          if (!payload.required || payload.completed) return;
-          useMigrationRunStore.getState().incrementReplayIncomplete();
-        },
-        onComplete: (payload: MigrationCompletePayload) => {
-          useMigrationRunStore.getState().applyComplete({
-            success: payload.success,
-            counts: {
-              taskChainsComplete: payload.counts.taskChainsComplete,
-              taskChainsSkipped: payload.counts.taskChainsSkipped,
-              taskChainsFailed: payload.counts.taskChainsFailed,
-              epicsComplete: payload.counts.epicsComplete,
-              epicsFailed: payload.counts.epicsFailed,
-              replaysIncomplete: payload.counts.replaysIncomplete,
-            },
-          });
-          if (hostIdAtStart !== null) {
-            void queryClient.invalidateQueries({
-              queryKey: hostQueryKeys.scope(hostIdAtStart),
+      // Pinned FIRST: the run outlives the surface that handed the binding
+      // over, and a scoped transport closes at that surface's unmount
+      // otherwise, taking this subscription with it.
+      const release = target.binding.retain?.() ?? null;
+      const client = new MigrationStreamClient({
+        wsStreamClient: target.binding.wsStreamClient,
+        callbacks: {
+          onStarted: (payload: MigrationStartedPayload) => {
+            useMigrationRunStore.getState().applyStarted(hostId, {
+              totalTaskChains: payload.totalTaskChains,
+              totalLocalEpics: payload.totalLocalEpics,
             });
-          }
-          if (payload.success) {
-            toast.success("Migration re-attempt complete.");
-          } else {
-            reportableWarningToast(
-              "Migration re-attempt incomplete. Some local data still needs migration.",
-              undefined,
-              {
-                title: "Migration incomplete",
-                message: null,
-                code: null,
-                source: "Data migration",
+          },
+          onTaskChainProgress: (payload: TaskChainProgressPayload) => {
+            useMigrationRunStore
+              .getState()
+              .incrementTaskChain(hostId, payload.outcome);
+          },
+          onEpicProgress: (payload: EpicProgressPayload) => {
+            useMigrationRunStore
+              .getState()
+              .incrementEpic(hostId, payload.outcome);
+          },
+          onReplayProgress: (payload: ReplayProgressPayload) => {
+            if (!payload.required || payload.completed) return;
+            useMigrationRunStore.getState().incrementReplayIncomplete(hostId);
+          },
+          onComplete: (payload: MigrationCompletePayload) => {
+            useMigrationRunStore.getState().applyComplete(hostId, {
+              success: payload.success,
+              counts: {
+                taskChainsComplete: payload.counts.taskChainsComplete,
+                taskChainsSkipped: payload.counts.taskChainsSkipped,
+                taskChainsFailed: payload.counts.taskChainsFailed,
+                epicsComplete: payload.counts.epicsComplete,
+                epicsFailed: payload.counts.epicsFailed,
+                replaysIncomplete: payload.counts.replaysIncomplete,
               },
-            );
-          }
-          closeClient();
+            });
+            void queryClient.invalidateQueries({
+              queryKey: hostQueryKeys.scope(hostId),
+            });
+            if (payload.success) {
+              toast.success("Migration re-attempt complete.");
+            } else {
+              reportableWarningToast(
+                "Migration re-attempt incomplete. Some local data still needs migration.",
+                undefined,
+                {
+                  title: "Migration incomplete",
+                  message: null,
+                  code: null,
+                  source: "Data migration",
+                },
+              );
+            }
+            closeRun(hostId);
+          },
+          onConnectionStatus: (_status, reason) => {
+            if (reason === null) return;
+            if (!runsRef.current.has(hostId)) return;
+            useMigrationRunStore.getState().applyError(hostId);
+            closeRun(hostId);
+          },
         },
-        onConnectionStatus: (_status, reason) => {
-          if (reason === null) return;
-          if (clientRef.current === null) return;
-          useMigrationRunStore.getState().applyError();
-          closeClient();
-        },
-      },
-    });
+      });
 
-    clientRef.current = client;
-  }, [closeClient, hostClient, queryClient, wsStreamClient]);
+      runsRef.current.set(hostId, { client, release });
+    },
+    [closeRun, queryClient],
+  );
 
   useEffect(() => {
     setMigrationStartHandle({ start });
@@ -119,9 +139,9 @@ export function MigrationRunController(): null {
 
   useEffect(
     () => () => {
-      closeClient();
+      for (const hostId of [...runsRef.current.keys()]) closeRun(hostId);
     },
-    [closeClient],
+    [closeRun],
   );
 
   // Cross-window sync: a freshly opened window may have missed prior fan-outs,
@@ -148,16 +168,22 @@ export function MigrationRunController(): null {
     };
   }, [runnerHost]);
 
-  // Outgoing announce: fire only on running ↔ not-running transitions. Without
-  // the wasRunning/isRunning guard, every progress increment would re-broadcast
-  // and churn IPC traffic across windows.
+  // Outgoing announce: fire only on running <-> not-running transitions.
+  // Without the wasRunning/isRunning guard, every progress increment would
+  // re-broadcast and churn IPC traffic across windows.
+  //
+  // The bit is about the WINDOW, not a host: the IPC contract carries one
+  // running flag and the window that owns it, so what is announced is "some
+  // host in this window is migrating". A second host starting while the first
+  // still runs is not a transition and stays silent, which is what the
+  // receiving windows already assume.
   useEffect(() => {
     const migration = runnerHost.migration;
     if (migration === null) return;
     const thisWindowId = resolveWindowId(runnerHost);
     const unsub = useMigrationRunStore.subscribe((state, prev) => {
-      const wasRunning = prev.status === "running";
-      const isRunning = state.status === "running";
+      const wasRunning = migrationAnyRunning(prev.runs);
+      const isRunning = migrationAnyRunning(state.runs);
       if (wasRunning === isRunning) return;
       void migration.announceRunning({
         running: isRunning,
@@ -170,6 +196,12 @@ export function MigrationRunController(): null {
   }, [runnerHost]);
 
   return null;
+}
+
+interface HostRun {
+  readonly client: MigrationStreamClient;
+  /** Returns the transport lease this run took; `null` for the ambient one. */
+  readonly release: (() => void) | null;
 }
 
 // The shared `IRunnerHost` does not expose `windows` (mobile/web don't have

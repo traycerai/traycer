@@ -8,6 +8,7 @@ import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-sett
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useInitialChatHandoffStore } from "@/stores/epics/initial-chat-handoff-store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { draftRuntimeRegistry } from "@/stores/home/draft-runtime-registry";
 import { useTabsStore } from "@/stores/tabs/store";
 import { setSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
@@ -76,22 +77,7 @@ vi.mock("@/lib/host", () => ({
   }),
 }));
 
-// `landing-draft-store.ts` (real, unmocked - `createDraft` reads the global
-// workspace snapshot through it) and `use-landing-composer-actions.ts` itself
-// (the imperative "create draft" path) both resolve the per-host
-// workspace-folder / run-settings buckets through this imperative snapshot,
-// not through a hook. Left unmocked it falls back to the real (unbound)
-// implementation, which always reports `null` - so every fixture below would
-// seed a host bucket the code never reads. Pin it to the SAME host id
-// `landingMocks.getActiveHostId()` returns, so the two ways this suite's
-// production code resolves "the active host" agree.
-// `activeHostIdOrNull` is what `ensureSubmissionDraft` reads for the run-
-// settings bucket now: the spine accessor below answers `null` for every host
-// since P4.2/D17 deleted the active slot, so the id has to come from the
-// authority's projection instead. Both are driven by the SAME knob, so a test
-// that moves the host still moves it everywhere this suite reaches.
 vi.mock("@/lib/host/runtime", () => ({
-  activeHostIdOrNull: () => landingMocks.getActiveHostId(),
   getHostBindingSnapshot: () => ({
     hostClient: { getActiveHostId: landingMocks.getActiveHostId },
   }),
@@ -272,6 +258,12 @@ describe("useLandingComposerActions", () => {
       defaultPermission: "supervised",
       defaultReasoning: "high",
     });
+    // Pre-created drafts read the real composer host snapshot. Match the
+    // mocked client's host so they inherit the workspace/settings fixtures.
+    useSelectionAuthorityStore.setState({
+      attached: true,
+      effectiveHostId: TEST_HOST_ID,
+    });
   });
 
   afterEach(() => {
@@ -295,6 +287,10 @@ describe("useLandingComposerActions", () => {
       openTabOrder: [],
       activeTabId: null,
       mostRecentTabIdByEpicId: {},
+    });
+    useSelectionAuthorityStore.setState({
+      attached: false,
+      effectiveHostId: null,
     });
   });
 

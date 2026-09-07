@@ -1,4 +1,5 @@
 import { runLinkPhoneFlow } from "../auth/link-phone-flow";
+import { makeColorizer, shouldUseColor } from "../runner/ansi";
 import type { CommandFn, CommandResult } from "../runner/runner";
 
 // `traycer link-phone` prints a QR (plus the same code as typeable text) for
@@ -27,12 +28,14 @@ export function buildLinkPhoneCommand(opts: {
       environment: ctx.runtime.environment,
       decision: result.decision,
     });
+    // The verdict line is printed on stdout by the runner.
+    const c = makeColorizer(shouldUseColor(ctx.runtime, process.stdout));
     return {
       data: { decision: result.decision, claimant: result.claimant },
       human:
         result.decision === "approved"
-          ? "Approved - the phone is signing in now."
-          : "Rejected. That phone was not signed in.",
+          ? `${c.green("✓")} Approved — the phone is signing in now.`
+          : `${c.red("✗")} Rejected. That phone was not signed in.`,
       exitCode: result.decision === "approved" ? 0 : 1,
     };
   };

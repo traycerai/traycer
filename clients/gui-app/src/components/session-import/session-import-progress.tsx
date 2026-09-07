@@ -1,5 +1,4 @@
 import { useMemo, useState } from "react";
-import { useShallow } from "zustand/react/shallow";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { cn } from "@/lib/utils";
 import {
@@ -13,39 +12,28 @@ import {
   sessionImportDoneCount,
   sessionImportIsRunning,
   sessionImportRunCounts,
-  useSessionImportRunStore,
+  useSessionImportRun,
 } from "@/stores/session-import/session-import-run-store";
 
 /**
  * What the wizard shows once a run is under way, and the summary it leaves
  * behind. Reads the run store rather than props because the same view has to
  * be correct when the wizard is closed and reopened mid-run - the progress it
- * shows is the run's, not this mount's.
+ * shows is the run's, not this mount's. The HOST is a prop: the wizard resolved
+ * it from the binding it submitted on, and reading it again here would be a
+ * second answer to "whose run is this".
  *
  * All three states share one centered layout, so the panel does not jump
  * between a centered spinner and a top-aligned report as the run moves on.
  */
 export function SessionImportProgress(props: {
   readonly tone: SessionImportTone;
+  readonly hostId: string | null;
 }) {
-  const { tone } = props;
-  // The selector returns only values the store itself owns - a derived array or
-  // counts object minted per call would fail `useShallow`'s equality every
-  // time, which `useSyncExternalStore` rejects as an uncached snapshot.
-  const run = useSessionImportRunStore(
-    useShallow((state) => ({
-      status: state.status,
-      runId: state.runId,
-      total: state.total,
-      done: sessionImportDoneCount(state),
-      lastTitle: state.lastTitle,
-      running: sessionImportIsRunning(state),
-      attached: state.attached,
-      outcomes: state.outcomes,
-      titles: state.titles,
-      finalCounts: state.finalCounts,
-    })),
-  );
+  const { tone, hostId } = props;
+  const run = useSessionImportRun(hostId);
+  const running = sessionImportIsRunning(run);
+  const done = sessionImportDoneCount(run);
   const counts = useMemo(
     () =>
       sessionImportRunCounts({
@@ -59,7 +47,7 @@ export function SessionImportProgress(props: {
     [run.outcomes, run.titles],
   );
 
-  if (run.running) {
+  if (running) {
     // `role="status"` (a polite live region by definition) because everything
     // that moves in this view is text: the count and the session being worked
     // on. Without it a screen reader is told an import started and then hears
@@ -76,7 +64,7 @@ export function SessionImportProgress(props: {
           variant={undefined}
         />
         <p className={cn("text-ui-sm font-medium", tone.strong)}>
-          Importing {run.done} of {run.total}…
+          Importing {done} of {run.total}…
         </p>
         {run.lastTitle !== null ? (
           <p className={cn("max-w-md truncate text-ui-xs", tone.faint)}>
@@ -142,7 +130,7 @@ export function SessionImportProgress(props: {
             <p className={cn("text-ui-xs", tone.muted)}>
               {tone.surface === "onboarding"
                 ? "They'll be in your task list when you finish the tour."
-                : "Your tasks are in the list on the left."}
+                : "They're in your task list."}
             </p>
           ) : null}
           {counts.skippedAlreadyImported > 0 ? (

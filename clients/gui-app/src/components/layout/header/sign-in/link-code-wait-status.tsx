@@ -62,14 +62,45 @@ function WaitStatusLine(props: { readonly progress: LinkLoginProgress }) {
 export function LinkCodeWaitStatus() {
   const auth = useAuthService();
   const progress = useAuthLinkLoginProgress(auth);
+  const matchCode = progress === null ? null : progress.matchCode;
   return (
     <div
       className="flex flex-col items-center gap-0.5"
       data-testid="link-code-signin-waiting"
     >
+      {matchCode !== null ? (
+        // The claim's match code, large: the desktop's prompt asks "Does your
+        // phone show NN?", and this is the NN. It is shown for the whole wait
+        // — the human may still be walking over to the desktop — and it is
+        // an attention proof, not something to type anywhere.
+        <p
+          className="text-center text-ui-sm"
+          data-testid="link-code-signin-match-code"
+          role="status"
+          aria-live="polite"
+        >
+          Your code:{" "}
+          <span className="font-mono text-title-lg tabular-nums">
+            {matchCode}
+          </span>
+        </p>
+      ) : null}
       <p className="text-center text-ui-sm opacity-80">
         Waiting for approval on your computer…
       </p>
+      {matchCode !== null ? (
+        // Conditional on purpose: an approver that predates the code (an
+        // older desktop, or the CLI before it learned to print one) asks
+        // nothing about it, and telling the user to approve "only if the
+        // code matches" would leave them refusing a prompt that never shows
+        // one. The standing line above is the instruction; this is the hint.
+        <p
+          className="text-center text-ui-xs text-muted-foreground"
+          data-testid="link-code-signin-match-code-hint"
+        >
+          If your computer asks, it should show this code.
+        </p>
+      ) : null}
       {progress !== null ? (
         <p
           className="text-center text-ui-xs text-muted-foreground tabular-nums"

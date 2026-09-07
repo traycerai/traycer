@@ -340,7 +340,11 @@ describe("PrDetailBody", () => {
     return render(
       <QueryClientProvider client={queryClient}>
         <StreamRuntimeContext.Provider
-          value={{ wsStreamClient: mockWsStreamClient, hostId: "host1" }}
+          value={{
+            wsStreamClient: mockWsStreamClient,
+            hostId: "host1",
+            retain: null,
+          }}
         >
           <VisiblePrListSubscription epicId={props.epicId} />
           <TabHostProvider hostId="host1">

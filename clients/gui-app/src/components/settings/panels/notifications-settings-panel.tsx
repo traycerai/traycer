@@ -73,6 +73,11 @@ const SEVERITY_ROWS: ReadonlyArray<{
     label: "Done",
     description: "Completed or intentionally stopped turns.",
   },
+  {
+    id: "info",
+    label: "Info",
+    description: "Background host operations, including worktree cleanup.",
+  },
 ];
 
 const EMPTY_RENDERER_CONFIG = {};

@@ -64,6 +64,10 @@ describe("<ModelRowsState /> catalog and model failure report actions", () => {
       hasQuery: false,
       activeProvider: null,
       rowsCount: 0,
+      activeProviderState: null,
+      terminalLoginSurface: null,
+      runTargetHostId: null,
+      onClosePicker: () => undefined,
     });
 
     screen.getByRole("option", { name: "Couldn't load providers" });
@@ -78,6 +82,10 @@ describe("<ModelRowsState /> catalog and model failure report actions", () => {
       hasQuery: false,
       activeProvider: null,
       rowsCount: 0,
+      activeProviderState: null,
+      terminalLoginSurface: null,
+      runTargetHostId: null,
+      onClosePicker: () => undefined,
     });
 
     act(() => {
@@ -104,6 +112,10 @@ describe("<ModelRowsState /> catalog and model failure report actions", () => {
       hasQuery: false,
       activeProvider: null,
       rowsCount: 0,
+      activeProviderState: null,
+      terminalLoginSurface: null,
+      runTargetHostId: null,
+      onClosePicker: () => undefined,
     });
 
     act(() => {
@@ -140,6 +152,10 @@ describe("<ModelRowsState /> catalog and model failure report actions", () => {
       hasQuery: false,
       activeProvider: provider,
       rowsCount: 0,
+      activeProviderState: null,
+      terminalLoginSurface: null,
+      runTargetHostId: null,
+      onClosePicker: () => undefined,
     });
 
     // The raw host reason is still shown to the user inline (existing UX) -
@@ -176,6 +192,10 @@ describe("<ModelRowsState /> catalog and model failure report actions", () => {
       hasQuery: false,
       activeProvider: null,
       rowsCount: 0,
+      activeProviderState: null,
+      terminalLoginSurface: null,
+      runTargetHostId: null,
+      onClosePicker: () => undefined,
     });
     screen.getByRole("option", { name: "No models available" });
     expect(screen.queryByRole("button", { name: "Report issue" })).toBeNull();
@@ -191,6 +211,10 @@ describe("<ModelRowsState /> catalog and model failure report actions", () => {
       hasQuery: false,
       activeProvider: null,
       rowsCount: 0,
+      activeProviderState: null,
+      terminalLoginSurface: null,
+      runTargetHostId: null,
+      onClosePicker: () => undefined,
     });
     screen.getByRole("option", { name: "Loading models" });
     expect(screen.queryByRole("button", { name: "Report issue" })).toBeNull();
@@ -211,6 +235,10 @@ describe("<ModelRowsState /> catalog and model failure report actions", () => {
       hasQuery: false,
       activeProvider: provider,
       rowsCount: 0,
+      activeProviderState: null,
+      terminalLoginSurface: null,
+      runTargetHostId: null,
+      onClosePicker: () => undefined,
     });
 
     screen.getByRole("button", { name: "Add API key" });
@@ -225,6 +253,10 @@ describe("<ModelRowsState /> catalog and model failure report actions", () => {
       hasQuery: false,
       activeProvider: null,
       rowsCount: 0,
+      activeProviderState: null,
+      terminalLoginSurface: null,
+      runTargetHostId: null,
+      onClosePicker: () => undefined,
     });
 
     screen.getByRole("option", { name: "This device is starting" });

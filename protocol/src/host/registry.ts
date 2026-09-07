@@ -272,6 +272,8 @@ import {
   hostUpdateCheckV11,
   hostUpdateInstallV10,
   hostUpdateInstallV11,
+  hostUpdateInstallV12,
+  hostUpdateInstallUpgradeV11ToV12,
   hostUpdateInstallUpgradeV10ToV11,
 } from "@traycer/protocol/host/maintenance/contracts";
 import {
@@ -787,6 +789,7 @@ import {
   providersTouchLoginRequestSchema,
   providersTouchLoginResponseSchema,
   providersStartTerminalLoginRequestSchema,
+  providersStartTerminalLoginRequestSchemaV20,
   providersStartTerminalLoginResponseSchema,
   providersEnsurePackRequestSchema,
   providersEnsurePackResponseSchema,
@@ -3321,6 +3324,59 @@ export const providersStartTerminalLoginV10 = defineRpcContract({
 });
 
 /**
+ * `scope` replaces the v1.0 request's `epicId` so a sign-in terminal can be
+ * minted in the landing page's independent scope. A field rename is not
+ * additive (the minor-additivity checker rejects it inside a line), so this
+ * is a new major on the `terminal.create@2.0` pattern: the upgrade folds an
+ * old client's `epicId` into `{ kind: "epic" }`, the downgrade folds an epic
+ * scope back and REFUSES an independent one - an old host has no surface to
+ * put it in, and that typed refusal is the feature gate. The response is
+ * byte-identical across the majors.
+ */
+export const providersStartTerminalLoginV20 = defineRpcContract({
+  method: "providers.startTerminalLogin",
+  schemaVersion: { major: 2, minor: 0 } as const,
+  requestSchema: providersStartTerminalLoginRequestSchemaV20,
+  responseSchema: providersStartTerminalLoginResponseSchema,
+});
+
+export const providersStartTerminalLoginUpgradeV10ToV20 = defineUpgradePath<
+  typeof providersStartTerminalLoginV10,
+  typeof providersStartTerminalLoginV20
+>({
+  from: providersStartTerminalLoginV10.schemaVersion,
+  to: providersStartTerminalLoginV20.schemaVersion,
+  upgradeRequest: (request) => {
+    const { epicId, ...rest } = request;
+    return { ...rest, scope: { kind: "epic", epicId } };
+  },
+  upgradeResponse: (response) => response,
+});
+
+export const providersStartTerminalLoginDowngradeV20ToV10 = defineDowngradePath<
+  typeof providersStartTerminalLoginV20,
+  typeof providersStartTerminalLoginV10
+>({
+  from: providersStartTerminalLoginV20.schemaVersion,
+  to: providersStartTerminalLoginV10.schemaVersion,
+  downgradeRequest: (request) => {
+    const { scope, ...rest } = request;
+    if (scope.kind === "independent") {
+      return {
+        ok: false,
+        error: {
+          code: "DOWNGRADE_UNSUPPORTED",
+          message:
+            "Independent-scope sign-in terminals have no representation in providers.startTerminalLogin@1.0",
+        },
+      };
+    }
+    return { ok: true, value: { ...rest, epicId: scope.epicId } };
+  },
+  downgradeResponse: (response) => ({ ok: true, value: response }),
+});
+
+/**
  * Brand-new v1.0 method (outside `RELEASED_FLOOR_METHOD_NAMES` - a new method
  * NAME is handshake-fatal against a released peer, so it rides the optional-
  * capability channel with `degrade: { kind: "unsupported" }`, exactly like
@@ -4475,7 +4531,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   "host.update.install": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: hostUpdateInstallV10,
@@ -4501,6 +4557,10 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
           // and neither is "we only call it from new clients": the validator
           // cannot check this, which is exactly why it is written down here.
           responseGrowthProjectionGated: true,
+        },
+        2: {
+          contract: hostUpdateInstallV12,
+          upgradeFromPreviousVersion: hostUpdateInstallUpgradeV11ToV12,
         },
       },
       downgradePathsFromLatest: {},
@@ -8721,6 +8781,19 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
         },
       },
       downgradePathsFromLatest: {},
+    },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersStartTerminalLoginV20,
+          upgradeFromPreviousVersion:
+            providersStartTerminalLoginUpgradeV10ToV20,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: providersStartTerminalLoginDowngradeV20ToV10,
+      },
     },
   },
   "providers.ensurePack": {

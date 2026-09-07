@@ -9,12 +9,10 @@ import type {
   BrowserAnnotationSetTargetChatLabelInput,
   BrowserAnnotationStartInput,
 } from "../../ipc-contracts/browser-annotation-types";
-import { BROWSER_VIEW_VIEWPORT_PRESET_IDS } from "@traycer-clients/shared/platform/browser-view";
 import type {
   BrowserSessionsStreamKey,
   BrowserSessionsStreamSend,
   BrowserViewAttachSurface,
-  BrowserViewBoundsUpdate,
   BrowserViewCertificateTrust,
   BrowserViewDetachSurface,
   BrowserViewDownloadCancel,
@@ -22,14 +20,11 @@ import type {
   BrowserViewFindRequest,
   BrowserViewFindStop,
   LoginImportRequest,
-  BrowserViewOverlayOcclusion,
-  BrowserViewOverlayRelease,
   BrowserViewReservedChord,
 } from "@traycer-clients/shared/platform/browser-view";
 import type { PipCaptureStartInput } from "@traycer-clients/shared/platform/browser-view";
 
 const nonEmptyStringSchema = z.string().min(1);
-const viewportPresetSchema = z.enum(BROWSER_VIEW_VIEWPORT_PRESET_IDS);
 const tileKeySchema = z.object({
   viewTabId: nonEmptyStringSchema,
   paneId: nonEmptyStringSchema,
@@ -63,29 +58,17 @@ const nativeTabKeySchema = z.object({
 const nativeTabCapabilitySchema = nativeTabKeySchema.extend({
   registrationId: nonEmptyStringSchema,
 });
-const boundsSchema = z.object({
-  x: z.number(),
-  y: z.number(),
-  width: z.number(),
-  height: z.number(),
-});
 const electronTabControlActionSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("navigate"), url: nonEmptyStringSchema }),
   z.object({ kind: z.literal("reload") }),
   z.object({ kind: z.literal("goBack") }),
   z.object({ kind: z.literal("goForward") }),
-  z.object({
-    kind: z.literal("setViewportPreset"),
-    viewportPreset: viewportPresetSchema,
-  }),
   z.object({ kind: z.literal("zoomIn") }),
   z.object({ kind: z.literal("zoomOut") }),
   z.object({ kind: z.literal("resetZoom") }),
   z.object({ kind: z.literal("openDevTools") }),
 ]);
 
-const boundsUpdateSchema: z.ZodType<BrowserViewBoundsUpdate> =
-  tileKeySchema.extend({ bounds: boundsSchema });
 const annotationStartSchema: z.ZodType<BrowserAnnotationStartInput> =
   tileKeySchema.extend({ theme: annotationThemeSchema });
 const annotationTargetChatLabelSchema: z.ZodType<BrowserAnnotationSetTargetChatLabelInput> =
@@ -117,16 +100,6 @@ const downloadCancelSchema: z.ZodType<BrowserViewDownloadCancel> = z.object({
 });
 const certificateTrustSchema: z.ZodType<BrowserViewCertificateTrust> =
   tileKeySchema.extend({ certificateErrorId: z.string() });
-const overlayOcclusionSchema: z.ZodType<BrowserViewOverlayOcclusion> = z.object(
-  {
-    overlayId: z.string(),
-    tiles: z.array(tileKeySchema),
-  },
-);
-const overlayReleaseSchema: z.ZodType<BrowserViewOverlayRelease> = z.object({
-  overlayId: z.string(),
-});
-const overlayPaintAckSchema = z.object({ overlayId: z.string() });
 const attachSurfaceSchema: z.ZodType<BrowserViewAttachSurface> =
   nativeTabCapabilitySchema.extend({
     bindingId: nonEmptyStringSchema,
@@ -235,7 +208,6 @@ export const browserViewIpcPayload = {
   annotationStart: annotationStartSchema,
   annotationTargetChatLabel: annotationTargetChatLabelSchema,
   attachSurface: attachSurfaceSchema,
-  boundsUpdate: boundsUpdateSchema,
   certificateTrust: certificateTrustSchema,
   detachSurface: detachSurfaceSchema,
   downloadCancel: downloadCancelSchema,
@@ -245,9 +217,6 @@ export const browserViewIpcPayload = {
   loginImportRun: loginImportRunSchema,
   loginImportScan: loginImportScanSchema,
   nativeTabCapability: nativeTabCapabilitySchema,
-  overlayOcclusion: overlayOcclusionSchema,
-  overlayPaintAck: overlayPaintAckSchema,
-  overlayRelease: overlayReleaseSchema,
   pipCaptureStart: pipCaptureStartSchema,
   savedLoginSite: savedLoginSiteSchema,
   saveLogins: saveLoginsSchema,
