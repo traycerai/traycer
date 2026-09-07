@@ -121,6 +121,7 @@ import {
 import {
   isDefaultSort,
   makeNodeComparator,
+  sortNodeIdsWithClock,
   type NodeComparator,
   type NodeSortClock,
 } from "@/lib/epic-sort";
@@ -581,10 +582,9 @@ function usePanelRootIds(
     // decided. The picker, which has no interleave to run, clocks its own
     // roots instead.
     //
-    // The one other consumer, the `selectableIds` walk below, DOES take this
-    // order for its roots (its child levels are clocked). Its root order can
-    // therefore differ from the rendered one - a pre-existing seam, left
-    // alone here rather than changed as a side effect of a sorting fix.
+    // The one other consumer, the `selectableIds` walk below, re-sorts these
+    // roots with the clock itself before traversing, so the bulk-selection
+    // order follows a publication the same way the rendered rows do.
     return sidebarTreeRootIds({
       tree,
       treeFilter: CHATS_TREE_FILTER,
@@ -1078,7 +1078,16 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
   const selectableIds = useEpicStore(
     useShallow((state: OpenEpicState): readonly string[] =>
       collectVisibleSidebarTreeIds({
-        rootIds,
+        // `rootIds` come from `useChatRootIds` unclocked (see its note); the
+        // traversal visits roots in the order given, so a foreign root whose
+        // head advanced would otherwise render ahead while bulk selection
+        // kept the projection order. Sorting here keeps the two in step.
+        rootIds: sortNodeIdsWithClock(
+          rootIds,
+          state.tree.nodeById,
+          comparator,
+          sortClock,
+        ),
         expandedIds,
         tree: state.tree,
         treeFilter: CHATS_TREE_FILTER,

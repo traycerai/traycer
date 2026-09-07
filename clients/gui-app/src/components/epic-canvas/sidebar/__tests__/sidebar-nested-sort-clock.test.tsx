@@ -22,6 +22,7 @@ import {
   makeNodeComparator,
   SORT_DIRECTION,
   SORT_FIELD,
+  sortNodeIdsWithClock,
   type NodeComparator,
   type NodeSortClock,
 } from "@/lib/epic-sort";
@@ -357,6 +358,49 @@ describe("nested sidebar rows reorder on a head-only delta", () => {
         OLD_ID,
         NEW_ID,
       ]);
+    } finally {
+      handle.dispose();
+    }
+  });
+
+  it("the bulk-selection traversal re-sorts the roots it is handed with the clock, so a foreign root whose head advanced leads", () => {
+    // The panel's `selectableIds` selector: roots arrive unclocked from
+    // `useChatRootIds` and are sorted with the clock before the walk. Here the
+    // two siblings stand in for two roots - the traversal visits roots in
+    // the order given, so the sort is what decides which comes first.
+    const handle = createSession();
+    try {
+      const walkRoots = (
+        comparator: NodeComparator | null,
+        clock: NodeSortClock | null,
+      ): readonly string[] => {
+        const tree = handle.store.getState().tree;
+        return collectVisibleSidebarTreeIds({
+          rootIds: sortNodeIdsWithClock(
+            [NEW_ID, OLD_ID],
+            tree.nodeById,
+            comparator,
+            clock,
+          ),
+          expandedIds: new Set<string>(),
+          tree,
+          treeFilter: CHATS_TREE_FILTER,
+          emitFilter: CHATS_TREE_FILTER,
+          visibleIds: null,
+          comparator,
+          clock,
+        });
+      };
+
+      expect(walkRoots(null, clockFor(handle))).toEqual([NEW_ID, OLD_ID]);
+
+      applyHeadOnlyDeltaForOld(handle);
+      const clockAfter = clockFor(handle);
+
+      expect(walkRoots(null, clockAfter)).toEqual([OLD_ID, NEW_ID]);
+      // CONTROL: the same store with the clock withheld keeps the old order,
+      // so the reorder is the clock's doing.
+      expect(walkRoots(null, null)).toEqual([NEW_ID, OLD_ID]);
     } finally {
       handle.dispose();
     }
