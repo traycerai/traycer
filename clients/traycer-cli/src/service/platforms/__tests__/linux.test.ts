@@ -14,12 +14,24 @@ const pidMetadata = vi.hoisted(() => ({
   replacement: null as { pid: number } | null,
   signalled: false,
   goneFor: null as number | null,
+  // The third answer the folding reader could not give. `"read"` derives the
+  // evidence from `metadata` above, so every test written against the folded
+  // reader keeps its exact behaviour; `"unreadable"` is the torn record that
+  // used to arrive as `null` and collapse the ladder.
+  evidenceKind: "read" as "read" | "unreadable",
 }));
+const currentPidMetadata = (): { pid: number } | null =>
+  pidMetadata.signalled && pidMetadata.replacement !== null
+    ? pidMetadata.replacement
+    : pidMetadata.metadata;
 vi.mock("../../../host/pid-metadata", () => ({
-  readHostPidMetadata: async () =>
-    pidMetadata.signalled && pidMetadata.replacement !== null
-      ? pidMetadata.replacement
-      : pidMetadata.metadata,
+  readHostPidMetadata: async () => currentPidMetadata(),
+  readHostPidMetadataEvidence: async () => {
+    if (pidMetadata.evidenceKind === "unreadable")
+      return { kind: "unreadable", cause: "not valid JSON" };
+    const metadata = currentPidMetadata();
+    return metadata === null ? { kind: "absent" } : { kind: "read", metadata };
+  },
   publishedHostProcessGone: (m: { pid: number }) => {
     pidMetadata.goneCalls += 1;
     if (pidMetadata.goneFor !== null) return m.pid === pidMetadata.goneFor;
@@ -384,6 +396,7 @@ describe("Q13: stopForRestart signals the unit instead of stopping it", () => {
     pidMetadata.replacement = null;
     pidMetadata.signalled = false;
     pidMetadata.goneFor = null;
+    pidMetadata.evidenceKind = "read";
     // Production graces are the host's own force-exit watchdog plus a 10s
     // kill window; letting them elapse is what makes the exhausted-ladder
     // case untestable at real timing.
@@ -470,6 +483,62 @@ describe("Q13: stopForRestart signals the unit instead of stopping it", () => {
     // And it did not consult the identity predicate at all - there was
     // nothing to consult it about.
     expect(pidMetadata.goneCalls).toBe(0);
+  });
+
+  it("an UNREADABLE record pays the whole ladder; an ABSENT one pays none of it", async () => {
+    // CodeRabbit #1773 round 2. Both used to arrive here as one `null` from
+    // the folding `readHostPidMetadata`, and `null` returned from the wait
+    // instantly - so SIGTERM and SIGKILL landed in the SAME TICK. A host whose
+    // `pid.json` was being rewritten as the signal arrived was killed outright
+    // instead of draining inside the watchdog this grace is derived from.
+    //
+    // Nothing about the RESULT changes, which is why this went unnoticed and
+    // why the assertions below are shaped the way they are: both rows return
+    // `forcedRecycle: true`, both issue SIGTERM and then SIGKILL, and neither
+    // ever consults the identity predicate. Every observable is identical
+    // except elapsed time, so elapsed time is what this pins.
+    //
+    // The two thresholds are one grace apart and the code cannot satisfy both
+    // by accident: fold the two answers back together and BOTH rows finish
+    // instantly (the torn row fails); serve the grace unconditionally and BOTH
+    // pay it (the absent row fails).
+    const graceMs = 120;
+    setRestartStopGracesForTests({ sigtermMs: graceMs, sigkillMs: graceMs });
+
+    pidMetadata.metadata = null;
+    pidMetadata.evidenceKind = "unreadable";
+    const torn = recordingController();
+    const tornStartedAt = Date.now();
+    const tornStop = await torn.controller.stopForRestart(
+      labelFor("ai.traycer.host.dev"),
+      { force: false },
+    );
+    const tornElapsedMs = Date.now() - tornStartedAt;
+
+    pidMetadata.signalled = false;
+    pidMetadata.evidenceKind = "read";
+    const gone = recordingController();
+    const goneStartedAt = Date.now();
+    const goneStop = await gone.controller.stopForRestart(
+      labelFor("ai.traycer.host.dev"),
+      { force: false },
+    );
+    const goneElapsedMs = Date.now() - goneStartedAt;
+
+    for (const { commands } of [torn, gone]) {
+      const flat = commands.map((c) => c.join(" "));
+      expect(flat.some((c) => c.includes("kill --signal=SIGTERM"))).toBe(true);
+      expect(flat.some((c) => c.includes("kill --signal=SIGKILL"))).toBe(true);
+    }
+    expect(tornStop.forcedRecycle).toBe(true);
+    expect(goneStop.forcedRecycle).toBe(true);
+    expect(pidMetadata.goneCalls).toBe(0);
+
+    // Unreadable serves both rungs; absent serves neither. The bounds sit
+    // inside the gap rather than on it, so ordinary scheduler jitter cannot
+    // move a row across.
+    expect(tornElapsedMs).toBeGreaterThanOrEqual(graceMs);
+    expect(goneElapsedMs).toBeLessThan(graceMs);
   });
 
   it("confirms the instance it SIGNALLED, not whatever the armed manager started in its place", async () => {

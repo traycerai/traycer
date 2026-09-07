@@ -7,7 +7,8 @@ import { dirname, isAbsolute } from "node:path";
 import {
   publishedHostProcessGone,
   readHostPidMetadata,
-  type HostPidMetadata,
+  readHostPidMetadataEvidence,
+  type HostPidMetadataEvidence,
 } from "../../host/pid-metadata";
 import { CLI_ERROR_CODES, cliError } from "../../runner/errors";
 import { forceStopHostProcess } from "./desktop-agent-shutdown";
@@ -330,6 +331,24 @@ async function statusService(label: ServiceLabel): Promise<ServiceStatus> {
  * It falls through to `forcedRecycle: true`, which is the safe direction: a
  * needless recycle costs a restart, a false "gone" activates over a host that
  * is still running.
+ *
+ * ## Three answers, not two, and the third one pays
+ *
+ * Unprovable is not one case. A record that is ABSENT means nothing was
+ * published and no grace is owed - the ladder may run straight through. A
+ * record that is UNREADABLE means we cannot tell, and the host it names may be
+ * draining right now, so the ladder serves its full budget before escalating
+ * and again before giving up (see `waitForSignalledHostGone`). Both still end
+ * at `forcedRecycle: true`; what differs is what the host is given first.
+ *
+ * That has a price and it lands on `--force`: `host restart --force` against
+ * an unreadable `pid.json` now pays the host's own force-exit watchdog -
+ * `SHUTDOWN_FORCE_EXIT_MS` plus the margin, then the SIGKILL grace - before
+ * reporting. That is the correct direction (the alternative is SIGKILL with no
+ * grace at all, on a record whose unreadability is not evidence of anything),
+ * and it is exactly what the same command already costs against a record that
+ * reads and names a live host. An unreadable record is never cheaper than a
+ * live one, because it may be one.
  */
 // The exhausted-ladder path is untestable at production timing: proving the
 // escalation runs means letting the SIGTERM grace expire, and that grace is
@@ -366,7 +385,11 @@ async function stopForRestartService(
   // BEFORE the signal. Captured afterwards, this would read whatever the
   // armed manager has started since, and confirm the death of a process that
   // was never signalled.
-  const signalled = await readHostPidMetadata(label.environment);
+  //
+  // EVIDENCE, not the folding read: "no record" and "could not read the
+  // record" are different facts here and only one of them means no grace is
+  // owed. See `waitForSignalledHostGone`.
+  const signalled = await readHostPidMetadataEvidence(label.environment);
   await killUnit(label, run, "SIGTERM");
   if (await waitForSignalledHostGone(signalled, graces.sigtermMs)) {
     return { forcedRecycle: false };
@@ -429,17 +452,49 @@ async function killUnit(
 /**
  * Poll until the instance we signalled is provably gone, or the budget runs
  * out. `false` is always "could not prove", never "still alive".
+ *
+ * ## Why this takes EVIDENCE and not a folded `HostPidMetadata | null`
+ *
+ * `readHostPidMetadata` folds "no record" and "could not read the record" into
+ * one `null`, and `pid-metadata.ts` says at the fold itself that this is
+ * "right for discovery … and wrong for a gate that must fail closed: a torn or
+ * momentarily unreadable record is not evidence that no host is running".
+ *
+ * This is such a gate, and the fold cost it the whole SIGTERM grace: `null`
+ * returned instantly, so the caller sent SIGKILL in the same tick. A host
+ * whose `pid.json` was being rewritten as the signal landed was killed outright
+ * instead of draining. The outcome was never wrong - `forcedRecycle: true`
+ * either way - only the ladder collapsed, which is invisible in the return
+ * value and therefore in every test that only asserted the return value.
+ *
+ * `macos.ts`'s takeover gate took the same correction in an earlier round
+ * (`refuseIfPublishedHostAlive`, "Codex, traycer#1761, round 7"); this is the
+ * same reader misused at a different site.
  */
 async function waitForSignalledHostGone(
-  signalled: HostPidMetadata | null,
+  signalled: HostPidMetadataEvidence,
   timeoutMs: number,
 ): Promise<boolean> {
-  // Nothing was published, so there is no instance to prove anything about.
-  // Unprovable, and the caller treats that as a forced recycle.
-  if (signalled === null) return false;
+  // Nothing was published, so there is no instance to prove anything about
+  // and nothing that a grace could protect. Unprovable, and the caller treats
+  // that as a forced recycle.
+  if (signalled.kind === "absent") return false;
+  // Unreadable is the case the fold used to hide. There is no identity to
+  // poll, so this can never return `true` - but the reason it cannot is our
+  // ignorance, not the host's absence, and escalating on ignorance kills a
+  // host that is exiting exactly as designed. So it costs what a LIVE record
+  // costs: the full budget, then "could not prove". An unreadable record must
+  // never be cheaper than a live one, because it may be one.
+  if (signalled.kind === "unreadable") {
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, timeoutMs);
+    });
+    return false;
+  }
+  const metadata = signalled.metadata;
   const deadline = Date.now() + timeoutMs;
   for (;;) {
-    if (publishedHostProcessGone(signalled)) return true;
+    if (publishedHostProcessGone(metadata)) return true;
     if (Date.now() >= deadline) return false;
     await new Promise<void>((resolve) => {
       setTimeout(resolve, FORCE_STOP_POLL_MS);

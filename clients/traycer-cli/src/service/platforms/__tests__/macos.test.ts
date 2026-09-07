@@ -1185,6 +1185,14 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
   it("waits through delayed host exit when stopping", async () => {
     vi.useFakeTimers();
     MOCKS.readHostPidMetadata.mockResolvedValue(HOST_PID_METADATA);
+    // The non-force stop reads EVIDENCE now, so "a record that reads" has to
+    // be said in the evidence mock; the folding one above no longer reaches
+    // this path. The default in `beforeEach` is `absent`, which would return
+    // before any wait and pass this test for the wrong reason.
+    MOCKS.readHostPidMetadataEvidence.mockResolvedValue({
+      kind: "read",
+      metadata: HOST_PID_METADATA,
+    });
     MOCKS.isProcessAlive
       .mockReturnValueOnce(true)
       .mockReturnValueOnce(true)
@@ -1202,6 +1210,10 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
   it("rejects when a stopped host remains alive through the shutdown timeout, naming --force as the escalation path", async () => {
     vi.useFakeTimers();
     MOCKS.readHostPidMetadata.mockResolvedValue(HOST_PID_METADATA);
+    MOCKS.readHostPidMetadataEvidence.mockResolvedValue({
+      kind: "read",
+      metadata: HOST_PID_METADATA,
+    });
     MOCKS.isProcessAlive.mockReturnValue(true);
     const runner: ProcessRunner = async () => buildSuccessResult();
     const controller = createMacosController(runner);
@@ -1222,6 +1234,99 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
     await expect(stopping).rejects.toMatchObject({
       message: expect.stringContaining("Re-run with --force"),
     });
+  });
+
+  // CodeRabbit #1773 round 2, the macOS half of the null-identity class.
+  //
+  // `stopServiceInternal` read the FOLDING `readHostPidMetadata`, which
+  // collapses "no record was published" and "the record could not be read"
+  // into one `null`, and then `if (before === null) return` reported SUCCESS
+  // for both. So a `pid.json` that was torn or momentarily unreadable as the
+  // signal landed made `host stop` and `host restart` claim a stop they never
+  // confirmed - which is exactly the no-op stop the pid snapshot three lines
+  // above exists to prevent, arriving through the one door it did not cover.
+  //
+  // `pid-metadata.ts` states the rule at the fold itself: a torn record "is
+  // not evidence that no host is running".
+  it("refuses to confirm a stop when the pid record stays unreadable, instead of reporting success", async () => {
+    vi.useFakeTimers();
+    MOCKS.readHostPidMetadataEvidence.mockReset();
+    MOCKS.readHostPidMetadataEvidence.mockResolvedValue({
+      kind: "unreadable",
+      cause: "not valid JSON",
+    });
+    const runner: ProcessRunner = async () => buildSuccessResult();
+    const controller = createMacosController(runner);
+
+    const stopping = controller.stop(label, { force: false });
+    const result = expect(stopping).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+      // The token. Not "did not exit" - nothing was observed to still be
+      // running - but "could not be confirmed", which is the honest claim.
+      message: expect.stringContaining("stop-not-confirmed"),
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.runAllTimersAsync();
+
+    await result;
+    // The cause travels, so a support report says WHY it could not be read
+    // rather than only that it could not.
+    await expect(stopping).rejects.toMatchObject({
+      message: expect.stringContaining("not valid JSON"),
+    });
+    // And it asked twice: once before the signal, once after serving the same
+    // grace the pid wait would have. A single read is the old behaviour with a
+    // throw bolted on - it would refuse stops that had already completed.
+    expect(MOCKS.readHostPidMetadataEvidence).toHaveBeenCalledTimes(2);
+  });
+
+  it("confirms the stop when an unreadable record has GONE by the end of the grace", async () => {
+    // The host removes its `pid.json` on exit, so an absent record after the
+    // grace is the same evidence the `absent` branch already trusts before the
+    // signal. Without this the fix above would turn every torn record into a
+    // failed stop, including the ones that plainly succeeded.
+    vi.useFakeTimers();
+    MOCKS.readHostPidMetadataEvidence.mockReset();
+    MOCKS.readHostPidMetadataEvidence
+      .mockResolvedValueOnce({ kind: "unreadable", cause: "not valid JSON" })
+      .mockResolvedValue({ kind: "absent" });
+    const runner: ProcessRunner = async () => buildSuccessResult();
+    const controller = createMacosController(runner);
+
+    const stopping = controller.stop(label, { force: false });
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.runAllTimersAsync();
+
+    await expect(stopping).resolves.toBeUndefined();
+  });
+
+  it("does NOT confirm against a record that only became readable after the grace", async () => {
+    // The trap in re-reading at all. launchd is armed, so by the end of the
+    // grace `pid.json` may name a REPLACEMENT host that came up exactly as
+    // intended. Binding the confirmation to it would report the old instance
+    // stopped on the strength of a new instance's record - the same confusion
+    // the before-snapshot exists to prevent, reintroduced by the fix for it.
+    // Only ABSENT confirms.
+    vi.useFakeTimers();
+    MOCKS.readHostPidMetadataEvidence.mockReset();
+    MOCKS.readHostPidMetadataEvidence
+      .mockResolvedValueOnce({ kind: "unreadable", cause: "not valid JSON" })
+      .mockResolvedValue({ kind: "read", metadata: HOST_PID_METADATA });
+    const runner: ProcessRunner = async () => buildSuccessResult();
+    const controller = createMacosController(runner);
+
+    const stopping = controller.stop(label, { force: false });
+    const result = expect(stopping).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+      message: expect.stringContaining("stop-not-confirmed"),
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.runAllTimersAsync();
+
+    await result;
+    // Never waited on the replacement's pid, which is the difference between
+    // "could not confirm" and "confirmed the wrong thing".
+    expect(MOCKS.isProcessAlive).not.toHaveBeenCalled();
   });
 
   // CLI-owned `stop --force` goes straight to the child-kill engine
