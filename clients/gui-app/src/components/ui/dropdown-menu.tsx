@@ -6,8 +6,6 @@ import { CheckIcon, ChevronRightIcon } from "lucide-react";
 import { usePaneAwareContentGuard } from "@/components/epic-tabs/pane-visibility-context";
 import { usePortalConcealed } from "@/components/ui/portal-concealment-context";
 import { useSafeAreaCollisionPadding } from "@/components/ui/safe-area-collision-padding";
-import { useComposedRefs } from "radix-ui/internal";
-import { useRegisterBrowserOverlay } from "@/lib/browser-view/tiles/use-register-browser-overlay";
 
 function DropdownMenu({
   ...props
@@ -62,13 +60,11 @@ function DropdownMenuContent({
   const concealed = usePortalConcealed();
   // Read above the early returns so hook order does not depend on presentation.
   const safeAreaInsets = useSafeAreaCollisionPadding();
-  const registerOverlayRef = useRegisterBrowserOverlay<HTMLDivElement>();
-  const composedRef = useComposedRefs(ref, registerOverlayRef);
   if (!paneFocused || concealed) return null;
   return (
     <DropdownMenuPrimitive.Portal container={container}>
       <DropdownMenuPrimitive.Content
-        ref={composedRef}
+        ref={ref}
         data-slot="dropdown-menu-content"
         sideOffset={sideOffset}
         align={align}
@@ -305,11 +301,9 @@ function DropdownMenuSubContent({
   // A submenu opens sideways from a row that is itself already near an edge, so
   // it is the surface most likely to need the clamp its parent content has.
   const safeAreaInsets = useSafeAreaCollisionPadding();
-  const registerOverlayRef = useRegisterBrowserOverlay<HTMLDivElement>();
-  const composedRef = useComposedRefs(ref, registerOverlayRef);
   return (
     <DropdownMenuPrimitive.SubContent
-      ref={composedRef}
+      ref={ref}
       data-slot="dropdown-menu-sub-content"
       collisionPadding={collisionPadding ?? safeAreaInsets}
       className={cn(

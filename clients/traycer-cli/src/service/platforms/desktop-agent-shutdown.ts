@@ -9,6 +9,7 @@ import {
 } from "@traycer/protocol/host/lifecycle/schemas";
 import {
   isValidLocalHostWebsocketUrl,
+  publishedHostProcessGone,
   readHostPidMetadata,
   removeHostPidMetadata,
   type HostPidMetadata,
@@ -86,7 +87,9 @@ export async function requestCooperativeShutdown(
   if (metadata === null) {
     return { kind: "no-metadata" };
   }
-  if (!isProcessAlive(metadata.pid)) {
+  // Exited, or a recycled pid: either way there is no host to claim against,
+  // and dialling the record's endpoint would only answer "unreachable".
+  if (publishedHostProcessGone(metadata)) {
     return { kind: "no-host" };
   }
   if (!isValidLocalHostWebsocketUrl(metadata.websocketUrl)) {

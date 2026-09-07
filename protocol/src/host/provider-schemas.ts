@@ -980,8 +980,8 @@ export const providerLoginCapabilitySchema = z.object({
   codePaste: z.object({}).nullable().catch(null),
   /**
    * Non-null when this provider must be signed in from a real terminal rather
-   * than the headless `providers.startLogin` child - the host opens an
-   * epic-scoped PTY over `providers.startTerminalLogin` and delivers the
+   * than the headless `providers.startLogin` child - the host opens a
+   * host-owned PTY over `providers.startTerminalLogin` and delivers the
    * provider's login command into it, and the user reads the device code and
    * URL the CLI prints. Copilot is the case: its `copilot login` prints a
    * device code that a headless child discards while the browser opens the
@@ -989,11 +989,18 @@ export const providerLoginCapabilitySchema = z.object({
    * SDK exposes that code natively, so Traycer never parses it out - the user
    * reads it from the terminal Traycer opened.
    *
-   * Set here, `oauthArgs` stays the command source but the GUI must NOT offer
-   * headless browser OAuth; the host refuses `providers.startLogin` for the
-   * same reason, so a released client that predates this field cannot start a
-   * concurrent broken flow. Shape carries no fields today - existence alone is
-   * the signal - but stays an object for the same reason `codePaste` does.
+   * Set here, the GUI must NOT offer headless browser OAuth, whatever
+   * `oauthArgs` says; the host refuses `providers.startLogin` for the same
+   * reason, so a released client that predates this field cannot start a
+   * concurrent broken flow. The command the terminal runs is host-owned and is
+   * NOT `oauthArgs` - that is the headless command. A provider with no
+   * headless command at all (Qwen, Droid, OMP, OpenCode: the sign-in lives
+   * inside their own TUI, so the host launches the CLI itself) declares this
+   * with `oauthArgs: null`, which is exactly what keeps the headless button
+   * hidden on older clients - so a GUI gate reads this field alone and never
+   * requires `oauthArgs` beside it. Shape carries no fields today - existence
+   * alone is the signal - but stays an object for the same reason `codePaste`
+   * does.
    *
    * `.catch(null)` hardens a present-but-unrecognized value. A genuinely
    * ABSENT key (an old host that predates the field, decoded through the
@@ -2850,20 +2857,25 @@ export type ProvidersTouchLoginResponse = z.infer<
 >;
 
 /**
- * Start (or restart) a host-owned, epic-scoped terminal running this
- * provider's login command, for providers whose capability declares
- * `terminalLogin`. The host - not the client - creates the PTY: only the host
- * can build the provider's spawn env (binary path, profile overrides,
- * `COPILOT_AUTO_UPDATE=false`) and pick the cwd, and a plain `terminal.create`
- * would get bare filtered `process.env` in a surface that has no cwd of its
- * own. The client's job is to render the session the host names back.
+ * Start (or restart) a host-owned terminal running this provider's login
+ * command, for providers whose capability declares `terminalLogin`. The host -
+ * not the client - creates the PTY: only the host can build the provider's
+ * spawn env (binary path, profile overrides, `COPILOT_AUTO_UPDATE=false`) and
+ * pick the cwd, and a plain `terminal.create` would get bare filtered
+ * `process.env` in a surface that has no cwd of its own. The client's job is
+ * to render the session the host names back.
  *
- * `epicId` scopes the session so it lands in the epic's Terminals surface and
- * the initiating view can open it as a tile - the same scope `terminal.create`
- * uses. `cols`/`rows` are the size the PTY is opened at, applied while the
- * shell's output is still buffered so its first redraw is not torn; they are
- * an INITIAL size, not a promise about the user's viewport - the tile resizes
- * on mount, and today's client sends a fixed 80x24. A host must not treat them
+ * This is the FROZEN `@1.0` request: `epicId` scopes the session to an epic's
+ * Terminals surface, the only surface that existed when the method shipped.
+ * `@2.0` below replaces it with a `TerminalScope`, exactly as
+ * `terminal.create@2.0` did, so the landing page's independent terminal panel
+ * can host a sign-in too. Never edit this shape in place; the registry's
+ * v1.0 line binds it.
+ *
+ * `cols`/`rows` are the size the PTY is opened at, applied while the shell's
+ * output is still buffered so its first redraw is not torn; they are an
+ * INITIAL size, not a promise about the user's viewport - the tile resizes on
+ * mount, and today's client sends a fixed 80x24. A host must not treat them
  * as the real geometry (no sizing heuristics, no resize-suppression window).
  *
  * No `profileId`: terminal login is Copilot-only today and Copilot has no
@@ -2888,6 +2900,39 @@ export const providersStartTerminalLoginRequestSchema = z.object({
 });
 export type ProvidersStartTerminalLoginRequest = z.infer<
   typeof providersStartTerminalLoginRequestSchema
+>;
+
+/**
+ * Canonical `@2.0` request. `scope` replaces `epicId`: `{ kind: "epic" }`
+ * lands the sign-in terminal in that epic's Terminals surface exactly as
+ * `@1.0` did, and `{ kind: "independent" }` lands it in the landing page's
+ * terminal panel - the surface a provider that is signed out BEFORE any epic
+ * exists can actually reach. A field rename is not additive, so this rides a
+ * new major (the `terminalScopeSchema` comment records why); the registry's
+ * v1.0→v2.0 upgrade folds an old client's `epicId` into an epic scope, and
+ * the downgrade refuses an independent scope against an old host (that
+ * refusal IS the feature gate - the old host has no surface to put it in).
+ *
+ * Everything the `@1.0` doc says about `cols`/`rows`, the absent `profileId`
+ * and the absent `desiredSessionId` holds unchanged here.
+ *
+ * The epic arm keeps `@1.0`'s non-empty floor on `epicId` rather than
+ * borrowing `terminalScopeSchema`'s bare string: an empty id decodes fine and
+ * then names no surface, leaving the host holding a live sign-in PTY nothing
+ * can list. Same inferred type as `TerminalScope`, so the host passes it
+ * through unchanged.
+ */
+export const providersStartTerminalLoginRequestSchemaV20 = z.object({
+  providerId: providerIdSchema,
+  scope: z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("epic"), epicId: z.string().min(1) }),
+    z.object({ kind: z.literal("independent") }),
+  ]),
+  cols: z.number().int().positive(),
+  rows: z.number().int().positive(),
+});
+export type ProvidersStartTerminalLoginRequestV20 = z.infer<
+  typeof providersStartTerminalLoginRequestSchemaV20
 >;
 
 /**

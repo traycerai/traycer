@@ -1,3 +1,11 @@
+// The Overview re-provides a scoped STREAM binding beside its unary one (for
+// the Data & migration group), and the real hook reads `useAuthService` -
+// which this suite deliberately does not stand up. `null` keeps the panel on
+// the ambient stream, the arrangement every assertion below already assumed.
+vi.mock("@/components/settings/host-scope/use-scoped-stream-binding", () => ({
+  useScopedStreamBinding: () => null,
+}));
+
 // Mirrors `local-host-restart-flow.test.tsx`'s boundary exactly, because
 // `HostUpdateBanner`'s bound arm pulls in the SAME split
 // (`useHostBinding`) plus `useLocalHostUpdateOperation`'s own two leaf
@@ -405,7 +413,7 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
         execution: "parked",
         busySessionCount: 2,
       }),
-      expectedPhrase: /Update will continue when 2 sessions finish/,
+      expectedPhrase: /Update waits for 2 sessions to finish/,
     },
     {
       name: "waiting-to-activate",
@@ -460,6 +468,24 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
       expect(text).not.toMatch(/^Updating this host/i);
     },
   );
+
+  // The coarse `updateProgress` marker beside `updateOperation:
+  // {kind:"none"}` - the shipped legacy `traycer host update` path's whole
+  // signal for "in flight", with no attempt record at all. Before this field
+  // reached the projection, a @1.3 local host running that path showed no
+  // operation branch here whatsoever while a real download/swap/restart was
+  // under way.
+  it("a local host reporting {kind:'none'} with coarse updateProgress {state:'updating'} shows the operation branch with 'Updating host'", async () => {
+    bindLocalHost({
+      "host.status": () => ({
+        ...attemptStatus({ kind: "none" }),
+        updateProgress: { state: "updating", error: null },
+      }),
+    });
+    renderBanner(undefined);
+    const text = await findPhaseText();
+    expect(text).toMatch(/Updating host/);
+  });
 
   // `restarting`-while-disconnected ("reconnecting") is a projection-level
   // rule (`connected` from `useReactiveHostReadiness`), already pinned
@@ -593,9 +619,7 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
     renderBanner(undefined);
     // Positive control that the banner rendered at all - an absent button is
     // trivially "absent" if nothing rendered.
-    expect(await findPhaseText()).toMatch(
-      /Update will continue when work finishes/,
-    );
+    expect(await findPhaseText()).toMatch(/Update waits for work to finish/);
     expect(screen.queryByTestId("host-update-banner-force-restart")).toBeNull();
   });
 
@@ -647,7 +671,7 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
     });
     expect(restartCalls).toBe(0);
     // The banner is untouched - still showing the same attempt.
-    expect(await findPhaseText()).toMatch(/Update will continue/);
+    expect(await findPhaseText()).toMatch(/Update waits for/);
   });
 
   it("Force restart… CONFIRM dispatches the cooperative host.restart RPC", async () => {
@@ -921,6 +945,7 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
         hostId: LOCAL_HOST_ID,
         status: attemptStatus(failedAttempt),
         nowMs: Date.now(),
+        legacyFacts: null,
       });
       const view = projectFleetUpdateView({
         observation,
@@ -932,6 +957,8 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
           view={view}
           hostName="This computer"
           onForceRestart={() => undefined}
+          onRestart={null}
+          onForceUpdate={null}
         />,
       );
       const card = screen.getByTestId("host-overview-operation-card");

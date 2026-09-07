@@ -425,6 +425,7 @@ function renderPickerWithFixture(
             createProfileHostId={null}
             runTargetHostId={null}
             profileAdmission={null}
+            terminalLoginSurface={null}
           />
         </TooltipProvider>
       </SurfaceActivityProvider>

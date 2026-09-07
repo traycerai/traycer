@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useReducer, useRef } from "react";
+import type { PermissionMode } from "@traycer/protocol/persistence/epic/schemas";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   SessionImportRunClient,
@@ -17,14 +18,31 @@ import {
   useSessionImportRunStore,
 } from "@/stores/session-import/session-import-run-store";
 import { useImportedUnseenStore } from "@/stores/session-import/imported-unseen-store";
+import { useSettingsStore } from "@/stores/settings/settings-store";
+import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
 import {
   getSessionImportStartHandle,
   setSessionImportStartHandle,
   type SessionImportRunRequest,
+  type SessionImportRunTarget,
 } from "@/components/session-import/session-import-run-handle";
 
 /**
- * Owns the single `sessionImport.run` subscription for the whole app.
+ * The permission mode a NEW chat on this host would start under, read at
+ * subscribe time: the last mode any composer ran with on that host, else the
+ * install's default. That is exactly what the composer seeds a fresh chat
+ * from, so an imported chat is no stricter and no looser than one the user
+ * creates. The host has no default of its own to consult.
+ */
+function newChatPermissionModeFor(hostId: string): PermissionMode {
+  return (
+    useComposerRunSettingsStore.getState().getGlobalRunSettings(hostId)
+      ?.permissionMode ?? useSettingsStore.getState().defaultPermission
+  );
+}
+
+/**
+ * Owns the `sessionImport.run` subscriptions for the whole app - ONE PER HOST.
  *
  * App-level rather than wizard-level on purpose: the user is invited to close
  * the wizard and carry on with the tour while the import runs, and a stream
@@ -33,25 +51,30 @@ import {
  * Here it stays attached for the life of the window, and the store it feeds is
  * what every import surface reads.
  *
- * It also asks the host, whenever a stream client connects, whether a run is
- * already going. A window opened while the host is still importing - a
- * reload, a second window - would otherwise show an idle wizard over a live
+ * "One run at a time" is still the contract, but it is the HOST's contract, so
+ * it holds per host: a second start for a host that is already importing is
+ * refused, while another machine can start one of its own. The target travels
+ * with the request (`SessionImportRunTarget`) rather than being read from this
+ * component's ambient binding, so a run started from a host-scoped panel runs
+ * on the host that panel is showing.
+ *
+ * It also asks the host, whenever the AMBIENT stream client connects, whether
+ * a run is already going. A window opened while the host is still importing -
+ * a reload, a second window - would otherwise show an idle wizard over a live
  * run, and its Import button would attach to that run instead of starting the
- * user's own selection.
+ * user's own selection. Only the ambient host is probed: a scoped host is
+ * asked about by the surface that opens it, and probing every host the window
+ * could reach is a fan-out nothing has asked for.
  */
 export function SessionImportRunController(): null {
   const queryClient = useQueryClient();
-  const wsStreamClient = useWsStreamClient();
-  // The host the run will actually execute on is the one this stream dials, so
-  // its name has to come off the same binding as the client - a host swap
-  // between the two reads would invalidate one machine's queries for a run that
-  // happened on another. See `StreamRuntimeBinding.hostId`.
-  const streamHostId = useStreamHostId();
-  const clientRef = useRef<SessionImportRunClient | null>(null);
-  // The mount-time probe while it is still waiting for the host's answer.
-  // Cleared the moment it attaches (it is the run's subscription then) or
-  // closes, so `start` can tell "a run is going" from "we are still asking".
-  const waitingProbeRef = useRef<SessionImportRunClient | null>(null);
+  const ambientStreamClient = useWsStreamClient();
+  // The host the mount-time probe asks. Its name has to come off the same
+  // binding as the client - a host swap between the two reads would invalidate
+  // one machine's queries for a run that happened on another. See
+  // `StreamRuntimeBinding.hostId`.
+  const ambientHostId = useStreamHostId();
+  const runsRef = useRef<Map<string, HostRun>>(new Map());
   // The stream client this window has already asked "is a run going?". One
   // question per binding: a probe that came back empty must not be asked
   // again on the same connection every time a client closes, while a NEW
@@ -65,24 +88,26 @@ export function SessionImportRunController(): null {
     0,
   );
 
-  const closeClient = useCallback(() => {
-    const client = clientRef.current;
-    if (client !== null) {
-      clientRef.current = null;
-      if (waitingProbeRef.current === client) waitingProbeRef.current = null;
-      client.close();
-      noteClientClosed();
-    }
+  const closeRun = useCallback((hostId: string) => {
+    const run = runsRef.current.get(hostId);
+    if (run === undefined) return;
+    runsRef.current.delete(hostId);
+    run.client.close();
+    // Returns the transport reference this run took at subscribe. A scoped
+    // transport closes here if nothing else is reading it; the ambient one
+    // has no lease to return.
+    run.release?.();
+    noteClientClosed();
   }, []);
 
   // The frames every subscription feeds the store from, whether it started
-  // the run or found one going. `hostIdAtStart` is captured by the caller: the
-  // run outlives this binding, and by the time it completes the app may be
-  // pointed at a different host.
+  // the run or found one going. The host is the run's, captured when it was
+  // opened: the run outlives its binding, and by the time it completes the app
+  // may be pointed somewhere else.
   const runCallbacks = useCallback(
-    (hostIdAtStart: string | null): SessionImportRunCallbacks => ({
+    (hostId: string): SessionImportRunCallbacks => ({
       onStarted: (payload: SessionImportRunStartedPayload) => {
-        useSessionImportRunStore.getState().applyStarted({
+        useSessionImportRunStore.getState().applyStarted(hostId, {
           runId: payload.runId,
           total: payload.total,
           attached: payload.attached,
@@ -90,7 +115,7 @@ export function SessionImportRunController(): null {
       },
       onProgress: (payload: SessionImportRunProgressPayload) => {
         const entry = progressEntryFrom(payload);
-        useSessionImportRunStore.getState().applyProgress(entry);
+        useSessionImportRunStore.getState().applyProgress(hostId, entry);
         // The task list's unread dot: each landed task is unseen until its
         // epic is first opened.
         if (entry.outcome.kind === "imported") {
@@ -100,56 +125,85 @@ export function SessionImportRunController(): null {
         }
       },
       onComplete: (payload: SessionImportRunCompletePayload) => {
-        useSessionImportRunStore.getState().applyComplete({
+        useSessionImportRunStore.getState().applyComplete(hostId, {
           runId: payload.runId,
           counts: payload.counts,
         });
         // Imported sessions are real epics and chats; the task list and the
         // Settings entry's `lastCompleted` are both stale the instant the
         // run lands.
-        if (hostIdAtStart !== null) {
-          void queryClient.invalidateQueries({
-            queryKey: sessionImportQueryKeys.status(hostIdAtStart),
-          });
-          void queryClient.invalidateQueries({
-            queryKey: hostQueryKeys.scope(hostIdAtStart),
-          });
-        }
-        closeClient();
+        void queryClient.invalidateQueries({
+          queryKey: sessionImportQueryKeys.status(hostId),
+        });
+        void queryClient.invalidateQueries({
+          queryKey: hostQueryKeys.scope(hostId),
+        });
+        closeRun(hostId);
       },
       onConnectionStatus: (_status, reason) => {
         if (reason === null) return;
-        if (clientRef.current === null) return;
-        useSessionImportRunStore.getState().applyError();
-        closeClient();
+        if (!runsRef.current.has(hostId)) return;
+        useSessionImportRunStore.getState().applyError(hostId);
+        closeRun(hostId);
       },
     }),
-    [closeClient, queryClient],
+    [closeRun, queryClient],
+  );
+
+  // Opens a subscription for one host and files it under that host. The
+  // transport is pinned FIRST: the run outlives the surface that handed the
+  // binding over, and a scoped transport closes at that surface's unmount
+  // otherwise, taking this subscription with it.
+  const openRun = useCallback(
+    (input: {
+      readonly target: SessionImportRunTarget;
+      readonly selections: SessionImportRunRequest["selections"];
+      readonly callbacks: SessionImportRunCallbacks;
+      readonly waitingProbe: boolean;
+    }): SessionImportRunClient => {
+      const release = input.target.binding.retain?.() ?? null;
+      const client = new SessionImportRunClient({
+        wsStreamClient: input.target.binding.wsStreamClient,
+        selections: input.selections,
+        permissionMode: newChatPermissionModeFor(input.target.hostId),
+        callbacks: input.callbacks,
+      });
+      runsRef.current.set(input.target.hostId, {
+        client,
+        release,
+        waitingProbe: input.waitingProbe,
+      });
+      return client;
+    },
+    [],
   );
 
   const start = useCallback(
-    (request: SessionImportRunRequest) => {
-      if (wsStreamClient === null) return;
-      // One run at a time is the contract; a second subscribe would attach to
-      // the first and silently drop this submission's selections. A probe
-      // still waiting for its answer is not a run, though: dropping the
+    (request: SessionImportRunRequest, target: SessionImportRunTarget) => {
+      // One run at a time PER HOST is the contract; a second subscribe would
+      // attach to the first and silently drop this submission's selections. A
+      // probe still waiting for its answer is not a run, though: dropping the
       // user's click for it would lose the submission with nothing on screen
       // to say so. Close it and subscribe with the selections - if a run WAS
       // in flight, this subscribe attaches to it exactly as the probe would.
-      if (clientRef.current !== null) {
-        if (clientRef.current !== waitingProbeRef.current) return;
-        closeClient();
+      const existing = runsRef.current.get(target.hostId);
+      if (existing !== undefined) {
+        if (!existing.waitingProbe) return;
+        closeRun(target.hostId);
       }
       if (request.selections.length === 0) return;
 
-      useSessionImportRunStore.getState().markStarting(request.titles);
-      clientRef.current = new SessionImportRunClient({
-        wsStreamClient,
+      useSessionImportRunStore
+        .getState()
+        .markStarting(target.hostId, request.titles);
+      openRun({
+        target,
         selections: request.selections,
-        callbacks: runCallbacks(streamHostId),
+        callbacks: runCallbacks(target.hostId),
+        waitingProbe: false,
       });
     },
-    [closeClient, runCallbacks, streamHostId, wsStreamClient],
+    [closeRun, openRun, runCallbacks],
   );
 
   // Subscribing with no selections is the host's "attach to whatever is
@@ -164,54 +218,68 @@ export function SessionImportRunController(): null {
   // new run id supersede it. A probe that finds nothing leaves the store as
   // it was.
   useEffect(() => {
-    if (wsStreamClient === null) return;
-    if (clientRef.current !== null) return;
-    if (probedStreamClientRef.current === wsStreamClient) return;
-    probedStreamClientRef.current = wsStreamClient;
+    if (ambientStreamClient === null || ambientHostId === null) return;
+    if (runsRef.current.has(ambientHostId)) return;
+    if (probedStreamClientRef.current === ambientStreamClient) return;
+    probedStreamClientRef.current = ambientStreamClient;
 
-    const callbacks = runCallbacks(streamHostId);
+    const hostId = ambientHostId;
+    const callbacks = runCallbacks(hostId);
     let attached = false;
-    const probe = new SessionImportRunClient({
-      wsStreamClient,
+    const probe = openRun({
+      // The ambient binding never closes under its readers, so there is
+      // nothing to pin: `retain: null` says exactly that.
+      target: {
+        binding: { wsStreamClient: ambientStreamClient, hostId, retain: null },
+        hostId,
+      },
       selections: [],
+      waitingProbe: true,
       callbacks: {
         ...callbacks,
         onStarted: (payload) => {
           if (!payload.attached) {
-            closeClient();
+            closeRun(hostId);
             return;
           }
           attached = true;
-          waitingProbeRef.current = null;
+          // It is the run's subscription from here, not a question awaiting an
+          // answer, so `start` must refuse rather than replace it.
+          const run = runsRef.current.get(hostId);
+          if (run !== undefined) run.waitingProbe = false;
           callbacks.onStarted(payload);
         },
       },
     });
-    clientRef.current = probe;
-    waitingProbeRef.current = probe;
+    // Copied out of the ref for the cleanup: the map object itself never
+    // changes for the life of this controller, so the copy reads the same
+    // entries the cleanup would, without the lint rule's stale-ref worry.
+    const runs = runsRef.current;
     return () => {
       // A probe still waiting for its answer when the client is replaced is
       // asking a connection that is gone; one that attached is the run's
       // subscription now and stays.
-      if (!attached && clientRef.current === probe) {
+      const opened = runs.get(hostId);
+      if (!attached && opened?.client === probe) {
         // Closed before the host answered (StrictMode's setup-cleanup-setup
         // replay, or the binding changed underneath it): the question was
         // never answered, so the next run of this effect asks again. Closed
-        // by hand rather than through `closeClient`: that bumps the
-        // generation this effect depends on, and a cleanup that re-runs its
-        // own effect would close and re-ask without end.
+        // by hand rather than through `closeRun`: that bumps the generation
+        // this effect depends on, and a cleanup that re-runs its own effect
+        // would close and re-ask without end.
         probedStreamClientRef.current = null;
-        waitingProbeRef.current = null;
-        clientRef.current = null;
+        runs.delete(hostId);
         probe.close();
+        opened.release?.();
       }
     };
   }, [
+    ambientHostId,
+    ambientStreamClient,
     clientGeneration,
-    closeClient,
+    closeRun,
+    openRun,
     runCallbacks,
-    streamHostId,
-    wsStreamClient,
   ]);
 
   useEffect(() => {
@@ -225,10 +293,22 @@ export function SessionImportRunController(): null {
 
   useEffect(
     () => () => {
-      closeClient();
+      for (const hostId of [...runsRef.current.keys()]) closeRun(hostId);
     },
-    [closeClient],
+    [closeRun],
   );
 
   return null;
+}
+
+interface HostRun {
+  readonly client: SessionImportRunClient;
+  /** Returns the transport lease this run took; `null` for the ambient one. */
+  readonly release: (() => void) | null;
+  /**
+   * True while this client is the mount-time probe still waiting for the
+   * host's answer, which is what lets `start` tell "a run is going" from "we
+   * are still asking".
+   */
+  waitingProbe: boolean;
 }

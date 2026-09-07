@@ -1,7 +1,10 @@
 import type { ReactNode } from "react";
 import { Cloud, Laptop, MonitorSmartphone, Server } from "lucide-react";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
+import { PingRing } from "@/components/ui/ping-ring";
 import { cn } from "@/lib/utils";
+
+const LIVE_RING_PEAK_OPACITY = 0.6;
 
 /**
  * A host's glyph.
@@ -60,12 +63,7 @@ export function HostPresenceDot(props: {
       aria-hidden
     >
       {props.animate ? (
-        <span
-          className={cn(
-            "absolute inline-flex h-full w-full animate-ping rounded-full opacity-60",
-            toneClass,
-          )}
-        />
+        <PingRing toneClass={toneClass} peakOpacity={LIVE_RING_PEAK_OPACITY} />
       ) : null}
       <span
         className={cn(

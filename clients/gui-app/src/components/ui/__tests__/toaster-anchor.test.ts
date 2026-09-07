@@ -5,7 +5,7 @@ import {
   TOASTER_EDGE_OFFSET_PX,
   type ToasterAnchor,
 } from "@/components/ui/toaster-anchor";
-import type { BrowserOverlayRect } from "@/lib/browser-view/tiles/browser-overlay-coordinator";
+import type { TileRect } from "@/lib/browser-view/tiles/tile-rect-registry";
 
 const VIEWPORT = { width: 1200, height: 800 };
 const TOASTER_SIZE = { width: 356, height: 120 };
@@ -30,7 +30,7 @@ const ANCHOR_TOP: Record<ToasterAnchor, number> = {
     VIEWPORT.height - TOASTER_EDGE_OFFSET_PX - TOASTER_SIZE.height,
 };
 
-function rectForAnchor(anchor: ToasterAnchor): BrowserOverlayRect {
+function rectForAnchor(anchor: ToasterAnchor): TileRect {
   const left = ANCHOR_LEFT[anchor];
   const top = ANCHOR_TOP[anchor];
   return {
@@ -119,7 +119,7 @@ describe("pickToasterAnchor", () => {
   });
 });
 
-function rectsOverlap(a: BrowserOverlayRect, b: BrowserOverlayRect): boolean {
+function rectsOverlap(a: TileRect, b: TileRect): boolean {
   return (
     a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top
   );

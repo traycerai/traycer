@@ -338,15 +338,11 @@ export const RunnerHostInvoke = {
   browserViewAttachSurface: "runnerHost:browserView:nativeTab:attachSurface",
   browserViewDetachSurface: "runnerHost:browserView:nativeTab:detachSurface",
   browserViewControlElectronTab: "runnerHost:browserView:nativeTab:control",
-  browserViewUpdateBounds: "runnerHost:browserView:updateBounds",
   browserViewSetReservedChords: "runnerHost:browserView:setReservedChords",
-  browserViewOverlayPaintAck: "runnerHost:browserView:overlayPaintAck",
   browserViewFindInPage: "runnerHost:browserView:findInPage",
   browserViewStopFindInPage: "runnerHost:browserView:stopFindInPage",
   browserViewCancelDownload: "runnerHost:browserView:cancelDownload",
   browserViewTrustCertificate: "runnerHost:browserView:trustCertificate",
-  browserViewOccludeForOverlay: "runnerHost:browserView:occludeForOverlay",
-  browserViewReleaseOverlay: "runnerHost:browserView:releaseOverlay",
   browserViewCapturePage: "runnerHost:browserView:capturePage",
   browserViewGetDebugSnapshot: "runnerHost:browserView:getDebugSnapshot",
   // Clear cookies for one site (keychain refactor ticket 07): the user's
@@ -448,6 +444,10 @@ export const RunnerHostEvent = {
   // (browser/dev, the single-window topology D16 names).
   registeredHostsChange: "runnerHost:event:host:registeredHostsChange",
   zoomChange: "runnerHost:event:zoom:change",
+  browserViewGuestMountRequested:
+    "runnerHost:event:browserView:guest:mountRequested",
+  browserViewGuestReleaseRequested:
+    "runnerHost:event:browserView:guest:releaseRequested",
   browserViewNativeTabStatusChange:
     "runnerHost:event:browserView:nativeTab:statusChange",
   browserViewFindChange: "runnerHost:event:browserView:findChange",
@@ -455,6 +455,7 @@ export const RunnerHostEvent = {
   browserViewCertificateError: "runnerHost:event:browserView:certificateError",
   browserViewOpenTileRequest: "runnerHost:event:browserView:openTileRequest",
   browserViewTileCommand: "runnerHost:event:browserView:tileCommand",
+  browserViewTileFocused: "runnerHost:event:browserView:tileFocused",
   browserViewSnapshotInvalidated:
     "runnerHost:event:browserView:snapshotInvalidated",
   // Ticket 04 exit-edge handshake: fired once the un-parked native view's

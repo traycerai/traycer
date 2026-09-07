@@ -772,6 +772,10 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
                     registerActivation={false}
                     createProfileHostId={hostId}
                     runTargetHostId={hostId}
+                    // A dialog has no terminal surface to open a setup
+                    // terminal into; the CTA shows its steps without the
+                    // button.
+                    terminalLoginSurface={null}
                     profileAdmission={admissionByProfileId}
                   />
                 </div>

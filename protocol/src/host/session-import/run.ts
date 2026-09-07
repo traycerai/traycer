@@ -43,7 +43,10 @@
  */
 import { z } from "zod";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
-import { guiHarnessIdSchema } from "@traycer/protocol/persistence/epic/foundation";
+import {
+  guiHarnessIdSchema,
+  permissionModeSchema,
+} from "@traycer/protocol/persistence/epic/foundation";
 import {
   sessionImportFailureReasonSchema,
   sessionImportSelectionSchema,
@@ -58,6 +61,13 @@ export {
 
 export const sessionImportRunOpenRequestSchema = z.object({
   selections: z.array(sessionImportSelectionSchema),
+  // The permission mode every imported chat continues under: the client's
+  // default for a NEW chat, so an imported task starts exactly as one the
+  // user created would. The host has no default of its own to fall back on -
+  // that setting lives in the client - and the source CLI's permission model
+  // is not a signal, so nothing is inferred from the session. Ignored by a
+  // subscribe that attaches to a run already in flight, like `selections`.
+  permissionMode: permissionModeSchema,
 });
 export type SessionImportRunOpenRequest = z.infer<
   typeof sessionImportRunOpenRequestSchema

@@ -13,7 +13,6 @@ import { useCloseCanvasTileWithNestedFocus } from "@/components/epic-canvas/rend
 import type { TileController } from "@/components/epic-canvas/renderers/tile-controller";
 import { ScreencastSurface } from "@/components/epic-canvas/renderers/screencast-surface";
 import { useScreencastTileChrome } from "@/components/epic-canvas/renderers/use-screencast-tile-chrome";
-import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -365,19 +364,11 @@ function ScreencastPeekChromeBar(props: {
         <div className="min-w-0 flex-1 [&>div]:border-b-0">
           <BrowserTileToolbar
             controller={props.controller}
+            loading={props.loading}
             pictureInPicture={props.pictureInPicture}
           />
         </div>
         <div className="flex shrink-0 items-center gap-2 pr-2">
-          {props.loading ? (
-            <span role="status" aria-label="Page loading">
-              <AgentSpinningDots
-                className="text-muted-foreground"
-                testId="screencast-page-loading"
-                variant={undefined}
-              />
-            </span>
-          ) : null}
           {props.readOnly ? <Badge variant="outline">View only</Badge> : null}
           {props.armed ? (
             <div className="flex shrink-0 items-center gap-1">

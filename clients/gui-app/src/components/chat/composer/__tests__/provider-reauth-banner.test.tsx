@@ -504,6 +504,44 @@ describe("<ProviderReauthBanner />", () => {
     expect(screen.queryByText(/sign-in code/)).toBeNull();
   });
 
+  // The banner resolves its copy through the SAME resolver the picker's setup
+  // CTA uses (`providerTerminalGuidance`), so a launch-the-CLI provider's
+  // in-CLI instruction reaches it. It used to fall back to its own inline copy
+  // of the generic sentences whenever the override table returned null, which
+  // told a Qwen user to read a sign-in code that nothing prints.
+  it("shows the in-CLI instruction, not the generic sign-in-code hint, for a launch-the-CLI provider (qwen)", () => {
+    render(
+      <ProviderReauthBanner
+        epicId="epic-1"
+        viewTabId="tab-1"
+        providerId="qwen"
+        state={{
+          ...copilotState({
+            oauthArgs: null,
+            token: null,
+            codePaste: null,
+            terminalLogin: {},
+          }),
+          providerId: "qwen",
+        }}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", { name: "Sign in from a terminal" }),
+    ).toBeDefined();
+    expect(
+      screen.getByText(
+        "Qwen Code opens in that terminal. Type /auth and complete the sign-in there, then use Refresh above.",
+      ),
+    ).toBeDefined();
+    expect(screen.queryByText(/sign-in code/)).toBeNull();
+  });
+
   // Row 2: a provider whose whole `loginCapability` is `null` (Cursor,
   // Traycer, or any CLI with no OAuth session to reconnect) makes the
   // helper's optional chain yield `undefined` for `terminalLogin` -
@@ -512,6 +550,36 @@ describe("<ProviderReauthBanner />", () => {
   // has real `oauthArgs`, so a null capability here also exercises the "no
   // reconnect method at all" branch rather than the headless button; assert
   // on the absence of the terminal button, which is Row 2's actual claim.
+  it("shows the pack's preparing state instead of the terminal button while the provider cannot spawn", () => {
+    render(
+      <ProviderReauthBanner
+        epicId="epic-1"
+        viewTabId="tab-1"
+        providerId="copilot"
+        state={{
+          ...copilotState(COPILOT_TERMINAL_CAP),
+          managedInstallState: { status: "downloading", percent: 30 },
+        }}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+
+    // A terminal login spawns the provider's CLI exactly as a turn does, so
+    // a pack with nothing to fall back to gates it the same way - the row
+    // stays (the wait is the thing to show), the button does not.
+    expect(
+      screen.queryByRole("button", { name: /Sign in from a terminal/ }),
+    ).toBeNull();
+    expect(screen.getByRole("status").textContent).toBe(
+      "Preparing Copilot… 30%",
+    );
+    // And not the CLI-only stub either: this is not a provider with no route.
+    expect(screen.queryByText(/Reconnect Copilot from its CLI/)).toBeNull();
+  });
+
   it("does not offer 'Sign in from a terminal' when loginCapability is null", () => {
     render(
       <ProviderReauthBanner
@@ -531,34 +599,46 @@ describe("<ProviderReauthBanner />", () => {
     ).toBeNull();
   });
 
-  // Unified gate: `terminalLogin` present but no real `oauthArgs` (the
-  // command the terminal would run) must read the same way here as it does
-  // in `providerSupportsTerminalLogin` and `resolveCreateProfileGate` - the
-  // banner falls through to the CLI stub, offering neither button.
-  it("offers neither sign-in button when terminalLogin is present but oauthArgs is empty", () => {
-    render(
-      <ProviderReauthBanner
-        epicId="epic-1"
-        viewTabId="tab-1"
-        providerId="copilot"
-        state={copilotState({
-          oauthArgs: [],
-          token: null,
-          codePaste: null,
-          terminalLogin: {},
-        })}
-        reason="provider_unauthenticated"
-        profileId={null}
-        profileLabel={null}
-        onContinueOnAmbient={null}
-      />,
-    );
+  // A launch-the-CLI provider (Qwen, Droid, OMP, OpenCode) declares
+  // `terminalLogin` with `oauthArgs: null`: there is no headless command, the
+  // host launches the CLI itself. The banner must offer the terminal button
+  // (never the headless one) - the same answer `providerSupportsTerminalLogin`
+  // and `resolveCreateProfileGate` give, so this surface cannot fall through
+  // to the CLI stub for a provider Traycer can open the CLI for.
+  // Both spellings of "no headless command" are covered: this suite's previous
+  // `[]` case asserted the OPPOSITE (neither button), so leaving it out would
+  // drop that boundary from the suite entirely.
+  it.each([{ oauthArgs: null }, { oauthArgs: [] }])(
+    "offers the terminal button, not the headless one, when terminalLogin is present and there is no oauthArgs (%o)",
+    ({ oauthArgs }) => {
+      render(
+        <ProviderReauthBanner
+          epicId="epic-1"
+          viewTabId="tab-1"
+          providerId="qwen"
+          state={{
+            ...copilotState({
+              oauthArgs,
+              token: null,
+              codePaste: null,
+              terminalLogin: {},
+            }),
+            providerId: "qwen",
+          }}
+          reason="provider_unauthenticated"
+          profileId={null}
+          profileLabel={null}
+          onContinueOnAmbient={null}
+        />,
+      );
 
-    expect(screen.queryByRole("button", { name: /Authenticate/ })).toBeNull();
-    expect(
-      screen.queryByRole("button", { name: /Sign in from a terminal/ }),
-    ).toBeNull();
-  });
+      expect(screen.queryByRole("button", { name: /Authenticate/ })).toBeNull();
+      expect(
+        screen.queryByRole("button", { name: /Sign in from a terminal/ }),
+      ).not.toBeNull();
+      expect(screen.queryByText(/from its CLI to continue/)).toBeNull();
+    },
+  );
 
   // Row 3: unlike browser OAuth (a localhost loopback that only a local host
   // can serve), a device-code terminal login needs no loopback, so it must be

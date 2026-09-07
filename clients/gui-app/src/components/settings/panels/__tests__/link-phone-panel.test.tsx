@@ -87,6 +87,20 @@ function claimedStatus(claimedAtMs: number, userAgent: string) {
   };
 }
 
+/**
+ * The same claim from a server that knows about match codes: a string is
+ * the code the phone is showing, `null` is the server saying the phone
+ * presented none.
+ */
+function claimedStatusWithCode(
+  claimedAtMs: number,
+  userAgent: string,
+  matchCode: string | null,
+) {
+  const status = claimedStatus(claimedAtMs, userAgent);
+  return { ...status, claimant: { ...status.claimant, matchCode } };
+}
+
 beforeEach(() => {
   vi.useFakeTimers();
   mocks.useAuthLinkLoginStatus.mockReturnValue(statusResult(null));
@@ -637,6 +651,182 @@ describe("LinkPhonePanel", () => {
     render(<LinkPhonePanel />);
     expect(screen.getByTestId("link-phone-confirm").textContent).toContain(
       "Approve sign-in from iPhone 16 Pro?",
+    );
+  });
+
+  it("asks about the match code when the claim carries one, with the device as context", () => {
+    // The question is the code: the phone shows the same two digits, and
+    // agreement between the screens is what the self-reported description
+    // cannot prove. The description stays, demoted to context.
+    mocks.useAuthLinkLoginCode.mockReturnValue(queryResultWithCode(Date.now()));
+    mocks.useAuthLinkLoginStatus.mockReturnValue(
+      statusResult(claimedStatusWithCode(Date.now(), "iPhone 16 Pro", "47")),
+    );
+    const respond = respondIdle();
+    mocks.useRespondLinkLoginMutation.mockReturnValue(respond);
+    render(<LinkPhonePanel />);
+    const card = screen.getByTestId("link-phone-confirm");
+    expect(screen.getByTestId("link-phone-match-code").textContent).toBe("47");
+    expect(card.textContent).toContain("Does your phone show 47?");
+    expect(card.textContent).toContain("Sign-in request from iPhone 16 Pro.");
+    expect(card.textContent).not.toContain("Approve sign-in from");
+    expect(card.textContent).toContain("Approve only if the code matches");
+    // The code is announced with the prompt: a screen-reader user hears the
+    // number they are asked to compare, not only that a prompt appeared.
+    expect(screen.getByRole("status").textContent).toContain("47");
+    // The decision is unchanged by the code: Approve still sends only the
+    // code being decided — the match code is never an input.
+    act(() => {
+      screen.getByRole("button", { name: "Approve" }).click();
+    });
+    expect(respond.mutate).toHaveBeenCalledWith(
+      { code: "ABCDE-FGHJK", approve: true },
+      expect.anything(),
+    );
+  });
+
+  it("warns loudly when the server says the phone presented no code", () => {
+    // `/claim` is unauthenticated and the claimant decides whether a code is
+    // minted, so a leaked-QR holder can withhold it. The server reports that
+    // as an explicit null, and the card must read as a different, worse
+    // state than a normal claim — not as today's prompt with a detail gone.
+    mocks.useAuthLinkLoginCode.mockReturnValue(queryResultWithCode(Date.now()));
+    mocks.useAuthLinkLoginStatus.mockReturnValue(
+      statusResult(claimedStatusWithCode(Date.now(), "iPhone 16 Pro", null)),
+    );
+    render(<LinkPhonePanel />);
+    const warning = screen.getByTestId("link-phone-no-match-code");
+    expect(warning.textContent).toContain(
+      "This phone did not show a sign-in code.",
+    );
+    expect(warning.textContent).toContain(
+      "Sign-in request from iPhone 16 Pro.",
+    );
+    // The BLOCK treatment, not just the text color: a warning that collapsed
+    // to a destructive-tinted subtitle would read as a detail, not a state.
+    // Background, border, icon and heading are what make it loud.
+    expect(warning.className).toContain("bg-destructive/");
+    expect(warning.className).toContain("border-destructive/");
+    expect(warning.className).toContain("text-destructive");
+    expect(warning.querySelector("svg")).not.toBeNull();
+    expect(warning.querySelector("p")?.className).toContain("text-title-");
+    expect(screen.queryByTestId("link-phone-match-code")).toBeNull();
+    const card = screen.getByTestId("link-phone-confirm");
+    expect(card.textContent).not.toContain("Approve sign-in from");
+    expect(card.textContent).not.toContain("Does your phone show");
+    // Announced like the other two: the warning is what a screen-reader
+    // user has to hear before the buttons.
+    expect(screen.getByRole("status").textContent).toContain(
+      "did not show a sign-in code",
+    );
+    // Still decidable — a legitimate older phone must get through.
+    expect(screen.getByRole("button", { name: "Approve" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Reject" })).toBeTruthy();
+  });
+
+  it("drops the code the moment the status stops carrying it, and with the decision", () => {
+    // The code is read off the CURRENT status, never retained: a status that
+    // stops carrying it (a server that rolled back, or a re-mint watched
+    // onto a code the phone declined on) must lose the code prompt on the
+    // next render, and a decided record — which omits the key — must not
+    // keep a confirm card with a number on it at all.
+    mocks.useAuthLinkLoginCode.mockReturnValue(queryResultWithCode(Date.now()));
+    mocks.useAuthLinkLoginStatus.mockReturnValue(
+      statusResult(claimedStatusWithCode(Date.now(), "iPhone 16 Pro", "47")),
+    );
+    const view = render(<LinkPhonePanel />);
+    expect(screen.getByTestId("link-phone-match-code").textContent).toBe("47");
+
+    mocks.useAuthLinkLoginStatus.mockReturnValue(
+      statusResult(claimedStatus(Date.now(), "iPhone 16 Pro")),
+    );
+    view.rerender(<LinkPhonePanel />);
+    expect(screen.queryByTestId("link-phone-match-code")).toBeNull();
+    expect(screen.getByTestId("link-phone-confirm").textContent).toContain(
+      "Approve sign-in from iPhone 16 Pro?",
+    );
+
+    mocks.useAuthLinkLoginStatus.mockReturnValue(
+      statusResult(claimedStatusWithCode(Date.now(), "iPhone 16 Pro", null)),
+    );
+    view.rerender(<LinkPhonePanel />);
+    expect(screen.getByTestId("link-phone-no-match-code")).toBeTruthy();
+    expect(screen.queryByTestId("link-phone-match-code")).toBeNull();
+
+    mocks.useAuthLinkLoginStatus.mockReturnValue(
+      statusResult(claimedStatusWithCode(Date.now(), "iPhone 16 Pro", "47")),
+    );
+    view.rerender(<LinkPhonePanel />);
+    expect(screen.getByTestId("link-phone-match-code").textContent).toBe("47");
+
+    // Decided elsewhere: the key is gone with the claim. No card, no code.
+    mocks.useAuthLinkLoginStatus.mockReturnValue(
+      statusResult({ status: "denied", claimant: null }),
+    );
+    view.rerender(<LinkPhonePanel />);
+    expect(screen.queryByTestId("link-phone-confirm")).toBeNull();
+    expect(screen.queryByTestId("link-phone-match-code")).toBeNull();
+    expect(screen.getByTestId("link-phone-rejected-elsewhere")).toBeTruthy();
+  });
+
+  it("counts the claim's server-stated deadline down once a second, and shows none without it", () => {
+    // The deadline is the server's (`claimExpiresAt`), never a local copy of
+    // the claim window: what the card shows is what the server honours.
+    mocks.useAuthLinkLoginCode.mockReturnValue(queryResultWithCode(Date.now()));
+    const status = claimedStatus(Date.now(), "iPhone 16 Pro");
+    mocks.useAuthLinkLoginStatus.mockReturnValue(
+      statusResult({
+        ...status,
+        claimant: { ...status.claimant, claimExpiresAt: Date.now() + 119_000 },
+      }),
+    );
+    const view = render(<LinkPhonePanel />);
+    const countdown = () =>
+      screen.getByTestId("link-phone-claim-countdown").textContent;
+    expect(countdown()).toBe("Expires in 1:59");
+    // Beneath the prompt in reading order but OUTSIDE the status live region:
+    // a region announces every change under it, and a once-a-second clock
+    // would have a screen reader talking over the code and the instructions.
+    const live = screen.getByRole("status");
+    expect(live.textContent).not.toContain("Expires in");
+    expect(
+      live.compareDocumentPosition(
+        screen.getByTestId("link-phone-claim-countdown"),
+      ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    act(() => {
+      vi.advanceTimersByTime(60_000);
+    });
+    expect(countdown()).toBe("Expires in 0:59");
+    act(() => {
+      vi.advanceTimersByTime(58_000);
+    });
+    expect(countdown()).toBe("Expires in 0:01");
+    // Clamped at zero: the card's retirement is the status poll's (or the
+    // local guard's) job, never a clock that counts up.
+    act(() => {
+      vi.advanceTimersByTime(5_000);
+    });
+    expect(countdown()).toBe("Expires in 0:00");
+
+    // An older server states no deadline: no countdown, nothing else changes.
+    mocks.useAuthLinkLoginStatus.mockReturnValue(statusResult(status));
+    view.rerender(<LinkPhonePanel />);
+    expect(screen.queryByTestId("link-phone-claim-countdown")).toBeNull();
+    expect(screen.getByTestId("link-phone-confirm")).toBeTruthy();
+  });
+
+  it("falls back to the description prompt when the server sends no match code", () => {
+    // A server that predates the code: today's prompt, unchanged, and no
+    // empty code slot on the card.
+    mocks.useAuthLinkLoginCode.mockReturnValue(queryResultWithCode(Date.now()));
+    mocks.useAuthLinkLoginStatus.mockReturnValue(
+      statusResult(claimedStatus(Date.now(), "iPhone 16 Pro")),
+    );
+    render(<LinkPhonePanel />);
+    expect(screen.queryByTestId("link-phone-match-code")).toBeNull();
+    expect(screen.getByTestId("link-phone-confirm").textContent).not.toContain(
+      "Does your phone show",
     );
   });
 

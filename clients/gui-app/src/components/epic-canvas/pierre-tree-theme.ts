@@ -66,8 +66,27 @@ export const PIERRE_FILE_TREE_TRUNCATION_TOLERANCE_CSS = `
 }
 `;
 
+export const PIERRE_FILE_TREE_REVEAL_HIGHLIGHT_CSS = `
+:host([data-sidebar-reveal-highlighted="true"]) [data-item-selected="true"] {
+  background: color-mix(in oklab, var(--primary) 15%, transparent) !important;
+  box-shadow: inset 0 0 0 2px color-mix(in oklab, var(--primary) 80%, transparent);
+  animation: sidebar-reveal-pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+@keyframes sidebar-reveal-pulse {
+  50% { opacity: 0.5; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :host([data-sidebar-reveal-highlighted="true"]) [data-item-selected="true"] {
+    animation: none;
+  }
+}
+`;
+
 export const GIT_PANEL_PIERRE_FILE_TREE_UNSAFE_CSS = `
 ${PIERRE_FILE_TREE_TRUNCATION_TOLERANCE_CSS}
+${PIERRE_FILE_TREE_REVEAL_HIGHLIGHT_CSS}
 
 [data-item-type="file"] [data-item-section="icon"] {
   opacity: 0.9;

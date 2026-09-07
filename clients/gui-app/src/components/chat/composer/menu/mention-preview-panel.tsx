@@ -27,8 +27,6 @@ import { cn } from "@/lib/utils";
 
 import { panelFitFor } from "./mention-preview-panel-fit";
 import { ZERO_DOM_RECT } from "./zero-dom-rect";
-import { useComposedRefs } from "radix-ui/internal";
-import { useRegisterBrowserOverlay } from "@/lib/browser-view/tiles/use-register-browser-overlay";
 
 const PANEL_GUTTER_PX = 6;
 const PANEL_BOUNDARY_PADDING_PX = 8;
@@ -64,8 +62,6 @@ export interface MentionPreviewPanelProps {
 export function MentionPreviewPanel(props: MentionPreviewPanelProps) {
   const { panelRef, listRef, activeIndex, preview, disabledReason } = props;
   const [fits, setFits] = useState(false);
-  const registerOverlayRef = useRegisterBrowserOverlay<HTMLDivElement>();
-  const composedPanelRef = useComposedRefs(panelRef, registerOverlayRef);
 
   useLayoutEffect(() => {
     const panel = panelRef.current;
@@ -148,7 +144,7 @@ export function MentionPreviewPanel(props: MentionPreviewPanelProps) {
 
   return createPortal(
     <div
-      ref={composedPanelRef}
+      ref={panelRef}
       data-slot="mention-preview-panel"
       role="presentation"
       aria-hidden

@@ -19,7 +19,14 @@ import {
   emptyDraft,
   questionIdentity,
 } from "@/components/chat/segments/pending-interview/interview-draft";
-import { focusActiveComposer } from "@/lib/composer/composer-focus-registry";
+import {
+  focusActiveComposer,
+  focusRegisteredActiveComposer,
+} from "@/lib/composer/composer-focus-registry";
+import {
+  PaneFocusProbeContext,
+  PaneSurfaceActivityContext,
+} from "@/components/epic-tabs/pane-visibility-context";
 import { setMobileApp } from "@/lib/mobile-app";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { interviewDraftKey } from "@/lib/persist";
@@ -1989,5 +1996,97 @@ describe("PendingInterviewCard keyboard navigation", () => {
     // The active-pane focus flow (and ⌘L) reaches the card through the registry.
     expect(focusActiveComposer()).toBe(true);
     expect(document.activeElement).toBe(cardEl);
+  });
+
+  // The tile flag the hosted chat body hands this card deliberately excludes
+  // top-level tab focus, so `isActive` alone is true for a card sitting in a
+  // background tab. Focus ownership is the composer's own predicate - tile
+  // active AND pane focused AND tab selected.
+  it("neither registers as active nor autofocuses while its surface is not focused", () => {
+    render(
+      <PaneSurfaceActivityContext.Provider
+        value={{ visible: true, focused: false }}
+      >
+        <TooltipProvider>
+          <PendingInterviewCard
+            chatId="chat-1"
+            blockId="unfocused-surface"
+            questions={[singleSelect("q", "Question?", ["Alpha", "Beta"])]}
+            isActive
+            isBusy={false}
+            onSubmit={vi.fn()}
+            onSkip={null}
+            onFork={null}
+          />
+        </TooltipProvider>
+      </PaneSurfaceActivityContext.Provider>,
+    );
+
+    expect(document.activeElement).not.toBe(
+      screen.getByTestId("interview-card"),
+    );
+    // A surface that becomes focused elsewhere must not be handed this card.
+    expect(focusRegisteredActiveComposer()).toBe(false);
+  });
+
+  it("does not autofocus its free-text field while its surface is not focused", async () => {
+    render(
+      <PaneSurfaceActivityContext.Provider
+        value={{ visible: true, focused: false }}
+      >
+        <TooltipProvider>
+          <PendingInterviewCard
+            chatId="chat-1"
+            blockId="unfocused-free-text"
+            questions={[singleSelect("q", "Describe it", [])]}
+            isActive
+            isBusy={false}
+            onSubmit={vi.fn()}
+            onSkip={null}
+            onFork={null}
+          />
+        </TooltipProvider>
+      </PaneSurfaceActivityContext.Provider>,
+    );
+
+    // The field focuses itself from a callback ref, one frame late.
+    await act(async () => {
+      await new Promise<void>((resolve) =>
+        window.requestAnimationFrame(() => resolve()),
+      );
+    });
+
+    expect(document.activeElement).not.toBe(
+      screen.getByLabelText("Interview answer"),
+    );
+  });
+
+  // The registration itself is a render-time value, and the surface that is
+  // becoming focused restores its own focus before a backgrounded card has
+  // re-rendered. So selection re-asks the live probe rather than trusting a
+  // claim that is one commit old.
+  it("is skipped by the registry when the live probe says its pane lost focus", () => {
+    render(
+      <PaneFocusProbeContext.Provider value={() => false}>
+        <TooltipProvider>
+          <PendingInterviewCard
+            chatId="chat-1"
+            blockId="stale-registration"
+            questions={[singleSelect("q", "Question?", ["Alpha", "Beta"])]}
+            isActive
+            isBusy={false}
+            onSubmit={vi.fn()}
+            onSkip={null}
+            onFork={null}
+          />
+        </TooltipProvider>
+      </PaneFocusProbeContext.Provider>,
+    );
+
+    const cardEl = screen.getByTestId("interview-card");
+    cardEl.blur();
+
+    expect(focusRegisteredActiveComposer()).toBe(false);
+    expect(document.activeElement).not.toBe(cardEl);
   });
 });

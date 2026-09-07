@@ -177,6 +177,55 @@ vi.mock("../../installer/apply", () => ({
   },
 }));
 
+// SAFETY: `buildHostUpdateCommand` reads the REAL `~/.traycer/host/pid.json`
+// for activation debt and re-derives it after a no-op apply, and it writes
+// the REAL update-progress marker. Left unmocked on a developer machine, the
+// `applyHost` no-op above reads the developer's live host as debt against the
+// mocked 1.0.0 record, asks the live host whether it is busy, and tries to
+// restart it - and leaves a `failed` marker in the real host home when the
+// service mock cannot. Every test here that runs `host update` sees "no
+// running host" and an in-memory marker.
+//
+// Both factories SPREAD the real module rather than hand-list every export:
+// a hand-listed factory silently omits whatever the module adds later, and
+// vitest throws only on ACCESS of a missing mocked export - so the gap stays
+// invisible until some other registered module imports the omission
+// (CodeRabbit r3944370766 caught `isValidLocalHostWebsocketUrl` and
+// `removeHostPidMetadata` missing here) or a new export like
+// `updateProgressRecordHasLiveWriter` lands. Overriding on top of the spread
+// keeps every export this suite does not care about wired to the real
+// implementation instead of silently `undefined`.
+vi.mock("../../host/pid-metadata", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../host/pid-metadata")>()),
+  readHostPidMetadata: vi.fn(async () => null),
+}));
+
+vi.mock("../../host/update-progress-marker", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../../host/update-progress-marker")
+  >()),
+  claimUpdateProgressMarkerBeforeLock: vi.fn(async () => ({
+    outcome: "published",
+  })),
+  createUpdateProgressMarkerIfAbsent: vi.fn(async () => "created"),
+  readUpdateProgressMarker: vi.fn(async () => null),
+  replaceUpdateProgressMarkerIfUnchanged: vi.fn(async () => "replaced"),
+  deleteUpdateProgressMarkerIfUnchanged: vi.fn(async () => "cleared"),
+  deleteUpdateProgressMarker: vi.fn(async () => {}),
+  writeUpdateProgressMarker: vi.fn(async () => {}),
+  progressRecord: (fields: {
+    state: "updating" | "failed";
+    error: string | null;
+    targetVersion: string;
+  }) => ({
+    ...fields,
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    writerId: "test-writer",
+    writerStartIdentity: null,
+  }),
+  sameProgress: () => true,
+}));
+
 vi.mock("../../host/free-port-kill", () => ({
   killConflictingPortOwner: async (opts: {
     readonly pid: number;

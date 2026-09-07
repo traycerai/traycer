@@ -6,11 +6,12 @@ import {
   type BootstrapPhase,
 } from "../host/bootstrap-log";
 import {
+  publishedHostProcessGone,
   readHostPidMetadata,
   type HostPidMetadata,
 } from "../host/pid-metadata";
 import { bootstrapLogPath } from "../store/paths";
-import { isProcessAlive } from "../store/cli-lock";
+import { makeColorizer, shouldUseColor, type Colorizer } from "../runner/ansi";
 import type { CommandFn, CommandResult } from "../runner/runner";
 import type { RuntimeContext } from "../runner/runtime";
 
@@ -62,12 +63,16 @@ export const hostStatusCommand: CommandFn = async (
     BOOTSTRAP_LOG_TAIL_LINES,
   );
 
+  // `running` must reflect process liveness, not merely the presence of a
+  // pid.json - a stopped/crashed host can leave a stale record behind, and a
+  // recycled pid a live-looking one; `publishedHostProcessGone` reads the
+  // record's creation stamp for the second case. (service status reads the
+  // same predicate; this keeps host status consistent and makes `host stop`
+  // observable.)
+  const running =
+    pidMetadata !== null && !publishedHostProcessGone(pidMetadata);
   const output: HostStatusOutput = {
-    // `running` must reflect process liveness, not merely the presence of a
-    // pid.json - a stopped/crashed host can leave a stale record behind.
-    // (service status already checks isProcessAlive; this keeps host
-    // status consistent and makes `host stop` observable.)
-    running: pidMetadata !== null && isProcessAlive(pidMetadata.pid),
+    running,
     pidMetadata,
     bootstrapMarkers: markers,
     bootstrapLogPath: bootstrapLogPath(ctx.runtime.environment),
@@ -84,46 +89,12 @@ export const hostStatusCommand: CommandFn = async (
 
 // ---------------------------------------------------------------- formatting
 
-// ANSI color resolution is per-call (not module-load) so the runner's
-// `--json` mode can force-disable colors even on a TTY: JSON-mode
-// callers consume `result.data` and never see the human text, but a
-// future caller that mixes both must never get ANSI codes leaked into a
-// machine-readable payload. `NO_COLOR` (env) and a non-TTY stdout
-// continue to suppress colors as before.
-function shouldUseColor(runtime: RuntimeContext): boolean {
-  if (runtime.json) return false;
-  return process.stdout.isTTY === true && !process.env.NO_COLOR;
-}
-
-interface Colorizer {
-  bold(s: string): string;
-  dim(s: string): string;
-  green(s: string): string;
-  red(s: string): string;
-  yellow(s: string): string;
-  cyan(s: string): string;
-  gray(s: string): string;
-}
-
-function makeColorizer(useColor: boolean): Colorizer {
-  const wrap = (s: string, code: string): string =>
-    useColor ? `\x1b[${code}m${s}\x1b[0m` : s;
-  return {
-    bold: (s) => wrap(s, "1"),
-    dim: (s) => wrap(s, "2"),
-    green: (s) => wrap(s, "32"),
-    red: (s) => wrap(s, "31"),
-    yellow: (s) => wrap(s, "33"),
-    cyan: (s) => wrap(s, "36"),
-    gray: (s) => wrap(s, "90"),
-  };
-}
-
 function renderHumanStatus(
   output: HostStatusOutput,
   runtime: RuntimeContext,
 ): string {
-  const c = makeColorizer(shouldUseColor(runtime));
+  // The block is printed on stdout, so that is the stream that decides.
+  const c = makeColorizer(shouldUseColor(runtime, process.stdout));
   const lines: string[] = [];
   const home = homedir();
   const tildePath = (p: string) =>
@@ -150,12 +121,16 @@ function renderHumanStatus(
     const rows: [string, string][] = [
       ["Log", tildePath(output.bootstrapLogPath)],
     ];
-    // A non-null pidMetadata with a dead pid means the host exited
-    // (e.g. after `host stop` or a crash) but its pid.json was left
-    // behind. Surface it as stale rather than silently reporting
-    // "running" off a dead record.
+    // A non-null pidMetadata in this branch means the host exited (e.g.
+    // after `host stop` or a crash) and left its pid.json behind, or the pid
+    // that record names is live and belongs to an unrelated process the OS
+    // handed the recycled number to. Surface it as stale rather than
+    // silently reporting "running" off a record that identifies no host.
     if (output.pidMetadata !== null) {
-      rows.push(["Stale pid", `${output.pidMetadata.pid} (not alive)`]);
+      rows.push([
+        "Stale pid",
+        `${output.pidMetadata.pid} (gone, or now another process)`,
+      ]);
     }
     if (last !== undefined) {
       rows.push(["Last phase", phaseLabel(last, c)]);

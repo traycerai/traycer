@@ -1,7 +1,7 @@
 import {
   rectsIntersect,
-  type BrowserOverlayRect,
-} from "@/lib/browser-view/tiles/browser-overlay-coordinator";
+  type TileRect,
+} from "@/lib/browser-view/tiles/tile-rect-registry";
 
 /** One of sonner's six fixed `Toaster` `position` values. */
 export type ToasterAnchor =
@@ -72,7 +72,7 @@ const ANCHOR_Y: Record<ToasterAnchor, "top" | "bottom"> = {
 export function pickToasterAnchor(input: {
   readonly toasterSize: ToasterSize | null;
   readonly viewport: ToasterSize;
-  readonly tileRects: readonly BrowserOverlayRect[];
+  readonly tileRects: readonly TileRect[];
 }): ToasterAnchor {
   const { toasterSize, viewport, tileRects } = input;
   if (toasterSize === null || tileRects.length === 0) {
@@ -92,7 +92,7 @@ function rectForAnchor(
   anchor: ToasterAnchor,
   size: ToasterSize,
   viewport: ToasterSize,
-): BrowserOverlayRect {
+): TileRect {
   const left = xLeftFor(ANCHOR_X[anchor], size.width, viewport.width);
   const top = yTopFor(ANCHOR_Y[anchor], size.height, viewport.height);
   return {

@@ -355,6 +355,13 @@ export interface LinkLoginProgress {
    * moment the approval has actually landed.
    */
   readonly phase: "waiting" | "checking" | "finalizing";
+  /**
+   * The claim's match code — the two digits the desktop's prompt is showing
+   * for THIS claim — so the phone can display them for the human to compare.
+   * Constant for the life of the poll; `null` from a server that predates
+   * it, in which case the desktop is showing no code either.
+   */
+  readonly matchCode: string | null;
 }
 
 export type LinkLoginProgressListener = (
@@ -641,9 +648,8 @@ export class AuthService {
   }
 
   /**
-   * Live identity-transition generation. WindowsBridge captures this before a
-   * delayed `authSession.get()` so a stale initial snapshot cannot overwrite a
-   * newer local mutation that landed while the get was in flight.
+   * Live identity-transition generation for observing interactive sign-in,
+   * sign-out, and disposal independently of same-user credential rotations.
    *
    * NOT a credential counter, and it must not be pressed into service as one:
    * it moves on `signIn` / `signOut` / `dispose` only, so every ordinary
@@ -3161,12 +3167,7 @@ export class AuthService {
       }
       return { kind: "network-error" };
     }
-    return this.pollLinkLoginResult(
-      authnBaseUrl,
-      claimed.secret,
-      claimed.pollIntervalSeconds,
-      attempt,
-    );
+    return this.pollLinkLoginResult(authnBaseUrl, claimed, attempt);
   }
 
   /**
@@ -3177,10 +3178,14 @@ export class AuthService {
    */
   private async pollLinkLoginResult(
     authnBaseUrl: string,
-    secret: string,
-    pollIntervalSeconds: number,
+    claim: {
+      readonly secret: string;
+      readonly pollIntervalSeconds: number;
+      readonly matchCode: string | null;
+    },
     attempt: Attempt,
   ): Promise<LinkLoginSignInResult> {
+    const { secret, pollIntervalSeconds, matchCode } = claim;
     const failCurrent = (
       result: LinkLoginSignInResult,
     ): LinkLoginSignInResult => {
@@ -3197,7 +3202,7 @@ export class AuthService {
       // about to wait out — so a directive-stretched wait is counted down at
       // its real length, never at the interval the claim first advertised.
       const nextPollAtMs = Date.now() + intervalMs;
-      this.setLinkLoginProgress({ nextPollAtMs, phase: "waiting" });
+      this.setLinkLoginProgress({ nextPollAtMs, phase: "waiting", matchCode });
       await new Promise((resolve) => setTimeout(resolve, intervalMs));
       if (
         this.isDisposed() ||
@@ -3206,14 +3211,22 @@ export class AuthService {
       ) {
         return { kind: "superseded" };
       }
-      this.setLinkLoginProgress({ nextPollAtMs, phase: "checking" });
+      this.setLinkLoginProgress({
+        nextPollAtMs,
+        phase: "checking",
+        matchCode,
+      });
       const polled = await linkLoginTokenViaHttp(authnBaseUrl, secret);
       if (this.isDisposed() || this.activeAttempt !== attempt) {
         return { kind: "superseded" };
       }
       switch (polled.kind) {
         case "authorized": {
-          this.setLinkLoginProgress({ nextPollAtMs, phase: "finalizing" });
+          this.setLinkLoginProgress({
+            nextPollAtMs,
+            phase: "finalizing",
+            matchCode,
+          });
           // The shared tail re-checks the epoch, consumes the attempt on
           // success, and drops a finalization superseded mid-persist.
           const applied = await this.applyTokenInternal(
@@ -3962,7 +3975,8 @@ export class AuthService {
       (current !== null &&
         next !== null &&
         current.nextPollAtMs === next.nextPollAtMs &&
-        current.phase === next.phase)
+        current.phase === next.phase &&
+        current.matchCode === next.matchCode)
     ) {
       return;
     }

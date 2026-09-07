@@ -66,7 +66,6 @@ import { hostQueryKeys } from "@/lib/query-keys";
 import { useQueryClient } from "@tanstack/react-query";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { useSettingsStore } from "@/stores/settings/settings-store";
 import {
   isImageAssetPath,
   isPdfAssetPath,
@@ -82,6 +81,7 @@ import {
   ImagePreview,
 } from "@/components/epic-canvas/image-preview/image-preview";
 import { BinaryPlaceholder } from "@/components/epic-canvas/binary-placeholder";
+import { useEffectiveDefaultEditor } from "@/hooks/editor/use-effective-default-editor";
 import { usePdfOpenExternallyTarget } from "@/hooks/editor/use-pdf-open-target";
 import { useWorkspaceFileOpenExternally } from "@/hooks/editor/use-workspace-file-open-externally";
 const MAX_MARKDOWN_PREVIEW_CHARS = 100_000;
@@ -259,14 +259,14 @@ function WorkspaceImageFileTile(props: {
   // tile renders straight from `assetState.status` like every other
   // failure - no local decode-failed flag to track or reset.
   const handleDecodeError = assetState.reportDecodeFailure;
-  const defaultEditor = useSettingsStore((s) => s.defaultEditor);
+  const openTarget = useEffectiveDefaultEditor(node.hostId);
   const {
     opening: openExternallyOpening,
     onOpenExternally: handleOpenExternally,
   } = useWorkspaceFileOpenExternally({
     workspacePath: node.workspacePath,
     filePath: node.filePath,
-    target: defaultEditor ?? "vscode",
+    target: openTarget,
   });
 
   // No line-goto in image mode - a reveal target aimed at this file can never

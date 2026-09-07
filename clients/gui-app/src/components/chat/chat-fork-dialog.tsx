@@ -871,6 +871,10 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
                 registerActivation={false}
                 createProfileHostId={selectedHostId}
                 runTargetHostId={selectedHostId}
+                // A dialog has no terminal surface to open a setup terminal
+                // into, and its selected host may not be the tab's; the CTA
+                // shows its steps without the button.
+                terminalLoginSurface={null}
                 profileAdmission={null}
               />
             </div>

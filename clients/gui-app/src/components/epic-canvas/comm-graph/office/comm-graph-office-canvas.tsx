@@ -1338,6 +1338,27 @@ function usePrefersReducedMotion(): boolean {
   return reduced;
 }
 
+/** The moment a detached floor is showing; nothing while live. */
+function OfficeCursorChip(props: {
+  readonly cursorMs: number | null;
+  readonly playing: boolean;
+}) {
+  if (props.cursorMs === null) return null;
+  return (
+    <div
+      data-testid="comm-graph-office-cursor-chip"
+      // Read-only: it must not take the pan or the click a person aims at the
+      // floor underneath it.
+      className="pointer-events-none absolute top-2 left-2 z-10 rounded-md border border-border bg-popover px-1.5 py-0.5 text-ui-xs text-popover-foreground tabular-nums shadow-xs"
+    >
+      <span className="text-muted-foreground">
+        {props.playing ? "Replaying " : "Paused at "}
+      </span>
+      {new Date(props.cursorMs).toLocaleTimeString()}
+    </div>
+  );
+}
+
 export type CommGraphOfficeCanvasProps = CommGraphCanvasProps;
 
 export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
@@ -2284,6 +2305,14 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
           aria-label="Office view of the communication graph"
         />
         {modeToggle}
+        {/*
+          A detached cursor has to be VISIBLE on the floor. Scrubbing back
+          changes little here - the same people sit at the same desks, only
+          their screens go dark and later arrivals vanish - so without a sign
+          the past reads as a live floor that stopped moving. The chip names
+          the moment being shown; the transport bar below owns moving it.
+        */}
+        <OfficeCursorChip cursorMs={cursorMs} playing={playing} />
         {hoverCard === null || hoveredAgent === null ? null : (
           <OfficeAgentHover
             epicId={epicId}

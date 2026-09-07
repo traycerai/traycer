@@ -1,16 +1,12 @@
 import { useCallback } from "react";
-import { v4 as uuidv4 } from "uuid";
 
 import {
   appendTerminalQuoteToDraft,
   appendTerminalQuoteToNewConversationDraft,
 } from "@/components/chat/quote/append-terminal-quote-to-draft";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
-import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
-import { displayTitle } from "@/lib/display-title";
-import { useOpenEpicHandle } from "@/providers/use-open-epic-handle";
+import { useRevealChatInTab } from "@/components/epic-canvas/renderers/use-reveal-chat-in-tab";
 import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
-import { tileIntent } from "@/lib/canvas/tile-open/intent";
 
 interface UseTerminalQuoteActionsArgs {
   readonly epicId: string;
@@ -40,37 +36,11 @@ export function useTerminalQuoteActions(
   args: UseTerminalQuoteActionsArgs,
 ): TerminalQuoteActions {
   const { epicId, viewTabId, terminalId, terminalTitle, terminalCwd } = args;
-  const handle = useOpenEpicHandle();
   const tabHostId = useTabHostId();
   const openNewConversationModal = useNewConversationModalOpenStore(
     (state) => state.open,
   );
-  const { openTile } = useEpicTileNavigation();
-
-  // `dedupe` is the "already on this canvas?" branch: a chat that is open is
-  // brought forward, and only a chat that is not gets a fresh tile.
-  const revealChat = useCallback(
-    (chatId: string) => {
-      const chats = handle.store.getState().chats;
-      if (!Object.hasOwn(chats.byId, chatId)) return;
-      const chat = chats.byId[chatId];
-      openTile(
-        tileIntent(
-          {
-            id: chat.id,
-            instanceId: uuidv4(),
-            type: "chat",
-            name: displayTitle(chat.title, "agent"),
-            hostId: chat.hostId ?? tabHostId,
-          },
-          { tabId: viewTabId },
-          "explicit",
-          "direct_ui",
-        ),
-      );
-    },
-    [handle, openTile, tabHostId, viewTabId],
-  );
+  const revealChat = useRevealChatInTab({ epicId, viewTabId });
 
   const quoteToChat = useCallback(
     (chatId: string, text: string) => {

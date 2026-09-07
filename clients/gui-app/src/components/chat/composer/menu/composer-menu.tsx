@@ -52,8 +52,6 @@ import { MentionMenuItem } from "./mention-menu-item";
 import { MentionPreviewPanel } from "./mention-preview-panel";
 import { SlashMenuItem } from "./slash-menu-item";
 import { ZERO_DOM_RECT } from "./zero-dom-rect";
-import { useComposedRefs } from "radix-ui/internal";
-import { useRegisterBrowserOverlay } from "@/lib/browser-view/tiles/use-register-browser-overlay";
 
 const SLASH_MENU_COPY = {
   header: "Slash commands",
@@ -184,8 +182,6 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
   const listRef = useRef<HTMLDivElement | null>(null);
   const floatingRef = useRef<HTMLDivElement | null>(null);
   const previewPanelRef = useRef<HTMLDivElement | null>(null);
-  const registerOverlayRef = useRegisterBrowserOverlay<HTMLDivElement>();
-  const composedFloatingRef = useComposedRefs(floatingRef, registerOverlayRef);
   const isMobile = useIsMobileViewport();
 
   const renderedItems = useMemo<ReadonlyArray<RenderedItem>>(
@@ -307,7 +303,7 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
   // re-managing the scrollbar the Dialog already owns.
   const menu = (
     <RemoveScroll
-      ref={composedFloatingRef}
+      ref={floatingRef}
       forwardProps
       enabled
       noIsolation={!isolateOutsideScroll}

@@ -989,6 +989,7 @@ describe("usePlainTerminalAuthority integration", () => {
         canMutate: true,
         closeTerminal: () => Promise.resolve(),
         importLegacyTerminal: importLegacy,
+        providerLoginProviderFor: () => null,
         queryClient: test.queryClient,
       }),
     );

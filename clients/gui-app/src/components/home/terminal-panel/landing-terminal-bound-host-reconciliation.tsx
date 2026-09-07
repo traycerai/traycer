@@ -5,6 +5,10 @@ import type {
   ImportLegacyPlainTerminalResponse,
 } from "@traycer/protocol/host/terminal/plain-schemas";
 import { useLandingTerminalStore } from "@/stores/home/landing-terminal-store";
+import {
+  providerLoginTerminalProviderId,
+  useProviderLoginTerminalsStore,
+} from "@/stores/providers/provider-login-terminals";
 import type { LandingTerminalAuthorityEntry } from "./landing-terminal-authority-fleet";
 import { reconcileCapableLandingTerminals } from "./use-landing-terminal-reconciliation";
 
@@ -43,6 +47,12 @@ function LandingTerminalBoundHostReconciliation(props: {
   const queryClient = useQueryClient();
   const tabs = useLandingTerminalStore((state) => state.tabs);
   const pendingKills = useLandingTerminalStore((state) => state.pendingKills);
+  // Same wake as the selected host's pass: provenance is read imperatively
+  // inside `reconcileCapableLandingTerminals`, so a record that lands after
+  // the pass has to re-key it.
+  const provenanceRevision = useProviderLoginTerminalsStore(
+    (state) => state.revision,
+  );
   const reconciliationRef = useRef<string | null>(null);
 
   const hostTabsFingerprint = tabs
@@ -83,6 +93,7 @@ function LandingTerminalBoundHostReconciliation(props: {
       authority.collection.projectionSequence,
       hostTabsFingerprint,
       pendingKillsFingerprint,
+      provenanceRevision,
     ].join("\u0000");
     if (reconciliationRef.current === reconciliationKey) return;
     reconciliationRef.current = reconciliationKey;
@@ -102,6 +113,8 @@ function LandingTerminalBoundHostReconciliation(props: {
         entry.mutations.close.mutateAsync({ ...request, hostId }),
       importLegacyTerminal: (request) =>
         entry.mutations.importLegacy.mutateAsync(request),
+      providerLoginProviderFor: (sessionId) =>
+        providerLoginTerminalProviderId(hostId, sessionId),
       queryClient,
     }).then(
       (outcome) => {
@@ -123,6 +136,7 @@ function LandingTerminalBoundHostReconciliation(props: {
     hostTabsFingerprint,
     landingPageId,
     pendingKillsFingerprint,
+    provenanceRevision,
     queryClient,
   ]);
 
