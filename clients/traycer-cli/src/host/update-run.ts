@@ -26,6 +26,7 @@ import {
   HOST_START_STAMP_FLOOR,
 } from "@traycer-clients/shared/host-update";
 import { baseDispatchAckReason } from "@traycer/protocol/config/host-update-ack-reason";
+import { HOST_UPDATE_REFUSES_RPC_CODE } from "@traycer/protocol/config/host-update-attempt";
 import { installHostDowngradeInSegment } from "../commands/host-update-downgrade";
 import type { ApplyHostOutcome } from "../installer/apply";
 import {
@@ -3323,7 +3324,7 @@ async function verifyUnderClaim(
           : `host update: applied ${target} but the service start failed, so the host never came up: ${postSwapError}. The bytes ARE committed at ${target}; run 'traycer host service install' and then 'traycer host service start'. (probe: ${diagnosis})`;
       await writer.fail({
         code: refused
-          ? "host-refuses-rpc"
+          ? HOST_UPDATE_REFUSES_RPC_CODE
           : postSwapError === null
             ? "verify-timeout"
             : "service-start-failed",
@@ -3945,7 +3946,14 @@ const UNCONDITIONALLY_STAMPED_FAILURE_CODES: ReadonlySet<string> = new Set([
   // likely serving `pid.json` at the target - so the observed-running check
   // would read "healthy", withhold the stamp, and leave the operator with a
   // machine nothing can update and no signal saying so.
-  "host-refuses-rpc",
+  //
+  // The CONSTANT, not a fourth copy of the string. This set and the stamp
+  // site above are two of the three places that have to spell it identically -
+  // the GUI's comparison is the third, in another package - and the only thing
+  // that made three literals safe was that nobody had yet mistyped one. The
+  // value IS the wire string, so it is pinned at the definition and again on
+  // the record this run writes; see `protocol/config/host-update-attempt.ts`.
+  HOST_UPDATE_REFUSES_RPC_CODE,
 ]);
 
 function isUnconditionallyStampedFailure(
