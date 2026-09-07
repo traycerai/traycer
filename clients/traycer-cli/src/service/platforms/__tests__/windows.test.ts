@@ -3869,12 +3869,30 @@ describe("Scheduled Task XML identity", () => {
     //
     // `IgnoreNew` is what makes that a no-op instead of a second host: Task
     // Scheduler drops the new run request while an instance is already
-    // running. The waiter launches the host, the executor's verify leg sees
-    // it, and one host exists throughout. Under `Parallel` the same sequence
-    // would start a SECOND supervisor beside the waiter, and both would go on
-    // to launch a host from the same data dir - the exact duplication the
-    // incumbent check cannot serialise, since it runs once as a gate before
-    // the wait and is never re-asked after admission.
+    // running. Under `Parallel` the same sequence would start a SECOND
+    // supervisor beside the waiter, and both would go on to launch a host
+    // from the same data dir - the exact duplication the incumbent check
+    // cannot serialise, since it runs once as a gate before the wait and is
+    // never re-asked after admission.
+    //
+    // SCOPE, and this pin does NOT establish convergence on Windows (cold
+    // review B). `IgnoreNew` is defined as what happens when a new instance
+    // is requested *while one is running*, which is exactly the narrow
+    // property. The window Q13 actually creates is the one where NONE is
+    // running: an admission refusal exits `SERVICE_RELAUNCH_BUSY_EXIT_CODE`,
+    // which EMPTIES the task's instance slot, so the design's own back-off
+    // produces "two start requests, nothing running" - a pending manager
+    // restart plus the executor's own `/Run`. `IgnoreNew` is silent about it.
+    //
+    // systemd and launchd survive that window on a property Task Scheduler
+    // has no equivalent for: their singleton is the UNIT and the LABEL, not
+    // the verb, so an explicit start and a pending auto-restart converge on
+    // one process in every state. Windows therefore stays in the same
+    // UNVERIFIED tier as its verb change until a lane measures it. What this
+    // pin buys is that the narrow property is not silently lost - which
+    // matters because `runTaskAndVerifyStart` already depends on it from the
+    // other direction ("mistake IgnoreNew's suppressed second run for a
+    // failed repair").
     //
     // This file already depends on the suppression from the other direction:
     // `runTaskAndVerifyStart` is documented as verifying its own `/Run` so

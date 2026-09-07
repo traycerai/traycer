@@ -263,6 +263,10 @@ interface Recorded {
     message: string;
     fields: Record<string, unknown>;
   }>;
+  readonly loggerWarns: Array<{
+    message: string;
+    fields: Record<string, unknown>;
+  }>;
 }
 
 /**
@@ -330,6 +334,7 @@ function makeRunStubs(
     stderrTees: [],
     loggerErrors: [],
     loggerInfos: [],
+    loggerWarns: [],
   };
   // The stub implements only the surface `runHostStart` touches; route it
   // to `ChildProcess` through an explicit `unknown` intermediate rather than a
@@ -341,7 +346,9 @@ function makeRunStubs(
     info: (message, fields) => {
       recorded.loggerInfos.push({ message, fields: { ...fields } });
     },
-    warn: () => undefined,
+    warn: (message, fields) => {
+      recorded.loggerWarns.push({ message, fields: { ...fields } });
+    },
     error: (message, fields, _error) => {
       recorded.loggerErrors.push({
         message,
@@ -3949,11 +3956,32 @@ describe("runHostStart - a SERVICE launch refused as busy exits non-zero so it i
       entry.message.includes("so the service manager retries"),
     );
     expect(retryLine).toBeDefined();
-    expect(retryLine?.fields.attemptId).toBeTypeOf("string");
-    expect(retryLine?.fields.environment).toBe("production");
-    expect(retryLine?.fields.reason).toBe(
-      "another update execution segment currently owns the restart boundary",
-    );
+    // The whole bag, exactly. Cold review B: my first cut asserted the three
+    // fields individually, which leaves the bag OPEN - adding `accountId` to
+    // the call passes every one of those assertions. And the field bag is the
+    // route this file actually uses for identifiers: the incumbent-decline
+    // line a few hundred lines up logs `incumbentPid`, `incumbentVersion` and
+    // `incumbentWebsocketUrl` as fields, not interpolated. So the likelier
+    // leak was the unwatched one.
+    //
+    // `toEqual` reddens on ANY added key whatever it is called, and still
+    // pins the reason literal inside it - which is the separate hazard, since
+    // `describeHostStartAdmission`'s neighbouring arms DO interpolate record
+    // contents into that string.
+    expect(retryLine?.fields).toEqual({
+      environment: "production",
+      attemptId: expect.any(String),
+      reason:
+        "another update execution segment currently owns the restart boundary",
+    });
+    // And pin the level by where the line ISN'T. Without this a future edit
+    // that emits BOTH an info and a warn passes, because the assertion above
+    // only looks in one sink.
+    expect(
+      recorded.loggerWarns.filter((entry) =>
+        entry.message.includes("so the service manager retries"),
+      ),
+    ).toHaveLength(0);
   });
 
   it("INTERACTIVE launch + busy -> still exit 0, unchanged", async () => {

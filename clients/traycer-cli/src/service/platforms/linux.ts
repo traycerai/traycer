@@ -62,7 +62,23 @@ export function createLinuxController(
     // service manager, and `systemctl stop` does exactly that - see
     // `stopForRestartService`.
     stopForRestart: (label) => stopForRestartService(label, run),
-    relaunchAfterRestart: (label) => startService(label, run),
+    // Consumes `forcedRecycle`, and must (cold review B). A plain
+    // `systemctl --user start` no-ops against a unit systemd still considers
+    // active - the SAME no-op `forcedRecycle` was invented to name on macOS.
+    // So the Linux stop that could not prove the old instance gone would issue
+    // a start that does nothing, and the run would proceed to activation over
+    // a host still serving the PRE-SWAP bytes: the exact failure the field
+    // exists for, on the one platform this round changed.
+    //
+    // `restart` rather than a second kill: it is an explicit stop job followed
+    // by a start, so it tears down whatever still holds the unit and leaves it
+    // ACTIVE. That last part is why it is safe here and `stop` is not - the
+    // Q13 hazard is a unit left INACTIVE with `Restart=` disarmed, and a
+    // restart job never ends there.
+    relaunchAfterRestart: (label, stop) =>
+      stop.forcedRecycle
+        ? restartService(label, run)
+        : startService(label, run),
     // SMAppService is macOS-only, so there is no second registration path
     // that could compete with systemd's user unit here.
     retireCompetingRegistration: () =>

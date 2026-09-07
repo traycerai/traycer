@@ -437,6 +437,15 @@ describe("Q13: stopForRestart signals the unit instead of stopping it", () => {
     const flat = commands.map((c) => c.join(" "));
     expect(flat.some((c) => c.includes("kill --signal=SIGTERM"))).toBe(true);
     expect(flat.some((c) => c.includes("kill --signal=SIGKILL"))).toBe(true);
+    // Cold review B's one token, and it makes H2 direct instead of
+    // incidental. Without it, swapping the confirmation for a health probe
+    // still reddens this row - but on `forcedRecycle`, i.e. "you got the wrong
+    // answer", not "you asked the wrong question". Asserting the identity
+    // predicate was consulted at all means any substitution of the
+    // confirmation MECHANISM reddens here, which is what instance-binding is
+    // about. The null-identity row below already asserts the mirror
+    // (`goneCalls === 0`); this is the same shape on the other side.
+    expect(pidMetadata.goneCalls).toBeGreaterThan(0);
     // Not proven gone, so the relaunch must RECYCLE rather than kickstart: a
     // kickstart of an already-running job is treated as satisfied and no-ops,
     // which would leave the host up on the old bytes after a "successful"
@@ -538,37 +547,46 @@ describe("Q13: stopForRestart signals the unit instead of stopping it", () => {
     expect(flat.some((c) => c.includes("kill --signal="))).toBe(false);
   });
 
-  it("the Linux relaunch ignores forcedRecycle - the flag is computed for a contract macOS owns", async () => {
-    // Stated so it is not mistaken for protection it does not provide.
-    // `forcedRecycle` has exactly one consumer, `kickstartDesktopAgent` on
-    // macOS, which uses it to choose `kickstart -k` over a plain `kickstart`
-    // that would silently no-op. Linux and Windows both route
-    // `relaunchAfterRestart` to `startService` and never read it.
+  it("RECYCLES rather than starts when the stop could not prove the old instance gone", async () => {
+    // Cold review B found the failure this closes, and it is on the one
+    // platform this round changed.
     //
-    // So the inverted default this round introduced is INERT on Linux today.
-    // It is still computed honestly rather than hard-coded, because
-    // `RestartStop` is the cross-platform contract and this is the one field
-    // whose entire purpose is naming "we could not tell" - a Linux `false`
-    // would be a lie in it, inert until the day something reads it
-    // generically. Windows hard-codes `false` and says why; Linux cannot,
-    // because its stop genuinely may fail to prove the instance gone.
+    // A plain `systemctl --user start` no-ops against a unit systemd still
+    // considers active - the same no-op `forcedRecycle` was invented to name
+    // on macOS. So a stop that reported `forcedRecycle: true` (SIGKILL could
+    // not prove the instance gone, or `systemctl kill` itself failed, which
+    // this path cannot see because `killUnit` tolerates a non-zero exit and
+    // never reads it) would issue a start that does nothing, and the update
+    // would proceed to ACTIVATION over a host still serving the pre-swap
+    // bytes.
+    //
+    // Before this, `forcedRecycle` had exactly one consumer in the tree -
+    // `kickstartDesktopAgent` on macOS - so the value the Linux stop computes
+    // so carefully was read by nobody.
     const { controller, commands } = recordingController();
 
     await controller.relaunchAfterRestart(labelFor("ai.traycer.host.dev"), {
       forcedRecycle: true,
     });
 
-    expect(commands.map((c) => c.join(" "))).toEqual(
-      (
-        await (async () => {
-          const second = recordingController();
-          await second.controller.relaunchAfterRestart(
-            labelFor("ai.traycer.host.dev"),
-            { forcedRecycle: false },
-          );
-          return second.commands;
-        })()
-      ).map((c) => c.join(" ")),
-    );
+    const flat = commands.map((c) => c.join(" "));
+    expect(flat.some((c) => /systemctl --user restart\b/.test(c))).toBe(true);
+    expect(flat.some((c) => /systemctl --user start\b/.test(c))).toBe(false);
+  });
+
+  it("but never leaves the unit INACTIVE - the recycle is a restart job, not a stop", async () => {
+    // The recycle has to undo the old instance without recreating the very
+    // hazard this round exists to remove. `systemctl restart` is a stop job
+    // followed by a start job and the unit ends ACTIVE, so `Restart=` is never
+    // left disarmed. A `stop` here - or a `kill` with no follow-up - would
+    // reintroduce Q13 on the recovery path, where it would be hardest to see.
+    const { controller, commands } = recordingController();
+
+    await controller.relaunchAfterRestart(labelFor("ai.traycer.host.dev"), {
+      forcedRecycle: true,
+    });
+
+    const flat = commands.map((c) => c.join(" "));
+    expect(flat.some((c) => /systemctl --user stop\b/.test(c))).toBe(false);
   });
 });
