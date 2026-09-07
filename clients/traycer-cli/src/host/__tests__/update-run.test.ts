@@ -5055,6 +5055,55 @@ describe("acceptance: cells with no legacy ancestor", () => {
     ]);
   });
 
+  it("Q24: a no-op plan at an ACTIVE record's own target resumes it, never releases", async () => {
+    // The ORDERING in `selectClaim` is the whole load-bearing fact, and nothing
+    // pinned it. Same-target equality is tested BEFORE the `isNoOpPlan`
+    // release, and that order is what lets the host reconciler's Q17 dispatch
+    // (`8d8a10d197`) work at all: it dispatches `--version <running>`, which
+    // resolves to a NO-OP plan carrying that `targetVersion`, precisely so an
+    // interrupted attempt at that version gets resumed rather than abandoned.
+    //
+    // Swapping the two `if`s reads as tidying - "check the cheap release
+    // first" - and would make every Q17 dispatch release `nothing-to-do`
+    // forever. Q17's latch would NOT contain that regression: a silent no-op
+    // leaves the record unmoved, so the latch stays armed and the reconciler
+    // re-dispatches into the same release, which is a defect that looks like
+    // quiet.
+    // Falsification (the ablation, run): swap the `record.targetVersion ===
+    // planTargetVersion(...)` block with the `isNoOpPlan` block and this
+    // reddens on the release reason and on the untouched record.
+    //
+    // Honest scope, because the ticket was filed as "nothing pins this" and
+    // that turned out to be half true. The swap also reddens SIX other pins in
+    // this file - the crash-recovery pair, Q16's three, and Q5's - because they
+    // all need a crashed record to be resumed. So the ordering was not
+    // unpinned; it was UNNAMED. What this row adds is a failure that says which
+    // line moved and why it matters, instead of six that say a recovery stopped
+    // working. Given the swap reads as tidying, that difference is the whole
+    // value here, and it is worth less than closing a hole would have been.
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    const crashed = await crashAtRestarting("2.0.0");
+    // The reconciler's world: the target IS installed (the crashed run placed
+    // it) and it is the newest thing there is, so the plan this run resolves is
+    // a no-op naming 2.0.0 - the same version the active record targets.
+    world.latest = "2.0.0";
+    // The host is NOT serving it, which is why there is anything left to do.
+    world.runningVersion = null;
+
+    const outcome = await runUpdate({ versionRequest: "2.0.0" }).then(
+      (value) => value,
+      () => null,
+    );
+
+    // A release would have answered `nothing-to-do` and left the record exactly
+    // as the crash left it. Either of those is the regression.
+    expect(outcome?.releasedReason ?? null).not.toBe("nothing-to-do");
+    const record = await requireRecord();
+    expect(record.attemptId).toBe(crashed.attemptId);
+    expect(record.phase).not.toBe("restarting");
+  });
+
   it("a crash before the completion write is finished by a same-target retry, on the SAME attempt", async () => {
     await seedInstalled("1.0.0");
     world.runningVersion = "1.0.0";
