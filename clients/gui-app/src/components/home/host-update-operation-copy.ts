@@ -163,20 +163,35 @@ function phaseSentence(
     case "failed":
       return failedSentence(view.errorMessage);
     case "finalizing-record":
-      // Two clauses, in this order, because the ORDER is the message: the
-      // update landed, and the leftover is bookkeeping. Leading with the
-      // bookkeeping would read as a qualification on the success.
+      // The success first, because the ORDER is the message: the update
+      // landed, and the leftover is bookkeeping. Leading with the bookkeeping
+      // would read as a qualification on the success.
       //
-      // "Finalizing", present continuous, on purpose — the next update run's
-      // reconciler concludes the record, so there is nothing for the reader to
-      // do and no remedy to offer. Naming the record at all is still right: it
-      // is why a `traycer host update` in their terminal just exited non-zero,
-      // and a card that said only "Updated" would leave that contradiction
-      // unexplained.
+      // A STATE, not an action. This was "Finalizing the update record." —
+      // present-continuous, and wrong, because nothing is in progress: the
+      // record is concluded by the next update RUN, so no work is happening on
+      // this host and the card has no expiry of its own. (`complete` retires
+      // when the record goes terminal and the host moves to `idle`; this kind
+      // is DEFINED by a record that has not concluded.) A card with no Retry,
+      // no Diagnostics, no poll and no affordance could therefore carry a
+      // claim of ongoing work indefinitely — the one sentence on it that gets
+      // falser the longer it is shown.
+      //
+      // The closing clause is what makes the fact bearable: naming the record
+      // is right (it is why `traycer host update` just exited non-zero, and a
+      // bare "Updated" would leave that contradiction unexplained), but "still
+      // open" alone is jargon on a surface offering nothing to do about it.
+      // Saying what closes it says nothing is owed of the reader.
+      //
+      // Deliberately true in both worlds: today nothing on this host ever
+      // concludes the record, and once the host reconciler closes that gap the
+      // state becomes transient. This sentence survives that change; a
+      // present-continuous one would only have become correct by accident.
+      //
       // `to` already collapses to "" for an unreported target, so a host that
-      // named no version reads "Updated. Finalizing the update record." rather
-      // than "Updated to v.".
-      return `Updated${to}. Finalizing the update record.`;
+      // named no version reads "Updated. The update record is still open; …"
+      // rather than "Updated to v.".
+      return `Updated${to}. The update record is still open; the next update reconciles it.`;
     case "unavailable":
       // Deliberately not "failed". The record could not be read; the update may
       // be fine. This wording points at the repair path Diagnostics offers.

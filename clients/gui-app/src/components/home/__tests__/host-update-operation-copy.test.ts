@@ -379,3 +379,62 @@ describe("describeUpdateOperation — a work park under an unmet CLI floor", () 
     );
   });
 });
+
+// Q11. The sentence itself, at the module that owns it — the Overview card's
+// suite pins that the card MOUNTS it, which is a different failure.
+describe("describeUpdateOperation — finalizing-record", () => {
+  function finalizingView(targetVersion: string | null): FleetUpdateView {
+    return {
+      ...UNKNOWN_FLEET_UPDATE_VIEW,
+      kind: "finalizing-record",
+      qualified: false,
+      attemptId: "attempt-1",
+      targetVersion,
+    };
+  }
+
+  it("states a FACT, not an action in progress", () => {
+    // Was "Finalizing the update record." — present-continuous, and wrong:
+    // nothing is in progress, the next update RUN concludes the record, and
+    // this card has no expiry of its own. A claim of ongoing work would get
+    // falser the longer it stayed on screen. The closing clause is what makes
+    // the fact bearable — it says nothing is owed of the reader.
+    expect(
+      describeUpdateOperation({
+        view: finalizingView("2.1.0"),
+        hostName: "host-a",
+        cliFloorBlocked: false,
+      }).primary,
+    ).toBe(
+      "Updated to v2.1.0. The update record is still open; the next update reconciles it.",
+    );
+  });
+
+  it("drops the version suffix when the host named no target, rather than reading 'to v.'", () => {
+    // The `to === ""` arm, which nothing else exercises.
+    expect(
+      describeUpdateOperation({
+        view: finalizingView(null),
+        hostName: "host-a",
+        cliFloorBlocked: false,
+      }).primary,
+    ).toBe(
+      "Updated. The update record is still open; the next update reconciles it.",
+    );
+  });
+
+  it("is announced POLITELY and needs no qualified marker", () => {
+    // `assertive` is reserved for `failed`. Interrupting a screen-reader user
+    // with alert semantics to tell them their update succeeded is the failure
+    // treatment arriving through the accessibility channel alone — which is
+    // exactly the split this module's `assertive` flag was added to close.
+    const copy = describeUpdateOperation({
+      view: finalizingView("2.1.0"),
+      hostName: "host-a",
+      cliFloorBlocked: false,
+    });
+    expect(copy.assertive).toBe(false);
+    expect(copy.needsQualifiedMarker).toBe(false);
+    expect(copy.accessibleLabel).toBe(`host-a: ${copy.primary}`);
+  });
+});

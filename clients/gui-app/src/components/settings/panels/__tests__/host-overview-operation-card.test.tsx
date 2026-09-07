@@ -650,7 +650,9 @@ describe("HostOverviewOperationCard — a refused completion write is not a fail
     await waitFor(() => {
       expect(
         screen.getByTestId("host-overview-operation-phase").textContent,
-      ).toBe("Updated to v2.1.0. Finalizing the update record.");
+      ).toBe(
+        "Updated to v2.1.0. The update record is still open; the next update reconciles it.",
+      );
     });
     // The failure treatment, asserted as ABSENT rather than assumed: the card
     // picks its border/fill/text colour off `view.kind === "failed"`, so this
