@@ -1065,10 +1065,16 @@ async function selectBoundResume(
     // PRESENT, and therefore not GONE (Linux E6L, Q5 defect 2).
     //
     // An ACTIVE record under this exact id is an interrupted attempt whose
-    // holder is dead - proven, not assumed: lock acquisition precedes
-    // selection, so a live holder would have refused this run admission
-    // before the selector ever ran. That is the RECOVERABLE case, and it is
-    // the only shape a crashed `host update` leaves behind.
+    // holder is dead - proven, not assumed, but NOT by this file (cold review
+    // B): mutation spans are taken and released per arm, so mere acquisition
+    // ordering would not exclude a live holder. Two layers do. The executor
+    // lock `withCliAttemptExecutor` is held across the whole segment, so a
+    // live holder still owns it and this run never reaches selection
+    // (`host/update-contender.ts:136`); and `decideAttemptRecovery`
+    // independently refuses `holder-not-proven-absent` unless the holder reads
+    // `recovery-lock-held` (`shared/host-update/transition.ts:356`). That is
+    // the RECOVERABLE case, and it is the only shape a crashed `host update`
+    // leaves behind.
     //
     // Releasing `refused-attempt-gone` here said the opposite of what is on
     // disk, and said it to the two readers who act on it: the dispatching
@@ -1742,6 +1748,30 @@ async function revalidateInstallIdentity(
  * baseline → target step is forgiven, which is the one step the attempt
  * itself performed.
  *
+ * ## The narrow case this ACCEPTS, stated rather than denied (cold review B)
+ *
+ * That protection is conditional on a refresh that can fail quietly, so there
+ * is one park this rule does forgive. `readClaimRefresh` returns
+ * `{ refresh: null }` when `readHostInstallRecord` reads nothing, `park()`
+ * passes that through, and `refreshedClaimBaseline` retains the PRIOR
+ * baseline - so a `waiting-to-activate` park whose install-record read
+ * transiently failed keeps its PRE-swap baseline. All three clauses then hold
+ * on the next resume, and a foreign same-version install landed in the
+ * meantime is forgiven with no generation comparison.
+ *
+ * It is accepted, not overlooked. It needs a transient read failure at park
+ * time AND a foreign same-version install before the resume; the alternative
+ * is refusing every genuine E6L recovery to catch it. The durable fix is at
+ * the other end - a park should not silently keep a baseline it could not
+ * refresh - and belongs with `readClaimRefresh`, not here.
+ *
+ * A fourth clause requiring the baseline's generation to differ from the live
+ * one does NOT close it, and cannot: it is a tautology here. The second and
+ * third clauses already force `baseline.installedVersion !== live.version`,
+ * and two install records at different versions are necessarily different
+ * generations, so such a clause is true whenever the first three are - in the
+ * foreign case exactly as much as in the honest one.
+ *
  * ## What still refuses, and why each one must
  *
  *  - `resume-apply`: the bytes are NOT placed, so a target-equal install is
@@ -1765,6 +1795,13 @@ async function revalidateInstallIdentity(
  * record's own target. Re-deriving a stricter answer here from a baseline
  * that predates the swap would not be a second check; it would be a refusal
  * of the first one.
+ *
+ * The wedged Linux box says the same thing from disk rather than from
+ * reasoning: `install.json` had already moved to the generation the 1.4.3
+ * swap minted (`id:f55134a3-…`), while the record's claim baseline still
+ * named the 1.4.2 generation it replaced (`id:4950d09a-…`). The generation
+ * this attempt's own swap wrote survives in exactly one place - the install
+ * record - which is the same place a foreign installer overwrites.
  */
 function installedByThisAttempt(
   record: HostUpdateAttemptRecord,
