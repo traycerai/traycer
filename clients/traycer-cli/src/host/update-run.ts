@@ -1611,6 +1611,19 @@ async function writeFailure(
   disturbed: boolean,
 ): Promise<void> {
   const phase = writer.phase;
+  // Q11's third terminal, and the only one that is NO terminal at all: the
+  // completion write was refused over a host verified healthy at the target.
+  // This has to be caught HERE and not only at the throw site, because the
+  // writer never settled - the refused write was the executor's, not the
+  // writer's - so without this arm the generic path below stamps `failed` and
+  // undoes the whole fix one frame up the stack. Leaving the record where the
+  // verify loop had it IS the answer; see the throw site for who concludes it.
+  if (
+    err instanceof CliError &&
+    err.code === CLI_ERROR_CODES.HOST_UPDATE_RECORD_NOT_CONCLUDED
+  ) {
+    return;
+  }
   const superseded =
     !disturbed &&
     err instanceof CliError &&
@@ -2955,31 +2968,65 @@ async function verifyUnderClaim(
     // - so the host is demonstrably serving the new version right now, and
     // what failed is that we could not write down that it concluded (Q11).
     //
-    // This used to report `E_HOST_UPDATE_HEALTH_CHECK_FAILED` with a
-    // `verify-timeout` record, and every part of that was false: nothing timed
-    // out, and the health check is the thing that had just PASSED. A client
-    // routing it to a failure card told the operator their update failed while
-    // their host ran the new version.
+    // This used to fall through to the health-failure arm above: a
+    // `verify-timeout` record and `E_HOST_UPDATE_HEALTH_CHECK_FAILED`. The
+    // record stamp is the half that mattered - the exit code never leaves the
+    // shell, but the record is mirrored onto `host.status.operation.error`,
+    // and `phase: "failed"` is what renders the red card. It told the operator
+    // their update failed while their host ran the new version, and it told
+    // them so in the SAME record vocabulary as a genuine timeout twenty lines
+    // up, so nothing downstream could tell the two apart.
     //
-    // The exit stays non-zero: the attempt did not durably conclude, and a
-    // reconciler polling the record must not read this as done. Non-zero here
-    // means "unfinished bookkeeping", which is why it needs its own code
-    // rather than a shared one.
-    const message = `host update: ${target} is installed and the host is running it, but the completion write for the attempt record was refused. The update itself is done; only Traycer's record of it is incomplete.`;
-    await writer.fail({
-      code: "record-not-concluded",
-      message,
-      phase: "verifying",
-    });
+    // NOTHING is written here - not the record, not the marker. That is the
+    // whole fix, and it generalises `supersede()`'s round-14 rule one case
+    // further: never stamp `failed` over a host that is verified healthy at
+    // the target. The record is LEFT where the verify loop had it, and the
+    // shape it is left in - a verify-side phase, an executor that is about to
+    // die, `host.status` running exactly this `targetVersion` - is itself the
+    // signal a client reads as "finalizing". Stamping over it would destroy
+    // the evidence rather than add to it.
+    //
+    // Both refusal kinds take this arm and leave disk BYTE-IDENTICAL. That is
+    // deliberate, not laziness: `rejected` (the intent was refused - a fenced
+    // path, a fail-closed store) and `durability-unverified` (the medium
+    // itself is broken - a symlinked record path, a roundtrip mismatch) are
+    // one situation to the operator, and on `durability-unverified` a
+    // consolation write would travel the same broken path and fail the same
+    // way. Distinguishing them on disk would only manufacture two renderings
+    // of one truth.
+    //
+    // WHO concludes it (Q11's reconciler citation), pinned rather than
+    // asserted - "Q11: the NEXT run concludes the record it could not" runs it.
+    //
+    // The record this arm leaves behind is `verifying`, `execution: "active"`,
+    // with no live holder - which is precisely the shape recovery exists for.
+    // The next run takes the recovery lock, observes bytes installed at the
+    // target AND a host positively bound to this home running it, and that
+    // exact pair is `decideAttemptRecovery`'s `terminalize-complete`
+    // (`shared/host-update/transition.ts:385`): it bypasses the ordinary
+    // `verifying -> complete` edge because it holds the same substantive proof
+    // the edge would have demanded. `afterTerminalizingRecovery` then writes
+    // the terminal, the selector finds nothing left to do, and the run releases
+    // `recovered-complete` at exit 0 with the marker withdrawn.
+    //
+    // Note it is NOT the `activate` continuation, which is the plausible-
+    // sounding wrong answer: `recoveryContinuation` is only consulted once the
+    // installed-and-running pair has already failed to hold.
+    //
+    // The exit stays non-zero all the same - the attempt did not durably
+    // conclude, and a script that polls the record must not read this run as
+    // done - which is why it needs its own code rather than the health-check
+    // one it used to borrow. Nothing timed out here and the health check is
+    // the thing that had just PASSED.
     throw cliError({
       code: CLI_ERROR_CODES.HOST_UPDATE_RECORD_NOT_CONCLUDED,
-      message,
+      message: `host update: ${target} is installed and the host is running it. The update itself is done - only the completion write for the attempt record was refused, and the next run will conclude the record.`,
       details: {
         environment: args.environment,
         version: target,
-        // WHY the write was refused, which is the only thing about this
-        // failure the operator cannot see for themselves.
-        refusal: committed.kind,
+        // HOW the write was refused. Reported for the operator and for logs;
+        // both kinds take the identical path above.
+        outcome: committed.kind,
       },
       exitCode: 1,
     });
@@ -3700,23 +3747,13 @@ function createMarkerMirror(
   }
 
   async function failed(record: HostUpdateAttemptRecord): Promise<void> {
-    // The one terminal `failed` that must NOT stamp `failed` (Q11).
-    //
-    // `record-not-concluded` is written only past the verify loop's success
-    // condition, so the host is running the target and is healthy. The marker
-    // is the operator- and daemon-facing signal about THE HOST, and its
-    // vocabulary is `updating` / `failed` / absent - there is no "the update
-    // worked but our paperwork did not". Absent is the one that is TRUE here:
-    // it is what a successful update leaves, and it lets the daemon derive the
-    // state from the version it can already see.
-    //
-    // Stamping `failed` would be the same misreport the error code carried,
-    // one layer down and more durable: the record's error is read by whoever
-    // debugs the attempt, but the marker is what the GUI renders at a glance.
-    if (record.error?.code === "record-not-concluded") {
-      await complete();
-      return;
-    }
+    // Nothing routes a Q11 completion-write refusal here, and that is by
+    // construction rather than by luck: that arm writes no terminal record at
+    // all, so no `failed` phase ever reaches this mirror to be stamped. The
+    // marker's vocabulary is `updating` / `failed` / absent and it has no word
+    // for "the update worked but our paperwork did not" - which is exactly why
+    // the refusal arm declines to say anything here instead of picking the
+    // least wrong word.
     const cause =
       record.error?.message ?? record.error?.code ?? "update failed";
     // The evidence loop's deadline is the ONE failure that must be reported

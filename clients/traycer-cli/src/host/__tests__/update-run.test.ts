@@ -121,6 +121,13 @@ const mocks = vi.hoisted(() => ({
   // which is the only shape the recovery arm exists to reconcile. Without it
   // a thrown error is just a failure, and the record says `failed`.
   refuseFailedWrites: false,
+  // Refuses the executor's TERMINAL completion write, and only that one (Q11).
+  // A different seam from `refuseFailedWrites` above: the completion travels
+  // through the revocable `ExecutorCompletionSession`, not through
+  // `commitExecutorAttemptMutation`, so nothing else can reach it. Both refusal
+  // kinds are offered because the ticket's whole claim is that they must be
+  // INDISTINGUISHABLE on disk, and a pin cannot assert that from one of them.
+  refuseCompletion: null as "rejected" | "durability-unverified" | null,
   // The stage id each mocked transfer actually placed, in order. Needed
   // because the apply CLEARS the stage, so `world.stageId` no longer names it
   // by the time a pin reads back what the apply was pinned to.
@@ -198,6 +205,48 @@ vi.mock("@traycer-clients/shared/host-update/contender", async () => {
       );
       return outcome;
     },
+    // The TERMINAL completion seam, wrapped rather than replaced: the real
+    // segment runs, holds the real lock and revokes the real session; only the
+    // one `complete` call the flag names is answered with a refusal instead of
+    // a commit. Nothing downstream of the refusal is simulated - production
+    // takes its own arm from the returned `kind`, and the record on disk is
+    // whatever the run genuinely left there.
+    withUpdateExecutorCompletionSegment: async <T>(
+      options: import("@traycer-clients/shared/host-update/contender").WithUpdateExecutorCompletionSegmentOptions,
+      run: (
+        capability: import("@traycer-clients/shared/host-update").UpdateMutationCapability,
+        context: import("@traycer-clients/shared/host-update/contender").UpdateContenderExecutionContext,
+        completion: import("@traycer-clients/shared/host-update/contender").ExecutorCompletionSession,
+      ) => Promise<T>,
+    ): Promise<
+      import("@traycer-clients/shared/host-update/contender").UpdateContenderOutcome<T>
+    > =>
+      actual.withUpdateExecutorCompletionSegment(
+        options,
+        (capability, context, completion) =>
+          run(capability, context, {
+            revoke: () => completion.revoke(),
+            complete: async (observation) => {
+              const refusal = mocks.refuseCompletion;
+              if (refusal === null) return completion.complete(observation);
+              mocks.writes.push(`completion-refused:${refusal}`);
+              return refusal === "rejected"
+                ? {
+                    kind: "rejected",
+                    reason: "record-fail-closed",
+                    canonical: { kind: "absent" },
+                  }
+                : {
+                    kind: "durability-unverified",
+                    cause: "post-write-roundtrip-mismatch",
+                    canonical: {
+                      kind: "unreadable",
+                      cause: "post-write-roundtrip-mismatch",
+                    },
+                  };
+            },
+          }),
+      ),
   };
 });
 
@@ -880,6 +929,7 @@ function armWorld(): void {
   mocks.deadWriterIds = new Set<string>();
   mocks.writes.length = 0;
   mocks.refuseFailedWrites = false;
+  mocks.refuseCompletion = null;
   mocks.ackWrites.length = 0;
   mocks.transferStageIds.length = 0;
 
@@ -3403,6 +3453,192 @@ describe("ported: update-progress marker (T16)", () => {
       own,
       expect.objectContaining({ state: "failed", targetVersion: "2.0.0" }),
     );
+    expect(mocks.disk.current).toMatchObject({
+      state: "failed",
+      targetVersion: "2.0.0",
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Q11: a refused COMPLETION write over a verified-healthy host.
+  //
+  // These four pins guard one rule with two halves. The rule: the CLI never
+  // stamps `failed` over a host it has just verified healthy at the target.
+  // The halves: the record is left untouched (so the GUI's "record at a
+  // verify-side phase + dead executor + running === target" reading survives to
+  // render "finalizing"), and the two refusal kinds leave disk IDENTICAL (so
+  // one user-visible situation cannot produce two renderings).
+  //
+  // The exit is still non-zero under its own code: the attempt did not durably
+  // conclude, and a script polling the record must not read this run as done.
+  // -------------------------------------------------------------------------
+  it.each([
+    { refusal: "rejected" as const },
+    { refusal: "durability-unverified" as const },
+  ])(
+    "Q11: a $refusal completion write leaves the record alone and exits non-zero",
+    async ({ refusal }) => {
+      await seedInstalled("1.0.0");
+      world.runningVersion = "1.0.0";
+      mocks.refuseCompletion = refusal;
+
+      await expect(runUpdate({})).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.HOST_UPDATE_RECORD_NOT_CONCLUDED,
+        exitCode: 1,
+        // The refusal kind is reported, and it is the ONLY thing that differs
+        // between these two rows. Everything asserted below is identical.
+        details: {
+          environment: ENVIRONMENT,
+          version: "2.0.0",
+          outcome: refusal,
+        },
+      });
+
+      // The update itself WORKED - that is the whole premise, and the reason
+      // stamping a failure would be a lie rather than a pessimism.
+      expect(world.installedVersion).toBe("2.0.0");
+      expect(world.runningVersion).toBe("2.0.0");
+
+      // ...and the record still says `verifying`, with no error at all. Not
+      // `failed`, not `complete`, and not a terminal of any kind: exactly what
+      // the verify loop's last write left, which is what the GUI reads.
+      const record = await requireRecord();
+      expect(record.phase).toBe("verifying");
+      expect(record.error).toBeNull();
+
+      // The MARKER is untouched too - neither stamped `failed` (which would
+      // render red at a glance) nor cleared (which would claim a conclusion
+      // this run could not write). The next run takes it over.
+      expect(mocks.disk.current).toMatchObject({
+        state: "updating",
+        targetVersion: "2.0.0",
+      });
+      expect(
+        mocks.replaceUpdateProgressMarkerIfUnchanged,
+      ).not.toHaveBeenCalledWith(
+        ENVIRONMENT,
+        expect.anything(),
+        expect.objectContaining({ state: "failed" }),
+      );
+      expect(
+        mocks.deleteUpdateProgressMarkerIfUnchanged,
+      ).not.toHaveBeenCalled();
+    },
+  );
+
+  it("Q11: the message names the version the host is running, not a failure", async () => {
+    // Split from the pins above because it is a different KIND of claim: those
+    // assert what is on disk, this asserts what the operator reads. The
+    // sentence has to say the update is done and the bookkeeping is not,
+    // because the exit code is non-zero and a non-zero exit with a silent
+    // message is read as "the update failed".
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    mocks.refuseCompletion = "rejected";
+
+    // ONE run, both claims off the same error. Asserting them in two runs was
+    // this pin's first shape and it failed instructively: the SECOND run
+    // reconciled the record left by the first and exited 0, which is the
+    // behaviour the next pin now covers deliberately.
+    const err = await runUpdate({}).then(
+      () => null,
+      (caught: unknown) => caught,
+    );
+    expect(err).toMatchObject({
+      code: CLI_ERROR_CODES.HOST_UPDATE_RECORD_NOT_CONCLUDED,
+      message: expect.stringContaining(
+        "2.0.0 is installed and the host is running it",
+      ),
+    });
+    expect(err).toMatchObject({
+      message: expect.stringContaining("the next run will conclude the record"),
+    });
+  });
+
+  it("Q11: the NEXT run concludes the record it could not", async () => {
+    // The citation the ticket asks for, executed rather than argued: the arm
+    // promises "the next run will conclude the record", and a promise a caller
+    // reads in a message is worth exactly as much as the pin behind it.
+    //
+    // The concluding path is `decideAttemptRecovery`'s `terminalize-complete`
+    // (installed AT the target AND running bound to this home), NOT the
+    // `activate` continuation - which is why the record ends `complete` rather
+    // than `superseded`, and why this run exits 0 having touched nothing.
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    mocks.refuseCompletion = "durability-unverified";
+    await expect(runUpdate({})).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_UPDATE_RECORD_NOT_CONCLUDED,
+    });
+    expect((await requireRecord()).phase).toBe("verifying");
+
+    // The next run, over the record the first one left, with the write medium
+    // working again.
+    mocks.refuseCompletion = null;
+    const outcome = await runUpdate({});
+
+    expect(outcome.releasedReason).toBe("recovered-complete");
+    const concluded = await requireRecord();
+    expect(concluded.phase).toBe("complete");
+    expect(concluded.execution).toBe("terminal");
+    // The MARKER, pinned as it actually behaves rather than as one would
+    // wish. A run that reconciles and releases never enters `runArm`, so the
+    // marker mirror never runs and the `updating` stamp the FIRST run wrote
+    // survives its own conclusion. That is the module's existing shape for
+    // every recovery-only run - the `crashAtRestarting` pin below reconciles
+    // the same way - and not something this arm introduced, so it is recorded
+    // here rather than quietly fixed under a Q11 commit. What keeps it benign
+    // is that a coarse `updating` is projected only BESIDE a `none` attempt,
+    // and this attempt is terminal and retained; the next update takes the
+    // marker over. Flagged to the round as a standalone gap.
+    expect(mocks.disk.current).toMatchObject({
+      state: "updating",
+      targetVersion: "2.0.0",
+    });
+  });
+
+  it("Q11 control: a GENUINE verification timeout still stamps `failed`", async () => {
+    // The falsification the pins above cannot perform on themselves. The Q11
+    // rule is a carve-out, and a carve-out written one predicate too wide
+    // silences the real failure it sits next to - the one case whose whole
+    // purpose is to be loud, and the only signal a 1.2.x host ever shows for a
+    // broken update.
+    //
+    // Falsification (the ablation, run): drop `writer.fail` from the
+    // health-failure arm and this reddens alone, all four Q11 pins above
+    // staying green.
+    //
+    // What does NOT falsify it is worth recording, because it was the first
+    // ablation tried and it came back green: widening `writeFailure`'s Q11 arm
+    // to return on ANY CliError changes nothing here. The health arm stamps at
+    // its own throw site, before the error ever reaches `writeFailure`, so that
+    // guard is not what keeps this failure loud.
+    //
+    // That widening is not unpinned, though - it just is not pinned HERE. Run
+    // whole, this file reddens on 17 other pins under it (the marker-cause
+    // stamps, the displaced-writer restores, the D-46 supersede/stamp split).
+    // Recorded so the next editor looks there rather than concluding from this
+    // comment that the arm's narrowness is free to change.
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    mocks.observeAttemptRecoveryEvidence.mockImplementation(async () => {
+      const observation = observationOfWorld();
+      return {
+        ...observation,
+        evidence: {
+          ...observation.evidence,
+          running: { kind: "unreadable" as const },
+        },
+      };
+    });
+
+    await expect(runUpdate({})).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_UPDATE_HEALTH_CHECK_FAILED,
+    });
+
+    expect((await requireRecord()).error).toMatchObject({
+      code: "verify-timeout",
+    });
     expect(mocks.disk.current).toMatchObject({
       state: "failed",
       targetVersion: "2.0.0",
