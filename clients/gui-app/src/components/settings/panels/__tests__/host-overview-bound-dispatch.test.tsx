@@ -75,6 +75,10 @@ import type {
   HostStagedRecord,
 } from "@traycer/protocol/config/installation-records";
 import { STALE_ATTEMPT_CLOSED_SUFFIX } from "@traycer/protocol/config/host-update-ack-reason";
+import {
+  HOST_UPDATE_CLI_FAILED_REASONS,
+  HOST_UPDATE_KNOWN_INDETERMINATE_DISPATCH_REASONS,
+} from "@traycer/protocol/config/host-update-bound-dispatch-reasons";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { HostTransportFailureError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { hostQueryKeys } from "@/lib/query-keys";
@@ -2119,4 +2123,231 @@ describe("update dispatch onError — a transport drop keeps the accepted latch 
       }
     });
   }
+});
+
+/**
+ * Pin (4): the reason vocabularies are PARTITIONED, one partition per wire field.
+ *
+ * The protocol owns two tuples because the two fields are different layers, and
+ * a single list over both would have demanded copy in this arm for reasons that
+ * arrive on the other one. Each partition below is over ITS OWN field's tuple.
+ *
+ * ## Two buckets, exhaustive, and why there is no third
+ *
+ * Every member is either RENDERED (its own sentence) or DIAGNOSTIC-ONLY (the
+ * generic sentence, naming the raw reason). A member in neither is a failure:
+ * that is the whole point — a reason added upstream reddens here and forces a
+ * DECISION, rather than silently reaching a user as a raw string.
+ *
+ * An arm per reason was considered and would be a regression. For several of
+ * these the raw string IS the content — `record-fail-closed` is minted when the
+ * attempt record cannot be decoded at all, so copy written over it would
+ * replace the one fact a support thread needs with a paraphrase carrying less
+ * information (ea8ce20c's argument, and the reason the escape hatch is a
+ * requirement rather than a concession). So the diagnostic bucket carries a
+ * per-entry justification and the pin checks placement, not coverage.
+ *
+ * ## The fallback is mandatory, not incidental
+ *
+ * `dispatch-indeterminate.reason` is an OPEN field: `refusedAckReason` mints
+ * `refused-<any CLI error code>` and the host echoes it verbatim, so the tuple
+ * enumerates only the reasons minted BY NAME. A `default`-less switch over it
+ * would certify a falsehood. The generated-refusal row below is the pin on
+ * that, and deleting the generic arm reddens it.
+ */
+describe("HostOverviewPanel — reason vocabularies are partitioned per wire field (pin 4)", () => {
+  const genericIndeterminate = (reason: string): string =>
+    `Couldn't confirm the update started on host-a: ${reason}. Watching for progress.`;
+
+  /** Members of the indeterminate tuple this page gives their own sentence. */
+  const RENDERED_INDETERMINATE: ReadonlySet<string> = new Set([
+    "refused-attempt-gone",
+    "refused-attempt-moved",
+    "refused-unverifiable",
+    "recovered-complete",
+    "recovered-failed",
+  ]);
+
+  /**
+   * Members deliberately left to the diagnostic sentence, each with the reason
+   * that decision is right for THAT member. Cite the producer, so the next
+   * reader can check the justification against the code that mints it.
+   */
+  const DIAGNOSTIC_ONLY_INDETERMINATE: ReadonlyMap<string, string> = new Map([
+    [
+      "externally-managed",
+      "The page already reports this condition through the STICKY `externally-managed` degrade, which persists while a toast does not. A sentence here would be a second, weaker narration of a state the page is already showing.",
+    ],
+    [
+      "record-fail-closed",
+      "Minted when the attempt record cannot be decoded (`update-run.ts:931`), so the raw reason IS the whole content. Copy over it would replace the one fact a support thread needs with a paraphrase that knows less.",
+    ],
+    [
+      "ack-timeout",
+      "The host's own bounded wait elapsed with no ACK naming this dispatch. The generic sentence already says the right thing — it could not be confirmed, and it is still being watched — and the token is what distinguishes this from the other two wait outcomes.",
+    ],
+    [
+      "child-exited-before-ack",
+      "As `ack-timeout`: a dispatcher wait outcome whose token is the diagnostic. The user's next action is identical for all three, so three sentences would differ only in wording.",
+    ],
+    [
+      "attempt-record-invalid",
+      "An ACK was present and unreadable. Same class as `record-fail-closed` — undecodable evidence, where a paraphrase discards the only distinguishing fact.",
+    ],
+    [
+      "refused-unprintable",
+      "The host refuses to repeat an ACK reason outside the grammar. Rendering copy for it would be this page inventing a description of a string the HOST declined to pass on.",
+    ],
+    [
+      "unnamed-attempt",
+      "A projection said `accepted` for a bound method with no attempt id — an internal inconsistency with no user-facing remedy, where the token is the bug report.",
+    ],
+  ]);
+
+  /**
+   * The `cli-failed` arm's partition, over the CLOSED tuple.
+   *
+   * Closed, unlike the indeterminate field: all three are host-minted by name,
+   * so no fallback row is needed here to be honest — though the arm keeps its
+   * generic sentence, because a host newer than this client is still a thing
+   * that can happen and the type is not a wire guarantee.
+   */
+  const RENDERED_CLI_FAILED: ReadonlySet<string> = new Set(["cli-too-old"]);
+
+  const DIAGNOSTIC_ONLY_CLI_FAILED: ReadonlyMap<string, string> = new Map([
+    [
+      "cli-unavailable",
+      "Names the same condition the page already reports through the sticky `cli-unavailable` degrade. The generic sentence — the CLI could not complete the request, plus the token — is the right level for a toast sitting beside a persistent banner that says more.",
+    ],
+    [
+      // Stated as asked rather than defaulted: this is the one member the
+      // brief left to me. Copy would replace a distinguishing token with a
+      // paraphrase of the sentence already printed above it.
+      "spawn-failed",
+      "The helper process did not start. The user's remedy is identical to any other CLI failure, so a bespoke sentence would differ from the generic one only in wording — while the raw token is exactly what tells a support thread this was a spawn rather than a run failure.",
+    ],
+  ]);
+
+  it("(n) every known indeterminate reason is either rendered or reasoned-diagnostic, and the two buckets are exhaustive and disjoint", () => {
+    const rendered = [...RENDERED_INDETERMINATE];
+    const diagnostic = [...DIAGNOSTIC_ONLY_INDETERMINATE.keys()];
+
+    // Asserted first: a member in NEITHER bucket is the regression this pin
+    // exists for — a reason added upstream that reaches a user as a raw string
+    // because nobody decided what to do with it.
+    const placed = new Set([...rendered, ...diagnostic]);
+    expect(
+      HOST_UPDATE_KNOWN_INDETERMINATE_DISPATCH_REASONS.filter(
+        (reason) => !placed.has(reason),
+      ),
+    ).toEqual([]);
+
+    // And disjoint: a member in BOTH would make the behavioural rows below
+    // contradict each other rather than fail.
+    expect(
+      rendered.filter((r) => DIAGNOSTIC_ONLY_INDETERMINATE.has(r)),
+    ).toEqual([]);
+    // Neither bucket may name something the tuple does not: that is how a
+    // member RETIRED upstream leaves a dead entry here.
+    const known = new Set<string>(
+      HOST_UPDATE_KNOWN_INDETERMINATE_DISPATCH_REASONS,
+    );
+    expect([...placed].filter((r) => !known.has(r))).toEqual([]);
+    // Every diagnostic entry states WHY, which is what keeps the bucket from
+    // becoming a place to put reasons nobody looked at.
+    for (const [reason, why] of DIAGNOSTIC_ONLY_INDETERMINATE) {
+      expect(why.length, `${reason} needs a stated reason`).toBeGreaterThan(40);
+    }
+  });
+
+  it("(n2) every cli-failed reason is placed, and those buckets are exhaustive and disjoint too", () => {
+    const placed = new Set([
+      ...RENDERED_CLI_FAILED,
+      ...DIAGNOSTIC_ONLY_CLI_FAILED.keys(),
+    ]);
+    expect(
+      HOST_UPDATE_CLI_FAILED_REASONS.filter((reason) => !placed.has(reason)),
+    ).toEqual([]);
+    expect(
+      [...RENDERED_CLI_FAILED].filter((r) => DIAGNOSTIC_ONLY_CLI_FAILED.has(r)),
+    ).toEqual([]);
+    const known = new Set<string>(HOST_UPDATE_CLI_FAILED_REASONS);
+    expect([...placed].filter((r) => !known.has(r))).toEqual([]);
+    for (const [reason, why] of DIAGNOSTIC_ONLY_CLI_FAILED) {
+      expect(why.length, `${reason} needs a stated reason`).toBeGreaterThan(40);
+    }
+  });
+
+  it("(n3) the two tuples share no member, so each arm's partition is over its own field", () => {
+    const cliFailed = new Set<string>(HOST_UPDATE_CLI_FAILED_REASONS);
+    // If these ever overlap, "pick the tuple by the arm" stops being a rule and
+    // a reason could be rendered on one arm and diagnostic on the other.
+    expect(
+      HOST_UPDATE_KNOWN_INDETERMINATE_DISPATCH_REASONS.filter((reason) =>
+        cliFailed.has(reason),
+      ),
+    ).toEqual([]);
+  });
+
+  it("(n4) each bucket behaves as its placement claims, and an OPEN-field reason falls to the generic sentence", async () => {
+    const rows: ReadonlyArray<{
+      readonly reason: string;
+      readonly generic: boolean;
+    }> = [
+      ...[...RENDERED_INDETERMINATE].map((reason) => ({
+        reason,
+        generic: false,
+      })),
+      ...[...DIAGNOSTIC_ONLY_INDETERMINATE.keys()].map((reason) => ({
+        reason,
+        generic: true,
+      })),
+      // The OPEN half of the field. `refused-e-*` is generated from a CLI error
+      // code and can never be enumerated, so it MUST reach the generic arm
+      // carrying its raw string. Deleting that arm reddens this row.
+      { reason: "refused-e-something-new", generic: true },
+    ];
+
+    for (const row of rows) {
+      const fixture = buildOverviewHostFixture({
+        hostId: "host-a",
+        isLocalMachine: true,
+        overrideHandlers: {
+          "host.update.check": () => ({
+            outcome: "ok" as const,
+            effectiveIncludePreReleases: false,
+            includePreReleasesSource: "stable-default" as const,
+            manifest: updateCheckManifest("1.6.0"),
+          }),
+          "host.update.install": () => ({
+            outcome: "dispatch-indeterminate" as const,
+            reason: row.reason,
+          }),
+        },
+      });
+      record("host-a", METHODS_WITH_BOUND);
+      hostBindingMock.current = { hostClient: fixture.client };
+      scopeOverrides.current = scopeFrom("host-a", fixture);
+      renderPanel();
+
+      fireEvent.click(
+        await screen.findByRole("button", { name: "Update now" }),
+      );
+      await waitFor(() => {
+        expect(vi.mocked(toast.info).mock.calls.length).toBeGreaterThan(0);
+      });
+      const message = vi.mocked(toast.info).mock.calls.at(-1)?.[0];
+      expect(
+        message === genericIndeterminate(row.reason),
+        `${row.reason} should ${row.generic ? "" : "NOT "}use the generic sentence`,
+      ).toBe(row.generic);
+
+      cleanup();
+      resetHostServiceWriteLatchesForTest();
+      resetNegotiatedManifests();
+      scopeOverrides.current = {};
+      hostBindingMock.current = null;
+      vi.clearAllMocks();
+    }
+  });
 });
