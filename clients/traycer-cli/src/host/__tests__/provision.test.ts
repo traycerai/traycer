@@ -483,6 +483,232 @@ describe("provisionHost - Finding D: implicit-registry-minimum satisfaction", ()
   });
 });
 
+// Q7: the OWN-BUILD policy - the packaged archive, and the `--from` the
+// Windows desktop passes for that same archive. It was `exact`, and equality
+// reverted a user whose host had been updated out of band past the app's
+// bundle: the desktop asks for a convergence whenever the local host is down
+// or has not been dialed, so the revert repeated after every outage and every
+// launch with a remote serving, and the update put it back. `own-build-minimum`
+// moves exactly one direction of that predicate - a comparably NEWER install is
+// kept - and every other direction still converges, which is what the rows
+// below hold in place. The install record is asserted UNCHANGED on the kept
+// row: "no install branch" and "the newer host's record survives intact" are
+// different claims, and it is the second one the user cares about.
+describe("provisionHost - Q7: own-build-minimum satisfaction", () => {
+  beforeEach(() => {
+    mocks.callOrder = [];
+    mocks.lockHeld = false;
+    mocks.lockAcquisitions = 0;
+    serviceLabelForMock.mockReturnValue({
+      id: "ai.traycer.host",
+      environment: "production",
+    });
+    assertHostNotBusyMock.mockResolvedValue(undefined);
+    discardStagedHostInstallSourceMock.mockResolvedValue(undefined);
+    createServiceInstallLifecycleMock.mockReturnValue(sampleLifecycleHandle());
+    stageHostInstallSourceMock.mockResolvedValue(sampleStaged("1.7.2"));
+    commitHostInstallSourceMock.mockResolvedValue({
+      record: sampleRecord("1.7.2"),
+      previous: null,
+      installGeneration: "id:install-1.7.2",
+    });
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function runningController() {
+    return {
+      status: async () => ({
+        state: "running" as const,
+        version: "host",
+        listenUrl: "ws://127.0.0.1:7100/rpc",
+        pid: 4242,
+      }),
+      install: vi.fn(),
+      start: vi.fn(),
+      hostStartAdoptionLabel: vi.fn(async (label: { id: string }) => label.id),
+    };
+  }
+
+  function ownBuild(version: string): ProvisionHostOptions["satisfaction"] {
+    return { kind: "own-build-minimum", version };
+  }
+
+  it("keeps a comparably NEWER install and leaves its record untouched (the anti-downgrade row)", async () => {
+    createServiceControllerMock.mockReturnValue(runningController());
+    const installed = sampleRecord("1.8.0");
+    readHostInstallRecordMock.mockResolvedValue(installed);
+    isVersionYankedMock.mockResolvedValue(false);
+
+    const result = await provisionHost(
+      makeOpts({
+        satisfaction: ownBuild("1.7.2"),
+        // What the desktop passes: the bundled build stamps itself as the
+        // recorded version, which is exactly the value that used to overwrite
+        // the newer host's record.
+        recordVersionOverride: "1.7.2",
+      }),
+    );
+
+    expect(result.action).toBe("noop");
+    expect(isVersionYankedMock).toHaveBeenCalledWith("1.8.0");
+    expect(stageHostInstallSourceMock).not.toHaveBeenCalled();
+    expect(commitHostInstallSourceMock).not.toHaveBeenCalled();
+    // The record the user's own update wrote is still the one on disk -
+    // version AND install id, since a restamp would also mint a new identity.
+    expect(result.version).toBe("1.8.0");
+    expect(installed.version).toBe("1.8.0");
+    expect(installed.installId).toBe("install-1.8.0");
+  });
+
+  it("keeps the exact stamp without consulting the yank list", async () => {
+    createServiceControllerMock.mockReturnValue(runningController());
+    readHostInstallRecordMock.mockResolvedValue(sampleRecord("1.7.2"));
+
+    const result = await provisionHost(
+      makeOpts({ satisfaction: ownBuild("1.7.2") }),
+    );
+
+    expect(result.action).toBe("noop");
+    expect(commitHostInstallSourceMock).not.toHaveBeenCalled();
+    // Equality answers before the comparator, so an unchanged build costs no
+    // manifest lookup - and this is the control that keeps the row below
+    // (another build of the same release) honest.
+    expect(isVersionYankedMock).not.toHaveBeenCalled();
+  });
+
+  it("reinstalls an OLDER install", async () => {
+    createServiceControllerMock.mockReturnValue(runningController());
+    readHostInstallRecordMock.mockResolvedValue(sampleRecord("1.6.0"));
+
+    const result = await provisionHost(
+      makeOpts({ satisfaction: ownBuild("1.7.2") }),
+    );
+
+    expect(result.action).toBe("installed");
+    expect(commitHostInstallSourceMock).toHaveBeenCalledTimes(1);
+    expect(isVersionYankedMock).not.toHaveBeenCalled();
+  });
+
+  it("reinstalls an UNORDERABLE install - a staging or dev stamp converges exactly as it did under `exact`", async () => {
+    createServiceControllerMock.mockReturnValue(runningController());
+    readHostInstallRecordMock.mockResolvedValue(
+      sampleRecord("staging.1788716277681.312db41da0"),
+    );
+
+    const result = await provisionHost(
+      makeOpts({
+        satisfaction: ownBuild("staging.1788780730120.1d4be2fe71"),
+      }),
+    );
+
+    // Neither stamp can be ranked, so nothing can be shown to be newer and
+    // the build's own archive wins - the behaviour every dev and staging slot
+    // has today. Also why a staging slot cannot MEASURE this change.
+    expect(result.action).toBe("installed");
+    expect(commitHostInstallSourceMock).toHaveBeenCalledTimes(1);
+    expect(isVersionYankedMock).not.toHaveBeenCalled();
+  });
+
+  it("reinstalls another build of the same release - the comparator ranks it equal, the string says it is a different artifact", async () => {
+    createServiceControllerMock.mockReturnValue(runningController());
+    readHostInstallRecordMock.mockResolvedValue(sampleRecord("2.0.0+bar"));
+
+    const result = await provisionHost(
+      makeOpts({ satisfaction: ownBuild("2.0.0+foo") }),
+    );
+
+    // The registry arm KEEPS this one (yank-checked); an own build must not,
+    // or `ensure`'s "a rebuilt host is reinstalled" promise dies quietly.
+    expect(result.action).toBe("installed");
+    expect(commitHostInstallSourceMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("reinstalls a newer install the registry has YANKED", async () => {
+    createServiceControllerMock.mockReturnValue(runningController());
+    readHostInstallRecordMock.mockResolvedValue(sampleRecord("1.8.0"));
+    isVersionYankedMock.mockResolvedValue(true);
+
+    const result = await provisionHost(
+      makeOpts({ satisfaction: ownBuild("1.7.2") }),
+    );
+
+    expect(result.action).toBe("installed");
+    expect(commitHostInstallSourceMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("announces the replacement of a DIFFERENT version at INFO, before the swap, and stays quiet otherwise", async () => {
+    createServiceControllerMock.mockReturnValue(runningController());
+    readHostInstallRecordMock.mockResolvedValue(sampleRecord("1.6.0"));
+    const info = vi.fn();
+
+    await provisionHost(
+      makeOpts({
+        satisfaction: ownBuild("1.7.2"),
+        runtime: { ...makeRuntime(), logger: { ...noopLogger, info } },
+      }),
+    );
+
+    // Both versions and the source kind; no install id, no generation, no
+    // path. This is the line whose absence made Q7 an afternoon of log
+    // archaeology - the completion line reports the outcome, by which point
+    // the previous bytes are gone.
+    expect(info).toHaveBeenCalledWith(
+      "Host provisioning replacing a different installed version",
+      {
+        environment: "production",
+        installedVersion: "1.6.0",
+        targetVersion: "1.7.2",
+        sourceKind: "registry",
+      },
+    );
+
+    // A FIRST install replaces nothing and must not claim to.
+    info.mockClear();
+    readHostInstallRecordMock.mockResolvedValue(null);
+    await provisionHost(
+      makeOpts({
+        satisfaction: ownBuild("1.7.2"),
+        runtime: { ...makeRuntime(), logger: { ...noopLogger, info } },
+      }),
+    );
+    expect(info).not.toHaveBeenCalledWith(
+      "Host provisioning replacing a different installed version",
+      expect.anything(),
+    );
+
+    // Neither does a forced reinstall of the SAME version.
+    info.mockClear();
+    readHostInstallRecordMock.mockResolvedValue(sampleRecord("1.7.2"));
+    await provisionHost(
+      makeOpts({
+        satisfaction: ownBuild("1.7.2"),
+        force: true,
+        runtime: { ...makeRuntime(), logger: { ...noopLogger, info } },
+      }),
+    );
+    expect(info).not.toHaveBeenCalledWith(
+      "Host provisioning replacing a different installed version",
+      expect.anything(),
+    );
+  });
+
+  it("still replaces a newer install under `--force` - the operator's own escape hatch is unchanged", async () => {
+    createServiceControllerMock.mockReturnValue(runningController());
+    readHostInstallRecordMock.mockResolvedValue(sampleRecord("1.8.0"));
+    isVersionYankedMock.mockResolvedValue(false);
+
+    const result = await provisionHost(
+      makeOpts({ satisfaction: ownBuild("1.7.2"), force: true }),
+    );
+
+    expect(result.action).toBe("installed");
+    expect(commitHostInstallSourceMock).toHaveBeenCalledTimes(1);
+  });
+});
+
 // Reviewer finding (host-ensure): `beforeMutate` must fire ONLY once this
 // call has committed to mutating the host, never on the lock-free no-op
 // fast path - `host ensure` hangs its sign-in pre-flight there precisely so

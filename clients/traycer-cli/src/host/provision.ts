@@ -109,13 +109,34 @@ export interface HostProvisionResult {
 }
 
 // The installed-version predicate for a provisioning run (RCA finding D).
-// Local files and an explicit `--release` request demand an exact match;
-// the build-stamped registry default accepts an installed version NEWER
-// than the target (a host updated out-of-band must not be downgraded back
-// to the stamped build), yank-checked against the manifest and fail-open.
+// An explicit `--release` request demands an exact match; the build-stamped
+// registry default accepts an installed version NEWER than the target (a host
+// updated out-of-band must not be downgraded back to the stamped build),
+// yank-checked against the manifest and fail-open; an own build (the packaged
+// archive, or an explicit `--from`) demands the exact stamp EXCEPT in that
+// same newer direction, for the same reason - see `own-build-minimum`.
 export type HostSatisfactionPolicy =
   | { readonly kind: "presence" }
   | { readonly kind: "exact"; readonly version: string }
+  /**
+   * This build's own host archive: converge to `version`, but never BACKWARDS
+   * over a comparably newer install (Q7).
+   *
+   * It was `exact`, and equality could not express the one case that matters:
+   * a user whose host had been updated out of band past the app's bundle had
+   * it silently replaced by the older bundled build on the next convergence -
+   * and, because a convergence is requested whenever the local host is down or
+   * has not been dialed, that revert repeated after every outage and every
+   * launch with a remote serving. The registry arm already states the rule
+   * ("a host updated out-of-band must not be downgraded"); this applies it to
+   * the source the desktop actually uses.
+   *
+   * Deliberately NOT the registry arm's predicate. That one also accepts a
+   * comparator-EQUAL different build string (`2.0.0+bar` installed for
+   * `2.0.0+foo`), and an own build promises the opposite: a rebuilt host of
+   * the same release is replaced. Only the strictly-greater direction moves.
+   */
+  | { readonly kind: "own-build-minimum"; readonly version: string }
   | { readonly kind: "implicit-registry-minimum"; readonly version: string };
 
 export interface ProvisionHostOptions {
@@ -415,6 +436,28 @@ async function provisionUnderLock(
               versionSatisfied: reinstallVersionSatisfied,
             },
           );
+          // INFO, not debug, and BEFORE the swap: this is the one line that
+          // says a host the user did not ask about is being replaced by a
+          // DIFFERENT version. Q7 spent an afternoon of log archaeology
+          // establishing after the fact that a background convergence had done
+          // exactly this; the install branch's own completion line reports the
+          // outcome, and by then the previous bytes are gone.
+          //
+          // Versions and the source kind only - no install id, no generation,
+          // no path. A first install and a same-version reinstall (a rebuilt
+          // stamp, or `--force`) are not replacements of anything a reader
+          // would be surprised by, and stay quiet.
+          if (state.installed && state.version !== preStaged.version) {
+            opts.runtime.logger.info(
+              "Host provisioning replacing a different installed version",
+              {
+                environment: opts.runtime.environment,
+                installedVersion: state.version,
+                targetVersion: preStaged.version,
+                sourceKind: preStaged.source.kind,
+              },
+            );
+          }
           stagedConsumed = true;
           return {
             kind: "result",
@@ -969,6 +1012,22 @@ async function versionSatisfied(
     return state.version === satisfaction.version;
   }
   if (state.version === null) return false;
+  if (satisfaction.kind === "own-build-minimum") {
+    // The requested stamp itself, decided BEFORE the comparator so a rebuilt
+    // same-release host (another build string the comparator ranks equal) does
+    // not slip through as satisfied - that case must still be replaced.
+    if (state.version === satisfaction.version) return true;
+    const ownComparison = compareHostVersions(
+      state.version,
+      satisfaction.version,
+    );
+    // Unordered stamps (`staging.<epoch>.<sha>`, a dev build) cannot be shown
+    // to be newer, so they converge exactly as they did under `exact`. Only a
+    // version this comparator positively ranks ABOVE the bundle is kept.
+    if (!ownComparison.comparable) return false;
+    if (ownComparison.ordering !== "greater") return false;
+    return !(await yankLookup.isVersionYanked(state.version));
+  }
   const comparison = compareHostVersions(state.version, satisfaction.version);
   // `comparable: false` = a malformed version on either side; never let an
   // install record we can't reason about look current.

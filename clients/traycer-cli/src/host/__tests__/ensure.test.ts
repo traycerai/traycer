@@ -251,6 +251,11 @@ beforeEach(() => {
   stageHostInstallSourceMock.mockResolvedValue({
     stagingDir: "/tmp/staged",
     version: "1.6.0",
+    // The staged source's own provenance. This fixture carried only the two
+    // fields the suite asserted on; the real `StagedHostInstallSource` always
+    // has it, and the install branch's "replacing a different installed
+    // version" line reads it (Q7).
+    source: { kind: "registry", value: "1.6.0" },
   });
   commitHostInstallSourceMock.mockResolvedValue({
     record: {
@@ -667,6 +672,48 @@ describe("ensureHost", () => {
       }),
     );
   });
+
+  // Q7 wiring. The core's own rows (`provision.test.ts`, "own-build-minimum
+  // satisfaction") prove what that policy DOES with a newer install; this is
+  // the half they cannot see - that an own-build source still asks for it.
+  // Reverting this mapping to `exact` reinstates the revert with every core
+  // row still green, which is exactly how the churn survived review the first
+  // time. Asserted on the target-computed line, before any install decision,
+  // so no yank lookup is reached and the pin costs one log read.
+  it.each([
+    ["the packaged archive", { fromPath: null }],
+    // The Windows desktop passes its bundled archive as `--from`, so the two
+    // platforms would otherwise disagree about whether a user's newer host
+    // survives a convergence.
+    ["an explicit --from", { fromPath: "/elsewhere/host.tar.gz" }],
+  ])(
+    "asks for `own-build-minimum` for %s, never `exact`",
+    async (_label, overrides) => {
+      config.supportedHostVersion = "1.7.2";
+      readHostInstallRecordMock.mockResolvedValue(null);
+      resolveBundledHostArchiveMock.mockResolvedValue("/bundle/host.tar.gz");
+      createServiceControllerMock.mockReturnValue(
+        makeController("not-installed"),
+      );
+      const debug = vi.fn();
+
+      await ensureHost(
+        makeOpts({
+          ...overrides,
+          runtime: { ...makeRuntime(), logger: { ...noopLogger, debug } },
+        }),
+      );
+
+      expect(debug).toHaveBeenCalledWith(
+        "Host ensure provisioning target computed",
+        expect.objectContaining({
+          sourceKind: "local-file",
+          satisfactionKind: "own-build-minimum",
+          satisfactionVersion: config.version,
+        }),
+      );
+    },
+  );
 
   it("keeps explicit latest as a live registry request even when a default version is configured", async () => {
     config.supportedHostVersion = "1.7.2";
