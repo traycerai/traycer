@@ -929,6 +929,7 @@ async function selectClaim(
     return {
       kind: "release",
       boundAttemptId: args.expectAttempt,
+      boundIdentity: null,
       reason: "record-fail-closed",
     };
   }
@@ -955,7 +956,12 @@ async function selectClaim(
       // the next `host update` naming THAT target; a plain up-to-date run
       // supersedes neither.
       await readInstalledUnderLock(args.environment, input.selection);
-      return { kind: "release", boundAttemptId: null, reason: "nothing-to-do" };
+      return {
+        kind: "release",
+        boundAttemptId: null,
+        boundIdentity: null,
+        reason: "nothing-to-do",
+      };
     }
     // Another target and real work to do: `start` for the plan's target, which
     // the core turns into supersede-then-create.
@@ -988,7 +994,12 @@ async function startSelection(
     // legacy `applyAndProjectLegacy` does when the record is GONE: the shell
     // must never report "already up to date" for a host with no install.
     await readInstalledUnderLock(args.environment, selection);
-    return { kind: "release", boundAttemptId: null, reason: "nothing-to-do" };
+    return {
+      kind: "release",
+      boundAttemptId: null,
+      boundIdentity: null,
+      reason: "nothing-to-do",
+    };
   }
   const identity = plan.plan.identity;
   return {
@@ -1041,7 +1052,12 @@ async function selectDebtStart(
     // two reads: the legacy no-ops on anything but `debt` / `no-live-host`.
     // No stale-`failed` clear - the legacy clears only when the PRE-lock
     // reading was `activated`, and this run's was `debt`.
-    return { kind: "release", boundAttemptId: null, reason: "nothing-to-do" };
+    return {
+      kind: "release",
+      boundAttemptId: null,
+      boundIdentity: null,
+      reason: "nothing-to-do",
+    };
   }
   selection.debtReading = reading.kind;
   selection.underLockRunningVersion =
@@ -1208,6 +1224,7 @@ async function selectBoundResume(
     return {
       kind: "release",
       boundAttemptId: expect,
+      boundIdentity: null,
       reason: "refused-attempt-gone",
     };
   }
@@ -1232,6 +1249,13 @@ async function selectBoundResume(
     return {
       kind: "release",
       boundAttemptId: expect,
+      // The identity the VERB bound to, not the record's: the closer compares
+      // them, and this is the half that authorizes.
+      boundIdentity: {
+        attemptId: expect,
+        generation: expectedIdentity.generation,
+        sequence: expectedIdentity.sequence,
+      },
       reason: "refused-attempt-moved",
     };
   }
@@ -1268,6 +1292,7 @@ async function selectBoundResume(
     return {
       kind: "release",
       boundAttemptId: expect,
+      boundIdentity: null,
       reason: "refused-attempt-gone",
     };
   }
@@ -1280,6 +1305,7 @@ async function selectBoundResume(
       return {
         kind: "release",
         boundAttemptId: expect,
+        boundIdentity: null,
         reason: "refused-unverifiable",
       };
     }
@@ -1296,6 +1322,7 @@ async function selectBoundResume(
       : {
           kind: "release",
           boundAttemptId: expect,
+          boundIdentity: null,
           reason: "refused-unverifiable",
         };
   }
@@ -1314,6 +1341,7 @@ async function selectBoundResume(
     : {
         kind: "release",
         boundAttemptId: expect,
+        boundIdentity: null,
         reason: "refused-unverifiable",
       };
 }

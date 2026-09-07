@@ -11,6 +11,7 @@ import {
   HOST_START_STAMP_FLOOR,
   type HostUpdateAttemptVerification,
   type AttemptClaimRequest,
+  sameAttemptIdentity,
   type HostUpdateAttemptIdentity,
   type HostUpdateAttemptRead,
   type HostUpdateAttemptRecord,
@@ -108,6 +109,23 @@ export type ExecutorClaimSelection =
        * is precisely what a correct `--expect-attempt` resumes.
        */
       readonly boundAttemptId: string | null;
+      /**
+       * The FULL identity the verb bound to, or `null` when the dispatcher
+       * sent only an id.
+       *
+       * `boundAttemptId` is not the whole binding any more. A bound verb can
+       * now carry `--expect-generation`/`--expect-sequence`, and an attempt
+       * that advances and parks again keeps its id while moving both - so an
+       * id-only comparison reads "this is the record you named" about a record
+       * the verb did NOT authorize.
+       *
+       * That is not hypothetical: `refused-attempt-moved` is minted precisely
+       * when those components missed, and it carries the matching id by
+       * construction, so an id-only guard waves it straight through into the
+       * close (ea8ce20c, at assembly). A refusal for staleness must have no
+       * side effects.
+       */
+      readonly boundIdentity: HostUpdateAttemptIdentity | null;
     };
 
 /**
@@ -610,6 +628,7 @@ async function claimUnderExecutorCapability(
       current,
       selection.reason,
       selection.boundAttemptId,
+      selection.boundIdentity,
     );
   }
   const request = claimRequestAtExecutor(selection.request, options.nowIso());
@@ -714,6 +733,7 @@ async function releaseAfterClosingStaleAttempt(
   current: HostUpdateAttemptRead,
   reason: string,
   boundAttemptId: string | null,
+  boundIdentity: HostUpdateAttemptIdentity | null,
 ): Promise<ExecutorClaimOutcome> {
   if (current.kind !== "valid" || current.value.execution !== "active") {
     return { kind: "released", reason, outcome: null };
@@ -733,13 +753,53 @@ async function releaseAfterClosingStaleAttempt(
   // the id mismatches, and without this guard the CLI would terminalize a
   // record nothing named and no human ever saw.
   //
-  // The second disjunct does no work today: a bound release on a MATCHED id no
-  // longer occurs, because ticket 02's recovery fix turns that case into a
-  // claim. It states the rule rather than the current topology, so the guard
-  // stays correct if such a release ever reappears.
+  // The id test below used to be the second half of a two-term guard, and its
+  // comment said that half "does no work today" - a bound release on a matched
+  // id no longer occurs, because ticket 02's recovery fix turns that case into
+  // a claim - while adding that the rule would hold "if such a release ever
+  // reappears".
+  //
+  // IT REAPPEARED, and not in the shape that anticipation assumed.
+  // `refused-attempt-moved` is minted on a MATCHED id: the id is checked one
+  // branch earlier in `selectBoundResume`, and what missed is the generation
+  // or sequence the verb bound to. So the rule was right and its UNIT was too
+  // small - "what you could have named" is the whole identity, not a third of
+  // one - and the guard is now two tests rather than two disjuncts.
   if (boundAttemptId !== null && boundAttemptId !== current.value.attemptId) {
     return { kind: "released", reason, outcome: null };
   }
+  // A REFUSAL FOR STALENESS HAS NO SIDE EFFECTS. Without this, a bound verb
+  // whose position missed terminalizes the very attempt it declined to touch,
+  // and reports it as `refused-attempt-moved-stale-attempt-closed` - a consent
+  // refusal that consumed the thing it was refusing to act on.
+  //
+  // The record is not stranded by declining to close it here: it is active
+  // with a dead holder, so the reconciler's next bound dispatch carries the
+  // CURRENT observed identity, matches, and closes it then.
+  if (
+    boundIdentity !== null &&
+    !sameAttemptIdentity(boundIdentity, attemptIdentityOf(current.value))
+  ) {
+    return { kind: "released", reason, outcome: null };
+  }
+  // Which reasons can pass this guard is a property of the PRODUCER, not of
+  // the grammar: the ACK permits the `-stale-attempt-closed` suffix on any
+  // base, and what decides whether a base ever wears it is which declines
+  // reach the close. After this widening exactly one does - `nothing-to-do`,
+  // from a plain `install` whose plan is a no-op meeting an ACTIVE
+  // interrupted record (`update-run.ts`). `refused-attempt-moved` cannot, and
+  // cannot STRUCTURALLY rather than incidentally: it is minted precisely
+  // because the generation or sequence moved, which is the condition this
+  // guard now refuses to close over. The rest never arrive - `recovered-
+  // complete` / `recovered-failed` ride the `terminalized` outcome and never
+  // enter this function at all, and every remaining release reason is stopped
+  // either by the validity-and-active test above (a parked, absent or
+  // undecodable record has nothing to close) or by this guard's id test.
+  //
+  // Split three ways rather than tidied into "everything else is caught
+  // above", because the reasons are stopped by DIFFERENT tests
+  // (ea8ce20c/26f0b9d7): a one-clause version reads better and stays true only
+  // until someone moves a test.
   const record = current.value;
   const outcome = await recoverInterruptedAttempt(
     capability,

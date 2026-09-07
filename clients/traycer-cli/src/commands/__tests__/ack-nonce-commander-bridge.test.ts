@@ -98,6 +98,8 @@ describe("--ack-nonce reaches the builder through the Commander bridge", () => {
         ackNonce: "nonce-abcdefgh",
         intent: null,
         expectAttempt: null,
+        expectGeneration: null,
+        expectSequence: null,
       },
     ]);
   });
@@ -115,6 +117,8 @@ describe("--ack-nonce reaches the builder through the Commander bridge", () => {
         ackNonce: null,
         intent: null,
         expectAttempt: null,
+        expectGeneration: null,
+        expectSequence: null,
       },
     ]);
   });
@@ -135,6 +139,8 @@ describe("--ack-nonce reaches the builder through the Commander bridge", () => {
         ackNonce: "nonce-abcdefgh",
         intent: null,
         expectAttempt: null,
+        expectGeneration: null,
+        expectSequence: null,
       },
     ]);
   });
@@ -160,6 +166,8 @@ describe("--ack-nonce reaches the builder through the Commander bridge", () => {
         ackNonce: "nonce-downgrade",
         intent: null,
         expectAttempt: null,
+        expectGeneration: null,
+        expectSequence: null,
       },
     ]);
   });

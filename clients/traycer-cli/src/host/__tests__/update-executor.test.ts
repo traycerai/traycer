@@ -1811,6 +1811,7 @@ describe("runAttemptExecutorSegment - lock-scoped claim selection, reselect-vs-r
           request: async () => ({
             kind: "release",
             boundAttemptId: null,
+            boundIdentity: null,
             reason: "nothing-to-do",
           }),
           // The world moved on: another actor installed and runs 3.0.0, so
@@ -1880,6 +1881,7 @@ describe("runAttemptExecutorSegment - lock-scoped claim selection, reselect-vs-r
         request: async () => ({
           kind: "release",
           boundAttemptId: null,
+          boundIdentity: null,
           reason: "nothing-to-do",
         }),
         readRecoveryEvidence: () =>
@@ -1906,6 +1908,158 @@ describe("runAttemptExecutorSegment - lock-scoped claim selection, reselect-vs-r
       expect(outcome.outcome).not.toBeNull();
       expect(outcome.outcome?.attemptId).toBe("attempt-q26-complete");
       expect(outcome.outcome?.phase).toBe("complete");
+    }
+  });
+
+  it("P1: a decline whose bound IDENTITY missed leaves the active record alone", async () => {
+    // The guard widened at assembly. `boundAttemptId` matching is no longer
+    // enough to authorize a close: a verb can bind to the full
+    // `{attemptId, generation, sequence}`, and an attempt that advances and
+    // parks again keeps its id while moving the other two. An id-only guard
+    // therefore reads "this is the record you named" about a record the verb
+    // did not authorize.
+    //
+    // Falsification (the ablation): drop the identity disjunct and this row
+    // reddens on the record being terminalized, with the reason arriving
+    // suffixed.
+    mockCohortEligible("linux");
+    const hostHomeDir = await freshHome();
+    await seedInterruptedActiveRecordAt(
+      hostHomeDir,
+      "attempt-p1-moved",
+      "1.2.3",
+      null,
+    );
+    const before = await readUpdateAttemptRecord(hostHomeDir);
+
+    const outcome = await runAttemptExecutorSegment(
+      claimOptions(hostHomeDir, {
+        request: async (current) => ({
+          kind: "release",
+          boundAttemptId: "attempt-p1-moved",
+          // Same id, a generation the record has since left behind.
+          boundIdentity: {
+            attemptId: "attempt-p1-moved",
+            generation:
+              (current.kind === "valid" ? current.value.generation : 0) + 1,
+            sequence: current.kind === "valid" ? current.value.sequence : 1,
+          },
+          reason: "refused-attempt-moved",
+        }),
+        readRecoveryEvidence: () =>
+          Promise.reject(new Error("a stale refusal must not reach recovery")),
+      }),
+      async () => {},
+      async () => "must-not-run",
+    );
+
+    expect(outcome.kind).toBe("released");
+    if (outcome.kind === "released") {
+      // Unsuffixed, and no record handed back: nothing was closed.
+      expect(outcome.reason).toBe("refused-attempt-moved");
+      expect(outcome.outcome).toBeNull();
+    }
+    expect(await readUpdateAttemptRecord(hostHomeDir)).toEqual(before);
+  });
+
+  it("P1 control: a decline whose bound identity MATCHES closes as before", async () => {
+    // The control that keeps the row above from passing for the wrong reason.
+    // A guard that refused every non-null `boundIdentity` would satisfy it and
+    // would silently disable the #1773 cleanup for every bound verb.
+    mockCohortEligible("linux");
+    const hostHomeDir = await freshHome();
+    await seedInterruptedActiveRecordAt(
+      hostHomeDir,
+      "attempt-p1-matched",
+      "1.2.3",
+      null,
+    );
+    const seeded = await readUpdateAttemptRecord(hostHomeDir);
+    if (seeded.kind !== "valid") throw new Error("expected a seeded record");
+
+    const outcome = await runAttemptExecutorSegment(
+      claimOptions(hostHomeDir, {
+        request: async () => ({
+          kind: "release",
+          boundAttemptId: "attempt-p1-matched",
+          boundIdentity: {
+            attemptId: seeded.value.attemptId,
+            generation: seeded.value.generation,
+            sequence: seeded.value.sequence,
+          },
+          reason: "nothing-to-do",
+        }),
+        readRecoveryEvidence: () =>
+          Promise.resolve(
+            observation({
+              installed: { kind: "verified", version: "3.0.0" },
+              staged: { kind: "absent" },
+              running: {
+                kind: "verified",
+                version: "3.0.0",
+                owner: "host-home-bound",
+              },
+            }),
+          ),
+      }),
+      async () => {},
+      async () => "must-not-run",
+    );
+
+    expect(outcome.kind).toBe("released");
+    if (outcome.kind === "released") {
+      expect(outcome.reason).toBe("nothing-to-do-stale-attempt-closed");
+      expect(outcome.outcome?.attemptId).toBe("attempt-p1-matched");
+    }
+    const after = await readUpdateAttemptRecord(hostHomeDir);
+    expect(after.kind).toBe("valid");
+    if (after.kind === "valid") expect(after.value.execution).toBe("terminal");
+  });
+
+  it("P1 legacy: a decline that named a MATCHED id and no identity closes as today", async () => {
+    // A dispatcher that predates `--expect-generation`/`--expect-sequence`
+    // sends `boundIdentity: null`, and must keep exactly today's behaviour.
+    // The widened guard has to be additive, not a new precondition: a version
+    // of it that required a non-null identity to close would pass both rows
+    // above and silently retire the #1773 cleanup on every un-upgraded host.
+    mockCohortEligible("linux");
+    const hostHomeDir = await freshHome();
+    await seedInterruptedActiveRecordAt(
+      hostHomeDir,
+      "attempt-p1-legacy",
+      "1.2.3",
+      null,
+    );
+
+    const outcome = await runAttemptExecutorSegment(
+      claimOptions(hostHomeDir, {
+        request: async () => ({
+          kind: "release",
+          boundAttemptId: "attempt-p1-legacy",
+          boundIdentity: null,
+          reason: "nothing-to-do",
+        }),
+        readRecoveryEvidence: () =>
+          Promise.resolve(
+            observation({
+              installed: { kind: "verified", version: "3.0.0" },
+              staged: { kind: "absent" },
+              running: {
+                kind: "verified",
+                version: "3.0.0",
+                owner: "host-home-bound",
+              },
+            }),
+          ),
+      }),
+      async () => {},
+      async () => "must-not-run",
+    );
+
+    expect(outcome.kind).toBe("released");
+    if (outcome.kind === "released") {
+      expect(outcome.reason).toBe("nothing-to-do-stale-attempt-closed");
+      expect(outcome.outcome?.attemptId).toBe("attempt-p1-legacy");
     }
   });
 
@@ -1942,6 +2096,7 @@ describe("runAttemptExecutorSegment - lock-scoped claim selection, reselect-vs-r
           kind: "release",
           // The verb named a DIFFERENT attempt than the one on disk.
           boundAttemptId: "attempt-the-caller-actually-named",
+          boundIdentity: null,
           reason: "refused-attempt-gone",
         }),
         readRecoveryEvidence: () =>
@@ -1983,6 +2138,7 @@ describe("runAttemptExecutorSegment - lock-scoped claim selection, reselect-vs-r
         request: async () => ({
           kind: "release",
           boundAttemptId: null,
+          boundIdentity: null,
           reason: "nothing-to-do",
         }),
         readRecoveryEvidence: () =>
@@ -2125,6 +2281,7 @@ describe("runAttemptExecutorSegment - lock-scoped claim selection, reselect-vs-r
           request: async () => ({
             kind: "release",
             boundAttemptId: null,
+            boundIdentity: null,
             reason: "nothing-to-do",
           }),
           readRecoveryEvidence: () => Promise.resolve(observation(evidence)),
@@ -2203,6 +2360,7 @@ describe("runAttemptExecutorSegment - lock-scoped claim selection, reselect-vs-r
             return {
               kind: "release",
               boundAttemptId: null,
+              boundIdentity: null,
               reason: "nothing-to-do",
             };
           }
@@ -2276,7 +2434,12 @@ describe("runAttemptExecutorSegment - lock-scoped claim selection, reselect-vs-r
           pollIntervalMs: 10,
         }),
       );
-      return { kind: "release", boundAttemptId: null, reason: "a1-observed" };
+      return {
+        kind: "release",
+        boundAttemptId: null,
+        boundIdentity: null,
+        reason: "a1-observed",
+      };
     };
 
     await runAttemptExecutorSegment(
@@ -2390,6 +2553,7 @@ describe("runAttemptExecutorSegment - lock-scoped claim selection, reselect-vs-r
     const selector: ExecutorClaimSelector = async () => ({
       kind: "release",
       boundAttemptId: null,
+      boundIdentity: null,
       reason: "nothing-to-do",
     });
 
@@ -2513,6 +2677,7 @@ describe("runAttemptExecutorSegment - lock-scoped claim selection, reselect-vs-r
         : {
             kind: "release",
             boundAttemptId: null,
+            boundIdentity: null,
             reason: "install-changed-under-lock",
           };
     };
@@ -2643,7 +2808,12 @@ describe("runAttemptExecutorSegment - lock-scoped claim selection, reselect-vs-r
         calls += 1;
         return calls === 1
           ? startSelectionFor("9.9.9", "attempt-a7c-b")
-          : { kind: "release", boundAttemptId: null, reason: "nothing-to-do" };
+          : {
+              kind: "release",
+              boundAttemptId: null,
+              boundIdentity: null,
+              reason: "nothing-to-do",
+            };
       };
 
       const outcome = await runAttemptExecutorSegment(
@@ -2693,7 +2863,12 @@ describe("runAttemptExecutorSegment - lock-scoped claim selection, reselect-vs-r
         calls += 1;
         return calls === 1
           ? startSelectionFor("9.9.9", "attempt-a7f-b")
-          : { kind: "release", boundAttemptId: null, reason: "nothing-to-do" };
+          : {
+              kind: "release",
+              boundAttemptId: null,
+              boundIdentity: null,
+              reason: "nothing-to-do",
+            };
       };
 
       const outcome = await runAttemptExecutorSegment(

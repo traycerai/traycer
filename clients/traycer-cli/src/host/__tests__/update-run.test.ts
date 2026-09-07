@@ -6031,6 +6031,58 @@ describe("acceptance: cells with no legacy ancestor", () => {
     expect(mocks.relaunchHostAfterRestartWithAttempt).toHaveBeenCalledTimes(1);
   });
 
+  it("P1: a MOVED bound verb over an ACTIVE record refuses without touching it", async () => {
+    // Found at assembly (ea8ce20c). The moved refusal is minted BEFORE the
+    // parked/active split and carries the matching `attemptId` by construction
+    // - the id was checked one branch earlier - so it walked straight through
+    // `releaseAfterClosingStaleAttempt`'s id-only guard and TERMINALIZED the
+    // active attempt it had just declined to act on. The ACK said
+    // `refused-attempt-moved-stale-attempt-closed`: a consent refusal that
+    // consumed the thing it was refusing.
+    //
+    // Both of the moved pins on `3fc8e5c40` used a PARKED record, where guard
+    // 1 (`execution === "active"`) bails first, so the active case was pinned
+    // in neither direction and the defect was invisible to them.
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    const crashed = await crashAtRestarting("2.0.0");
+    expect(crashed.execution).toBe("active");
+    // The host DID come back at the target, out of band. This matters: it is
+    // what lets the recovery inside the closer conclude. Without it the
+    // recovery cannot settle, falls back to the plain release, and the row
+    // passes whether or not the guard exists - which is how the first draft of
+    // this pin was green under its own ablation.
+    world.runningVersion = "2.0.0";
+    const before = await requireRecord();
+    // The crash setup applied once; this run must apply zero more times.
+    mocks.applyHostWithAttempt.mockClear();
+
+    const outcome = await runUpdate({
+      intent: "continue",
+      expectAttempt: crashed.attemptId,
+      // The dispatcher observed this attempt one generation ago.
+      expectGeneration: String(before.generation + 1),
+      expectSequence: String(before.sequence),
+      versionRequest: "2.0.0",
+      registryClient: unreachableRegistry(),
+      ackNonce: "nonce-abcdefgh",
+    });
+
+    // UNSUFFIXED: nothing was closed. The suffix is what the defect added.
+    expect(outcome.releasedReason).toBe("refused-attempt-moved");
+    expect(await readAck("nonce-abcdefgh")).toMatchObject({
+      kind: "no-attempt",
+      reason: "refused-attempt-moved",
+    });
+    // Byte-identical: a refusal for staleness has no side effects.
+    const after = await requireRecord();
+    expect(after).toEqual(before);
+    expect(mocks.applyHostWithAttempt).not.toHaveBeenCalled();
+    // Not stranded, either: the record is active with a dead holder, so the
+    // reconciler's next dispatch carries the CURRENT identity, matches, and
+    // recovers it - which is the pin immediately below, unchanged.
+  });
+
   it("Q5 defect 2: `--intent continue` on the wedged attempt RECOVERS it - a present record whose holder is dead is not `refused-attempt-gone`", async () => {
     await seedInstalled("1.0.0");
     world.runningVersion = "1.0.0";

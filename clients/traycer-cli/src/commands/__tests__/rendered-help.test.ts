@@ -1244,6 +1244,11 @@ describe("rendered root/parent/leaf --help (CLI command audit regression suite)"
         // a broader authorization than the caller asked for.
         "traycer host update --intent",
         "traycer host update --expect-attempt",
+        // The other two thirds of that identity (P1 window B). Same family,
+        // same reason for being argv: an attempt that re-parks keeps its id,
+        // so an id alone cannot say which park was authorized.
+        "traycer host update --expect-generation",
+        "traycer host update --expect-sequence",
         "traycer host restart --if-idle",
         "traycer host install --if-idle",
         "traycer host apply --expected-stage-fingerprint",
